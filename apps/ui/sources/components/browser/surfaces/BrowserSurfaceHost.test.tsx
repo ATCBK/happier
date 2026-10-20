@@ -39,6 +39,7 @@ import type {
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installLocalStorageMock, installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { initializeTerminalRouteRuntimeForTests, installTerminalRouteCommonModuleMocks } from '@/__tests__/routes/(app)/terminal/terminalRouteTestHelpers';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { adoptHomeProfile } from '@/sync/domains/server/serverProfiles';
@@ -57,6 +58,8 @@ import { executePluginBrowserAction, type PluginBrowserProjectionModel } from '@
 import { createPluginUiProjectedActionResolver } from '@/sync/domains/plugins/ui/projection';
 import { EMPTY_PLUGIN_UI_PROJECTION, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY } from '@/sync/domains/plugins/ui/projectionUnion';
+import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
+import { useAppPaneScope, type AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 
 // The visibility owner installs one app-lifetime watch. Keep one OS emitter for
 // the whole suite so eager executor imports cannot bind it to a discarded stub.
@@ -144,6 +147,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineLiveStreamRelaySocket', () => ({
     resolveServerScopedMachineLiveStreamRelaySocket: async () => ({
         machineId: 'machine_1', viewerId: 'viewer_1', socketId: 'tab_1',
+        onSocketIdChange: () => () => {},
         sendEnvelope: () => {},
         onEnvelope: (listener: (raw: unknown) => void) => {
             browserStreamBoundary.listeners.add(listener);
@@ -340,11 +344,22 @@ const browserPanelPlacement = {
 
 const hostedWebBrowserPanelProjection: PluginUiProjectionModel = {
     ...EMPTY_PLUGIN_UI_PROJECTION,
+    // A daemon-projected renderer has an installed occurrence and source
+    // custody. Keep the real mounted-context owner responsible for admission.
+    installedPackagesById: {
+        'acme.browser': PluginProjectionInstalledPackageV2Schema.parse({
+            id: 'acme.browser', displayName: 'Browser panel', version: '1.0.0', enabled: true,
+            source: { kind: 'localPath', locator: 'acme.browser' },
+            occurrenceId: browserPanelPlacement.occurrenceId,
+            sourceCustody: { kind: 'development', registeredRootId: 'browser-panel-root' },
+            declaresContributionPoints: false,
+        }),
+    },
     hostedWebById: {
         'hostedWeb:acme.browser:panel': {
             id: 'hostedWeb:acme.browser:panel',
             pluginId: 'acme.browser',
-            occurrenceId: 'acme-browser-occurrence-1',
+            occurrenceId: browserPanelPlacement.occurrenceId,
             contributionKind: 'hostedWeb',
             contributionId: 'panel',
             service: { kind: 'sessionEndpoint', endpointIdPath: '/endpointId' },
@@ -394,9 +409,9 @@ const BROWSER_CLIENT_ACTION_ORIGIN_PROJECTION = Object.freeze({
 });
 const BROWSER_CLIENT_ACTION_AUTHORIZATION = Object.freeze({
     generation: Object.freeze({
-        targetGeneration: String(BROWSER_CLIENT_ACTION_GENERATION),
-        desiredGeneration: String(BROWSER_CLIENT_ACTION_GENERATION),
-        appliedGeneration: String(BROWSER_CLIENT_ACTION_GENERATION),
+        targetGeneration: 'occurrence-browser-client-action',
+        desiredGeneration: 'occurrence-browser-client-action',
+        appliedGeneration: 'occurrence-browser-client-action',
     }),
     resourceSelections: Object.freeze([]),
     scopedGrants: Object.freeze([]),
@@ -551,7 +566,15 @@ function createBrowserClientActionFixture(handler: PluginClientActionHandler): R
 let browserAccountConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let restoreBrowserStorage: (() => void) | undefined;
 let restoreBrowserLocks: (() => void) | undefined;
+let browserPanelPane: AppPaneScopeApi | undefined;
+function BrowserPanelPaneProbe() {
+    browserPanelPane = useAppPaneScope('browser-panels:browser_session_default');
+    return null;
+}
 beforeEach(async () => {
+    browserPanelPane = undefined;
+    const { storage } = await import('@/sync/domains/state/storage');
+    storage.getState().applyLocalSettings({ appPaneScopesV1: {} });
     browserAppState.emit('active');
     browserSystemOpen.mockClear();
     browserPreviewBoundary.response = null;
@@ -651,17 +674,19 @@ describe('BrowserSurfaceHost', () => {
             await flushHookEffects({ cycles: 6, turns: 6 });
             expect(browserStreamBoundary.listeners.size).toBe(1);
             await act(async () => appState.emit('background'));
-            expect(browserStreamBoundary.listeners.size).toBe(0);
+            // The ingestion owner keeps a pending start's subscriber until its
+            // late result can be stopped. Observe cleanup after that settlement.
+            await act(async () => { await vi.waitFor(() => expect(browserStreamBoundary.listeners.size).toBe(0)); });
             await act(async () => appState.emit('active'));
             await flushHookEffects({ cycles: 6, turns: 6 });
             expect(browserStreamBoundary.listeners.size).toBe(1);
             await screen.update(renderHost(false));
-            expect(browserStreamBoundary.listeners.size).toBe(0);
+            await act(async () => { await vi.waitFor(() => expect(browserStreamBoundary.listeners.size).toBe(0)); });
             await screen.update(renderHost(true));
             await flushHookEffects({ cycles: 6, turns: 6 });
             expect(browserStreamBoundary.listeners.size).toBe(1);
             await screen.unmount();
-            expect(browserStreamBoundary.listeners.size).toBe(0);
+            await act(async () => { await vi.waitFor(() => expect(browserStreamBoundary.listeners.size).toBe(0)); });
         } finally {
             appState.emit('active');
             browserStreamBoundary.views = [];
@@ -823,6 +848,7 @@ describe('BrowserSurfaceHost', () => {
             await expect(composition.reconcile([fixture.activation])).resolves.toEqual([
                 expect.objectContaining({ result: { ok: true } }),
             ]);
+            let invocationOutcome: unknown;
             const invoking = executePluginBrowserAction({
                 action: browserAction, machineId: target.machineId,
                 accountLifetime,
@@ -832,8 +858,8 @@ describe('BrowserSurfaceHost', () => {
                 resolveContributedAction: createPluginUiProjectedActionResolver(fixture.pluginUiProjection.actionsById),
                 pluginUiProjection: fixture.pluginUiProjection,
                 isCurrent: accountLifetime.isCurrent, readCurrentUiContext,
-            });
-            await vi.waitFor(() => expect(browserActionModal.shown()).toBe(true));
+            }).then(outcome => { invocationOutcome = outcome; return outcome; });
+            await vi.waitFor(() => expect(browserActionModal.shown(), JSON.stringify(invocationOutcome)).toBe(true));
             expect(readCurrentUiContext).not.toHaveBeenCalled();
             expect(handler).not.toHaveBeenCalled();
             suppliedContext = { navigation: { area: 'app', screen: 'fresh-browser' }, commands: [] };
@@ -1286,6 +1312,46 @@ describe('BrowserSurfaceHost', () => {
         expect(screen.findByTestId('browser-surface-address')?.props.value).toBe('first.test');
     });
 
+    it('projects exact Machine Action events into its mounted Browser state', async () => {
+        const { BrowserSurfaceHost } = await import('./BrowserSurfaceHost');
+        const { createDefaultRuntimeActionExecutor } = await import('@/sync/ops/actions/defaultRuntimeActionExecutor');
+        const { readRegisteredBrowserRuntimeControlAdapter } = await import('@/sync/domains/browser/actions/runtimeControlRegistry');
+        const { BrowserCommandDispatchResultV1Schema } = await import('@happier-dev/protocol');
+        const scope = getActiveServerAccountScope();
+        if (!scope) throw new Error('Browser test Account was not restored');
+        const sendDaemonCommand = vi.fn();
+        const initialBrowserState = openBrowserTarget(createBrowserViewState(), {
+            kind: 'streamedBrowser', targetId: 'exact-stream', streamId: 'exact-stream',
+        }, { browserSessionId: 'session_1', viewId: 'agent-view', platform: 'web' });
+        const screen = await renderScreen(<BrowserSurfaceHost
+            browserSessionId="session_1" platform="web" initialBrowserState={initialBrowserState}
+            pluginBrowserActionContext={{ sessionId: 'session_1', machineId: 'machine_1', serverId: scope.serverId }}
+            policy={{ browserEnabled: true, viewTargetsEnabled: true, diagnosticsEnabled: false, contextEnabled: false }}
+            productModels={{ browserProfile: { profile: sessionBrowserProfile, activePermissionGrantCount: 0 } }}
+            browserFeatureDecision={enabledBrowserDecision} sendDaemonCommand={sendDaemonCommand}
+            testID="browser-surface"
+        />);
+        const control = readRegisteredBrowserRuntimeControlAdapter('session_1', 'agent-view');
+        expect(control?.readState()?.viewsById['agent-view']).toBeDefined();
+        const result = BrowserCommandDispatchResultV1Schema.parse({ v: 1, commandId: 'close-machine',
+            status: 'dispatched', adapterKind: 'chromiumSidecar', events: [{
+                kind: 'viewClosed', eventId: 'machine-closed', browserSessionId: 'session_1',
+                viewId: 'agent-view', occurredAt: 1000,
+            }] });
+        // The exact Machine Action transport is external; production registration and the
+        // Browser host's real event projection must consume its authoritative response.
+        const execute = createDefaultRuntimeActionExecutor({}, undefined, async () => result);
+        await act(async () => {
+            expect(await execute({ actionId: 'browser.view.close', input: { kind: 'closeView',
+                commandId: 'close-machine', browserSessionId: 'session_1', viewId: 'agent-view' },
+                context: { serverId: scope.serverId, runtimeAccountId: scope.accountId, authority: 'present_user',
+                    externalActionTarget: { kind: 'machine', machineId: 'machine_1' } } })).toEqual(result);
+        });
+        expect(control?.readState()?.viewsById['agent-view']).toBeUndefined();
+        expect(sendDaemonCommand).not.toHaveBeenCalled();
+        await screen.unmount();
+    });
+
     it('retargets the active local-preview view when typed navigation resolves to an external URL target', async () => {
         const onViewTargetChange = vi.fn();
         const initialBrowserState = openBrowserTarget(createBrowserViewState(), target, {
@@ -1374,7 +1440,13 @@ describe('BrowserSurfaceHost', () => {
         expect(screen.findByType('iframe').props.src).toBe('https://preview.happier.test/dashboard');
     });
 
-    it('renders browser panel plugin placements for the active browser target', async () => {
+    it('opens browser panel plugin placements through the exact Browser surface pane scope', async () => {
+        const { storage } = await import('@/sync/domains/state/storage');
+        // The preview and its plugin renderer are served by this addressed
+        // Machine. Publish its real hydrated row rather than bypassing the
+        // mounted host's daemon-reachability/offline boundary.
+        storage.getState().applyMachines([createMachineFixture({ id: target.machineId, activeAt: Date.now() })], true,
+            { sourceServerId: browserAccountConnection!.home.id });
         const initialBrowserState = openBrowserTarget(createBrowserViewState(), target, {
             platform: 'web',
             currentUrl: 'https://preview.happier.test/',
@@ -1410,7 +1482,7 @@ describe('BrowserSurfaceHost', () => {
         });
 
         const screen = await renderScreen(
-            <BrowserSurfaceHost
+            <AppPaneProvider><BrowserPanelPaneProbe /><BrowserSurfaceHost
                 browserSessionId="browser_session_default"
                 platform="web"
                 initialBrowserState={initialBrowserState}
@@ -1428,9 +1500,11 @@ describe('BrowserSurfaceHost', () => {
                     sessionId: 'session_1',
                 }}
                 testID="browser-surface"
-            />,
+            /></AppPaneProvider>,
         );
 
+        expect(screen.findByTestId('browser-surface-plugin-placement-surfacePlacement:acme.browser:panel')).toBeNull();
+        await act(async () => browserPanelPane!.setRightTabState(browserPanelPlacement.id, { isOpen: true }));
         expect(screen.findByTestId('browser-surface-plugin-placement-surfacePlacement:acme.browser:panel')).not.toBeNull();
         await vi.waitFor(() => {
             const unavailableDiagnostics = screen.root.findAll((node) => (
@@ -1446,6 +1520,8 @@ describe('BrowserSurfaceHost', () => {
                 ]),
             );
         });
+        await act(async () => browserPanelPane!.setRightTabState(browserPanelPlacement.id, { isOpen: false }));
+        expect(screen.findByTestId('browser-surface-plugin-placement-surfacePlacement:acme.browser:panel')).toBeNull();
     });
 
     it('renders browser panel plugins inside the Browser column, between the diagnostics drawer and the bottom chrome', async () => {
@@ -1488,7 +1564,7 @@ describe('BrowserSurfaceHost', () => {
         });
 
         const screen = await renderScreen(
-            <BrowserSurfaceHost
+            <AppPaneProvider><BrowserPanelPaneProbe /><BrowserSurfaceHost
                 browserSessionId="browser_session_default"
                 platform="web"
                 initialBrowserState={initialBrowserState}
@@ -1507,8 +1583,9 @@ describe('BrowserSurfaceHost', () => {
                     sessionId: 'session_1',
                 }}
                 testID="browser-surface"
-            />,
+            /></AppPaneProvider>,
         );
+        await act(async () => browserPanelPane!.setRightTabState(browserPanelPlacement.id, { isOpen: true }));
 
         const placementTestID = 'browser-surface-plugin-placement-surfacePlacement:acme.browser:panel';
         const shell = screen.findByTestId('browser-surface');
@@ -1614,8 +1691,8 @@ describe('BrowserSurfaceHost', () => {
         });
 
         await vi.waitFor(() => expect(screen.findByTestId('browser-surface-launchpad')).toBeNull());
-        // Blurred address field shows the pretty display URL (scheme/trailing-slash trimmed).
-        expect(screen.findByTestId('browser-surface-address')?.props.value).toBe('preview.happier.test/current-registration');
+        // Blurred address field names a relay preview by the service it exposes, keeping the path.
+        expect(screen.findByTestId('browser-surface-address')?.props.value).toBe('localhost:5173/current-registration');
         expect(screen.findByType('iframe').props.src).toBe(registeredUrl);
         expect(onViewTargetChange).toHaveBeenCalledWith({
             browserSessionId: 'browser_session_default',

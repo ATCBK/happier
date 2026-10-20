@@ -20,7 +20,10 @@ import { loadDaemonMergedProjectionCacheEntry, readCachedDaemonMergedProjectionC
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { subscribeMachineContributionRegistryProjectionInvalidation } from '@/sync/ops/machineContributionRegistryProjection';
-import { storage } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storageStore';
+import { sync } from '@/sync/sync';
+import { serverFetch } from '@/sync/http/client';
+import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import {
     answerSessionPermission,
@@ -31,7 +34,9 @@ import { createAppSessionTranscriptActions } from '@/components/sessions/transcr
 import { resolveWorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
 import { sessionWorkStatusFactsFromStatus } from '@/components/work/status/sessionWorkStatusFacts';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
-import { getSessionStatus } from '@/utils/sessions/sessionUtils';
+import { getSessionName, getSessionStatus } from '@/utils/sessions/sessionUtils';
+import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 
 import {
     createPluginSurfaceHostApiError,
@@ -112,7 +117,7 @@ function projectSession(session: Session, accountScope: ServerAccountScope | nul
     const state = PluginUiSessionStateV1Schema.parse({
         sessionId: session.id,
         ...(accountScope ? { serverId: accountScope.serverId } : {}),
-        ...(awareness.title ? { title: awareness.title } : {}),
+        title: getSessionName(session, accountScope?.serverId),
         ...(catalog ? { agent: {
             agentId: catalog.agentId,
             displayName: catalog.title,
@@ -165,6 +170,7 @@ export function createPluginSurfaceSessionHandlers(input: Readonly<{
 }>): PluginSurfaceSessionHandlers {
     const watches = new Map<string, ActiveSessionWatch>();
     let disposed = false;
+    const lifetime = new AbortController();
 
     const refusal = (options?: PluginSurfaceHostApiRequestOptions): PluginUiJsonValueV1 | null => {
         if (disposed || !input.isCurrent()) return createPluginSurfaceHostApiError('stale_surface', ['plugin_surface_retired']);
@@ -179,6 +185,21 @@ export function createPluginSurfaceSessionHandlers(input: Readonly<{
         watch.release();
     };
 
+    const hydrateSession = async (sessionId: string, options?: PluginSurfaceHostApiRequestOptions): Promise<void> => {
+        const scope = input.accountScope;
+        if (storage.getState().sessions[sessionId] || !scope) return;
+        // A linked Session may be outside the client's loaded list window. Use the ordinary exact-Account
+        // hydration owner, including its in-flight sharing and currentness checks, before claiming absence.
+        await runWithServerRequestAuthorityForServerAccountScope({ scope, activeRequest: serverFetch }, async (authority) => {
+            await sync.ensureSessionVisibleForMessageRoute(sessionId, {
+                serverId: scope.serverId,
+                authority,
+                scopeCurrentness: () => refusal(options) === null,
+                hydrateMessages: false,
+            });
+        });
+    };
+
     const readSession = async (
         request: PluginUiHostApiRequestEnvelopeV1,
         options?: PluginSurfaceHostApiRequestOptions,
@@ -187,28 +208,35 @@ export function createPluginSurfaceSessionHandlers(input: Readonly<{
         if (refused) return refused;
         const parsed = PluginUiReadSessionRequestV1Schema.safeParse(request.payload);
         if (!parsed.success) return createPluginSurfaceHostApiError('invalid_payload', ['session_read_payload_invalid']);
+        await hydrateSession(parsed.data.sessionId, options);
+        const retiredAfterHydration = refusal(options);
+        if (retiredAfterHydration) return retiredAfterHydration;
         const session = storage.getState().sessions[parsed.data.sessionId];
         const agentId = session ? readSessionPresentationAgentId(session) : null;
         const machineId = session ? getSessionStatus(session).awareness.workspace?.machineId : null;
         // Built-ins have a local catalog. Installed Agents need the same cold,
         // exact-Account catalog loader used by Session chrome, not an ambient cache.
         if (agentId && !isBundledAgentId(agentId) && machineId) {
-            await loadDaemonMergedProjectionCacheEntry({
-                machineId,
-                serverId: input.accountScope?.serverId,
-                accountLifetime: input.accountLifetime,
-                reuseFreshReady: true,
-            });
+            const cancellation = mergeAbortSignals([lifetime.signal, options?.signal]);
+            try {
+                await loadDaemonMergedProjectionCacheEntry({
+                    machineId,
+                    serverId: input.accountScope?.serverId,
+                    accountLifetime: input.accountLifetime,
+                    reuseFreshReady: true,
+                    signal: cancellation.signal,
+                });
+            } finally { cancellation.dispose(); }
             const retired = refusal(options);
             if (retired) return retired;
         }
         return readProjectedSession(parsed.data.sessionId, input.accountScope)?.state ?? null;
     };
 
-    const watchSession = (
+    const watchSession = async (
         request: PluginUiHostApiRequestEnvelopeV1,
         options?: PluginSurfaceHostApiRequestOptions,
-    ): PluginUiJsonValueV1 => {
+    ): Promise<PluginUiJsonValueV1> => {
         const refused = refusal(options);
         if (refused) return refused;
         const record = readPayloadRecord(request.payload);
@@ -219,10 +247,13 @@ export function createPluginSurfaceSessionHandlers(input: Readonly<{
         if (!subscriptionId || !parsed.success) {
             return createPluginSurfaceHostApiError('invalid_payload', ['session_watch_payload_invalid']);
         }
+        const { sessionId } = parsed.data;
+        await hydrateSession(sessionId, options);
+        const retiredAfterHydration = refusal(options);
+        if (retiredAfterHydration) return retiredAfterHydration;
         if (watches.has(subscriptionId)) {
             return createPluginSurfaceHostApiError('invalid_payload', ['session_watch_subscription_reused']);
         }
-        const { sessionId } = parsed.data;
         const initial = readProjectedSession(sessionId, input.accountScope);
         if (!initial) return createPluginSurfaceHostApiError('unavailable', ['session_unavailable']);
 
@@ -248,12 +279,16 @@ export function createPluginSurfaceSessionHandlers(input: Readonly<{
         const readInputs = (state: ReturnType<typeof storage.getState>) => ({
             session: state.sessions[sessionId],
             messages: state.sessionMessages?.[sessionId],
+            displayRow: input.accountScope
+                ? readSessionListRowForServerId(state.sessionListRowsByServerId, input.accountScope.serverId, sessionId)
+                : undefined,
             locale: state.settings.preferredLanguage,
         });
         let lastInputs = readInputs(storage.getState());
         const unsubscribe = storage.subscribe((state) => {
             const nextInputs = readInputs(state);
             if (nextInputs.session === lastInputs.session && nextInputs.messages === lastInputs.messages
+                && nextInputs.displayRow === lastInputs.displayRow
                 && nextInputs.locale === lastInputs.locale) return;
             lastInputs = nextInputs;
             if (!input.isCurrent()) return;
@@ -323,6 +358,7 @@ export function createPluginSurfaceSessionHandlers(input: Readonly<{
         dispose: () => {
             if (disposed) return;
             disposed = true;
+            lifetime.abort();
             for (const subscriptionId of [...watches.keys()]) releaseWatch(subscriptionId);
         },
     });

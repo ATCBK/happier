@@ -4,7 +4,7 @@ import { ParticipantExecutionRunRecipientRoutingIdentityV1Schema } from '@happie
 import { SessionExecutionRunPendingEnqueueRequestV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingExecutionRunMachineAdmissionV2';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { optional } from 'zod/mini';
 import { Platform } from 'react-native';
 import {
@@ -16,11 +16,11 @@ import { getPersistenceStorage } from './persistenceStorage';
 import { scopedSessionLocalStateKey } from './sessionLocalStateKeys';
 import { updateBrowserRecord } from './browserRecordStorage';
 
-const PendingEnqueueRequestEnvelopeSchema = z.object({
+const PendingEnqueueRequestEnvelopeSchema = z.strictObject({
     v: z.literal(1),
     body: z.string(),
     recipient: optional(ParticipantExecutionRunRecipientRoutingIdentityV1Schema),
-}).strict();
+});
 export type PersistedPendingEnqueueRequestV1 = Readonly<z.infer<typeof PendingEnqueueRequestEnvelopeSchema>>;
 const StoredPendingEnqueueRequestEnvelopeSchema = createStoredReadSchema(PendingEnqueueRequestEnvelopeSchema);
 

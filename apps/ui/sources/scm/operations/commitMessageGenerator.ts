@@ -1,3 +1,4 @@
+import { EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
 import { ExecutionRunGetResponseSchema, ExecutionRunStartResponseSchema, type ExecutionRunStatus } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
@@ -76,7 +77,7 @@ export async function generateScmCommitMessage(params: Readonly<{
         {
             sessionId,
             ...(params.host.kind === 'workspace' ? { cwd: params.host.workspace.rootPath } : {}),
-            kind: 'scm_commit_message.v1',
+            kind: EXECUTION_RUN_KIND_BY_INTENT.scm_commit_message,
             intent: 'scm_commit_message',
             backendTarget: { kind: 'backend', backendId, sourceKind: 'built_in' },
             // Hard-safety: commit generation must not be tool-capable.

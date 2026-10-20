@@ -10,7 +10,10 @@ import { sessionUpdateHandler } from "./sessionUpdateHandler";
 // The feature decision reads the stored Home rows (the database boundary): none is stored.
 vi.mock("@/storage/db", async (importOriginal) => ({
     ...await importOriginal<typeof import("@/storage/db")>(),
-    db: { homeSettings: { findUnique: async () => null }, homeGovernancePolicy: { findUnique: async () => null } },
+    db: (await import("../testkit/dbMocks")).createDbTransactionMock(() => ({
+        homeSettings: { findUnique: async () => null },
+        homeGovernancePolicy: { findUnique: async () => null },
+    })).wrapDb({}),
 }));
 
 describe("sessionUpdateHandler ephemeral Runner admission", () => {

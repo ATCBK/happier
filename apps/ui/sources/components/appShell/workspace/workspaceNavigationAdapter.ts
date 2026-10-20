@@ -2,10 +2,12 @@ import type { CompactAppDestination, DestinationRef } from '../destinations/comp
 import { hrefForDestinationRef, resolveDestinationRefFromHref } from '../destinations/compactAppDestinationCatalog';
 import { createWorkspaceNavigationHistory, recordWorkspaceNavigation, stepWorkspaceNavigation, workspaceNavigationRestorationActions, type WorkspaceNavigationEntry } from './workspaceNavigationHistory';
 import { createWorkspaceEmptyTab, type WorkspaceAction, type WorkspaceState, type WorkspaceTab } from './workspaceState';
-import { isWorkspaceSingletonDestination } from './workspaceDestinationPolicy';
+import { isWorkspaceSingletonDestination, resolveWorkspaceDestinationScope, workspaceDestinationNavigationIdentity } from './workspaceDestinationPolicy';
 import { createWorkspaceDestinationSplit } from './workspaceSplit';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { matchWorkspaceDestinationRoute } from './workspaceRoutes';
+import { parseSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
 
 export type WorkspaceOpenOptions = Readonly<{
     mode?: 'preview' | 'newTab' | 'splitLeft' | 'splitRight' | 'splitUp' | 'splitDown';
@@ -50,34 +52,61 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
     let history = createWorkspaceNavigationHistory();
     const resolveOpenTarget = (href: string): DestinationRef | null => {
         const admitted = input.resolveOpenHref ? input.resolveOpenHref(href) : href;
-        return admitted ? resolveDestinationRefFromHref(input.getCatalog(), admitted) : null;
+        const catalog = input.getCatalog();
+        const target = admitted ? resolveDestinationRefFromHref(catalog, admitted) : null;
+        return target ? resolveWorkspaceDestinationScope(target, catalog, input.getScope?.()) : null;
+    };
+    const isSessionTerminal = (ref: DestinationRef) => {
+        if (ref.params.workspacePathname
+            && matchWorkspaceDestinationRoute(ref.params.workspacePathname)?.routeKey === 'session/[id]/terminal') return true;
+        if (ref.kind !== 'session') return false;
+        const pane = parseSessionPaneUrlState(ref.params);
+        return pane?.rightTabId === 'terminal'
+            || (!pane?.details && !pane?.rightTabId && pane?.bottomTabId === 'terminal');
+    };
+    const sessionIdentity = (ref: DestinationRef) => {
+        if (ref.kind !== 'session' && !isSessionTerminal(ref)) return null;
+        const scope = input.getScope?.();
+        const serverId = ref.params.serverId ?? scope?.serverId;
+        // Missing qualifiers denote the current persisted workspace realm,
+        // never an Account on an explicitly different Home.
+        return { id: ref.params.id, serverId, accountId: ref.params.accountId
+            ?? (areServerProfileIdentifiersEquivalent(serverId, scope?.serverId) ? scope?.accountId : undefined) };
+    };
+    const sameSessionIdentity = (a: DestinationRef, b: DestinationRef) => {
+        const identity = sessionIdentity(a);
+        const candidate = sessionIdentity(b);
+        return identity !== null && candidate !== null && candidate.id === identity.id
+            && (candidate.serverId === identity.serverId || areServerProfileIdentifiersEquivalent(candidate.serverId, identity.serverId))
+            && candidate.accountId === identity.accountId;
+    };
+    const adoptSessionTarget = (retained: DestinationRef, target: DestinationRef): DestinationRef => {
+        const params: Record<string, string> = { ...retained.params, ...target.params,
+            ...(retained.params.serverId ? { serverId: retained.params.serverId } : {}),
+        };
+        // A responsive return to the Session root must not keep projecting the
+        // phone child route from the previous view's params.
+        if (!target.params.workspacePathname) delete params.workspacePathname;
+        return { ...target, params };
     };
     const findOpenDestination = (target: DestinationRef, state = input.getState(), groupId?: string, tabId?: string): WorkspaceOpenDestination | null => {
         const catalog = input.getCatalog();
-        const singleton = isWorkspaceSingletonDestination(catalog, target);
         const scope = input.getScope?.();
-        const sessionIdentity = (ref: DestinationRef) => {
-            const serverId = ref.params.serverId ?? scope?.serverId;
-            // Missing qualifiers denote the current persisted workspace realm,
-            // never an Account on an explicitly different Home.
-            return { id: ref.params.id, serverId, accountId: ref.params.accountId
-                ?? (areServerProfileIdentifiersEquivalent(serverId, scope?.serverId) ? scope?.accountId : undefined) };
-        };
-        const identity = target.kind === 'session' ? sessionIdentity(target) : null;
+        const singleton = isWorkspaceSingletonDestination(catalog, target);
+        const navigationIdentity = workspaceDestinationNavigationIdentity(target, catalog, scope);
+        const identity = sessionIdentity(target);
         const tab = Object.values(state.tabs).find(tab => {
             if (tabId && tab.id !== tabId) return false;
             if (groupId && !state.groups[groupId]?.tabIds.includes(tab.id)) return false;
             if (singleton) return tab.target.kind === target.kind;
+            if (navigationIdentity !== null) return workspaceDestinationNavigationIdentity(tab.target, catalog, scope) === navigationIdentity;
             const href = hrefForDestinationRef(catalog, tab.target);
             const normalized = href ? resolveDestinationRefFromHref(catalog, href) : null;
-            if (!normalized || normalized.kind !== target.kind) return false;
+            if (!normalized) return false;
             // SessionAddress owns resource identity; pane URL state and anchors belong
             // to the retained view, and must not turn Go to it into a duplicate tab.
             if (!identity) return sameDestinationRef(normalized, target);
-            const candidate = sessionIdentity(normalized);
-            return candidate.id === identity.id && (candidate.serverId === identity.serverId
-                || areServerProfileIdentifiersEquivalent(candidate.serverId, identity.serverId))
-                && candidate.accountId === identity.accountId;
+            return sameSessionIdentity(normalized, target);
         });
         const group = tab ? Object.values(state.groups).find(group => group.tabIds.includes(tab.id)) : null;
         return tab && group ? { tabId: tab.id, groupId: group.id } : null;
@@ -127,14 +156,12 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
         },
         initialize(href: string) {
             const target = resolveOpenTarget(href);
-            const reusable = target?.kind === 'session' ? findOpenDestination(target) : null;
+            const reusable = target && sessionIdentity(target) ? findOpenDestination(target) : null;
             if (target && reusable) {
                 // Cold admission addresses the Session, not a new pane. Keep its
                 // saved view state and Home qualifier while applying explicit URL state.
                 const retained = input.getState().tabs[reusable.tabId].target;
-                const adopted = { ...target, params: { ...retained.params, ...target.params,
-                    ...(retained.params.serverId ? { serverId: retained.params.serverId } : {}),
-                } };
+                const adopted = adoptSessionTarget(retained, target);
                 if (!sameDestinationRef(retained, adopted)) input.dispatch({ type: 'setTarget', tabId: reusable.tabId, target: adopted });
                 input.dispatch({ type: 'activateTab', groupId: reusable.groupId, tabId: reusable.tabId });
                 visit(true, false, true);
@@ -154,20 +181,31 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
             const openingGroupId = options.groupId ?? state.focusedGroupId;
             const mode = options.mode ?? 'preview';
             const admittedSingleton = singletonActions(state, target);
+            const resourcePreview = mode === 'preview' && options.reuseExisting !== false
+                && workspaceDestinationNavigationIdentity(target, input.getCatalog()) !== null;
             // A bare Session address is Go to it, including Expo URL adoption.
-            // Explicit presentation params and new-tab/split intents keep their
-            // existing destination policy; retained terminal chrome is not a new resource.
+            // Terminal and unaddressed Details presentations keep the Session's pane scope;
+            // resource-addressed Details and explicit new-tab/split intents remain independent.
             const sessionPreview = mode === 'preview' && target.kind === 'session' && options.reuseExisting !== false
                 && Object.keys(target.params).every(key => key === 'id' || key === 'serverId' || key === 'accountId');
+            const presentationPreview = mode === 'preview' && options.reuseExisting !== false
+                && (isSessionTerminal(target) || (target.kind === 'session' && target.params.mobileSurface === 'tabs'));
             // A mounted destination router supplies its SOURCE tabId. A bare
             // Session address still focuses the retained resource across panes.
-            const reusable = (options.reuseExisting || sessionPreview) && (!options.tabId || sessionPreview)
-                ? findOpenDestination(target, state, options.reuseExisting ? undefined : options.groupId) : null;
+            const reusable = (options.reuseExisting || sessionPreview || presentationPreview || resourcePreview) && (!options.tabId || sessionPreview || presentationPreview || resourcePreview)
+                ? (presentationPreview ? findOpenDestination(target, state, options.groupId,
+                    options.tabId ?? state.groups[openingGroupId].activeTabId) : null)
+                    ?? findOpenDestination(target, state, options.reuseExisting ? undefined : options.groupId) : null;
             if (reusable && !admittedSingleton) {
                 const retained = state.tabs[reusable.tabId].target;
                 // Reuse retains pane state, but an explicitly selected Session
                 // address must qualify a legacy tab before it is projected again.
-                if (target.kind === 'session') {
+                if (workspaceDestinationNavigationIdentity(target, input.getCatalog()) !== null) {
+                    if (!sameDestinationRef(retained, target)) input.dispatch({ type: 'setTarget', tabId: reusable.tabId, target });
+                } else if (presentationPreview) {
+                    const adopted = adoptSessionTarget(retained, target);
+                    if (!sameDestinationRef(retained, adopted)) input.dispatch({ type: 'setTarget', tabId: reusable.tabId, target: adopted });
+                } else if (target.kind === 'session') {
                     const params = { ...retained.params,
                         ...(target.params.serverId ? { serverId: retained.params.serverId ?? target.params.serverId } : {}),
                         ...(target.params.accountId ? { accountId: target.params.accountId } : {}),
@@ -276,17 +314,33 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
             const target = resolveDestinationRefFromHref(input.getCatalog(), href);
             if (!target) return false;
             const current = focusedEntry();
-            const currentSession = target.kind === 'session'
+            // Phone chrome mirrors an already selected pane into its fullscreen route.
+            // That handoff (and its return) keeps the destination, Account lifetime and retained
+            // source slot. An independently addressed Details resource still opens separately.
+            const sameSession = (current.target.kind === 'session' || current.target.kind === 'sessionDetails')
+                && (target.kind === 'session' || target.kind === 'sessionDetails')
+                && sameSessionIdentity({ ...current.target, kind: 'session' }, { ...target, kind: 'session' });
+            const currentDetails = parseSessionPaneUrlState(current.target.params)?.details;
+            const nextDetails = parseSessionPaneUrlState(target.params)?.details;
+            const detailsProjection = sameSession && (
+                (current.target.kind === 'session' && target.kind === 'sessionDetails' && currentDetails !== undefined
+                    && JSON.stringify(currentDetails) === JSON.stringify(nextDetails))
+                || (current.target.kind === 'sessionDetails' && target.kind === 'session'
+                    && (nextDetails === undefined || JSON.stringify(currentDetails) === JSON.stringify(nextDetails)))
+            );
+            const currentSession = sessionIdentity(target)
                 && findOpenDestination(target, input.getState(), undefined, current.tabId);
+            const changedSessionParams = currentSession ? Object.entries(target.params).filter(([key, value]) =>
+                key !== 'id' && key !== 'serverId' && key !== 'accountId' && current.target.params[key] !== value) : null;
             // Readiness may re-admit the cold URL after initialization. Its Home
             // alias and omitted view state must not replace the same current pane.
-            if (sameDestinationRef(current.target, target) || (currentSession
-                && Object.entries(target.params).every(([key, value]) => key === 'id' || key === 'serverId' || key === 'accountId'
-                    || current.target.params[key] === value))) {
+            if (sameDestinationRef(current.target, target) || changedSessionParams?.length === 0) {
                 input.transport.adoptCurrent?.(current, history.index);
                 return true;
             }
-            return this.openHref(href, {}, false);
+            // Phone cockpit selection changes the current view, not its retained pane.
+            const phoneSelection = changedSessionParams?.length === 1 && changedSessionParams[0][0] === 'mobileSurface';
+            return this.openHref(href, phoneSelection || detailsProjection ? { tabId: current.tabId } : {}, false);
         },
         step(direction: -1 | 1) {
             if (direction === -1 ? !this.canGoBack : !this.canGoForward) return;

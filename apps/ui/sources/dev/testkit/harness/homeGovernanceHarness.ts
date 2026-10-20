@@ -1,5 +1,4 @@
 import { AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema } from '@happier-dev/protocol/account/authoringMemory';
-import { CurrentCursorResponseSchema } from '@happier-dev/protocol/changes';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
 import { vi } from 'vitest';
 import type { ActionSurfaceKey } from '@happier-dev/protocol/actions/actionSettings';
@@ -26,11 +25,81 @@ import { createPlainAccountEncryptionCurrentnessFixture } from '../fixtures/acco
 import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
 import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
+import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol';
 import { parseToken } from '@/utils/auth/parseToken';
 import type { Settings } from '@/sync/domains/settings/settings';
 import { waitForNetworkResponseForTests } from '../mocks/runtimeFetch';
+import { loadSyncSingletonForTests } from './syncSingletonLoader';
 import type { ManagedMachineActionInputV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import type { ActionExecutorContext, WorkflowActionExecute } from '@happier-dev/protocol';
+import { DiscussionCreateRequestV1Schema, DiscussionCreateResponseV1Schema, DiscussionPostRequestV1Schema,
+    type DiscussionCreateResponseV1 } from '@happier-dev/protocol/discussions/api';
+
+/** Stateful HTTP boundary; the real Discussion adapter owns sealing, opening and mutation intent. */
+export function answerDiscussionThreadForTests(homes: HomeGovernanceHarness, serverId: string,
+    options: Readonly<{ accountId?: string; mode?: 'plain' | 'e2ee'; loseCreate?: boolean; loseFirstRejoin?: boolean; losePost?: boolean }> = {}) {
+    const accountId = options.accountId ?? 'alice';
+    let stored: DiscussionCreateResponseV1 | null = null;
+    let loseResponse = options.loseCreate ?? true;
+    let loseFirstRejoin = options.loseFirstRejoin ?? true;
+    let losePost = options.losePost ?? false;
+    let readDenied = false;
+    const messages: DiscussionCreateResponseV1['firstMessage'][] = [];
+    homes.answer(serverId, 'GET /v1/discussions', { select: (_input, request) => {
+        if (loseFirstRejoin) { loseFirstRejoin = false; return { dispatchThenFail: true }; }
+        const url = new URL(request.url);
+        const docArtifactId = url.searchParams.get('anchorDocArtifactId');
+        return { body: { discussions: stored && url.searchParams.get('state') !== 'archived'
+            && (!url.searchParams.get('creationLocalId') || url.searchParams.get('creationLocalId') === stored.discussion.creationLocalId)
+            && (!docArtifactId || (stored.discussion.anchor?.kind === 'doc'
+                && stored.discussion.anchor.doc.ref.artifactId === docArtifactId))
+            ? [docArtifactId ? { ...stored.discussion, firstMessage: stored.firstMessage } : stored.discussion]
+            : [], nextCursor: null } };
+    } });
+    homes.answer(serverId, 'POST /v1/discussions', { select: input => {
+        const request = DiscussionCreateRequestV1Schema.parse(input);
+        if (!stored) {
+            const firstMessage = { id: 'committed-root', discussionId: 'committed-thread', localId: request.firstMessage.localId,
+                seq: 1, authorAccountId: accountId, accountActor: { v: 1, accountId, profile: null }, producerV1: null,
+                content: request.firstMessage.content, replyTarget: request.firstMessage.replyTarget,
+                mentionedAccountIds: request.firstMessage.mentionedAccountIds, createdAt: 1,
+                ...(request.firstMessage.docEditProposal ? { docEditProposalDispositionV1: { state: 'open' as const } } : {}) };
+            const { discussionId: _discussionId, content: _content, replyTarget: _target,
+                mentionedAccountIds: _mentions, docEditProposalDispositionV1: _disposition, ...latestMessage } = firstMessage;
+            stored = DiscussionCreateResponseV1Schema.parse({ discussion: {
+                id: 'committed-thread', ownerAccountId: accountId, encryptionMode: options.mode ?? 'plain', anchor: request.anchor ?? null, access: 'owner',
+                keyReadiness: true, dataEncryptionKey: request.dataEncryptionKey ?? null, creationLocalId: request.creationLocalId,
+                titleContent: request.titleContent, latestMessage, messageSeq: 1, lastReadSeq: 0, unreadCount: 1, unreadMentionCount: 0,
+                recentAuthorAccountIds: [accountId], archivedAt: null, capabilities: { postMessages: true, rename: true, archive: true,
+                    restore: false, askAgent: true, sendToSession: true, manageAccess: true, leave: false },
+            }, firstMessage });
+            messages.push(stored.firstMessage);
+        }
+        if (loseResponse) { loseResponse = false; return { dispatchThenFail: true }; }
+        return { body: stored };
+    } });
+    homes.answer(serverId, '/v1/discussions/committed-thread', { select: () => readDenied
+        ? { status: 409, body: { error: 'discussion_content_unavailable' } } : { body: { discussion: stored?.discussion } } });
+    homes.answer(serverId, 'GET /v1/discussions/committed-thread/messages', { select: () => readDenied
+        ? { status: 409, body: { error: 'discussion_content_unavailable' } }
+        : { body: { messages, hasMoreOlder: false, messageSeq: messages.length } } });
+    homes.answer(serverId, 'POST /v1/discussions/committed-thread/messages', { select: input => {
+        const request = DiscussionPostRequestV1Schema.parse(input);
+        if (!stored) throw new Error('No committed root');
+        let message = messages.find(row => row.localId === request.localId);
+        if (!message) {
+            const { docEditProposalDispositionV1: _disposition, ...prototype } = stored.firstMessage;
+            message = { ...prototype, id: `committed-${messages.length + 1}`, seq: messages.length + 1,
+                localId: request.localId, content: request.content, replyTarget: request.replyTarget,
+                mentionedAccountIds: request.mentionedAccountIds,
+                ...(request.docEditProposal ? { docEditProposalDispositionV1: { state: 'open' as const } } : {}) };
+            messages.push(message);
+        }
+        if (losePost) { losePost = false; return { dispatchThenFail: true }; }
+        return { body: { message, messageSeq: messages.length } };
+    } });
+    return { messages, deny: () => { readDenied = true; }, stored: () => stored };
+}
 
 /** Keep the real Workflow transport in its UI program during cross-program tests. */
 export async function loadWorkflowActionTransportForTests() {
@@ -88,7 +157,12 @@ export type HomeDomainAnswer = Readonly<{
      * One path serving several reads told apart by their body (the active and the archived Team
      * list): return the answer for this request, or `undefined` for this answer's own fields.
      */
-    select?: (input: unknown, request: Readonly<{ signal?: AbortSignal | null }>) => HomeDomainAnswer | undefined | Promise<HomeDomainAnswer | undefined>;
+    select?: (input: unknown, request: Readonly<{
+        signal?: AbortSignal | null;
+        /** Original HTTP request, for canonical wire-boundary adapters. */
+        url: string;
+        init: RequestInit | undefined;
+    }>) => HomeDomainAnswer | undefined | Promise<HomeDomainAnswer | undefined>;
     status?: number;
     /** Sent as the JSON body. Omit for an empty body. */
     body?: unknown;
@@ -193,7 +267,7 @@ export type HomeGovernanceHarness = Readonly<{
      */
     answer(serverId: string, path: string, answer: HomeDomainAnswer): void;
     /**
-     * Makes one exact Action explicitly approval-required for this Home's
+     * Makes the named Actions explicitly approval-required for this Home's
      * Account, through the real persisted Actions policy the shared Action front
      * door reads. That requirement is what turns an ordinary mutation into an
      * approval request instead of an immediate Home call, so a case asserting
@@ -206,9 +280,9 @@ export type HomeGovernanceHarness = Readonly<{
      * — which surfaces as a domain failure rather than the isolation defect it
      * is. `reset` therefore removes exactly what this seeded.
      */
-    requireUiApproval(serverId: string, actionId: string): Promise<void>;
+    requireUiApproval(serverId: string, actionId: string | readonly string[]): Promise<void>;
     /** Seed the same persisted policy for another real invocation surface. */
-    requireActionApproval(serverId: string, actionId: string, surface: ActionSurfaceKey): Promise<void>;
+    requireActionApproval(serverId: string, actionId: string | readonly string[], surface: ActionSurfaceKey): Promise<void>;
     /** Requests recorded for one path, for asserting what was asked and where. */
     requestsFor(path: string): RecordedHomeRequest[];
     /**
@@ -261,6 +335,8 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
     const credentialWrites: Array<NonNullable<Awaited<ReturnType<typeof TokenStorage.setCredentialsForServerUrlWithRollback>>>> = [];
     const installedLocks: Array<ReturnType<typeof installWebLockManagerMock>> = [];
 
+    const findHomeRecord = (serverId: string) => homesByServerId.get(serverId)
+        ?? homesByServerUrl.get(getServerProfileById(serverId)?.serverUrl ?? '');
     let harness: HomeGovernanceHarness;
     harness = Object.freeze({
         requests,
@@ -315,9 +391,8 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
             record.answers.set(ACCOUNT_SETTINGS_V2_PATH, { body: { content: null, version: 0 } });
             record.answers.set('/health', { body: {} });
             record.answers.set('/v1/auth/ping', { body: {} });
-            // The real managed Socket transport probes this authenticated
-            // endpoint before constructing its external SDK connection.
-            record.answers.set('/v2/cursor', { body: CurrentCursorResponseSchema.parse({ cursor: 0, changesFloor: 0 }) });
+            // Artifact persistence also answers the Account cursor/change feed,
+            // including the managed Socket's authenticated cursor probe.
             if ((options.accountEncryptionMode ?? 'plain') === 'plain') {
                 record.answers.set('/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
             }
@@ -397,15 +472,17 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
             return serverId;
         },
         answer(serverId: string, path: string, answer: HomeDomainAnswer): void {
-            const record = homesByServerId.get(serverId);
+            // Restoring current Account authority can promote a local URL id
+            // to the Home's published identity; it is still the same HTTP boundary.
+            const record = findHomeRecord(serverId);
             if (!record) throw new Error(`No Home saved for ${serverId}`);
             record.answers.set(path, answer);
         },
-        async requireUiApproval(serverId: string, actionId: string): Promise<void> {
+        async requireUiApproval(serverId: string, actionId: string | readonly string[]): Promise<void> {
             await this.requireActionApproval(serverId, actionId, 'ui');
         },
-        async requireActionApproval(serverId: string, actionId: string, surface: ActionSurfaceKey): Promise<void> {
-            const record = homesByServerId.get(serverId);
+        async requireActionApproval(serverId: string, actionId: string | readonly string[], surface: ActionSurfaceKey): Promise<void> {
+            const record = findHomeRecord(serverId);
             if (!record) throw new Error(`No Home saved for ${serverId}`);
             if (!record.accountId) {
                 throw new Error(`Home ${serverId} holds no Account to require approval for`);
@@ -421,12 +498,24 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
             const targetScope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: record.accountId };
             const persisted = loadAccountSettings(targetScope);
             const current = isAppliedAccount ? storage.getState().settings : settingsParse(persisted.settings ?? {});
-            const version = (persisted.version ?? 0) + 1;
+            const homeSnapshot = AccountSettingsV2GetResponseSchema.safeParse(
+                record.answers.get(`GET ${ACCOUNT_SETTINGS_V2_PATH}`)?.body
+                    ?? record.answers.get(ACCOUNT_SETTINGS_V2_PATH)?.body,
+            );
+            const homeSettings = homeSnapshot.success && homeSnapshot.data.content?.t === 'plain'
+                ? settingsParse(homeSnapshot.data.content.v)
+                : current;
+            const version = (homeSnapshot.success ? homeSnapshot.data.version : persisted.version ?? 0) + 1;
             const settings = settingsParse({
                 ...current,
                 actionsSettingsV1: normalizeActionsSettingsV1({
                     v: 1,
-                    actions: { [actionId]: { approvalRequiredSurfaces: [surface] } },
+                    actions: {
+                        ...homeSettings.actionsSettingsV1.actions,
+                        ...current.actionsSettingsV1.actions,
+                        ...Object.fromEntries((typeof actionId === 'string' ? [actionId] : actionId)
+                            .map(id => [id, { approvalRequiredSurfaces: [surface] }])),
+                    },
                 }),
             });
             // A local settings publication can only belong to an actually
@@ -451,12 +540,12 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
             return requests.filter((request) => request.path === path);
         },
         artifacts(serverId: string): ArtifactStoreBoundary {
-            const record = homesByServerId.get(serverId);
+            const record = findHomeRecord(serverId);
             if (!record) throw new Error(`No Home saved for ${serverId}`);
             return record.artifacts;
         },
         async switchAccount(serverId: string, accountId: string, options?: AuthCredentials | Readonly<{ currentAccount?: boolean }>): Promise<void> {
-            const record = homesByServerId.get(serverId);
+            const record = findHomeRecord(serverId);
             if (!record) throw new Error(`No saved Home ${serverId}`);
             const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
             const active = getActiveServerAccountScope();
@@ -468,7 +557,10 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
                 seededApprovalRequirement = null;
             }
             const { disconnectActiveServerConnection, restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
-            if (isAppliedHome) await disconnectActiveServerConnection();
+            if (isAppliedHome) {
+                await loadSyncSingletonForTests();
+                await disconnectActiveServerConnection();
+            }
             const nextCredentials = options && 'token' in options ? options : { token: createAccountTokenForTests(accountId, options) };
             const write = await TokenStorage.setCredentialsForServerUrlWithRollback(
                 record.serverUrl,
@@ -510,6 +602,7 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
             }
             seededApprovalRequirement = null;
             if (active && [...homesByServerId.keys()].some(id => resolveServerProfileScopeIdForIdentifier(id) === active.serverId)) {
+                await loadSyncSingletonForTests();
                 const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
                 await disconnectActiveServerConnection();
             }
@@ -571,7 +664,7 @@ async function answerForEndpoint(
     const route = new URL(path, serverUrl).pathname;
     const pathAnswer = record?.answers.get(`${method} ${path}`) ?? record?.answers.get(path)
         ?? record?.answers.get(`${method} ${route}`) ?? record?.answers.get(route);
-    const answer = await pathAnswer?.select?.(input, { signal: init?.signal }) ?? pathAnswer;
+    const answer = await pathAnswer?.select?.(input, { signal: init?.signal, url, init }) ?? pathAnswer;
     if (!answer && path === '/v1/account/profile') {
         let accountId: string | null = null;
         try { accountId = token ? parseToken(token) : null; } catch { /* Invalid external bearer stays unauthenticated. */ }

@@ -8,6 +8,15 @@ import type {
 } from './activityAttentionDeliveryPlanTypes';
 import { resolveActivityAttentionDeliveryPlan } from './resolveActivityAttentionDeliveryPlan';
 import type { ExactHomeAccountSettingsResolver } from './useExactHomeAccountSettings';
+import { ABSENT_SESSION_FOLLOW_FACTS_V1, resolveEffectiveAccountFollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
+import { resolveRequestFollowEventV1, type FollowEventV1, type ResolveFollowDeliveryV1Params } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import { resolvePendingRequestAttentionReasonV1 } from '@happier-dev/protocol/sessions/personal/attention';
+import { selectOldestPendingRequest } from '@happier-dev/session-core/pending';
+import { listPendingSessionRequests } from '@/sync/domains/session/pending/listPendingSessionRequests';
+import { readCurrentPersonalFollowOnceOccurrenceForViewer } from '@/sync/domains/session/readState/sessionViewerAttention';
+import { isFollowDeliveryMutedV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import type { ActivityAttentionSource } from '@/activity/source/activityAttentionSourceTypes';
 
 type LocalSettingsLike = Readonly<Record<string, unknown>>;
 
@@ -45,6 +54,45 @@ export function resolveActivityCandidateEventKind(
     return 'ready';
 }
 
+function resolveCandidateFollowIntent(candidate: SessionActivityAttention): ResolveFollowDeliveryV1Params | undefined {
+    // Passive working/progress cards are not new semantic occurrences.
+    if (!candidate.hasAttention) return undefined;
+    if (candidate.personalAttention.primary === 'manual' || candidate.personalAttention.primary === 'reminder_due'
+        || candidate.personalAttention.primary === 'mentioned' || candidate.personalAttention.primary === 'unread_discussion') return undefined;
+    const policy = resolveEffectiveAccountFollowPolicyV1({
+        facts: candidate.session.viewer?.follow ?? ABSENT_SESSION_FOLLOW_FACTS_V1,
+        isSessionOwner: candidate.session.access?.level === 'owner',
+    });
+    const reasons = candidate.personalAttention.reasons;
+    const once = readCurrentPersonalFollowOnceOccurrenceForViewer(candidate.session);
+    const pendingReason = candidate.reasons.hasPendingPermissionRequests ? 'permission_required'
+        : candidate.reasons.hasPendingUserActionRequests ? 'user_action_required' : null;
+    const requests = pendingReason ? listPendingSessionRequests(candidate.session)
+        .filter(request => resolvePendingRequestAttentionReasonV1(request) === pendingReason) : [];
+    const request = requests.find(value => value.id === once?.requestId) ?? selectOldestPendingRequest(requests);
+    // Counts retain Inbox attention, but unopened user-action content cannot
+    // establish continue mode or a manager handler for an interruption.
+    if (pendingReason === 'user_action_required' && !request) {
+        return { policies: [], event: { kind: 'needs_you', type: 'decision' } };
+    }
+    let event: FollowEventV1 = candidate.reasons.hasPendingPermissionRequests
+        ? { kind: 'needs_you', type: 'approval' }
+        : candidate.reasons.hasPendingUserActionRequests ? { kind: 'needs_you', type: 'decision' }
+        : candidate.reasons.hasBlockedPendingDelivery ? { kind: 'needs_you', type: 'blocked' }
+        : reasons.includes('failed') ? { kind: 'failed_or_stopped' }
+        : reasons.includes('ready_after_read') ? { kind: 'finished' }
+        : { kind: 'message' };
+    if (request) event = resolveRequestFollowEventV1({ requestKind: resolvePendingRequestAttentionReasonV1(request) === 'permission_required' ? 'permission' : 'user_action',
+        questionV1: request.questionV1, currentHandler: request.currentHandler });
+    const onceMatches = once && (event.kind === 'needs_you'
+        ? once.event === pendingReason && once.requestId === request?.id
+        : event.kind === 'failed_or_stopped' ? once.event === 'failed'
+        : event.kind === 'finished' && (once.event === 'ready' || once.event === 'cancelled'));
+    if (onceMatches && once.event === 'cancelled') event = { kind: 'failed_or_stopped' };
+    return { policies: [...(policy ? [policy] : []), ...(candidate.followRulePolicies ?? []),
+        ...(onceMatches ? [{ preset: 'everything' as const }] : [])], event };
+}
+
 export type ActivitySurfaceDeliveryAdmission = Readonly<{
     /** Candidates whose own Home admits this surface, in the input order. */
     candidates: readonly SessionActivityAttention[];
@@ -67,6 +115,8 @@ export function resolveActivitySurfaceDeliveryAdmission(params: Readonly<{
     resolveAccountSettings: ExactHomeAccountSettingsResolver;
     localSettings: LocalSettingsLike;
     now: Date;
+    accountDeliveryMutesByServerId?: ActivityAttentionSource['accountDeliveryMutesByServerId'];
+    audienceScopes?: ActivityAttentionSource['audienceScopes'];
 }>): ActivitySurfaceDeliveryAdmission {
     const privacyModeByKey = new Map<string, ActivitySurfacePrivacyMode>();
     const admitted: SessionActivityAttention[] = [];
@@ -74,6 +124,15 @@ export function resolveActivitySurfaceDeliveryAdmission(params: Readonly<{
 
     for (const candidate of params.candidates) {
         const key = candidateDeliveryKey(candidate);
+        const serverId = resolveCandidateServerId(candidate);
+        const muteSnapshot = serverId ? params.accountDeliveryMutesByServerId?.[serverId] : null;
+        const scope = serverId ? params.audienceScopes?.get(serverId) : null;
+        if (!muteSnapshot || !scope || !areServerAccountScopesEqual(scope, muteSnapshot.scope)
+            || isFollowDeliveryMutedV1(muteSnapshot.scopes, { senderSessionId: candidate.sessionId,
+                source: { kind: 'session', sessionId: candidate.sessionId } })) {
+            fingerprintEntries.push(JSON.stringify([key, false]));
+            continue;
+        }
         const accountSettings = params.resolveAccountSettings(resolveCandidateServerId(candidate));
         const plan = accountSettings
             ? resolveActivityAttentionDeliveryPlan({
@@ -83,6 +142,9 @@ export function resolveActivitySurfaceDeliveryAdmission(params: Readonly<{
                 channel: params.surface,
                 surface: params.surface,
                 now: params.now,
+                follow: resolveCandidateFollowIntent(candidate),
+                inboxItemType: candidate.personalAttention.primary === 'mentioned' ? 'mention'
+                    : candidate.personalAttention.primary === 'unread_discussion' ? 'update' : undefined,
             })
             : null;
         if (!plan || plan.delivery === 'suppress') {

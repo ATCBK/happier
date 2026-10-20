@@ -1,5 +1,6 @@
 import { isChangeTitleToolNameAlias } from '@happier-dev/plugin-sdk/sessions';
 import { isRecord } from '@happier-dev/plugin-sdk';
+import { readSessionInputPromptUserTextV1 } from '@happier-dev/plugin-sdk/sessions/external';
 import { readJsonlFileForwardLines } from '@happier-dev/plugin-sdk/sessions/file-stores';
 
 import {
@@ -29,9 +30,6 @@ const CODEX_TITLE_MAX_CHARS = 120;
  */
 const CODEX_TITLE_MAX_RECORD_BYTES = 32 * 1024;
 const CODEX_TITLE_BOILERPLATE_PATTERNS = [
-  '# session title',
-  'at the start of the session',
-  'change_title tool',
   '<environment_context>',
   '<instructions>',
   '<turn_aborted>',
@@ -89,7 +87,7 @@ export const CODEX_ROLLOUT_TITLE_HEAD_BUDGET: CodexRolloutTitleReadBudget = {
  */
 export function readCodexExternalSessionTitleCandidate(value: unknown): string | null {
   if (typeof value !== 'string') return null;
-  const normalized = value.replace(/\s+/g, ' ').trim();
+  const normalized = readSessionInputPromptUserTextV1(value).replace(/\s+/g, ' ').trim();
   if (!normalized) return null;
   const title = normalized.length <= CODEX_TITLE_MAX_CHARS
     ? normalized
@@ -107,6 +105,7 @@ function readTitleFromCodexTitleToolInput(input: unknown): string | null {
 
 export type CodexRolloutHead = Readonly<{
   title: string | null;
+  cwd?: string;
   /** From line 1's `session_meta`, which this read traverses anyway. */
   thread: CodexSessionThread | null;
 }>;
@@ -136,6 +135,7 @@ export async function readCodexRolloutHead(
   budget: CodexRolloutTitleReadBudget = CODEX_ROLLOUT_TITLE_FULL_BUDGET,
 ): Promise<CodexRolloutHead> {
   let thread: CodexSessionThread | null = null;
+  let cwd: string | undefined;
   let firstRecord = true;
   const fileSystem = createCodexExternalSessionJsonlScannerFileSystem(bounds);
   let fallbackUserText: string | null = null;
@@ -176,6 +176,7 @@ export async function readCodexRolloutHead(
         firstRecord = false;
         if (isRecord(line.value) && line.value.type === 'session_meta') {
           thread = classifyCodexSessionThread(line.value.payload);
+          if (isRecord(line.value.payload) && typeof line.value.payload.cwd === 'string' && line.value.payload.cwd.trim()) cwd = line.value.payload.cwd;
         }
       }
       if (
@@ -192,7 +193,7 @@ export async function readCodexRolloutHead(
       for (const action of mapCodexRolloutEventToActions(line.value, { debug: false })) {
         if (action.type === 'tool-call' && isChangeTitleToolNameAlias(action.name)) {
           const title = readTitleFromCodexTitleToolInput(action.input);
-          if (title) return { title, thread };
+          if (title) return { title, thread, ...(cwd ? { cwd } : {}) };
         }
         if (action.type === 'user-text' && fallbackUserText === null) {
           fallbackUserText = readCodexExternalSessionTitleCandidate(action.text);
@@ -205,5 +206,5 @@ export async function readCodexRolloutHead(
     offsetBytes = page.nextOffsetBytes;
   }
 
-  return { title: fallbackUserText, thread };
+  return { title: fallbackUserText, thread, ...(cwd ? { cwd } : {}) };
 }

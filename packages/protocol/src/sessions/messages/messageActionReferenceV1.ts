@@ -1,8 +1,10 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
+import { defineProtocolLiteral, defineProtocolObject, defineProtocolString } from '../../plugins/actions/protocolComposableSchema.js';
+import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 
 import { SessionMessageRoleSchema, type SessionMessageRole } from './sessionMessageRole.js';
-import { type SessionMessageProvenanceV1 } from './sessionInputAdmission.js';
+import type { SessionMessageProvenanceV1 } from './sessionInputAdmission.js';
 
 const textEncoder = new TextEncoder();
 
@@ -17,12 +19,15 @@ function boundedDisclosureText(maxUtf8Bytes: number, label: string) {
   return z.string().check(z.refine((value) => textEncoder.encode(value).byteLength <= maxUtf8Bytes, `${label} must contain at most ${maxUtf8Bytes} UTF-8 bytes`));
 }
 
-export const MessageActionReferenceV1Schema = lazyZodSchema(() => z.strictObject({
-  v: z.literal(1),
-  sessionId: strictNonBlankString(512, 'sessionId'),
-  messageId: strictNonBlankString(512, 'messageId'),
-  observedRevision: strictNonBlankString(512, 'observedRevision'),
-}));
+const messageReferenceString = defineProtocolString({ minLength: 1, maxLength: 512,
+  pattern: '^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])' });
+export const MessageActionReferenceV1ProtocolSchema = defineProtocolObject({
+  v: defineProtocolLiteral(1),
+  sessionId: messageReferenceString,
+  messageId: messageReferenceString,
+  observedRevision: messageReferenceString,
+}, { policy: 'closed' });
+export const MessageActionReferenceV1Schema = asProtocolZod(MessageActionReferenceV1ProtocolSchema);
 
 export type MessageActionReferenceV1 = z.infer<typeof MessageActionReferenceV1Schema>;
 

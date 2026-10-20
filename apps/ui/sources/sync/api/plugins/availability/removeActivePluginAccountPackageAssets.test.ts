@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { createActivePluginAccountPackageAssetsRemover } from './removeActivePluginAccountPackageAssets';
+installHomeGovernanceBoundaries(createHomeGovernanceHarness());
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+const { createActivePluginAccountPackageAssetsRemover } = await import('./removeActivePluginAccountPackageAssets');
 
 const scope = { serverId: 'server-a', accountId: 'account-a' } as const;
 const target = { release: { pluginId: 'example.tasks', version: '2.0.0' } };

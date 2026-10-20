@@ -16,6 +16,73 @@ function dragEvent(type: string, x = 50) {
 }
 
 describe('entity DOM carry boundary', () => {
+    it('prepares a list source only on browser dragstart and delivers it through the same runtime', async () => {
+        const runtime = createEntityDragDropRuntime();
+        const scope = { serverId: 'home', accountId: 'account' };
+        let preparations = 0;
+        let writes = 0;
+        const source = document.createElement('div');
+        const target = document.createElement('div');
+        document.body.append(source, target);
+        let captures = 0;
+        source.setPointerCapture = () => { captures++; };
+        const sourceHook = await renderHook(() => useEntityDragDomBinding({ runtime, enabled: true,
+            begin: () => {
+                preparations++;
+                runtime.registerSource({ id: 'lazy-list-source', scope, isCurrent: () => true,
+                    getItem: () => ({ kind: 'session', scope, address: { serverId: 'home', sessionId: 's1' } }) });
+                return runtime.begin('lazy-list-source', 'pointer');
+            },
+        }));
+        runtime.registerTarget({ id: 'list', scope, acceptedKinds: ['session'],
+            getBounds: () => ({ x: 0, y: 0, width: 100, height: 100 }),
+            resolve: () => ({ status: 'allowed', effect: { actionId: 'workspace.tabs.open', input: {}, preview: { verb: 'Open', target: 'Session' } } }),
+            execute: async () => { writes++; return { status: 'applied' }; },
+        });
+        const targetHook = await renderHook(() => useEntityDropDomBinding(runtime));
+        act(() => { sourceHook.getCurrent()(source); targetHook.getCurrent()(target); });
+        try {
+            source.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+            expect(captures).toBe(0);
+            expect(preparations).toBe(0);
+            expect(runtime.getSnapshot().phase).toBe('idle');
+            act(() => { source.dispatchEvent(dragEvent('dragstart')); });
+            expect(preparations).toBe(1);
+            expect(runtime.getSnapshot()).toMatchObject({ phase: 'carrying', sourceId: 'lazy-list-source' });
+            await act(async () => { target.dispatchEvent(dragEvent('drop')); });
+            expect(writes).toBe(1);
+            expect(runtime.getSnapshot().outcome).toEqual({ status: 'applied' });
+            source.dispatchEvent(dragEvent('dragend'));
+            expect(writes).toBe(1);
+        } finally {
+            runtime.cancel(); source.remove(); target.remove();
+            await sourceHook.unmount(); await targetHook.unmount();
+        }
+    });
+    it('lets the realm card be the only thing carried: the browser draws no ghost of the row', async () => {
+        const runtime = createEntityDragDropRuntime();
+        const scope = { serverId: 'home', accountId: 'account' };
+        runtime.registerSource({ id: 'source', scope, isCurrent: () => true,
+            getItem: () => ({ kind: 'destination', scope, href: '/inbox' }) });
+        const sourceHook = await renderHook(() => useEntityDragDomBinding({ runtime, sourceId: 'source', enabled: true, describe: () => 'Inbox' }));
+        const source = document.createElement('div');
+        source.textContent = 'Inbox';
+        document.body.append(source);
+        act(() => { sourceHook.getCurrent()(source); });
+        const images: Array<Readonly<{ image: Element; x: number; y: number }>> = [];
+        const start = dragEvent('dragstart');
+        Object.defineProperty(start, 'dataTransfer', { value: {
+            setData: () => undefined,
+            setDragImage: (image: Element, x: number, y: number) => { images.push({ image, x, y }); },
+        } });
+        try {
+            act(() => { source.dispatchEvent(start); });
+            expect(runtime.getSnapshot().phase).toBe('carrying');
+            expect(images).toHaveLength(1);
+            expect(images[0]!.image).not.toBe(source);
+            expect(images[0]!.image.textContent ?? '').toBe('');
+        } finally { runtime.cancel('test'); source.remove(); }
+    });
     it.each(['applied', 'refused', 'cancelled'] as const)('suppresses the pointer release activation after a %s carry without swallowing the next press', async (outcome) => {
         const runtime = createEntityDragDropRuntime();
         const scope = { serverId: 'home', accountId: 'account' };

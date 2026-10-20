@@ -10,6 +10,7 @@ import { artifactSavedByFromActionContextV1, type ArtifactBodyV1, type ArtifactS
 import type { ActionExecutorContext } from '../actions/executor/types.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import type { ArtifactCallerAccessV1 } from '../artifacts/artifactAccessV1.js';
+import type { ArtifactCoarseKindV1 } from '../artifacts/artifactKindV1.js';
 
 export const WORK_BOARD_ARTIFACT_KIND_V1 = 'work-board.v1';
 /** Saved structure only: no resolved memberships, widget inputs or runtime counts. */
@@ -50,7 +51,8 @@ export type WorkBoardArtifactSummaryV1 = Readonly<{
 }>;
 export type WorkBoardArtifactTransportV1 = Readonly<{
     read(artifactId: string, options?: Readonly<{ signal?: AbortSignal }>): Promise<WorkBoardArtifactV1 | null>;
-    list(options: Readonly<{ limit: number; cursor?: string; signal?: AbortSignal }>): Promise<Readonly<{
+    /** A coarse-kind read returns that kind's complete membership; the Artifact list owner falls back to the full inventory while any row is unclassified. */
+    list(options: Readonly<{ limit: number; cursor?: string; coarseKind?: ArtifactCoarseKindV1; signal?: AbortSignal }>): Promise<Readonly<{
         items: readonly Readonly<{ artifactId: string; header: Readonly<Record<string, unknown>>; headerVersion: number;
             bodyVersion?: number; ownerAccountId?: string; access?: ArtifactCallerAccessV1 }>[];
         nextCursor?: string;
@@ -140,7 +142,7 @@ export function createWorkBoardArtifactPortV1(transport: WorkBoardArtifactTransp
         do {
             check(signal);
             // Artifact's canonical page maximum; this is paging, never a Board quota.
-            const page = await transport.list({ limit: 500, ...(cursor ? { cursor } : {}), signal });
+            const page = await transport.list({ limit: 500, coarseKind: 'work_board', ...(cursor ? { cursor } : {}), signal });
             check(signal);
             for (const item of page.items) {
                 const summary = readWorkBoardArtifactSummaryV1(item.artifactId, item.header);

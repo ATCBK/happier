@@ -74,6 +74,7 @@ async function settle(): Promise<void> {
 }
 
 beforeEach(async () => {
+    await home.reset();
     serverId = await home.addHome({ name: 'Diagnosis', serverUrl: 'https://home.example', accountId: 'account-1' });
     home.answer(serverId, probePath, { status: 200 });
     const { getStorage } = await import('@/sync/domains/state/storage');

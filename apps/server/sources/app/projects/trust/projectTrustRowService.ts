@@ -7,8 +7,10 @@ import { markAccountChanged } from '@/app/changes/markAccountChanged';
 import { PROJECT_TRUST_ACCOUNT_KV_PREFIX, buildProjectTrustPhysicalKey, parseProjectTrustPhysicalKey } from '@/app/kv/accountScopedKv';
 import {
     listReservedAccountScopedKvRowsInTx, mutateReservedAccountScopedKvRowInTx, readReservedAccountScopedKvRowInTx,
+    readReservedAccountScopedKvRowMutationConflict,
     type ReservedAccountScopedKvRowDomain, type ReservedAccountScopedKvRowFailure,
     type ReservedAccountScopedKvRowReadResult, type ReservedAccountScopedKvRowMutationResult,
+    type ReservedAccountScopedKvRowMutationInTxResult,
 } from '@/app/kv/reservedAccountScopedKvRow';
 import { inTx, type Tx } from '@/storage/inTx';
 
@@ -33,7 +35,7 @@ function domainForProject(project: QualifiedProjectTrustProjectV1): ReservedAcco
     };
 }
 
-export async function markProjectTrustChangedInTx(tx: Tx, input: Readonly<{ accountId: string; project: QualifiedProjectTrustProjectV1; revision: number }>): Promise<number> {
+export async function markProjectTrustChangedInTx(tx: Tx, input: Readonly<{ accountId: string; project: QualifiedProjectTrustProjectV1; revision: number }>): ReturnType<typeof markAccountChanged> {
     return await markAccountChanged(tx, { accountId: input.accountId, kind: 'account', entityId: buildProjectTrustPhysicalKey(input.project),
         hint: ProjectTrustChangeHintV1Schema.parse({ projectTrust: true, project: input.project, revision: input.revision }),
     });
@@ -61,7 +63,7 @@ export async function listProjectTrustInTx(tx: Tx, input: Readonly<{ accountId: 
     return { status: 'listed', rows };
 }
 
-export async function mutateProjectTrustInTx(tx: Tx, input: Readonly<{ accountId: string; project: QualifiedProjectTrustProjectV1; expectedRevision: number | 'absent'; content: ProjectTrustContentV1 | null }>): Promise<ReservedAccountScopedKvRowMutationResult> {
+export async function mutateProjectTrustInTx(tx: Tx, input: Readonly<{ accountId: string; project: QualifiedProjectTrustProjectV1; expectedRevision: number | 'absent'; content: ProjectTrustContentV1 | null }>): Promise<ReservedAccountScopedKvRowMutationInTxResult> {
     return await mutateReservedAccountScopedKvRowInTx(tx, { accountId: input.accountId, physicalKey: buildProjectTrustPhysicalKey(input.project),
         expectedRevision: input.expectedRevision, envelope: input.content, domain: domainForProject(input.project),
         markChanged: ({ tx: changeTx, revision }) => markProjectTrustChangedInTx(changeTx, { accountId: input.accountId, project: input.project, revision }),
@@ -70,4 +72,11 @@ export async function mutateProjectTrustInTx(tx: Tx, input: Readonly<{ accountId
 
 export async function readProjectTrust(input: Parameters<typeof readProjectTrustInTx>[1]): ReturnType<typeof readProjectTrustInTx> { return await inTx(tx => readProjectTrustInTx(tx, input), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true }); }
 export async function listProjectTrust(input: Parameters<typeof listProjectTrustInTx>[1]): ReturnType<typeof listProjectTrustInTx> { return await inTx(tx => listProjectTrustInTx(tx, input), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true }); }
-export async function mutateProjectTrust(input: Parameters<typeof mutateProjectTrustInTx>[1]): ReturnType<typeof mutateProjectTrustInTx> { return await inTx(tx => mutateProjectTrustInTx(tx, input)); }
+export async function mutateProjectTrust(input: Parameters<typeof mutateProjectTrustInTx>[1]): Promise<ReservedAccountScopedKvRowMutationResult> {
+    try { return await inTx(tx => mutateProjectTrustInTx(tx, input)); }
+    catch (error) {
+        const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+        if (conflict) return conflict;
+        throw error;
+    }
+}

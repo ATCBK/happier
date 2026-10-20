@@ -67,7 +67,7 @@ export function useAgentInputCommandMenu(input: Readonly<{
         if (includePromptPicker && index === suggestions.length) {
             setDismissedTriggerKey(activeTriggerKey);
             input.onOpenPromptPicker?.();
-        } else if (!selectionPending) handleSuggestionSelect(index >= 0 ? index : 0);
+        } else if (!selectionPending && suggestions[index >= 0 ? index : 0]?.disabled !== true) handleSuggestionSelect(index >= 0 ? index : 0);
     }, [activeTriggerKey, handleSuggestionSelect, includePromptPicker, input.onOpenPromptPicker, selectionPending, suggestions.length]);
     const onSelectFromMenu = React.useCallback(() => onSelectIndexFromMenu(selectedIndex), [onSelectIndexFromMenu, selectedIndex]);
 

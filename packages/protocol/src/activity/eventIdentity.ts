@@ -1,4 +1,4 @@
-import type { SessionDiscussionId } from '../sessions/idsV1.js';
+import type { DiscussionId } from '../sessions/idsV1.js';
 
 /**
  * Canonical committed sequence reference for one Session Activity event.
@@ -13,7 +13,7 @@ export type ActivitySequenceEventReferenceV1 =
     }>
   | Readonly<{
       sequenceDomain: 'discussion';
-      discussionId: SessionDiscussionId;
+      discussionId: DiscussionId;
       sequence: number;
     }>;
 
@@ -40,6 +40,11 @@ export function resolveLegacyActivitySequenceEventIdentityV1(sequence: number): 
 /** Stable identity for committed turn-scoped Activity events. */
 export function resolveActivityTurnEventIdentityV1(turnId: string): string {
   return `turn:${turnId}`;
+}
+
+/** The presence owner already commits this exact fence; no extra event id is allocated. */
+export function resolveActivityStalledEventIdentityV1(occurrence: Readonly<{ turnId: string; publisherFence: number }>): string {
+  return `stalled:${occurrence.turnId}:${occurrence.publisherFence}`;
 }
 
 /**

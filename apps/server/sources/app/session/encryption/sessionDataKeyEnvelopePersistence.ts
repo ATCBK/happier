@@ -3,7 +3,7 @@ import { parseEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/en
 import { encodeBase64 } from "privacy-kit";
 
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
-import { deriveAccountRecipientEnvelopeReadinessFromRow } from "@/app/encryption/accountRecipientEnvelopeReadiness";
+import { deriveAccountRecipientEnvelopeReadinessFromRow, type AccountRecipientEnvelopeReadinessReadScope } from "@/app/encryption/accountRecipientEnvelopeReadiness";
 import type { Tx } from "@/storage/inTx";
 import { RECIPIENT_READINESS_SELECT } from "./sessionDataKeyRecipientProjection";
 
@@ -90,12 +90,13 @@ export function projectViewerSessionDataKey(row: SessionDataKeyEnvelopeViewerRow
  */
 export function resolveViewerSessionNotificationContentAvailability(
     row: SessionDataKeyEnvelopeViewerRow & Readonly<{ encryptionMode: string | null }>,
+    recipientReadiness: AccountRecipientEnvelopeReadinessReadScope = deriveAccountRecipientEnvelopeReadinessFromRow,
 ): boolean {
     if (row.encryptionMode === "plain") return true;
     if (row.encryptionMode !== "e2ee") return false;
     const envelope = row.dataKeyEnvelopes[0];
     if (!envelope) return false;
-    if (deriveAccountRecipientEnvelopeReadinessFromRow(envelope.recipientAccount).status !== "available") {
+    if (recipientReadiness(envelope.recipientAccount).status !== "available") {
         return false;
     }
     return isStructurallyValidSessionDataKeyEnvelope(envelope.encryptedDataKey);

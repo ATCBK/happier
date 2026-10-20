@@ -4,6 +4,7 @@ import { computeWorkspaceSyncPolicyDigest } from '@happier-dev/protocol/sessions
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { storage } from '@/sync/domains/state/storage';
 import { executeProjectWorkerActionV1 } from './projectWorkerActions';
+import { createPlainMachineRowFixture } from '@/dev/testkit';
 
 const remote = vi.hoisted(() => vi.fn());
 // The Machine network boundary is the only replaced execution path.
@@ -18,9 +19,9 @@ describe('UI service placement Get through the Action front door', () => {
     home = await createPlainArtifactHomeFixture('https://service-placement.test', {
       handleRequest: async path => {
         if (path === '/v1/projects/execution/config/read') return new Response(JSON.stringify({ status: 'absent' }));
-        if (path === '/v1/machines') return new Response(JSON.stringify([
-          { id: 'source-machine', revokedAt: null, replacedByMachineId: null },
-          { id: 'worker-machine', revokedAt: null, replacedByMachineId: null },
+        if (path === '/v1/machines?includeRevoked=true') return new Response(JSON.stringify([
+          createPlainMachineRowFixture({ id: 'source-machine', accountId: 'artifact-account' }),
+          createPlainMachineRowFixture({ id: 'worker-machine', accountId: 'artifact-account' }),
         ]));
         return null;
       },
@@ -47,12 +48,21 @@ describe('UI service placement Get through the Action front door', () => {
       title: 'dev', state: 'available', confidence: 'high', actions: ['manage'] };
     let failWorker = false;
     let withdrawRows = false;
+    let reprojectOrganization = false;
     remote.mockImplementation(async ({ machineId, accountId, payload }) => {
       expect(accountId).toBe(scope.accountId);
       expect(payload).toEqual({ machineId, scope: 'workspace', workspaceRoot: machineId === source.machineId ? source.rootPath : worker.rootPath,
         projection: 'managed_bindings' });
       if (machineId !== source.machineId && machineId !== worker.machineId) throw new Error('Unrelated owner');
       if (machineId === worker.machineId && failWorker) throw new Error('Owner unavailable');
+      if (reprojectOrganization) {
+        reprojectOrganization = false;
+        const current = storage.getState().projectAccountRows!;
+        storage.getState().applyProjectAccountRowsForScope(scope, { ...current, organizations: [{
+          key: { kind: 'project-organization', serverId, projectKey: source.id }, revision: 1,
+          value: { hidden: false, pinned: true },
+        }] });
+      }
       if (withdrawRows) storage.getState().clearProjectAccountRowsScope();
       return { protocolVersion: 1, snapshot: { v: 1, machineId, updatedAt: 1, targets: machineId === worker.machineId ? [target] : [] } };
     });
@@ -60,6 +70,8 @@ describe('UI service placement Get through the Action front door', () => {
       { workspace: { serverId, refId: source.id }, serviceName: id(source) }, { expectedAccountId: scope.accountId });
     expect(await get()).toMatchObject({ status: 'ready', placement: { runsOn: { kind: 'primary' } },
       actual: { status: 'present', target: { id: id(worker) } } });
+    reprojectOrganization = true;
+    expect(await get()).toMatchObject({ actual: { status: 'present', target: { id: id(worker) } } });
     failWorker = true;
     expect(await get()).toMatchObject({ actual: { status: 'unavailable' } });
     failWorker = false;

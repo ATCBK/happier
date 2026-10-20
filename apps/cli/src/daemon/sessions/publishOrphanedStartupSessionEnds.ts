@@ -94,16 +94,20 @@ export async function publishOrphanedStartupSessionEnds(params: Readonly<{
       }
       if (isShuttingDown()) return;
       const captured = await params.apiMachine.captureMachineSessionTerminal(sessionId);
-      if (captured.status !== 'captured') {
-        if (captured.status !== 'already_inactive') {
-          logger.debug('[DAEMON] Startup orphan terminal capture was not accepted; retaining marker evidence', {
-            sessionId,
-            markerPids: evidence.map((marker) => marker.pid),
-            status: captured.status,
-            reason: captured.reason,
-          });
+      if (captured.status === 'rejected') {
+        if (captured.reason === 'not_found' || captured.reason === 'archived') {
+          // No Session remains that can accept turn or control-serviceability
+          // retirement, so the dead runner marker is the last stale projection.
+          if (await removeEvidence(evidence)) settledSessionIds.add(sessionId);
           return;
         }
+        logger.debug('[DAEMON] Startup orphan terminal capture was not accepted; retaining marker evidence', {
+          sessionId,
+          markerPids: evidence.map((marker) => marker.pid),
+          status: captured.status,
+          reason: captured.reason,
+        });
+        return;
       }
       if (!await stageEvidence(evidence)) return;
       if (captured.status === 'already_inactive') {

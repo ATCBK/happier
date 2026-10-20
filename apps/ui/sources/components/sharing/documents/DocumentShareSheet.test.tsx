@@ -57,6 +57,7 @@ const { useApprovalDecisionHandler } = await import('@/components/tools/shell/ap
 await import('@/components/sharing/publicLinkApprovalPreparation');
 const { Modal: renderedModalHost } = await import('@/modal');
 const showNetworkConfirmation = vi.mocked(renderedModalHost.show);
+const confirmAction = vi.mocked(renderedModalHost.confirm);
 
 /**
  * HTTP is the sheet's boundary: the real Action front door, its policy, the Artifact grant Actions,
@@ -118,7 +119,7 @@ function dashboardDocument(bindings: WidgetInputBindingsV1 = {}, authored?: Widg
     } };
 }
 
-let disposeHome: (() => Promise<void>) | null = null;
+let servedHome: Awaited<ReturnType<typeof serveActionHomes>> | null = null;
 let widgetHomeActive = false;
 function binaryBlobId() { return `00000000-0000-4000-8000-${host.documentVersion.toString(16).padStart(12, '0')}`; }
 function storedArtifact(artifactId: string) {
@@ -281,7 +282,7 @@ async function serveHome(): Promise<void> {
     primeServerFeaturesSnapshot({ serverId: host.serverId, snapshot: { status: 'ready', features } });
     const sheetScope = { serverId: host.serverId, accountId: 'owner' };
     getStorage().setState({ profileScope: sheetScope, settingsScope: sheetScope });
-    disposeHome = served.dispose;
+    servedHome = served;
 }
 
 const ana = { principal: { kind: 'account', accountId: 'ana' }, accessLevel: 'edit', createdByAccountId: 'owner', createdAt: 1,
@@ -309,6 +310,8 @@ async function activateWidgetHome(inputApproval: 'default' | 'waived' = 'default
             'widgets.item.inputs.set': ['ui'],
         } };
     }
+    if (!servedHome) throw new Error('Expected the served Home fixture');
+    servedHome.replaceAccountSettings('home', { settings: host.settings, version: 2 });
     await loadSyncSingletonForTests();
     const { setActiveServer } = await import('@/sync/domains/server/serverRuntime');
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
@@ -398,6 +401,7 @@ describe('DocumentShareSheet', () => {
         host.networkAtPublicCreate = [];
         host.publicDeleteError = null;
         modal.alert.mockClear();
+        confirmAction.mockClear();
         modal.show.mockClear();
         showNetworkConfirmation.mockClear();
         modal.hide.mockClear();
@@ -422,8 +426,8 @@ describe('DocumentShareSheet', () => {
             await disconnectActiveServerConnection();
             widgetHomeActive = false;
         }
-        await disposeHome?.();
-        disposeHome = null;
+        await servedHome?.dispose();
+        servedHome = null;
         retireActiveServerAccountScopeLifetime();
         invalidateAccountEncryptionModeCache();
         resetServerFeaturesClientForTests();
@@ -443,7 +447,6 @@ describe('DocumentShareSheet', () => {
         expect(screen.findByTestId('document-share-copy-link')).toBeNull();
         await screen.pressByTestIdAsync('document-share-grant-team:studio');
         await screen.pressByTestIdAsync('document-share-remove:team:studio');
-        await screen.pressByTestIdAsync('document-share-remove-confirm:team:studio');
         await settle();
         expect(host.grants).toEqual([ana]);
         expect(host.documentUpdates).toEqual([]);
@@ -522,7 +525,10 @@ describe('DocumentShareSheet', () => {
         await screen.unmount();
     });
 
-    it('keeps the private choice unchanged while the default Action policy awaits approval', async () => {
+    it('keeps the private choice unchanged while the user Ask-first Action policy awaits approval', async () => {
+        host.settings.actionsSettingsV1 = { v: 1, actions: {
+            'widgets.item.inputs.reset': { approvalRequiredSurfaces: ['ui'] },
+        } };
         await activateWidgetHome();
         const dashboard = dashboardDocument({ connection: { kind: 'value', value: {
             service: { pluginId: 'com.acme.cloud', localId: 'cloud' }, accountId: 'private-choice',
@@ -704,8 +710,6 @@ describe('DocumentShareSheet', () => {
 
         await screen.pressByTestIdAsync('document-share-grant-team:studio');
         await screen.pressByTestIdAsync('document-share-remove:team:studio');
-        expect(host.requests.at(-1)?.method).not.toBe('DELETE');
-        await screen.pressByTestIdAsync('document-share-remove-confirm:team:studio');
         await settle();
         expect(host.requests.at(-1)).toEqual({ method: 'DELETE',
             body: { artifactId: 'wf-1', principal: { kind: 'team', teamId: 'studio' } } });
@@ -736,7 +740,6 @@ describe('DocumentShareSheet', () => {
         expect(screen.findByTestId('document-share-grant-team:payments')).not.toBeNull();
         await screen.pressByTestIdAsync('document-share-grant-team:studio');
         await screen.pressByTestIdAsync('document-share-remove:team:studio');
-        await screen.pressByTestIdAsync('document-share-remove-confirm:team:studio');
         await settle();
         expect(screen.findByTestId('document-share-grant-team:studio')).toBeNull();
         expect(screen.findByTestId('document-share-grant-account:ana')).not.toBeNull();
@@ -771,7 +774,6 @@ describe('DocumentShareSheet', () => {
         await settle();
         await screen.pressByTestIdAsync('document-share-grant-account:owner');
         await screen.pressByTestIdAsync('document-share-remove:account:owner');
-        await screen.pressByTestIdAsync('document-share-remove-confirm:account:owner');
         await settle();
 
         expect(renderedTestIds(screen, 'document-share-grant-')).toEqual([]);
@@ -859,6 +861,7 @@ describe('DocumentShareSheet', () => {
     });
 
     it('creates a local fragment link, reads the owner audit and revokes through the canonical Actions', async () => {
+        confirmAction.mockClear();
         const screen = await renderScreen(<DocumentShareSheet artifactId="wf-1" kind="workflow-definition.v1" />);
         await settle();
         await screen.pressByTestIdAsync('document-share-public-link');
@@ -866,6 +869,7 @@ describe('DocumentShareSheet', () => {
         await screen.pressByTestIdAsync('session-public-link-create');
         await screen.pressByTestIdAsync('session-public-link-options-create');
         await settle();
+        expect(confirmAction).not.toHaveBeenCalled();
 
         const issuedUrl = screen.findByTestId('session-public-link-url')?.props.children as string;
         const url = new URL(issuedUrl);
@@ -884,9 +888,12 @@ describe('DocumentShareSheet', () => {
         await settle();
         expect(screen.findByTestId('document-share-public-link-visit:visit-1')).not.toBeNull();
 
+        confirmAction.mockClear();
         await screen.pressByTestIdAsync('session-public-link-turn-off');
         await settle();
-        expect(host.publicShare).toBeNull();
+        await waitForHomeGovernance(() => expect(confirmAction).toHaveBeenCalledTimes(1));
+        await waitForHomeGovernance(() => expect(host.publicShare).toBeNull());
+        await settle();
         expect(screen.findByTestId('document-share-public-link')?.props.accessibilityLabel).toContain('Off');
         expect(screen.findByTestId('session-public-link-url')).toBeNull();
         expect(host.publicRequests.some(request => request.method === 'DELETE')).toBe(true);
@@ -1071,7 +1078,7 @@ describe('DocumentShareSheet', () => {
             expect((await readStoredApproval(artifactId)).status).toBe('open');
             expect(host.publicRequests.some(request => request.method === 'POST')).toBe(false);
             await act(async () => { acknowledge?.(); });
-            await expect(decision.decision).resolves.toBe(true);
+            await expect(decision.decision).rejects.toMatchObject({ code: 'public_share_request_failed' });
             expect(host.networkAtPublicCreate).toEqual([{ network: 'none' }]);
             expect(host.publicRequests.filter(request => request.method === 'POST')).toHaveLength(1);
             expect(host.publicShare).toBeNull();
@@ -1087,7 +1094,7 @@ describe('DocumentShareSheet', () => {
             try {
                 await act(async () => { retry.screen.findByTestId('session-public-link-network-off')!.props.onValueChange(true); });
                 await retry.screen.pressByTestIdAsync('public-link-network-confirm');
-                await expect(retry.decision).resolves.toBe(true);
+                await expect(retry.decision).rejects.toMatchObject({ code: 'public_share_request_failed' });
                 expect(host.documentUpdates).toHaveLength(1);
                 expect([...host.approvalArtifacts.values()]).toHaveLength(1);
                 // A failed original approval retains its recorded outcome; another human press
@@ -1226,6 +1233,30 @@ describe('DocumentShareSheet', () => {
         expect(JSON.parse(host.document.body)).toEqual(bundle);
         expect(host.documentUpdates).toEqual([]);
         expect(host.publicShare).not.toBeNull();
+    });
+
+    it.each(['ask-first', 'allowed'] as const)('honors explicit %s revoke policy without another confirmation', async policy => {
+        host.settings.actionsSettingsV1 = policy === 'ask-first' ? { v: 1, actions: {
+            'artifact.public_link.revoke': { approvalRequiredSurfaces: ['ui'] },
+        } } : { v: 1, actions: {}, approvalWaivedSurfaces: { 'artifact.public_link.revoke': ['ui'] } };
+        await activateWidgetHome();
+        host.publicShare = { id: 'existing-share', subject: { kind: 'artifact', id: 'wf-1' },
+            expiresAt: null, maxUses: null, useCount: 0, isConsentRequired: false,
+            createdAt: 1, updatedAt: 1, keyDerivation: 'fragment_v1', networkOff: false };
+        const screen = await renderScreen(<DocumentShareSheet artifactId="wf-1" kind="workflow-definition.v1" />);
+        await settle();
+        await screen.pressByTestIdAsync('document-share-public-link');
+        confirmAction.mockClear();
+        await screen.pressByTestIdAsync('session-public-link-turn-off');
+        await settle();
+        expect(confirmAction).not.toHaveBeenCalled();
+        expect(host.publicShare?.id ?? null).toBe(policy === 'ask-first' ? 'existing-share' : null);
+        expect(host.publicRequests.some(request => request.method === 'DELETE')).toBe(policy === 'allowed');
+        expect(host.approvalArtifacts.size).toBe(policy === 'ask-first' ? 1 : 0);
+        if (policy === 'ask-first') {
+            const approvalId = [...host.approvalArtifacts.keys()][0]!;
+            expect(await readStoredApproval(approvalId)).toMatchObject({ actionId: 'artifact.public_link.revoke', status: 'open' });
+        }
     });
 
     it('retains a refused revoke in the shared card and clears it when the next revoke succeeds', async () => {

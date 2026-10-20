@@ -10,6 +10,7 @@ export const RoleOverrideV1Schema = lazyZodSchema(() => z.strictObject({
   profileId: z.optional(z.string().check(z.minLength(1))),
   workspaceWrites: z.optional(z.enum(['allow', 'deny'])),
   secondOpinion: z.optional(z.enum(['off', 'encouraged'])),
+  canDelegateToOtherRoles: z.optional(z.boolean()),
 }));
 export type RoleOverrideV1 = z.infer<typeof RoleOverrideV1Schema>;
 export const RoleInstructionsOverrideV1Schema = lazyZodSchema(() => z.extend(RoleOverrideV1Schema, { instructionsOverride: z.optional(z.string()) }));
@@ -23,7 +24,7 @@ export const WorkflowRoleV1Schema = defineStoredReadProjection(z.union([
   createStoredReadSchema(InlineWorkflowRoleV1Schema),
   // Inline fields identify that arm even when invalid; stripping must not
   // silently turn an authored role into a reference-only override.
-  z.pipe(z.transform((value) => value !== null && typeof value === 'object'
+  (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => value !== null && typeof value === 'object'
     && ('name' in value || 'instructions' in value) ? null : value), createStoredReadSchema(RoleOverrideV1Schema)),
 ]));
 export type WorkflowRoleV1 = z.infer<typeof WorkflowRoleV1Schema>;

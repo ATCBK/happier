@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import childProcess from 'node:child_process';
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
+import { hostname, tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import test from 'node:test';
 
@@ -17,6 +19,7 @@ import {
 import { DEV_TARGET_SYNC_EXECUTOR_REPO, DEV_TARGET_MUTAGEN_IGNORE_PATHS, renderMutagenProject, resolveMutagenSessionName } from './mutagen_project.mjs';
 import { resolveDevTargetMutagenRuntime } from './mutagen_runtime.mjs';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
+import { runCaptureResult } from '../proc/proc.mjs';
 
 const envFor = root => ({ HAPPIER_STACK_STORAGE_DIR: root });
 const runtimeFor = (root, sourceDir = DEV_TARGET_SYNC_EXECUTOR_REPO) => resolveDevTargetMutagenRuntime({ stackBaseDir: root, sourceDir, env: envFor(root) });
@@ -29,6 +32,94 @@ const target = {
   repoDir: '/Users/dev/happier',
   cliHomeDir: '/Users/dev/.happier',
 };
+
+for (const platform of ['darwin', 'win32']) {
+  test(`sync owner identifies a self-target across private user namespaces (${platform})`, async t => {
+    const { root } = await createTempFixture(t, { prefix: 'hstack-replica-host-' });
+    const sourceDir = join(root, 'source');
+    await mkdir(sourceDir);
+    const uuid = '01234567-89ab-cdef-0123-456789abcdef';
+    const nativeOutput = value => platform === 'darwin'
+      ? `"IOPlatformUUID" = "${value}"` : `MachineGuid    REG_SZ    ${value}`;
+    // Only OS facts and SSH are substituted. Identity parsing, source/path
+    // admission and the Mutagen producer remain real; no private temp is shared.
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+    t.mock.method(childProcess, 'spawnSync', () => ({ status: 0, stdout: nativeOutput(uuid) }));
+    syncBuiltinESMExports();
+    Object.defineProperty(process, 'platform', { ...descriptor, value: platform });
+    try {
+      for (const observation of ['same', 'different', 'unavailable']) {
+        let mutation = false;
+        const admission = ensureDevTargetSyncProject({ stackBaseDir: join(root, observation), sourceDir,
+          targets: [{ ...target, platform: platform === 'win32' ? 'windows' : 'posix', repoDir: sourceDir }],
+          ownerId: INDEPENDENT_DEV_TARGET_SYNC_OWNER, env: envFor(root),
+        }, { runProcess: async ({ command, args }) => {
+          if (command === 'ssh') {
+            const raw = String(args.at(-1));
+            const script = platform === 'win32' ? Buffer.from(raw.split(' ').at(-1), 'base64').toString('utf16le') : raw;
+            if (script.includes('ioreg') || script.includes('reg.exe')) {
+              const output = observation === 'unavailable' ? '' : nativeOutput(observation === 'same'
+                ? uuid : '11111111-2222-3333-4444-555555555555');
+              return { code: 0, out: output + (platform === 'win32' ? `\n${hostname()}\n` : '') };
+            }
+            return { code: 0, out: `HSTACK_CONTROLLER_SOURCE\n${sourceDir}\n` };
+          }
+          mutation = true;
+          return { code: 0, out: args[1] === 'list' ? '[]' : '' };
+        } });
+        if (observation === 'different') {
+          await admission;
+          assert.equal(mutation, true, 'an equal path on another host is not a self-target');
+        } else {
+          await assert.rejects(admission, observation === 'same' ? /self-target.*overlap/i : /host identity unavailable/i);
+          assert.equal(mutation, false, 'unsafe or unobserved destinations must not reach Mutagen');
+        }
+      }
+    } finally {
+      Object.defineProperty(process, 'platform', descriptor);
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  });
+}
+
+test('sync owner rejects self-target replicas overlapping its source before any Mutagen mutation', { skip: process.platform === 'win32' }, async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-self-replica-' });
+  const sourceDir = join(root, 'source');
+  await mkdir(sourceDir);
+  const alias = join(root, 'source-alias');
+  await symlink(sourceDir, alias, 'dir');
+  for (const repoDir of [sourceDir, root, join(sourceDir, 'nested'), alias, join(alias, 'nested')]) {
+    const mutations = [];
+    await assert.rejects(ensureDevTargetSyncProject({
+      stackBaseDir: join(root, 'stack'), sourceDir, targets: [{ ...target, repoDir }],
+      ownerId: INDEPENDENT_DEV_TARGET_SYNC_OWNER, env: envFor(root),
+    }, { runProcess: async ({ command, args }) => {
+      if (command === 'ssh') {
+        // Real shell/filesystem probe through a fake SSH boundary on the controller host.
+        const result = await runCaptureResult('/bin/sh', ['-c', args.at(-1)]);
+        return { ...result, code: result.exitCode };
+      }
+      if (!['list'].includes(args[1])) mutations.push(args);
+      return { code: 0, out: '[]' };
+    } }), /self-target.*overlap/i);
+    assert.deepEqual(mutations, [], 'a dangerous one-way replica must never reach Mutagen');
+  }
+  for (const [repoDir, self] of [[join(root, 'source-sibling'), true], [sourceDir, false]]) {
+    let started = false;
+    await ensureDevTargetSyncProject({ stackBaseDir: join(root, 'stack'), sourceDir,
+      targets: [{ ...target, repoDir }], ownerId: INDEPENDENT_DEV_TARGET_SYNC_OWNER, env: envFor(root),
+    }, { runProcess: async ({ command, args }) => {
+      if (command === 'ssh' && self) {
+        const result = await runCaptureResult('/bin/sh', ['-c', args.at(-1)]);
+        return { ...result, code: result.exitCode };
+      }
+      if (args[0] === 'project' && args[1] === 'start') started = true;
+      return { code: 0, out: command === 'mutagen' && args[1] === 'list' ? '[]' : '' };
+    } });
+    assert.equal(started, true, 'distinct self mirrors and equal paths on other hosts remain valid');
+  }
+});
 
 test('standby capture status reuses the configured SSH transport', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-standby-status-ssh-' });
@@ -435,6 +526,36 @@ test('independent sync start owns and resumes the canonical Mutagen project', as
   );
 });
 
+test('source policy replacement does not require a paused replica to become reachable', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-sync-policy-offline-' });
+  const projectFile = projectFor(root);
+  await mkdir(dirname(projectFile), { recursive: true });
+  const desired = renderMutagenProject({ sourceDir: DEV_TARGET_SYNC_EXECUTOR_REPO,
+    targets: [target], ownerId: INDEPENDENT_DEV_TARGET_SYNC_OWNER });
+  const stale = desired.replace('        - "/.project/plans/**/*.ndjson"\n', '');
+  assert.notEqual(stale, desired);
+  await writeFile(projectFile, stale);
+  await writeFile(`${projectFile}.lock`, 'proj-existing-source-replicas');
+  const result = await ensureDevTargetSyncProject({ stackBaseDir: root,
+    sourceDir: DEV_TARGET_SYNC_EXECUTOR_REPO, targets: [target],
+    ownerId: INDEPENDENT_DEV_TARGET_SYNC_OWNER, allowIndependentBorrow: false, env: envFor(root),
+  }, { runProcess: async ({ command, args }) => {
+    // Mutagen/SSH are process boundaries. The paused replica cannot complete
+    // network synchronization, but its project can still be retired locally.
+    if (command === 'mutagen' && args[0] === 'sync') {
+      if (args[1] === 'list') return { code: 0, out: JSON.stringify([{
+        name: 'happier-mac', paused: true, status: 'disconnected',
+        alpha: { protocol: 'local', path: DEV_TARGET_SYNC_EXECUTOR_REPO, connected: false },
+        beta: { connected: false },
+      }]) };
+      return { code: 1 };
+    }
+    return { code: 0 };
+  } });
+  assert.equal(result.projectCreated, true);
+  assert.equal(await readFile(projectFile, 'utf8'), desired);
+});
+
 test('equivalent project keeps reconnecting sessions when project resume reports an offline endpoint', async () => {
   const root = await mkdtemp(join(tmpdir(), 'happier-sync-project-reconnect-'));
   const projectFile = projectFor(root);
@@ -692,12 +813,10 @@ test('sync-service release waits for stale independent reconciliation before cha
     await reconciliation;
     await release;
     assert.deepEqual(
-      reconciliationCalls.map((call) => [call.command, ...call.args.slice(0, 2)]),
+      reconciliationCalls.filter(call => call.command === 'mutagen').map((call) => [call.command, ...call.args.slice(0, 2)]),
       [
         ['mutagen', 'version'],
         ['mutagen', 'sync', 'list'],
-        ['mutagen', 'sync', 'resume'],
-        ['mutagen', 'sync', 'flush'],
         ['mutagen', 'project', 'terminate'],
         ['mutagen', 'project', 'start'],
         ['mutagen', 'project', 'list'],

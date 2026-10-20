@@ -12,7 +12,7 @@ import { buildSessionFolderAssignmentKey, resolveFolderAwareSessionListSourceFor
 import { projectSessionListIndexForLayout } from '@/sync/domains/session/listing/sessionListLayout';
 import { createSessionFixture } from '@/dev/testkit';
 import { resolvePutUnderEligibility } from '@/components/sessions/work/putUnderCandidates';
-import { createSessionReportsToEligibilitySnapshot } from '@/sync/ops/relations/sessionReportsToEligibility';
+import { createSessionManagerEligibilitySnapshot } from '@/sync/ops/relations/sessionManagerEligibility';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
 import type { SessionListDragIntent } from './_types';
 import { resolveWorkspaceRootTreeRowId, treeRowId } from '../drop-resolution/treeRowId';
@@ -131,12 +131,12 @@ function makeContext(overrides?: Partial<Parameters<typeof commitSessionListDrag
             setSessionListGroupOrderV1,
             setSessionWorkspaceOrderV1,
             setSessionFolderAssignment,
-            resolvePutSessionUnder: (input: Readonly<{ serverId: string; sessionId: string; leadSessionId: string }>) => {
-                const facts = createSessionReportsToEligibilitySnapshot({ serverId: input.serverId, accountId: 'account',
-                    sessionId: input.sessionId, currentLeadSessionId: null,
+            resolvePutSessionUnder: (input: Readonly<{ serverId: string; sessionId: string; managerSessionId: string }>) => {
+                const facts = createSessionManagerEligibilitySnapshot({ serverId: input.serverId, accountId: 'account',
+                    sessionId: input.sessionId, currentManagerSessionId: null,
                     candidates: Object.keys(sessions).map(sessionId => ({ sessionId, allowed: true })),
                     isCurrent: () => true, dispose: () => {} });
-                return resolvePutUnderEligibility(sessions, input.sessionId, input.leadSessionId, facts, { serverId: input.serverId });
+                return resolvePutUnderEligibility(sessions, input.sessionId, input.managerSessionId, facts, { serverId: input.serverId });
             },
             ...overrides,
         },
@@ -217,18 +217,18 @@ describe('commitSessionListDragIntent — putting a Session under a lead', () =>
         const sessions = { 'root-a': createSessionFixture({ id: 'root-a', serverId: scope.serverId }),
             'root-b': createSessionFixture({ id: 'root-b', serverId: scope.serverId }) };
         let current = true;
-        const facts = createSessionReportsToEligibilitySnapshot({ ...scope, sessionId: 'root-b', currentLeadSessionId: null,
+        const facts = createSessionManagerEligibilitySnapshot({ ...scope, sessionId: 'root-b', currentManagerSessionId: null,
             candidates: [{ sessionId: 'root-a', allowed: true }], isCurrent: () => current, dispose: () => { current = false; } });
         const putSessionUnder = vi.fn(async () => 'applied' as const);
         const { context } = makeContext({ scope, putSessionUnder,
-            resolvePutSessionUnder: input => resolvePutUnderEligibility(sessions, input.sessionId, input.leadSessionId, facts, scope) });
+            resolvePutSessionUnder: input => resolvePutUnderEligibility(sessions, input.sessionId, input.managerSessionId, facts, scope) });
         const params = { item: { kind: 'session' as const, scope, address: { serverId: scope.serverId, sessionId: 'root-b' } },
             intent: underIntent('root-a'), context, preview: () => ({ verb: 'Put under', target: 'Lead' }),
             refusedPreview: ({ target }: Readonly<{ target: { sessionId: string | null } | null }>) =>
                 target?.sessionId ? { verb: 'Cannot put under', target: target.sessionId } : undefined,
             reason: (code: string) => ({ code, message: code }) };
         expect(resolveSessionListEntityDrop(params)).toMatchObject({ status: 'allowed', effect: {
-            actionId: 'session.reports_to.set', input: { sessionId: 'root-b', leadSessionId: 'root-a', expectedLeadSessionId: null } } });
+            actionId: 'session.manager.set', input: { sessionId: 'root-b', managerSessionId: 'root-a', expectedManagerSessionId: null } } });
         expect(putSessionUnder).not.toHaveBeenCalled();
         facts.dispose();
         expect(resolveSessionListEntityDrop(params)).toMatchObject({ status: 'refused', reason: { code: 'unavailable' },
@@ -239,14 +239,14 @@ describe('commitSessionListDragIntent — putting a Session under a lead', () =>
         expect(putSessionUnder).not.toHaveBeenCalled();
     });
 
-    it('asks the reportsTo owner and touches no folder or order state', async () => {
+    it('asks the manager owner and touches no folder or order state', async () => {
         const putSessionUnder = vi.fn(async () => 'applied' as const);
         const { context, spies } = makeContext({ putSessionUnder });
 
         const result = await commitSessionListDragIntent({ intent: underIntent('root-a'), context });
 
         expect(result).toEqual({ ok: true });
-        expect(putSessionUnder).toHaveBeenCalledWith({ serverId: 'server-a', sessionId: 'root-b', leadSessionId: 'root-a' });
+        expect(putSessionUnder).toHaveBeenCalledWith({ serverId: 'server-a', sessionId: 'root-b', managerSessionId: 'root-a' });
         expect(spies.setSessionListGroupOrderV1).not.toHaveBeenCalled();
         expect(spies.setSessionFolderAssignment).not.toHaveBeenCalled();
         expect(spies.setSessionFoldersV1).not.toHaveBeenCalled();

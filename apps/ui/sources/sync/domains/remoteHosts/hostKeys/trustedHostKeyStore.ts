@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { readStorageScopeFromEnv, scopedStorageId } from '@/utils/system/storageScope';
@@ -20,21 +20,21 @@ type KeyValueStringStorage = Readonly<{
     delete: (key: string) => void;
 }>;
 
-const TrustedHostKeyRecordSchema = z.object({
-    hostLower: z.string().min(1),
-    port: z.number().int().min(1).max(65_535),
-    algorithm: z.string().min(1),
-    fingerprintSha256: z.string().min(1),
-    trustedAtMs: z.number().int().min(0),
-    lastSeenAtMs: z.number().int().min(0),
-    remoteHostId: z.string().min(1).optional(),
+const TrustedHostKeyRecordSchema = z.strictObject({
+    hostLower: z.string().check(z.minLength(1)),
+    port: z.number().check(z.int(), z.minimum(1), z.maximum(65_535)),
+    algorithm: z.string().check(z.minLength(1)),
+    fingerprintSha256: z.string().check(z.minLength(1)),
+    trustedAtMs: z.number().check(z.int(), z.minimum(0)),
+    lastSeenAtMs: z.number().check(z.int(), z.minimum(0)),
+    remoteHostId: z.optional(z.string().check(z.minLength(1))),
     source: z.literal('remote-host'),
-}).strict();
+});
 
-const PersistedTrustedHostKeysSchema = z.object({
+const PersistedTrustedHostKeysSchema = z.strictObject({
     version: z.literal(1),
     recordsByKey: z.record(z.string(), TrustedHostKeyRecordSchema),
-}).strict();
+});
 
 type PersistedTrustedHostKeys = z.infer<typeof PersistedTrustedHostKeysSchema>;
 const PersistedTrustedHostKeysReadSchema = createStoredReadSchema(PersistedTrustedHostKeysSchema);

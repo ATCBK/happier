@@ -6,12 +6,13 @@ import type { MachineGuardActivityRowV1 } from '@happier-dev/protocol/machines/g
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES, createRpcCallError } from '@happier-dev/protocol/rpcErrors';
 
-import { renderScreen } from '@/dev/testkit';
+import { createDeferred, renderScreen } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createMachineGuardViewFixture } from '@/sync/domains/machines/guard/guardViewFixtures';
+import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
 
@@ -29,6 +30,10 @@ const { GuardBarAccessory } = await import('./GuardBarAccessory');
 const { MachineFreshnessChip } = await import('@/components/machines/page/MachineFreshnessChip');
 
 const GiB = 1024 ** 3;
+
+function MachinePagePresentation({ children }: React.PropsWithChildren) {
+    return <ListPresentationProvider value="page">{children}</ListPresentationProvider>;
+}
 
 const VIEW = createMachineGuardViewFixture({
     ladder: {
@@ -65,11 +70,12 @@ async function mount(options: Readonly<{ params?: React.ComponentProps<typeof Gu
         if (answer !== undefined) return answer;
         if (method === RPC_METHODS.DAEMON_GUARD_WATCH) return new Promise(() => {});
         if (method === RPC_METHODS.MACHINES_GUARD_GET) return guardAnswer.current;
+        if (method === RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST) return { entries: [], counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: Date.now() };
         throw new Error(`unexpected ${method}`);
     });
     const setParams = vi.fn();
     const screen = await renderScreen(<GuardTab serverId={serverId} machineId="machine" machineName="leeroy-mbp" online
-        params={options.params ?? { id: 'guard' }} setParams={setParams} barAccessoryShown={options.barAccessoryShown} />);
+        params={options.params ?? { id: 'guard' }} setParams={setParams} barAccessoryShown={options.barAccessoryShown} />, { wrapper: MachinePagePresentation });
     return { screen, setParams, serverId };
 }
 
@@ -86,6 +92,62 @@ beforeEach(async () => { await home.reset(); machineGuardStore.reset(); transpor
 afterEach(async () => { standardCleanup(); machineGuardStore.reset(); storage.setState(before); await home.reset(); });
 
 describe('GuardTab', () => {
+    it('previews the same Activity receipts as the detail page when today has no entries', async () => {
+        const yesterday = Date.now() - 86_400_000;
+        const entries: MachineGuardActivityRowV1[] = Array.from({ length: 30 }, (_, index) => ({
+            v: 1, id: `receipt-${index}`, at: yesterday - index * 1000,
+            kind: index === 0 ? 'housekeeping' : index === 1 ? 'closed_terminal' : 'stop_failed',
+            rule: index === 0 ? 'housekeeping' : index === 1 ? 'idle_terminals' : 'memory_guard',
+            outcome: index < 2 ? 'done' : 'failed', attribution: { kind: 'unknown' },
+        }));
+        const { screen, setParams, serverId } = await mount({ rpc: (method, payload) => {
+            if (method !== RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST) return undefined;
+            const selected = payload.range === '7d' && payload.filter === 'all' ? entries : [];
+            return { entries: selected, counts: { stopped: 1, cleanedUp: 1, needsLook: 28, others: 0 }, asOf: Date.now() };
+        } });
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-activity-receipt-0')).not.toBeNull()); });
+        expect(screen.findByTestId('machine-guard-all-activity')).not.toBeNull();
+        expect(screen.findByTestId('machine-guard-activity-empty')).toBeNull();
+        for (const entry of entries.slice(0, 3)) expect(screen.findByTestId(`machine-activity-${entry.id}`)).not.toBeNull();
+        expect(screen.findByTestId('machine-activity-receipt-3')).toBeNull();
+        const key = { serverId: 'srv_guard_tab', expectedAccountId: 'owner', machineId: 'machine', range: '7d' as const, filter: 'all' as const };
+        const preview = machineGuardStore.getActivity(key).list;
+        expect(preview?.entries).toEqual(entries);
+        await act(async () => screen.pressByTestId('machine-guard-all-activity'));
+        expect(setParams).toHaveBeenCalledWith({ id: 'guard', page: 'activity' });
+        await screen.update(<GuardTab serverId={serverId} machineId="machine" machineName="leeroy-mbp" online
+            params={{ id: 'guard', page: 'activity' }} setParams={setParams} />);
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-activity-receipt-29')).not.toBeNull()); });
+        // Both surfaces read the same store query, including receipts outside the Guard view's today window.
+        expect(machineGuardStore.getActivity(key).list?.entries).toEqual(preview?.entries);
+    });
+
+    it('uses the Activity read state even when the Guard view is ready, retaining receipts across a failed refresh', async () => {
+        const first = createDeferred<unknown>();
+        const entry: MachineGuardActivityRowV1 = { v: 1, id: 'held-preview', at: Date.now(), kind: 'housekeeping',
+            rule: 'housekeeping', outcome: 'done', attribution: { kind: 'unknown' } };
+        let reads = 0;
+        const { screen } = await mount({ rpc: method => {
+            if (method !== RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST) return undefined;
+            if (++reads === 1) return first.promise;
+            if (reads === 3) throw new Error('Activity unavailable');
+            return { entries: [entry], counts: { stopped: 0, cleanedUp: 1, needsLook: 0, others: 0 }, asOf: Date.now() };
+        } });
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-guard-live')).not.toBeNull()); });
+        expect(screen.findByTestId('machine-guard-activity-loading')).not.toBeNull();
+        expect(screen.findByTestId('machine-guard-activity-empty')).toBeNull();
+        await act(async () => first.reject(new Error('Activity unavailable')));
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-guard-activity-error')).not.toBeNull()); });
+        const key = { serverId: 'srv_guard_tab', expectedAccountId: 'owner', machineId: 'machine', range: '7d' as const, filter: 'all' as const };
+        await act(async () => machineGuardStore.retryActivity(key));
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-activity-held-preview')).not.toBeNull()); });
+        await act(async () => machineGuardStore.retryActivity(key));
+        await act(async () => { await vi.waitFor(() => expect(machineGuardStore.getActivity(key).status).toBe('error')); });
+        expect(screen.findByTestId('machine-activity-held-preview')).not.toBeNull();
+        expect(screen.findByTestId('machine-guard-all-activity')).not.toBeNull();
+        expect(screen.findByTestId('machine-guard-activity-empty')).toBeNull();
+    });
+
     it('accepts Custom values across the policy units and returns failed tool saves to their saved truth', async () => {
         const writes: unknown[] = [];
         const { screen } = await mount({ rpc: (method, payload) => {
@@ -192,6 +254,7 @@ describe('GuardTab', () => {
         expect(text).toContain('Off. 2 are running on leeroy-mbp right now, holding 1.1 GB.');
         expect(text).toContain('Linux only. macOS can’t cap what a session and its processes use together.');
         expect(text).toContain('Nothing yet. Whatever Happier stops on leeroy-mbp by itself is listed here with the reason and a way back.');
+        expect(screen.findByTestId('machine-guard-activity-empty')).not.toBeNull();
         // Off, the ladder is a preview: no step switches.
         expect(screen.findByTestId('machine-guard-step-browsers-switch')).toBeNull();
     });
@@ -279,7 +342,7 @@ describe('GuardTab', () => {
     });
 
     it('says it is still checking while the first Guard read is out, and claims no present fact until it answers', async () => {
-        const { screen } = await mount({ rpc: method => method === RPC_METHODS.MACHINES_GUARD_GET ? new Promise(() => {}) : undefined });
+        const { screen } = await mount({ rpc: method => method === RPC_METHODS.MACHINES_GUARD_GET || method === RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST ? new Promise(() => {}) : undefined });
         await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-guard-checking')).not.toBeNull()); });
         const text = screen.getTextContent();
         expect(text).toContain('Checking…');
@@ -288,6 +351,9 @@ describe('GuardTab', () => {
         expect(text).toContain('Off. Idle sessions keep running.');
         expect(text).not.toContain('No session here has been idle for long');
         expect(screen.findByTestId('machine-guard-ladder-reserved')).not.toBeNull();
+        // "Nothing yet" claims an answered read; the first one is still out.
+        expect(screen.findByTestId('machine-guard-activity-empty')).toBeNull();
+        expect(screen.findByTestId('machine-guard-activity-loading')).not.toBeNull();
     });
 
     it('keeps the held answer under \u201cAs of \u2026 \u00b7 Checking\u2026\u201d while a later read is still out', async () => {
@@ -317,13 +383,18 @@ describe('GuardTab', () => {
         await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-guard-offline')).not.toBeNull()); });
         expect(screen.findByTestId('machine-guard-left-behind:off')).toBeNull();
         expect(screen.findByTestId('machine-guard-left-behind')).not.toBeNull();
+        expect(screen.findByTestId('machine-guard-activity-empty')).toBeNull();
+        expect(screen.findByTestId('machine-guard-activity-offline')).not.toBeNull();
     });
 
     it('keeps the saved rules under one line saying the first read failed, instead of emptying the tab', async () => {
-        const { screen } = await mount({ rpc: method => { if (method === RPC_METHODS.MACHINES_GUARD_GET) throw new Error('unreachable'); return undefined; } });
+        const { screen } = await mount({ rpc: method => { if (method === RPC_METHODS.MACHINES_GUARD_GET || method === RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST) throw new Error('unreachable'); return undefined; } });
         await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-guard-error')).not.toBeNull()); });
         expect(screen.findByTestId('machine-guard-idle-switch')).not.toBeNull();
         expect(screen.findByTestId('machine-guard-ladder-reserved')).toBeNull();
+        // A failed read is not an empty Activity, and the ladder does not stay on its reserved Checking skeleton.
+        expect(screen.findByTestId('machine-guard-activity-empty')).toBeNull();
+        expect(screen.findByTestId('machine-guard-activity-error')).not.toBeNull();
     });
 
     it('says what is missing when the machine runs an older Happier', async () => {

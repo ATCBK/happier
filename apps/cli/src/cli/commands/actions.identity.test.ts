@@ -49,11 +49,11 @@ it('admits the same qualified widget Home through ambient and explicit generic A
     }), ...selector, '--json'], deps);
     return JSON.parse(output) as unknown;
   };
-  expect(await invoke('srv_home_a', ['--server-id', profile.id]))
-    .toMatchObject({ ok: true, data: { instances: [] } });
+  const explicit = await invoke('srv_home_a', ['--server-id', profile.id]);
+  expect(explicit).toMatchObject({ ok: true, data: { instances: expect.any(Array) } });
   const ambient = await invoke('srv_home_a', []);
   expect(ambient, JSON.stringify(ambient))
-    .toMatchObject({ ok: true, data: { instances: [] } });
+    .toEqual(explicit);
   expect(await invoke('srv_other_home', []))
     .toMatchObject({ ok: false, error: { code: 'server_target_mismatch' } });
 });

@@ -2,6 +2,7 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { InputFieldHintSchema, InputPathSchema } from '../inputs/inputFields.js';
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
+import { PluginJsonSchemaV2Schema } from '../plugins/contributions/jsonSchema.js';
 import { ArtifactRevisionV1Schema, type ArtifactRevisionV1 } from '../artifacts/artifactActionsV1.js';
 import { ArtifactCallerAccessV1Schema } from '../artifacts/artifactAccessV1.js';
 import { AnchoredListPositionV1Schema } from '../actions/anchoredListOrderV1.js';
@@ -40,6 +41,13 @@ export type { WidgetProjectAreaV1 } from './widgetPresentationV1.js';
 
 export { WIDGET_INSTANCE_ACTION_IDS_V1, WidgetInstanceActionIdV1Schema } from './actionIdsV1.js';
 export type { WidgetInstanceActionIdV1 } from './actionIdsV1.js';
+/** Metadata, types and options use the selected Session, or the hosting Session. */
+export function readWidgetActionSessionTargetV1(surface: WidgetSurfaceRefV1,
+  selected?: Readonly<{ serverId: string; sessionId: string }>): Readonly<{ serverId: string; sessionId: string }> | undefined {
+  const owner = surface.owner;
+  return selected ?? (owner.kind === 'sessionBoard' || owner.kind === 'companion'
+    ? { serverId: surface.serverId, sessionId: owner.sessionId } : undefined);
+}
 /** One nested-target reader for Action policy, approval custody and widget execution. */
 export function readWidgetActionSurfaceV1(input: unknown): WidgetSurfaceRefV1 | null {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
@@ -150,7 +158,10 @@ export type WidgetSurfaceReadV1 = z.infer<typeof WidgetSurfaceReadV1Schema>;
 export const WidgetCatalogEntryV1Schema = lazyZodSchema(() => z.strictObject({
   sizeDeclaration: WidgetSizeDeclarationV1Schema, presentation: WidgetSurfacePresentationV1Schema,
   definition: WidgetDefinitionRefV1Schema, title: z.string().check(z.trim(), z.minLength(1)),
-  fields: z.array(InputFieldHintSchema), availability: z.enum(['available', 'unavailable', 'denied']),
+  fields: z.array(InputFieldHintSchema),
+  /** The exact schema a configured instance's resolved inputs must satisfy; the admission owner compiles this same object. */
+  inputSchema: z.optional(PluginJsonSchemaV2Schema),
+  availability: z.enum(['available', 'unavailable', 'denied']),
   instanceCount: z.number().check(z.int(), z.nonnegative(), z.int()),
 }));
 export type WidgetCatalogEntryV1 = z.infer<typeof WidgetCatalogEntryV1Schema>;

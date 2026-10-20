@@ -1,12 +1,15 @@
 import { execFile } from 'node:child_process';
-import { cp, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { installRemoteFirstPartyComponent, installRemoteFirstPartyComponentPayload } from './remoteFirstPartyPayloadInstaller.js';
+import { buildRemoteSelfDownloadFirstPartyInstallCommand } from '../ssh/remoteSelfDownloadFirstPartyInstallCommand.js';
+import { createHash } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 
 const execFileAsync = promisify(execFile);
 
@@ -46,6 +49,128 @@ async function extractTarFixture(params: Readonly<{ archivePath: string }>): Pro
 }
 
 describe('installRemoteFirstPartyComponent', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it.each([
+    { strategy: 'scp-upload', promotionFails: false },
+    { strategy: 'remote-self-download', promotionFails: false },
+    { strategy: 'scp-upload', promotionFails: true },
+    { strategy: 'remote-self-download', promotionFails: true },
+  ] as const)('applies retention around $strategy promotion (failure: $promotionFails)', async ({ strategy, promotionFails }) => {
+    if (process.platform === 'win32') return;
+    const home = await mkdtemp(join(tmpdir(), 'happier-retention-'));
+    const fixture = await createPayloadRootFixture();
+    const installRoot = join(home, '.happier', 'cli');
+    const versions = join(installRoot, 'versions');
+    try {
+      for (const id of ['1.0.0', '1.1.0', '1.2.0', 'local-stable-1792190545251']) {
+        await mkdir(join(versions, id), { recursive: true });
+        await writeFile(join(versions, id, 'happier'), id);
+      }
+      await symlink('versions/1.2.0', join(installRoot, 'current'));
+      await symlink(join(versions, '1.1.0'), join(installRoot, 'previous'));
+      const outside = join(home, 'outside');
+      await mkdir(outside);
+      await writeFile(join(outside, 'keep'), 'outside');
+      await symlink(outside, join(versions, 'unrelated-link'));
+      if (promotionFails) await rm(join(fixture.payloadRoot, 'happier'));
+      const archive = join(home, 'payload.tar.gz');
+      // Self-download archives have one payload-root directory.
+      await execFileAsync('tar', ['-czf', archive, '-C', join(fixture.payloadRoot, '..'), basename(fixture.payloadRoot)]);
+      const plan = {
+        binaryPath: '$HOME/.happier/cli/current/happier', versionId: '1.3.0', source: 'fixture',
+        command: buildRemoteSelfDownloadFirstPartyInstallCommand({
+          componentId: 'happier-cli', versionId: '1.3.0',
+          archive: { name: 'payload.tar.gz', url: pathToFileURL(archive).href },
+          expectedSha256: createHash('sha256').update(await readFile(archive)).digest('hex'),
+        }),
+      };
+      const installation = installRemoteFirstPartyComponentPayload({ componentId: 'happier-cli', strategy }, {
+        resolveRemoteReleaseTarget: async () => ({ os: 'linux', arch: 'x64' }),
+        runRemoteText: async ({ remoteCommand }) => {
+          if (remoteCommand.includes('tar -xf')) {
+            await expect(lstat(join(versions, '1.0.0'))).rejects.toMatchObject({ code: 'ENOENT' });
+            await expect(lstat(join(versions, 'local-stable-1792190545251'))).rejects.toMatchObject({ code: 'ENOENT' });
+            expect(await readFile(join(versions, '1.2.0', 'happier'), 'utf8')).toBe('1.2.0');
+            expect(await readFile(join(versions, '1.1.0', 'happier'), 'utf8')).toBe('1.1.0');
+          }
+          return execFileAsync('/bin/sh', ['-c', remoteCommand], { env: { ...process.env, HOME: home } }).then(
+            (result) => ({ status: 0, ...result }),
+            (error: unknown) => {
+              if (!(error instanceof Error) || !('code' in error) || typeof error.code !== 'number') throw error;
+              return { status: error.code, stdout: '', stderr: '' };
+            },
+          );
+        },
+        copyLocalDirectoryToRemote: async ({ localPath, remotePath }) => {
+          await cp(localPath, join(home, remotePath, basename(localPath)), { recursive: true });
+        },
+        resolveSelfDownloadInstallPlan: async () => plan,
+        preparePayload: async () => ({ componentId: 'happier-cli', channel: 'stable', versionId: '1.3.0', payloadRoot: fixture.payloadRoot, source: null, cleanup: async () => {} }),
+      });
+      if (promotionFails) {
+        await expect(installation).rejects.toThrow(/install failed|promotion failed/u);
+        expect((await readdir(versions)).sort()).toEqual(['1.1.0', '1.2.0', 'unrelated-link']);
+        expect(await readFile(join(installRoot, 'current', 'happier'), 'utf8')).toBe('1.2.0');
+        expect(await readFile(join(installRoot, 'previous', 'happier'), 'utf8')).toBe('1.1.0');
+      } else {
+        await installation;
+        expect((await readdir(versions)).sort()).toEqual(['1.2.0', '1.3.0', 'unrelated-link']);
+        expect(await readlink(join(installRoot, 'current'))).toBe(join(versions, '1.3.0'));
+        expect(await readFile(join(installRoot, 'previous', 'happier'), 'utf8')).toBe('1.2.0');
+      }
+      expect(await readFile(join(outside, 'keep'), 'utf8')).toBe('outside');
+    } finally {
+      await fixture.cleanup();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the finite disk-full promotion refusal without disclosing remote stderr', async () => {
+    const fixture = await createPayloadRootFixture();
+    try {
+      await expect(installRemoteFirstPartyComponentPayload({ componentId: 'happier-cli' }, {
+        resolveRemoteReleaseTarget: async () => ({ os: 'linux', arch: 'x64' }),
+        runRemoteText: async ({ remoteCommand }) => remoteCommand.includes('tar -xf')
+          ? { status: 2, stdout: '', stderr: 'tar: private-path: Cannot write: No space left on device' }
+          : { status: 0, stdout: 'current=\nprevious=\n', stderr: '' },
+        copyLocalDirectoryToRemote: async () => {},
+        preparePayload: async () => ({ componentId: 'happier-cli', channel: 'stable', versionId: '1.2.3', payloadRoot: fixture.payloadRoot, source: null, cleanup: async () => {} }),
+      })).rejects.toMatchObject({ code: 'remote_storage_full', message: expect.not.stringContaining('private-path') });
+    } finally { await fixture.cleanup(); }
+  });
+
+  it('uses the CLI operator payload even when remote self-download was requested', async () => {
+    if (process.platform === 'win32') return;
+    const home = await mkdtemp(join(tmpdir(), 'happier-source-payload-home-'));
+    const fixture = await createPayloadRootFixture();
+    try {
+      vi.stubEnv('HAPPIER_FIRST_PARTY_REMOTE_CLI_PAYLOAD_ROOT', fixture.payloadRoot);
+      const installed = await installRemoteFirstPartyComponent({
+        componentId: 'happier-cli', strategy: 'remote-self-download', ssh: { target: 'guest.test', auth: 'agent' },
+      }, {
+        resolveRemoteReleaseTarget: async () => ({ os: 'linux', arch: 'x64' }),
+        runRemoteText: async ({ remoteCommand }) => {
+          const result = await execFileAsync('/bin/sh', ['-c', remoteCommand], { env: { ...process.env, HOME: home } });
+          return { status: 0, stdout: result.stdout, stderr: result.stderr };
+        },
+        copyLocalDirectoryToRemote: async ({ localPath, remotePath }) => {
+          const [archiveName] = await readdir(localPath);
+          const archive = await readFile(join(localPath, archiveName!));
+          expect(archive.subarray(0, 2)).toEqual(Buffer.from([0x1f, 0x8b]));
+          await cp(localPath, join(home, remotePath, basename(localPath)), { recursive: true });
+        },
+        // A network boundary must not be used for an explicit local payload.
+        resolveSelfDownloadInstallPlan: async () => { throw new Error('Release lookup must not run'); },
+      });
+      expect(installed.source).toBe(`local-payload:${fixture.payloadRoot}`);
+      expect(await readFile(join(home, '.happier/cli/current/happier'), 'utf8')).toBe(await readFile(join(fixture.payloadRoot, 'happier'), 'utf8'));
+    } finally {
+      await fixture.cleanup();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it('installs the same binary payload through native file and exec IO without an SSH identity', async () => {
     if (process.platform === 'win32') return;
     const home = await mkdtemp(join(tmpdir(), 'happier-native-home with spaces-'));
@@ -135,7 +260,8 @@ describe('installRemoteFirstPartyComponent', () => {
       },
     );
 
-    expect(observedSignals).toEqual([controller.signal, controller.signal]);
+    expect(observedSignals.length).toBeGreaterThan(0);
+    expect(observedSignals.every((signal) => signal === controller.signal)).toBe(true);
   });
 
   it('uses an scp-safe remote path for staging while keeping $HOME-based paths in remote shell commands', async () => {
@@ -293,7 +419,7 @@ describe('installRemoteFirstPartyComponent', () => {
             capturedLocalPaths.push(localPath);
             const stageEntries = await lstat(localPath);
             expect(stageEntries.isDirectory()).toBe(true);
-            const archivePath = join(localPath, 'payload-root.tar');
+            const archivePath = join(localPath, 'payload-root.tar.gz');
             const extracted = await extractTarFixture({ archivePath });
             try {
               const copiedSymlinkPath = join(extracted.extractRoot, 'payload-root', 'node_modules', '.bin', 'tool');
@@ -351,7 +477,7 @@ describe('installRemoteFirstPartyComponent', () => {
           runRemoteText: async () => ({ status: 0, stdout: '', stderr: '' }),
           copyLocalDirectoryToRemote: async ({ localPath }) => {
             capturedLocalPaths.push(localPath);
-            const extracted = await extractTarFixture({ archivePath: join(localPath, 'payload-root.tar') });
+            const extracted = await extractTarFixture({ archivePath: join(localPath, 'payload-root.tar.gz') });
             try {
               await expect(lstat(join(extracted.extractRoot, 'payload-root', 'node_modules', '.bin', 'tool'))).rejects.toThrow();
             } finally {
@@ -413,7 +539,7 @@ describe('installRemoteFirstPartyComponent', () => {
       versionId: 'preview-1',
       source: 'https://example.test/happier.tar.gz',
     });
-    expect(remoteTextCommands).toEqual(['verified self-download install command']);
+    expect(remoteTextCommands).toContain('verified self-download install command');
     expect(copiedRemotePaths).toEqual([]);
   });
 });

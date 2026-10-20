@@ -35,6 +35,7 @@ function buildCacheKey(input: Input): string {
         getPreferredLanguage(),
         input.session.access ?? null,
         input.session.active ? 1 : 0,
+        input.session.archivedAt != null ? 1 : 0,
         input.session.presence ?? '',
         input.session.agentState?.controlledByUser === true ? 1 : 0,
         input.session.agentState?.localControl ?? null,
@@ -64,6 +65,7 @@ export function resolveSessionViewRuntimeDisplayState(input: Input): SessionView
         isSessionActive: input.isSessionActive,
         isResumable: input.isResumable,
         isMachineOnline: input.isMachineReachable,
+        isArchived: input.session.archivedAt != null,
         allowInputWhileInactive: input.allowInputWhileInactive,
     });
 

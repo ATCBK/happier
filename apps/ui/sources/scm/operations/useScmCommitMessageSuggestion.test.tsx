@@ -1,14 +1,78 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { standardCleanup } from '@/dev/testkit';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createSessionFilesViewFixture, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema,
+    ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { ExecutionRunStartResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { parseToken } from '@/utils/auth/parseToken';
+import { encodeBase64 } from '@/encryption/base64';
+import nacl from 'tweetnacl';
 
 installSessionFilesViewBoundaries();
-let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
-beforeAll(prepareSessionFilesViewTestkit);
+let fixture: Awaited<ReturnType<typeof createSuggestionFixture>>;
+await prepareSessionFilesViewTestkit();
 afterEach(async () => { standardCleanup(); await fixture?.dispose(); });
+
+function pendingStart(runId: string) {
+    return ExecutionRunStartResponseSchema.parse({ runId, callId: 'call', sidechainId: 'sidechain',
+        wait: { ok: true, status: 'running', disposition: 'observation_timeout', runId,
+            timeoutMs: 12_000, observedAtMs: 13_000, deadlineAtMs: 13_000 } });
+}
+
+/** Home HTTP and daemon RPC are the boundaries; requester sealing/admission stays real. */
+async function createSuggestionFixture(input: Readonly<{
+    start(): ReturnType<typeof pendingStart>;
+    rpc: NonNullable<Parameters<typeof createSessionFilesViewFixture>[0]>['rpc'];
+}>) {
+    const serverIdentityId = 'srv_commit_suggestion';
+    const installation = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(12));
+    const startRequests: unknown[] = [];
+    const request: NonNullable<NonNullable<Parameters<typeof createSessionFilesViewFixture>[0]>['request']> = async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        const authorization = new Headers(init?.headers).get('Authorization');
+        const accountId = authorization?.startsWith('Bearer ') ? parseToken(authorization.slice(7)) : null;
+        if ((path === '/v1/machines' || path === '/v1/machines/m1') && accountId) {
+            const machine = { ...createPlainMachineRowFixture({ id: 'm1', accountId }),
+                installationId: 'suggestion-installation', installationPublicKey: encodeBase64(installation.publicKey) };
+            return Response.json(path === '/v1/machines' ? [machine] : { machine });
+        }
+        if (path === '/v1/actions/execution.run.start/execution-authorization' && accountId) {
+            const mint = ExternalActionExecutionAuthorizationRequestV1Schema.parse(JSON.parse(String(init?.body)));
+            return Response.json(ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'fixture-authorization', binding: {
+                accountId, custodianAccountId: accountId, authentication: { kind: 'account', tokenEpoch: 0 },
+                accountEncryptionMode: 'plain', serverIdentityId, machineId: 'm1', installationId: 'suggestion-installation',
+                actionId: 'execution.run.start', requestId: mint.envelope.requestId, target: mint.envelope.target,
+                requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(mint.envelope),
+            } }));
+        }
+        if (path === '/v1/actions/execution.run.start') {
+            const mint = ExternalActionExecutionAuthorizationRequestV1Schema.parse(JSON.parse(String(init?.body)));
+            startRequests.push(mint.envelope);
+            return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({ v: 1,
+                actionId: 'execution.run.start', requestId: mint.envelope.requestId,
+                execution: { ok: true, result: input.start() },
+            }));
+        }
+        return null;
+    };
+    const owner = await createSessionFilesViewFixture({ rpc: call => {
+        // The Action executor composes observation after the native Home start;
+        // it deliberately does not trust a start receipt as a waiter result.
+        if (call.method === SESSION_RPC_METHODS.EXECUTION_RUN_WAIT) {
+            const { runId } = call.payload as { runId: string };
+            return pendingStart(runId).wait;
+        }
+        return input.rpc?.(call);
+    }, request, serverIdentityId,
+        credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }) } });
+    return { ...owner, startRequests, suggestionRequest: request };
+}
 
 describe('shared commit suggestion Run custody', () => {
     it('does not disclose a held old-Account result or clear the new Account pending Run', async () => {
@@ -19,14 +83,11 @@ describe('shared commit suggestion Run custody', () => {
             backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, permissionMode: 'no_tools', retentionPolicy: 'ephemeral',
             runClass: 'bounded', ioMode: 'request_response', status: 'succeeded', startedAtMs: 1, finishedAtMs: 2 },
             latestToolResult: { message: runId === 'old' ? 'private old Account message' : 'new Account message' } });
-        fixture = await createSessionFilesViewFixture({ rpc: request => {
+        fixture = await createSuggestionFixture({ start: () => pendingStart(++starts === 1 ? 'old' : 'new'), rpc: request => {
             if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 1, results: {
                 'tool.executionRuns': { ok: true, checkedAt: Date.now(), data: { protocolVersion: 2,
                     features: { detachedScope: true, startAndWait: true } } },
             } };
-            if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_START) return { runId: ++starts === 1 ? 'old' : 'new', callId: 'call', sidechainId: 'sidechain' };
-            if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_WAIT) return { ok: true, status: 'running', disposition: 'observation_timeout',
-                runId: starts === 1 ? 'old' : 'new', timeoutMs: 12_000, observedAtMs: 13_000, deadlineAtMs: 13_000 };
             if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_GET) return (request.payload as { runId: string }).runId === 'old' ? held.promise : output('new');
             return undefined;
         } });
@@ -45,10 +106,14 @@ describe('shared commit suggestion Run custody', () => {
         const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
         const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
         const { createPlainAccountEncryptionCurrentnessFixture } = await import('@/dev/testkit/fixtures/accountEncryptionCurrentness');
-        const newAccount = await restoreServerAccountForTest({ serverUrl: fixture.home.serverUrl, accountId: 'bob', request: async url => {
+        const newAccount = await restoreServerAccountForTest({ serverUrl: fixture.home.serverUrl, accountId: 'bob',
+            credentials: { token: createAccountTokenForTests('bob', { currentAccount: true }) }, request: async (url, init) => {
+            const handled = await fixture.suggestionRequest(url, init);
+            if (handled) return handled;
             const path = new URL(String(url)).pathname;
             if (path === '/health') return Response.json({ status: 'ok' });
             if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 0 });
             if (path === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
@@ -58,7 +123,10 @@ describe('shared commit suggestion Run custody', () => {
             fixture.storage.getState().applySettingsLocal(settings);
             await flushHookEffects({ cycles: 10 });
             expect(current().contextKey).not.toBe(oldKey);
-            await act(async () => { expect(await current().generate()).toMatchObject({ ok: false, runId: 'new', outcome: 'pending' }); });
+            await act(async () => {
+                const result = await current().generate();
+                expect(result, JSON.stringify(result)).toMatchObject({ ok: false, runId: 'new', outcome: 'pending' });
+            });
             held.resolve(output('old'));
             expect(await oldRead).toMatchObject({ ok: false, errorCode: 'SCM_COMMIT_MESSAGE_SCOPE_RETIRED' });
             expect(await oldRead).not.toHaveProperty('message');
@@ -68,14 +136,11 @@ describe('shared commit suggestion Run custody', () => {
     });
     it('observes and cancels the admitted native Run rather than starting another suggestion', async () => {
         let terminal = false;
-        fixture = await createSessionFilesViewFixture({ rpc: request => {
+        fixture = await createSuggestionFixture({ start: () => pendingStart('retained'), rpc: request => {
             if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 1, results: {
                 'tool.executionRuns': { ok: true, checkedAt: Date.now(), data: { protocolVersion: 2,
                     features: { detachedScope: true, startAndWait: true } } },
             } };
-            if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_START) return { runId: 'retained', callId: 'call', sidechainId: 'sidechain' };
-            if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_WAIT) return { ok: true, status: 'running', disposition: 'observation_timeout',
-                runId: 'retained', timeoutMs: 12_000, observedAtMs: 13_000, deadlineAtMs: 13_000 };
             if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP) return { ok: true };
             if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_GET) return { run: {
                 runId: 'retained', callId: 'call', sidechainId: 'sidechain', intent: 'scm_commit_message',
@@ -97,13 +162,13 @@ describe('shared commit suggestion Run custody', () => {
         const current = () => { if (!suggestion) throw new Error('Hook not mounted'); return suggestion; };
         let first: Awaited<ReturnType<ReturnType<typeof current>['generate']>>;
         await act(async () => { first = await current().generate(); });
-        expect(first!).toMatchObject({ ok: false, runId: 'retained', outcome: 'pending' });
+        expect(first!, JSON.stringify(first!)).toMatchObject({ ok: false, runId: 'retained', outcome: 'pending' });
         await act(async () => { await current().cancel(); });
         terminal = true;
         let second: Awaited<ReturnType<ReturnType<typeof current>['generate']>>;
         await act(async () => { second = await current().generate(); });
         expect(second!).toMatchObject({ ok: true, message: 'feat: retained suggestion' });
-        expect(fixture.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_START)).toHaveLength(1);
+        expect(fixture.startRequests).toHaveLength(1);
         expect(fixture.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP)).toEqual([
             expect.objectContaining({ targetId: 'm1', payload: { runId: 'retained' } }),
         ]);

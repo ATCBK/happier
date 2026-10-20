@@ -21,7 +21,17 @@ export function projectPluginInstalledAvailabilityInventory(input: Readonly<{
     }
     const recorded = new Set(input.inventory.materializations.map(materialization => materialization.pluginId));
     const runtime = input.runtimeMaterializations.filter(materialization => !recorded.has(materialization.pluginId));
-    const materializations = [...input.inventory.materializations, ...runtime];
+    // A recorded release-less installation (a registered local folder) has no release to declare it; the
+    // serving source's manifest of the same version is its declaration, as for runtime-only materializations.
+    const servedManifests = new Map((input.registry.pluginDeclarations ?? []).map(entry => [entry.pluginId, entry.manifest] as const));
+    const declared = input.inventory.materializations.map((materialization) => {
+        const manifest = materialization.portableRelease || materialization.declaredManifest
+            ? undefined : servedManifests.get(materialization.pluginId);
+        return manifest && manifest.version === materialization.version
+            ? Object.freeze({ ...materialization, declaredManifest: manifest })
+            : materialization;
+    });
+    const materializations = [...declared, ...runtime];
     return Object.freeze({
         ...input.inventory,
         materializations: Object.freeze(materializations.sort((left, right) => left.materializationId.localeCompare(right.materializationId))),

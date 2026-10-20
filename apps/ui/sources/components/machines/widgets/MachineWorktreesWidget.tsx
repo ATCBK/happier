@@ -7,6 +7,7 @@ import type { WidgetSizeV1 } from '@happier-dev/protocol/widgets';
 import type { MachinePageTabParams } from '@/components/machines/page/machinePageTabQuery';
 import { useStorageCollect } from '@/components/machines/storage/StorageCollectToggle';
 import { StorageItemRow } from '@/components/machines/storage/StorageItemRow';
+import { storageEvidenceLabel } from '@/components/machines/storage/storageReasonPresentation';
 import { repositoryOf } from '@/components/machines/storage/StorageWorktreesPage';
 import {
   VitalsSubLine,
@@ -211,7 +212,7 @@ function MachineWorktreesWidgetBody(
             evidence={(size === 'full'
               ? item.evidence
               : item.evidence.slice(0, 1)
-            ).join(' · ')}
+            ).map(storageEvidenceLabel).join(' · ')}
             bytes={item.size.allocatedBytes}
             atLeast={item.size.atLeast}
             largest={largest}

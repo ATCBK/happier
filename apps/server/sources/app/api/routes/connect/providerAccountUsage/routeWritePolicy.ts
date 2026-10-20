@@ -2,17 +2,17 @@ import type { ConnectedServiceUsageSourceV1, SealedConnectedServiceQuotaSnapshot
 import type { ProviderAccountUsageRecordId, ProviderAccountUsageRecordKeyV1, ProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/account-usage-primitives';
 import type { SealedProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/accountUsage';
 import { isPrismaErrorCode, type TransactionClient } from "@/storage/prisma";
-import { serializeProviderAccountUsageSnapshotMaterialV1 } from '@happier-dev/protocol/connect/account-usage-primitives';
+import { serializeProviderAccountUsageHistoryMaterialV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 import { PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes';
-import { markAccountChanged } from '@/app/changes/markAccountChanged';
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from '@/app/changes/markAccountChanged';
 import { compareConnectedServiceQuotaObservationRecency, isConnectedServiceQuotaObservationAtOrBeforeNow } from '@happier-dev/protocol/connect/quotaObservationTime';
 import { mergeProviderAccountSubscription } from '@happier-dev/protocol/connect/accountSubscription';
 
 import { inTx } from "@/storage/inTx";
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import {
-    createProviderAccountUsageRecord,
-    readProviderAccountUsageRecord,
+    createProviderAccountUsageRecordIfAbsent,
+    readProviderAccountUsageRecordWithCurrentGuard,
     updateProviderAccountUsageRecordIfCurrent,
     retainProviderAccountUsageHistory,
     hasProviderAccountUsageHistory,
@@ -46,6 +46,8 @@ export type ProviderAccountUsageWritePolicyParams = Readonly<{
         sealed: SealedConnectedServiceQuotaSnapshotV1;
     }>;
     client?: ProviderAccountUsagePolicyClient;
+    /** Source owner fences its revision only when this transaction mutates usage. */
+    beforeWrite?: () => Promise<void>;
 }>;
 
 type ProviderAccountUsageWritePolicyOverrides = Partial<Omit<ProviderAccountUsageWritePolicyParams, "client">> & Readonly<{
@@ -152,6 +154,9 @@ async function writeProviderAccountUsageRecordWithPolicyInClient(
     if (!isConnectedServiceQuotaObservationAtOrBeforeNow({ observedAtMs: params.fetchedAt, nowMs })) {
         throw new ProviderAccountUsagePayloadInvariantError("Provider account usage observation time must not be in the future");
     }
+    // The passed-client path may be ReadCommitted. Stabilize Account authority
+    // before the mode read, then let the usage owner enforce its row CAS.
+    await acquireAccountChangePublicationLocksInTx(params.client, [params.accountId], { includeSingleAccount: true, intent: "content" });
     const account = await params.client.account.findUnique({
         where: { id: params.accountId },
         select: {
@@ -174,14 +179,17 @@ async function writeProviderAccountUsageRecordWithPolicyInClient(
     const incomingFingerprint = normalizeFingerprint(params.materialFingerprint);
     const incomingLegacyQuotaProjection =
         buildIncomingLegacyQuotaProjection(params);
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-        const existing = await readProviderAccountUsageRecord({
+    // Concurrent material writes retry within the containing transaction's
+    // existing deadline; this phase must not fail valid work after five CAS misses.
+    for (;;) {
+        const captured = await readProviderAccountUsageRecordWithCurrentGuard({
             accountId: params.accountId,
             recordId: params.recordId,
         }, params.client);
 
-        if (!existing) {
+        if (!captured) {
             try {
+                await params.beforeWrite?.();
                 const initialWrite = buildWriteParams(
                     params,
                     {
@@ -197,7 +205,7 @@ async function writeProviderAccountUsageRecordWithPolicyInClient(
                             : {}),
                     },
                 );
-                await createProviderAccountUsageRecord(initialWrite, params.client);
+                if (!await createProviderAccountUsageRecordIfAbsent(initialWrite, params.client)) continue;
                 await retainProviderAccountUsageHistory(initialWrite, params.client);
                 await markAccountChanged(params.client, { accountId: params.accountId, kind: 'account', entityId: PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 });
                 return "written";
@@ -206,6 +214,8 @@ async function writeProviderAccountUsageRecordWithPolicyInClient(
                 throw error;
             }
         }
+
+        const existing = captured.record;
 
         const existingFingerprint = normalizeFingerprint(existing.metadata?.materialFingerprint);
         const existingFetchedAt = existing.fetchedAt ?? null;
@@ -321,13 +331,11 @@ async function writeProviderAccountUsageRecordWithPolicyInClient(
 
         if (existing.metadata?.pageProjection) nextWrite = { ...nextWrite,
             metadata: { ...nextWrite.metadata, pageProjection: existing.metadata.pageProjection } };
-        const updated = await updateProviderAccountUsageRecordIfCurrent(nextWrite, {
-            fetchedAt: existing.fetchedAt,
-            ...(existing.refreshRequestedAt !== undefined ? { refreshRequestedAt: existing.refreshRequestedAt } : {}),
-        }, params.client);
+        await params.beforeWrite?.();
+        const updated = await updateProviderAccountUsageRecordIfCurrent(nextWrite, captured.guard, params.client);
         if (updated) {
             const changedMaterial = nextWrite.snapshot && existing.snapshot
-                ? serializeProviderAccountUsageSnapshotMaterialV1(nextWrite.snapshot) !== serializeProviderAccountUsageSnapshotMaterialV1(existing.snapshot)
+                ? serializeProviderAccountUsageHistoryMaterialV1(nextWrite.snapshot) !== serializeProviderAccountUsageHistoryMaterialV1(existing.snapshot)
                 : !incomingFingerprint || existingFingerprint !== incomingFingerprint;
             if (changedMaterial || !await hasProviderAccountUsageHistory({ accountId: params.accountId, recordId: params.recordId }, params.client)) {
                 await retainProviderAccountUsageHistory(nextWrite, params.client);
@@ -337,7 +345,6 @@ async function writeProviderAccountUsageRecordWithPolicyInClient(
         }
     }
 
-    throw new Error("Provider account usage write policy could not commit after concurrent changes");
 }
 
 export async function writeProviderAccountUsageRecordWithPolicy(

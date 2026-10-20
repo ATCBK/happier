@@ -1,4 +1,4 @@
-import { archiveSessionReports, confirmSessionArchive } from '@/components/sessions/actions/confirmSessionArchive';
+import { confirmSessionArchive } from '@/components/sessions/actions/confirmSessionArchive';
 import * as React from 'react';
 import type { View } from 'react-native';
 
@@ -9,6 +9,10 @@ import {
     SESSION_ACTION_CLEAR_ATTENTION_STANDING_ID,
     SESSION_ACTION_EDIT_TAGS_ID,
     SESSION_ACTION_PUT_UNDER_ID,
+    SESSION_ACTION_COORDINATOR_MAKE_ID,
+    SESSION_ACTION_COORDINATOR_EDIT_ID,
+    SESSION_ACTION_COORDINATOR_ANSWERS_ID,
+    SESSION_ACTION_COORDINATOR_STOP_ID,
     SESSION_ACTION_MARK_READ_ID,
     SESSION_ACTION_MARK_UNREAD_ID,
     SESSION_ACTION_MOVE_TO_FOLDER_ID,
@@ -77,6 +81,10 @@ function resolveActionIdFromMenuItemId(itemId: string): SessionActionId | null {
         case SESSION_ACTION_MAKE_REGULAR_ID:
         case SESSION_ACTION_TOOL_CALLS_TOGGLE_ID:
         case SESSION_ACTION_TOOL_CALLS_USE_DEFAULT_ID:
+        case SESSION_ACTION_COORDINATOR_MAKE_ID:
+        case SESSION_ACTION_COORDINATOR_EDIT_ID:
+        case SESSION_ACTION_COORDINATOR_ANSWERS_ID:
+        case SESSION_ACTION_COORDINATOR_STOP_ID:
             return itemId;
         default:
             return null;
@@ -191,38 +199,22 @@ export function useSessionRowActionMenu(params: Readonly<{
     const alsoArchiveReportsRef = React.useRef(false);
     const [archivingSession, performArchiveMutation] = useHappyAction(async () => {
         const context = { hideInactiveSessions: params.hideInactiveSessions };
+        const alsoArchiveReports = alsoArchiveReportsRef.current;
+        alsoArchiveReportsRef.current = false;
         await executeSessionAction({
             actionId: SESSION_ACTION_ARCHIVE_ID,
             target,
+            input: { alsoArchiveReports },
             context,
         });
-        if (alsoArchiveReportsRef.current) {
-            alsoArchiveReportsRef.current = false;
-            await archiveSessionReports({ leadSessionId: target.sessionId, serverId: target.serverId, context });
-        }
     });
 
-    const confirmStopSession = React.useCallback(async () => {
-        const confirmed = await Modal.confirm(
-            t('sessionInfo.stopSession'),
-            t('sessionInfo.stopSessionConfirm'),
-            {
-                cancelText: t('common.cancel'),
-                confirmText: t('sessionInfo.stopSession'),
-                destructive: true,
-            },
-        );
-        if (!confirmed) return;
-        performStopMutation();
-    }, [performStopMutation]);
-
-    const reportCount = target.session.reports?.total ?? 0;
     const confirmArchiveSession = React.useCallback(async () => {
-        const confirmation = await confirmSessionArchive({ reportCount });
+        const confirmation = await confirmSessionArchive({ leadSessionId: target.sessionId, serverId: target.serverId });
         if (!confirmation.confirmed) return;
         alsoArchiveReportsRef.current = confirmation.alsoArchiveReports;
         performArchiveMutation();
-    }, [performArchiveMutation, reportCount]);
+    }, [performArchiveMutation, target.serverId, target.sessionId]);
 
     const handleRenameSession = React.useCallback(async () => {
         const newName = await Modal.prompt(
@@ -397,7 +389,7 @@ export function useSessionRowActionMenu(params: Readonly<{
                 await handleRenameSession();
                 return;
             case SESSION_ACTION_STOP_ID:
-                await confirmStopSession();
+                performStopMutation();
                 return;
             case SESSION_ACTION_ARCHIVE_ID:
                 await confirmArchiveSession();
@@ -408,12 +400,15 @@ export function useSessionRowActionMenu(params: Readonly<{
             case SESSION_ACTION_WORK_OPEN_ID:
             case SESSION_ACTION_TALK_ID:
             case SESSION_ACTION_PUT_UNDER_ID:
-            case SESSION_ACTION_RAIL_PIN_ID:
             case SESSION_ACTION_RAIL_UNPIN_ID:
             case SESSION_ACTION_MAKE_BOT_ID:
             case SESSION_ACTION_MAKE_REGULAR_ID:
             case SESSION_ACTION_TOOL_CALLS_TOGGLE_ID:
             case SESSION_ACTION_TOOL_CALLS_USE_DEFAULT_ID:
+            case SESSION_ACTION_COORDINATOR_MAKE_ID:
+            case SESSION_ACTION_COORDINATOR_EDIT_ID:
+            case SESSION_ACTION_COORDINATOR_ANSWERS_ID:
+            case SESSION_ACTION_COORDINATOR_STOP_ID:
                 await executeSessionAction({ actionId, target }).catch(showActionError);
                 return;
             default:
@@ -421,7 +416,7 @@ export function useSessionRowActionMenu(params: Readonly<{
         }
     }, [
         confirmArchiveSession,
-        confirmStopSession,
+        performStopMutation,
         handleAttentionStandingAction,
         handleReadStateAction,
         handleRenameSession,

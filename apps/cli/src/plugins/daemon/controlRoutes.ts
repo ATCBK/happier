@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { NpmRegistryProfileIdV1Schema } from '@happier-dev/protocol/rpc/npmRegistryProfiles';
 import { ExpectedMarketplaceListingV1Schema } from '@happier-dev/protocol/marketplace/internal';
 import { PluginUpdatePolicyV1Schema } from '@happier-dev/protocol/marketplace/pluginUpdatePolicyV1';
@@ -25,56 +25,56 @@ export const PLUGIN_ACTION_EXECUTE_PATH = '/plugins/actions/execute';
 export const PLUGIN_CATALOG_READ_PATH = '/plugins/catalog/read';
 export const PLUGIN_DEVELOPMENT_CONTROL_PATH = '/plugins/development/control';
 
-const NonEmptyStringSchema = z.string().trim().min(1).max(32_768);
-const PluginIdSchema = z.string().trim().min(1).max(256);
-const PluginRuntimeOccurrenceIdSchema = z.string().trim().min(1).max(512);
-const ArchiveSha256IntegritySchema = z.string().trim().regex(/^sha256-[A-Za-z0-9+/]{43}=$/u);
+const NonEmptyStringSchema = z.string().check(z.trim(), z.minLength(1), z.maxLength(32_768));
+const PluginIdSchema = z.string().check(z.trim(), z.minLength(1), z.maxLength(256));
+const PluginRuntimeOccurrenceIdSchema = z.string().check(z.trim(), z.minLength(1), z.maxLength(512));
+const ArchiveSha256IntegritySchema = z.string().check(z.trim(), z.regex(/^sha256-[A-Za-z0-9+/]{43}=$/u));
 
 const PluginChangeRequestSchema = z.union([
-  z.object({
+  z.strictObject({
     kind: z.literal('installPath'),
     locator: NonEmptyStringSchema,
-    development: z.literal(false).optional(),
-  }).strict(),
-  z.object({
+    development: z.optional(z.literal(false)),
+  }),
+  z.strictObject({
     kind: z.literal('installArchive'),
     locator: NonEmptyStringSchema,
-    expectedIntegrity: ArchiveSha256IntegritySchema.optional(),
-  }).strict(),
-  z.object({
+    expectedIntegrity: z.optional(ArchiveSha256IntegritySchema),
+  }),
+  z.strictObject({
     kind: z.literal('installNpm'),
     packageName: NonEmptyStringSchema,
-    selector: NonEmptyStringSchema.optional(),
-    registryOrigin: NonEmptyStringSchema.optional(),
-    registryProfileId: NpmRegistryProfileIdV1Schema.optional(),
-    expectedMarketplaceListing: ExpectedMarketplaceListingV1Schema.optional(),
-  }).strict(),
-  z.object({
+    selector: z.optional(NonEmptyStringSchema),
+    registryOrigin: z.optional(NonEmptyStringSchema),
+    registryProfileId: z.optional(NpmRegistryProfileIdV1Schema),
+    expectedMarketplaceListing: z.optional(ExpectedMarketplaceListingV1Schema),
+  }),
+  z.strictObject({
     kind: z.literal('update'),
     pluginId: PluginIdSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('setUpdatePolicy'),
     pluginId: PluginIdSchema,
     policy: PluginUpdatePolicyV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('development'),
-    pluginId: PluginIdSchema.optional(),
+    pluginId: z.optional(PluginIdSchema),
     sourceRootPath: NonEmptyStringSchema,
-    changedPaths: z.array(NonEmptyStringSchema).max(4_096).optional(),
-    sdkRegistryOrigin: NonEmptyStringSchema.optional(),
-  }).strict(),
+    changedPaths: z.optional(z.array(NonEmptyStringSchema).check(z.maxLength(4_096))),
+    sdkRegistryOrigin: z.optional(NonEmptyStringSchema),
+  }),
   ...([
     'enable',
     'rollback',
     'forgetTrust',
   ] as const).map((kind) => (
-    z.object({ kind: z.literal(kind), pluginId: PluginIdSchema }).strict()
+    z.strictObject({ kind: z.literal(kind), pluginId: PluginIdSchema })
   )),
   ...(['disable', 'uninstall', 'uninstallAndDeleteData'] as const).map((kind) => (
-    z.object({ kind: z.literal(kind), pluginId: PluginIdSchema,
-      managedResourceDispositions: z.array(ManagedResourceDispositionV1Schema).optional() }).strict()
+    z.strictObject({ kind: z.literal(kind), pluginId: PluginIdSchema,
+      managedResourceDispositions: z.optional(z.array(ManagedResourceDispositionV1Schema)) })
   )),
 ]);
 
@@ -85,53 +85,53 @@ const PluginChangeRequestSchema = z.union([
  * means such a field is rejected here rather than silently ignored.
  */
 const PluginChangeDecisionSchema = z.discriminatedUnion('decision', [
-  z.object({
+  z.strictObject({
     pendingChangeId: NonEmptyStringSchema,
     decision: z.literal('installAndTrust'),
-    optionalSelections: z.array(z.object({
+    optionalSelections: z.optional(z.array(z.strictObject({
       accessId: NonEmptyStringSchema,
       selected: z.boolean(),
-    }).strict()).max(512).optional(),
-  }).strict(),
-  z.object({
+    })).check(z.maxLength(512))),
+  }),
+  z.strictObject({
     pendingChangeId: NonEmptyStringSchema,
     decision: z.literal('cancel'),
-  }).strict(),
+  }),
 ]);
 
-const PluginChangeStatusRequestSchema = z.object({
+const PluginChangeStatusRequestSchema = z.strictObject({
   pendingChangeId: NonEmptyStringSchema,
-}).strict();
+});
 
 const PluginDevelopmentControlRequestSchema = z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('registerWorkspace'),
     projectRoot: NonEmptyStringSchema,
-    trust: z.enum(['accept', 'deny']).optional(),
-  }).strict(),
-  z.object({
+    trust: z.optional(z.enum(['accept', 'deny'])),
+  }),
+  z.strictObject({
     kind: z.literal('registerExplicit'),
     rootPath: NonEmptyStringSchema,
-    sdkRegistryOrigin: NonEmptyStringSchema.optional(),
-  }).strict(),
-  z.object({
+    sdkRegistryOrigin: z.optional(NonEmptyStringSchema),
+  }),
+  z.strictObject({
     kind: z.literal('unregisterExplicit'),
     rootPath: NonEmptyStringSchema,
-  }).strict(),
-  z.object({ kind: z.literal('invalidate'), rootPath: NonEmptyStringSchema }).strict(),
-  z.object({ kind: z.literal('reload'), rootPath: NonEmptyStringSchema }).strict(),
-  z.object({ kind: z.literal('status') }).strict(),
+  }),
+  z.strictObject({ kind: z.literal('invalidate'), rootPath: NonEmptyStringSchema }),
+  z.strictObject({ kind: z.literal('reload'), rootPath: NonEmptyStringSchema }),
+  z.strictObject({ kind: z.literal('status') }),
 ]);
 
-const PluginActionExecuteRequestSchema = z.object({
+const PluginActionExecuteRequestSchema = z.strictObject({
   actionId: NonEmptyStringSchema,
   input: z.unknown(),
-  requiredDangerLevel: z.literal('safe').optional(),
+  requiredDangerLevel: z.optional(z.literal('safe')),
   surface: z.enum(['cli', 'mcp', 'agent']),
-  defaultSessionId: NonEmptyStringSchema.optional(),
-  startedBy: WorkflowRunStartedByV1Schema.optional(),
-  expectedContributorOccurrenceId: PluginRuntimeOccurrenceIdSchema.optional(),
-}).strict();
+  defaultSessionId: z.optional(NonEmptyStringSchema),
+  startedBy: z.optional(WorkflowRunStartedByV1Schema),
+  expectedContributorOccurrenceId: z.optional(PluginRuntimeOccurrenceIdSchema),
+});
 
 export type PluginActionExecuteRequest = z.infer<typeof PluginActionExecuteRequestSchema>;
 

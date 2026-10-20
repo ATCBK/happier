@@ -4,7 +4,7 @@ import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 import { readSkillZipFilesV1 } from '@happier-dev/protocol/prompts/library/skills/skillZipV1';
 import { readSkillDirectoryInputV1 } from './skillsDirectoryInputAdapter';
 import type { SkillInstallSourceV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 
 export async function readSkillSourceArgV1(source: string): Promise<z.infer<typeof SkillInstallSourceV1Schema> | Readonly<{ kind: 'registryUnpinned'; sourceId: string; itemId: string }>> {
   if (/^https?:\/\//i.test(source)) return { kind: 'link', url: source };

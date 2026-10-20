@@ -36,6 +36,7 @@ import type { ConnectedServiceRuntimeFailureClassification } from '../runtimeAut
 import { applyConnectedServiceRuntimeAuthFailureSourceBinding, readConnectedServiceRuntimeAuthFailureSourceBinding } from '../runtimeAuth/handleConnectedServiceRuntimeAuthFailure';
 import type { ConnectedServiceRuntimeRegistry } from '../runtimeRegistry/registry';
 import type { RequesterSessionRuntimeContext } from '../../sessionEncryption/requesterSessionCredentials';
+import { readRequesterHomeWithinActionLifetime } from '../../sessionEncryption/requesterCurrentness';
 import { ConnectedServiceCredentialRevisionV1Schema, type ConnectedServiceCredentialRevisionV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 import type { ConnectedServiceAuthGroupSwitchCoordinator } from '../accountGroups/switching/ConnectedServiceAuthGroupSwitchCoordinator';
 import type { QualifiedConnectedAccountServiceRef } from '@happier-dev/protocol';
@@ -76,7 +77,7 @@ import {
  * auth.
  */
 
-type ResolveAuthForSpawnInput = Readonly<{ parentSessionId: string }> & Pick<
+type ResolveAuthForSpawnInput = Readonly<{ parentSessionId: string | null }> & Pick<
     Parameters<typeof resolveConnectedServiceAuthForSpawn>[0],
     | 'agentId'
     | 'connectedServicesBindingsRaw'
@@ -87,18 +88,25 @@ type ResolveAuthForSpawnInput = Readonly<{ parentSessionId: string }> & Pick<
     | 'modelId'
     | 'resolveQualifiedPurposeBindingSnapshot'
     | 'activateQualifiedPurposeBindings'
+    | 'signal'
 >;
 
 type CapturedExecutionRunRunnerIdentity = Readonly<{
     /** Canonical tracked Session object, also used by the exact exit owner. */
     identity: object;
-    parentSessionId: string;
+    parentSessionId: string | null;
     isCurrent(): boolean;
 }>;
 
 type ResolveAuthForSpawn = (
     input: ResolveAuthForSpawnInput,
-) => ReturnType<typeof resolveConnectedServiceAuthForSpawn>;
+) => Promise<(NonNullable<Awaited<ReturnType<typeof resolveConnectedServiceAuthForSpawn>>>
+    & Readonly<{ releaseAccountContext?: () => Promise<void> }>) | null>;
+
+type RunPurposeBindingActivation = Readonly<{
+    lease: ConnectedAccountPurposeBindingLease;
+    releaseAccountContext?: () => Promise<void>;
+}>;
 
 type ExecutionRunAgentPurposeContributions =
     AgentSpawnPurposeContributions
@@ -116,7 +124,7 @@ export type ExecutionRunTargetRegistration = Readonly<{
     materializationKey: string;
     connectedServicesBindingsRaw: unknown;
     connectedServiceSelectionsEnv: Readonly<Record<string, string>>;
-    sessionId: string;
+    sessionId: string | null;
     sessionDirectory?: string | null;
     exactPurposeBindingSubjectId?: string;
 }>;
@@ -125,26 +133,32 @@ export type ExecutionRunTargetRegistration = Readonly<{
 export async function registerExecutionRunConnectedServicesTarget(input: Readonly<{
     registry: ConnectedServiceRuntimeRegistry;
     registration: ExecutionRunTargetRegistration;
-    resolveSessionAccountContext: (sessionId: string) => Promise<RequesterSessionRuntimeContext | null>;
-    assertSessionAccountCurrent: (sessionId: string, context: RequesterSessionRuntimeContext | null) => Promise<void>;
+    signal?: AbortSignal;
+    withSessionAccountContext: <T>(sessionId: string | null, operation: (context: RequesterSessionRuntimeContext | null) => Promise<T>,
+        attribution?: RequesterSessionRuntimeContext['bootstrap']['attribution'], signal?: AbortSignal) => Promise<T>;
+    assertSessionAccountCurrent: (sessionId: string | null, context: RequesterSessionRuntimeContext | null,
+        attribution?: RequesterSessionRuntimeContext['bootstrap']['attribution'], signal?: AbortSignal) => Promise<void>;
 }>): Promise<void> {
     const registration = input.registration;
-    const context = await input.resolveSessionAccountContext(registration.sessionId);
-    await input.assertSessionAccountCurrent(registration.sessionId, context);
-    if (context && !await context.isCurrent()) throw new Error('requester_session_not_current');
-    input.registry.registerRunTarget({ runKey: registration.runKey, pid: registration.runnerPid, agentId: registration.agentId,
-        materializationKey: registration.materializationKey, connectedServicesBindingsRaw: registration.connectedServicesBindingsRaw,
-        connectedServiceSelectionsEnv: registration.connectedServiceSelectionsEnv,
-        exactPurposeBindingSubjectId: registration.exactPurposeBindingSubjectId, sessionId: registration.sessionId,
-        sessionDirectory: registration.sessionDirectory,
-        ...(context ? { requesterWorkAttributionV1: context.bootstrap.attribution } : {}) });
+    // Retryable Home failures occur during context resolution/currentness, before
+    // synchronous local registration. Release is local retirement and aggregates
+    // cleanup failures, so it cannot repeat this effect as a retryable Home read.
+    await readRequesterHomeWithinActionLifetime(() => input.withSessionAccountContext(registration.sessionId, async context => {
+        await input.assertSessionAccountCurrent(registration.sessionId, context, undefined, input.signal);
+        input.registry.registerRunTarget({ runKey: registration.runKey, pid: registration.runnerPid, agentId: registration.agentId,
+            materializationKey: registration.materializationKey, connectedServicesBindingsRaw: registration.connectedServicesBindingsRaw,
+            connectedServiceSelectionsEnv: registration.connectedServiceSelectionsEnv,
+            exactPurposeBindingSubjectId: registration.exactPurposeBindingSubjectId, sessionId: registration.sessionId,
+            sessionDirectory: registration.sessionDirectory,
+            ...(context ? { requesterWorkAttributionV1: context.bootstrap.attribution } : {}) });
+    }, undefined, input.signal), input.signal);
 }
 
 export type CreateExecutionRunConnectedServicesBridgeDeps = Readonly<{
     recordRuntimeTurnCompleted?: (input: Readonly<{ runId: string }>) => Promise<void>;
     classifyRuntimeFailure?: (input: Readonly<{ target: ConnectedServiceRuntimeTarget; diagnostic: unknown }>) => Promise<ConnectedServiceRuntimeFailureClassification | null>;
     recoverRuntimeFailure?: (input: Readonly<{
-        runId: string; parentSessionId: string; nativeResumeId: string; interruptedOriginId: string;
+        runId: string; parentSessionId: string | null; nativeResumeId: string; interruptedOriginId: string;
         selection: ConnectedServiceChildSelection; classification: ConnectedServiceRuntimeFailureClassification;
         refreshCredential(): ReturnType<ConnectedServiceRunRuntimeAuthRefreshHandler>;
         isCurrent(): boolean; signal: AbortSignal;
@@ -154,26 +168,26 @@ export type CreateExecutionRunConnectedServicesBridgeDeps = Readonly<{
     resolveRunCredentialRevisionTarget?: ConnectedServiceRuntimeRegistry['resolveExactRunCredentialRevisionTarget'];
     resolveDaemonAuthBridge?: ResolveDaemonAuthBridge;
     recoverRejectedStart?: (input: Readonly<{
-        parentSessionId: string;
+        parentSessionId: string | null;
         selection: Extract<ConnectedServiceChildSelection, { kind: 'group' }>;
         modelId: string;
         isCurrent(): boolean;
     }>) => ReturnType<ConnectedServiceAuthGroupSwitchCoordinator<QualifiedConnectedAccountServiceRef>['switchAfterClassifiedFailure']>;
     resolveAuthForSpawn: ResolveAuthForSpawn;
-    registerRunTargets: (registration: ExecutionRunTargetRegistration) => void | Promise<void>;
+    registerRunTargets: (registration: ExecutionRunTargetRegistration, signal?: AbortSignal) => void | Promise<void>;
     unregisterRunTargets: (runKey: string) => void | Promise<void>;
     /** Run lifetime ends independently from an activation's target retirement. */
     finishRunRecovery?: (runKey: string) => Promise<void>;
     resolveRunMaterializedRoot: (input: Readonly<{
         runKey: string;
         agentId: CatalogAgentId;
-        parentSessionId: string;
+        parentSessionId: string | null;
     }>) => string | null | Promise<string | null>;
     createAdoptedRootCleanup: (input: Readonly<{
         runKey: string;
         agentId: CatalogAgentId;
         materializedRoot: string;
-        parentSessionId: string;
+        parentSessionId: string | null;
     }>) => (() => void | Promise<void>) | null | Promise<(() => void | Promise<void>) | null>;
     captureRunnerIdentity: (input: Readonly<{
         runnerPid: number;
@@ -185,6 +199,7 @@ export type CreateExecutionRunConnectedServicesBridgeDeps = Readonly<{
         agentId: CatalogAgentId;
     }>) => Promise<Readonly<{
         contributions: ExecutionRunAgentPurposeContributions;
+        catalogEntry?: AgentCatalogEntry | null;
         /**
          * The exact immutable Agent contribution this lease's registry would derive purposes and
          * request-auth uses from. `null` when the registry cannot prove one, which makes the run
@@ -198,7 +213,7 @@ export type CreateExecutionRunConnectedServicesBridgeDeps = Readonly<{
     }>>;
     purposeBindingOwner: Readonly<{
         activatePurposeBindings(input: Parameters<ConnectedAccountPurposeBindingOwner['activatePurposeBindings']>[0],
-            context: Readonly<{ parentSessionId: string }>): ConnectedAccountPurposeBindingLease | Promise<ConnectedAccountPurposeBindingLease>;
+            context: Readonly<{ parentSessionId: string | null; signal?: AbortSignal }>): RunPurposeBindingActivation | Promise<RunPurposeBindingActivation>;
     }>;
     requestAuthRegistry: Pick<
         ConnectedAccountRequestAuthSubjectRegistry,
@@ -256,7 +271,10 @@ type RunReleaseEntry = {
     agentId: CatalogAgentId;
     cleanupOnFailure: (() => void | Promise<void>) | null;
     cleanupOnExit: (() => void | Promise<void>) | null;
+    releaseMaterializationAccountContext: (() => Promise<void>) | null;
+    releasePurposeBindingAccountContext: (() => Promise<void>) | null;
     cleanupPromise: Promise<void> | null;
+    stopObservingMaterializationCancellation?: () => void;
     retiring: boolean;
     targetsMayBeRegistered: boolean;
     purposeBindingLease: ConnectedAccountPurposeBindingLease | null;
@@ -347,6 +365,8 @@ export function createExecutionRunConnectedServicesBridge(
         entry.cleanupPromise ??= (async () => {
             // Currentness is revoked synchronously before capability or materialized-root I/O.
             entry.retiring = true;
+            entry.stopObservingMaterializationCancellation?.();
+            entry.stopObservingMaterializationCancellation = undefined;
             entry.purposeBindingLease?.dispose();
             if (entry.targetsMayBeRegistered) {
                 entry.targetsMayBeRegistered = false;
@@ -396,6 +416,10 @@ export function createExecutionRunConnectedServicesBridge(
                     );
                 });
             }
+            if (entry.releasePurposeBindingAccountContext) {
+                await entry.releasePurposeBindingAccountContext();
+                entry.releasePurposeBindingAccountContext = null;
+            }
             if (!options.skipFilesystem) {
                 const cleanupFilesystem = options.beforeAdmission
                     ? entry.cleanupOnFailure ?? entry.cleanupOnExit
@@ -403,6 +427,10 @@ export function createExecutionRunConnectedServicesBridge(
                 await cleanupFilesystem?.();
                 if (options.clearTerminalReceipt !== false) {
                     await deps.clearTerminalCleanupReceipt(entry.runKey);
+                }
+                if (entry.releaseMaterializationAccountContext) {
+                    await entry.releaseMaterializationAccountContext();
+                    entry.releaseMaterializationAccountContext = null;
                 }
             }
         })();
@@ -434,11 +462,16 @@ export function createExecutionRunConnectedServicesBridge(
     const cleanupUnadmittedMaterialization = async (input: Readonly<{
         runKey: string;
         cleanupFilesystem: (() => void | Promise<void>) | null;
+        releaseAccountContext?: () => Promise<void>;
         contributionLease: Readonly<{ release(): Promise<void> }>;
     }>): Promise<void> => {
         const cleanupResults = await Promise.allSettled([
             Promise.resolve().then(async () => {
-                await input.cleanupFilesystem?.();
+                try {
+                    await input.cleanupFilesystem?.();
+                } finally {
+                    await input.releaseAccountContext?.();
+                }
             }),
             Promise.resolve().then(async () => {
                 await input.contributionLease.release();
@@ -473,9 +506,12 @@ export function createExecutionRunConnectedServicesBridge(
         >[0]['bindings'];
         qualifiedPurposeBindingSnapshot?: AgentSpawnQualifiedPurposeBindingSnapshot | null;
         materializedRoot: string | null;
+        requestAuthMaterializedRoot: string | null;
         env: Readonly<Record<string, string>>;
         cleanupOnFailure: (() => void | Promise<void>) | null;
         cleanupOnExit: (() => void | Promise<void>) | null;
+        releaseMaterializationAccountContext?: (() => Promise<void>) | null;
+        signal?: AbortSignal;
         contributionLease?: Awaited<
             ReturnType<
                 CreateExecutionRunConnectedServicesBridgeDeps[
@@ -492,6 +528,7 @@ export function createExecutionRunConnectedServicesBridge(
             });
         let purposeBindingLease: ConnectedAccountPurposeBindingLease | null =
             null;
+        let releasePurposeBindingAccountContext: (() => Promise<void>) | null = null;
         let requestAuthCapability:
             ConnectedAccountRequestAuthCapabilityDescriptor
             | null = null;
@@ -509,6 +546,7 @@ export function createExecutionRunConnectedServicesBridge(
                     agentId: input.agentId,
                     bindings: input.connectedServicesBindings,
                     contributions: contributionLease.contributions,
+                    catalogEntry: contributionLease.catalogEntry,
                 });
             const requestAuthPurposeBindings =
                 resolveQualifiedRequestAuthPurposeBindingsFromSnapshot(
@@ -527,7 +565,7 @@ export function createExecutionRunConnectedServicesBridge(
                     && retainedCleanupByRunKey.get(input.runKey) === entry;
             };
             if (purposeSnapshot?.purposes.length) {
-                purposeBindingLease =
+                const activation =
                     await deps.purposeBindingOwner.activatePurposeBindings({
                         subject: {
                             kind: 'execution_run',
@@ -541,7 +579,9 @@ export function createExecutionRunConnectedServicesBridge(
                         ...(purposeSnapshot.directMaterialOrigins
                             ? { directMaterialOrigins: purposeSnapshot.directMaterialOrigins }
                             : {}),
-                    }, { parentSessionId: input.runner.parentSessionId });
+                    }, { parentSessionId: input.runner.parentSessionId, ...(input.signal ? { signal: input.signal } : {}) });
+                purposeBindingLease = activation.lease;
+                releasePurposeBindingAccountContext = activation.releaseAccountContext ?? null;
             }
             if (requestAuthPurposeBindings.length > 0) {
                 const legacyConnectedServiceCatalogAgent =
@@ -551,15 +591,15 @@ export function createExecutionRunConnectedServicesBridge(
                         ],
                     );
                 const capabilityPath =
-                    input.materializedRoot
+                    input.requestAuthMaterializedRoot
                         ? resolveConnectedAccountRequestAuthCapabilityPath(
-                            input.materializedRoot,
+                            input.requestAuthMaterializedRoot,
                         )
                         : '';
                 if (
                     !purposeBindingLease
                     || !purposeSnapshot?.requestAuthUses?.length
-                    || !input.materializedRoot
+                    || !input.requestAuthMaterializedRoot
                     || input.env[
                         CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH_ENV
                     ] !== capabilityPath
@@ -574,7 +614,7 @@ export function createExecutionRunConnectedServicesBridge(
                         subject: scopeConnectedAccountPurposeBindingLease({
                             lease: purposeBindingLease,
                             subjectId: purposeBindingLease.subjectId,
-                            parentSessionId: input.runner.parentSessionId,
+                            ...(input.runner.parentSessionId ? { parentSessionId: input.runner.parentSessionId } : {}),
                             uses: purposeSnapshot.requestAuthUses,
                             ...(legacyConnectedServiceCatalogAgent
                                 ? {
@@ -584,7 +624,7 @@ export function createExecutionRunConnectedServicesBridge(
                                 : {}),
                             registerRedaction: redactionLease.add,
                         }),
-                        materializedRootDir: input.materializedRoot,
+                        materializedRootDir: input.requestAuthMaterializedRoot,
                         materializationId: input.runKey,
                         httpPort: deps.resolveRequestAuthHttpPort(),
                     });
@@ -609,6 +649,8 @@ export function createExecutionRunConnectedServicesBridge(
                 agentId: input.agentId,
                 cleanupOnFailure: input.cleanupOnFailure,
                 cleanupOnExit: input.cleanupOnExit,
+                releaseMaterializationAccountContext: input.releaseMaterializationAccountContext ?? null,
+                releasePurposeBindingAccountContext,
                 cleanupPromise: null,
                 retiring: false,
                 targetsMayBeRegistered: false,
@@ -635,6 +677,7 @@ export function createExecutionRunConnectedServicesBridge(
             if (!contributionLeaseProvided) {
                 await contributionLease.release().catch(() => undefined);
             }
+            await releasePurposeBindingAccountContext?.();
             throw error;
         }
     };
@@ -726,6 +769,8 @@ export function createExecutionRunConnectedServicesBridge(
                         agentId: registrationAgentId,
                         cleanupOnFailure: null,
                         cleanupOnExit,
+                        releaseMaterializationAccountContext: null,
+                        releasePurposeBindingAccountContext: null,
                         cleanupPromise: null,
                         retiring: false,
                         targetsMayBeRegistered: false,
@@ -807,6 +852,11 @@ export function createExecutionRunConnectedServicesBridge(
             }
             let entry: RunReleaseEntry | null = null;
             try {
+                const requestAuthMaterializedRoot = await deps.resolveRunMaterializedRoot({
+                    runKey: registration.runKey,
+                    agentId: registrationAgentId,
+                    parentSessionId: runner.parentSessionId,
+                });
                 entry = await prepareEntry({
                     activationId: registration.activationId ?? randomUUID(),
                     runKey: registration.runKey,
@@ -817,11 +867,12 @@ export function createExecutionRunConnectedServicesBridge(
                     connectedServicesBindings:
                         registration.connectedServicesBindings,
                     materializedRoot: registration.materializedRoot,
-                    env: registration.materializedRoot
+                    requestAuthMaterializedRoot,
+                    env: requestAuthMaterializedRoot
                         ? {
                             [CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH_ENV]:
                                 resolveConnectedAccountRequestAuthCapabilityPath(
-                                    registration.materializedRoot,
+                                    requestAuthMaterializedRoot,
                                 ),
                         }
                         : {},
@@ -883,9 +934,11 @@ export function createExecutionRunConnectedServicesBridge(
         });
     };
 
-    const materialize: ConnectedServiceRunMaterializationHandler = async (input) => {
+    const materialize: ConnectedServiceRunMaterializationHandler = async (input, signal) => {
+        signal?.throwIfAborted();
         const runKey = buildRunKey(input);
         return await withRunKeyMutation(runKey, async () => {
+            signal?.throwIfAborted();
             const agentId = input.agentId.trim();
             if (!isCatalogAgentId(agentId)) {
                 return blocked(`Execution-run connected services are not supported for backend '${agentId}'`);
@@ -900,6 +953,7 @@ export function createExecutionRunConnectedServicesBridge(
                     'Execution-run connected services runner identity is not current',
                 );
             }
+            signal?.throwIfAborted();
             const recoveryEntry = input.recovery ? retainedCleanupByRunKey.get(runKey) : null;
             if (input.recovery && (!recoveryEntry || recoveryEntry.activationId !== input.recovery.activationId
                 || recoveryEntry.runnerPid !== input.runnerPid || recoveryEntry.runnerIdentity !== runner.identity
@@ -945,7 +999,7 @@ export function createExecutionRunConnectedServicesBridge(
                             : 'Agent purpose contributions are unavailable',
                     ));
                 }
-                if (!runner.isCurrent()) {
+                if (signal?.aborted || !runner.isCurrent()) {
                     await cleanupUnadmittedMaterialization({
                         runKey,
                         cleanupFilesystem: null,
@@ -958,6 +1012,7 @@ export function createExecutionRunConnectedServicesBridge(
                 let resolved: Awaited<ReturnType<ResolveAuthForSpawn>>;
                 try {
                     resolved = await deps.resolveAuthForSpawn({
+                        signal,
                         parentSessionId: runner.parentSessionId,
                         agentId,
                         connectedServicesBindingsRaw: input.connectedServices,
@@ -971,16 +1026,17 @@ export function createExecutionRunConnectedServicesBridge(
                                 agentId,
                                 bindings,
                                 contributions: contributionLease.contributions,
+                                catalogEntry: contributionLease.catalogEntry,
                             }),
-                        activateQualifiedPurposeBindings: (snapshot) =>
-                            deps.purposeBindingOwner.activatePurposeBindings({
+                        activateQualifiedPurposeBindings: async (snapshot) => {
+                            const activation = await deps.purposeBindingOwner.activatePurposeBindings({
                                 subject: {
                                     kind: 'execution_run',
                                     runId: runKey,
                                     runnerPid: input.runnerPid,
                                     agentId,
                                     isCurrent: () => (
-                                        runner.isCurrent()
+                                        !signal?.aborted && runner.isCurrent()
                                         && contributionLease.isCurrent()
                                     ),
                                 },
@@ -989,7 +1045,15 @@ export function createExecutionRunConnectedServicesBridge(
                                 ...(snapshot.directMaterialOrigins
                                     ? { directMaterialOrigins: snapshot.directMaterialOrigins }
                                     : {}),
-                            }, { parentSessionId: runner.parentSessionId }),
+                            }, { parentSessionId: runner.parentSessionId, ...(signal ? { signal } : {}) });
+                            return {
+                                subjectId: activation.lease.subjectId,
+                                async dispose() {
+                                    try { activation.lease.dispose(); }
+                                    finally { await activation.releaseAccountContext?.(); }
+                                },
+                            };
+                        },
                     });
                 } catch (error) {
                     await cleanupUnadmittedMaterialization({
@@ -1051,12 +1115,16 @@ export function createExecutionRunConnectedServicesBridge(
                 let cleanupOnFailure: (() => void | Promise<void>) | null =
                     resolved.materializationPurposeLease
                         ? async () => {
-                            await Promise.resolve(resolved.cleanupOnFailure?.());
-                            await resolved.materializationPurposeLease?.dispose();
+                            try {
+                                await (resolved.cleanupOnFailure ?? resolved.cleanupOnExit)?.();
+                            } finally {
+                                await resolved.materializationPurposeLease?.dispose();
+                            }
                         }
-                        : resolved.cleanupOnFailure;
+                        : resolved.cleanupOnFailure ?? resolved.cleanupOnExit;
                 let entry: RunReleaseEntry | null = null;
                 try {
+                    signal?.throwIfAborted();
                     const env: Record<string, string> = { ...resolved.env };
                     const materializedRoot = resolved.targetMaterializedRoot ?? null;
                     const cleanupOnExit = resolved.cleanupOnExit
@@ -1065,7 +1133,7 @@ export function createExecutionRunConnectedServicesBridge(
                             : null);
                     cleanupOnFailure ??= cleanupOnExit;
                     const connectedServicesBindings = resolved.connectedServicesBindings ?? input.connectedServices;
-                    const activationId = randomUUID();
+                    const activationId = input.activationId;
                     const agentContribution = await contributionLease
                         .resolveAgentContributionIdentity();
                     // Resolution's launch-only subject has finished materializing. Retire it
@@ -1082,11 +1150,27 @@ export function createExecutionRunConnectedServicesBridge(
                         qualifiedPurposeBindingSnapshot:
                             resolved.qualifiedPurposeBindingSnapshot,
                         materializedRoot,
+                        requestAuthMaterializedRoot: resolved.requestAuthMaterializedRoot ?? null,
                         env,
                         cleanupOnFailure,
                         cleanupOnExit,
+                        releaseMaterializationAccountContext: resolved.releaseAccountContext ?? null,
+                        signal,
                         contributionLease,
                     });
+                    if (recoveryEntry?.releaseMaterializationAccountContext) {
+                        // The newly prepared entry owns cleanup now. Keep the previous
+                        // release in that same owner if its asynchronous retirement fails.
+                        const releaseCurrentContext = entry.releaseMaterializationAccountContext;
+                        entry.releaseMaterializationAccountContext = async () => {
+                            await recoveryEntry.releaseMaterializationAccountContext?.();
+                            recoveryEntry.releaseMaterializationAccountContext = null;
+                            await releaseCurrentContext?.();
+                        };
+                        await recoveryEntry.releaseMaterializationAccountContext();
+                        recoveryEntry.releaseMaterializationAccountContext = null;
+                        entry.releaseMaterializationAccountContext = releaseCurrentContext;
+                    }
                     const registration: ExecutionRunConnectedServicesRegistrationV1 = {
                         v: 1,
                         activationId,
@@ -1111,8 +1195,24 @@ export function createExecutionRunConnectedServicesBridge(
                         ...(entry.purposeBindingLease ? { exactPurposeBindingSubjectId: entry.purposeBindingLease.subjectId } : {}),
                         sessionId: runner.parentSessionId,
                         sessionDirectory: input.cwd,
-                    });
+                    }, ...(signal ? [signal] as const : []));
+                    signal?.throwIfAborted();
                     if (!entry.isCurrent()) throw new Error('execution_run_runner_retired');
+
+                    // Keep cancellation bound to this exact activation after returning it:
+                    // the HTTP caller may disconnect before receiving its release identity.
+                    if (signal) {
+                        const admittedEntry = entry;
+                        const cancel = () => {
+                            void withRunKeyMutation(runKey, async () => {
+                                if (retainedCleanupByRunKey.get(runKey) === admittedEntry) {
+                                    await cleanupEntry(admittedEntry, { beforeAdmission: true });
+                                }
+                            });
+                        };
+                        entry.stopObservingMaterializationCancellation = () => signal.removeEventListener('abort', cancel);
+                        signal.addEventListener('abort', cancel, { once: true });
+                    }
 
                     return {
                         ok: true,
@@ -1129,6 +1229,7 @@ export function createExecutionRunConnectedServicesBridge(
                         await cleanupUnadmittedMaterialization({
                             runKey,
                             cleanupFilesystem: cleanupOnFailure,
+                            releaseAccountContext: resolved.releaseAccountContext,
                             contributionLease,
                         });
                     }
@@ -1155,7 +1256,7 @@ export function createExecutionRunConnectedServicesBridge(
         if (!parsed.success) return refused;
         const request = parsed.data;
         const entry = retainedCleanupByRunKey.get(request.runId);
-        const runner = await deps.captureRunnerIdentity({ runnerPid: request.runnerPid });
+        const runner = await deps.captureRunnerIdentity({ runnerPid: request.runnerPid, runId: request.runId });
         let target = deps.getRunRuntimeTarget?.(request.runId);
         const hasCurrentAuthority = () => Boolean(entry && entry.authorityActive && !entry.retiring
             && retainedCleanupByRunKey.get(request.runId) === entry
@@ -1217,7 +1318,7 @@ export function createExecutionRunConnectedServicesBridge(
         const input = parsed.data;
         return await withRunKeyMutation(input.runId, async () => {
             const entry = retainedCleanupByRunKey.get(input.runId);
-            const runner = await deps.captureRunnerIdentity({ runnerPid: input.runnerPid });
+            const runner = await deps.captureRunnerIdentity({ runnerPid: input.runnerPid, runId: input.runId });
             if (!entry || !runner || !entry.authorityActive || entry.retiring
                 || entry.activationId !== input.activationId || entry.runnerPid !== input.runnerPid
                 || runner.identity !== entry.runnerIdentity || !runner.isCurrent() || !entry.isCurrent()
@@ -1232,7 +1333,7 @@ export function createExecutionRunConnectedServicesBridge(
         if (!parsed.success || signal.aborted) return { status: 'failed', reason: 'runtime_recovery_invalid' };
         const input = parsed.data;
         const entry = retainedCleanupByRunKey.get(input.runId);
-        const runner = await deps.captureRunnerIdentity({ runnerPid: input.runnerPid });
+        const runner = await deps.captureRunnerIdentity({ runnerPid: input.runnerPid, runId: input.runId });
         let target = deps.getRunRuntimeTarget?.(input.runId);
         const isCurrent = () => Boolean(!signal.aborted && entry && target && entry.authorityActive && !entry.retiring
             && retainedCleanupByRunKey.get(input.runId) === entry && entry.activationId === input.activationId
@@ -1286,7 +1387,7 @@ export function createExecutionRunConnectedServicesBridge(
         const input = parsed.data;
         return await withRunKeyMutation(input.runId, async () => {
             const entry = retainedCleanupByRunKey.get(input.runId);
-            const runner = await deps.captureRunnerIdentity({ runnerPid: input.runnerPid });
+            const runner = await deps.captureRunnerIdentity({ runnerPid: input.runnerPid, runId: input.runId });
             const isCurrent = () => Boolean(entry && entry.authorityActive && !entry.retiring
                 && entry.activationId === input.activationId && entry.runnerPid === input.runnerPid
                 && runner?.identity === entry.runnerIdentity && runner.isCurrent() && entry.isCurrent());
@@ -1339,7 +1440,6 @@ export function createExecutionRunConnectedServicesBridge(
                     clearTerminalReceipt: false,
                 });
             }
-            if (!input.sessionId) return false;
             const materializedRoot = input.materializedRoot ?? await deps.resolveRunMaterializedRoot({
                 runKey: parsed.data.runKey,
                 agentId: parsed.data.agentId,
@@ -1374,6 +1474,8 @@ export function createExecutionRunConnectedServicesBridge(
                     agentId: parsed.data.agentId,
                     cleanupOnFailure: null,
                     cleanupOnExit: cleanup,
+                    releaseMaterializationAccountContext: null,
+                    releasePurposeBindingAccountContext: null,
                     cleanupPromise: null,
                     retiring: false,
                     targetsMayBeRegistered: false,
@@ -1417,10 +1519,9 @@ export function createExecutionRunConnectedServicesBridge(
             ) {
                 return { ok: true, released: false };
             }
-            return {
-                ok: true,
-                released: await cleanupEntry(entry),
-            };
+            return await cleanupEntry(entry)
+                ? { ok: true, released: true }
+                : { ok: false, errorCode: 'connected_service_run_cleanup_failed' };
         });
     };
 

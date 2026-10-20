@@ -3,13 +3,16 @@ import { actionInputOptionValueKey } from '@happier-dev/protocol/actions/actionI
 import type { ActionFieldOption } from './ActionInputFields';
 import type { InputFieldOptionsState } from './inputFieldOptionsStore';
 import type { InputOptionsConsumerV1 } from '@happier-dev/protocol/inputs';
+import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { InputTypePickerHostContext } from './InputTypePickerHostProvider';
 import { usageDimensionLabel } from '@/sync/domains/usage/usageLabels';
 import { localizeBuiltinInputLabel } from '@/text/builtinInputPrompts';
 import { UsageQuerySchema } from '@happier-dev/protocol/inputs/usageQuery';
 import { formatUsageCalendarPeriod } from '@/sync/domains/usage/usageCalendarPresentation';
 
-export type InputFieldOptionsContext = Readonly<{ actionId?: string; consumer?: InputOptionsConsumerV1; draftInput?: Readonly<Record<string, unknown>> }>;
+export type InputFieldOptionsContext = Readonly<{ actionId?: string; consumer?: InputOptionsConsumerV1; draftInput?: Readonly<Record<string, unknown>>;
+    /** Check these picked values only: a source that can answer them directly does not read its whole inventory. */
+    values?: readonly JsonValue[] }>;
 export type ResolveSessionActionFieldOptions = ((
     field: Pick<ActionInputFieldHint, 'optionsSourceId' | 'options' | 'inputType' | 'connectedAccountOptions'> & { path?: string },
     context?: InputFieldOptionsContext,

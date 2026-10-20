@@ -9,6 +9,7 @@ the structured result for automation; it does not bypass authority or
 credential decisions. An explicit local-path install is itself the code-trust
 decision, documented in
 [Install a development source without a prompt](#install-a-development-source-without-a-prompt).
+These commands describe 0.3 development source / Developer Preview authoring.
 
 ## Create and develop
 
@@ -43,10 +44,22 @@ command for a package tree, not a prerequisite. Pass
 `--sdk-registry <origin>` only when the selected SDK must resolve from an
 approved registry origin.
 
+A project folder uses `src/index.ts` or `index.ts` (having both is an error).
+When neither exists, set `package.json`'s `main` to the author module: an exact
+`.ts`, `.mts`, `.js`, or `.mjs` file exporting `manifest` and `activate`. For
+example, a plain-JavaScript package can use `"main": "./src/index.mjs"`.
+The conventional TypeScript source takes precedence over a package's built
+`main`; conditional `exports` do not select the development entry. Folder
+development keeps dependency and UI-artifact preparation rooted at that package.
+
 Use `hdev plugins status [--json]` from another terminal to read the canonical
 roots, phases, current occurrences, UI digests, and bounded diagnostics.
 
 ## Check the author package
+
+The scaffold's package scripts are aliases for these managed commands:
+`npm run typecheck`, `npm run build`, `npm test`, and `npm run pack:plugin`.
+They use the CLI invoker selected when the package was created.
 
 ```bash
 hdev plugins dev typecheck .
@@ -150,35 +163,51 @@ decision is required until the reviewed source identity changes.
 
 ## Review a pending change
 
-An install or development request can return a daemon-issued pending change
-ID. Review and decide that exact request:
+An install or development request can leave a daemon-retained candidate waiting
+for review. In 0.3 development source, it uses an ordinary `plugins.install`
+approval Artifact in the Happier Inbox. Review the evaluated manifest,
+permissions, and host access there. A review still awaiting daemon evaluation
+cannot be approved.
+
+When development registration needs review, `plugins dev` hands the retained
+candidate to this same install owner and returns the ordinary approval Artifact
+ID. Decide it, then run `plugins dev` again to continue watching.
+
+To reconnect to a retained development review, rerun `plugins dev` with the exact
+source, or use the explicit install alternative to rejoin the same Artifact:
+
+```bash
+hdev plugins install <exact-source> --dev --json
+```
+
+Decide in the Inbox, or use the public `approval.request.decide` Action with
+the ordinary approval Artifact ID returned by the proposal:
+
+```bash
+hdev actions invoke approval.request.decide --input-json '{"artifactId":"<approvalArtifactId>","decision":"approve"}' --json
+hdev actions invoke approval.request.decide --input-json '{"artifactId":"<approvalArtifactId>","decision":"reject"}' --json
+```
+
+The same Action is available to agents and MCP callers. Decision authority
+follows the user's approval policy; JSON output does not grant authority.
+Optional host resources and Secrets retain their separate authority decisions.
+
+A daemon pending change ID identifies preparation status, not the approval
+Artifact. Preserve it for read-only inspection:
 
 ```bash
 hdev plugins change status <pendingChangeId> --json
-hdev plugins change approve <pendingChangeId> --json
-hdev plugins change reject <pendingChangeId> --json
 ```
 
-`status` is read-only. `approve` and `reject` are explicit present-user
-decisions on this pending-change route. An Agent may prepare a request but
-cannot decide a separate authority grant. A source-root
-approval can return `reviewRequired` with the same pending ID when package
-review remains. Review the reported package facts, then use `approve` again on
-the same pending ID. `reject` cancels the request. JSON or noninteractive
-installation never auto-approves a separate authority grant, and a direct
-local-path install selects no optional host resources.
-
-The same decision is available in the app. Settings -> Plugins lists every
-change the machine's daemon is still holding, including one an Agent prepared,
-and offers the same approve and reject decisions with the full review. Use it
-when the initiating result is not in front of you.
+`status` does not publish or decide an approval. Use the original source flow
+to rejoin a retained development review instead of preparing another candidate.
 
 Pending IDs are rejoinable only during the same daemon lifetime. If `status`
 reports `expired` after restart, rerun the original request and review its new
 facts. If a mutation reports `outcome_unknown`, inspect installed state before
-replaying it. The listing is daemon-lifetime state, not a durable queue: a
-restarted daemon holds nothing, so preserve the ID surfaced by the initiating
-result whenever you can query that exact request.
+replaying it. Pending candidate custody lasts for that daemon lifetime; a
+restart requires newly prepared facts even if an older approval Artifact remains
+visible.
 
 ## Other plugin administration
 

@@ -27,7 +27,8 @@ import { openExternalUrl } from '@/utils/url/openExternalUrl';
 
 import { catalogReviewStatusLabel, formatCatalogEntryVersion } from '../model/pluginMarketplaceModel';
 import { usePluginSettingsScreenState, type PluginSettingsScreenState } from '../model/usePluginSettingsScreenState';
-import { buildPluginDetailRoute, buildPluginsHomeRoute, PLUGINS_HOME_TITLE_KEY, usePluginsSurfaceHost } from '../model/pluginsSurfaceRoutes';
+import { buildPluginDetailRoute, buildPluginsHomeRoute, PLUGINS_HOME_TITLE_KEY } from '../model/pluginsSurfaceRoutes';
+import { usePluginsSurfaceHost } from '../model/usePluginsSurfaceHost';
 import { PluginMark } from '../PluginMark';
 import { PluginReadOnlySnapshotNotice } from '../PluginReadOnlySnapshotNotice';
 import type { PluginMarketplaceCatalogEntry } from '../readPluginMarketplaceCatalog';

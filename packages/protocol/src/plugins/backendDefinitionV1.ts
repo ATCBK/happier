@@ -502,7 +502,7 @@ export const PluginBackendSessionCapabilitiesV1Schema = lazyZodSchema(() => z._d
 }));
 export type PluginBackendSessionCapabilitiesV1 = z.infer<typeof PluginBackendSessionCapabilitiesV1Schema>;
 
-export const PluginBackendCapabilitiesV1Schema = lazyZodSchema(() => z.pipe(z.transform(normalizePluginBackendCapabilitiesInput), z._default(z.looseObject({
+export const PluginBackendCapabilitiesV1Schema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizePluginBackendCapabilitiesInput), z._default(z.looseObject({
     executionRun: z._default(PluginBackendExecutionRunCapabilitiesV1Schema, { supported: true }),
     session: PluginBackendSessionCapabilitiesV1Schema,
   }), {

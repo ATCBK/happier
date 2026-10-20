@@ -2,14 +2,15 @@ import { spawn } from 'node:child_process';
 import { readFileSync, readdirSync, writeSync } from 'node:fs';
 import { Socket } from 'node:net';
 import { constants } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { withWorkspaceBundleLock, WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE } from '../../../../../packages/cli-common/workspaceBundleLock.mjs';
 import { parseWorkspaceLockLeaseValue } from '../../../../../packages/cli-common/workspaceLockLease.mjs';
 import { createFileChangeObserver, DEFAULT_FILE_CHANGE_CATCH_UP_MS } from '../../../../../packages/cli-common/fileChangeObserver.mjs';
-import { resolveDependencyInstallRoot, resolveDependencyRefreshLockPath, withDependencyConsumption } from './dependency_refresh.mjs';
+import { callerHoldsDependencyConsumption, resolveDependencyInstallRoot, resolveDependencyRefreshLockPath, withDependencyConsumption } from './dependency_refresh.mjs';
 import { JSON_OWNER_FILE_LOCK_BUSY_ERROR_CODE } from './jsonOwnerFileLock.mjs';
+import { spawnForegroundCommand } from './proc.mjs';
 
 const workerPath = fileURLToPath(import.meta.url);
 const sourceRoot = fileURLToPath(new URL('../../../../../', import.meta.url));
@@ -20,7 +21,8 @@ export function isWorkspaceBuildStartup({ env = process.env, devStartup = false 
   return devStartup || env.HAPPIER_WORKSPACE_BUILD_STARTUP === '1';
 }
 
-async function hasInheritedWorkspaceLease(env) {
+async function hasInheritedBuildCustody(env) {
+  if (callerHoldsDependencyConsumption(env)) return true;
   const { callerHoldsWorkspaceBundleLock } = await import('../../../../../packages/cli-common/workspaceBundleLock.mjs');
   let leases;
   try { leases = JSON.parse(env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES || '[]'); }
@@ -64,13 +66,25 @@ export async function runWorkspaceBuildAdmission({ command, args = [], locks = [
     launcherPath, env, admissionClass, admissionRequired, dependencyInstallDir, devStartup });
   if (isWorkspaceBuildStartup({ env, devStartup })) env = { ...env, HAPPIER_HSTACK_DISPATCH_CONTROL: '1' };
   return await new Promise(resolveResult => {
-    const child = spawn(invocation.command, invocation.args, { cwd, env, signal, stdio });
+    const child = spawnForegroundCommand(invocation.command, invocation.args, {
+      cwd, env, signal, stdio, ownedProcessGroup: true,
+    });
+    // Native admission settles interruption with a numeric shell status. Keep
+    // the caller's actual signal distinct from an ordinary numeric child exit;
+    // foreground custody still owns forwarding and waits for the tree to close.
+    let callerSignal = null;
+    const handlers = new Map(['SIGINT', 'SIGTERM', 'SIGHUP'].map(name =>
+      [name, () => { callerSignal ??= name; }]));
+    for (const [name, handler] of handlers) process.on(name, handler);
     let stdout = '', stderr = '', error;
     child.stdout?.on('data', value => { if (captureStdout) stdout += value; onStdout?.(value); });
     child.stderr?.on('data', value => { if (captureStderr) stderr += value; onStderr?.(value); });
     child.once('error', value => { error = value; });
-    child.once('close', (status, terminalSignal) => resolveResult({ status, signal: terminalSignal,
-      ...(child.stdout ? { stdout } : {}), ...(child.stderr ? { stderr } : {}), ...(error ? { error } : {}) }));
+    child.once('close', (status, terminalSignal) => {
+      for (const [name, handler] of handlers) process.off(name, handler);
+      resolveResult({ status: callerSignal ? null : status, signal: callerSignal ?? terminalSignal,
+        ...(child.stdout ? { stdout } : {}), ...(child.stderr ? { stderr } : {}), ...(error ? { error } : {}) });
+    });
   });
 }
 
@@ -98,32 +112,42 @@ function admissionChangeObservation(locks, env) {
   const waiter = env.HSTACK_ADMISSION_WAITER;
   const lockPaths = locks.flatMap(lock => [resolve(lock.path), `${resolve(lock.path)}.priority-claim`]);
   const dependencyWaiters = locks.filter(lock => lock.kind === 'dependency').map(lock => `${resolve(lock.path)}.waiters`);
+  let resourcesRelevant = true;
   const observer = createFileChangeObserver([...new Set([
     ...(root ? [join(root, 'owners'), join(root, 'waiters')] : []), ...lockPaths.map(dirname), ...dependencyWaiters,
-  ])]);
+  ])], {
+    // These parent directories also carry logs, queue-gate attempts and other
+    // publishers. Only exclusion/admission changes justify reading all leases.
+    isRelevant: (directory, filename) => filename == null
+      || (root && directory === join(root, 'owners'))
+      || (root && directory === join(root, 'waiters') && join(directory, String(filename)) !== waiter)
+      || (resourcesRelevant && ((dependencyWaiters.includes(directory) && /^\d+\.json$/.test(String(filename)))
+        || lockPaths.some(path => dirname(path) === directory && basename(path) === String(filename)))),
+  });
   const raw = path => { try { return readFileSync(path, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
   const entries = directory => {
     try { return readdirSync(directory).sort(); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   };
-  const readSnapshot = () => JSON.stringify([
+  const readSnapshot = (includeResources = true) => JSON.stringify([
     root ? entries(join(root, 'owners')) : [],
     root ? entries(join(root, 'waiters')).filter(name => join(root, 'waiters', name) !== waiter)
       .map(name => [name, raw(join(root, 'waiters', name))]) : [],
-    lockPaths.map(path => {
+    includeResources ? lockPaths.map(path => {
       const value = raw(path);
       try {
         const { updatedAtMs, ...identity } = JSON.parse(value);
         return identity;
       } catch { return value; }
-    }),
-    dependencyWaiters.map(directory => entries(directory).filter(name => /^\d+\.json$/.test(name))
+    }) : [],
+    includeResources ? dependencyWaiters.map(directory => entries(directory).filter(name => /^\d+\.json$/.test(name))
       .map(name => {
         const value = raw(join(directory, name));
         try { const { updatedAtMs, ...identity } = JSON.parse(value); return [name, identity]; }
         catch { return [name, value]; }
-      })),
+      })) : [],
   ]);
-  return { observer, readSnapshot };
+  return { observer, readSnapshot, readAdmissionSnapshot: () => readSnapshot(false),
+    observeResources: value => { resourcesRelevant = value; } };
 }
 
 /** Non-Linux and in-process publishers use the same all-resource attempt as
@@ -133,7 +157,7 @@ function admissionChangeObservation(locks, env) {
 export async function withWorkspaceBuildResources({ locks = [], dependencyInstallDir, env = process.env, signal }, run) {
   locks = workspaceBuildResources(locks, dependencyInstallDir, env);
   const observation = admissionChangeObservation(locks, env);
-  const inherited = await hasInheritedWorkspaceLease(env);
+  const inherited = await hasInheritedBuildCustody(env);
   let waited = false;
   try {
     while (true) {
@@ -195,7 +219,7 @@ async function withLocks(locks, env, signal, run, index = 0) {
 export async function runWorkspaceBuildAdmissionWorker(argv) {
   if (argv.length === 1 && argv[0] === '--held-lock-probe') {
     try {
-      process.exitCode = await hasInheritedWorkspaceLease(process.env) ? 0 : 1;
+      process.exitCode = await hasInheritedBuildCustody(process.env) ? 0 : 1;
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
       // Exit 1 means an authenticated lease is absent. A probe failure must
@@ -212,7 +236,7 @@ export async function runWorkspaceBuildAdmissionWorker(argv) {
   }
   const locks = parseLocks(rawLocks);
   if (mode === '--dev-startup') process.env.HAPPIER_WORKSPACE_BUILD_STARTUP = '1';
-  const inheritedWorkspaceLease = await hasInheritedWorkspaceLease(process.env);
+  const inheritedBuildCustody = await hasInheritedBuildCustody(process.env);
   if (mode === '--standalone' && process.platform === 'linux') {
     const { requiresTypeScriptAdmission } = await import('../../../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs');
     if (requiresTypeScriptAdmission({ env: process.env, platform: process.platform })) {
@@ -238,6 +262,7 @@ export async function runWorkspaceBuildAdmissionWorker(argv) {
   const eventMode = mode === '--worker-events' || mode === '--worker-events-inherited';
   const observation = eventMode ? admissionChangeObservation(locks, process.env) : null;
   let waitSnapshot;
+  let waitReadSnapshot;
   let running = false;
   let reportedBusy = false;
   const acquire = standalone || mode === '--worker'
@@ -245,11 +270,19 @@ export async function runWorkspaceBuildAdmissionWorker(argv) {
     : run => withLocks(locks, process.env, cancellation.signal, run);
   try {
     do {
-      if (eventMode) waitSnapshot = observation.observer.capture(observation.readSnapshot);
+      let admissionSnapshot;
+      let resourcesAcquired = false;
+      if (eventMode) {
+        observation.observeResources(true);
+        waitReadSnapshot = observation.readSnapshot;
+        waitSnapshot = observation.observer.capture(waitReadSnapshot);
+        admissionSnapshot = observation.readAdmissionSnapshot();
+      }
       try {
         await acquire(async env => {
+          resourcesAcquired = true;
           if (!standalone) {
-            writeSync(3, inheritedWorkspaceLease ? 'ready-inherited\n' : 'ready\n');
+            writeSync(3, inheritedBuildCustody ? 'ready-inherited\n' : 'ready\n');
             const decision = await lines.next();
             if (decision.done || decision.value === 'release') return;
             if (decision.value !== 'run') throw new Error('Invalid workspace admission decision');
@@ -291,13 +324,21 @@ export async function runWorkspaceBuildAdmissionWorker(argv) {
         writeSync(3, 'busy\n');
       }
       if (!eventMode || running) break;
+      if (resourcesAcquired) {
+        // Capacity/queue denial released otherwise available resources. Their
+        // independent publishers cannot free capacity; watching their transient
+        // leases makes queued workers repeatedly wake one another.
+        observation.observeResources(false);
+        waitReadSnapshot = observation.readAdmissionSnapshot;
+        waitSnapshot = admissionSnapshot;
+      }
       writeSync(3, 'released\n');
       const decision = await lines.next();
       if (decision.done) break;
       if (!decision.value.startsWith('wait ')) throw new Error('Invalid workspace admission wait');
       const maxWaitMs = Number(decision.value.slice(5));
       if (!Number.isFinite(maxWaitMs) || maxWaitMs <= 0) throw new Error('Invalid workspace admission catch-up');
-      await observation.observer.wait({ snapshot: waitSnapshot, readSnapshot: observation.readSnapshot,
+      await observation.observer.wait({ snapshot: waitSnapshot, readSnapshot: waitReadSnapshot,
         maxWaitMs, signal: cancellation.signal });
       writeSync(3, 'changed\n');
       const retry = await lines.next();

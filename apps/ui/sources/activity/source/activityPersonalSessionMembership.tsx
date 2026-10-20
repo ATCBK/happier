@@ -13,11 +13,23 @@ import type { SessionListQueryHomeState } from '@/sync/domains/session/listing/s
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { buildSessionListQueryKey } from '@/sync/domains/session/listing/sessionListQueryKey';
 import { useSessionListQueryHomeStates } from '@/sync/domains/session/listing/useSessionListQuerySourceState';
+import type { SessionFollowRulesSnapshot } from '@/sync/api/session/sessionFollowRulesApi';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { subscribeHomeAccountChange, subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import type { FollowDeliveryMuteScopeV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { resolveServerCredentialAccountScope } from '@/sync/domains/scope/serverCredentialAccountScope';
 
 export type ActivityPersonalSessionMembership = Readonly<{
     membershipByServerId: Readonly<Record<string, readonly string[]>>;
     statesByServerId: Readonly<Record<string, SessionListQueryHomeState | undefined>>;
     coverageComplete: boolean;
+    followRulesByServerId?: Readonly<Record<string, SessionFollowRulesSnapshot>>;
+    accountDeliveryMutesByServerId?: Readonly<Record<string, Readonly<{
+        scope: ServerAccountScope; scopes: readonly FollowDeliveryMuteScopeV1[];
+    }> | null>>;
 }>;
 
 const EMPTY_ACTIVITY_PERSONAL_SESSION_MEMBERSHIP: ActivityPersonalSessionMembership = {
@@ -29,6 +41,86 @@ const EMPTY_ACTIVITY_PERSONAL_SESSION_MEMBERSHIP: ActivityPersonalSessionMembers
 const ActivityPersonalSessionMembershipContext = React.createContext<ActivityPersonalSessionMembership>(
     EMPTY_ACTIVITY_PERSONAL_SESSION_MEMBERSHIP,
 );
+const EMPTY_FOLLOW_RULES: Readonly<Record<string, SessionFollowRulesSnapshot>> = Object.freeze({});
+const EMPTY_ACCOUNT_DELIVERY_MUTES: NonNullable<ActivityPersonalSessionMembership['accountDeliveryMutesByServerId']> = Object.freeze({});
+
+/** One private census per mounted Activity owner, shared by closed badges and open details. */
+function usePersonalFollowInputs(serverIds: readonly string[], enabled: boolean, generation: number) {
+    const [snapshot, setSnapshot] = React.useState({ serverIds, generation, rules: EMPTY_FOLLOW_RULES, mutes: EMPTY_ACCOUNT_DELIVERY_MUTES });
+    React.useEffect(() => {
+        const setRules = (update: (previous: Readonly<Record<string, SessionFollowRulesSnapshot>>) => Readonly<Record<string, SessionFollowRulesSnapshot>>) => {
+            setSnapshot(previous => {
+                const sameScope = previous.serverIds === serverIds && previous.generation === generation;
+                const rules = update(sameScope ? previous.rules : EMPTY_FOLLOW_RULES);
+                return sameScope && sameStrictJsonValue(previous.rules, rules) ? previous
+                    : { serverIds, generation, rules, mutes: sameScope ? previous.mutes : EMPTY_ACCOUNT_DELIVERY_MUTES };
+            });
+        };
+        if (!enabled) setRules(() => EMPTY_FOLLOW_RULES);
+        const setMute = (serverId: string, value: NonNullable<ActivityPersonalSessionMembership['accountDeliveryMutesByServerId']>[string]) => {
+            setSnapshot(previous => {
+                const sameScope = previous.serverIds === serverIds && previous.generation === generation;
+                const mutes = { ...(sameScope ? previous.mutes : EMPTY_ACCOUNT_DELIVERY_MUTES), [serverId]: value };
+                return sameScope && sameStrictJsonValue(previous.mutes, mutes) ? previous
+                    : { serverIds, generation, rules: sameScope ? previous.rules : EMPTY_FOLLOW_RULES, mutes };
+            });
+        };
+        let disposed = false;
+        const requests = new Map<string, { controller: AbortController; rerun: boolean }>();
+        const refresh = (serverId: string, retire = false) => {
+            const existing = requests.get(serverId);
+            setMute(serverId, null);
+            if (retire) {
+                existing?.controller.abort();
+                requests.delete(serverId);
+                setRules(previous => ({ ...previous, [serverId]: { status: 'unavailable', reason: 'scope-retired' } }));
+            } else if (existing) { existing.rerun = true; return; }
+            const request = { controller: new AbortController(), rerun: false };
+            requests.set(serverId, request);
+            const rulesRead = enabled ? import('@/sync/api/session/sessionFollowRulesApi').then(api => api.readSessionFollowRules(serverId, request.controller.signal))
+                .then(snapshot => {
+                    if (!disposed && !request.controller.signal.aborted) setRules(previous => ({ ...previous, [serverId]: snapshot }));
+                }).catch(() => {
+                    if (!disposed && !request.controller.signal.aborted) setRules(previous => ({ ...previous, [serverId]: { status: 'unavailable', reason: 'unavailable' } }));
+                }) : Promise.resolve();
+            const muteRead = resolveServerCredentialAccountScope(serverId).then(async resolution => {
+                if (resolution.kind !== 'bound') return null;
+                const { readAccountSessionDeliveryMutedScopes } = await import('@/sync/api/session/sessionFollowApi');
+                const scopes = await readAccountSessionDeliveryMutedScopes(resolution.scope, request.controller.signal);
+                return scopes === null ? null : { scope: resolution.scope, scopes };
+            }).then(mutes => {
+                if (!disposed && !request.controller.signal.aborted) setMute(serverId, request.rerun ? null : mutes);
+            }).catch(() => {
+                if (!disposed && !request.controller.signal.aborted) setMute(serverId, null);
+            });
+            void Promise.all([rulesRead, muteRead]).finally(() => {
+                    if (requests.get(serverId) !== request) return;
+                    requests.delete(serverId);
+                    if (!disposed && request.rerun) refresh(serverId);
+                });
+        };
+        const refreshMatching = (serverId: string, retire = false) => {
+            for (const home of serverIds) if (areServerProfileIdentifiersEquivalent(home, serverId)) refresh(home, retire);
+        };
+        const unsubscribeChanges = subscribeHomeAccountChange(event => {
+            if (event.entityIds === undefined || event.entityIds.some(id => id === 'session-follows' || id === 'self')) refreshMatching(event.serverId);
+        });
+        const unsubscribeCredentials = subscribeHomeCredentialChange(event => refreshMatching(event.serverId, true));
+        const retirement = captureActiveServerAccountScopeLifetime()?.onRetire(() => {
+            for (const request of requests.values()) request.controller.abort();
+            setSnapshot({ serverIds, generation, rules: EMPTY_FOLLOW_RULES, mutes: EMPTY_ACCOUNT_DELIVERY_MUTES });
+        });
+        for (const serverId of serverIds) refresh(serverId);
+        return () => {
+            disposed = true;
+            retirement?.dispose(); unsubscribeChanges(); unsubscribeCredentials();
+            for (const request of requests.values()) request.controller.abort();
+        };
+    }, [enabled, generation, serverIds]);
+    const current = snapshot.serverIds === serverIds && snapshot.generation === generation;
+    return React.useMemo(() => ({ rules: enabled && current ? snapshot.rules : EMPTY_FOLLOW_RULES,
+        mutes: current ? snapshot.mutes : EMPTY_ACCOUNT_DELIVERY_MUTES }), [current, enabled, snapshot.mutes, snapshot.rules]);
+}
 
 /**
  * Activity's independent personal corpus. The strict query owner evaluates every
@@ -110,27 +202,6 @@ export function projectActivityPersonalSessionMembership(input: Readonly<{
     };
 }
 
-export function buildActivityPersonalQueryContinuationKey(
-    homes: readonly ActivityPersonalQueryHome[],
-    statesByServerId: Readonly<Record<string, SessionListQueryHomeState | undefined>>,
-): string {
-    const pending = homes.flatMap((home) => {
-        const state = statesByServerId[home.serverId];
-        if (!(state?.phase === 'ready'
-            && state.appliedSourceKind === 'query'
-            && state.appliedQueryKey === home.queryKey
-            && (state.hasNext || state.attentionHasNext))) {
-            return [];
-        }
-        return [{
-            serverId: home.serverId,
-            nextCursor: state.hasNext ? state.nextCursor : null,
-            attentionNextCursor: state.attentionHasNext ? state.attentionNextCursor : null,
-        }];
-    });
-    return pending.length > 0 ? JSON.stringify(pending) : '';
-}
-
 export function ActivityPersonalSessionMembershipProvider(props: React.PropsWithChildren<{
     enabled: boolean;
 }>): React.ReactElement {
@@ -152,26 +223,23 @@ export function ActivityPersonalSessionMembershipProvider(props: React.PropsWith
         [activeServer.serverId, profilesGeneration],
     );
     const homes = React.useMemo(() => buildActivityPersonalQueryHomes(serverIds), [serverIds]);
+    const personalInputs = usePersonalFollowInputs(serverIds, props.enabled, activeServer.generation);
     // Membership needs which Sessions are in the corpus, never their rows: the states-only owner keeps
     // session content changes from re-rendering Activity.
     const querySource = useSessionListQueryHomeStates({
         enabled: props.enabled,
         homes,
     });
-    const continuationKey = buildActivityPersonalQueryContinuationKey(homes, querySource.statesByServerId);
-    const loadNext = querySource.loadNext;
-    React.useEffect(() => {
-        if (!props.enabled || !continuationKey) return;
-        void loadNext();
-    }, [continuationKey, loadNext, props.enabled]);
+    // Background membership observes its first page and reports partial coverage.
+    // Only a visible list or an explicit exhaustive operation demands more pages.
 
-    const value = React.useMemo(() => projectActivityPersonalSessionMembership({
+    const value = React.useMemo(() => ({ ...projectActivityPersonalSessionMembership({
         enabled: props.enabled,
         homes,
         statesByServerId: querySource.statesByServerId,
         membershipByServerId: querySource.membershipByServerId,
         coverageComplete: querySource.coverageComplete,
-    }), [homes, props.enabled, querySource.coverageComplete, querySource.membershipByServerId, querySource.statesByServerId]);
+    }), followRulesByServerId: personalInputs.rules, accountDeliveryMutesByServerId: personalInputs.mutes }), [personalInputs, homes, props.enabled, querySource.coverageComplete, querySource.membershipByServerId, querySource.statesByServerId]);
 
     return (
         <ActivityPersonalSessionMembershipContext.Provider value={value}>

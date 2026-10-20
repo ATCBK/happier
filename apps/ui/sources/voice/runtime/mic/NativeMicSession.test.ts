@@ -419,6 +419,47 @@ describe('NativeMicSession', () => {
         expect(deleteRecordedAudio).toHaveBeenCalledTimes(1);
     });
 
+    it.each(['android', 'ios'])('releases pending %s recording custody on teardown and fences late completion from a retry', async (platform) => {
+        (Platform as { OS: string }).OS = platform;
+        let finishPreparation!: () => void;
+        const preparation = new Promise<void>((resolve) => { finishPreparation = resolve; });
+        const firstRecorder = { ...recorder, prepareToRecordAsync: vi.fn(() => preparation), record: vi.fn(), stop: vi.fn(async () => {}) };
+        const retryRecorder = { ...recorder, record: vi.fn(), stop: vi.fn(async () => {}) };
+        const nativeStart = vi.fn()
+            .mockImplementationOnce(async () => { await preparation; return { recordingId: 'pending' }; })
+            .mockResolvedValueOnce({ recordingId: 'retry' });
+        const nativeStop = vi.fn(async ({ recordingId }: { recordingId: string }) => ({ uri: `file:///tmp/${recordingId}.m4a` }));
+        const session = createRecordingSession({
+            requestPermission,
+            createRecorder: vi.fn().mockReturnValueOnce(firstRecorder).mockReturnValueOnce(retryRecorder),
+            createNativeFileRecording: () => createVoiceFileRecording({ ...audioSession.nativeModule,
+                startFileRecording: nativeStart,
+                setFileRecordingMuted: async () => {},
+                stopFileRecording: nativeStop,
+            }),
+            deleteRecordedAudio: vi.fn(async () => {}),
+        });
+        const starting = session.beginRecording();
+        try {
+            await vi.waitFor(() => expect(platform === 'ios' ? nativeStart : firstRecorder.prepareToRecordAsync).toHaveBeenCalledOnce());
+            await session.teardown();
+            expect(audioSession.coordinator.getSnapshot().leaseCount).toBe(0);
+            await session.beginRecording();
+            expect(audioSession.coordinator.getSnapshot().leaseCount).toBe(1);
+            finishPreparation();
+            await starting;
+            expect(audioSession.coordinator.getSnapshot().leaseCount).toBe(1);
+            expect(firstRecorder.record).not.toHaveBeenCalled();
+            expect(retryRecorder.stop).not.toHaveBeenCalled();
+            await expect(session.stopRecording()).resolves.toBe(platform === 'ios' ? 'file:///tmp/retry.m4a' : 'file:///tmp/rec.m4a');
+            if (platform === 'ios') expect(nativeStop.mock.calls.map(([args]) => args.recordingId)).toEqual(['pending', 'retry']);
+            else expect(firstRecorder.stop).toHaveBeenCalledOnce();
+        } finally {
+            finishPreparation();
+            await starting;
+        }
+    });
+
     it('tracks muted state and pauses an active recorder until unmuted', async () => {
         const session = createRecordingSession({
             createRecorder,

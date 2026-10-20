@@ -3,7 +3,6 @@ import * as React from 'react';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
-import { Modal } from '@/modal';
 import { leaveTeam } from '@/sync/ops/teams/teamMemberOperations';
 import { isTeamActionApprovalPendingError } from '@/sync/ops/teams/teamActionClient';
 import { t } from '@/text';
@@ -11,7 +10,7 @@ import { t } from '@/text';
 import type { TeamSectionContext } from '../teamSectionContext';
 import { teamMutationFailureLabel } from '../teamMutationPresentation';
 
-/** One confirmation and approval continuation for the two self-removal entry points. */
+/** One Action and approval continuation for the two self-removal entry points. */
 export const TeamLeaveAction = React.memo(function TeamLeaveAction(props: Readonly<{
     context: TeamSectionContext;
     testID: string;
@@ -32,12 +31,7 @@ export const TeamLeaveAction = React.memo(function TeamLeaveAction(props: Readon
         const finish = () => context.settleLeave({ kind: 'succeeded' });
         const failure = (message: string) => context.settleLeave({ kind: 'failed', message });
         try {
-            const confirmed = await Modal.confirm(
-                t('teams.leave.confirmTitle', { name: context.team.name }),
-                t('teams.leave.confirmBody'),
-                { confirmText: t('teams.leave.action'), destructive: true },
-            );
-            if (!confirmed || !mounted.current) return;
+            if (!mounted.current) return;
             setBusy(true);
             const outcome = await leaveTeam({
                 scope: context.scope,
@@ -64,7 +58,7 @@ export const TeamLeaveAction = React.memo(function TeamLeaveAction(props: Readon
         titleNumberOfLines="complete"
         loading={busy}
         disabled={busy || !context.mutationsAvailable || context.approvalPending}
-        onPress={(event) => { event?.stopPropagation(); void leave(); }}
+        onPress={(event) => { event?.stopPropagation?.(); void leave(); }}
     />;
     return props.presentation === 'button' ? button : (
         <ItemGroup surface="none">

@@ -22,7 +22,7 @@ async function account(id: string, homeRole: HomeRoleV1, name: string | null, us
 }
 
 async function page(actorAccountId: string, cursor: string | null = null, limit = 2) {
-    const result = await inTx((tx) => listHomeAccountsInTx(tx, { actorAccountId, env: ENV, cursor, limit }));
+    const result = await inTx((tx) => listHomeAccountsInTx(tx, { emailDeliveryReady: false, actorAccountId, env: ENV, cursor, limit }));
     expect(result.status).toBe("ok");
     if (result.status !== "ok") throw new Error("expected roster page");
     return HomeAccountListResultV1Schema.parse(result.result);
@@ -113,7 +113,7 @@ describe("Home People server ordering", () => {
             .map((parts) => encodeKeysetCursorV1({ queryKey: QUERY, parts })),
     ])("rejects a malformed or foreign cursor (%#)", async (cursor) => {
         const actor = await account("owner", "owner", "Owner");
-        expect(await inTx((tx) => listHomeAccountsInTx(tx, { actorAccountId: actor, env: ENV, cursor })))
+        expect(await inTx((tx) => listHomeAccountsInTx(tx, { emailDeliveryReady: false, actorAccountId: actor, env: ENV, cursor })))
             .toEqual({ status: "rejected", code: "invalid_home_cursor" });
     });
 

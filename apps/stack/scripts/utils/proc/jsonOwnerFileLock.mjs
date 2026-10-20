@@ -1,5 +1,5 @@
-import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { createFileChangeObserver, DEFAULT_FILE_CHANGE_CATCH_UP_MS } from '../../../../../packages/cli-common/fileChangeObserver.mjs';
 
 import { isPidAlive } from './pids.mjs';
@@ -40,6 +40,22 @@ function serializeJsonOwnerLock({ createdAtMs, updatedAtMs, priority }) {
     updatedAtMs,
     ...(priority === 'writer' || priority === 'reader' ? { priority } : {}),
   });
+}
+
+// Publish complete records for holders and waiters alike. Linking a completed
+// sibling file retains exclusive-create semantics without exposing an empty
+// live path; replacement uses the same atomic rename as queue heartbeats.
+function publishOwnerRecord(path, raw, { create = false, expectedRaw } = {}) {
+  const pendingPath = `${path}.pending-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  try {
+    writeFileSync(pendingPath, raw, { encoding: 'utf8', flag: 'wx' });
+    if (expectedRaw !== undefined && readJsonOwnerLockRaw(path) !== expectedRaw) return false;
+    if (create) linkSync(pendingPath, path);
+    else renameSync(pendingPath, path);
+    return true;
+  } finally {
+    try { unlinkSync(pendingPath); } catch {}
+  }
 }
 
 export function describeJsonOwnerLockOwner(owner, nowMs = Date.now()) {
@@ -108,7 +124,7 @@ function reclaimJsonOwnerLockSnapshot(lockPath, expectedRaw) {
   }
 
   try {
-    writeFileSync(lockPath, movedRaw, { encoding: 'utf8', flag: 'wx' });
+    publishOwnerRecord(lockPath, movedRaw, { create: true });
     unlinkSync(reclaimPath);
   } catch {
     // Another owner already has the lock path. Keep the quarantined file for diagnostics.
@@ -152,7 +168,7 @@ async function withJsonOwnerFileLockInternal(fn, options, fair) {
   const startedAt = Date.now();
   const errorLabel = options.errorLabel ?? 'JSON owner file lock';
 
-  let fd = null;
+  let exclusiveAcquired = false;
   let heartbeat = null;
   let ownLockRaw = null;
   let acquiredAtMs = null;
@@ -161,7 +177,19 @@ async function withJsonOwnerFileLockInternal(fn, options, fair) {
   const ownReader = { pid: process.pid, createdAtMs: startedAt, readerId: Math.random().toString(36).slice(2) };
   let sharedAcquired = false;
   const waitersDir = `${lockPath}.waiters`;
-  const observer = createFileChangeObserver([dirname(lockPath), waitersDir]);
+  let observedWaiterNames = new Set();
+  const observer = createFileChangeObserver([dirname(lockPath), waitersDir], {
+    isRelevant(directory, filename) {
+      if (filename == null) return true;
+      const name = String(filename);
+      if (directory === dirname(lockPath)) return name === basename(lockPath) || name === basename(waitersDir);
+      // Existing tickets only heartbeat; their identity and queue position stay
+      // fixed. Joins/removals affect eligibility. The usual catch-up still
+      // observes death or an externally replaced ticket without a file event.
+      return /^\d+\.json$/.test(name)
+        && (!observedWaiterNames.has(name) || !existsSync(join(waitersDir, name)));
+    },
+  });
   let waiterPath = null;
   let ownWaiterRaw = null;
   let waiterCreatedAtMs = startedAt;
@@ -189,17 +217,7 @@ async function withJsonOwnerFileLockInternal(fn, options, fair) {
 
   // Creation and heartbeats both publish complete records: killing a waiter
   // during a heartbeat must not leave an ownerless head for an infinite wait.
-  const publishWaiter = (raw, expectedRaw) => {
-    const pendingPath = `${waiterPath}.pending-${process.pid}-${Math.random().toString(36).slice(2)}`;
-    try {
-      writeFileSync(pendingPath, raw, {encoding:'utf8', flag:'wx'});
-      if (expectedRaw !== undefined && readJsonOwnerLockRaw(waiterPath) !== expectedRaw) return false;
-      renameSync(pendingPath, waiterPath);
-      return true;
-    } finally {
-      try { unlinkSync(pendingPath); } catch {}
-    }
-  };
+  const publishWaiter = (raw, expectedRaw) => publishOwnerRecord(waiterPath, raw, { expectedRaw });
 
   const registerWaiter = (waiters, reuseOnly = false) => {
     // A re-entering writer keeps its original queue identity. Do not adopt a
@@ -228,8 +246,8 @@ async function withJsonOwnerFileLockInternal(fn, options, fair) {
   const acquire = () => {
     acquiredAtMs = Date.now();
     ownLockRaw = serializeJsonOwnerLock({createdAtMs:acquiredAtMs, updatedAtMs:acquiredAtMs, priority:options.priority});
-    fd = openSync(lockPath, 'wx');
-    writeFileSync(fd, ownLockRaw, 'utf8');
+    publishOwnerRecord(lockPath, ownLockRaw, { create: true });
+    exclusiveAcquired = true;
   };
 
   const withQueueGate = fn => withJsonOwnerFileLockInternal(fn, {
@@ -238,12 +256,7 @@ async function withJsonOwnerFileLockInternal(fn, options, fair) {
   }, false);
   const publishReaders = (readers, create = false) => {
     const raw = JSON.stringify({ ...readers[0], priority: 'reader', updatedAtMs: Date.now(), readers });
-    if (create) { writeFileSync(lockPath, raw, { encoding: 'utf8', flag: 'wx' }); return; }
-    const pendingPath = `${lockPath}.pending-${process.pid}-${Math.random().toString(36).slice(2)}`;
-    try {
-      writeFileSync(pendingPath, raw, { encoding: 'utf8', flag: 'wx' });
-      renameSync(pendingPath, lockPath);
-    } finally { try { unlinkSync(pendingPath); } catch {} }
+    publishOwnerRecord(lockPath, raw, { create });
   };
   const trySharedAcquire = () => {
     let waiters = readWaiters();
@@ -288,6 +301,7 @@ async function withJsonOwnerFileLockInternal(fn, options, fair) {
     let names = [];
     try { names = readdirSync(waitersDir).filter(name => /^\d+\.json$/.test(name)).sort(); }
     catch (error) { if (error?.code !== 'ENOENT') throw error; }
+    observedWaiterNames = new Set(names);
     return JSON.stringify([ownerIdentity(lockPath), names.filter(name => join(waitersDir, name) !== waiterPath)
       .map(name => [name, ownerIdentity(join(waitersDir, name))])]);
   };
@@ -309,18 +323,17 @@ async function withJsonOwnerFileLockInternal(fn, options, fair) {
         // Both reader joins and writer decisions use the existing short ticket
         // registration lock. No reader may race a newly registered writer.
         await withQueueGate(trySharedAcquire);
-        if (sharedAcquired || fd !== null) break;
+        if (sharedAcquired || exclusiveAcquired) break;
       }
       const head = fair ? readWaiters()[0] : null;
       let eligible = !fair || (waiterPath ? head?.path === waiterPath : !head);
       try {
         if (eligible && !sharedReaders) acquire();
-        if (fd !== null) {
-          // Keep the existing wx fast path. A newcomer may reserve the file
+        if (exclusiveAcquired) {
+          // Keep the exclusive-create fast path. A newcomer may reserve the file
           // during a head's slow poll, but may not enter ahead of that head.
           if (!fair || waiterPath || readWaiters().length === 0) break;
-          closeSync(fd);
-          fd = null;
+          exclusiveAcquired = false;
           if (readJsonOwnerLockRaw(lockPath) === ownLockRaw) unlinkSync(lockPath);
           ownLockRaw = null;
         }
@@ -358,6 +371,7 @@ async function withJsonOwnerFileLockInternal(fn, options, fair) {
           options.onWait({
             lockPath,
             owner: snapshot.owner,
+            queueHead: head?.owner,
             staleAfterMs,
             timeoutMs,
             waitedMs: Date.now() - startedAt,
@@ -374,8 +388,8 @@ async function withJsonOwnerFileLockInternal(fn, options, fair) {
     if (!sharedAcquired) heartbeat = setInterval(() => {
       try {
         if (readJsonOwnerLockRaw(lockPath) !== ownLockRaw) return;
-        ownLockRaw = serializeJsonOwnerLock({ createdAtMs: acquiredAtMs, updatedAtMs: Date.now(), priority:options.priority });
-        writeFileSync(lockPath, ownLockRaw, 'utf8');
+        const nextRaw = serializeJsonOwnerLock({ createdAtMs: acquiredAtMs, updatedAtMs: Date.now(), priority:options.priority });
+        if (publishOwnerRecord(lockPath, nextRaw, { expectedRaw: ownLockRaw })) ownLockRaw = nextRaw;
       } catch {}
     }, heartbeatIntervalMs);
     return await fn({ waited, lockPath, owner: sharedAcquired ? ownReader : readJsonOwnerLockSnapshot(lockPath).owner });
@@ -394,11 +408,7 @@ async function withJsonOwnerFileLockInternal(fn, options, fair) {
       }, { ...options, signal: undefined, wait: true, sharedReaders: false,
         lockPath: `${lockPath}.queue.lock`, timeoutMs: Infinity, onWait: undefined }, false);
     }
-    if (fd !== null) {
-      try {
-        closeSync(fd);
-      } catch {}
-      fd = null;
+    if (exclusiveAcquired) {
       try {
         if (readJsonOwnerLockRaw(lockPath) === ownLockRaw) unlinkSync(lockPath);
       } catch {}

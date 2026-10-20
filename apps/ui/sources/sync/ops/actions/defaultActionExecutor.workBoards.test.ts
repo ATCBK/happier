@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';

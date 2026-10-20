@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { createActionExecutor } from '@happier-dev/protocol/actions';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+import { createActionExecutor, ActionsSettingsV1Schema, isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions';
 import { AppShellActionOutputSchemas } from '@happier-dev/protocol/actions/appShellActionFamily';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { projectWork } from '@/components/sessions/work/workProjection';
@@ -7,7 +10,7 @@ import { createActionOperationStore } from '@/sync/domains/actionOperations/acti
 import { createActionOperationSelectors } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { registerMountedWorkReadOwner, invokeMountedWorkRead } from './mountedWorkReadAction';
 import { registerMountedInboxReadOwner } from './mountedWorkReadAction';
-import { ApprovalRequestV2Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
+import { ApprovalRequestV2Schema, buildApprovalRequestArtifactHeaderV1, FeaturesResponseSchema } from '@happier-dev/protocol';
 import { buildInboxWorkGroups } from '@/activity/presentation/buildInboxWorkGroups';
 import { createAutomationRunFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { createInboxAttentionFixture } from '@/dev/testkit/fixtures/inboxFixtures';
@@ -16,12 +19,16 @@ import type { InboxModel } from '@/hooks/inbox/useInboxModel';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome';
 import { SessionReadStateSetResultV1Schema } from '@happier-dev/protocol/sessions/readState/actions';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
 it('acknowledges an exact Inbox address from voice through the production bulk-read owner', async () => {
+    installDisconnectedServerSocketBoundary();
+    const features = FeaturesResponseSchema.parse({ features: {}, capabilities: {} });
     const writes: unknown[] = [];
     const home = await serveSessionActionHome({
         homes: [{ key: 'session', serverUrl: 'https://session-actions.test', accountId: 'session-account', currentAccount: true }],
         route: request => {
+            if (request.path === '/v1/features') return Response.json(features);
             if (request.method !== 'POST' || request.path !== '/v2/sessions/worker/read-state') return undefined;
             writes.push({ accountId: request.accountId, body: request.body });
             return Response.json({ success: true, ...SessionReadStateSetResultV1Schema.parse({
@@ -29,6 +36,7 @@ it('acknowledges an exact Inbox address from voice through the production bulk-r
             }) });
         },
     });
+    const disconnect = await home.restoreActiveConnection();
     const { createFrontDoorActionExecute } = await import('./frontDoorRuntimeActionExecutor');
     try {
         const response = await createFrontDoorActionExecute()('inbox.mark_all_read', {
@@ -40,7 +48,7 @@ it('acknowledges an exact Inbox address from voice through the production bulk-r
         if (!response.ok) throw new Error('Expected voice Inbox acknowledgement');
         expect(AppShellActionOutputSchemas['inbox.mark_all_read'].parse(response.result)).toEqual(response.result);
         expect(writes).toEqual([{ accountId: 'session-account', body: { state: 'read' } }]);
-    } finally { await home.dispose(); }
+    } finally { await disconnect(); await home.dispose(); }
 });
 
 it('reads approval and Automation rows from the canonical Inbox grouping without disclosing their private content', async () => {
@@ -65,7 +73,7 @@ it('reads approval and Automation rows from the canonical Inbox grouping without
             ordinarySessionListMembershipByServerId: {}, sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {} },
         ...createInboxAttentionFixture(serverId),
         automationAttentionItems: [{ key: `automation-run:${run.id}`, run,
-            route: { pathname: '/automations/[id]/runs/[runId]', params: { id: run.automationId, runId: run.id } } }],
+            route: `/workflows/runs/${run.id}?target=occurrence&automationId=${run.automationId}` }],
         openApprovals: [approval], openUsageNotices: [], friendRequests: [],
         sessionPresentation: { sessionsNeedingAttention: [], readySessions: [], markAllReadTargets: [], pendingRequestHydrationTargets: [] },
         workGroups: groups, targetBySessionAddress: new Map(), actionOperationEntries: [], pendingReadKeys: new Set(),
@@ -128,8 +136,11 @@ describe('mounted canonical Work reads', () => {
                 if (!response.ok) throw new Error('Expected production App shell Work binding');
                 expect(AppShellActionOutputSchemas['session.work.get'].parse(response.result)).toEqual(response.result);
             }
+            const settings = ActionsSettingsV1Schema.parse({ v: 1,
+                actions: { 'session.work.get': { approvalRequiredSurfaces: ['voice'] } } });
             const approved = createActionExecutor(createActionExecutorBoundaryFixture({
-                appShellAction: invokeMountedWorkRead, isActionApprovalRequired: () => true,
+                appShellAction: invokeMountedWorkRead, isActionApprovalRequired: (id, context) =>
+                    isApprovalRequiredByActionsSettings(id, settings, context),
             }));
             const beforeApproval = reads;
             const voiceContext = { surface: 'voice' as const, authority: 'account_automation' as const,
@@ -162,7 +173,7 @@ describe('mounted canonical Work reads', () => {
             actionOperations: createActionOperationSelectors().selectForSession(operations.getSnapshot(),
                 { serverId: 'home-a', accountId: 'account-a', sessionId: 'lead' }),
             describeOperationStatus: () => 'Running',
-            managedRuns: [{ run: { id: 'run-a', state: 'running' }, title: 'Review', word: 'Running', needsAttention: true }],
+            managedRuns: [{ run: { id: 'run-a', state: 'running', workflowCustodyState: null }, title: 'Review', word: 'Running', needsAttention: true }],
             ownTriggerRunIds: new Set(), describeAgentStatus: () => '', describeProgress: () => '',
         });
         const remove = registerMountedWorkReadOwner({

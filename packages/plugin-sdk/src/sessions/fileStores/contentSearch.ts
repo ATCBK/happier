@@ -1,16 +1,26 @@
 /** @moduleRealm daemon */
 import { open, stat } from 'node:fs/promises';
 
-import { createExternalSessionContentMatchSnippet } from '@happier-dev/protocol/sessions/external/contentSearchMatch';
+import { createExternalSessionContentMatchSnippet } from '../promptDisplay.js';
 import type { AgentExternalSessionsInvocation } from '../../externalSessions.js';
 import type { JsonlScannerFileSystemV1 } from './boundedJsonlScanner.js';
 
 export class ExternalSessionContentSearchYield extends Error {}
 
+/** Source binding and native branch cursors remain owned by the decoder. */
+export type ExternalSessionContentSearchPageProgress = {
+  cursor?: string;
+  complete: boolean;
+  itemCount: number;
+  match: { cursor?: string; id: string; distanceFromEnd: number } | null;
+};
+
 export type ExternalSessionContentSearchControl = Readonly<{
   signal?: AbortSignal;
   checkWork(resetEstimate?: boolean): void;
   assertNotYielded(): void;
+  /** Commit one native step before yielding; true completes the phase. */
+  prepare(step: () => Promise<boolean>): Promise<void>;
   fileSystem: JsonlScannerFileSystemV1;
 }>;
 
@@ -30,12 +40,29 @@ export function createExternalSessionContentSearchControl(bounds: Readonly<{ sig
       throw new ExternalSessionContentSearchYield();
     }
   };
+  const assertNotYielded = () => {
+    bounds.signal?.throwIfAborted();
+    if (yielded) throw new ExternalSessionContentSearchYield();
+  };
   return {
     signal: bounds.signal,
     checkWork,
-    assertNotYielded() {
-      bounds.signal?.throwIfAborted();
-      if (yielded) throw new ExternalSessionContentSearchYield();
+    assertNotYielded,
+    async prepare(step) {
+      assertNotYielded();
+      // Native phases measure their own steps, not earlier enumeration or rg
+      // process work. The containing deadline still bounds this invocation.
+      previousWorkAtMs = Date.now();
+      longestWorkMs = 0;
+      while (true) {
+        assertNotYielded();
+        // Native state owns the result and resume position. The indivisible
+        // step commits both before cooperative scheduling can interrupt it.
+        const complete = await step();
+        assertNotYielded();
+        if (complete) return;
+        checkWork();
+      }
     },
     fileSystem: {
       async stat(filePath) {
@@ -62,6 +89,57 @@ export function createExternalSessionContentSearchControl(bounds: Readonly<{ sig
   };
 }
 
+function escapePattern(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Source-scoped native prefilter, shared by individual decoders and page owners.
+ * Null means no file can safely be excluded. Paths may be admitted native roots,
+ * avoiding an argv proportional to the corpus (including on Windows).
+ */
+export async function prefilterExternalSessionContentPaths(params: Readonly<{
+  query: string;
+  paths: readonly string[];
+  ripgrep: NonNullable<AgentExternalSessionsInvocation['ripgrep']>;
+  signal?: AbortSignal;
+  /** Native layout selectors, supplied by the same owner that enumerates candidates. */
+  glob?: string;
+  maxDepth?: number;
+}>): Promise<ReadonlySet<string> | null> {
+  params.signal?.throwIfAborted();
+  if (!params.query || /[^\x01-\x7F]/.test(params.query.toLowerCase())) return null;
+  if (params.paths.length === 0) return new Set();
+  // A mixed JSON spelling either contains the literal/named-escaped query or
+  // at least one Unicode escape for a character in it. Bound the alternatives
+  // by the ASCII alphabet, not query length: expanding every query character
+  // into alternatives can exceed Windows argv for a valid 2,000-unit query.
+  const folded = params.query.toLowerCase();
+  const codes = new Set([...folded].flatMap(char => [char.charCodeAt(0), char.toUpperCase().charCodeAt(0)]));
+  // The only non-ASCII code points whose JavaScript lowercase contains ASCII.
+  if (folded.includes('i')) codes.add(0x0130);
+  if (folded.includes('k')) codes.add(0x212a);
+  const patterns = [...new Set([escapePattern(params.query), escapePattern(JSON.stringify(params.query).slice(1, -1)),
+    `\\\\u(?:${[...codes].map(code => code.toString(16).padStart(4, '0')).join('|')})`,
+    ...(folded.includes('i') ? ['İ'] : []), ...(folded.includes('k') ? ['K'] : []),
+    ...(params.query.includes('/') ? [escapePattern('\\/')] : [])])];
+  const result = await params.ripgrep.run({
+    // A raw NUL in a damaged native record must not hide readable messages
+    // elsewhere in the file. The decoder owns record validity and coverage.
+    args: ['--no-config', '--files-with-matches', '--null', '--ignore-case', '--multiline', '--text',
+      '--hidden', '--no-ignore',
+      ...(params.glob === undefined ? [] : ['--glob', params.glob]),
+      ...(params.maxDepth === undefined ? [] : ['--max-depth', String(params.maxDepth)]),
+      ...patterns.flatMap(pattern => ['-e', pattern])],
+    paths: params.paths,
+    signal: params.signal,
+  });
+  params.signal?.throwIfAborted();
+  if (result.stdoutTruncated) return null;
+  if (result.exitCode !== 0 && result.exitCode !== 1) throw new Error('Conversation content prefilter failed.');
+  return new Set(result.stdout.split('\0').filter(Boolean));
+}
+
 /** Native decoding/semantic selection stays with the plugin; bodies are not retained. */
 export async function searchExternalSessionContent(params: Readonly<{
   query: string;
@@ -70,34 +148,63 @@ export async function searchExternalSessionContent(params: Readonly<{
   control: ExternalSessionContentSearchControl;
   /** Native EOF closes cooperative scanning; source verification still observes cancellation. */
   isScanComplete?: () => boolean;
-  decode: (matchText: (text: string) => string | null) => Promise<Readonly<{
+  /** Older native pages contain chronological records. Retain locators, not snippets. */
+  pageProgress?: ExternalSessionContentSearchPageProgress;
+  decode: (matchText: (text: string) => string | null, cursor?: string) => Promise<Readonly<{
     /** Streaming decoders may supply the ordinal without retaining preceding rows. */
     records: readonly Readonly<{ id: string; snippet?: string; messageIndex?: number }>[];
     partial: boolean;
+    nextCursor?: string | null;
   }>>;
 }>): Promise<Readonly<{ match?: Readonly<{ snippet: string; sourceItemId: string; messageIndex: number }>; partial: boolean }>> {
-  params.control.checkWork();
+  const nativeProgress = params.pageProgress !== undefined || params.isScanComplete !== undefined;
+  if (nativeProgress) params.control.assertNotYielded();
+  else params.control.checkWork();
   if (!params.query) return { partial: false };
   if (params.paths) {
     if (params.paths.length === 0) return { partial: false };
     if (!params.ripgrep) throw new Error('File content search requires host ripgrep.');
-    // JavaScript folding owns matching. rg can exclude only process-safe ASCII
-    // queries (NUL cannot be passed in argv).
-    if (!/[^\x01-\x7F]/.test(params.query.toLowerCase())) {
-      const prefilter = await params.ripgrep.run({
-        args: ['--no-config', '--files-with-matches', '--null', '--ignore-case', '--multiline', '--fixed-strings', '-e', params.query, '-e', '\\'],
-        paths: params.paths,
-        signal: params.control.signal,
-      });
-      // Process work and decode work have different costs, with one host budget.
-      params.control.checkWork(true);
-      if (!prefilter.stdoutTruncated && prefilter.exitCode !== 0 && prefilter.exitCode !== 1) throw new Error('Conversation content prefilter failed.');
-      if (!prefilter.stdoutTruncated && !prefilter.stdout.split('\0').some(Boolean)) return { partial: false };
-    }
+    const paths = await prefilterExternalSessionContentPaths({ query: params.query, paths: params.paths,
+      ripgrep: params.ripgrep, signal: params.control.signal });
+    if (nativeProgress) params.control.assertNotYielded();
+    else params.control.checkWork(true);
+    if (paths?.size === 0) return { partial: false };
   }
-  const projection = await params.decode((text) => createExternalSessionContentMatchSnippet(text, params.query));
+  const matchText = (text: string) => createExternalSessionContentMatchSnippet(text, params.query);
+  const decodePages = async () => {
+    const progress = params.pageProgress!;
+    let partial = false;
+    await params.control.prepare(async () => {
+      if (progress.complete) return true;
+      const cursor = progress.cursor;
+      const page = await params.decode(matchText, cursor);
+      if (page.partial) {
+        progress.complete = true;
+        partial = true;
+        return true;
+      }
+      const matchIndex = page.records.findIndex((item) => item.snippet !== undefined);
+      if (matchIndex >= 0) {
+        progress.match = { cursor, id: page.records[matchIndex]!.id,
+          distanceFromEnd: progress.itemCount + page.records.length - matchIndex };
+      }
+      progress.itemCount += page.records.length;
+      progress.cursor = page.nextCursor ?? undefined;
+      progress.complete = !progress.cursor;
+      return progress.complete;
+    });
+    if (partial) return { records: [], partial: true };
+    params.control.assertNotYielded();
+    const match = progress.match;
+    if (!match) return { records: [], partial: false };
+    const page = await params.decode(matchText, match.cursor);
+    const item = page.records.find((record) => record.id === match.id);
+    if (page.partial || item?.snippet === undefined) return { records: [], partial: true };
+    return { records: [{ ...item, messageIndex: progress.itemCount - match.distanceFromEnd }], partial: false };
+  };
+  const projection = params.pageProgress ? await decodePages() : await params.decode(matchText);
   const checkFinalization = () => {
-    if (params.isScanComplete?.()) params.control.assertNotYielded();
+    if (params.pageProgress?.complete || params.isScanComplete?.()) params.control.assertNotYielded();
     else params.control.checkWork();
   };
   checkFinalization();

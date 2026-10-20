@@ -3,16 +3,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { accountSettingsParse } from '@happier-dev/protocol';
+import { accountSettingsParse, QualifiedConnectedAccountPurposeBindingsV1Schema } from '@happier-dev/protocol';
+import { AccountSettingsSchema } from '@happier-dev/protocol/account/settings/accountSettings';
 import { sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
+import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
+import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
+import { sealConnectedAccountCatalogContentV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 
 import { resolveSessionSpawnConnectedServicesDefaultsPayload, agentSupportsSpawnConnectedServicesDefaults } from '@/session/services/spawnConnectedServicesDefaults';
 import { resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn } from '@/daemon/connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
 
 import { configuration } from '@/configuration';
+import { logger } from '@/ui/logger';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { Credentials, StoredCredentials, TokenOnlyCredentials } from '@/persistence';
+import * as persistence from '@/persistence';
 
 import { bootstrapAccountSettingsContext, resetInMemoryAccountSettingsContextForTests } from './bootstrapAccountSettingsContext';
 import { getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from './activeAccountSettingsSnapshot';
@@ -68,6 +74,55 @@ describe('bootstrapAccountSettingsContext', () => {
 
   beforeEach(() => {
     resetInMemoryAccountSettingsContextForTests();
+  });
+
+  it.each(['plain', 'e2ee'] as const)('parses unchanged %s refresh content once while retaining fresh reads and changed-content admission', async mode => {
+    Object.assign(mutableConfigurationForTest(), { clientEncryptionRequirement: 'follow_account' });
+    const credentials = mode === 'plain' ? createTokenOnlyCredentialsStub() : createCredentialsStub();
+    const contents = [
+      { schemaVersion: 2, themePreference: 'dark' },
+      { schemaVersion: 2, themePreference: 'dark' },
+      { schemaVersion: 2, themePreference: 'light' },
+    ];
+    let revision = 0;
+    const get = vi.spyOn(axios, 'get').mockImplementation(async () => {
+      const raw = contents[revision++]!;
+      const content = mode === 'plain' ? { t: 'plain' as const, v: raw }
+        : { t: 'encrypted' as const, c: sealAccountScopedBlobCiphertext({ kind: 'account_settings',
+          material: { type: 'legacy', secret: new Uint8Array(32).fill(1) }, payload: raw,
+          randomBytes: length => new Uint8Array(length).fill(revision) }) };
+      return { status: 200, data: { version: revision, content } };
+    });
+    // Transparent instrumentation: the canonical parser and decryptor execute unchanged.
+    const parses = vi.spyOn(AccountSettingsSchema, 'parse');
+    const options = { credentials, refresh: 'force' as const,
+      deps: { resolveCachePath: () => '/tmp/happier-settings-parse-reuse', readCache: async () => null,
+        writeCache: async () => {}, applySideEffects: () => {} } };
+    const first = await bootstrapAccountSettingsContext(options);
+    expect(parses).toHaveBeenCalledTimes(1);
+    const same = await bootstrapAccountSettingsContext(options);
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(parses).toHaveBeenCalledTimes(1);
+    expect(same.settings).toBe(first.settings);
+    const changed = await bootstrapAccountSettingsContext(options);
+    expect(get).toHaveBeenCalledTimes(3);
+    expect(parses).toHaveBeenCalledTimes(2);
+    expect(changed.settings.themePreference).toBe('light');
+    expect(changed.settings).not.toBe(first.settings);
+  });
+
+  it('identifies a failed network refresh without recording Account content or the transport error', async () => {
+    const logs = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    const failure = new Error('private-transport-content');
+    vi.spyOn(axios, 'get').mockRejectedValue(failure);
+    await expect(bootstrapAccountSettingsContext({ credentials: createTokenOnlyCredentialsStub(),
+      refresh: 'force', minSettingsVersion: 1,
+      deps: { resolveCachePath: () => '/tmp/happier-settings-phase', readCache: async () => null },
+    })).rejects.toBe(failure);
+    expect(logs.mock.calls).toContainEqual(['[accountSettings] Bootstrap phase', expect.objectContaining({
+      phase: 'network_read', status: 'failed', durationMs: expect.any(Number),
+    })]);
+    expect(JSON.stringify(logs.mock.calls)).not.toContain('private-transport-content');
   });
 
   it('renews freshness after an unchanged authoritative refresh without republishing Settings', async () => {
@@ -158,11 +213,11 @@ describe('bootstrapAccountSettingsContext', () => {
     if (!codexScope || !agentSupportsSpawnConnectedServicesDefaults('codex')) {
       throw new Error('The real bundled Codex purpose must be available for the composed defaults test');
     }
-    return { connectedAccountPurposeBindingsV1: { v: 1, bindings: [{
+    return { connectedAccountPurposeBindingsV1: QualifiedConnectedAccountPurposeBindingsV1Schema.parse({ v: 1, bindings: [{
       purpose: codexScope.purpose, target: { kind: 'account', account: {
         service: codexScope.serviceRefs[0], accountId: 'saved-codex',
       } },
-    }] } };
+    }] }) };
   };
 
   it.each([{ withCache: false, encrypted: false }, { withCache: true, encrypted: false },
@@ -195,18 +250,37 @@ describe('bootstrapAccountSettingsContext', () => {
     Object.assign(mutableConfigurationForTest(), { activeServerDir: directory, clientEncryptionRequirement: 'follow_account' });
     try {
       const valid = validQualifiedDefaults();
+      const credentials = createCredentialsStub();
+      vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+      const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) };
+      const crypto = createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material });
+      const purposeContent = sealConnectedAccountCatalogContentV1({ mode: 'e2ee', material,
+        record: { key: 'purposes', value: valid.connectedAccountPurposeBindingsV1 } });
       if (source === 'cache') {
         await writeAccountSettingsCacheAtomic(resolveAccountSettingsCachePath(createCredentialsStub()), {
           version: 2, cachedAt: 0, settingsVersion: 1,
-          settingsContent: { t: 'encrypted', c: sealSettings(valid) },
+          settingsContent: { t: 'encrypted', c: sealSettings({}) },
         });
-        vi.spyOn(axios, 'get').mockRejectedValue(new Error('offline'));
-      } else {
-        vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { version: 2,
-          content: source === 'encrypted network'
-            ? { t: 'encrypted', c: sealSettings(valid) } : { t: 'plain', v: valid },
-        } });
       }
+      // Settings and its independent purpose row share real admission/crypto;
+      // only Home HTTP and the stored bearer are substituted.
+      vi.spyOn(axios, 'get').mockImplementation(async url => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+          mode: 'e2ee', version: 1, signingKeyFingerprint: null,
+          contentKeyFingerprint: convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(crypto.contentPublicKeyFingerprint), updatedAt: 1,
+        } };
+        if (path === '/v1/account/entity-rows/connected-accounts/purposes') return {
+          status: 200, data: { status: 'present', revision: 1, content: purposeContent },
+        };
+        if (path === '/v2/account/settings') {
+          if (source === 'cache') throw new Error('offline');
+          return { status: 200, data: { version: 2, content: source === 'encrypted network'
+            ? { t: 'encrypted', c: sealSettings({}) } : { t: 'plain', v: {} } } };
+        }
+        if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+        throw new Error(`Unexpected defaults Home read: ${path}`);
+      });
       await expect(resolveOmittedSelection()).resolves.toMatchObject({
         connectedServices: { v: 2, bindingsByServiceId: {
           'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: 'saved-codex' },
@@ -555,7 +629,7 @@ describe('bootstrapAccountSettingsContext', () => {
         // `acpBackend:<id>` spelling to the V2 target key on parse, so the
         // published context carries that spelling.
         backendEnabledByTargetKey: {
-          'backend:review-bot:configured:review-bot': false,
+          'agent:happier.agent.custom-acp/custom-acp:definition:review-bot': false,
         },
       }),
     }));
@@ -754,10 +828,12 @@ describe('bootstrapAccountSettingsContext', () => {
       scopeKey: createAccountSettingsScopeKey({ cachePath, token: credentials.token }),
     };
     setActiveAccountSettingsSnapshot(newer);
+    const acceptedWinner = getActiveAccountSettingsSnapshot();
     finishWrite();
 
     await expect(pending).resolves.toMatchObject({ settingsVersion: 4 });
-    expect(getActiveAccountSettingsSnapshot()).toBe(newer);
+    expect(getActiveAccountSettingsSnapshot()).toBe(acceptedWinner);
+    expect(acceptedWinner?.settings).toEqual(newer.settings);
   });
 
   it('persists a forced encrypted fetch when an equal-version live snapshot is already active', async () => {
@@ -1014,12 +1090,7 @@ describe('bootstrapAccountSettingsContext', () => {
           t: 'plain',
           v: {
             schemaVersion: 6,
-            mcpServersSettingsV1: {
-              v: 1,
-              strictMode: true,
-              servers: [{ id: 'server-1', name: 'qa_server', transport: 'stdio', stdio: { command: 'npx', args: ['-y', 'pkg'] }, env: {}, createdAt: 1, updatedAt: 1 }],
-              bindings: [],
-            },
+            mcpServersStrictMode: true,
           },
         },
       },
@@ -1048,7 +1119,7 @@ describe('bootstrapAccountSettingsContext', () => {
         headers: expect.objectContaining({ Authorization: 'Bearer t' }),
       }),
     );
-    expect((res.settings as any).mcpServersSettingsV1?.servers).toHaveLength(1);
+    expect(res.settings.mcpServersStrictMode).toBe(true);
   });
 
   it('uses apiServerUrl for v1 fallback fetches when canonical serverUrl differs', async () => {

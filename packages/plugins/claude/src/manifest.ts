@@ -1,6 +1,7 @@
 import { projectAgentCapabilitiesV2FromDefinition } from '@happier-dev/plugin-sdk/agents';
 import { definePlugin } from '@happier-dev/plugin-sdk';
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import type { AgentPreflightSessionControlsContributionV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 import {
   HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_JSON_ENV,
   HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON_ENV,
@@ -21,6 +22,8 @@ import {
   resolveClaudeCliSessionOptions,
 } from './agent/cli/command.js';
 import { resolveClaudeSessionRuntimePreferences } from './agent/preferences/session.js';
+import { resolveClaudeNativeLaunchSettings } from './agent/runtime/launchSettings.js';
+import { readClaudeTerminalRuntimeSelection } from './agent/runtime/terminal/unified/selection.js';
 import { HAPPIER_CLAUDE_CONFIG_DIR_ENV } from './agent/environment.js';
 import {
   augmentClaudeDaemonSpawnEnv,
@@ -437,7 +440,18 @@ export const CLAUDE_PLUGIN = definePlugin({
         } },
       },
       factory: createClaudeAgentRuntime,
-      preflightSessionControls: { catalogs: CLAUDE_PREFLIGHT_CATALOGS },
+      preflightSessionControls: {
+        catalogs: CLAUDE_PREFLIGHT_CATALOGS,
+        async resolveNativeSkillDirectories({ pluginSettings, runtimeDescriptorV1 }: Parameters<NonNullable<AgentPreflightSessionControlsContributionV1['resolveNativeSkillDirectories']>>[0]) {
+          const values = pluginSettings.account ?? {};
+          const launch = await resolveClaudeNativeLaunchSettings({
+            settings: { get: key => values[key], snapshot: async () => ({ values }) },
+            launchEnv: {},
+            includeAdvancedOptions: readClaudeTerminalRuntimeSelection(runtimeDescriptorV1)?.mode !== 'unifiedTerminal',
+          });
+          return launch.settingSources.includes('project') ? launch.advancedOptions.additionalDirectories ?? [] : [];
+        },
+      },
       cliAuth: {
         async detectAuthStatus({ runDeclaredSystemToolCommand }) {
           // Claude Code 2.1.292 observes CLAUDE_CONFIG_DIR and native credential
@@ -580,7 +594,8 @@ export const CLAUDE_PLUGIN = definePlugin({
       title: 'Create agent team',
       description: 'Creates one Claude agent team in the current Session.',
       scopes: ['session'],
-      surfaces: ['ui', 'agent'],
+      surfaces: ['ui', 'agent', 'cli', 'mcp'],
+      hostAccess: ['claude-session-runtime-control'],
       placementBindings: ['primary'],
       inputSchema: {
         type: 'object',
@@ -591,13 +606,23 @@ export const CLAUDE_PLUGIN = definePlugin({
         },
         required: ['teamId'],
       },
+      inputHints: {
+        fields: [{
+          path: 'teamId', title: { key: 'session.subagents.launch.teamName', fallback: 'Team name' },
+          widget: 'text', required: true,
+        }, {
+          path: 'description', title: { key: 'session.subagents.launch.description', fallback: 'Description' },
+          widget: 'textarea',
+        }],
+      },
       run: launchClaudeTeam,
     },
     'subagent-member-launch': {
       title: 'Launch teammate',
       description: 'Launches one Claude teammate in the current Session.',
       scopes: ['session'],
-      surfaces: ['ui', 'agent'],
+      surfaces: ['ui', 'agent', 'cli', 'mcp'],
+      hostAccess: ['claude-session-runtime-control'],
       placementBindings: ['primary'],
       inputSchema: {
         type: 'object',
@@ -608,6 +633,18 @@ export const CLAUDE_PLUGIN = definePlugin({
           instructions: { type: 'string', minLength: 1, maxLength: 20000 },
         },
         required: ['teamId', 'memberLabel', 'instructions'],
+      },
+      inputHints: {
+        fields: [{
+          path: 'teamId', title: { key: 'session.subagents.launch.teamName', fallback: 'Team name' },
+          widget: 'text', required: true,
+        }, {
+          path: 'memberLabel', title: { key: 'session.subagents.launch.teammateName', fallback: 'Teammate name' },
+          widget: 'text', required: true,
+        }, {
+          path: 'instructions', title: { key: 'session.subagents.launch.instructions', fallback: 'Instructions' },
+          widget: 'textarea', required: true,
+        }],
       },
       run: launchClaudeTeammate,
     },
@@ -621,16 +658,22 @@ export const CLAUDE_PLUGIN = definePlugin({
       renderer: {
         kind: 'declarative',
         root: {
-          kind: 'actionPanel',
+          kind: 'stack',
           children: [{
-            kind: 'action',
-            action: 'subagent-team-launch',
-            label: 'Create team',
-            variant: 'primary',
+            kind: 'text',
+            text: { key: 'session.subagents.launch.intro', fallback: 'Start a team of Claude agents on one task, or add a teammate to a team.' },
           }, {
-            kind: 'action',
-            action: 'subagent-member-launch',
-            label: 'Launch teammate',
+            kind: 'actionPanel',
+            children: [{
+              kind: 'action',
+              action: 'subagent-team-launch',
+              label: 'Create team',
+              variant: 'primary',
+            }, {
+              kind: 'action',
+              action: 'subagent-member-launch',
+              label: 'Launch teammate',
+            }],
           }],
         },
       },

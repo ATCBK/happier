@@ -1,7 +1,8 @@
+// @vitest-environment jsdom
 import * as React from 'react';
 import type { ReactTestInstance } from 'react-test-renderer';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installUiListsCommonModuleMocks } from '@/components/ui/lists/uiListsTestHelpers';
@@ -21,6 +22,12 @@ const actionFocusMock = vi.hoisted(() => vi.fn());
 const sectionFocusFallbackMock = vi.hoisted(() => vi.fn());
 const nativeFocusMock = vi.hoisted(() => vi.fn());
 const modalConfirmMock = vi.hoisted(() => vi.fn(async () => false));
+let focusTarget: HTMLButtonElement | null = null;
+
+afterEach(() => {
+    focusTarget?.remove();
+    focusTarget = null;
+});
 
 installUiListsCommonModuleMocks({
     modal: async () => {
@@ -290,7 +297,11 @@ describe('ExternalSessionsIntegrationSection Item boundary', () => {
             });
             if (platformOS === 'web') {
                 expect(fallback?.props).toMatchObject({ role: 'region', tabIndex: -1 });
+                focusTarget = document.createElement('button');
+                document.body.appendChild(focusTarget);
                 await act(async () => {
+                    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+                    focusTarget?.focus();
                     fallback?.props.onFocus?.();
                 });
                 expect(screen.findByTestId('settings-external-sessions-focus-fallback')?.props.style)
@@ -354,7 +365,7 @@ describe('ExternalSessionsIntegrationSection Item boundary', () => {
             });
             await flushHookEffects({ cycles: 2, turns: 2 });
 
-            expect(modalConfirmMock).toHaveBeenCalledOnce();
+            expect(modalConfirmMock).not.toHaveBeenCalled();
             expect(screen.findByTestId('settings-external-sessions-action-enabled-uninstall')).toBeNull();
             expect(screen.findByTestId('settings-external-sessions-focus-fallback')?.props)
                 .toMatchObject({

@@ -19,10 +19,20 @@ export function useBrowserDaemonControlTransport(
 ): BrowserDaemonControlCommandSender | undefined {
     const machineId = input.machineId?.trim() ?? '';
     const serverId = input.serverId?.trim() ?? '';
-    return React.useMemo(() => {
+    const binding = React.useMemo(() => {
         if (!machineId || !serverId) {
             return undefined;
         }
-        return createBrowserDaemonControlCommandSender({ machineId, serverId });
+        const lifetime = { controller: new AbortController() };
+        const send = createBrowserDaemonControlCommandSender({ machineId, serverId,
+            get signal() { return lifetime.controller.signal; } });
+        return { lifetime, send };
     }, [machineId, serverId]);
+    React.useEffect(() => {
+        if (!binding) return;
+        // React may replay the effect after cleanup while keeping the same sender.
+        if (binding.lifetime.controller.signal.aborted) binding.lifetime.controller = new AbortController();
+        return () => binding.lifetime.controller.abort();
+    }, [binding]);
+    return binding?.send;
 }

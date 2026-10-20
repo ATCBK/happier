@@ -20,8 +20,15 @@ describe('correlated Trash receipts', () => {
             kind: 'trash_emptied', rule: 'approved_proposal', outcome: 'done', freedBytes: 2, attribution: { kind: 'unknown' } }],
             counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: 2 });
         const receipt = deriveResourceProposalTrashReceipt(result, [], activity.entries);
-        expect(resourceProposalDisplayWithTrashReceipt(result, receipt)).toEqual({ kind: 'emptied', count: 2, freedBytes: 10 });
+        expect(resourceProposalDisplayWithTrashReceipt(result, receipt)).toMatchObject({ kind: 'emptied', count: 2, freedBytes: 10 });
         expect(deriveResourceProposalTrashReceipt(result, [], [])).toMatchObject({ deletedCount: 1, unknownCount: 1, freedBytes: 8 });
+        const immediate = PileApplyResultV1Schema.parse({ ...result, inTrashBytes: 0, trashEntryIds: [],
+            outcomes: [{ itemId: 'first', status: 'moved' },
+                { itemId: 'second', status: 'skipped', reason: { code: 'changed_since_review' } }],
+        });
+        const emptied = resourceProposalDisplayWithTrashReceipt(immediate, deriveResourceProposalTrashReceipt(immediate, [], []));
+        expect(resolveResourceProposalOutcomes(emptied, new Set(['first', 'second']))?.get('second'))
+            .toEqual({ status: 'skipped', reasonCode: 'changed_since_review' });
     });
 });
 

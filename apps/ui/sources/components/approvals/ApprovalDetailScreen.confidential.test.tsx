@@ -17,12 +17,13 @@ import { BrowserAutomationSecretFillRequestV1Schema } from '@happier-dev/protoco
 import { ComputerSecretFillRequestV1Schema } from '@happier-dev/protocol/computer/v1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
 import { AccessibleMachineAccessV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { createSessionListRenderableSessionFixture, createTestSessionTranscriptSource, renderScreen, standardCleanup } from '@/dev/testkit';
 import { SessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import { DestinationInstanceHost, type DestinationNavigation } from '@/components/appShell/workspace/DestinationInstanceHost';
 import type { InboxModel } from '@/hooks/inbox/useInboxModel';
-import { EMPTY_WORKFLOW_ATTENTION_SOURCE } from '@/hooks/inbox/useWorkflowAttentionSource';
+import { createInboxAttentionFixture } from '@/dev/testkit/fixtures/inboxFixtures';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -37,6 +38,7 @@ import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { buildInboxWorkGroups } from '@/activity/presentation/buildInboxWorkGroups';
+import { buildInboxItems } from '@/components/inbox/inboxItems';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -250,18 +252,22 @@ describe('confidential approval human continuation', () => {
         if (!artifact?.isDecrypted) throw new Error('missing_test_approval');
         // The Inbox's public presentation input is a fixture; its card and
         // workspace navigation remain real, as do the destination's owners.
+        const sessionPresentation = { sessionsNeedingAttention: [], readySessions: [], markAllReadTargets: [], pendingRequestHydrationTargets: [] };
+        const workGroups = buildInboxWorkGroups({ sessionEntries: [], workflowRuns: [], automationRuns: [],
+            automationServerId: null, openApprovals: [artifact], stalledSessions: [], landings: [], snoozed: [],
+            resolveSession: () => null, resolveOriginRunId: () => null });
         const model: InboxModel = {
             source: { isDataReady: true, sessionsById: {}, sessionListRowsByServerId: {},
                 ordinarySessionListMembershipByServerId: {}, sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {} },
             openApprovals: [artifact], openUsageNotices: [], friendRequests: [],
-            sessionPresentation: { sessionsNeedingAttention: [], readySessions: [], markAllReadTargets: [], pendingRequestHydrationTargets: [] },
+            ...createInboxAttentionFixture(),
+            sessionPresentation,
+            items: buildInboxItems({ workGroups, sessionPresentation, workflowServerId: null,
+                accountServerId: resolveServerProfileScopeIdForIdentifier(connection!.home.id), notices: [] }),
             targetBySessionAddress: new Map(), actionOperationEntries: [], pendingReadKeys: new Set(),
             markAllPending: false, isLoading: false, hasPrimaryAttention: true, hasContent: true, showCaughtUp: false,
-            workGroups: buildInboxWorkGroups({ sessionEntries: [], workflowRuns: [], automationRuns: [],
-                automationServerId: null, openApprovals: [artifact], stalledSessions: [], landings: [], snoozed: [],
-                resolveSession: () => null, resolveOriginRunId: () => null }),
-            spansHomes: false, workflowAttention: EMPTY_WORKFLOW_ATTENTION_SOURCE,
-            automationAttention: EMPTY_WORKFLOW_ATTENTION_SOURCE, automationAttentionItems: [],
+            workGroups,
+            spansHomes: false,
             markRead: async () => {}, dismissUsageNotice: async () => {}, resolveActionOperation: () => {}, settle: async () => {}, setReminder: async () => {},
         };
         const destinations: string[] = [];
@@ -314,6 +320,36 @@ describe('confidential approval human continuation', () => {
         expect(screen.findByTestId('approvals.secret-value')?.props.value ?? '').toBe('');
         expect(screen.findByTestId('approvals.secret-continue')?.props.disabled ?? true).toBe(true);
         expect(screen.getTextContent()).not.toContain('one-time-value');
+    });
+
+    it('awaits an admitted private delivery beyond the transport setup budget while its caller remains current', async () => {
+        const artifact = storage.getState().artifacts['approval-1'];
+        if (typeof artifact?.body !== 'string') throw new Error('missing_test_approval');
+        const approval = ApprovalRequestV2Schema.parse(JSON.parse(artifact.body));
+        const continuation = PrivateSecretContinuationV1Schema.parse({ v: 1, artifactId: 'approval-1',
+            requestId: 'approval-operation-1', actionId: approval.actionId, request: approval.actionArgs,
+            accountEncryptionMode: 'plain', choice: { kind: 'once', value: 'one-time-value' }, submit: false });
+        let release!: () => void;
+        holdPrivateReply = new Promise<void>(resolve => { release = resolve; });
+        const { continueConfidentialSecretFill } = await import('@/sync/ops/actions/confidentialSecretContinuation');
+        let settled = false;
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const pending = continueConfidentialSecretFill({ continuation,
+            scope: { serverId: resolveServerProfileScopeIdForIdentifier(connection!.home.id), accountId: 'account-a' },
+            expectedServerIdentityId: 'srv_confidential-home', isCurrent: () => true,
+        }).then(result => { settled = true; return result; });
+        try {
+            await vi.waitFor(() => expect(deliveries).toHaveLength(1));
+            await vi.advanceTimersByTimeAsync(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS + 1);
+            expect(settled).toBe(false);
+            release();
+            await expect(pending).resolves.toEqual({ fill: { status: 'filled', code: 'filled' }, remember: 'not_requested' });
+            expect(continuation.choice.kind === 'once' ? continuation.choice.value : null).toBe('');
+        } finally {
+            release();
+            await pending;
+            vi.useRealTimers();
+        }
     });
 
     it('keeps a failed explicit Remember separate from the completed physical fill', async () => {

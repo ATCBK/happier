@@ -119,7 +119,7 @@ installDisconnectedServerSocketBoundary(socket => {
   });
 });
 
-async function prepareDaemonAudioQa() {
+async function prepareDaemonAudioQa(allowedPorts: number[] = []) {
   await loadSyncSingletonForTests();
   const sessionHttp = createSessionMetadataHttpBoundary(() => homeSessions);
   const answerRequest = async (url: RequestInfo | URL, init?: RequestInit): Promise<Response | null> => {
@@ -134,6 +134,7 @@ async function prepareDaemonAudioQa() {
       });
       features.features.machines.liveStream.serverRouted.enabled = true;
       features.capabilities.machines.liveStream.serverRouted = { caps: {}, disabledReason: null };
+      features.capabilities.machines.tunnel.directPeer.allowedPorts = allowedPorts;
       return Response.json(features);
     }
     const preparation = answerVoiceRealtimePreparationHttpRequest(url, storage.getState().settings);
@@ -399,6 +400,24 @@ describe('VoiceQaScreen', () => {
       },
       machineRpcReceipts: [],
     });
+  });
+
+  it('uses the applied Home daemon port instead of stale machine-list diagnostics', async () => {
+    await prepareDaemonAudioQa([39001]);
+    const serverId = account!.home.id;
+    const machine = createMachineFixture({ id: 'qa-voice-machine', activeAt: Date.now(), daemonState: { httpPort: 39001 } });
+    storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({
+      voice: { ...storage.getState().settings.voice, executionMachine: { mode: 'fixed', machineId: machine.id } },
+    }, storage.getState().settings));
+    storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [serverId]: [{ ...machine, daemonState: null }] } });
+    const { VoiceQaScreen } = await import('./VoiceQaScreen');
+    const screen = await renderScreen(<VoiceQaScreen />);
+    const snapshot = () => JSON.parse(String(screen.findByTestId('voiceQa.media.snapshot')!.props.children));
+    expect(snapshot()).toMatchObject({ executionMachineId: machine.id, machineControlPortAuthorized: true });
+    await act(async () => {
+      storage.setState({ machines: { [machine.id]: { ...machine, daemonState: null } }, machineListByServerId: { [serverId]: [machine] } });
+    });
+    expect(snapshot().machineControlPortAuthorized).toBe(false);
   });
 
   it('projects bounded voice machine-RPC routing receipts into dev QA evidence', async () => {

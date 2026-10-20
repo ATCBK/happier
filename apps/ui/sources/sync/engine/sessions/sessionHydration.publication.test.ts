@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import * as nativeCrypto from 'rn-encryption';
 import tweetnacl from 'tweetnacl';
 import { sealEncryptedDataKeyEnvelopeV1, type AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol';
@@ -14,6 +14,7 @@ import { fetchAndApplySessionById } from './sessionById';
 import { fetchAndApplySessions } from './sessionSnapshot';
 import { parseDecryptedSessionMetadata } from './parsePlainSessionPayload';
 import { flushActivityUpdates, handleUpdateContainer } from '../socket/socket';
+import { registerSessionRealtimeTranscriptConsumer } from '@/sync/runtime/sessionRealtimeTranscriptConsumers';
 
 const currentness = {
     mode: 'e2ee', version: 1, updatedAt: 1,
@@ -109,6 +110,29 @@ describe('Session hydration publication', () => {
         expect(storage.getState().sessionListRowsByServerId[serverId]?.[sessionId]?.presence).toBe('online');
     });
 
+    it('retains observed presence when a durable list refresh republishes the Session summary', async () => {
+        const { row, params } = await createHydrationContext();
+        params.applySessions([storage.getState().sessions[sessionId]]);
+        expect(storage.getState().sessionListRowsByServerId[serverId]?.[sessionId]?.presence).toBe('online');
+        const publishedPresence: Array<SessionListRenderableSession['presence']> = [];
+
+        await fetchAndApplySessions({
+            ...params,
+            awaitSessionListHydration: true,
+            request: async () => jsonResponse({ sessions: [{ ...row, metadataVersion: row.metadataVersion + 1 }], hasNext: false }),
+            getCurrentSessionListRenderable: id => storage.getState().sessionListRowsByServerId[serverId]?.[id],
+            applySessionListRenderables: rows => {
+                storage.getState().applyServerScopedSessionListRows(serverId, rows, { source: 'ordinary', mode: 'replace' });
+                publishedPresence.push(storage.getState().sessionListRowsByServerId[serverId]?.[sessionId]?.presence);
+            },
+        });
+
+        expect(storage.getState().sessions[sessionId].presence).toBe('online');
+        expect(storage.getState().sessionListRowsByServerId[serverId]?.[sessionId]?.presence).toBe('online');
+        expect(publishedPresence.length).toBeGreaterThan(0);
+        expect(publishedPresence.every(presence => presence === 'online')).toBe(true);
+    });
+
     it('applies explicit ephemeral offline and online observations to hydrated sessions', async () => {
         const { params } = await createHydrationContext();
         const observe = (active: boolean, activeAt: number) => flushActivityUpdates({
@@ -166,6 +190,8 @@ describe('Session hydration publication', () => {
 
     it('does not publish stale socket metadata after by-ID hydration cleared its reader', async () => {
         const { row, params, encryption } = await createHydrationContext();
+        // The socket opens content only while the real transcript owner demands it.
+        onTestFinished(registerSessionRealtimeTranscriptConsumer(sessionId, serverId));
         const started = createDeferred<void>();
         const release = createDeferred<void>();
         const decrypt = nativeCrypto.decryptAsyncAES;

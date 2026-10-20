@@ -50,6 +50,8 @@ export function resolveExecutionRunLauncherOptionFields(params: Readonly<{
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
         gap: theme.space.s20,
+        // It fills a chip popover, whose panel gives its content no inset of its own.
+        padding: theme.space.s12,
     },
     field: {
         gap: theme.space.s8,
@@ -67,6 +69,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'baseline',
         gap: theme.space.s8,
+    },
+    tileGroup: {
+        gap: theme.space.s8,
+    },
+    tileGroupLabel: {
+        color: theme.colors.text.secondary,
+        ...Typography.variant('meta'),
     },
     tiles: {
         flexDirection: 'row',
@@ -175,6 +184,8 @@ export const ExecutionRunLauncherOptions = React.memo((props: Readonly<{
     sections?: readonly ExecutionRunLauncherOptionsSection[];
     /** Narrows the `fields` section to the paths a chip owns (the review scope, or everything else). */
     includeFieldPath?: (path: string) => boolean;
+    /** The Machine the choices run on; names where an Agent that is not ready there stands. */
+    machineName?: string;
     /** The "Who" row's title for this intent ("Who reviews"); the generic section title otherwise. */
     backendSectionLabel?: string;
     /** Several agents can be chosen (a review); each tile then carries a checkbox and the row a count. */
@@ -197,6 +208,16 @@ export const ExecutionRunLauncherOptions = React.memo((props: Readonly<{
     const showPermissions = sections.includes('permissions') && props.permissionModeOptions.length > 1;
     const showProfiles = sections.includes('profiles') && props.profileChoices.length > 0;
     const selectedCount = props.backendChoices.filter((choice) => props.selectedBackendTargetKeys.includes(choice.targetKey)).length;
+    // Agents the Machine has are offered first; the ones it lacks follow under the picker's own
+    // "Not on <machine> yet" heading, so a dimmed tile never has to explain itself.
+    const choiceGroups = React.useMemo(() => {
+        const machine = props.machineName ?? '';
+        return [
+            { key: 'ready', label: null, choices: props.backendChoices.filter((choice) => !choice.unavailable) },
+            { key: 'notOnMachine', label: t('machineAgents.notOnMachineYet', { machine }), choices: props.backendChoices.filter((choice) => choice.unavailable === 'notOnMachine') },
+            { key: 'cantRun', label: t('machineAgents.cantRunOn', { machine }), choices: props.backendChoices.filter((choice) => choice.unavailable === 'cantRun') },
+        ].filter((group) => group.choices.length > 0);
+    }, [props.backendChoices, props.machineName]);
     const permissionTabs = React.useMemo(
         () => props.permissionModeOptions.map((option) => ({ id: String(option.value), label: option.label })),
         [props.permissionModeOptions],
@@ -213,43 +234,48 @@ export const ExecutionRunLauncherOptions = React.memo((props: Readonly<{
                         </Text>
                         {props.multiSelect && selectedCount > 0 ? (
                             <Text style={styles.labelCount}>{t('runPage.launcher.selectedCount', { count: selectedCount })}</Text>
-                    ) : null}
+                        ) : null}
+                    </View>
+                    {choiceGroups.map((group) => (
+                        <View key={group.key} style={styles.tileGroup}>
+                            {group.label ? <Text accessibilityRole="header" style={styles.tileGroupLabel}>{group.label}</Text> : null}
+                            <View style={styles.tiles}>
+                                {group.choices.map((choice) => {
+                                    const selected = props.selectedBackendTargetKeys.includes(choice.targetKey);
+                                    const disabled = choice.disabled || !props.editable;
+                                    return (
+                                        <Pressable
+                                            key={choice.targetKey}
+                                            testID={`execution-run-launcher-target:${choice.targetKey}`}
+                                            accessibilityRole={props.multiSelect ? 'checkbox' : 'radio'}
+                                            accessibilityLabel={t('executionRuns.newRun.a11y.toggleBackend', { backendId: choice.title })}
+                                            accessibilityState={{ selected, checked: selected, disabled }}
+                                            disabled={disabled}
+                                            onPress={() => props.onSelectBackend(choice.targetKey)}
+                                            style={({ pressed }) => [
+                                                styles.tile,
+                                                selected ? styles.tileSelected : null,
+                                                {
+                                                    minWidth: interactiveTargetSize,
+                                                    minHeight: interactiveTargetSize,
+                                                    opacity: choice.disabled ? 0.5 : pressed ? motionTokens.press.opacity : 1,
+                                                },
+                                            ]}
+                                        >
+                                            <ExecutionRunAgentMark agentId={choice.agentId} size={30} />
+                                            <Text numberOfLines={1} style={[styles.tileTitle, choice.disabled ? styles.tileTitleDisabled : null]}>
+                                                {choice.title}
+                                            </Text>
+                                            <View style={[styles.check, props.multiSelect ? null : styles.checkRound, selected ? styles.checkOn : null]}>
+                                                {selected ? <Icon name="check" size={13} color={theme.colors.surface.base} /> : null}
+                                            </View>
+                                        </Pressable>
+                                    );
+                                })}
+                            </View>
+                        </View>
+                    ))}
                 </View>
-                <View style={styles.tiles}>
-                    {props.backendChoices.map((choice) => {
-                        const selected = props.selectedBackendTargetKeys.includes(choice.targetKey);
-                        const disabled = choice.disabled || !props.editable;
-                        return (
-                            <Pressable
-                                key={choice.targetKey}
-                                testID={`execution-run-launcher-target:${choice.targetKey}`}
-                                accessibilityRole={props.multiSelect ? 'checkbox' : 'radio'}
-                                accessibilityLabel={t('executionRuns.newRun.a11y.toggleBackend', { backendId: choice.title })}
-                                accessibilityState={{ selected, checked: selected, disabled }}
-                                disabled={disabled}
-                                onPress={() => props.onSelectBackend(choice.targetKey)}
-                                style={({ pressed }) => [
-                                    styles.tile,
-                                    selected ? styles.tileSelected : null,
-                                    {
-                                        minWidth: interactiveTargetSize,
-                                        minHeight: interactiveTargetSize,
-                                        opacity: choice.disabled ? 0.5 : pressed ? motionTokens.press.opacity : 1,
-                                    },
-                                ]}
-                            >
-                                <ExecutionRunAgentMark agentId={choice.agentId} size={30} />
-                                <Text numberOfLines={1} style={[styles.tileTitle, choice.disabled ? styles.tileTitleDisabled : null]}>
-                                    {choice.title}
-                                </Text>
-                                <View style={[styles.check, props.multiSelect ? null : styles.checkRound, selected ? styles.checkOn : null]}>
-                                    {selected ? <Icon name="check" size={13} color={theme.colors.surface.base} /> : null}
-                                </View>
-                            </Pressable>
-                        );
-                    })}
-                </View>
-            </View>
             ) : null}
             {showPermissions || showProfiles ? (
                 <View style={styles.pair}>

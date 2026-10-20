@@ -5,6 +5,7 @@ export type SessionViewerSource = 'computer' | 'browser';
 export type SessionViewerSemanticIntent = Extract<CurrentSessionPresentationIntentV1, { kind: `viewer.${string}` }>;
 export type SessionViewerLocalIntent = SessionViewerSemanticIntent
     | Readonly<{ kind: 'viewer.dock' }>
+    | Readonly<{ kind: 'viewer.float' }>
     | Readonly<{ kind: 'viewer.corner.set'; corner: 'tl' | 'tr' | 'bl' | 'br' }>
     | Readonly<{ kind: 'viewer.size.set'; width: number }>;
 
@@ -25,7 +26,7 @@ export type SessionViewerPresentationPort = Readonly<{
     apply: (intent: SessionViewerSemanticIntent) => CurrentSessionPresentationIntentResultV1;
 }>;
 
-/** Local presentation only; target selection, control and compute stay source-owned. */
+/** Local placement only; the mounted controller projects floating placement into phone reading flow. */
 export function resolveSessionViewerPresentation(
     state: SessionViewerPresentationState,
     intent: SessionViewerLocalIntent,
@@ -39,7 +40,7 @@ export function resolveSessionViewerPresentation(
         case 'viewer.source.select': {
             if (!input.canPresentSource(intent.source)) return unavailable();
             if (intent.kind === 'viewer.source.select' && state.mode === 'closed') return unavailable();
-            const mode = state.mode === 'closed' ? input.phone ? 'docked' : 'floating' : state.mode;
+            const mode = state.mode === 'closed' ? 'floating' : state.mode;
             if (state.source === intent.source && state.mode === mode) return unchanged();
             return applied({ ...state, source: intent.source, mode });
         }
@@ -50,10 +51,14 @@ export function resolveSessionViewerPresentation(
             return applied({ ...state, mode: 'expanded', restore: { mode: state.mode, rect: state.rect } });
         case 'viewer.restore':
             if (state.mode !== 'expanded' || !state.restore) return unchanged();
-            return applied({ ...state, mode: input.phone ? 'docked' : state.restore.mode, rect: state.restore.rect, restore: null });
+            return applied({ ...state, mode: state.restore.mode, rect: state.restore.rect, restore: null });
         case 'viewer.dock':
             return state.mode === 'closed' || state.mode === 'docked' ? unchanged()
                 : applied({ ...state, mode: 'docked', restore: null });
+        case 'viewer.float':
+            // Back from the desktop dock to the frame at its retained placement; a phone docks in Chat.
+            if (input.phone) return unavailable();
+            return state.mode === 'docked' ? applied({ ...state, mode: 'floating' }) : unchanged();
         case 'viewer.corner.set':
             if (input.phone) return unavailable();
             return state.corner === intent.corner ? unchanged() : applied({ ...state, corner: intent.corner });

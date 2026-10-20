@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '../../strings/maxCodeUnits.js';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { sha256 } from '@noble/hashes/sha2';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
@@ -34,11 +35,11 @@ export type SessionSubagentCustodyContentFingerprintV1 = z.infer<typeof SessionS
 const SessionSubagentCustodyContentEnvelopeSchema = lazyZodSchema(() => z.discriminatedUnion('t', [
   z.strictObject({
     t: z.literal('encrypted'),
-    c: z.string().check(z.minLength(1), z.maxLength(MAX_SESSION_SUBAGENT_CUSTODY_ENCRYPTED_CONTENT_CODE_UNITS), z.regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u)),
+    c: z.string().check(z.minLength(1), maxCodeUnits(MAX_SESSION_SUBAGENT_CUSTODY_ENCRYPTED_CONTENT_CODE_UNITS), z.regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u)),
   }),
   z.strictObject({ t: z.literal('plain'), v: AgentRuntimeJsonValueV1Schema }),
 ]));
-export const SessionSubagentCustodyContentV1Schema = lazyZodSchema(() => z.pipe(z.transform((value) => {
+export const SessionSubagentCustodyContentV1Schema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return null;
@@ -179,7 +180,7 @@ export type SessionSubagentCustodyMutationResponseV1 = z.infer<typeof SessionSub
 export const SessionSubagentCustodyListQueryV1Schema = lazyZodSchema(() => z.strictObject({
   pluginId: asProtocolZod(PluginIdSchema),
   contributionId: asProtocolZod(PluginContributionLocalIdSchema),
-  sourceCustody: z.pipe(z.transform((value) => {
+  sourceCustody: (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
     if (typeof value !== 'string') return value;
     try { return JSON.parse(value) as unknown; } catch { return null; }
   }), PluginSourceCustodyV1Schema),

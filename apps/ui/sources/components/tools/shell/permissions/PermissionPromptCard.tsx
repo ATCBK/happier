@@ -11,7 +11,13 @@ import { PermissionFooter } from '@/components/tools/shell/permissions/Permissio
 import type { PermissionToolCallMessageLocation } from '@/utils/sessions/permissions/permissionToolCallLocationTypes';
 import { buildPermissionToolCallRoute, canOpenPermissionToolCallRoute } from '@/utils/sessions/permissions/buildPermissionToolCallRoute';
 import { t } from '@/text';
-import { buildPermissionPromptModel } from '@/components/tools/shell/permissions/presentation/buildPermissionPromptModel';
+import { usePermissionPromptModel } from '@/components/tools/shell/permissions/presentation/usePermissionPromptModel';
+import { useServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { ActionApprovalFieldsCard } from '@/components/approvals/ActionApprovalFieldsCard';
+import { McpToolDecisionBadges } from '@/components/settings/mcpServers/tools/McpToolDecisionBadges';
+import { mcpServerRoute } from '@/components/settings/mcpServers/collection/mcpServerCollectionModel';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
+import { Text } from '@/components/ui/text/Text';
 import { useSetting } from '@/sync/domains/state/storage';
 import { resolveToolViewDetailLevel } from '@/components/tools/normalization/policy/resolveToolViewDetailLevel';
 import { ToolInlineBody } from '@/components/tools/shell/views/ToolInlineBody';
@@ -45,10 +51,20 @@ export const PermissionPromptCard = React.memo(function PermissionPromptCard(pro
     const toolViewDetailLevelDefaultLocalControl = useSetting('toolViewDetailLevelDefaultLocalControl');
     const toolViewDetailLevelByToolName = useSetting('toolViewDetailLevelByToolName');
 
-    const model = React.useMemo(() => {
-        return buildPermissionPromptModel({ request: props.request, metadata: props.metadata, nowMs: Date.now() });
-    }, [props.metadata, props.request]);
+    // An MCP tool named by the catalog reads as that tool, with its server's default (P8 U8.5, lab xa A).
+    const scopeResolution = useServerCredentialAccountScopeResolution(props.serverId ?? transcriptSource.serverId ?? undefined);
+    const [nowMs] = React.useState(() => Date.now());
+    const { model } = usePermissionPromptModel({ request: props.request, metadata: props.metadata, nowMs,
+        scope: scopeResolution.kind === 'bound' ? scopeResolution.scope : null });
     const headerText = model.headerText;
+    const mcp = model.mcp ?? null;
+    const mcpFacts = React.useMemo(() => mcp ? { unrepresentable: null, rows: mcp.argumentFacts.map(fact => ({
+        kind: 'value' as const, path: fact.key, title: fact.label, value: fact.value })) } : null, [mcp]);
+    const mcpEffect = mcp?.badges.includes('destructive') ? 'destructive' as const : mcp?.badges.includes('read_only') ? 'read' as const : null;
+    const openToolSettings = React.useCallback(() => {
+        if (!mcp) return;
+        navigateWithBlurOnWeb(() => { transcriptSource.navigate?.(mcpServerRoute(mcp.serverId)); });
+    }, [mcp, transcriptSource]);
 
     const onViewTool = React.useCallback(() => {
         if (props.sessionId === undefined) return;
@@ -100,7 +116,9 @@ export const PermissionPromptCard = React.memo(function PermissionPromptCard(pro
         if (!isPreviewVisible) return subtitle;
         const normalizedLower = headerText.normalizedToolName.trim().toLowerCase();
         const isShellTool = normalizedLower === 'bash' || normalizedLower === 'execute' || normalizedLower === 'shell' || normalizedLower === 'codexbash';
-        return isShellTool ? null : subtitle;
+        // The question card's own body already leads with the question and its header.
+        const isQuestionTool = normalizedLower === 'askuserquestion';
+        return isShellTool || isQuestionTool ? null : subtitle;
     }, [headerText.normalizedToolName, headerText.subtitle, isPreviewVisible]);
 
     const [headerActions, setHeaderActions] = React.useState<React.ReactNode | null>(null);
@@ -113,8 +131,8 @@ export const PermissionPromptCard = React.memo(function PermissionPromptCard(pro
     return (
         <ApprovalPromptChrome
             testID="permission-prompt-card"
-            title={headerText.title}
-            subtitle={effectiveSubtitle}
+            title={mcp ? mcp.title : headerText.title}
+            subtitle={mcp ? mcp.serverTitle : effectiveSubtitle}
             titleNumberOfLines={1}
             subtitleNumberOfLines={2}
             icon="lock"
@@ -122,7 +140,8 @@ export const PermissionPromptCard = React.memo(function PermissionPromptCard(pro
             bodyBottomInset={0}
             headerAccessory={(
                 <>
-                    {headerActions ? <View style={styles.headerActions}>{headerActions}</View> : null}
+                    {mcpEffect ? <McpToolDecisionBadges effect={mcpEffect} testID="permission-prompt-mcp-badge" /> : null}
+                    {headerActions && !mcp ? <View style={styles.headerActions}>{headerActions}</View> : null}
                     {canOpenToolRoute ? (
                         <Pressable
                             testID="permission-prompt-view-tool"
@@ -160,7 +179,22 @@ export const PermissionPromptCard = React.memo(function PermissionPromptCard(pro
                 />
             )}
         >
-            {isPreviewVisible ? (
+            {mcp && mcpFacts ? (
+                <View style={styles.mcpBody}>
+                    {mcpFacts.rows.length > 0 ? <ActionApprovalFieldsCard presentation={mcpFacts} serverId={props.serverId ?? transcriptSource.serverId ?? null} /> : null}
+                    {mcp.serverDefault ? (
+                        <View style={styles.mcpDefault}>
+                            <Icon name="shield-check" size={14} color={theme.colors.text.secondary} />
+                            <Text variant="meta" style={styles.mcpDefaultText} numberOfLines={1}>
+                                {`${mcp.serverTitle}: ${t(mcp.serverDefault === 'ask' ? 'capabilities.mcp.tools.defaultAsk'
+                                    : mcp.serverDefault === 'allow_read_only' ? 'capabilities.mcp.tools.defaultReadOnly' : 'capabilities.mcp.tools.defaultAll')}`}
+                            </Text>
+                            {transcriptSource.navigate ? <TextLinkButton testID="permission-prompt-tool-settings" size="meta" tone="strong"
+                                label={t('capabilities.session.toolAsk.toolSettings')} onPress={openToolSettings} /> : null}
+                        </View>
+                    ) : null}
+                </View>
+            ) : isPreviewVisible ? (
                 <ToolInlineBody
                     mode="timeline"
                     tool={model.tool}
@@ -192,6 +226,18 @@ const styles = StyleSheet.create((theme) => ({
     },
     viewButtonPressed: {
         backgroundColor: theme.colors.surface.pressedOverlay,
+    },
+    mcpBody: {
+        gap: theme.space.s8,
+    },
+    mcpDefault: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.space.s6,
+    },
+    mcpDefaultText: {
+        color: theme.colors.text.secondary,
+        flexShrink: 1,
     },
     headerActions: {
         flexDirection: 'row',

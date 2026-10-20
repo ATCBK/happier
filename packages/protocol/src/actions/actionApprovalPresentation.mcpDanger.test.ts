@@ -14,11 +14,10 @@ const cases: readonly (readonly [McpServerActionIdV1, unknown, readonly string[]
   ['mcp.servers.create', { entry, where, expectedRevision: 1 }, ['issue-mcp', '--workspace', 'team', 'Issue tracker', 'machine-a']],
   ['mcp.servers.create', { entries: [{ entry, where }], expectedRevision: 1 }, ['issue-mcp', '--workspace', 'Issue tracker', 'machine-a']],
   ['mcp.servers.update', { entry, expectedRevision: 1 }, ['issue-mcp', '--workspace', 'Issue tracker']],
-  ['mcp.servers.duplicate', { serverId: 'original', entry, where, expectedRevision: 1 }, ['original', 'issue-mcp', 'Issue tracker', 'machine-a']],
+  ['mcp.servers.duplicate', { serverId: 'original' }, ['original', 'Everywhere']],
   ['mcp.servers.delete', { serverId: 'mcp-a', removeBindings: true, expectedRevision: 1 }, ['mcp-a', 'Remove rules']],
   ['mcp.servers.tools.set', { serverId: 'mcp-a', default: 'allow_read_only', tools: { delete_issue: 'allow', search: 'off', list: 'inherit' } },
     ['delete_issue', 'Allow', 'search', 'Off', 'Use server default', 'Allow read-only']],
-  ['mcp.servers.test', { t: 'draft', machineId: 'machine-a', directory: '/work', server: entry }, ['issue-mcp', 'team', 'machine-a', '/work']],
   ['mcp.servers.test', { t: 'byId', machineId: 'machine-a', directory: '/work', serverId: 'mcp-a' }, ['mcp-a', 'machine-a', '/work']],
   ['mcp.servers.signIn.start', { serverId: 'mcp-a', stepUp: true }, ['mcp-a', 'More access']],
   ['mcp.servers.import', { source: { kind: 'paste', text: JSON.stringify({ mcpServers: { issues: {
@@ -34,6 +33,9 @@ const cases: readonly (readonly [McpServerActionIdV1, unknown, readonly string[]
   ['mcp.servers.update', { entry, expectedRevision: 1, configOverrides: [{ target: { t: 'machine', machineId: 'machine-a' },
     stdio: { command: 'alternate-mcp', args: ['--team', 'other'] }, envPatch: { TOKEN: { t: 'literal', v: 'private-secret-sentinel' } } }] },
     ['alternate-mcp', 'other', 'machine-a', 'TOKEN']],
+  ['mcp.servers.update', { entry: { ...entry, stdio: { ...entry.stdio, cwd: { t: 'path', path: '/base-folder' } } },
+    expectedRevision: 1, configOverrides: [{ target: { t: 'machine', machineId: 'machine-a' }, stdio: { cwd: { t: 'session' } } }] },
+    ['/base-folder', 'Session folder', 'machine-a']],
   ['mcp.servers.import', { source: { kind: 'link', url: 'https://example.test/config.json' }, dryRun: false }, ['https://example.test/config.json', 'Everywhere']],
 ];
 

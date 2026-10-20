@@ -1,8 +1,10 @@
 import { createServer, type OutgoingHttpHeaders, type ServerResponse } from "node:http";
+import { json } from 'node:stream/consumers';
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { AddressInfo } from "node:net";
 import { logger } from "@/ui/logger";
 import { createHappierMcpServer } from "@/mcp/createHappierMcpServer";
+import { listHappierMcpToolNames } from "@/mcp/resources/registerHappierMcpResources";
 import {
     listAdmittedSessionRunReadActionIds,
 } from "@/agent/tools/happierTools/listBuiltInHappierTools";
@@ -28,18 +30,19 @@ import {
     createMcpActionSettingsProvider,
 } from '@/mcp/server/createMcpActionEnablement';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import type { SessionClientServerBinding } from '@/api/session/client/transport/sessionClientTransport';
+import type { SessionClientPort } from '@/api/session/sessionClientPort';
 import { DaemonPluginToolCatalogUnavailableError } from './pluginToolCatalogError';
 import { createSessionMcpToolInventory } from './server/sessionMcpToolInventory';
 import { SessionCapabilityNoticeV1Schema, SESSION_CAPABILITY_NOTICE_SIDECAR_KEY } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 
 const NativeAgentToolCallRequestV1Schema = z.strictObject({
-    toolName: z.string().trim().min(1).max(256),
+    toolName: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
     args: z.unknown(),
-    toolCallId: z.string().trim().min(1).max(512).optional(),
+    toolCallId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(512))),
 });
 
 export type HappyMcpExecutionRunService = Readonly<{
@@ -53,6 +56,7 @@ export type HappyMcpExecutionRunService = Readonly<{
 }>;
 
 export type HappyMcpSessionClient = {
+    getSessionRoleContext?: import('@/mcp/runtime/applyRunnerMcpSessionContext').RunnerMcpSessionContextAccessors['getSessionRoleContext'];
     getCurrentSessionSkillItems?: import('@/mcp/runtime/applyRunnerMcpSessionContext').RunnerMcpSessionContextAccessors['getCurrentSessionSkillItems'];
     getPluginMcpRuntimeRegistry?: import('@/mcp/runtime/applyRunnerMcpSessionContext').RunnerMcpSessionContextAccessors['getPluginMcpRuntimeRegistry'];
     getCurrentResolvedRoles?(): import('@happier-dev/protocol').ResolvedRolesSnapshotV1;
@@ -62,6 +66,8 @@ export type HappyMcpSessionClient = {
     sessionId: string;
     getServerBinding(): SessionClientServerBinding;
     getMachineAdmissionTransport?: import('@/api/session/sessionClient').ApiSessionClient['getMachineAdmissionTransport'];
+    mutateSessionMessageReply?: import('@/api/session/sessionClient').ApiSessionClient['mutateSessionMessageReply'];
+    publishSessionMessageReply?: import('@/api/session/sessionClient').ApiSessionClient['publishSessionMessageReply'];
     getMcpRequestAuthPort?: import('@/api/session/sessionClient').ApiSessionClient['getMcpRequestAuthPort'];
     rpcHandlerManager: RpcHandlerManagerLike;
     updateMetadata(updater: (metadata: Metadata) => Metadata): void | Promise<void>;
@@ -99,12 +105,9 @@ export type HappyMcpSessionClient = {
     /**
      * Stored-content material the live Session client already holds for this
      * exact Session. A Session-scoped runtime (a Runner) has no Account
-     * material, so this is what opens its own Board and Discussions.
+     * material, so this is what opens its own Board.
      */
-    getStoredContentEncryptionContext?(): Readonly<{
-        mode: 'plain' | 'e2ee';
-        ctx?: Readonly<{ encryptionKey: Uint8Array; encryptionVariant: 'legacy' | 'dataKey' }>;
-    }>;
+    getStoredContentEncryptionContext?: SessionClientPort['getStoredContentEncryptionContext'];
 };
 
 type HappySessionToolRuntimeOptions = Readonly<{
@@ -253,6 +256,13 @@ export async function startHappyServer(
     opts?: HappySessionToolRuntimeOptions,
 ) {
     // Transports remain request-local; reuse the bridge's admitted inventory.
+    // The bridge survives native runtime replacement. Discovery cannot inherit
+    // the retiring incarnation's signal while its successor is still opening.
+    const bridgeLifetime = new AbortController();
+    // Invocation-only bridges already have a containing Run at construction;
+    // ordinary Session bridges are prepared before the first native open.
+    const ownerSignal = client.getRuntimeLifetimeSignal?.();
+    const bridgeSignal = ownerSignal ? AbortSignal.any([bridgeLifetime.signal, ownerSignal]) : bridgeLifetime.signal;
     const actionSettingsProvider = opts?.actionsSettingsProvider ?? createMcpActionSettingsProvider({
         accountSettings: opts?.accountSettings ?? null,
         getAccountSettings: opts?.getAccountSettings ?? null,
@@ -266,8 +276,9 @@ export async function startHappyServer(
         authorityScope: opts?.authorityScope,
         requiredDirectActionIds: opts?.requiredDirectActionIds,
         pluginRuntimeRegistryLease: opts?.pluginRuntimeRegistryLease,
+        lifetimeSignal: bridgeSignal,
     });
-    const startupSignal = readMcpToolExecutionSignal(client);
+    const startupSignal = bridgeSignal;
     let initialPluginToolCatalog: readonly ProjectedPluginToolCatalogEntry[];
     try {
         initialPluginToolCatalog = await readCurrentPluginToolCatalog(client, readToolInventory, startupSignal)
@@ -287,12 +298,13 @@ export async function startHappyServer(
             });
         startupSignal?.throwIfAborted();
     } catch (error) {
+        bridgeLifetime.abort(error);
         readToolInventory.dispose();
         throw error;
     }
     const initialToolInventory = readToolInventory(initialPluginToolCatalog);
     const toolsSnapshot = initialToolInventory.tools;
-    const toolNamesSnapshot = toolsSnapshot.map((tool) => tool.name);
+    const toolNamesSnapshot = listHappierMcpToolNames(toolsSnapshot.map((tool) => tool.name));
     const supportedSessionReadActions = listAdmittedSessionRunReadActionIds(toolsSnapshot);
     const keepAliveIntervalMs = configuration.mcpSseKeepAliveIntervalMs;
 
@@ -301,7 +313,27 @@ export async function startHappyServer(
     //
 
     const server = createServer(async (req, res) => {
-        const toolExecutionSignal = req.method === 'POST' ? readMcpToolExecutionSignal(client) : undefined;
+        let parsedBody: unknown;
+        if (req.method === 'POST') {
+            try {
+                parsedBody = await json(req);
+            } catch {
+                res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({
+                    jsonrpc: '2.0', error: { code: -32700, message: 'Parse error: Invalid JSON' }, id: null,
+                }));
+                return;
+            }
+        }
+        // Codex resumes and lists tools before admitting its next host turn.
+        // Discovery belongs to the bridge; tools/call also inherits native/turn cancellation.
+        // The MCP SDK still validates and dispatches the parsed JSON-RPC message.
+        const messages: readonly unknown[] = Array.isArray(parsedBody) ? parsedBody : [parsedBody];
+        const isToolCall = messages.some(
+            message => message !== null && typeof message === 'object' && 'method' in message && message.method === 'tools/call',
+        );
+        const toolExecutionSignal = isToolCall
+            ? readMcpToolExecutionSignal(client, bridgeSignal)
+            : bridgeSignal;
         // Claude Code keeps a long-lived standalone GET SSE stream open for MCP notifications.
         // Without periodic bytes on that stream, the client times out and reconnects every ~5 minutes.
         // Keepalives are only needed for the standalone GET stream (POST response streams are short-lived).
@@ -390,7 +422,7 @@ export async function startHappyServer(
 
         try {
             await mcp.connect(transport);
-            await transport.handleRequest(req, res);
+            await transport.handleRequest(req, res, parsedBody);
         } catch (error) {
             logger.debug('[happierMCP] Error handling request:', error);
             if (!res.headersSent) {
@@ -411,15 +443,16 @@ export async function startHappyServer(
         url: baseUrl.toString(),
         toolNames: toolNamesSnapshot,
         readToolNames: async (signal?: AbortSignal) => {
-            const operationSignal = readMcpToolExecutionSignal(client, signal);
+            const operationSignal = signal ? AbortSignal.any([bridgeSignal, signal]) : bridgeSignal;
             operationSignal?.throwIfAborted();
             const catalog = await readCurrentPluginToolCatalog(client, readToolInventory, operationSignal);
             operationSignal?.throwIfAborted();
-            return readToolInventory(catalog).tools.map(tool => tool.name);
+            return listHappierMcpToolNames(readToolInventory(catalog).tools.map(tool => tool.name));
         },
         supportedSessionReadActions,
         stop: () => {
             logger.debug('[happierMCP] Stopping server');
+            bridgeLifetime.abort();
             readToolInventory.dispose();
             server.close();
         }

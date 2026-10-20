@@ -192,9 +192,10 @@ export function useSessionViewShellSession(sessionId: string, expectedServerId?:
             previousSource = session;
             previousTitle = title;
             const signature = session ? JSON.stringify([buildSessionViewShellSessionSignature(session), title]) : 'null';
-            // Apply the existing shell projection before Zustand notifies React. Transcript-only
-            // fields have their own leaf subscriptions and must not invalidate the shell.
-            if (signature !== previousSignature) {
+            // Seq/pending updates have leaf subscriptions. Structured turns instead travel on
+            // this Session prop; ingestion retains their reference for equal hydration echoes.
+            if (signature !== previousSignature
+                || (session?.sessionTurns ?? null) !== (previousSession?.sessionTurns ?? null)) {
                 previousSignature = signature;
                 // A row-only title hydration must notify memoized header consumers even when
                 // the full Session is unchanged. Other transcript changes retain its identity.

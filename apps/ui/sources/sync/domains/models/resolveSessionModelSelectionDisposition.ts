@@ -20,6 +20,8 @@ export type SessionModelSelectionDisposition = Readonly<{
     proposedSelection: ProviderBoundModelRef | null;
     proposedSelectionV2: SessionModelSelectionV2 | null;
     activeSelection: ProviderBoundModelRef | null;
+    /** Coherent runtime-applied history for presentation; never current runner/context authority. */
+    lastAppliedSelection: ProviderBoundModelRef | null;
     selectionTransitionPending: boolean;
     reportedSelection: ProviderBoundModelRef | null;
     reportedSelectionStatus: 'running' | 'last_used' | 'last_reported' | null;
@@ -103,20 +105,15 @@ export function resolveSessionModelSelectionDisposition(params: Readonly<{
             : providerFallbackSelection;
     const reportedSelection = exactSelection ?? fallbackSelection;
     const activeSelection = params.sessionActive ? exactSelection : null;
-    // A missing daemon observation is not evidence that the reader armed a
-    // different route. Compare the proposal with the coherent runtime-applied
-    // fact, using its own witness only to validate that historical fact. It
-    // never becomes active/context truth, and an observed replacement runner
-    // must still establish its own selection before it can satisfy a proposal.
-    const appliedSelectionForTransition = exactSelection ?? (
-        params.currentRunnerProcessIdentity === null
-            ? readActiveSessionModelSelectionFromMetadata(
-                params.metadata,
-                params.agentId,
-                params.agentTargetKey,
-                params.metadata?.sessionModelsV1?.activeSelectionV1?.runner ?? null,
-            )
-            : null
+    // A replacement runner is not a new model choice. Compare intent with
+    // coherent applied history even while the replacement's model publication
+    // is catching up. This history never supplies active/context authority;
+    // a genuinely different selection still requires transition admission.
+    const lastAppliedSelection = exactSelection ?? readActiveSessionModelSelectionFromMetadata(
+        params.metadata,
+        params.agentId,
+        params.agentTargetKey,
+        params.metadata?.sessionModelsV1?.activeSelectionV1?.runner ?? null,
     );
     const teamSelectionTransitionPending = proposedSelectionV2?.ref.source === 'team_resource'
         && (
@@ -128,12 +125,16 @@ export function resolveSessionModelSelectionDisposition(params: Readonly<{
             teamSelectionTransitionPending
             || (
                 proposedIntent !== null
+                // Session socket presence precedes native startup/model publication.
+                // The launch intent alone is not evidence of a changed runtime route.
+                // Leave active/context authority unknown until the producer publishes it.
+                && sessionModels !== null
                 && (
-                    appliedSelectionForTransition === null
+                    lastAppliedSelection === null
                     || proposedSelection === null
-                    || appliedSelectionForTransition.agentTargetKey !== proposedSelection.agentTargetKey
-                    || appliedSelectionForTransition.providerConnectionId !== proposedSelection.providerConnectionId
-                    || appliedSelectionForTransition.modelId !== proposedSelection.modelId
+                    || lastAppliedSelection.agentTargetKey !== proposedSelection.agentTargetKey
+                    || lastAppliedSelection.providerConnectionId !== proposedSelection.providerConnectionId
+                    || lastAppliedSelection.modelId !== proposedSelection.modelId
                 )
             )
         );
@@ -149,6 +150,7 @@ export function resolveSessionModelSelectionDisposition(params: Readonly<{
         proposedSelection,
         proposedSelectionV2,
         activeSelection,
+        lastAppliedSelection,
         selectionTransitionPending,
         reportedSelection,
         reportedSelectionStatus,

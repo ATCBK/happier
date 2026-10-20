@@ -97,10 +97,22 @@ export function snapshotToScmStatusFiles(snapshot: ScmWorkingSnapshot): ScmStatu
     return result;
 }
 
+const SCM_PATH_ORDER = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+const SCM_PATH_TIEBREAK = new Intl.Collator(undefined, { numeric: true });
+
+/**
+ * The one order for changed paths and path segments: natural (`group-2` before `group-10`) and
+ * case-insensitive, with case only breaking ties. The changed-file list, its tree and the walkthrough's
+ * code map all read it.
+ */
+export function compareScmPaths(left: string, right: string): number {
+    return SCM_PATH_ORDER.compare(left, right) || SCM_PATH_TIEBREAK.compare(left, right);
+}
+
 /**
  * The working copy's changed files: one row per changed path (a file staged and then edited again is
  * one file), untracked files included, and directories collapsed by the backend (`scratch/`) left
- * out because they are not a file a person can open, stage or commit. Sorted by path.
+ * out because they are not a file a person can open, stage or commit. Sorted by path ({@link compareScmPaths}).
  *
  * This list is the one change-count truth: its length is the count on the rail badge and its tooltip,
  * the Git and Files headers, the Changes tab and the phone cockpit (`ScmStatus.changedFileCount`).
@@ -116,7 +128,7 @@ export function selectScmChangedFiles(snapshot: ScmWorkingSnapshot): readonly Sc
         if (isDirectoryLikeScmFileStatus(file) || mergedByPath.has(file.fullPath)) continue;
         mergedByPath.set(file.fullPath, file);
     }
-    const result = Array.from(mergedByPath.values()).sort((a, b) => a.fullPath.localeCompare(b.fullPath));
+    const result = Array.from(mergedByPath.values()).sort((a, b) => compareScmPaths(a.fullPath, b.fullPath));
     snapshotChangedFilesCache.set(snapshot, result);
     return result;
 }

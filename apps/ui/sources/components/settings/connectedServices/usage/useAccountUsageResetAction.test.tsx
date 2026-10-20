@@ -14,12 +14,11 @@ import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machine
 import { apiSocket } from '@/sync/api/session/apiSocket';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
-import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { decideApprovalAsInbox, replayApprovedAsDaemon } from '@/dev/testkit/harness/approvalInbox';
+import { decideApprovalAsInbox, installOwnMachineApprovalReplayBoundary } from '@/dev/testkit/harness/approvalInbox';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { buildRecoveryCreditConsumeIdempotencyKey } from '@happier-dev/protocol/connect/recoveryCreditConsumeIdempotencyKey';
-import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { Modal } from '@/modal';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { serverScopedRpcSocketPool } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool';
@@ -43,37 +42,38 @@ afterEach(() => { standardCleanup(); vi.restoreAllMocks(); });
 
 it.each(['approve', 'reject', 'disabled', 'stale'] as const)('admits the shared reset through Action policy and fresh targets (%s)', async decision => {
     const bridge = await loadSyncSingletonForTests();
-    const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'reset-account', encryptionMode: 'plain' });
     const actionsSettingsV1 = ActionsSettingsV1Schema.parse({ v: 1, actions: {
         'connectedServices.quota.reset': decision === 'disabled' ? { disabledSurfaces: ['ui'] } : { approvalRequiredSurfaces: ['ui'] },
     } });
+    const home = createHomeGovernanceHarness();
+    installHomeGovernanceBoundaries(home);
+    const serverUrl = 'https://reset-approval.test';
+    const serverId = await home.addHome({ name: 'Reset Home', serverUrl, serverIdentityId: 'srv_reset_approval',
+        accountId: 'reset-account', currentAccount: true });
+    const artifacts = home.artifacts(serverId);
+    await installOwnMachineApprovalReplayBoundary({ harness: home, serverId, accountId: 'reset-account', machineId: 'selected-machine' });
+    const machineRow = createPlainMachineRowFixture({ id: 'selected-machine', accountId: 'reset-account' });
+    home.answer(serverId, '/v1/machines', { body: [machineRow] });
+    home.answer(serverId, '/v1/machines/selected-machine', { body: { machine: machineRow } });
+    home.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: { actionsSettingsV1 } }, version: 1 } });
+    home.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+    const token = home.findByServerUrl(serverUrl)?.token;
+    if (!token) throw new Error('Missing current Reset Account credential');
     const account = await restoreServerAccountForTest({ serverUrl: 'https://reset-approval.test',
-        serverIdentityId: 'srv_reset_approval', accountId: 'reset-account', request: async (input, init) => {
-            const path = new URL(String(input)).pathname;
-            const artifact = artifacts.handle(path, init);
-            if (artifact) return artifact;
-            if (path === '/v1/machines/selected-machine') return Response.json({ machine: createPlainMachineRowFixture({ id: 'selected-machine', accountId: 'reset-account' }) });
-            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
-            if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: { actionsSettingsV1 } }, version: 1 });
-            if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
-            return Response.json({}, { status: 404 });
-        } });
+        serverIdentityId: 'srv_reset_approval', accountId: 'reset-account', credentials: { token }, request: home.request });
     const active = getActiveServerSnapshot();
     const machine = createMachineFixture({ id: 'selected-machine', activeAt: Date.now() });
     storage.getState().activateProfileScope({ serverId: active.serverId, accountId: 'reset-account' });
     await storage.getState().activateSettingsScope({ serverId: active.serverId, accountId: 'reset-account' });
     storage.getState().applyProfile({ ...profileDefaults, id: 'reset-account' });
-    storage.getState().applySettings({ ...settingsDefaults, actionsSettingsV1, machineAdministrationTargetsLocalV1: {
+    storage.setState({ settings: { ...settingsDefaults, actionsSettingsV1, machineAdministrationTargetsLocalV1: {
         [MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.connectedAccounts]: { serverIdentityId: 'srv_reset_approval', machineId: machine.id },
-    } }, 1);
+    } }, settingsVersion: 1 });
     storage.getState().applyMachines([machine], true, { sourceServerId: active.serverId });
     storage.setState({ isDataReady: true });
     const spends: unknown[] = [];
     const respond = async (machineId: string, method: string, payload: unknown) => {
-        if (method === RPC_METHODS.APPROVAL_REQUEST_REPLAY_APPROVED) {
-            return await replayApprovedAsDaemon({ serverId: active.serverId, machineId,
-                artifactId: String(Reflect.get(payload as object, 'artifactId')) });
-        }
+        expect(machineId).toBe(machine.id);
         if (method !== RPC_METHODS.DAEMON_CONNECTED_SERVICE_QUOTA_RECOVERY_CREDIT_CONSUME) throw new Error(`Unexpected machine RPC ${method}`);
         spends.push(payload);
         return { ok: true, receipt: { idempotencyKey: 'reset-receipt', providerCreditId: 'credit-1', status: 'nothing_to_reset' }, snapshot: null };
@@ -111,9 +111,9 @@ it.each(['approve', 'reject', 'disabled', 'stale'] as const)('admits the shared 
         }
         expect(rpc).not.toHaveBeenCalled();
         expect(applied).toBe(false);
+        expect(hook.getCurrent().pending, JSON.stringify(vi.mocked(Modal.alert).mock.calls)).toBe(true);
         await waitForHomeGovernance(() => expect(artifacts.list()).toHaveLength(1));
         const artifactId = artifacts.list()[0]!.id;
-        expect(hook.getCurrent().pending).toBe(true);
         expect(rpc).not.toHaveBeenCalled();
         expect(applied).toBe(false);
         expect(StoredApprovalRequestSchema.parse(JSON.parse(artifacts.readPlainBody(artifactId)!))).toMatchObject({
@@ -121,7 +121,8 @@ it.each(['approve', 'reject', 'disabled', 'stale'] as const)('admits the shared 
                 machineId: machine.id, serviceId: 'openai-codex', profileId: 'work', providerCreditId: 'credit-1', sourceSnapshotFetchedAtMs: 123,
             },
         });
-        await decideApprovalAsInbox(active.serverId, artifactId, decision);
+        const decided = await decideApprovalAsInbox(active.serverId, artifactId, decision);
+        expect(decided, JSON.stringify(decided)).toMatchObject({ ok: true });
         await waitForHomeGovernance(() => expect(hook.getCurrent().pending).toBe(false));
         await request;
         if (decision === 'approve') {
@@ -143,7 +144,7 @@ it.each(['approve', 'reject', 'disabled', 'stale'] as const)('admits the shared 
         await hook.unmount(); await request;
         await serverScopedRpcSocketPool.stopAll(); resetScopedMachineTransportCacheForTests();
         installDisconnectedServerSocketBoundary();
-        await account.dispose(); bridge.dispose(); storage.getState().clearProfileScope();
+        await account.dispose(); await home.reset(); bridge.dispose(); storage.getState().clearProfileScope();
     }
 });
 
@@ -157,9 +158,9 @@ it.each([null, 'different-machine'])('refuses a usage reset outside the explicit
     storage.getState().activateProfileScope({ serverId: active.serverId, accountId: 'reset-account' });
     await storage.getState().activateSettingsScope({ serverId: active.serverId, accountId: 'reset-account' });
     storage.getState().applyProfile({ ...profileDefaults, id: 'reset-account' });
-    storage.getState().applySettings({ ...settingsDefaults, machineAdministrationTargetsLocalV1: {
+    storage.setState({ settings: { ...settingsDefaults, machineAdministrationTargetsLocalV1: {
         [MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.connectedAccounts]: { serverIdentityId: 'srv_reset_admission', machineId: machine.id },
-    } }, 1);
+    } }, settingsVersion: 1 });
     storage.getState().applyMachines([machine], true, { sourceServerId: active.serverId });
     storage.setState({ isDataReady: true });
     // Socket RPC is the external effect; target resolution and the consume operation remain real.

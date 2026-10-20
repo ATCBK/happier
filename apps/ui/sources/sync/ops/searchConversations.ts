@@ -16,6 +16,7 @@ import { listExternalSessionBrowseProviderIds, resolveExternalSessionBrowseSourc
     resolveExternalSessionBrowseContentSearchSupported } from '@/components/sessions/external/browse/resolveExternalSessionBrowseSourceOptions';
 import { authorizeMemorySearchResult, captureMemorySearchSessionReadAuthority,
     readMemorySearchSessionForServerScope, readMemorySearchSessionHydrationConcurrencyLimit } from '@/sync/domains/memory/hydrateMemorySearchSessionTargets';
+import { getConnectedMetadataCatalog } from '@/sync/store/settings/connectedMetadataCatalogSnapshot';
 import { searchConversations, type ConversationSearchSource, type ConversationSearchResult } from '@/sync/domains/search/searchConversations';
 
 /** Reuses History's projected/configured source owner, including connected-account variants. */
@@ -25,7 +26,7 @@ export async function readConversationSearchSources(input: Readonly<{
     const { serverId, accountId } = input.accountLifetime.scope;
     input.signal?.throwIfAborted();
     if (!input.accountLifetime.isCurrent()) return [];
-    const inputs = await loadDaemonMergedProjectionInputs({ machineId: input.machineId, serverId, accountLifetime: input.accountLifetime });
+    const inputs = await loadDaemonMergedProjectionInputs({ machineId: input.machineId, serverId, accountLifetime: input.accountLifetime, signal: input.signal });
     input.signal?.throwIfAborted();
     const projection = inputs?.pluginProjectionV2;
     if (!projection || !input.accountLifetime.isCurrent()) return [];
@@ -47,7 +48,7 @@ export async function readConversationSearchSources(input: Readonly<{
         if (!input.accountLifetime.isCurrent()) return [];
         return listExternalSessionBrowseProviderIds({ accountScope: input.accountLifetime.scope, machineId: input.machineId, projection })
             .flatMap(agentId => resolveExternalSessionBrowseSourceOptions({ accountScope: input.accountLifetime.scope,
-                machineId: input.machineId, providerId: agentId, projection, profile, labelsByKey: {}, activeServerId: serverId,
+                machineId: input.machineId, providerId: agentId, projection, profile, labelsByKey: getConnectedMetadataCatalog(input.accountLifetime.scope).labelsByKey, activeServerId: serverId,
                 agentSettings: readAccountSettingsForScope({ scope: input.accountLifetime.scope,
                     focusedScope: state.settingsScope, focusedSettings: state.settings }),
             }).flatMap(option => {
@@ -72,6 +73,7 @@ export async function searchConversationsForAccount(input: Readonly<{
     includeThreads?: boolean;
     signal?: AbortSignal;
     continuation?: NonNullable<ConversationSearchResult['continuations']>[number];
+    retrySource?: Parameters<typeof searchConversations>[0]['retrySource'];
     onSources?: (sources: NonNullable<ConversationSearchResult['sources']>) => void;
     onProgress?: (result: ConversationSearchResult) => void;
 }>): Promise<ConversationSearchResult> {
@@ -117,6 +119,7 @@ export async function searchConversationsForAccount(input: Readonly<{
             concurrencyLimit: readMemorySearchSessionHydrationConcurrencyLimit(),
             mode: input.mode, ...input.providers, homeSessions, signal: controller.signal,
             continuation: input.continuation,
+            retrySource: input.retrySource,
             includeThreads: input.includeThreads,
             onSources: input.onSources,
             onProgress: input.onProgress,

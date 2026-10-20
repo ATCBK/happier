@@ -53,6 +53,7 @@ const pluginRuntime = {
     machineId: null,
     serverId: OWNER_ADDRESS.serverId,
     platform: 'web' as const,
+    accountLifetime: null,
 };
 
 // Reachability and repository freshness are separate axes on purpose: a

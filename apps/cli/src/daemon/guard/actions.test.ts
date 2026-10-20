@@ -33,7 +33,7 @@ function fixture() {
       accountId: 'owner', machineId: 'machine', serverId: 'home',
       // Fresh Home identity/target/account reads are network boundaries.
       resolveCurrentMachineExecutionOriginContext: async () => current ? { machineId: 'machine', serverIdentityId: 'home-identity' } : null,
-      resolveTarget: async () => ({ kind: 'machine', machineId: 'machine' }), listAccountApiTokens: async () => ({ tokens: [] }),
+      resolveTarget: async () => ({ kind: 'machine', machineId: 'machine' }), isAccountCurrent: async () => true, listAccountApiTokens: async () => ({ tokens: [] }),
     }),
     approvalsWaitForDecision: async args => {
       const result = await coordinator.waitForDecision(args);

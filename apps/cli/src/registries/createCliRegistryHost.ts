@@ -10,7 +10,8 @@ import { logger } from '@/ui/logger';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { resolveMergedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { createSavedSecretMaterializerFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
-import { readSavedSecretCatalogForOperation, SavedSecretOperationAdmissionError, type SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { readSavedSecretCatalogForOperation, SavedSecretOperationAdmissionError } from "@/settings/secrets/savedSecretCatalogRead";
+import { type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { resolveValueRefPlaintext } from '@/settings/valueRefs/resolveValueRefPlaintext';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { SocketRpcMachineAdmissionContextV1 } from '@happier-dev/protocol/socketRpc';
@@ -42,7 +43,7 @@ export function createCliRegistryHostV1(input:Readonly<{credentials?:StoredCrede
     if(!operation&&getActiveAccountSettingsSnapshot()?.scopeKey!==scopeKey
       &&!await warmActiveAccountSettingsSnapshotBestEffort({credentials,logger}))throw new RegistryFetchErrorV1({state:'unreachable'});
     const store=createCliPromptLibraryStore({credentials,signal:input.signal,operationContext:operation});
-    port={serverId:'',assertCurrent:store.assertCurrent,readCatalog:async()=>({catalog:await store.readPromptLibraryCatalog()}),writeRecord:store.writeRecord};
+    port={serverId:'',assertCurrent:store.assertCurrent,readCatalog:store.readCatalog,writeRecord:store.writeRecord};
     return port;
   };
   const readSources=async()=>readCliRegistrySourcesV1({port:await resolvePort(),signal:input.signal});

@@ -1,25 +1,23 @@
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import axios from 'axios';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-import { AccountEncryptionCurrentnessResponseSchema, AccountEncryptionCurrentnessErrorResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
 import { assertConnectedServiceCredentialRecordBinding } from '@happier-dev/protocol/connect/connectedServiceCredentialBinding';
 import { ConnectedServiceCredentialRecordV1Schema, SealedConnectedServiceCredentialV1Schema, readConnectedServiceCredentialRevisionBoundaryV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 import { ConnectedServiceIdSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { StoredJsonContentEnvelopeSchema } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
-import type { ConnectedServiceCredentialRecordV1, ConnectedServiceCredentialRevisionV1, ConnectedServiceCredentialRevisionBoundaryV1, ConnectedServiceId, SealedConnectedServiceCredentialV1, AccountEncryptionCurrentnessResponse, AccountEncryptionCurrentnessErrorResponse } from '@happier-dev/protocol';
+import type { ConnectedServiceCredentialRecordV1, ConnectedServiceCredentialRevisionV1, ConnectedServiceCredentialRevisionBoundaryV1, ConnectedServiceId, SealedConnectedServiceCredentialV1, AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol';
 
 import { logger } from '@/ui/logger';
-import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
-import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
-import { readStoredCredentials } from '@/persistence';
 
 import { resolveConnectedServicesServerApiTimeoutMs } from './connectedServicesServerApiTimeout';
-import { createHttpStatusError } from './httpStatusError';
 import { logServerEndpointFailure } from './serverEndpointFailureLog';
 import { resolveServerHttpBaseUrl } from './serverHttpBaseUrl';
 import { readAccountEncryptionModeOnce } from './accountEncryptionMode';
+import { createHttpStatusError } from './httpStatusError';
 import { readObservedAccountEncryptionCurrentness } from './accountEncryptionCurrentnessObservation';
+import { fetchAccountEncryptionCurrentness } from './accountEncryptionCurrentness';
+export { AccountEncryptionCurrentnessUnavailableError, fetchAccountEncryptionCurrentness, fetchAccountEncryptionCurrentnessFromServer } from './accountEncryptionCurrentness';
 
 const CONNECTED_SERVICE_PROFILE_LIST_CACHE_TTL_MS = 10_000;
 const ACCOUNT_ENCRYPTION_MODE_CACHE_TTL_MS = 10_000;
@@ -114,22 +112,6 @@ export class ConnectedServiceCredentialUnsupportedFormatError extends Error {
   }
 }
 
-export class AccountEncryptionCurrentnessUnavailableError extends Error {
-  readonly code = 'account_encryption_currentness_unavailable' as const;
-
-  constructor(
-    message = 'Account encryption currentness is unavailable',
-    readonly recipientEnvelopeReadiness?: AccountEncryptionCurrentnessErrorResponse['recipientEnvelopeReadiness'],
-    options?: ErrorOptions,
-  ) {
-    // The wrapped transport failure stays reachable as `cause` so the caller
-    // that owns the offline/auth classification (getOrCreateSession) can
-    // classify this preflight exactly as it classifies its own request.
-    super(message, options);
-    this.name = 'AccountEncryptionCurrentnessUnavailableError';
-  }
-}
-
 function readAxiosErrorCode(error: unknown): string | undefined {
   if (!axios.isAxiosError(error)) return undefined;
   const data = error.response?.data;
@@ -143,114 +125,6 @@ function createHeaders(token: string): Readonly<Record<string, string>> {
     ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
     Authorization: `Bearer ${token}`,
   };
-}
-
-type AccountEncryptionCurrentnessRead = Readonly<{
-  token: string;
-  authorizationHeaders?: Readonly<Record<string, string>>;
-  serverBaseUrl?: string;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-}>;
-
-export async function fetchAccountEncryptionCurrentness(params: AccountEncryptionCurrentnessRead): Promise<AccountEncryptionCurrentnessResponse> {
-  // Exact witnesses include the Account-wide cursor. Identity observations
-  // cannot supply it: a claim advances that cursor before its socket wake.
-  return await fetchAccountEncryptionCurrentnessFromServer(params);
-}
-
-/** The observation's initial/unknown/reconnect read; never consult its own pending fact. */
-export async function fetchAccountEncryptionCurrentnessFromServer(params: AccountEncryptionCurrentnessRead): Promise<AccountEncryptionCurrentnessResponse> {
-  const serverBaseUrl = (params.serverBaseUrl ?? resolveServerHttpBaseUrl())
-    .replace(/\/+$/, '');
-  const readCurrentness = async () => await axios.get(
-    `${serverBaseUrl}/v1/account/encryption/currentness`,
-    {
-      headers: params.authorizationHeaders ?? createHeaders(params.token),
-      timeout: params.timeoutMs ?? resolveConnectedServicesServerApiTimeoutMs(),
-      validateStatus: () => true,
-      ...(params.signal ? { signal: params.signal } : {}),
-    },
-  );
-  let response;
-  try {
-    response = await readCurrentness();
-  } catch (error) {
-    if (params.signal?.aborted) throw error;
-    throw new AccountEncryptionCurrentnessUnavailableError(undefined, undefined, { cause: error });
-  }
-  const legacyReadiness = response.status === 400
-    ? AccountEncryptionCurrentnessErrorResponseSchema.safeParse(response.data)
-    : null;
-  const suppliedAuthorization = params.authorizationHeaders
-    ? Object.entries(params.authorizationHeaders).find(([key]) => key.toLowerCase() === 'authorization')?.[1]
-    : null;
-  if (
-    legacyReadiness?.success
-    && legacyReadiness.data.recipientEnvelopeReadiness.reason === 'encryption_setup_required'
-    && (!params.authorizationHeaders || suppliedAuthorization === `Bearer ${params.token}`)
-  ) {
-    const stored = await readStoredCredentials().catch(() => null);
-    const expectedAccountId = readAccountIdFromToken(params.token);
-    if (
-      stored?.token === params.token
-      && stored.credentialProvenance === 'stored_session'
-      && stored.encryption?.type === 'legacy'
-      && expectedAccountId
-    ) {
-      try {
-        const snapshot = await fetchServerFeaturesSnapshot({
-          serverUrl: serverBaseUrl,
-          token: params.token,
-          ...(params.signal ? { signal: params.signal } : {}),
-        });
-        const serverIdentityId = snapshot.status === 'ready'
-          ? snapshot.features.capabilities.serverIdentity.serverIdentityId?.trim()
-          : null;
-        if (serverIdentityId) {
-          const { authenticateExistingAccountWithLegacySecret } = await import('@/cli/commands/auth/nativeEmail');
-          // The Home's expectedAccountId branch requires an already-bound key;
-          // this existing-Account proof repairs the missing binding, then we
-          // compare its issued Account with the stored bearer's subject.
-          const repairedToken = await authenticateExistingAccountWithLegacySecret({
-            secret: stored.encryption.secret,
-            serverApiUrl: serverBaseUrl,
-            serverIdentityId,
-            ...(params.signal ? { signal: params.signal } : {}),
-          });
-          if (readAccountIdFromToken(repairedToken) !== expectedAccountId) {
-            throw new Error('Recovered Account does not match the stored bearer');
-          }
-          response = await readCurrentness();
-        }
-      } catch (error) {
-        params.signal?.throwIfAborted();
-        // Preserve the original typed recovery result when proof cannot be completed.
-      }
-    }
-  }
-  if (response.status !== 200) {
-    const parsedError = response.status === 400
-      ? AccountEncryptionCurrentnessErrorResponseSchema.safeParse(response.data)
-      : null;
-    const message = `Account encryption currentness is unavailable (${response.status})`;
-    throw new AccountEncryptionCurrentnessUnavailableError(
-      message,
-      parsedError?.success ? parsedError.data.recipientEnvelopeReadiness : undefined,
-      // `validateStatus` suppresses Axios' own rejection, so carry the status
-      // on the canonical minimal Axios-like error the status policies read.
-      { cause: createHttpStatusError(response.status, message) },
-    );
-  }
-  const parsed = AccountEncryptionCurrentnessResponseSchema.safeParse(
-    response.data,
-  );
-  if (!parsed.success) {
-    throw new AccountEncryptionCurrentnessUnavailableError(
-      'Account encryption currentness response is invalid',
-    );
-  }
-  return parsed.data;
 }
 
 export class ConnectedServiceCredentialHttpClient implements ConnectedServiceCredentialApi {
@@ -308,9 +182,9 @@ export class ConnectedServiceCredentialHttpClient implements ConnectedServiceCre
 
       const metadataParsed = z.object({
         kind: z.enum(['oauth', 'token']),
-        providerEmail: z.string().nullable().optional(),
-        providerAccountId: z.string().nullable().optional(),
-        expiresAt: z.number().nullable().optional(),
+        providerEmail: z.optional(z.nullable(z.string())),
+        providerAccountId: z.optional(z.nullable(z.string())),
+        expiresAt: z.optional(z.nullable(z.number())),
       }).safeParse((raw as any).metadata);
 
       if (!metadataParsed.success) {
@@ -404,7 +278,7 @@ export class ConnectedServiceCredentialHttpClient implements ConnectedServiceCre
       );
       if (
         response.status !== 200
-        || !z.object({ success: z.literal(true) }).strict()
+        || !z.strictObject({ success: z.literal(true) })
           .safeParse(response.data).success
       ) {
         throw new Error(
@@ -462,13 +336,13 @@ export class ConnectedServiceCredentialHttpClient implements ConnectedServiceCre
 
     const profilesParsed = z.array(
       z.object({
-        profileId: z.string().min(1),
+        profileId: z.string().check(z.minLength(1)),
         status: z.enum(['connected', 'refreshing', 'needs_reauth', 'refresh_failed_retryable']),
-        kind: z.enum(['oauth', 'token']).nullable().optional(),
-        providerEmail: z.string().nullable().optional(),
-        providerAccountId: z.string().nullable().optional(),
-        expiresAt: z.number().nullable().optional(),
-        lastUsedAt: z.number().nullable().optional(),
+        kind: z.optional(z.nullable(z.enum(['oauth', 'token']))),
+        providerEmail: z.optional(z.nullable(z.string())),
+        providerAccountId: z.optional(z.nullable(z.string())),
+        expiresAt: z.optional(z.nullable(z.number())),
+        lastUsedAt: z.optional(z.nullable(z.number())),
       }),
     ).safeParse((raw as any).profiles);
 
@@ -526,6 +400,12 @@ export class ConnectedServiceCredentialHttpClient implements ConnectedServiceCre
           ...(signal ? { signal } : {}),
         }),
       });
+      // Most readers retain the existing unknown projection. Bootstrap readers
+      // opting into throwOnTransportError must retain a responding Home failure
+      // instead of treating it as missing Account encryption material.
+      if (result.kind === 'http_error') {
+        throw createHttpStatusError(result.status, 'Account encryption mode is unavailable');
+      }
       return result.kind === 'resolved' ? result.mode : 'unknown';
     } catch (error: unknown) {
       if (signal?.aborted) throw error;

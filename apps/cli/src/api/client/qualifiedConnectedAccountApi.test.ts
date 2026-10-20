@@ -84,6 +84,61 @@ describe("qualified Connected Account V4 API", () => {
         vi.mocked(axios.delete).mockReset();
     });
 
+    it.each(['plain', 'e2ee'] as const)('reconciles a lost usage write acknowledgement in %s mode without resending', async (accountMode) => {
+        const { ProviderAccountUsageSnapshotV1Schema } = await import('@happier-dev/protocol/connect/account-usage-primitives');
+        const { sealProviderAccountUsageSnapshot } = await import('@happier-dev/protocol/connect/accountUsage');
+        const recordKey = { providerId: 'codex', accountSubjectId: 'account', subjectKind: 'account' as const, quotaScope: 'account' as const };
+        const snapshot = ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+            providerId: 'codex', accountSubject: { kind: 'providerSubject', id: 'account' }, observedAtMs: 1000, fetchedAtMs: 1000,
+            staleAfterMs: 300_000, source: 'runtimeSignal', confidence: 'confirmed', state: 'loaded_data', meters: [] });
+        const source = { ref: { service, accountId: 'work' }, bindingKind: 'account' as const };
+        const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
+        const sealed = sealProviderAccountUsageSnapshot({ snapshot, material, randomBytes: length => new Uint8Array(length).fill(2) });
+        const write = { source, expectedCredentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS', expectedConfigurationRevision: null,
+            recordId: snapshot.recordId, recordKey, status: 'ok', fetchedAt: snapshot.fetchedAtMs, staleAfterMs: snapshot.staleAfterMs,
+            ...(accountMode === 'plain' ? { payloadMode: 'plain_json_v1', snapshot }
+                : { payloadMode: 'sealed_account_scoped_v1', sealedPayload: sealed }) };
+        const timeout = Object.assign(new Error('timeout'), { code: 'ECONNABORTED' });
+        vi.mocked(axios.post).mockRejectedValue(timeout);
+        vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { sources: [source],
+            content: accountMode === 'plain' ? { t: 'plain', v: snapshot } : { t: 'encrypted', c: sealed.ciphertext },
+            metadata: { status: 'ok', fetchedAt: 1000, staleAfterMs: 300_000 } } });
+        await expect(writeQualifiedProviderAccountUsageV4({ token: 'token', write, ...(accountMode === 'e2ee' ? { material } : {}) }))
+            .resolves.toMatchObject({ success: true, source: { status: 'linked' } });
+        expect(axios.post).toHaveBeenCalledTimes(1);
+        expect(axios.get).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(axios.post).mock.calls[0]?.[1]).not.toHaveProperty('material');
+        vi.mocked(axios.get).mockRejectedValue(new Error('reconciliation read unavailable'));
+        await expect(writeQualifiedProviderAccountUsageV4({ token: 'token', write, ...(accountMode === 'e2ee' ? { material } : {}) }))
+            .rejects.toBe(timeout);
+    });
+
+    it.each(['conflict', 'timeout'] as const)('does not acknowledge unpersisted content or an unlinked source after %s recovery', async (failure) => {
+        const { ProviderAccountUsageSnapshotV1Schema } = await import('@happier-dev/protocol/connect/account-usage-primitives');
+        const recordKey = { providerId: 'codex', accountSubjectId: 'account', subjectKind: 'account' as const, quotaScope: 'account' as const };
+        const snapshot = ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+            providerId: 'codex', accountSubject: { kind: 'providerSubject', id: 'account' }, observedAtMs: 1000, fetchedAtMs: 1000,
+            staleAfterMs: 300_000, source: 'runtimeSignal', confidence: 'confirmed', state: 'loaded_data', meters: [] });
+        const source = { ref: { service, accountId: 'work' }, bindingKind: 'account' as const };
+        const write = { source, expectedCredentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS', expectedConfigurationRevision: null,
+            recordId: snapshot.recordId, recordKey, payloadMode: 'plain_json_v1', status: 'ok', snapshot,
+            fetchedAt: snapshot.fetchedAtMs, staleAfterMs: snapshot.staleAfterMs };
+        const conflict = failure === 'conflict'
+            ? { response: { status: 503, data: { error: 'database_transaction_conflict_exhausted' } } }
+            : Object.assign(new Error('timeout'), { code: 'ECONNABORTED' });
+        vi.mocked(axios.post).mockRejectedValue(conflict);
+        for (const record of [
+            { content: { t: 'plain', v: { ...snapshot, planLabel: 'different' } }, sources: [source] },
+            { content: { t: 'plain', v: snapshot }, sources: [{ ...source, ref: { ...source.ref, accountId: 'other' } }] },
+        ]) {
+            vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { ...record,
+                metadata: { fetchedAt: 1000, staleAfterMs: 300_000, status: 'ok' } } });
+            await expect(writeQualifiedProviderAccountUsageV4({ token: 'token', write })).rejects.toBe(conflict);
+        }
+        expect(axios.post).toHaveBeenCalledTimes(2);
+        expect(axios.get).toHaveBeenCalledTimes(2);
+    });
+
     it("preserves retained native review facts and serializes exact removal dispositions", async () => {
         const resource = { managedId: 'retained-id', homeId: 'home', custodianAccountId: 'account', intentRevision: 3,
             controller: { machineId: 'controller', installationId: 'installation' }, provider: { pluginId: 'fixture.compute', localId: 'cloud' },

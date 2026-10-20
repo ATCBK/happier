@@ -1,52 +1,70 @@
-import { projectExecutionRunChildChoiceV1 } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import * as React from 'react';
 import { Dimensions } from 'react-native';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AIBackendProfileSchema, buildBackendTargetKeyV2, DaemonContributionRegistryProjectionDescribeResponseSchema, ExecutionRunPublicStateSchema, FeaturesResponseSchema, MACHINE_PLAIN_DATA_KEY_MARKER, PersistedBackendTargetRefV2Schema, V2SessionByIdResponseSchema } from '@happier-dev/protocol';
+import { AIBackendProfileSchema, buildBackendTargetKeyV2, DaemonContributionRegistryProjectionDescribeResponseSchema, ExecutionRunPublicStateSchema, FeaturesResponseSchema, PluginProjectionV2Schema, V2SessionByIdResponseSchema } from '@happier-dev/protocol';
+import { MachineAgentInventoryItemSchema } from '@happier-dev/protocol/capabilities';
+import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
+import { projectExecutionRunChildChoiceV1, withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { AgentExecutionTargetV1Schema } from '@happier-dev/protocol/agents/executionTargetV1';
 import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryRowsListResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { SavedSecretResourceMaterialsResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { ComposerSnapshotV1Schema } from '@happier-dev/protocol/plugins/ui/composer';
+import type { RoleOverrideRecordV1 } from '@happier-dev/protocol/prompts/roles/roleOverrideRecordV1';
 
 import { changeTextTestInstance, createMachineFixture, createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainSessionCurrentProjectionRecordFixture, createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { serveActionHomes, type ServedHomeRequest } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixtures/pluginProviderDaemonProjection';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { AgentInput } from '@/components/sessions/agentInput';
-import { AgentInputChipPickerPanel } from '@/components/sessions/agentInput/components/AgentInputChipPickerPanel';
-import { SessionParticipantComposer } from '@/components/sessions/participants/composer/SessionParticipantComposer';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { settingsDefaults, type Settings } from '@/sync/domains/settings/settings';
-import { ensureSessionDraftRepositoryHydrated, getSessionDraftSnapshot, resetSessionDraftRepositoryForTests } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import { configureSessionDraftRepository, createSessionDraftRepository, ensureSessionDraftAddressesHydrated, ensureSessionDraftRepositoryHydrated, getSessionDraftSnapshot, resetSessionDraftRepositoryForTests, writeExistingSessionDraft, type SessionDraftRepositoryCipher, type SessionDraftRepositoryTransport } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import { getSessionDraftDocumentField } from '@/sync/ops/sessionDrafts/sessionDraftDocumentFields';
+import { createSessionDraftPrivatePayloadV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
+import { PROFILE_ROWS_ROUTE_V1, PROFILE_REFERENCE_GUARD_ROUTE_V1, ProfileRowsListResponseV1Schema, ProfileReferenceGuardReadResponseV1Schema, sealProfileRecordContentV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
+import { PROFILE_TRANSFER_ROUTE_V1, ProfileTransferRowReadResponseV1Schema } from '@happier-dev/protocol/profiles/profileTransferV1';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { invalidateAccountEncryptionModeCache } from '@/sync/api/account/apiAccountEncryptionMode';
 import { clearDaemonMergedProjectionCacheForTests } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { invalidateRoleCatalog } from '@/components/roles/catalog/useRoleCatalog';
 import { t } from '@/text';
-import { SessionInteractiveExecutionRunDraftView } from './SessionInteractiveExecutionRunDraftView';
-import { StartReviewDialog } from '@/components/sessions/reviews/walkthrough/StartReviewDialog';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { restoreConnectionToActiveServer, disconnectActiveServerConnection } from '@/sync/runtime/orchestration/connectionManager';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
-import { applyProfileCatalogSnapshot, resetProfileCatalogSnapshotsForTests } from '@/sync/store/settings/profileCatalogSnapshot';
+import { applyProfileCatalogSnapshot, getProfileCatalogSnapshot, resetProfileCatalogSnapshotsForTests } from '@/sync/store/settings/profileCatalogSnapshot';
 import { resetProfileCatalogEngineForTests } from '@/sync/engine/settings/profileCatalogEngine';
 import { resolveReviewEngineTarget } from '@/sync/domains/reviews/reviewEngineCatalog';
 import { refreshSavedSecretCatalog, resetSavedSecretCatalogEngineForTests } from '@/sync/engine/settings/savedSecretCatalogEngine';
 import { resetSavedSecretCatalogSnapshotsForTests } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import { refreshPromptLibraryCatalog, resetPromptLibraryCatalogEngineForTests } from '@/sync/engine/settings/promptLibraryCatalogEngine';
 import { resetPromptLibraryCatalogSnapshotsForTests } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
+import { saveAccountSettings } from '@/sync/domains/state/accountSettingsPersistence';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
+import { beginAcpCatalogLoad } from '@/sync/store/settings/acpCatalogSnapshot';
+import { readComposerPresentationSnapshot } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
+import { AgentInput } from '@/components/sessions/agentInput';
+import { AgentInputChipPickerPanel } from '@/components/sessions/agentInput/components/AgentInputChipPickerPanel';
+import { SessionParticipantComposer } from '@/components/sessions/participants/composer/SessionParticipantComposer';
+import { SessionInteractiveExecutionRunDraftView } from './SessionInteractiveExecutionRunDraftView';
+import { StartReviewDialog } from '@/components/sessions/reviews/walkthrough/StartReviewDialog';
+import { ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { ReviewEngineListItemSchema } from '@happier-dev/protocol/reviews/reviewEngines';
 
 // Platform, credentials, local persistence, HTTP and RPC are the boundaries. The composer,
 // capture/coordinator, draft repository, launcher options, role catalog, capability/feature
 // decisions, default Action executor and sync.submitMessage all run for real.
 // The common AgentInput installer deliberately supplies a small fake store. This journey needs
 // the whole real store, so install its canonical platform factories without that store override.
+const windowState = vi.hoisted(() => ({ width: 1024 }));
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock();
+    return createReactNativeWebMock({ useWindowDimensions: () => ({ width: windowState.width, height: 800 }) });
 });
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
@@ -62,7 +80,7 @@ vi.mock('@/text', async () => {
 });
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({ spies: { alert: modal.alert, show: modal.show } }).module;
+    return createModalModuleMock({ spies: { alert: modal.alert, show: modal.show, update: modal.update } }).module;
 });
 vi.mock('expo-image', () => ({ Image: (props: Record<string, unknown>) => React.createElement('Image', props) }));
 vi.mock('@/sync/domains/state/browserRecordStorage', async () => {
@@ -83,15 +101,22 @@ vi.mock('socket.io-client', async () => {
             const colon = raw.method.indexOf(':');
             const target = raw.method.slice(0, colon);
             const method = raw.method.slice(colon + 1);
-            const { listServerProfiles } = await import('@/sync/domains/server/serverProfiles');
-            const serverId = listServerProfiles().find((profile) => profile.serverUrl === url)?.id;
-            return { ok: true, result: await transport.call({ method, payload: raw.params, serverId,
-                ...(target === 'machine_1' ? { machineId: target } : { sessionId: target }) }) };
+            const { listServerProfiles, resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+            const profile = listServerProfiles().find((candidate) => candidate.serverUrl === url);
+            const serverId = profile ? resolveServerProfileScopeIdForIdentifier(profile.id) : undefined;
+            const result = await transport.call({ method, payload: raw.params, serverId,
+                ...(target === 'machine_1' ? { machineId: target } : { sessionId: target }) });
+            // Relay acknowledgements are outside the target handler's result envelope.
+            if (startRelayFailure && (method === SESSION_RPC_METHODS.EXECUTION_RUN_START
+                || method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1)) {
+                return { ok: false, ...startRelayFailure };
+            }
+            return { ok: true, result };
         });
         return socket;
     } };
 });
-const modal = vi.hoisted(() => ({ alert: vi.fn(), show: vi.fn() }));
+const modal = vi.hoisted(() => ({ alert: vi.fn(), show: vi.fn(), update: vi.fn() }));
 const platform = vi.hoisted(() => ({ focus: vi.fn() }));
 const random = vi.hoisted(() => ({ next: 0 }));
 vi.mock('@/platform/randomUUID', () => ({ randomUUID: () => `identity_${++random.next}` }));
@@ -110,14 +135,34 @@ let backends: Record<string, { available: boolean; intents: string[] }>;
 let protocolSupported = true;
 let admissionFailure = false;
 let admissionGate: Promise<void> | null = null;
+/** Holds the Machine's capability read, or fails it, so a test can stand in the unanswered window. */
+let capabilitiesGate: Promise<void> | null = null;
+let capabilitiesFailure = false;
+/** Holds the Roles catalog read the same way. */
+let rolesGate: Promise<void> | null = null;
 let startResults: Array<unknown | Promise<unknown>>;
+let startRelayFailure: Readonly<{ error: string; errorCode: string }> | null = null;
 let listedRuns: Run[];
 let listResult: Promise<unknown> | null;
 let emittedStarts: Array<Record<string, unknown>>;
 let outbound: ServedHomeRequest[];
 let pluginProjection = false;
 let secretAvailable = false;
+let publishedProfiles: Array<ReturnType<typeof AIBackendProfileSchema.parse>> = [];
+let roleOverrides: RoleOverrideRecordV1['overrides'] = {};
 const secretRef = 'happier:shared-secret:v1:personal-secret';
+const reviewAgentProjection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, installedPackagesById: {},
+    agentsById: Object.fromEntries((['claude', 'codex'] as const).map(agentId => [agentId, { id: agentId, title: agentId,
+        identity: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES[agentId],
+        capabilities: { surfaces: [], sessions: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true } },
+    }])), actionsById: {}, familiesById: {}, toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [] });
+function reviewAgentReadiness() { return Object.fromEntries(['claude', 'codex'].map(agentId => [`cli.${agentId}`, {
+    ok: true, checkedAt: Date.now(), data: MachineAgentInventoryItemSchema.parse({ agentId, title: agentId, installed: true,
+        version: '1', latestVersion: null, update: { supported: false, command: null },
+        signIn: { status: 'signedIn', loginSupport: 'status_only' }, platform: { supported: true },
+        install: { available: false, mode: 'manual', sizeBytes: null, guideUrl: null }, dependencies: [],
+    }),
+}])); }
 
 function record(value: unknown): Record<string, unknown> {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Expected boundary object');
@@ -125,16 +170,18 @@ function record(value: unknown): Record<string, unknown> {
 }
 function started(runId = 'run_1') { return { runId, callId: `call_${runId}`, sidechainId: `side_${runId}` }; }
 function uncertain() { return { ok: false, error: 'response lost', details: { executionRunStart: { v: 1, runCreation: 'outcomeUnknown' } } }; }
-function childChoiceRefusal() {
+function childChoiceRefusal(agentTargetKey = 'agent:codex', parentModelSelection?: Parameters<typeof projectExecutionRunChildChoiceV1>[0]['parentModelSelection']) {
     return { ok: false, error: 'Choose a model for this Run', errorCode: 'execution_run_child_choice_required', details: {
-        childChoice: projectExecutionRunChildChoiceV1({ agentTargetKey: 'agent:codex' }), executionRunStart: { v: 1, runCreation: 'noRunCreated' } } };
+        childChoice: projectExecutionRunChildChoiceV1({ agentTargetKey, parentModelSelection }), executionRunStart: { v: 1, runCreation: 'noRunCreated' } } };
 }
 function noRun() { return { ok: false, error: 'not started', details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } }; }
 function run(runId: string, launchOrigin?: unknown): Run {
     return ExecutionRunPublicStateSchema.parse({ ...started(runId), intent: 'delegate', backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, permissionMode: 'read_only', status: 'running', startedAtMs: 1,
         retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming', ...(launchOrigin ? { launchOrigin } : {}) });
 }
-function startedTargetKey(value: Record<string, unknown>) { return buildBackendTargetKeyV2(PersistedBackendTargetRefV2Schema.parse(value.backendTarget)); }
+function startedTargetKey(value: Record<string, unknown>) {
+    return buildBackendTargetKeyV2(AgentExecutionTargetV1Schema.parse(value.backendTarget));
+}
 function canonicalTargetKey(optionId: string) {
     return optionId.includes(':') ? resolveBackendTargetKeyV2(optionId)
         : buildBackendTargetKeyV2(resolveReviewEngineTarget(optionId));
@@ -143,10 +190,11 @@ function setSettings(patch: Partial<Settings>) {
     getStorage().setState((state) => ({ settings: { ...state.settings, ...patch } }));
 }
 function publishProfile(profile: ReturnType<typeof AIBackendProfileSchema.parse>) {
+    publishedProfiles = [profile];
     applyProfileCatalogSnapshot({ serverId, accountId: 'account_1' }, { status: 'ready', source: 'destination',
         authority: 'active', diagnostics: [], referenceGuardRevision: 1,
         records: [{ record: { v: 1, id: profile.id, definition: { kind: 'legacy', profile },
-            enabled: true, secretBindings: {}, promptStack: [] }, revision: 1 }],
+            enabled: true, secretBindings: {}, promptStack: [], skillSeeds: [] }, revision: 1 }],
         controlRevision: 1, control: { revision: 1, record: { v: 1, phase: 'active', sourceSettingsVersion: 0,
             migratedLogicalRevision: 1, inventory: [{ kind: 'account_row', id: profile.id, revision: 1 }] } } }, true);
 }
@@ -184,7 +232,10 @@ async function mount(props: Partial<React.ComponentProps<typeof SessionInteracti
 async function type(text: string) { await act(async () => changeTextTestInstance(input(), text)); }
 async function send(text = 'Inspect this', waitForCompletion = true) {
     await type(text);
-    await waitFor(() => expect(composer().canSendMessages, JSON.stringify({ visible: screen.getTextContent(), rpc: transport.call.mock.calls.map(([request]) => request.method), http: home.requests.map((request) => request.path) })).toBe(true));
+    await waitFor(() => expect(composer().canSendMessages, JSON.stringify({ visible: screen.getTextContent(),
+        profileCatalog: getProfileCatalogSnapshot({ serverId, accountId: 'account_1' })?.catalog,
+        rpc: transport.call.mock.calls.map(([request]) => request.method), http: home.requests.map((request) => request.path) })).toBe(true));
+    await waitFor(() => expect(composer().isSendDisabled).toBe(false));
     await act(async () => { await sendButton().props.onPress(); });
     await settle();
     if (waitForCompletion) await waitFor(() => expect(screen.findByTestId('execution-run-conversation-phase')).toBeNull());
@@ -222,7 +273,13 @@ async function reviewers() {
     return ids;
 }
 function reviewerKeys() { return (composer().extraActionChips ?? []).map((item) => item.key).filter((key) => key.startsWith('execution-run-start-reviewer:')); }
-function draft(runId = 'run_1') { return getSessionDraftSnapshot({ serverId, accountId: 'account_1' }, { kind: 'run', sessionId: 'session_1', runId }); }
+function draft(runId = 'run_1') {
+    const snapshot = getSessionDraftSnapshot({ serverId, accountId: 'account_1' }, { kind: 'run', sessionId: 'session_1', runId });
+    if (!snapshot) return null;
+    const document = snapshot.document;
+    if (!('composer' in document)) throw new Error('Expected a Run composer draft');
+    return { ...snapshot, document };
+}
 function admitted() { return record(outbound.at(-1)?.body); }
 function admittedRunId() { return outbound.at(-1)?.path.split('/execution-runs/')[1]?.split('/')[0]; }
 function outboundText() {
@@ -242,16 +299,24 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         protocolSupported = true;
         admissionFailure = false;
         admissionGate = null;
+        capabilitiesGate = null;
+        capabilitiesFailure = false;
+        rolesGate = null;
         pluginProjection = false;
         secretAvailable = false;
+        publishedProfiles = [];
+        roleOverrides = {};
         backends = { claude: { available: true, intents: ['delegate', 'review', 'plan'] }, codex: { available: true, intents: ['delegate', 'review', 'plan'] } };
         startResults = [];
+        startRelayFailure = null;
         listedRuns = [];
         listResult = null;
         emittedStarts = [];
         outbound = [];
         modal.alert.mockClear();
         modal.show.mockClear();
+        modal.show.mockReturnValue('launcher-modal');
+        modal.update.mockClear();
         platform.focus.mockClear();
         resetSessionDraftRepositoryForTests();
         retireActiveServerAccountScopeLifetime();
@@ -259,9 +324,17 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         clearDaemonMergedProjectionCacheForTests();
         transport.call.mockReset();
         transport.call.mockImplementation(async (request) => {
+            if (request.method === RPC_METHODS.CAPABILITIES_INVOKE) return { ok: true, result: {
+                availableModels: [{ id: 'gpt-6.1-luna', name: '6.1 Luna' }], supportsFreeform: false,
+                source: 'dynamic', observedAt: Date.now(),
+            } };
+            if (request.method === RPC_METHODS.CAPABILITIES_DETECT && (capabilitiesGate || capabilitiesFailure)) {
+                await capabilitiesGate;
+                if (capabilitiesFailure) throw new Error('capabilities unavailable');
+            }
             if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return {
                 protocolVersion: 1,
-                results: { 'tool.executionRuns': { ok: true, checkedAt: Date.now(), data: {
+                results: { ...reviewAgentReadiness(), 'tool.executionRuns': { ok: true, checkedAt: Date.now(), data: {
                     available: true, backends, protocolVersion: 2,
                     features: { detachedScope: true, startAndWait: true, exactInputResults: true, runScopedAgentBindings: protocolSupported, secretReferenceOverlay: protocolSupported },
                 } } },
@@ -278,24 +351,46 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
                 return { type: 'success', sessionId: 'session_1' };
             }
             if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_LIST) return await (listResult ?? { runs: listedRuns });
-            if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE && pluginProjection) return DaemonContributionRegistryProjectionDescribeResponseSchema.parse({
+            if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return DaemonContributionRegistryProjectionDescribeResponseSchema.parse({
                 protocolVersion: 1,
-                projection: PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE,
+                projection: pluginProjection ? { ...PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE,
+                    agentsById: { ...reviewAgentProjection.agentsById, ...PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE.agentsById } } : reviewAgentProjection,
             });
             return { errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND, error: 'Method not found' };
         });
         home = await serveActionHomes({
-            homes: [{ key: 'home', serverUrl: `https://launcher-${++sequence}.example.test`, accountId: 'account_1' }],
+            homes: [{ key: 'home', serverUrl: `https://launcher-${++sequence}.example.test`, serverIdentityId: `srv_launcher_${sequence}`,
+                accountId: 'account_1', currentAccount: true }],
             route: async (request) => {
+                if (request.path === '/v1/actions/review.engines.list') return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({
+                    v: 1, actionId: 'review.engines.list', requestId: record(request.body).requestId,
+                    execution: { ok: true, result: { items: Object.keys(backends).map((engineId) => ReviewEngineListItemSchema.parse({
+                        engineId, value: engineId, label: engineId, enabled: backends[engineId]!.available,
+                        capabilities: { structuredNarration: true },
+                    })) } },
+                }));
                 if (request.path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({
                     features: { execution: { runs: { enabled: true } }, teams: { enabled: true }, encryption: { plaintextStorage: { enabled: true }, accountOptOut: { enabled: true } } },
                     capabilities: { session: { pendingInput: { protocolVersion: 3 } }, accountStoredContentCompatibility: { v: 1, currentProtocolVersion: 3, minimumProtocolVersion: 3, declarationTransport: 'http-header-and-socket-auth-v1' } },
                 }));
-                if (request.path === '/v1/machines/machine_1') return Response.json({ machine: { id: 'machine_1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
+                if (request.path === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'machine_1', accountId: 'account_1' })]);
+                if (request.path === '/v1/machines/machine_1') return Response.json({ machine: createPlainMachineRowFixture({ id: 'machine_1', accountId: 'account_1' }) });
                 if (request.path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
                 if (request.path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json(AcpCatalogRowReadResponseV1Schema.parse({ status: 'absent' }));
+                if (request.path === PROFILE_ROWS_ROUTE_V1 || request.path === PROFILE_TRANSFER_ROUTE_V1 || request.path === PROFILE_REFERENCE_GUARD_ROUTE_V1) {
+                    const transferControl = ProfileTransferRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
+                        content: { t: 'plain', v: { v: 1, phase: 'active', sourceSettingsVersion: 0, migratedLogicalRevision: 1,
+                            inventory: publishedProfiles.map(profile => ({ kind: 'account_row', id: profile.id, revision: 1 })) } } });
+                    if (request.path === PROFILE_TRANSFER_ROUTE_V1) return Response.json(transferControl);
+                    if (request.path === PROFILE_REFERENCE_GUARD_ROUTE_V1) return Response.json(ProfileReferenceGuardReadResponseV1Schema.parse({ status: 'ready', revision: 1 }));
+                    return Response.json(ProfileRowsListResponseV1Schema.parse({ status: 'listed', complete: true, nextCursor: null,
+                        referenceGuardRevision: 1, transferControl, diagnostics: [], rows: publishedProfiles.map(profile => ({ id: profile.id, revision: 1,
+                            content: sealProfileRecordContentV1({ mode: 'plain', material: null, record: { v: 1, id: profile.id,
+                                definition: { kind: 'legacy', profile }, enabled: true, secretBindings: {}, promptStack: [], skillSeeds: [] } }) })) }));
+                }
+                if (request.path === PROMPT_LIBRARY_ROWS_ROUTE_V1) await rolesGate;
                 if (request.path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return Response.json(PromptLibraryRowsListResponseV1Schema.parse({ status: 'listed', rows: [{ key: 'role-overrides', revision: 1,
-                    content: { t: 'plain', v: { key: 'role-overrides', value: { v: 1, overrides: getStorage().getState().settings.rolesV1?.overrides ?? {} } } } }] }));
+                    content: { t: 'plain', v: { key: 'role-overrides', value: { v: 1, overrides: roleOverrides } } } }] }));
                 if (request.path === '/v1/account/saved-secrets/resources/materials') return Response.json(SavedSecretResourceMaterialsResponseV1Schema.parse({ resources: secretAvailable ? [{
                     resourceId: 'personal-secret', encryptionMode: 'plain', recipientEnvelope: null,
                     storedContent: { t: 'plain', v: { v: 1, name: 'Personal secret', kind: 'token', value: 'sealed-secret' } },
@@ -304,7 +399,9 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
                 }] : [] }));
                 if (request.path === '/v2/sessions/session_1') {
                     const session = getStorage().getState().sessions.session_1!;
-                    return Response.json(V2SessionByIdResponseSchema.parse({ session: { ...session, metadata: JSON.stringify(session.metadata), dataEncryptionKey: null } }));
+                    return Response.json(V2SessionByIdResponseSchema.parse({ session: createPlainSessionCurrentProjectionRecordFixture({
+                        id: session.id, active: session.active, seq: session.seq, metadata: session.metadata,
+                    }) }));
                 }
                 if (request.path.includes('/execution-runs/') && request.path.endsWith('/pending')) {
                     if (request.method === 'GET') return Response.json({ pending: [], discarded: [], pendingVersion: 1, pendingCount: 0 });
@@ -327,8 +424,11 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         const session = createSessionFixture({ id: 'session_1', serverId, active: true, pendingVersion: 3,
             metadata: { path: '/repo', host: 'tester.local', homeDir: '/Users/tester', machineId: 'machine_1', flavor: 'claude' } });
         const machine = createMachineFixture({ id: 'machine_1', activeAt: Date.now(), storageMode: 'plain' });
+        // Account activation reloads the persisted settings of its scope, so the Account's choices live there too.
+        const launcherSettings = { ...settingsDefaults, experiments: true, featureToggles: { 'execution.runs': true, teams: true }, backendEnabledByTargetKey: {}, sessionMessageSendMode: 'server_pending' as const, currentSecretBindingsByProfileId: {} };
+        saveAccountSettings({ serverId, accountId: 'account_1' }, launcherSettings, 1);
         getStorage().setState({ sessions: { session_1: session }, machines: { machine_1: machine }, machineListByServerId: { [serverId]: [machine] },
-            settings: { ...settingsDefaults, experiments: true, featureToggles: { 'execution.runs': true, teams: true }, backendEnabledByTargetKey: {}, sessionMessageSendMode: 'server_pending', currentSecretBindingsByProfileId: {} },
+            settings: launcherSettings,
             settingsScope: { serverId, accountId: 'account_1' }, profileScope: { serverId, accountId: 'account_1' } });
         await ensureSessionDraftRepositoryHydrated({ serverId, accountId: 'account_1' });
     });
@@ -340,6 +440,7 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         const inputId = composer().initialLocalId;
         expect(emittedStarts).toEqual([]);
         expect(outbound).toEqual([]);
+        expect(getSessionDraftSnapshot({ serverId, accountId: 'account_1' }, { kind: 'session', sessionId: 'session_1' })).toBeNull();
         await send();
         expect(emittedStarts[0]).toMatchObject({ intent: 'delegate', runClass: 'long_lived', launchOrigin: { kind: 'session', sessionId: 'session_1', draftCorrelationId: expect.any(String) } });
         await waitFor(() => expect(opened).toHaveBeenCalledWith('run_1', undefined, { title: 'Inspect this' }));
@@ -347,8 +448,48 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         expect(admitted()).toMatchObject({ localId: inputId, targetMachineId: 'machine_1' });
         expect(outboundText()).toContain('Inspect this');
     });
+    it('waits for the retained launcher draft before seeding host text', async () => {
+        await mount();
+        await waitFor(() => expect(composer().canSendMessages).toBe(true));
+        await screen.unmount();
+        const scope = { serverId, accountId: 'account_1' };
+        const address = { kind: 'session', sessionId: 'session_1' } as const;
+        const values = new Map<string, string>();
+        const cipher: SessionDraftRepositoryCipher = {
+            seal: async (address, document) => ({ t: 'plain', v: createSessionDraftPrivatePayloadV2(address, document) }),
+            open: async (_address, content) => content.t === 'plain' ? content.v.document : null,
+        };
+        const producer = createSessionDraftRepository({ syncEnabled: false, cipher,
+            randomUUID: () => '00000000-0000-4000-8000-000000000001',
+            storage: { getString: (key) => values.get(key), set: (key, value) => { values.set(key, value); }, delete: (key) => { values.delete(key); } } });
+        producer.writeExistingSessionDraft({ scope, sessionId: 'session_1', patch: { executionRunLauncher: {
+            key: 'conversation', patch: { text: 'Previously retained text' },
+        } } });
+        const document = producer.getSessionDraftSnapshot(scope, address)!.document;
+        const record = { address, revision: 1, createdAt: 1, updatedAt: 1,
+            content: { t: 'plain' as const, v: createSessionDraftPrivatePayloadV2(address, document) } };
+        let release!: () => void;
+        const boundary = new Promise<void>((resolve) => { release = resolve; });
+        const transport: SessionDraftRepositoryTransport = {
+            read: async () => { await boundary; return { status: 'present', record }; },
+            list: async () => ({ items: [] }),
+            mutate: async () => ({ status: 'conflict', current: record }),
+        };
+        configureSessionDraftRepository({ scope, syncEnabled: true, cipher, transport });
+        try {
+            const hydration = ensureSessionDraftAddressesHydrated(scope, [address]);
+            await mount({ initialText: 'Host seed' });
+            await act(async () => { release(); expect(await hydration).toBe(true); });
+            expect(getSessionDraftSnapshot(scope, address)?.document, JSON.stringify({ visible: input().props.value, identity: composer().initialLocalId })).toMatchObject({ extensions: { happier: {
+                'executionRunLauncherV1:conversation:text': { value: 'Previously retained text' },
+            } } });
+            await waitFor(() => expect(input().props.value).toBe('Previously retained text'));
+        } finally {
+            configureSessionDraftRepository({ syncEnabled: false });
+        }
+    });
     it('refuses a disabled start Action before issuing a Run RPC and preserves the editable draft', async () => {
-        setSettings({ actionsSettingsV1: { v: 1, actions: { 'execution.run.start': { disabledSurfaces: ['ui'] } } } });
+        setSettings({ actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'execution.run.start': { disabledSurfaces: ['ui'] } } }) });
         const opened = vi.fn();
         await mount({ onRunStarted: opened });
         const inputId = composer().initialLocalId;
@@ -372,7 +513,10 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         await settle();
         expect(emittedStarts).toEqual([]);
         expect(outbound).toEqual([]);
-        expect(input().props.value).toBe('Keep my Account-bound draft');
+        expect(input().props.value).toBe('');
+        expect(getSessionDraftSnapshot({ serverId, accountId: 'account_1' }, { kind: 'session', sessionId: 'session_1' })?.document).toMatchObject({ extensions: { happier: {
+            'executionRunLauncherV1:conversation:text': { value: 'Keep my Account-bound draft' },
+        } } });
     });
     it('clears the accepted Run draft before navigation retires the Account binding', async () => {
         let atNavigation: unknown;
@@ -402,6 +546,28 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         await send();
         expect(startedTargetKey(emittedStarts[0]!)).toBe(canonicalTargetKey(codex.id));
         expect(admittedRunId()).toBe('run_1');
+    });
+    it('keeps built-in Agent choices and child choice recovery usable while configured Agents refresh', async () => {
+        await mount();
+        await waitFor(() => expect(composer().canSendMessages).toBe(true));
+        await type('Keep my child draft');
+        await act(async () => beginAcpCatalogLoad({ serverId, accountId: 'account_1' }));
+        expect(composer().engine).not.toBeNull();
+        expect(composer().canSendMessages).toBe(true);
+        expect(input().props.value).toBe('Keep my child draft');
+        const codex = composer().engine!.options.find((option) => option.id.includes('codex'))!;
+        await selectEngine(codex.id);
+        startResults.push(childChoiceRefusal(canonicalTargetKey(codex.id)), started());
+        await send('Keep my child draft');
+        expect(startedTargetKey(emittedStarts[0]!)).toBe(canonicalTargetKey(codex.id));
+        expect(screen.findByTestId('execution-run-child-choice')).not.toBeNull();
+        await screen.pressByTestIdAsync('execution-run-child-choice.model');
+        const shown = modal.show.mock.calls.at(-1)?.[0] as { props: { onSelect: (ref: unknown) => void } };
+        const ref = { agentTargetKey: canonicalTargetKey(codex.id), providerConnectionId: null, modelId: 'gpt-6.1-luna' };
+        await act(async () => shown.props.onSelect(ref));
+        await waitFor(() => expect(emittedStarts).toHaveLength(2));
+        expect(emittedStarts[1]).toMatchObject({ modelSelection: ref });
+        expect(outboundText()).toContain('Keep my child draft');
     });
     it('does not let an unavailable default Agent hide an eligible Agent', async () => {
         backends.claude = { available: false, intents: ['delegate'] };
@@ -438,10 +604,12 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         expect(outbound).toEqual([]);
         expect(input().props.value).toBe('Inspect this');
         expect(composer().initialLocalId).toBe(inputId);
-        expect(composer().canSendMessages).toBe(false);
+        expect(composer().disabled).toBe(true);
         expect(screen.findByTestId('execution-run-conversation-error')?.props.children)
             .toBe(t('sessionDrafts.executionRunStart.unresolved'));
         expect(screen.findByTestId('execution-run-conversation-start-another')).not.toBeNull();
+        // The draft says it once, inline, beside its recovery action; no second blocking message.
+        expect(modal.alert).not.toHaveBeenCalled();
         const listRequests = transport.call.mock.calls.filter(([request]) => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_LIST);
         expect(listRequests.length).toBeGreaterThan(0);
         for (const [request] of listRequests) expect(request).toMatchObject({ sessionId: 'session_1', serverId, payload: {} });
@@ -452,14 +620,14 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         listResult = new Promise((resolve) => { resolveList = resolve; });
         await mount();
         await send('Inspect this', false);
-        expect(composer().canSendMessages).toBe(false);
+        expect(composer().disabled).toBe(true);
         const inputId = composer().initialLocalId;
         expect(screen.findByTestId('execution-run-conversation-start-another')).toBeNull();
         expect(emittedStarts).toHaveLength(1);
         await act(async () => resolveList({ runs: [] }));
         await settle();
         await waitFor(() => expect(screen.findByTestId('execution-run-conversation-start-another')).not.toBeNull());
-        expect(composer().canSendMessages).toBe(false);
+        expect(composer().disabled).toBe(true);
         expect(composer().initialLocalId).toBe(inputId);
         expect(input().props.value).toBe('Inspect this');
         expect(emittedStarts).toHaveLength(1);
@@ -489,9 +657,9 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         const codex = composer().engine!.options.find((option) => option.id.includes('codex'))!;
         await selectEngine(codex.id);
         await send();
+        expect(composer().engine!.selectedOptionId).toBe(codex.id);
         await send();
         const selected = canonicalTargetKey(codex.id);
-        expect(composer().engine!.selectedOptionId).toBe(codex.id);
         expect(emittedStarts.map(startedTargetKey)).toEqual([selected, selected]);
         expect(emittedStarts[0]?.launchOrigin).toEqual(emittedStarts[1]?.launchOrigin);
     });
@@ -512,9 +680,20 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         expect(outboundText()).toContain('Inspect this');
         expect(screen.findByTestId('execution-run-child-choice')).toBeNull();
     });
-    it('starts with the exact model picked in the chooser, and Cancel starts nothing', async () => {
-        startResults.push(childChoiceRefusal(), childChoiceRefusal(), started());
+    it('says the session model by its catalog title in the chooser, never its raw id', async () => {
+        startResults.push(childChoiceRefusal('agent:codex', { agentTargetKey: 'agent:claude', providerConnectionId: null, modelId: 'claude-haiku-4-5' }));
         await mount();
+        await send();
+        expect(screen.findByTestId('execution-run-child-choice')).not.toBeNull();
+        const parent = screen.getTextContent().match(/childChoice\.incompatible\(agent=[^,]*,parent=([^)]*)\)/)?.[1] ?? '';
+        expect(parent).toContain('Haiku 4.5');
+        expect(parent).not.toContain('claude-haiku-4-5');
+    });
+    it('starts with the exact model picked in the chooser, and Cancel starts nothing', async () => {
+        await mount();
+        // The chooser asks about the Agent the start targeted, and the model it returns must belong to that Agent.
+        const agent = canonicalTargetKey(composer().engine!.selectedOptionId!);
+        startResults.push(childChoiceRefusal(agent), childChoiceRefusal(agent), started());
         await send();
         await screen.pressByTestIdAsync('execution-run-child-choice-learn-more');
         expect(screen.findByTestId('execution-run-child-choice')).toBeNull();
@@ -522,7 +701,7 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         await send();
         await screen.pressByTestIdAsync('execution-run-child-choice.model');
         const shown = modal.show.mock.calls.at(-1)?.[0] as { props: { onSelect: (ref: unknown) => void } };
-        const ref = { agentTargetKey: 'agent:codex', providerConnectionId: null, modelId: 'gpt-6.1-luna' };
+        const ref = { agentTargetKey: agent, providerConnectionId: null, modelId: 'gpt-6.1-luna' };
         await act(async () => shown.props.onSelect(ref));
         await waitFor(() => expect(emittedStarts).toHaveLength(3));
         expect(emittedStarts[2]).toMatchObject({ modelSelection: ref });
@@ -562,6 +741,35 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         expect(startedTargetKey(emittedStarts[2]!)).not.toBe(startedTargetKey(emittedStarts[0]!));
         expect(emittedStarts[2]).toMatchObject({ modelSelection: ref });
     });
+    it('asks each refused reviewer its own question in turn and gives every Agent only its own model', async () => {
+        startResults.push(childChoiceRefusal('agent:claude'), childChoiceRefusal('agent:codex'), started('run_claude'), started('run_codex'));
+        const opened = vi.fn();
+        await mount({ intent: 'review', onRunStarted: opened });
+        await reviewers();
+        await send();
+        expect(emittedStarts).toHaveLength(2);
+        const chooseModel = async (agentTargetKey: string) => {
+            await screen.pressByTestIdAsync('execution-run-child-choice.model');
+            const shown = modal.show.mock.calls.at(-1)?.[0] as { props: { onSelect: (ref: unknown) => void } };
+            const ref = { agentTargetKey, providerConnectionId: null, modelId: 'gpt-6.1-luna' };
+            await act(async () => shown.props.onSelect(ref));
+            return ref;
+        };
+        const claudeRef = await chooseModel('agent:claude');
+        await waitFor(() => expect(emittedStarts).toHaveLength(3));
+        // The second reviewer is not reduced to a generic alert: its own question follows.
+        expect(emittedStarts[2]).toMatchObject({ modelSelection: claudeRef });
+        expect(startedTargetKey(emittedStarts[2]!)).toBe(startedTargetKey(emittedStarts[0]!));
+        await waitFor(() => expect(screen.findByTestId('execution-run-child-choice')).not.toBeNull());
+        expect(opened).not.toHaveBeenCalled();
+        expect(modal.alert).not.toHaveBeenCalled();
+        const codexRef = await chooseModel('agent:codex');
+        await waitFor(() => expect(opened).toHaveBeenCalledTimes(1));
+        expect(emittedStarts).toHaveLength(4);
+        expect(emittedStarts[3]).toMatchObject({ modelSelection: codexRef });
+        expect(startedTargetKey(emittedStarts[3]!)).toBe(startedTargetKey(emittedStarts[1]!));
+        expect(modal.alert).not.toHaveBeenCalled();
+    });
     it('does not treat an unknown-outcome reviewer as permission to start it again', async () => {
         startResults.push(uncertain(), childChoiceRefusal(), started('run_codex'));
         const opened = vi.fn();
@@ -577,6 +785,21 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         expect(startedTargetKey(emittedStarts[2]!)).toBe(startedTargetKey(emittedStarts[1]!));
     });
     describe('choosing a model for this Run from the route chip', () => {
+        it('renders the selected Agent model detail in the engine picker and submits its exact choice', async () => {
+            await mount();
+            const engine = composer().engine!;
+            const codex = engine.options.find((option) => option.id.includes('codex'))!;
+            const picker = await renderScreen(<AgentInputChipPickerPanel title={engine.title} options={engine.options}
+                selectedOptionId={engine.selectedOptionId} onSelect={engine.onSelect} onRequestClose={vi.fn()} />);
+            await picker.pressByTestIdAsync(`agent-input-chip-picker.option:${codex.id}`);
+            const ref = { agentTargetKey: canonicalTargetKey(codex.id), providerConnectionId: null, modelId: 'gpt-6.1-luna' };
+            const modelId = `model-picker-overlay-option:${JSON.stringify([ref.agentTargetKey, null, ref.modelId])}`;
+            await waitFor(() => expect(picker.findByTestId(modelId)).not.toBeNull());
+            await picker.pressByTestIdAsync(modelId);
+            await send();
+            expect(emittedStarts[0]).toMatchObject({ modelSelection: ref });
+            expect(startedTargetKey(emittedStarts[0]!)).toBe(ref.agentTargetKey);
+        });
         async function chooseModelRow() {
             const content = await renderChipContent('execution-run-start-route');
             await content.pressByTestIdAsync('execution-run-route-choice.choose');
@@ -584,6 +807,65 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
             return modal.show.mock.calls.at(-1)?.[0] as { props: { onSelect: (ref: unknown) => void } };
         }
         const claude = () => canonicalTargetKey('claude');
+        it('opens the real native model rows from Choose for this run and submits the tapped exact choice', async () => {
+            await mount();
+            const codex = composer().engine!.options.find((option) => option.id.includes('codex'))!;
+            await selectEngine(codex.id);
+            await chooseModelRow();
+            const shown = modal.show.mock.calls.at(-1)?.[0] as {
+                component: React.ComponentType<Record<string, unknown>>;
+                props: { agentTargetKey: string; nativeModels: readonly { value: string }[] };
+            };
+            const latestProps = () => (modal.update.mock.calls.at(-1)?.[1] ?? shown.props) as typeof shown.props;
+            await waitFor(() => expect(latestProps().nativeModels).toEqual(expect.arrayContaining([
+                expect.objectContaining({ value: 'gpt-6.1-luna' }),
+            ])));
+            const live = latestProps();
+            const model = live.nativeModels.find((candidate) => candidate.value !== 'default')!;
+            const picker = await renderScreen(React.createElement(shown.component, { ...live, onClose: vi.fn() }));
+            const selected = { agentTargetKey: shown.props.agentTargetKey, providerConnectionId: null, modelId: model!.value };
+            await picker.pressByTestIdAsync(`model-picker-overlay-option:${JSON.stringify([selected.agentTargetKey, null, selected.modelId])}`);
+            await send();
+            expect(emittedStarts[0]).toMatchObject({ modelSelection: selected });
+            expect(startedTargetKey(emittedStarts[0]!)).toBe(canonicalTargetKey(codex.id));
+        });
+        it('restores unsent text and an explicit Agent/model after repository reload without changing the parent draft', async () => {
+            writeExistingSessionDraft({ scope: { serverId, accountId: 'account_1' }, sessionId: 'session_1', patch: { text: 'Parent draft' } });
+            await mount();
+            const codex = composer().engine!.options.find((option) => option.id.includes('codex'))!;
+            const defaultTarget = composer().engine?.selectedOptionId;
+            await selectEngine(codex.id);
+            const picker = await chooseModelRow();
+            const selected = { agentTargetKey: canonicalTargetKey(codex.id), providerConnectionId: null, modelId: 'gpt-6.1-luna' };
+            const modelLabel = () => ((modal.update.mock.calls.at(-1)?.[1] ?? picker.props) as {
+                nativeModels: readonly { value: string; label: string }[];
+            }).nativeModels.find((model) => model.value === selected.modelId)?.label;
+            await waitFor(() => expect(modelLabel()).toBeTruthy());
+            const chosenLabel = modelLabel()!;
+            await act(async () => picker.props.onSelect(selected));
+            await type('Keep this unsent Run');
+            const localId = composer().initialLocalId;
+            await screen.unmount();
+            resetSessionDraftRepositoryForTests();
+            await ensureSessionDraftRepositoryHydrated({ serverId, accountId: 'account_1' });
+            await mount();
+            expect(input().props.value).toBe('Keep this unsent Run');
+            expect(composer().engine?.selectedOptionId).toBe(codex.id);
+            expect(composer().engine?.label).toBe(codex.label);
+            expect(screen.getTextContent()).toContain(chosenLabel);
+            expect(screen.getTextContent()).not.toContain(t('agentInput.model.useCliSettings'));
+            expect(composer().initialLocalId).toBe(localId);
+            await send('Keep this unsent Run');
+            expect(emittedStarts[0]).toMatchObject({ modelSelection: selected });
+            const parentDraft = getSessionDraftSnapshot({ serverId, accountId: 'account_1' }, { kind: 'session', sessionId: 'session_1' });
+            expect(getSessionDraftDocumentField(parentDraft?.document ?? null, { kind: 'composer', field: 'text' })?.value).toBe('Parent draft');
+            await screen.unmount();
+            resetSessionDraftRepositoryForTests();
+            await ensureSessionDraftRepositoryHydrated({ serverId, accountId: 'account_1' });
+            await mount();
+            expect(input().props.value).toBe('');
+            expect(composer().engine?.selectedOptionId).toBe(defaultTarget);
+        });
         it('starts on the exact source and model picked, telling same-name models of two sources apart', async () => {
             await mount();
             const picker = await chooseModelRow();
@@ -602,6 +884,24 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
             await act(async () => picker.props.onSelect(native));
             await send();
             expect(emittedStarts[0]).toMatchObject({ modelSelection: native });
+        });
+        it('on a phone says what the Run follows beside when it starts, so a scrolled-away chip never hides it', async () => {
+            windowState.width = 390;
+            try {
+                await mount();
+                const foot = () => screen.findByTestId('execution-run-start-foot')?.props.children as string;
+                expect(foot()).toContain(t('runPage.menu.selectionInherited'));
+                const picker = await chooseModelRow();
+                await act(async () => picker.props.onSelect({ agentTargetKey: claude(), providerConnectionId: 'pc_a', modelId: 'm' }));
+                expect(foot()).not.toContain(t('runPage.menu.selectionInherited'));
+            } finally {
+                windowState.width = 1024;
+            }
+        });
+        it('on a wide window keeps the route in its labelled chip and says it once', async () => {
+            await mount();
+            expect(screen.findByTestId('execution-run-start-foot')?.props.children)
+                .toBe(t('agentStart.startsWhenYouSend', { count: 1 }));
         });
         it('returns to following the session when Inherit is chosen again', async () => {
             await mount();
@@ -633,7 +933,7 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         expect(emittedStarts).toHaveLength(1);
         expect(outbound).toEqual([]);
         expect(input().props.value).toBe('Inspect this');
-        expect(composer().canSendMessages).toBe(false);
+        expect(composer().disabled).toBe(true);
         expect(screen.findByTestId('execution-run-conversation-error')?.props.children)
             .toBe(t('sessionDrafts.executionRunStart.unresolved'));
     });
@@ -653,6 +953,25 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         expect(composer().canSendMessages).toBe(false);
         expect(input().props.value).toBe('Keep my draft');
         expect(emittedStarts).toEqual([]);
+    });
+    it('uses the exact parent access capabilities and recovers when write access is granted', async () => {
+        getStorage().setState((state) => ({ sessions: { session_1: createSessionFixture({
+            ...state.sessions.session_1!, access: createSessionAccessFixture('view'),
+        }) } }));
+        await mount();
+        await type('Keep my draft across access changes');
+        expect(composer().canSendMessages).toBe(false);
+        await act(async () => { await sendButton().props.onPress(); });
+        expect(emittedStarts).toEqual([]);
+        expect(outbound).toEqual([]);
+        await act(async () => getStorage().setState((state) => ({ sessions: { session_1: createSessionFixture({
+            ...state.sessions.session_1!, access: createSessionAccessFixture('owner'),
+        }) } })));
+        await waitFor(() => expect(composer().canSendMessages).toBe(true));
+        expect(input().props.value).toBe('Keep my draft across access changes');
+        await send('Keep my draft across access changes');
+        expect(emittedStarts).toHaveLength(1);
+        expect(outboundText()).toContain('Keep my draft across access changes');
     });
     it('keeps the actual mounted composer and unsent content across Start another', async () => {
         startResults.push(uncertain());
@@ -685,9 +1004,9 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         startResults.push({ ok: false, error: 'backend_unavailable' });
         await send('Inspect this', false);
         await waitFor(() => expect(screen.findByTestId('execution-run-conversation-start-another')).not.toBeNull());
-        expect(composer().canSendMessages).toBe(false);
+        expect(composer().disabled).toBe(true);
         await screen.pressByTestIdAsync('execution-run-conversation-start-another');
-        await waitFor(() => expect(composer().canSendMessages).toBe(true));
+        await waitFor(() => expect(composer().disabled).toBe(false));
         expect(platform.focus).not.toHaveBeenCalled();
         await screen.unmount();
         platform.focus.mockClear();
@@ -695,7 +1014,7 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         expect(platform.focus).not.toHaveBeenCalled();
     });
     it('keeps Ask Agent selection as context and sends it ahead of the typed question', async () => {
-        await mount({ initialText: 'Selected discussion messages', launchOrigin: { kind: 'session_discussion', sessionId: 'session_1', discussionId: 'discussion_1', messageIds: ['message_1'], draftCorrelationId: 'selection_1' } });
+        await mount({ initialText: 'Selected discussion messages', launchOrigin: { kind: 'discussion', serverId: 'server-a', discussionId: 'discussion_1', messageIds: ['message_1'], draftCorrelationId: 'selection_1' } });
         expect(input().props.value).toBe('');
         await send('Why did this fail?');
         expect(outboundText()).toContain('Selected discussion messages');
@@ -711,12 +1030,12 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
     });
     it('keeps Discussion provenance after explicit unresolved recovery', async () => {
         startResults.push(uncertain(), started());
-        await mount({ initialText: 'Selection', launchOrigin: { kind: 'session_discussion', sessionId: 'session_1', discussionId: 'discussion_1', messageIds: ['message_1'], draftCorrelationId: 'selection_1' } });
+        await mount({ initialText: 'Selection', launchOrigin: { kind: 'discussion', serverId: 'server-a', discussionId: 'discussion_1', messageIds: ['message_1'], draftCorrelationId: 'selection_1' } });
         await send();
         await screen.pressByTestIdAsync('execution-run-conversation-start-another');
         await settle();
         await send();
-        expect(emittedStarts[1]).toMatchObject({ launchOrigin: { kind: 'session_discussion', discussionId: 'discussion_1', messageIds: ['message_1'] } });
+        expect(emittedStarts[1]).toMatchObject({ launchOrigin: { kind: 'discussion', discussionId: 'discussion_1', messageIds: ['message_1'] } });
         expect(record(emittedStarts[1]?.launchOrigin).draftCorrelationId).not.toBe('selection_1');
     });
     it('forwards the Report chip selection on a plain conversation', async () => {
@@ -732,7 +1051,7 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         const opened = vi.fn();
         startResults.push(started('run_claude'), started('run_codex'));
         await mount({ intent: 'review', onRunStarted: opened });
-        expect(composer().canSendMessages).toBe(false);
+        expect(composer().isSendDisabled).toBe(true);
         expect(await reviewers()).toHaveLength(2);
         expect(reviewerKeys()).toHaveLength(2);
         await send();
@@ -774,14 +1093,49 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         expect(opened).not.toHaveBeenCalled();
         expect(input().props.value).toBe('Inspect this');
         expect(screen.findByTestId('execution-run-conversation-error')).not.toBeNull();
+        expect(modal.alert).not.toHaveBeenCalled();
     });
     it('keeps a written draft while execution runs are disabled', async () => {
         setSettings({ featureToggles: { 'execution.runs': false } });
         await mount({ intent: 'review' });
         await type('Keep this');
-        expect(composer().canSendMessages).toBe(false);
+        expect(composer().isSendDisabled).toBe(true);
+        expect(input().props.editable).not.toBe(false);
         expect(screen.findByTestId('execution-run-start-blocked')).not.toBeNull();
         expect(input().props.value).toBe('Keep this');
+    });
+
+    it('names the Reviewer role as loading, never by its raw id, until the Roles catalog answers', async () => {
+        let release!: () => void;
+        rolesGate = new Promise((resolve) => { release = resolve; });
+        invalidateRoleCatalog();
+        await mount({ intent: 'review' });
+        const roleChip = await renderChip('execution-run-start-role');
+        expect(roleChip.getTextContent()).toContain(t('common.loading'));
+        expect(roleChip.getTextContent()).not.toContain('reviewer');
+        release();
+        await vi.waitFor(async () => {
+            await settle();
+            expect((await renderChip('execution-run-start-role')).getTextContent()).toContain('Reviewer');
+        });
+    });
+    it('reads an unanswered Machine as checking, offers no Agent yet, and still names the Session\'s own Agent', async () => {
+        let release!: () => void;
+        capabilitiesGate = new Promise((resolve) => { release = resolve; });
+        await mount();
+        expect(screen.getTextContent()).toContain(t('runPage.launcher.checking'));
+        expect(screen.getTextContent()).not.toContain(t('runPage.launcher.unavailableReason'));
+        expect(composer().engine?.agentType).toBe('claude');
+        expect(composer().engine!.options.slice(1).every((option) => option.muted === true)).toBe(true);
+        release();
+        await waitFor(() => expect(screen.findByTestId('execution-run-start-blocked')).toBeNull());
+        expect(composer().engine!.options.slice(1).some((option) => option.muted !== true)).toBe(true);
+    });
+    it('says the Machine could not be checked, not that it offers nothing, when its capability read fails', async () => {
+        capabilitiesFailure = true;
+        await mount({ intent: 'review' });
+        await waitFor(() => expect(screen.getTextContent()).toContain(t('machineAgents.unknown')));
+        expect(screen.getTextContent()).not.toContain(t('runPage.launcher.unavailableReason'));
     });
 
     async function chooseRole(roleId: string) {
@@ -808,7 +1162,7 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         expect(roles, JSON.stringify(roles)).toMatchObject({ ok: true });
         await mount({ intent: 'delegate' });
         const codex = composer().engine!.options.find((option) => option.id.includes('codex'))!;
-        setSettings({ rolesV1: { overrides: { scout: { roleId: 'scout', engine: { agentTargetKey: canonicalTargetKey(codex.id) } } } } });
+        roleOverrides = { scout: { roleId: 'scout', engine: { agentTargetKey: canonicalTargetKey(codex.id) } } };
         await refreshPromptLibraryCatalog({ serverId, accountId: 'account_1' });
         invalidateRoleCatalog();
         await settle();
@@ -825,6 +1179,17 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
     });
     it('starts Second opinion through the real review Action with its explicit role', async () => {
         await mount({ intent: 'review', roleId: 'second_opinion' });
+        // Choosing who reviews is launch readiness, not a change to the parent's input grant.
+        // The person can write the question before making that choice.
+        expect(composer().canSendMessages).toBe(true);
+        expect(input().props.editable).not.toBe(false);
+        expect(input().props.placeholder).toBe(t('session.inputPlaceholder'));
+        await type('Inspect this');
+        expect(sendButton().props.disabled).toBe(true);
+        const snapshot = readComposerPresentationSnapshot(screen.root.findByType(Reflect.get(AgentInput, 'type')).props.composerRef);
+        expect(ComposerSnapshotV1Schema.parse(snapshot).state).toMatchObject({ editable: true, submittable: false });
+        await act(async () => { await sendButton().props.onPress(); });
+        expect(emittedStarts).toEqual([]);
         await reviewers();
         await send();
         expect(emittedStarts[0]).toMatchObject({ intent: 'review', roleId: 'second_opinion' });
@@ -869,6 +1234,49 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         expect(emittedStarts).toEqual([]);
         expect(screen.getTextContent()).toContain(t('sessionDrafts.executionRunStart.secretReferenceOverlayUpdateRequired'));
     });
+    it('guides an unconfirmed comparison Start to Runs and Session resume without resending', async () => {
+        const onStarted = vi.fn();
+        const onClose = vi.fn();
+        startRelayFailure = { error: 'RPC target disconnected after request submission', errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN };
+        screen = await renderScreen(<StartReviewDialog sessionId="session_1" serverId={serverId} cwd="/repo"
+            comparison={{ kind: 'workingTree' }} comparisonId="captured-1" scopeLabel="Pending changes"
+            defaultWalkthrough={false} onClose={onClose} onStarted={onStarted} />);
+        await settle();
+        await waitFor(() => expect(screen.findByTestId('start-review-start')?.props.disabled,
+            JSON.stringify({ text: screen.getTextContent(), rpc: transport.call.mock.calls.map(([request]) => request.method) })).toBe(false));
+        await act(async () => screen.changeTextByTestId('start-review-instructions', 'Keep this review request'));
+        await screen.pressByTestIdAsync('start-review-start');
+        await waitFor(() => expect(screen.getTextContent()).toContain('sessionDrafts.executionRunStart.submittedUnknown'));
+        expect(screen.getTextContent()).not.toContain(startRelayFailure.error);
+        expect(emittedStarts).toHaveLength(1);
+        expect(outbound).toEqual([]);
+        expect(onStarted).not.toHaveBeenCalled();
+        expect(onClose).not.toHaveBeenCalled();
+        expect(screen.findByTestId('start-review-instructions')?.props.value).toBe('Keep this review request');
+        await settle();
+        expect(emittedStarts).toHaveLength(1);
+    });
+    it('translates a structured-output model refusal through the actual comparison Start', async () => {
+        const onStarted = vi.fn();
+        const onClose = vi.fn();
+        const code = 'model_structured_output_unsupported';
+        startResults.push({ ok: false, error: code, errorCode: code,
+            details: withExecutionRunStartFailureDetails({ modelId: 'default', structuredOutput: 'unknown' }, 'noRunCreated') });
+        screen = await renderScreen(<StartReviewDialog sessionId="session_1" serverId={serverId} cwd="/repo"
+            comparison={{ kind: 'workingTree' }} comparisonId="captured-1" scopeLabel="Pending changes"
+            defaultWalkthrough={false} onClose={onClose} onStarted={onStarted} />);
+        await settle();
+        await waitFor(() => expect(screen.findByTestId('start-review-start')?.props.disabled).toBe(false));
+        await act(async () => screen.changeTextByTestId('start-review-instructions', 'Keep this review request'));
+        await screen.pressByTestIdAsync('start-review-start');
+        await waitFor(() => expect(screen.getTextContent()).toContain(t('walkthrough.generationFailure.modelUnavailable')));
+        expect(screen.getTextContent()).not.toContain(code);
+        expect(emittedStarts).toHaveLength(1);
+        expect(outbound).toEqual([]);
+        expect(onStarted).not.toHaveBeenCalled();
+        expect(onClose).not.toHaveBeenCalled();
+        expect(screen.findByTestId('start-review-instructions')?.props.value).toBe('Keep this review request');
+    });
     it('resumes the stopped host on its exact Home before the comparison dialog starts a review', async () => {
         getStorage().setState((state) => ({ sessions: { session_1: { ...state.sessions.session_1!, active: false,
             metadata: { ...state.sessions.session_1!.metadata!, claudeSessionId: 'native-session-1' } } } }));
@@ -912,7 +1320,7 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         await act(async () => { await refreshSavedSecretCatalog({ serverId, accountId: 'account_1' }); });
         await settle();
         await type('Keep this secret-bound draft');
-        expect(composer().canSendMessages).toBe(false);
+        expect(composer().isSendDisabled).toBe(true);
         expect(emittedStarts).toEqual([]);
         expect(input().props.value).toBe('Keep this secret-bound draft');
     });

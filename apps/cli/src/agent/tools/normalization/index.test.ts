@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
-import { canonicalizeToolNameV2, normalizeToolCallV2 } from './index';
+import { canonicalizeToolNameV2, normalizeToolCallV2, normalizeToolResultV2 } from './index';
+
+describe('normalizeToolResultV2 content envelopes', () => {
+  it.each([
+    ['Read', { file: { content: 'direct\nnested' } }],
+    ['Write', { message: 'direct\nnested' }],
+    ['WebFetch', { text: 'direct\nnested' }],
+    ['WebSearch', { results: [{ snippet: 'direct\nnested' }] }],
+  ])('decodes the shared envelope through %s family dispatch', (canonicalToolName, expected) => {
+    expect(normalizeToolResultV2({
+      protocol: 'acp',
+      provider: 'example-provider',
+      rawToolName: canonicalToolName,
+      canonicalToolName,
+      rawOutput: [{ text: 'direct' }, { content: { text: 'nested' } }],
+    })).toMatchObject(expected);
+  });
+});
 
 describe('canonicalizeToolNameV2', () => {
   it('keeps Delete inference for write tool names', () => {

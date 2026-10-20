@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ChildProcess, type spawn } from 'node:child_process';
 import { createProviderCliAttachSurface } from '@/session/attach/providerCliAttach';
 import { createTerminalLauncherFixture } from '@/testkit/process/terminalLauncher';
-import type { AgentRuntime } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentRuntime, AgentSessionRuntime } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import type { ResolvedAgentRuntimeContribution } from '../../../plugins/projection/registry/types';
 import { HostTerminalModelSelectionBlockedError } from '../session/terminal/contract';
@@ -1613,7 +1613,7 @@ describe('resolveBackendExecutionSurfacesFromNativeAgentRuntime', () => {
       modelSelection: null,
       runWithCurrentPublisherPermit: allowCurrentPublisherEffect,
       directory: '/repo',
-      observeTerminalExecution: observation => { executionObservations.push(observation); },
+      observeTerminalExecution: (observation: Parameters<NonNullable<AgentSessionRuntime['observeTerminalExecution']>>[0]) => { executionObservations.push(observation); },
       host: {
         input: { subscribe: vi.fn() },
         switching: { register: vi.fn() },

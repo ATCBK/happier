@@ -9,6 +9,7 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { SelectionTiles } from '@/components/ui/forms/SelectionTiles';
 import { Icon } from '@/components/ui/icons/Icon';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
+import { Item } from '@/components/ui/lists/Item';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -46,6 +47,9 @@ export type AgentSetupFormViewProps = Readonly<{
     handlers: AgentSetupFormHandlers;
     testID: string;
 }>;
+
+// A choice's description (account, reach) needs this much to read whole; narrower panels list the choices one per line.
+const SIGN_IN_TILE_MIN_WIDTH = 200;
 
 /** The sign-in choices in the order the form offers them: connected services first (recommended), then the machine's own login. */
 export function resolveAgentSignInChoices(agent: MachineAgent): readonly AgentSignInChoice[] {
@@ -96,7 +100,11 @@ export const AgentSetupFormView = React.memo(function AgentSetupFormView(props: 
     const phase = resolveAgentSetupPhase(agent, props.session);
     const compact = props.layout === 'compact';
     return (
-        <View testID={props.testID} style={compact ? styles.bodyCompact : styles.body} accessibilityLiveRegion="polite">
+        <View
+            testID={props.testID}
+            style={compact ? styles.bodyCompact : [styles.body, phase === 'ready' ? null : styles.inset]}
+            accessibilityLiveRegion="polite"
+        >
             <PhaseBody {...props} phase={phase} compact={compact} handlers={handlers} />
         </View>
     );
@@ -175,7 +183,7 @@ function PhaseBody(props: AgentSetupFormViewProps & Readonly<{ phase: AgentSetup
                     <AttentionBanner
                         testID={`${testID}.failure`}
                         title={failure?.title ?? t('machineAgents.unknown')}
-                        description={[outcome?.message ?? failure?.body, t('machineAgents.failedKept')].filter(Boolean).join(' ')}
+                        description={[failure?.code === 'rate_limited' ? failure.body : outcome?.message ?? failure?.body, t('machineAgents.failedKept')].filter(Boolean).join(' ')}
                         action={failure?.recovery.kind === 'guide' && guideUrl
                             ? { label: failure.recovery.label, onPress: () => handlers.onOpenGuide(guideUrl), testID: `${testID}.failure.guide` }
                             : { label: failure?.recovery.label ?? t('machineAgents.actionRetry'), onPress: handlers.onRetry, testID: `${testID}.retry` }}
@@ -198,25 +206,17 @@ function PhaseBody(props: AgentSetupFormViewProps & Readonly<{ phase: AgentSetup
                 </>
             );
         case 'ready':
+            // Full layout opens under a row that already says the status: it shows the setup rows instead.
+            if (!compact) return <ReadySetupRows {...props} />;
             return (
                 <>
                     <SuccessLine
                         title={t('machineAgents.readyLine', { agent: agent.title, machine })}
-                        detail={agent.signIn.via?.kind === 'connected'
-                            ? t('machineAgents.signedInWith', { label: agent.signIn.via.profileLabel ?? agent.signIn.via.title })
-                            : agent.signIn.via?.kind === 'native' && agent.signIn.via.accountLabel
-                                ? t('machineAgents.signedInAs', { label: agent.signIn.via.accountLabel })
-                                : null}
+                        detail={describeSignedIn(agent)}
                     />
-                    {handlers.onStartSession || (!compact && handlers.onSetUpAnother) ? (
+                    {handlers.onStartSession ? (
                         <Actions>
-                            {handlers.onStartSession ? (
-                                <RoundButton testID={`${testID}.startSession`} size="small" title={t('machineAgents.startSessionWith', { agent: agent.title })} onPress={handlers.onStartSession} />
-                            ) : null}
-                            <View style={styles.grow} />
-                            {!compact && handlers.onSetUpAnother ? (
-                                <RoundButton testID={`${testID}.setUpAnother`} size="small" display="inverted" title={t('machineAgents.setUpAnother')} onPress={handlers.onSetUpAnother} />
-                            ) : null}
+                            <RoundButton testID={`${testID}.startSession`} size="small" title={t('machineAgents.startSessionWith', { agent: agent.title })} onPress={handlers.onStartSession} />
                         </Actions>
                     ) : null}
                 </>
@@ -236,6 +236,72 @@ function PhaseBody(props: AgentSetupFormViewProps & Readonly<{ phase: AgentSetup
                 />
             );
     }
+}
+
+
+
+/** How the agent is signed in, in the sign-in owner's words; null when nothing names it. */
+function describeSignedIn(agent: MachineAgent): string | null {
+    const via = agent.signIn.via;
+    if (via?.kind === 'connected') return t('machineAgents.signedInWith', { label: via.profileLabel ?? via.title });
+    if (via?.kind === 'native' && via.accountLabel) return t('machineAgents.signedInAs', { label: via.accountLabel });
+    return null;
+}
+
+/**
+ * A ready agent's setup on one machine, as rows (lab `ad` expanded row): how it signs in (with Change, which opens
+ * the same sign-in choices as first setup) and which command line runs it.
+ */
+function ReadySetupRows(props: AgentSetupFormViewProps & Readonly<{ phase: AgentSetupPhase; compact: boolean }>) {
+    const { agent, handlers, testID } = props;
+    const [changing, setChanging] = React.useState(false);
+    const canChange = resolveAgentSignInChoices(agent).length > 0;
+    if (changing) {
+        return (
+            <View style={styles.changing}>
+                <SignInChoices {...props} />
+                <Actions>
+                    <View style={styles.grow} />
+                    <RoundButton testID={`${testID}.keepSignIn`} size="small" display="inverted" title={t('common.cancel')} onPress={() => setChanging(false)} />
+                </Actions>
+            </View>
+        );
+    }
+    const cli = [agent.version, agent.managed === true ? t('machineAgents.cliByHappier') : null].filter(Boolean).join(' · ');
+    return (
+        <>
+            <View>
+                <Item
+                    testID={`${testID}.signInRow`}
+                    title={t('machineAgents.setupSignInTitle')}
+                    subtitle={describeSignedIn(agent) ?? t('machineAgents.signedInHere')}
+                    rightElement={canChange ? (
+                        <RoundButton testID={`${testID}.changeSignIn`} size="small" display="secondary" title={t('machineAgents.setupChangeSignIn')} onPress={() => setChanging(true)} />
+                    ) : undefined}
+                    rightElementOutsidePressable
+                    showChevron={false}
+                />
+                <Item
+                    testID={`${testID}.cliRow`}
+                    title={t('machineAgents.setupCliTitle')}
+                    subtitle={cli || t('machineAgents.unknown')}
+                    showChevron={false}
+                    showDivider={false}
+                />
+            </View>
+            {handlers.onStartSession || handlers.onSetUpAnother ? (
+                <Actions>
+                    {handlers.onStartSession ? (
+                        <RoundButton testID={`${testID}.startSession`} size="small" title={t('machineAgents.startSessionWith', { agent: agent.title })} onPress={handlers.onStartSession} />
+                    ) : null}
+                    <View style={styles.grow} />
+                    {handlers.onSetUpAnother ? (
+                        <RoundButton testID={`${testID}.setUpAnother`} size="small" display="inverted" title={t('machineAgents.setUpAnother')} onPress={handlers.onSetUpAnother} />
+                    ) : null}
+                </Actions>
+            ) : null}
+        </>
+    );
 }
 
 function SignInChoices(props: AgentSetupFormViewProps & Readonly<{ compact: boolean }>) {
@@ -290,6 +356,7 @@ function SignInChoices(props: AgentSetupFormViewProps & Readonly<{ compact: bool
                 testIdPrefix={`${testID}.ways`}
                 density="compact"
                 minimumColumns={1}
+                minimumTileWidth={SIGN_IN_TILE_MIN_WIDTH}
                 options={options}
                 value={choiceKey(selected)}
                 onChange={(next) => { if (next) setSelectedKey(next); }}
@@ -328,6 +395,14 @@ const styles = StyleSheet.create((theme) => ({
     body: {
         gap: 14,
         paddingBottom: theme.space.s16,
+    },
+    // The full layout opens under a row inside a sheet: its blocks keep the row's own inset (the ready rows are Items and carry theirs).
+    inset: {
+        paddingHorizontal: theme.space.s16,
+    },
+    changing: {
+        gap: 14,
+        paddingHorizontal: theme.space.s16,
     },
     bodyCompact: {
         gap: theme.space.s12,

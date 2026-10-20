@@ -27,7 +27,7 @@ describe('bulk per-entry settlement', () => {
         },
     ];
 
-    it('does not hide a secondary link failure behind a created Session and accepted send', () => {
+    it.each(['accepted', 'alreadyAccepted', 'replied'] as const)('does not hide a secondary link failure behind a created Session and %s send', (delivery) => {
         const outcomes = projectTriageBulkEntryOutcomesV1({
             entries,
             start: {
@@ -35,7 +35,7 @@ describe('bulk per-entry settlement', () => {
                 type: 'opened',
                 sessionId: 'session-a',
                 disposition: 'created',
-                delivery: 'accepted',
+                delivery,
             },
             secondaryLinks: ['conflictedOrUnavailable'],
             compose: 'notRequested',
@@ -50,8 +50,8 @@ describe('bulk per-entry settlement', () => {
         expect(outcomes.map(isTriageBulkEntryOutcomeIncompleteV1)).toEqual([false, true]);
     });
 
-    it.each(['failed', 'cancelled'] as const)(
-        'reports a terminal %s direct send as incomplete',
+    it.each(['failed', 'cancelled', 'held'] as const)(
+        'reports a %s direct send as incomplete',
         (delivery) => {
             const outcomes = projectTriageBulkEntryOutcomesV1({
                 entries: [entries[0]!],
@@ -67,8 +67,8 @@ describe('bulk per-entry settlement', () => {
             });
 
             expect(outcomes[0]).toMatchObject({
-                directSend: 'refused',
-                attachment: 'refused',
+                directSend: delivery === 'held' ? 'uncertain' : 'refused',
+                attachment: delivery === 'held' ? 'uncertain' : 'refused',
             });
             expect(isTriageBulkEntryOutcomeIncompleteV1(outcomes[0]!)).toBe(true);
         },

@@ -238,21 +238,22 @@ describe('VoiceTranscriptProjector', () => {
         expect(first?.id).not.toBe(second?.id);
     });
 
-    it('reconciles a no-turn optimistic user projection into a later canonical turn without duplicating the row', async () => {
+    it.each(['user', 'assistant'] as const)('reconciles a no-turn optimistic %s projection into a later canonical turn without duplicating the row', async (role) => {
         const { createVoiceTranscriptProjector } = await import('./VoiceTranscriptProjector');
 
         const projector = createVoiceTranscriptProjector({ getState: storage.getState, nowMs: () => 100 });
 
-        const optimistic = projector.projectUserText({
+        const projectText = role === 'user' ? projector.projectUserText : projector.projectAssistantText;
+        const optimistic = projectText({
             conversationSessionId: 'carrier-s1',
             text: 'open the session',
         });
-        projector.projectUserText({
+        projectText({
             conversationSessionId: 'carrier-s1',
             text: 'open the session',
             turn: {
                 epoch: 7,
-                role: 'user',
+                role,
                 ts: 123,
                 voiceAgentId: 'voice-agent-1',
                 runId: 'run_1',
@@ -261,17 +262,17 @@ describe('VoiceTranscriptProjector', () => {
         });
 
         const stored = readStoredSessionMessages(storage.getState(), 'carrier-s1');
-        expect(optimistic?.id).toBe('voice-turn-provisional:carrier-s1:user:1');
+        expect(optimistic?.id).toBe(`voice-turn-provisional:carrier-s1:${role}:1`);
         expect(stored).toHaveLength(1);
         expect(stored[0]).toMatchObject({
-            realID: 'voice-turn:voice-agent-1:run_1:stream_1:7:user:123',
+            realID: `voice-turn:voice-agent-1:run_1:stream_1:7:${role}:123`,
             meta: {
                 happier: {
                     kind: 'voice_agent_turn.v1',
                     payload: {
                         v: 1,
                         epoch: 7,
-                        role: 'user',
+                        role,
                         ts: 123,
                         voiceAgentId: 'voice-agent-1',
                         runId: 'run_1',

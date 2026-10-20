@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import { DaemonPluginComposerReferenceSearchResponseSchema, type PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { MENTION_KIND_V1, buildMentionRefForKindV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
+import { resolveSkillCatalogItemIdentityV1 } from '@happier-dev/protocol/runtime/catalog/skills';
 import type { PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 import type { PluginContributionIntrospectionPresentationV1 } from '@happier-dev/protocol/daemon/pluginContributionIntrospection';
 import type { PluginLocalizedStringV2 } from '@happier-dev/protocol/plugins/contributions/public-types';
@@ -11,7 +12,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { FileMentionSuggestion } from '@/components/sessions/agentInput/components/AgentInputSuggestionView';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Avatar } from '@/components/ui/avatar/Avatar';
-import { buildDiscussionAccountMentionPayload } from '@/components/sessions/conversations/discussionComposerDocument';
+import { buildDiscussionAccountMentionPayload } from '@/components/discussions/discussionComposerDocument';
 import { formatSessionResponsibilityAccessHint } from '@/components/sessions/responsibility/formatSessionResponsibilityAccessHint';
 import { formatSessionResponsibilityName } from '@/components/sessions/responsibility/formatSessionResponsibilityName';
 import { SessionAgentCatalogIdentityIcon } from '@/components/sessions/presentation/SessionAgentCatalogIdentityIcon';
@@ -35,6 +36,7 @@ import {
     matchesComposerSuggestionQuery,
     resolveComposerSuggestionSkillIdentity,
     type ComposerSuggestionCatalogs,
+    type ComposerSuggestionSkillItem,
 } from './composerSuggestionCatalogs';
 import {
     COMPOSER_SUGGESTION_KIND_IDS,
@@ -45,6 +47,8 @@ import {
     type ComposerSuggestionTrigger,
 } from './composerSuggestionGrammar';
 import { COMPOSER_SUGGESTION_KIND_DEADLINE_MS } from './composerSuggestionDeadlines';
+import { buildSkillComposerGroups, pickSkillComposerRow, type SkillComposerSource } from '@/sync/domains/skills/skillComposerGroups';
+import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { buildComposerFileReferenceSelection, buildComposerSessionReferenceSelection, buildContributedComposerReferenceSelection } from '@/sync/domains/input/composerReferenceSelection';
 
 /**
@@ -109,11 +113,12 @@ export const NEW_SESSION_COMPOSER_SUGGESTION_KINDS = [
 ] as const satisfies readonly ComposerSuggestionKindId[];
 
 /**
- * A human discussion's composer (R-9): the people who can read this Session, and nothing an agent
- * composer offers. No agent composer lists `accountMention`, so the two never share a picker.
+ * A Discussion offers its admitted people and executable participant Sessions.
+ * The host supplies both candidate sets; ordinary Agent reference catalogs stay separate.
  */
 export const DISCUSSION_COMPOSER_SUGGESTION_KINDS = [
     'accountMention',
+    'session',
 ] as const satisfies readonly ComposerSuggestionKindId[];
 
 /**
@@ -184,6 +189,8 @@ export type ComposerSuggestionResolveContext = Readonly<{
     /** The scope alias matched in the token, or null. */
     scope: string | null;
     catalogs: ComposerSuggestionCatalogs;
+    /** Current catalog read, started only by the kind that consumes it. */
+    loadCatalogs?: () => Promise<ComposerSuggestionCatalogs>;
     limit: number;
     /** The active query's cancellation, owned by `useActiveSuggestions`. */
     signal?: AbortSignal;
@@ -195,6 +202,8 @@ export type ComposerSuggestionResolveContext = Readonly<{
     publish?: (suggestions: readonly AutocompleteSuggestion[]) => void;
     /** Absent outside a human discussion's composer. */
     accountMentions?: ComposerAccountMentionSource | null;
+    /** The host's library/Found source for the `$` groups; absent where no Agent is known yet. */
+    skillSource?: SkillComposerSource | null;
 }>;
 
 export type ComposerSuggestionSelectionResult =
@@ -222,6 +231,8 @@ export type ComposerSuggestionKindDefinition = Readonly<{
     catalog?: ComposerSuggestionCatalogKey;
     /** Maximum rows this kind contributes. Per-trigger sums are bounded (D-22). */
     limit: number;
+    /** A non-RPC source owns cold completion instead of borrowing the daemon RPC ceiling. */
+    coldStartWait?: 'producer';
     /**
      * Picker section header for this kind's rows (R-1). Resolved at render time
      * so a language change is picked up, exactly like `markdown.slash.groups.*`.
@@ -279,7 +290,8 @@ async function resolveVendorPluginSuggestions(
 ): Promise<readonly AutocompleteSuggestion[]> {
     const seen = new Set<string>();
     const out: AutocompleteSuggestion[] = [];
-    for (const plugin of context.catalogs.vendorPlugins ?? []) {
+    const catalogs = context.loadCatalogs ? await context.loadCatalogs() : context.catalogs;
+    for (const plugin of catalogs.vendorPlugins ?? []) {
         if (out.length >= context.limit) break;
         // The daemon's own `mentionable` decision wins when present; the
         // installed+enabled pair is the fallback for older snapshots.
@@ -619,62 +631,124 @@ async function resolveComposerReferenceSuggestions(
     return out;
 }
 
+/** The catalog origin fold the composer catalog reader applies, for snapshots a host supplies directly. */
+function withSkillCatalogOrigin(skill: ComposerSuggestionSkillItem): ComposerSuggestionSkillItem {
+    return skill.origin ? skill : { ...skill, origin: skill.source ?? skill.projectionKind };
+}
+
+/**
+ * The `$` kind (P6 U6.8): the Session's own skills, then the Account's library, then what the Machine's
+ * Agent keeps natively. Grouping, identity dedupe, user-invocable filtering and search are
+ * `buildSkillComposerGroups`; a library pick turns the skill on through `pickSkillComposerRow`. The
+ * Session's own rows keep the full catalog payload the send path reads.
+ */
 async function resolveSkillSuggestions(
     context: ComposerSuggestionResolveContext,
 ): Promise<readonly AutocompleteSuggestion[]> {
-    const seen = new Set<string>();
-    const out: AutocompleteSuggestion[] = [];
-    for (const skill of context.catalogs.skills ?? []) {
-        if (out.length >= context.limit) break;
-        if (skill.enabled === false) continue;
-        const { identity, suggestionKey } = resolveComposerSuggestionSkillIdentity(skill);
-        if (seen.has(identity)) continue;
-        const label = skill.displayName ?? skill.name;
-        const subtitle = skill.description
-            ?? skill.origin
-            ?? skill.source
-            ?? skill.projectionRef
-            ?? skill.projectionKind
-            ?? skill.name;
-        if (
-            !matchesComposerSuggestionQuery(skill.name, context.scopedQuery)
-            && !matchesComposerSuggestionQuery(label, context.scopedQuery)
-        ) continue;
-        seen.add(identity);
-        out.push({
-            kind: 'skill',
-            key: `skill-${suggestionKey}`,
-            text: formatComposerSuggestionToken('$', skill.name),
-            label,
-            description: subtitle,
-            structuredInput: {
-                kind: 'skill',
-                ...(skill.id ? { id: skill.id } : {}),
-                name: skill.name,
-                ...(skill.path ? { path: skill.path } : {}),
-                ...(skill.displayName ? { displayName: skill.displayName } : {}),
-                ...(skill.description ? { description: skill.description } : {}),
-                ...(skill.origin ?? skill.source ? { origin: skill.origin ?? skill.source } : {}),
-                ...(skill.projectionKind ? { projectionKind: skill.projectionKind } : {}),
-                ...(skill.projectionRef ?? skill.projectionKind
-                    ? { projectionRef: skill.projectionRef ?? skill.projectionKind }
-                    : {}),
-                ...(skill.backendId ? { backendId: skill.backendId } : {}),
-                ...(skill.agentId ? { agentId: skill.agentId } : {}),
-            },
+    const source = context.skillSource ?? null;
+    let catalogs = context.catalogs;
+    let facts = source?.peek() ?? null;
+    const rows = () => {
+        const raw = catalogs.skills ?? [];
+        const catalog = raw.map(withSkillCatalogOrigin);
+        // The first catalog entry per Protocol identity is the one the groups keep; its row keeps the
+        // entry exactly as the catalog published it.
+        const catalogByIdentity = new Map<string, ComposerSuggestionSkillItem>();
+        catalog.forEach((item, index) => {
+            const id = resolveSkillCatalogItemIdentityV1(item)?.id;
+            if (id && !catalogByIdentity.has(id)) catalogByIdentity.set(id, raw[index]!);
         });
-    }
-    return out;
+        const groups = buildSkillComposerGroups({
+            open: true, query: context.scopedQuery, agentId: source?.agentId ?? '', sessionItems: catalog,
+            machineId: source?.machineId ?? null, libraryItems: facts?.libraryItems ?? [], found: facts?.found ?? null,
+        });
+        // Catalog entries that differ only in display case share one picker row (the row identity owner).
+        const keys = new Set<string>();
+        // Each group keeps a fair share of the kind's rows, so a long session catalog never hides the library.
+        const perGroup = Math.max(4, Math.floor(context.limit / Math.max(1, groups.length)));
+        return groups.flatMap((group) => group.rows.slice(0, perGroup).map((row): AutocompleteSuggestion => {
+            const title = group.kind === 'session' ? t('capabilities.session.picker.inThisSession')
+                : group.kind === 'library' ? t('capabilities.session.picker.yourLibrary')
+                    : t('capabilities.session.picker.foundOn', { machine: source?.machineName ?? group.machineId ?? '' });
+            const base = { kind: 'skill' as const, text: formatComposerSuggestionToken('$', row.name), group: title };
+            if (group.kind === 'session') {
+                const skill = catalogByIdentity.get(row.key)!;
+                return {
+                    ...base,
+                    key: `skill-${resolveComposerSuggestionSkillIdentity(skill).suggestionKey}`,
+                    label: skill.displayName ?? skill.name,
+                    description: skill.description ?? skill.origin ?? skill.source ?? skill.projectionRef ?? skill.projectionKind ?? skill.name,
+                    structuredInput: {
+                        kind: 'skill',
+                        ...(skill.id ? { id: skill.id } : {}),
+                        name: skill.name,
+                        ...(skill.path ? { path: skill.path } : {}),
+                        ...(skill.displayName ? { displayName: skill.displayName } : {}),
+                        ...(skill.description ? { description: skill.description } : {}),
+                        ...(skill.origin ?? skill.source ? { origin: skill.origin ?? skill.source } : {}),
+                        ...(skill.projectionKind ? { projectionKind: skill.projectionKind } : {}),
+                        ...(skill.projectionRef ?? skill.projectionKind ? { projectionRef: skill.projectionRef ?? skill.projectionKind } : {}),
+                        ...(skill.backendId ? { backendId: skill.backendId } : {}),
+                        ...(skill.agentId ? { agentId: skill.agentId } : {}),
+                    },
+                };
+            }
+            // A library skill cannot join a running Session whose Agent can neither reload skills live nor
+            // resume (P8 F4): the row stays listed with the Session apply words and cannot be picked.
+            const newSessionsOnly = row.source === 'library' && source?.applyTiming()?.t === 'new_sessions_only';
+            return {
+                ...base,
+                key: `skill-${group.kind}:${row.key}`,
+                label: row.name,
+                ...(newSessionsOnly
+                    ? { description: t('capabilities.session.apply.newSessionsOnly', { item: '', machine: '' }), disabled: true as const }
+                    : row.description ? { description: row.description } : {}),
+                structuredInput: {
+                    kind: 'skill',
+                    ...(row.skillId ? { id: row.skillId } : {}),
+                    name: row.name,
+                    origin: row.identity.origin,
+                    ...(row.identity.backendId ? { backendId: row.identity.backendId } : {}),
+                },
+                ...(source && row.source === 'library' && !newSessionsOnly ? { selectionEffect: () => pickSkillComposerRow(row, source.owner) } : {}),
+            };
+        })).filter((suggestion) => !keys.has(suggestion.key) && Boolean(keys.add(suggestion.key))).slice(0, context.limit);
+    };
+    const first = rows();
+    const publish = () => { if (!context.signal?.aborted) context.publish?.(rows()); };
+    if (source && !context.signal?.aborted) context.publish?.(first);
+    await Promise.all([
+        context.loadCatalogs?.().then(current => { catalogs = current; publish(); }),
+        source?.read().then(current => { facts = current; publish(); }),
+    ]);
+    return context.signal?.aborted ? first : rows();
+}
+
+/** A library pick turns the skill on for this Session (or draft) before its token is inserted. */
+async function applySkillSelection(
+    args: ComposerSuggestionApplySelectionArgs,
+): Promise<ComposerSuggestionSelectionResult> {
+    const effect = args.suggestion.selectionEffect;
+    if (!effect) return { handled: false };
+    const result = await effect();
+    if (result.ok) return { handled: false };
+    publishPresentationNotice({
+        key: 'composer-skill-pick',
+        message: t('capabilities.control.changeFailed'),
+        severity: 'error',
+    });
+    return { handled: false, preserveInput: true };
 }
 
 async function resolveSlashCommandSuggestions(
     context: ComposerSuggestionResolveContext,
 ): Promise<readonly AutocompleteSuggestion[]> {
+    const catalogs = context.loadCatalogs ? await context.loadCatalogs() : context.catalogs;
     return await getCommandSuggestions(context.sessionId, context.scopedQuery, {
         serverId: context.serverId,
         limit: context.limit,
         contributedActions: context.contributedActions,
-        ...(context.catalogs.commands ? { nativeCommands: context.catalogs.commands } : {}),
+        ...(catalogs.commands ? { nativeCommands: catalogs.commands } : {}),
     });
 }
 
@@ -847,9 +921,12 @@ const COMPOSER_SUGGESTION_KIND_DEFINITIONS = {
         id: 'skill',
         catalog: 'skills',
         limit: 12,
+        // Account library reads include HTTP pages and encrypted headers, not only daemon RPC.
+        coldStartWait: 'producer',
         sectionTitleKey: 'agentInput.suggestionGroups.skills',
         icon: () => React.createElement(Icon, { name: 'sparkle', size: 16 }),
         resolve: resolveSkillSuggestions,
+        applySelection: applySkillSelection,
     },
     slashCommand: {
         id: 'slashCommand',

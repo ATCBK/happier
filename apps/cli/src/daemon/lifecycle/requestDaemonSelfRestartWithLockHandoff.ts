@@ -11,12 +11,21 @@ type RequestDaemonSelfRestart = typeof requestDaemonSelfRestart;
 
 export function resolveDaemonSelfRestartEnvironment(
   successorDistClosureFingerprint: string | undefined,
+  successorServerUrls: Readonly<{ serverUrl: string; webappUrl: string }> | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv | undefined {
-  if (!successorDistClosureFingerprint) return undefined;
+  if (!successorDistClosureFingerprint && !successorServerUrls) return undefined;
   return {
     ...env,
-    HAPPIER_CLI_SUBPROCESS_DAEMON_DIST_CLOSURE_FINGERPRINT: successorDistClosureFingerprint,
+    ...(successorDistClosureFingerprint
+      ? { HAPPIER_CLI_SUBPROCESS_DAEMON_DIST_CLOSURE_FINGERPRINT: successorDistClosureFingerprint }
+      : {}),
+    ...(successorServerUrls
+      ? {
+          HAPPIER_SERVER_URL: successorServerUrls.serverUrl,
+          HAPPIER_WEBAPP_URL: successorServerUrls.webappUrl,
+        }
+      : {}),
   };
 }
 

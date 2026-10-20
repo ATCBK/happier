@@ -12,6 +12,11 @@ import type { AuthEmailMessage } from "@/app/auth/email/authEmailDelivery";
 import { upsertVerifiedMailboxEvidenceInTx } from "@/app/auth/verifiedMailboxEvidence";
 import { homeGovernanceRoutes } from "@/app/api/routes/home/homeGovernanceRoutes";
 import { sessionRoutes } from "@/app/api/routes/session/sessionRoutes";
+import { registerDiscussionRoutes } from "@/app/api/routes/discussions/registerDiscussionRoutes";
+import { DISCUSSION_HTTP_PATHS_V1 } from "@happier-dev/protocol/discussions/api";
+import { encodeBase64 } from "@happier-dev/protocol/crypto/base64";
+import { deriveAccountRecipientEnvelopeReadinessFromRow } from "@/app/encryption/accountRecipientEnvelopeReadiness";
+import { RECIPIENT_READINESS_SELECT } from "@/app/session/encryption/sessionDataKeyRecipientProjection";
 import { createAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
@@ -45,7 +50,7 @@ import { registerTeamRoutes } from "./registerTeamRoutes";
  * and is named for completeness):
  *   HAPPIER_FEATURE_TEAMS__ENABLED
  *   HAPPIER_FEATURE_SESSIONS_FILTERED_LISTING__ENABLED (Team-shared Sessions appear in a listing)
- *   HAPPIER_FEATURE_SESSIONS_FOLLOWING__ENABLED       (auto-Follow, read tracking, attention)
+ *   HAPPIER_FEATURE_SESSIONS_FOLLOWING__ENABLED       (explicit Follow, read tracking, attention)
  *   HAPPIER_FEATURE_SESSIONS_CONVERSATIONS__ENABLED   (discussions and mentions)
  *   HAPPIER_FEATURE_SESSIONS_BOARD__ENABLED           (Board items, views and the surface wakeup)
  * plus HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY=optional so an E2EE Session
@@ -157,6 +162,7 @@ describe("Composed two-Account Teams journey (SQLite integration)", () => {
 
         app = createAuthenticatedTestApp();
         sessionRoutes(app);
+        registerDiscussionRoutes(app);
         homeGovernanceRoutes(app);
         registerTeamRoutes(app);
         registerTeamMemberRoutes(app);
@@ -222,7 +228,7 @@ describe("Composed two-Account Teams journey (SQLite integration)", () => {
         expect(search.json()).toEqual({
             accounts: [{
                 accountId: state.bId,
-                profile: { firstName: null, lastName: null, username: null, avatarUrl: null },
+                profile: { name: null, firstName: null, lastName: null, username: null, avatarUrl: null },
                 eligible: true,
             }],
         });
@@ -380,14 +386,20 @@ describe("Composed two-Account Teams journey (SQLite integration)", () => {
         })).toEqual(sessionDataKey);
     });
 
-    it("step 7 — A assigns B responsible and B is automatically followed at Important", async () => {
+    it("step 7 — A assigns B responsible and B explicitly follows at Important", async () => {
         const assigned = await post("/v2/sessions/responsibility/set", state.aId, {
             sessionId: state.sessionId, responsibleAccountId: state.bId,
         });
         expect(assigned.statusCode, assigned.body).toBe(200);
         expect(assigned.json()).toMatchObject({
-            changed: true, responsibleAccountId: state.bId, autoFollowed: true,
+            changed: true, responsibleAccountId: state.bId, autoFollowed: false,
         });
+
+        const followed = await app.inject({
+            method: "PUT", url: `/v2/sessions/${state.sessionId}/follow`, headers: headers(state.bId),
+            payload: { notificationLevel: "important", includeInVoice: false },
+        });
+        expect(followed.statusCode, followed.body).toBe(200);
 
         const follow = await get(`/v2/sessions/${state.sessionId}/follow`, state.bId);
         expect(follow.statusCode, follow.body).toBe(200);
@@ -429,7 +441,21 @@ describe("Composed two-Account Teams journey (SQLite integration)", () => {
     });
 
     it("step 9 — A mentions B in a discussion on the Session", async () => {
-        const created = await post(`/v2/sessions/${state.sessionId}/discussions`, state.aId, {
+        const [a, b] = await Promise.all([state.aId, state.bId].map(id => db.account.findUniqueOrThrow({ where: { id }, select: RECIPIENT_READINESS_SELECT })));
+        const ownerKey = deriveAccountRecipientEnvelopeReadinessFromRow(a);
+        const recipientKey = deriveAccountRecipientEnvelopeReadinessFromRow(b);
+        if (ownerKey.status !== "available" || recipientKey.status !== "available") throw new Error("Discussion recipients require current content keys");
+        const discussionDataKey = tweetnacl.randomBytes(32);
+        const sealKey = (recipientPublicKey: Uint8Array) => encodeBase64(sealEncryptedDataKeyEnvelopeV1({
+            dataKey: discussionDataKey, recipientPublicKey, randomBytes: length => tweetnacl.randomBytes(length),
+        }));
+        const created = await post(DISCUSSION_HTTP_PATHS_V1.collection, state.aId, {
+            anchor: { kind: "session", sessionId: state.sessionId },
+            participants: [{ kind: "account", accountId: state.bId }],
+            dataEncryptionKey: sealKey(ownerKey.binding.contentPublicKey),
+            expectedOwnerContentPublicKeyFingerprint: ownerKey.binding.contentPublicKeyFingerprint,
+            recipientKeyEnvelopes: [{ recipientAccountId: state.bId, encryptedDataKey: sealKey(recipientKey.binding.contentPublicKey),
+                recipientContentPublicKeyFingerprint: recipientKey.binding.contentPublicKeyFingerprint }],
             creationLocalId: "journey-discussion",
             creationEqualityEvidenceV1: e2eeTag("A"),
             titleContent: { t: "encrypted", c: "opaque-title" },
@@ -442,7 +468,7 @@ describe("Composed two-Account Teams journey (SQLite integration)", () => {
         });
         expect(created.statusCode, created.body).toBe(200);
         expect(created.json()).toMatchObject({
-            discussion: { sessionId: state.sessionId, messageSeq: 1 },
+            discussion: { anchor: { kind: "session", sessionId: state.sessionId }, ownerAccountId: state.aId, messageSeq: 1 },
             firstMessage: { mentionedAccountIds: [state.bId], producerV1: null },
         });
         state.discussionId = created.json().discussion.id;
@@ -453,10 +479,10 @@ describe("Composed two-Account Teams journey (SQLite integration)", () => {
         if (state.discussionId === null || state.discussionMessageSeq === null) {
             throw new Error("step 9 produced no discussion");
         }
-        const discussionUrl = `/v2/sessions/${state.sessionId}/discussions/${state.discussionId}`;
+        const discussionUrl = DISCUSSION_HTTP_PATHS_V1.discussion.replace(":discussionId", state.discussionId);
         const unread = await get(discussionUrl, state.bId);
         expect(unread.statusCode, unread.body).toBe(200);
-        // B is a tracked reader (auto-followed at step 7), so B's own baseline
+        // B is a tracked reader (explicitly followed at step 7), so B's own baseline
         // cursor already exists at 0; the unread counts are what a client reads.
         expect(unread.json().discussion).toMatchObject({ unreadCount: 1, unreadMentionCount: 1, lastReadSeq: 0 });
 
@@ -499,14 +525,16 @@ describe("Composed two-Account Teams journey (SQLite integration)", () => {
         state.boardLayoutRevision = created.json().layoutRevision;
 
         // Item and placement commit together on the Session owner's tuple, and
-        // the server stores the two envelopes byte for byte: it never opens,
-        // re-serializes or interprets Board content on an E2EE Session.
+        // the item wrapper retains its authenticated creator while both
+        // encrypted payloads remain opaque to the server.
         const stored = await db.sessionSystemRecord.findMany({
             where: { sessionId: state.sessionId }, select: { accountId: true, localId: true, content: true },
         });
         expect(stored).toHaveLength(2);
         expect(new Set(stored.map(row => row.accountId))).toEqual(new Set([state.aId]));
-        expect(stored.find(row => row.localId === BOARD_ITEM_ID)?.content).toEqual(itemContent);
+        expect(stored.find(row => row.localId === BOARD_ITEM_ID)?.content).toEqual({
+            t: "session_surface_record_v1", creator: { kind: "user" }, content: itemContent,
+        });
         expect(stored.find(row => row.localId === "layout")?.content).toEqual(layoutContent);
 
         // B's wakeup is the surface hint, which carries no Board content.

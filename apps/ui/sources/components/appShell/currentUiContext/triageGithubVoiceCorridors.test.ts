@@ -227,8 +227,7 @@ function createTriageVoiceProjection(serverId: string) {
     execution: declaration.execution,
     dangerLevel: declaration.dangerLevel,
     available: true,
-    serverIdentityId: executionOrigin.serverIdentityId,
-    materializationRef: executionOrigin.materializationRef,
+    executionOrigin,
   });
   const projection = normalizePluginUiProjection({
     v: 2,

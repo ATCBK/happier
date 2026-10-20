@@ -62,10 +62,14 @@ export const FilesystemListDirectoryOutputSchema = lazyZodSchema(() => z.union([
     truncated: z.optional(z.boolean()), gitIgnoreAvailable: z.optional(z.boolean()) }),
   FilesystemFailureSchema,
 ]));
-export type FilesystemTreeNode = Readonly<{
-  name: string; path: string; type: 'file' | 'directory'; size?: number; modified?: number;
-  children?: readonly FilesystemTreeNode[];
-}>;
+export interface FilesystemTreeNode {
+  readonly name: string;
+  readonly path: string;
+  readonly type: 'file' | 'directory';
+  readonly size?: number;
+  readonly modified?: number;
+  readonly children?: readonly FilesystemTreeNode[];
+}
 export const FilesystemTreeNodeSchema: z.ZodMiniType<FilesystemTreeNode> = z.lazy(() => z.strictObject({
   name: z.string(), path: z.string(), type: z.enum(['file', 'directory']), size: z.optional(z.number()),
   modified: z.optional(z.number()), children: z.optional(z.array(FilesystemTreeNodeSchema)),

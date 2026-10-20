@@ -12,7 +12,8 @@ import type { MachinePageTabBarAccessoryProps } from '@/components/machines/page
 import { useMachinePageState } from '@/components/machines/page/machinePageContext';
 import { MachineFreshnessChip, type MachineFreshness } from '@/components/machines/page/MachineFreshnessChip';
 import { readMachinePublishedResources } from '@/components/machines/summary/machineResourceSentences';
-import { isMachineResourceStateStale, machineResourceStore } from '@/sync/domains/machines/resources/machineResourceStore';
+import { EMPTY_MACHINE_RESOURCE_STATE, isMachineResourceStateStale, machineResourceStore } from '@/sync/domains/machines/resources/machineResourceStore';
+import { useMachineDaemonReadTarget } from '@/sync/domains/machines/useMachineDaemonReadTarget';
 
 import { MACHINE_VITALS_RANGES, selectMachineVitalsOverviewView, type MachineVitalsOverviewView } from './machineVitalsPresentation';
 
@@ -106,16 +107,18 @@ export const MachineVitalsBarAccessory = React.memo(function MachineVitalsBarAcc
     const daemonState: unknown = target.machine?.daemonState;
     const published = React.useMemo(() => readMachinePublishedResources(daemonState), [daemonState]);
     const [range] = useMachineVitalsRange();
-    const key = React.useMemo(() => ({ machineId: props.machineId, serverId: props.serverId, view: 'overview' as const }), [props.machineId, props.serverId]);
+    const readTarget = useMachineDaemonReadTarget(props);
+    const key = React.useMemo(() => ({ ...readTarget.key, view: 'overview' as const }), [readTarget.key]);
     const subscribe = React.useCallback((listener: () => void) => machineResourceStore.observe(key, listener), [key]);
-    const getSnapshot = React.useCallback(() => machineResourceStore.getState(key), [key]);
+    const getSnapshot = React.useCallback(() => readTarget.accountMatches ? machineResourceStore.getState(key) : EMPTY_MACHINE_RESOURCE_STATE, [key, readTarget.accountMatches]);
     const state = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
     const view = selectMachineVitalsOverviewView({ online: props.online, published,
         state: { ...state, stale: isMachineResourceStateStale(state, Date.now()) } });
     const retry = React.useCallback(() => {
+        if (!readTarget.enabled) return;
         machineResourceStore.retry(key);
-        machineResourceStore.retryHistory({ machineId: props.machineId, serverId: props.serverId, range });
-    }, [key, props.machineId, props.serverId, range]);
+        machineResourceStore.retryHistory({ ...readTarget.key, range });
+    }, [key, readTarget.enabled, readTarget.key, range]);
     if (view.kind !== 'loading' && view.kind !== 'ready') return null;
     return <MachineVitalsRangeBar freshness={resolveVitalsFreshnessChip(view, retry)} showRange={view.kind === 'ready'} placement="bar" />;
 });

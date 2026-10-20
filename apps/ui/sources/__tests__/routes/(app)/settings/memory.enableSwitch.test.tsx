@@ -1,7 +1,12 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderScreen as renderBaseScreen } from '@/dev/testkit/render/renderScreen';
+import { standardCleanup } from '@/dev/testkit';
+import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { Switch } from '@/components/ui/forms/Switch';
 import {
     createMachineAdministrationTargetSelectionMock,
     installMachineAdministrationTargetSelectionBoundary,
@@ -10,8 +15,12 @@ import { installSessionSettingsEntryModuleMocks, resetSessionSettingsEntryState 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const machineRpcSpy = vi.fn();
+const { machineRpcSpy } = vi.hoisted(() => ({ machineRpcSpy: vi.fn() }));
 const featureEnabledState: Record<string, boolean> = { 'memory.search': true };
+let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>> | undefined;
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 const administrationTargetSelection = vi.hoisted(() => {
     const executionTarget = {
         target: { serverIdentityId: 'srv_1', machineId: 'm1' },
@@ -48,11 +57,6 @@ function installMemorySettingsEntryMocks() {
                 TextInput: 'TextInput',
             });
         },
-        featureEnabled: (featureId) => featureEnabledState[featureId] === true,
-        storageModule: async () => {
-            const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-            return createStorageModuleStub({});
-        },
     });
 
     // The screen administers the machine chosen through the canonical Machine Administration target;
@@ -66,18 +70,26 @@ function installMemorySettingsEntryMocks() {
         Item: (props: any) => React.createElement('Item', props, props.rightElement ?? null),
     }));
 }
+installMemorySettingsEntryMocks();
+installDisconnectedServerSocketBoundary();
 
-afterEach(() => {
+async function renderScreen(element: React.ReactElement) {
+    account = await createSecretSettingsTestHarness({ serverIdentityId: 'srv_1', settings: settingsParse({
+        experiments: true, featureToggles: { 'memory.search': featureEnabledState['memory.search'] === true },
+    }), sharedEnabled: false });
+    return renderBaseScreen(element);
+}
+
+afterEach(async () => {
+    await standardCleanup();
+    await account?.dispose();
+    account = undefined;
     machineRpcSpy.mockReset();
     featureEnabledState['memory.search'] = true;
-    vi.resetModules();
     resetSessionSettingsEntryState();
 });
 
 describe('Memory settings (enable switch)', () => {
-    beforeEach(() => {
-        installMemorySettingsEntryMocks();
-    });
 
     it('loads daemon.memory.status alongside settings', async () => {
         machineRpcSpy.mockImplementation(async (params: any) => {
@@ -136,7 +148,7 @@ describe('Memory settings (enable switch)', () => {
 
         const screen = await renderScreen(React.createElement(Screen));
 
-        const switches = screen.findAllByType('Switch' as any);
+        const switches = screen.findAllByType(Switch);
         expect(switches).toHaveLength(0);
         expect(machineRpcSpy).not.toHaveBeenCalled();
     });

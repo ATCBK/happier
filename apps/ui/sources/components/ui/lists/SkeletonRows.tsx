@@ -2,7 +2,7 @@ import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
 import { HappierSkeletonRows, type HappierSkeletonRowsProps } from '@happier-dev/plugin-ui/presentation';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 
 export type SkeletonRowsProps = Omit<HappierSkeletonRowsProps, 'theme' | 'color' | 'reducedMotion'>;
@@ -16,11 +16,12 @@ export type SkeletonRowsProps = Omit<HappierSkeletonRowsProps, 'theme' | 'color'
 export const SkeletonRows = React.memo(function SkeletonRows(props: SkeletonRowsProps) {
     const { theme } = useUnistyles();
     const reducedMotion = useReducedMotionPreference();
+    const pluginTheme = usePluginUiTheme(theme);
     return (
         <HappierSkeletonRows
             {...props}
-            theme={projectPluginUiTheme(theme)}
-            color={theme.colors.surface.ripple}
+            theme={pluginTheme}
+            color={theme.colors.surface.skeleton}
             reducedMotion={reducedMotion}
         />
     );

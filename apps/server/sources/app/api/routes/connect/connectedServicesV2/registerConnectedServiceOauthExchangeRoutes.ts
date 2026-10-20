@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import type { Fastify } from "../../../types";
 import { CONNECTED_SERVICE_ERROR_CODES } from '@happier-dev/protocol/connect/connectedServiceErrors';
@@ -33,11 +33,11 @@ const ConnectedServiceOauthExchangeErrorResponseSchema = z.union([
   }),
   // Fastify validation errors can occur before the handler (e.g. max-length checks). When using
   // zod serializerCompiler, ensure we accept the default error shape for 400 responses.
-  z.object({
+  z.looseObject({
     statusCode: z.literal(400),
-    error: z.string().min(1),
-    message: z.string().min(1),
-  }).passthrough(),
+    error: z.string().check(z.minLength(1)),
+    message: z.string().check(z.minLength(1)),
+  }),
 ]);
 
 export function registerConnectedServiceOauthExchangeRoutes(app: Fastify): void {
@@ -48,14 +48,14 @@ export function registerConnectedServiceOauthExchangeRoutes(app: Fastify): void 
         serviceId: ConnectedServiceIdSchema,
       }),
       body: z.object({
-        publicKey: z.string().min(1).max(CONNECTED_SERVICE_OAUTH_PUBLIC_KEY_MAX_LEN),
-        code: z.string().min(1).max(CONNECTED_SERVICE_OAUTH_CODE_MAX_LEN),
-        verifier: z.string().min(1).max(CONNECTED_SERVICE_OAUTH_VERIFIER_MAX_LEN),
-        redirectUri: z.string().url().max(CONNECTED_SERVICE_OAUTH_REDIRECT_URI_MAX_LEN),
-        state: z.string().min(1).max(CONNECTED_SERVICE_OAUTH_STATE_MAX_LEN).nullable().optional(),
+        publicKey: z.string().check(z.minLength(1), z.maxLength(CONNECTED_SERVICE_OAUTH_PUBLIC_KEY_MAX_LEN)),
+        code: z.string().check(z.minLength(1), z.maxLength(CONNECTED_SERVICE_OAUTH_CODE_MAX_LEN)),
+        verifier: z.string().check(z.minLength(1), z.maxLength(CONNECTED_SERVICE_OAUTH_VERIFIER_MAX_LEN)),
+        redirectUri: z.string().check(z.url(), z.maxLength(CONNECTED_SERVICE_OAUTH_REDIRECT_URI_MAX_LEN)),
+        state: z.optional(z.nullable(z.string().check(z.minLength(1), z.maxLength(CONNECTED_SERVICE_OAUTH_STATE_MAX_LEN)))),
       }),
       response: {
-        200: z.object({ bundle: z.string().min(1) }),
+        200: z.object({ bundle: z.string().check(z.minLength(1)) }),
         400: ConnectedServiceOauthExchangeErrorResponseSchema,
       },
     },

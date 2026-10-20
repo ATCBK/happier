@@ -13,6 +13,7 @@ import { streamVoiceAgentTurn } from './streamVoiceAgentTurn';
 import { requiresProviderSafeModelSelectionRpc } from '@/sync/ops/providerDaemonSessionCompatibility';
 import { requiresProviderSafeExecutionRunStartRpc } from '@happier-dev/protocol/execution/runs/startRequest';
 import { buildAgentUniverseBackendTargetKey } from '@/agents/catalog/agentUniverse';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 
 const VOICE_AGENT_LIFECYCLE_RPC_TIMEOUT_MS = null;
 
@@ -61,15 +62,27 @@ export class VoiceAgentStartOutcomeUnknownError extends Error {
 }
 
 export class DaemonVoiceAgentClient implements VoiceAgentClient {
-  constructor(private readonly scope: ServerAccountScope) {}
+  constructor(private readonly scope: ServerAccountScope, private readonly lifetimeSignal?: AbortSignal) {}
 
-  private sessionRpc<R, A>(params: Readonly<{
+  private async sessionRpc<R, A>(params: Readonly<{
     sessionId: string;
     method: string;
     payload: A;
     timeoutMs?: number | null;
+    signal?: AbortSignal;
   }>): Promise<R> {
-    return sessionRpcWithServerAccountScope<R, A>({ ...params, scope: this.scope });
+    // Cleanup is a separate Account-owned request. It must still reach the
+    // daemon after Stop retires the Voice attempt and its pending operations.
+    if (params.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP
+        || params.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_CANCEL) {
+      return await sessionRpcWithServerAccountScope<R, A>({ ...params, scope: this.scope });
+    }
+    const lifetime = mergeAbortSignals([params.signal, this.lifetimeSignal]);
+    try {
+      return await sessionRpcWithServerAccountScope<R, A>({ ...params, scope: this.scope, signal: lifetime.signal });
+    } finally {
+      lifetime.dispose();
+    }
   }
 
   async start(params: VoiceAgentStartParams): Promise<VoiceAgentStartResult> {
@@ -85,7 +98,9 @@ export class DaemonVoiceAgentClient implements VoiceAgentClient {
     const chatModelSelection = params.chatModelSelection ?? (chatModelId
       ? { agentTargetKey: buildAgentUniverseBackendTargetKey(backendId), providerConnectionId: null, modelId: chatModelId }
       : params.chatModelId?.trim() === 'default' ? null : undefined);
-    const commitModelSelection = params.commitModelSelection;
+    const commitModelSelection = params.commitModelSelection ?? (commitModelId && commitModelId !== 'default'
+      ? { agentTargetKey: buildAgentUniverseBackendTargetKey(backendId), providerConnectionId: null, modelId: commitModelId }
+      : undefined);
     const ensureOrStartMethod = requiresProviderSafeExecutionRunStartRpc({ modelSelection: chatModelSelection }, true)
       || requiresProviderSafeModelSelectionRpc(chatModelSelection, commitModelSelection)
       ? SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1
@@ -115,6 +130,7 @@ export class DaemonVoiceAgentClient implements VoiceAgentClient {
       ...(params.sessionConfigOptionOverrides
         ? { sessionConfigOptionOverrides: params.sessionConfigOptionOverrides }
         : {}),
+      ...(params.connectedServices ? { connectedServices: params.connectedServices } : {}),
       ...(params.commitIsolation === true ? { commitIsolation: true } : {}),
       ...(launchProfileId ? { launchProfileId } : {}),
       idleTtlSeconds: params.idleTtlSeconds,
@@ -224,6 +240,7 @@ export class DaemonVoiceAgentClient implements VoiceAgentClient {
     speechSegmentTargetChars?: number;
     resume?: boolean;
     userTranscript?: ExecutionRunUserTranscriptDirective;
+    signal?: AbortSignal;
   }>): Promise<{ streamId: string }> {
     const res: any = await this.sessionRpc({
       sessionId: params.sessionId,
@@ -231,6 +248,7 @@ export class DaemonVoiceAgentClient implements VoiceAgentClient {
         ? SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2
         : SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START,
       timeoutMs: VOICE_AGENT_LIFECYCLE_RPC_TIMEOUT_MS,
+      signal: params.signal,
       payload: {
         runId: params.voiceAgentId,
         message: params.userText,
@@ -270,11 +288,12 @@ export class DaemonVoiceAgentClient implements VoiceAgentClient {
   }
 
   async readTurnStream(
-    params: Readonly<{ sessionId: string; voiceAgentId: string; streamId: string; cursor: number; maxEvents?: number }>,
+    params: Readonly<{ sessionId: string; voiceAgentId: string; streamId: string; cursor: number; maxEvents?: number; signal?: AbortSignal }>,
   ): Promise<{ streamId: string; events: VoiceAgentTurnStreamEvent[]; nextCursor: number; done: boolean }> {
     const res: any = await this.sessionRpc({
       sessionId: params.sessionId,
       method: SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ,
+      signal: params.signal,
       payload: {
         runId: params.voiceAgentId,
         streamId: params.streamId,
@@ -317,10 +336,11 @@ export class DaemonVoiceAgentClient implements VoiceAgentClient {
     return { commitText };
   }
 
-  async stop(params: Readonly<{ sessionId: string; voiceAgentId: string }>): Promise<{ ok: true }> {
+  async stop(params: Readonly<{ sessionId: string; voiceAgentId: string; signal?: AbortSignal }>): Promise<{ ok: true }> {
     const res: any = await this.sessionRpc({
       sessionId: params.sessionId,
       method: SESSION_RPC_METHODS.EXECUTION_RUN_STOP,
+      signal: params.signal,
       payload: { runId: params.voiceAgentId },
     });
     throwIfRpcError(res);

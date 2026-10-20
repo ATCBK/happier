@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import { useOptionalCurrentUiContextReader } from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
+import { readCurrentUiContextActionReader } from '@/components/appShell/currentUiContext/currentUiContextActionRuntime';
 import { useHomeSetupDismissals } from '@/components/hub/layout/useHomeSetupDismissals';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import type { AskHappierContext } from '@/sync/domains/pending/pendingSetupIntent.shared';
@@ -78,21 +78,25 @@ export function useAskHappierOfferChoices(): Readonly<{
  * captured at the press, never read again after the draft opens.
  */
 export function useAskHappierOpener(): (context?: AskHappierContext) => Promise<AskHappierDraftResult> {
-  const currentUiContextReader = useOptionalCurrentUiContextReader();
-  const start = useAskHappierStarter();
+  const { start } = useAskHappierStarter();
   return React.useCallback(async (context?: AskHappierContext) => start({
     lifetime: captureActiveServerAccountScopeLifetime(), context,
-    currentUiContext: currentUiContextReader?.readCurrentUiContext() ?? null,
-  }), [currentUiContextReader, start]);
+    // Sheets and workspace pages may be reparented outside the provider's React tree.
+    // The mounted Action port borrows that same canonical reader without copying it.
+    currentUiContext: readCurrentUiContextActionReader({ surface: 'ui' })?.readCurrentUiContext() ?? null,
+  }), [start]);
 }
 
 /** Captured entry data also serves authenticated resume and the shell palette. */
-export function useAskHappierStarter(): (params: Parameters<typeof startAskHappier>[0]) => Promise<AskHappierDraftResult> {
+export function useAskHappierStarter(): Readonly<{
+  start: (params: Parameters<typeof startAskHappier>[0]) => Promise<AskHappierDraftResult>;
+  ready: boolean;
+}> {
   const scope = useAccountSettingsScope();
-  const { execute } = useMountedActionExecution(scope);
+  const { execute, ready } = useMountedActionExecution(scope);
   const acknowledged = React.useRef<Readonly<{ scope: ServerAccountScope; guideRef: PromptDocArtifactRefV1 }> | null>(null);
-  return React.useCallback(
-    async params => {
+  const start = React.useCallback(
+    async (params: Parameters<typeof startAskHappier>[0]) => {
       const { lifetime } = params;
       const guideRef = lifetime && acknowledged.current && areServerAccountScopesEqual(lifetime.scope, acknowledged.current.scope)
         ? acknowledged.current.guideRef : undefined;
@@ -102,4 +106,5 @@ export function useAskHappierStarter(): (params: Parameters<typeof startAskHappi
     },
     [execute],
   );
+  return { start, ready };
 }

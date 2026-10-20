@@ -4,6 +4,8 @@ import {
     type PluginUiArtifactFileV1,
     type PluginUiArtifactsManifestEntryV2,
 } from '@happier-dev/protocol/plugins/ui';
+import type { PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import type { PluginAccountHostedArtifactPublicationResult } from './accountHostedArtifactPublication';
 import {
     computePluginUiArtifactSha256Digest,
     computePluginUiArtifactFileSetSha256Digest,
@@ -14,7 +16,9 @@ import type {
     PluginAccountAvailabilityArtifactFact,
     PluginAccountAvailabilityArtifactSlot,
     PluginAccountAvailabilityReader,
+    PluginDaemonProjectionArtifactSelection,
 } from './reader';
+export type { PluginDaemonProjectionArtifactSelection } from './reader';
 import {
     areServerAccountScopesEqual,
     type ServerAccountScope,
@@ -56,17 +60,6 @@ export type PluginSelectedArtifactIdentity = Readonly<{
 export type PluginArtifactDaemonTransport = Readonly<{
     machineId: string;
     serverId: string;
-}>;
-
-/**
- * Exact non-portable Artifact selected by one admitted daemon projection.
- * The projection supplies semantic selection/currentness only; every source
- * still has to return bytes matching this selected digest and graph.
- */
-export type PluginDaemonProjectionArtifactSelection = Readonly<{
-    occurrenceId: string;
-    artifact: PluginAccountAvailabilityArtifactFact;
-    isCurrent: () => boolean;
 }>;
 
 /**
@@ -162,7 +155,12 @@ export type PluginSelectedArtifactLease = Readonly<{
 }>;
 
 export type PluginSelectedArtifactLeaseAcquireResult =
-    | Readonly<{ kind: 'available'; lease: PluginSelectedArtifactLease }>
+    | Readonly<{
+        kind: 'available';
+        lease: PluginSelectedArtifactLease;
+        /** Optional hosting never delays use of the verified lease. */
+        accountHosting?: Promise<PluginAccountHostedArtifactPublicationResult>;
+    }>
     | Readonly<{
         kind: 'unavailable';
         code:
@@ -179,8 +177,8 @@ export type PluginSelectedArtifactLeaseAcquireResult =
 const SOURCE_ORDER = Object.freeze([
     'persistentCache',
     'appExact',
-    'daemon',
     'accountHosted',
+    'daemon',
 ] satisfies readonly PluginArtifactSourceKind[]);
 
 function cloneArtifactFact(
@@ -202,29 +200,9 @@ function readSelectedArtifactAdmission(input: Readonly<{
     reader: PluginAccountAvailabilityReader;
     slot: PluginAccountAvailabilityArtifactSlot;
     daemonProjectionSelection?: PluginDaemonProjectionArtifactSelection;
+    executionOrigin?: PluginMachineExecutionOriginV1 | null;
 }>): PluginSelectedArtifactAdmission {
-    const selected = input.daemonProjectionSelection;
-    if (!selected) return input.reader.readCurrentArtifact(input.slot);
-    if (
-        !selected.occurrenceId.trim()
-        || selected.artifact.pluginId !== input.slot.pluginId
-        || selected.artifact.contributionId !== input.slot.contributionId
-        || selected.artifact.tier !== input.slot.tier
-        || selected.artifact.platform !== input.slot.platform
-    ) {
-        return Object.freeze({ kind: 'unavailable', code: 'artifact_not_current' });
-    }
-    try {
-        if (!selected.isCurrent()) {
-            return Object.freeze({ kind: 'unavailable', code: 'artifact_not_current' });
-        }
-    } catch {
-        return Object.freeze({ kind: 'unavailable', code: 'artifact_not_current' });
-    }
-    return Object.freeze({
-        kind: 'available',
-        artifact: selected.artifact,
-    });
+    return input.reader.readCurrentArtifact(input.slot, input.executionOrigin, input.daemonProjectionSelection);
 }
 
 function sameArtifactIdentity(
@@ -882,6 +860,7 @@ export async function acquirePluginSelectedArtifactLease(input: Readonly<{
     signal?: AbortSignal;
     slot: PluginAccountAvailabilityArtifactSlot;
     daemonProjectionSelection?: PluginDaemonProjectionArtifactSelection;
+    executionOrigin?: PluginMachineExecutionOriginV1 | null;
     artifactGraph: unknown;
     sources: readonly PluginArtifactSourceCandidate[];
 }>): Promise<PluginSelectedArtifactLeaseAcquireResult> {

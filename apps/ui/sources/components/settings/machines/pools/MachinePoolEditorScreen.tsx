@@ -44,7 +44,7 @@ import {
     machinePoolSettingsRowTestId,
     resolveMachinePoolDeleteFocusTargetTestId,
 } from '../sections/MachinePoolsSection';
-import { publishMachinePoolDraftTitle } from './machinePoolDraftTitle';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 
 type Draft = Readonly<{ name: string; description: string; members: readonly MachinePoolMemberInputV1[]; tierCount: number }>;
 const draftFromView = (view: MachinePoolViewV1 | null): Draft => {
@@ -148,13 +148,14 @@ function MachinePoolEditorContent(props: MachinePoolEditorContentProps) {
     // The saved values the draft is compared with: Save waits for a change, Create for a name.
     const [baseline, setBaseline] = React.useState<Draft>(() => draftFromView(existing));
     // A new pool's draft row in the Machines collection shows its name as it is typed.
+    const { publish: publishMachinePoolDraftTitle } = useCollectionDraftTitle();
     React.useEffect(() => {
         if (!isNew) return;
         publishMachinePoolDraftTitle(draft.name);
-    }, [draft.name, isNew]);
+    }, [draft.name, isNew, publishMachinePoolDraftTitle]);
     React.useEffect(() => () => {
         if (isNew) publishMachinePoolDraftTitle('');
-    }, [isNew]);
+    }, [isNew, publishMachinePoolDraftTitle]);
     const [saving, setSaving] = React.useState(false); const [error, setError] = React.useState<string | null>(null);
     const [approvalId, setApprovalId] = React.useState<string | null>(null);
     const {

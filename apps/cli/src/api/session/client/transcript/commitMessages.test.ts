@@ -2,8 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { SessionClientTranscriptSendPort } from './sendMessages';
 import { resolveTranscriptSessionBoardItemReferenceV1 } from '@happier-dev/protocol/sessions/board';
+import { API_TOKEN_FULL_GRANT_V1, AccountApiTokensCreateActionOutputV1Schema } from '@happier-dev/protocol';
 import type { TranscriptRawAgentEventV1 } from '@happier-dev/protocol';
 import { commitRuntimeSessionEvent } from '@/agent/runtime/session/transcripts/publishRuntimeSessionEvent';
+import { prepareSessionEventMessageViaPort } from './sendMessages';
+import { SESSION_CAPABILITY_NOTICE_SIDECAR_KEY, type SessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 import type { RuntimeTranscriptProjectionSession } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
 import {
   prepareCommittedAgentMessageViaPort,
@@ -31,6 +34,69 @@ function createTranscriptSendPort(): SessionClientTranscriptSendPort {
 }
 
 describe('commitMessages', () => {
+  it('reuses a capability notice identity across runner retries while keeping distinct failures', () => {
+    const items: SessionCapabilityNoticeV1['items'] = [
+      { kind: 'mcp_server', itemId: 'mcp-1', name: 'Tracker', code: 'mcp_unavailable', detail: 'catalog_unavailable' },
+      { kind: 'skill', itemId: 'skill-1', name: 'Review', code: 'skills_unavailable', detail: 'content_unreadable' },
+    ];
+    const prepare = (noticeItems: SessionCapabilityNoticeV1['items']) => prepareSessionEventMessageViaPort(
+      createTranscriptSendPort(), { type: 'message', message: 'Capability preparation failed',
+        [SESSION_CAPABILITY_NOTICE_SIDECAR_KEY]: { v: 1, items: noticeItems } });
+    const first = prepare(items);
+    const retried = prepare([...items].reverse());
+    expect(retried.localId).toBe(first.localId);
+    expect(prepare([{ ...items[0], detail: 'permission_denied' }, items[1]]).localId).not.toBe(first.localId);
+    expect(prepareSessionEventMessageViaPort(createTranscriptSendPort(), { type: 'message', message: 'Ordinary event' }).localId)
+      .not.toBe(prepareSessionEventMessageViaPort(createTranscriptSendPort(), { type: 'message', message: 'Ordinary event' }).localId);
+  });
+  it.each(['claude', 'codex'] as const)('projects correlated Action results before %s transcript normalization and sealing', async provider => {
+    for (const tool of ['account_api_tokens_create', 'action_execute']) {
+      const port = createTranscriptSendPort();
+      const tokenId = '2c67deea-4706-40fe-8f36-dd0935ca35ca';
+      const bearer = `hap_v1_${tokenId}_${'A'.repeat(43)}`;
+      const raw = AccountApiTokensCreateActionOutputV1Schema.parse({ token: bearer, apiToken: {
+        tokenId, label: 'Requester only', displayPrefix: 'hap_v1_2c67deea', createdAt: '2026-10-16T12:00:00.000Z',
+        lastUsedAt: null, expiresAt: null, hasEncryptionAccess: false, hasUnattendedTeamAccess: false,
+        grant: API_TOKEN_FULL_GRANT_V1, parentTokenId: null, activeChildCount: 0, embedConfig: null,
+      } });
+      const nativeOutput = provider === 'claude'
+        ? { content: [{ type: 'text', text: JSON.stringify(raw) }], tool_use_result: raw }
+        : { content: [{ type: 'text', text: JSON.stringify(raw) }], structuredContent: raw, isError: false };
+      await prepareCommittedAgentMessageViaPort(port, provider, {
+        type: 'tool-call', callId: 'token-call', id: 'call', name: `mcp__happier__${tool}`,
+        input: tool === 'action_execute' ? { actionId: 'account.apiTokens.create', input: {} } : {},
+      }, { localId: 'call' });
+      for (const localId of ['result', 'repeated-result']) {
+        const prepared = await prepareCommittedAgentMessageViaPort(port, provider, {
+          type: 'tool-result', callId: 'token-call', id: localId, output: nativeOutput,
+        }, { localId });
+        expect(JSON.stringify(prepared.payload)).not.toContain(bearer);
+        if (prepared.normalizedBody.type !== 'tool-result') throw new Error('Expected tool result');
+        expect(prepared.normalizedBody.output).toMatchObject({ _raw: expect.anything() });
+        expect(prepared.normalizedBody.output).toMatchObject({ apiToken: raw.apiToken });
+        expect(JSON.stringify(prepared.normalizedBody.output)).not.toContain(bearer);
+      }
+      expect(JSON.stringify(nativeOutput)).toContain(bearer);
+      const foreignPort = createTranscriptSendPort();
+      await prepareCommittedAgentMessageViaPort(foreignPort, provider, {
+        type: 'tool-call', callId: 'foreign-call', id: 'foreign-call', name: `mcp__foreign__${tool}`,
+        input: { actionId: 'account.apiTokens.create', input: {} },
+      }, { localId: 'foreign-call' });
+      const foreign = await prepareCommittedAgentMessageViaPort(foreignPort, provider, {
+        type: 'tool-result', callId: 'foreign-call', id: 'foreign-result', output: { text: 'External tool receipt' },
+      }, { localId: 'foreign-result' });
+      expect(foreign.normalizedBody).toMatchObject({ output: { text: 'External tool receipt' } });
+    }
+  });
+
+  it.each(['goal-changed', 'worker-report'] as const)('keeps the original %s category readable to Home policy without opening its encrypted body', type => {
+    const prepared = prepareSessionEventMessageViaPort({ buildOutboundSessionMessagePayload: () => 'sealed-original' },
+      type === 'goal-changed' ? { type } : { type, summary: 'Private published result' }, 'original-id');
+    expect(prepared.localId).toMatch(new RegExp(`^${type}:`));
+    expect(prepared.payload).toBe('sealed-original');
+    expect(prepared.messageRole).toBe('event');
+  });
+
   it.each([
     { type: 'worker-update', update: { v: 1, workerKind: 'session', workerId: 'worker',
       ownerState: 'settled', wake: 'finished', headline: 'Worker finished', result: 'Done', canInspect: true } },

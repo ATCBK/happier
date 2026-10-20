@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
+import { createThemeFixture, pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
 import { installSessionFilesCommonModuleMocks } from './sessionFilesTestHelpers';
 import { SourceControlOperationsHistorySection } from '@/components/workspaces/scm/SourceControlOperationsHistorySection';
 import { ScmTimelineGutter } from '@/components/workspaces/scm/history/ScmTimelineGutter';
@@ -37,23 +37,7 @@ describe('SourceControlOperationsHistorySection', () => {
         vi.clearAllMocks();
     });
 
-    const theme = {
-        colors: {
-            text: {
-                primary: '#fff',
-                secondary: '#aaa',
-                link: '#09f',
-            },
-            divider: '#333',
-            border: { default: '#333' },
-            surface: {
-                base: '#222',
-                inset: '#111',
-            },
-            surfaceHigh: '#222',
-            input: { background: '#111' },
-        },
-    } as any;
+    const theme = createThemeFixture();
 
     it('shows more commits initially when more can be loaded, then expands when requested', async () => {
 
@@ -74,7 +58,8 @@ describe('SourceControlOperationsHistorySection', () => {
         expect(commitRowsBefore).toHaveLength(12);
 
         // HEAD is now identified by the timeline's emphasized point, not a separate badge.
-        const headPoints = screen.findAllByType(ScmTimelineGutter).filter((point) => point.props.tone === 'head');
+        const headPoints = screen.findAllByType(Reflect.get(ScmTimelineGutter, 'type') ?? ScmTimelineGutter)
+            .filter((point) => point.props.tone === 'head');
         expect(headPoints).toHaveLength(1);
         expect(headPoints[0]?.props.testID).toBe('scm-commit-entry-sha-1-when');
 

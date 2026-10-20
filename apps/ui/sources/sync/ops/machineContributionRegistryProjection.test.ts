@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@happier-dev/protocol';
 
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
@@ -10,6 +10,7 @@ import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionO
 const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
 let network: Awaited<ReturnType<typeof installSessionOpsNetworkBoundary>>;
 let serverAId = '';
+let restoreBrowserRuntime: (() => void) | undefined;
 
 const mountedTarget = {
     pluginId: 'acme.preview',
@@ -62,13 +63,13 @@ function automationEligibleEventsSnapshot() {
     }] as const;
 }
 
+// Install the external boundary before loading the real Sync graph. Module
+// preparation belongs to collection, outside per-case lifecycle deadlines.
+vi.resetModules();
+network = await installSessionOpsNetworkBoundary();
+await import('./machineContributionRegistryProjection');
+
 describe('machine contribution registry projection ops', () => {
-    beforeAll(async () => {
-        // Retire the setup file's cold module graph once, before installing
-        // this describe's external Socket port and loading its runtime.
-        vi.resetModules();
-        network = await installSessionOpsNetworkBoundary();
-    });
     async function configureNetworkForCase() {
         network.resetRequests();
         const homes = await Promise.all([
@@ -111,11 +112,15 @@ describe('machine contribution registry projection ops', () => {
     });
     afterEach(async () => {
         vi.useRealTimers();
-        const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
-        const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
-        await serverScopedRpcSocketPool.stopAll();
-        resetScopedMachineTransportCacheForTests();
-        await network.dispose();
+        try {
+            const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+            const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
+            await serverScopedRpcSocketPool.stopAll();
+            resetScopedMachineTransportCacheForTests();
+        } finally {
+            restoreBrowserRuntime?.();
+            restoreBrowserRuntime = undefined;
+        }
     });
     afterAll(async () => { await network.dispose(); });
 
@@ -170,10 +175,9 @@ describe('machine contribution registry projection ops', () => {
         }));
         if (platform === 'web') {
             // The real capability owner probes a physical browser iframe.
-            vi.stubGlobal('document', {
-                body: { appendChild: vi.fn(), removeChild: vi.fn() },
-                createElement: (tag: string) => ({ nodeName: tag.toUpperCase(), contentWindow: {}, setAttribute: vi.fn() }),
-            });
+            const { installBrowserRuntimeForTests } = await import('@/dev/testkit/harness/browserRuntimeHarness');
+            const browser = await installBrowserRuntimeForTests({ url: 'https://projection.test/' });
+            restoreBrowserRuntime = browser.restore;
         }
         network = await installSessionOpsNetworkBoundary();
         await configureNetworkForCase();
@@ -224,6 +228,59 @@ describe('machine contribution registry projection ops', () => {
         machineRpcWithServerScopeMock.mockRejectedValueOnce(new Error('socket closed'));
         await expect(machineContributionRegistryProjectionDescribe('machine-1', { serverId: 'server-a' }))
             .resolves.toEqual({ supported: false, reason: 'error' });
+    });
+
+    it.each(['machine-row', 'features', 'socket', 'reachability'] as const)('releases shared targeted reads when %s setup never settles, even after abort', async (phase) => {
+        const { machinePluginUiTargetedContributionsRead } = await import('./machineContributionRegistryProjection');
+        const { deleteServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+        const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
+        await resetServerReachabilitySupervisors();
+        deleteServerFeaturesSnapshot({ serverId: serverAId });
+        let setupAttempts = 0;
+        let recovered = false;
+        network.setHttpResponder(async (input) => {
+            const path = new URL(String(input)).pathname;
+            const held = phase === 'reachability' ? path === '/health' || path === '/v1/auth/ping'
+                : path === (phase === 'features' ? '/v1/features' : '/v1/machines/machine-1');
+            if (!held || phase === 'socket') return null;
+            setupAttempts++;
+            // The network boundary deliberately ignores cancellation. The real
+            // setup budget, not a cooperative mock rejection, must release demand.
+            return await new Promise<Response>(() => {});
+        });
+        if (phase === 'socket') network.setSocketConfigurator(({ socket }) => {
+            const connect = socket.connect;
+            socket.connect = vi.fn(() => {
+                setupAttempts++;
+                if (recovered) connect();
+            });
+        });
+        const input = {
+            serverId: serverAId,
+            pluginId: mountedTarget.pluginId,
+            accountLifetime: { scope: { serverId: serverAId, accountId: 'account-a' } },
+        };
+        vi.useFakeTimers();
+        const pending = machinePluginUiTargetedContributionsRead('machine-1', input);
+        const joined = machinePluginUiTargetedContributionsRead('machine-1', input);
+        await vi.waitFor(() => expect(setupAttempts).toBeGreaterThan(0));
+        await vi.advanceTimersByTimeAsync(30_000);
+        await expect(Promise.all([pending, joined])).resolves.toEqual([
+            { supported: false, reason: 'timeout' },
+            { supported: false, reason: 'timeout' },
+        ]);
+
+        recovered = true;
+        network.setHttpResponder(async (request) => new URL(String(request)).pathname === '/v1/account/encryption'
+            ? Response.json({ mode: 'plain', updatedAt: 0 })
+            : null);
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({
+            status: 'current', targetedContributions: targetedSnapshot(), targetedSurfaceMounts: [],
+        });
+        const recovery = machinePluginUiTargetedContributionsRead('machine-1', input);
+        await vi.advanceTimersByTimeAsync(30_000);
+        await expect(recovery)
+            .resolves.toMatchObject({ supported: true, targetedContributions: targetedSnapshot() });
     });
 
     it.each(['targeted', 'schemas', 'resource', 'action', 'settings', 'secret'] as const)(
@@ -325,6 +382,36 @@ describe('machine contribution registry projection ops', () => {
         expect(cancellations).toEqual([[SOCKET_RPC_EVENTS.CANCEL, { requestId: issued.requestId }]]);
     });
 
+    it('retires the last shared reader and permits an immediate retry of unanswered projection and schema requests', async () => {
+        const { SOCKET_RPC_EVENTS } = await import('@happier-dev/protocol/socketRpc');
+        for (const kind of ['describe', 'targeted', 'schemas'] as const) {
+            const answers: Array<(response: unknown) => void> = [];
+            network.setRpcAckResponder(async () => ({ ok: true, result: await new Promise((resolve) => { answers.push(resolve); }) }));
+            const mod = await import('./machineContributionRegistryProjection');
+            const read = (signal: AbortSignal) => kind === 'describe'
+                ? mod.machineContributionRegistryProjectionDescribe('machine-1', { serverId: serverAId, signal })
+                : kind === 'targeted'
+                    ? mod.machinePluginUiTargetedContributionsRead('machine-1', { serverId: serverAId, pluginId: 'acme.preview', signal })
+                    : mod.machinePluginActionSchemasRead('machine-1', { serverId: serverAId, expectedOccurrenceId: 'occurrence-a', qualifiedActionId: 'acme.preview/refresh', signal });
+            const firstOwner = new AbortController();
+            const first = read(firstOwner.signal);
+            await vi.waitFor(() => expect(answers).toHaveLength(1));
+            const issued = network.socketBoundaries.flatMap(({ socket }) => socket.emitWithAck.mock.calls)
+                .filter(([event]) => event === SOCKET_RPC_EVENTS.CALL).at(-1)?.[1];
+            if (!issued || typeof issued !== 'object' || !('requestId' in issued)) throw new Error('Missing issued request identity');
+            firstOwner.abort();
+            await expect(first).resolves.toEqual({ supported: false, reason: 'aborted' });
+            const retryOwner = new AbortController();
+            const retry = read(retryOwner.signal);
+            await vi.waitFor(() => expect(answers).toHaveLength(2));
+            expect(network.socketBoundaries.flatMap(({ socket }) => socket.emit.mock.calls)
+                .filter(([event]) => event === SOCKET_RPC_EVENTS.CANCEL))
+                .toContainEqual([SOCKET_RPC_EVENTS.CANCEL, { requestId: issued.requestId }]);
+            retryOwner.abort();
+            await expect(retry).resolves.toEqual({ supported: false, reason: 'aborted' });
+        }
+    });
+
     it('allows one shared schema reader to cancel while another receives the late answer', async () => {
         let answer!: (response: unknown) => void;
         network.setRpcAckResponder(async () => ({ ok: true, result: await new Promise((resolve) => { answer = resolve; }) }));
@@ -397,6 +484,25 @@ describe('machine contribution registry projection ops', () => {
             method: RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ,
             payload: expect.objectContaining({ machineId: 'machine-1', pluginId: 'acme.preview' }),
         }));
+    });
+
+    it('does not read a mounted target using credentials from a successor Account', async () => {
+        const { machinePluginUiTargetedContributionsRead } = await import('./machineContributionRegistryProjection');
+        const accountLifetime = { scope: { serverId: serverAId, accountId: 'account-a' } };
+        machineRpcWithServerScopeMock.mockResolvedValue({
+            status: 'current',
+            targetedContributions: targetedSnapshot(),
+            targetedSurfaceMounts: [],
+        });
+        const input = { serverId: serverAId, pluginId: mountedTarget.pluginId, accountLifetime };
+        await expect(machinePluginUiTargetedContributionsRead('machine-1', input))
+            .resolves.toMatchObject({ supported: true });
+        expect(network.requests).toHaveLength(1);
+
+        await network.setAccount('https://server-a', 'account-b');
+        await expect(machinePluginUiTargetedContributionsRead('machine-1', input))
+            .resolves.toEqual({ supported: false, reason: 'error' });
+        expect(network.requests).toHaveLength(1);
     });
 
     it('never shows a target slice that answers for another plugin, and reports a daemon unavailable answer', async () => {

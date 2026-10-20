@@ -1,16 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
+import { ApprovalRequestV2Schema, type ApprovalRequest, type ApprovalRequestV2 } from '../approvals/approvalRequestV1.js';
 
 import { createBlockingApprovalCoordinator } from './blockingApprovalCoordinator.js';
+import { computeActionInputApprovalDigestV1 } from './decisionAuthority.js';
+import { TargetActionApprovalRequestV1Schema } from '../approvals/targetActionApprovalRequestV1.js';
 
-function approvalRequest(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
-  return {
+function approvalRequest(overrides: Partial<ApprovalRequestV2> = {}): ApprovalRequestV2 {
+  return ApprovalRequestV2Schema.parse({
     v: 2,
     status: 'open',
     createdAtMs: 1,
     updatedAtMs: 1,
-    createdBy: { surface: 'ui', accountId: 'account-1' },
+    createdBy: { surface: 'system' },
     requestedSurface: 'ui',
     actionId: 'teams.invitations.create',
     actionArgs: {
@@ -23,21 +25,55 @@ function approvalRequest(overrides: Partial<ApprovalRequest> = {}): ApprovalRequ
     },
     summary: 'Create invitation',
     preview: { actionId: 'teams.invitations.create' },
-    origin: {
+    executionOriginV1: {
       v: 1,
       authority: 'present_user',
-      caller: { kind: 'human', surface: 'ui', accountId: 'account-1' },
-      accountId: 'account-1',
+      surface: 'ui',
+      caller: { kind: 'host' },
+      accountId: 'alice',
       serverId: 'server-1',
+      sessionId: 'bot-session',
       actionId: 'teams.invitations.create',
-      actionInputHash: 'input-hash',
+      requestId: 'request-bob',
+      actionRequestAttributionV1: { requestRef: 'request-bob', requester: { serverId: 'server-1', accountId: 'bob' },
+        persona: { serverId: 'server-1', sessionId: 'bot-session' }, origin: null },
     },
     ...overrides,
-  } as ApprovalRequest;
+  });
 }
 
 describe('createBlockingApprovalCoordinator', () => {
   afterEach(() => vi.useRealTimers());
+  it.each(['builtin', 'target'] as const)('keeps $0 requester confirmation waiting for the host decision proof after a durable update', async family => {
+    const coordinator = createBlockingApprovalCoordinator();
+    const base = approvalRequest();
+    const builtin = approvalRequest({ requesterConfirmation: {
+      requestRef: 'request-bob', requesterAccountId: 'bob', executionAccountId: 'alice',
+      personaSessionRef: { serverId: 'server-1', sessionId: 'bot-session' },
+      inputDigest: computeActionInputApprovalDigestV1(base.actionId, base.actionArgs),
+    } });
+    const targetInput = { title: 'Release' };
+    const request = family === 'builtin' ? builtin : TargetActionApprovalRequestV1Schema.parse({
+      v: 1, kind: 'plugin_target_action', status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'agent' }, requestedSurface: 'agent', qualifiedActionId: 'acme.target/actions/run',
+      input: targetInput, secretInputPaths: [], sourceCustody: { kind: 'development', registeredRootId: 'target-root' },
+      policyFingerprint: 'a'.repeat(64), subjectFingerprint: 'b'.repeat(64), summary: 'Release',
+      executionOriginV1: { ...builtin.executionOriginV1, surface: 'agent', actionId: 'action.invoke' },
+      requesterConfirmation: { ...builtin.requesterConfirmation,
+        inputDigest: computeActionInputApprovalDigestV1('action.invoke', { action: { pluginId: 'acme.target', localId: 'run' }, input: targetInput }) },
+    });
+    const pending = coordinator.waitForDecision({ artifactId: 'requester-live', request });
+    const approved = { ...request, status: 'approved' as const, updatedAtMs: 2,
+      decision: { kind: 'approve' as const, decidedAtMs: 2, authority: 'present_user' as const, decidingAccountId: 'bob' } };
+    coordinator.notifyApprovalUpdated({ artifactId: 'requester-live', request: approved });
+    expect(coordinator.getLiveWaiterCount('requester-live')).toBe(1);
+    const requesterApprovalDecision = { sessionId: 'bot-session',
+      actor: { kind: 'accountUser', accountId: 'bob', relationship: 'sharedApprover' },
+      isCurrent: async () => true } as const;
+    await expect(coordinator.resolveBlockingDecision({ artifactId: 'requester-live', request: approved,
+      decision: 'approve', decisionAuthority: 'present_user', requesterApprovalDecision })).resolves.toEqual({ resolved: true });
+    await expect(pending).resolves.toMatchObject({ decision: 'approve', requesterApprovalDecision });
+  });
   it('returns an approval decision only to the exact live waiter', async () => {
     const coordinator = createBlockingApprovalCoordinator();
     const pending = coordinator.waitForDecision({

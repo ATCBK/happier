@@ -26,7 +26,8 @@ import {
     readReservedAccountScopedKvRowInTx,
     type ReservedAccountScopedKvRowDomain,
 } from '@/app/kv/reservedAccountScopedKvRow';
-import { inTx, type Tx } from '@/storage/inTx';
+import { inTx, transactionResult, type Tx } from '@/storage/inTx';
+import { readUserKvMutationConflict } from '@/app/kv/kvMutate';
 
 function domainForKey(key?: ProjectAccountRowKeyV1): ReservedAccountScopedKvRowDomain<ProjectAccountRowContentV1> {
     const parse = (input: unknown, stored: boolean): ProjectAccountRowContentV1 | null => {
@@ -47,7 +48,7 @@ function domainForKey(key?: ProjectAccountRowKeyV1): ReservedAccountScopedKvRowD
 }
 
 /** Publishes only the changed row identity/revision through the incumbent change stream. */
-export async function markProjectAccountRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; key: ProjectAccountRowKeyV1; revision: number }>): Promise<number> {
+export async function markProjectAccountRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; key: ProjectAccountRowKeyV1; revision: number }>): ReturnType<typeof markAccountChanged> {
     return await markAccountChanged(tx, {
         accountId: input.accountId, kind: 'account', entityId: buildProjectAccountRowPhysicalKeyV1(input.key),
         hint: ProjectAccountRowChangeHintV1Schema.parse({ projectAccountRow: true, key: input.key, revision: input.revision }),
@@ -105,7 +106,7 @@ export async function mutateProjectAccountRows(input: Readonly<{ accountId: stri
     try {
         return await inTx(async tx => {
             const request = parsed.data;
-            const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+            const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
             if (fence.status === 'account_not_found') abort({ status: 'account-not-found' });
             if (fence.status === 'account_inconsistent') abort({ status: 'account-inconsistent', reason: fence.reason });
             const mode = fence.account.currentness.encryptionMode;
@@ -153,7 +154,7 @@ export async function mutateProjectAccountRows(input: Readonly<{ accountId: stri
             if (needsGraph && !hasGraph) abort({ status: 'graph-required' });
             for (const expected of request.expectedRefs) checkRevision(expected.key, await read(expected.key), expected.expectedRevision);
             const rows: ProjectAccountRowV1[] = [];
-            let cursor = 0;
+            let resolveCursor = () => 0;
             for (const mutation of request.mutations) {
                 const result = await mutateReservedAccountScopedKvRowInTx(tx, {
                     accountId: input.accountId, physicalKey: buildProjectAccountRowPhysicalKeyV1(mutation.key),
@@ -162,13 +163,18 @@ export async function mutateProjectAccountRows(input: Readonly<{ accountId: stri
                 });
                 if (result.status === 'conflict') abort({ ...result, key: mutation.key });
                 if (result.status !== 'updated') abort(result);
-                cursor = result.cursor;
+                resolveCursor = () => result.resolveResult().cursor;
                 rows.push({ key: mutation.key, revision: result.revision, content: mutation.content });
             }
-            return { status: 'updated' as const, rows, cursor };
+            return transactionResult(() => ({ status: 'updated' as const, rows, cursor: resolveCursor() }));
         });
     } catch (error) {
         if (error instanceof ProjectAccountRowTransactionAbort) return error.result;
+        const conflict = await readUserKvMutationConflict(error);
+        if (conflict) {
+            const key = parseProjectAccountRowPhysicalKeyV1(conflict.key);
+            if (key) return { status: 'conflict', key, revision: conflict.version };
+        }
         throw error;
     }
 }

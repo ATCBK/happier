@@ -41,8 +41,8 @@ export type GithubRowFactsInputV1 = Readonly<{
   labelNames: readonly string[];
   /** `null` when unresolved: REST cannot always answer this (see `reviews.ts`). */
   reviewDecision: GithubReviewDecisionV1 | null;
-  /** `null` when checks are unavailable, unreadable, or not configured. */
-  checks: GithubChecksRowStateV1 | null;
+  /** `null` when no row verdict is reported; failed reads use `unavailable`. */
+  checks: GithubChecksRowStateV1 | 'unavailable' | null;
   mergeability: 'conflicts' | 'blocked' | 'computing' | null;
   /**
    * `'detailOnly'` on a scan row — the cost of the diff stat is a large fraction of
@@ -56,12 +56,19 @@ export type GithubRowFactsProjectionV1 = Readonly<{
   truncated: boolean;
 }>;
 
-/** Bounding order when the published fact count cannot hold the whole table. */
+/** Keep actionable facts ahead of labels, then other supplementary facts. */
 const IMPORTANCE_RANK: Readonly<Record<GithubTriageRowFactImportanceV1, number>> = Object.freeze({
   primary: 0,
   secondary: 1,
-  supplementary: 2,
+  supplementary: 3,
 });
+
+function rowFactPriority(fact: GithubTriageRowFactV1): number {
+  // These values already travel as snapshot/observation metadata, unlike labels.
+  if (fact.id === 'github/author' || fact.id === 'github/updated') return 4;
+  if (fact.id === 'github/labels') return 2;
+  return IMPORTANCE_RANK[fact.importance];
+}
 
 /** Label names joined by `, `, first three, then `+N`. */
 export function formatGithubLabelSummary(labelNames: readonly string[]): string {
@@ -84,8 +91,10 @@ function reviewDecisionFact(decision: GithubReviewDecisionV1): GithubTriageRowFa
   });
 }
 
-function checksFact(state: GithubChecksRowStateV1): GithubTriageRowFactV1 {
-  const value = state.kind === 'failing'
+function checksFact(state: NonNullable<GithubRowFactsInputV1['checks']>): GithubTriageRowFactV1 {
+  const value = state === 'unavailable'
+    ? ({ kind: 'status', label: 'Checks unavailable', tone: 'warning' } as const)
+    : state.kind === 'failing'
     ? ({ kind: 'status', label: `${state.failingCount} failing`, tone: 'danger' } as const)
     : state.kind === 'running'
       ? ({ kind: 'status', label: 'Running', tone: 'info' } as const)
@@ -112,7 +121,7 @@ function checksFact(state: GithubChecksRowStateV1): GithubTriageRowFactV1 {
  */
 export function buildGithubStateRowFactsV1(input: Readonly<{
   reviewDecision: GithubReviewDecisionV1 | null;
-  checks: GithubChecksRowStateV1 | null;
+  checks: GithubRowFactsInputV1['checks'];
 }>): readonly GithubTriageRowFactV1[] {
   const facts: GithubTriageRowFactV1[] = [];
   if (input.reviewDecision !== null) facts.push(reviewDecisionFact(input.reviewDecision));
@@ -224,10 +233,12 @@ export function buildGithubRowFacts(input: GithubRowFactsInputV1): GithubRowFact
   if (facts.length > MAX_TRIAGE_ROW_FACTS_V1) {
     // The published fact count is small, so WHICH facts survive is the whole product
     // decision. Emission order is the table's reading order, not an importance order,
-    // so a positional slice would drop a pull request's review decision and checks —
-    // the two facts a reviewer actually triages on — to keep its comment count.
+    // so a positional slice would drop a pull request's review decision and checks.
+    // Labels are the issue's Signal: retain them before author/update facts whose
+    // values already travel as snapshot/observation metadata. Their presentation
+    // importance remains supplementary; selection must not erase the only signal.
     const ranked = [...facts].sort((left, right) =>
-      IMPORTANCE_RANK[left.importance] - IMPORTANCE_RANK[right.importance]);
+      rowFactPriority(left) - rowFactPriority(right));
     return Object.freeze({
       rowFacts: Object.freeze(ranked.slice(0, MAX_TRIAGE_ROW_FACTS_V1)),
       truncated: true,

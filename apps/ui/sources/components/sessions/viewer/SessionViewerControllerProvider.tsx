@@ -11,6 +11,7 @@ import {
   SessionViewerControllerContext,
   SessionViewerReadingInsetContext,
   type SessionViewerController,
+  type SessionViewerReadingInset,
   type SessionViewerSourceFacts,
 } from './SessionViewerController';
 import {
@@ -43,6 +44,8 @@ export function SessionViewerControllerProvider(
        * phone the Chat reading flow it docks into. Called when the presentation asks to reveal it.
        */
       openDocked: (source: SessionViewerSource) => void;
+      /** Releases what `openDocked` revealed when the frame floats again, so the transcript reads underneath. */
+      closeDocked?: (source: SessionViewerSource) => void;
     }>
   >,
 ): React.ReactElement {
@@ -54,7 +57,10 @@ export function SessionViewerControllerProvider(
   );
   const [presence] = React.useState(createSessionViewerPresenceStore);
   const [readingInset, setReadingInsetState] =
-    React.useState<Readonly<{ left: number; right: number }>>(NO_SESSION_VIEWER_INSET);
+    React.useState<SessionViewerReadingInset>(NO_SESSION_VIEWER_INSET);
+  const [floatFits, setFloatFits] = React.useState(false);
+  const floatFitsRef = React.useRef(floatFits);
+  floatFitsRef.current = floatFits;
   const inputRef = React.useRef(props);
   inputRef.current = props;
 
@@ -67,7 +73,9 @@ export function SessionViewerControllerProvider(
     return () => lifetime.abort();
   }, [semanticScope]);
   const applyPresentation = React.useCallback((intent: SessionViewerLocalIntent) => {
-    const { phone, canPresentSource, openDocked } = inputRef.current;
+    const { phone, canPresentSource, openDocked, closeDocked } = inputRef.current;
+    // Floating again is the placement owner's call: only while the frame fits where it would rest.
+    if (intent.kind === 'viewer.float' && !floatFitsRef.current) return { status: 'unavailable' } as const;
     const next = resolveSessionViewerPresentation(readState(), intent, {
       phone,
       canPresentSource,
@@ -76,6 +84,9 @@ export function SessionViewerControllerProvider(
       setState(next.state);
       if (!phone && intent.kind === 'viewer.dock' && next.state.source)
         openDocked(next.state.source);
+      // A phone's dock is Chat's reading flow: there is no pane to release.
+      if (!phone && intent.kind === 'viewer.float' && next.state.source)
+        closeDocked?.(next.state.source);
     } else if (
       next.result.status === 'unchanged' &&
       !phone &&
@@ -146,6 +157,7 @@ export function SessionViewerControllerProvider(
         if (
           previous &&
           previous.machineName === next.machineName &&
+          previous.targetTitle === next.targetTitle &&
           previous.personInControl === next.personInControl &&
           previous.watching === next.watching &&
           previous.aspectRatio === next.aspectRatio &&
@@ -161,9 +173,13 @@ export function SessionViewerControllerProvider(
     [],
   );
   const setReadingInset = React.useCallback(
-    (inset: Readonly<{ left: number; right: number }>) => {
+    (inset: SessionViewerReadingInset) => {
       setReadingInsetState((current) =>
-        current.left === inset.left && current.right === inset.right
+        current.left === inset.left &&
+        current.right === inset.right &&
+        current.centred.left === inset.centred.left &&
+        current.centred.right === inset.centred.right &&
+        current.centred.bottom === inset.centred.bottom
           ? current
           : inset,
       );
@@ -189,8 +205,11 @@ export function SessionViewerControllerProvider(
       publishFacts,
       presence,
       setReadingInset,
+      floatFits,
+      setFloatFits,
     }),
     [
+      floatFits,
       apply,
       requestSemantic,
       canPresentSource,

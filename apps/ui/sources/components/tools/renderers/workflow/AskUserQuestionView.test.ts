@@ -22,7 +22,10 @@ import { createMachineFixture, createRootLayoutFeaturesResponse } from '@/dev/te
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { PluginProjectionV2Schema, DaemonContributionRegistryProjectionDescribeResponseSchema, DaemonPluginSettingsGetRequestSchema, DaemonPluginSettingsSetRequestSchema, DaemonPluginSettingsGetResponseSchema, DaemonPluginSettingsSetResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { PluginAccountSettingsMutationRequestV1Schema, PluginAccountSettingsReadResponseV1Schema, PluginAccountSettingsMutationResponseV1Schema } from '@happier-dev/protocol/plugins/settings/accountSettingsV1';
+import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionOutputV1Schema,
+    PluginAvailabilityIntentsListActionOutputV1Schema, PluginAvailabilityMaterializationsReadActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { HappyError } from '@/utils/errors/errors';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 
 
@@ -31,6 +34,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const sessionDeny = vi.fn();
 const sendMessage = vi.fn();
 const sessionAllowWithAnswers = vi.fn();
+const readRequestOutcome = vi.fn<(requestId: string) => Promise<'pending' | 'settled'>>();
 const pluginSettingsRecords = new Map<string, { revision: number; values: Record<string, unknown> }>();
 const daemonSettingRequests: unknown[] = [];
 const daemonProjectionRequests: unknown[] = [];
@@ -99,6 +103,7 @@ async function renderScreen(element: React.ReactElement) {
             answerUserAction: (params) => sessionAllowWithAnswers(params),
             respondToPermission: (params) => sessionDeny(params),
             abort: async () => {}, submitMessage: (params) => sendMessage(params),
+            readRequestOutcome: (requestId) => readRequestOutcome(requestId),
         },
         navigate: () => {},
     });
@@ -246,6 +251,16 @@ describe('AskUserQuestionView', () => {
             ...overrides,
         });
     }
+
+    it('names the authenticated person in the completed question answer byline', async () => {
+        const viewer = storage.getState().profileScope;
+        expect(viewer?.accountId).toBeTruthy();
+        const tool = makeTool({ state: 'completed', result: { status: 'answered', answers: { 'Pick one': ['B'] } },
+            permission: { id: 'toolu_1', status: 'approved', answeredBy: { kind: 'person', accountId: viewer!.accountId } } });
+        const screen = await renderScreen(React.createElement(AskUserQuestionView, makeToolViewProps(tool, { sessionId: 's1' })));
+        expect(screen.getTextContent()).toContain('workflows.run.answeredByYou');
+        expect(screen.getTextContent()).toContain('B');
+    });
 
     it('shows serialized structured answers on the completed question card', async () => {
         const tool = makeTool({
@@ -419,6 +434,7 @@ describe('AskUserQuestionView', () => {
         sessionDeny.mockReset();
         sendMessage.mockReset();
         sessionAllowWithAnswers.mockReset();
+        readRequestOutcome.mockReset();
         daemonSessionAttachSupported = true;
         supportsAnswersInPermission = true;
         activeAskUserQuestionRequestId = 'toolu_1';
@@ -449,6 +465,74 @@ describe('AskUserQuestionView', () => {
         const screen = await renderView(makeTool(), { serverId: 'server-b', session });
         await chooseOptionAndSubmit(screen, 'A');
         expect(sessionAllowWithAnswers).toHaveBeenCalledWith({ id: 'toolu_1', answers: { 'Pick one': ['A'] } });
+    });
+
+    describe('when the result of an answer is lost (RPC_OUTCOME_UNKNOWN)', () => {
+        const unknownOutcome = () => new HappyError('The outcome is unknown', false, { code: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+        let requestId = '';
+        let cases = 0;
+
+        // The unconfirmed set outlives a render, so each case answers its own request.
+        async function renderUnknownQuestion() {
+            requestId = `toolu_unknown_outcome_${++cases}`;
+            activeAskUserQuestionRequestId = requestId;
+            sessionAllowWithAnswers.mockRejectedValueOnce(unknownOutcome());
+            const screen = await renderView(makeTool({ permission: { id: requestId, status: 'pending' } }));
+            await chooseOptionAndSubmit(screen, 'A');
+            return screen;
+        }
+        const notices = (screen: Screen) => screen.findAllByProps({ testID: 'ask-user-question.answer-unconfirmed' });
+        const submitDisabled = (screen: Screen) => screen.findByProps({ testID: 'ask-user-question.submit' }).props.accessibilityState.disabled;
+
+        it('withholds the form instead of inviting a resend, with the notice rather than an error alert', async () => {
+            const screen = await renderUnknownQuestion();
+
+            expectNoAlert(screen);
+            expect(notices(screen)).toHaveLength(1);
+            expect(submitDisabled(screen)).toBe(true);
+            expect(screen.findByProps({ testID: 'ask-user-question.option:0:1' }).props.accessibilityState.disabled).toBe(true);
+
+            await pressPressableByLabel(screen, 'tools.askUserQuestion.submit');
+            expect(sessionAllowWithAnswers).toHaveBeenCalledTimes(1);
+        });
+
+        it('checks the exact request and releases the form only when the re-read says it is still waiting', async () => {
+            const screen = await renderUnknownQuestion();
+            readRequestOutcome.mockRejectedValueOnce(new Error('The Session does not say whether the request is still waiting'));
+
+            await pressTestInstanceAsync(screen.findByProps({ testID: 'ask-user-question.check-again' }), 'check again (unreadable)');
+            expect(readRequestOutcome).toHaveBeenCalledExactlyOnceWith(requestId);
+            expect(notices(screen)).toHaveLength(1);
+            expect(screen.getTextContent()).toContain('errors.permissionCheckAgainFailed');
+            expect(submitDisabled(screen)).toBe(true);
+
+            readRequestOutcome.mockResolvedValueOnce('pending');
+            await pressTestInstanceAsync(screen.findByProps({ testID: 'ask-user-question.check-again' }), 'check again');
+            expect(notices(screen)).toHaveLength(0);
+            expect(submitDisabled(screen)).toBe(false);
+
+            sessionAllowWithAnswers.mockResolvedValueOnce(undefined);
+            await pressPressableByLabel(screen, 'tools.askUserQuestion.submit');
+            expect(sessionAllowWithAnswers).toHaveBeenCalledTimes(2);
+        });
+    });
+
+    describe('when Check again finds the question already settled', () => {
+        it('keeps the form withheld until the card itself leaves the waiting state', async () => {
+            const requestId = 'toolu_unknown_outcome_settled';
+            activeAskUserQuestionRequestId = requestId;
+            sessionAllowWithAnswers.mockRejectedValueOnce(new HappyError('The outcome is unknown', false, { code: RPC_ERROR_CODES.OUTCOME_UNKNOWN }));
+            const screen = await renderView(makeTool({ permission: { id: requestId, status: 'pending' } }));
+            await chooseOptionAndSubmit(screen, 'A');
+
+            readRequestOutcome.mockResolvedValueOnce('settled');
+            await pressTestInstanceAsync(screen.findByProps({ testID: 'ask-user-question.check-again' }), 'check again');
+
+            expect(readRequestOutcome).toHaveBeenCalledExactlyOnceWith(requestId);
+            expect(screen.findByProps({ testID: 'ask-user-question.submit' }).props.accessibilityState.disabled).toBe(true);
+            await pressPressableByLabel(screen, 'tools.askUserQuestion.submit');
+            expect(sessionAllowWithAnswers).toHaveBeenCalledTimes(1);
+        });
     });
 
     it('exposes question choices and submit progress with their current accessible state', async () => {
@@ -898,6 +982,37 @@ describe('AskUserQuestionView', () => {
 
     it('persists an external Agent choice through its own qualified settings declaration', async () => {
         publishReviewAskUserQuestionDescriptor(['always_include']);
+        // Account Settings admission reads the selected release declaration;
+        // a daemon's current Agent descriptor alone cannot authorize that write.
+        const intentRead = PluginAvailabilityIntentReadActionOutputV1Schema.parse({
+            availabilityCursor: 1, hostingCapability: { enabled: false },
+            intent: { pluginId: 'acme.review', desiredVersion: '1.0.0', enabled: true,
+                offlineUiHosting: 'disabled', writableCollections: [], revision: '1' },
+            release: { ref: { pluginId: 'acme.review', version: '1.0.0' }, archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+                normalizedManifest: { schemaVersion: 2, id: 'acme.review', version: '1.0.0', displayName: 'Review',
+                    engines: { happier: '^1.0.0' }, runtime: { apiVersion: 1 }, contributes: { settings: [{
+                        id: 'settings', title: 'Remembered choices', scope: 'account',
+                        target: { kind: 'agent', agent: { pluginId: 'acme.review', localId: 'review' } },
+                        fields: [{ id: 'reviewScopePreference', title: 'Review scope',
+                            schema: { type: 'string', enum: ['ask_every_time', 'always_include'] } }],
+                    }] } }, collectionContracts: [], uiSlots: [],
+                packageAssetArchive: { archiveDigestSha256: `sha256:${'b'.repeat(64)}`, resources: [] } },
+            packageAssets: [], uiArtifacts: [],
+        });
+        homes.answer(account.serverId, `POST ${PluginAvailabilityActionHttpPathsV1['account.plugins.availability.materializations.read']}`, {
+            body: PluginAvailabilityMaterializationsReadActionOutputV1Schema.parse({ availabilityCursor: 1, snapshots: [] }),
+        });
+        homes.answer(account.serverId, `POST ${PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list']}`, {
+            body: PluginAvailabilityIntentsListActionOutputV1Schema.parse({ availabilityCursor: 1, pluginIds: ['acme.review'],
+                intentReads: [{ pluginId: 'acme.review', response: intentRead }], failedPluginIds: [], nextCursor: null }),
+        });
+        const [{ createActivePluginAccountAvailabilityProjectionHydrator }, { applyPluginAccountAvailabilityProjectionRefresh }] = await Promise.all([
+            import('@/sync/api/plugins/availability/pluginAvailabilityProjection'),
+            import('@/sync/domains/plugins/availability/projection'),
+        ]);
+        const availability = await createActivePluginAccountAvailabilityProjectionHydrator().refresh();
+        if (!availability) throw new Error('Question Account Availability scope retired');
+        applyPluginAccountAvailabilityProjectionRefresh(availability);
         askUserQuestionSessionState.current = {
             serverId: account.serverId,
             metadataLayoutVersion: 1,

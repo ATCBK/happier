@@ -190,10 +190,22 @@ describe('the one Voice recovery dispatch every placement fires', () => {
     expect(navigate).toHaveBeenCalledWith(route);
   });
 
-  it('retains the existing Connected Services list for Connect recovery without selected context', async () => {
+  it('opens the selected Agent settings for inherited authentication so the user can sign in or choose its default account', async () => {
     const navigate = vi.fn();
     (await dispatch('connect_agent', navigate))();
-    expect(navigate).toHaveBeenCalledWith('/settings/connected-services');
+    expect(navigate).toHaveBeenCalledWith({
+      pathname: '/(app)/settings/agents/[agentId]',
+      params: {
+        agentId: 'codex', pluginId: 'acme.installed-agent', machineId: 'm2',
+        serverIdentityId: 'server-identity-1',
+      },
+    });
+  });
+
+  it('opens Agent settings for Connect recovery without an exact runtime target', async () => {
+    const navigate = vi.fn();
+    (await dispatch('connect_agent', navigate, { runtimeRecoveryTarget: null }))();
+    expect(navigate).toHaveBeenCalledWith('/settings/agents');
   });
 
   it('opens the canonical Voice binding setup when provider settings must be repaired', async () => {
@@ -255,14 +267,14 @@ describe('the one Voice recovery dispatch every placement fires', () => {
 
   it('retries through the canonical voice session manager', async () => {
     await admitFailedConversation('s1');
-    (await dispatch('retry'))();
+    await (await dispatch('retry'))();
     await vi.waitFor(() => expect(lifecycle.getSnapshot()).toMatchObject({ sessionId: 's1', status: 'connected', mode: 'idle', canStop: true }));
     expect(lifecycle.getAttemptTargetSessionAddress()).toEqual({ serverId: account.home.id, sessionId: 's1' });
   });
 
   it('retries the conversation the surface named rather than falling back to a global start', async () => {
     await admitFailedConversation('named-session');
-    (await dispatch('retry', vi.fn(), {
+    await (await dispatch('retry', vi.fn(), {
       attemptSessionId: null,
       startSessionId: 'named-session',
       globalStartAuthorized: false,

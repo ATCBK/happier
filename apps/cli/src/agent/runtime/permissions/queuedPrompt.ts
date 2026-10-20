@@ -8,9 +8,13 @@ import type {
   SessionMessageProvenance,
 } from '@happier-dev/protocol';
 import type { HappierStructuredInputV1 } from '@happier-dev/protocol/runtime';
-import type { SessionFollowReconciledContext } from '@/agent/runtime/session/follow/sessionFollowContextReconciler';
+import type { SessionFollowQueuedDelivery, SessionFollowReconciledContext } from '@/agent/runtime/session/follow/sessionFollowContextReconciler';
 import type { WorkflowInvocationIdentity } from '@/agent/runtime/session/contextOnly/hostContextOnlyInput';
 import type { WorkflowStepWithdrawal } from '@/agent/runtime/session/contextOnly/workflowStepWithdrawal';
+import type { ActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import type { SessionInputReturnedAnswerV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import type { DiscussionAddressingV1 } from '@happier-dev/protocol/discussions/participants';
 
 export type HostContextOnlyInput = (
   | Readonly<{ kind: 'session_follow'; prepared: SessionFollowReconciledContext }>
@@ -30,6 +34,8 @@ export type HostContextOnlyInput = (
 ) & Readonly<{ commitHostEvent: (workerEvents?: readonly Readonly<{ localId: string; update: WorkerUpdateV1 }>[]) => Promise<void> }>;
 
 export type PermissionModeQueuedPromptMode = Readonly<{
+  discussionAddressing?: DiscussionAddressingV1;
+  actionRequestAttributionV1?: ActionRequestAttributionV1;
   callerInputConstraints?: CallerInputConstraintsV1;
   permissionMode: PermissionMode;
   appendSystemPrompt?: string | null;
@@ -42,9 +48,12 @@ export type PermissionModeQueuedPromptMode = Readonly<{
   inputContextBlock?: string;
   /** Protected admission provenance retained as data for host turn stamping. */
   inputProvenance?: SessionMessageProvenance;
+  returnedAnswer?: SessionInputReturnedAnswerV1;
 }>;
 
 export type PermissionModeQueuedPrompt = Readonly<{
+  discussionAddressing?: DiscussionAddressingV1;
+  actionRequestAttributionV1?: ActionRequestAttributionV1;
   text: string;
   localId: string | null;
   localIds?: readonly string[];
@@ -59,6 +68,14 @@ export type PermissionModeQueuedPrompt = Readonly<{
   /** Host-rendered descriptive block applied only at the provider boundary. */
   inputContextBlock?: string;
   inputProvenance?: SessionMessageProvenance;
+  returnedAnswer?: SessionInputReturnedAnswerV1;
+  /** Retained information joins this real input without adopting its authority. */
+  returnedAnswerContext?: readonly Readonly<{
+    reply: SessionInputReturnedAnswerV1; text: string;
+    localId: string | null; userMessageSeq: number | null;
+  }>[];
+  /** Public receipt-bound originals retain their own identity when joining another turn. */
+  followDeliveries?: readonly SessionFollowQueuedDelivery[];
   /** Trusted host-only turn input. It is never inserted into MessageQueue/Pending/transcript. */
   hostContextOnly?: HostContextOnlyInput;
 }>;
@@ -116,6 +133,14 @@ export function combinePermissionModeQueuedPrompts(
     throw new Error('Cannot combine multiple structured prompts');
   }
   const [first] = prompts;
+  if (prompts.some(prompt => !sameStrictJsonValue(prompt.discussionAddressing ?? null, first?.discussionAddressing ?? null))) {
+    throw new Error('Cannot combine distinct Discussion question cutoffs');
+  }
+  if (prompts.some(prompt => !sameStrictJsonValue(
+    prompt.actionRequestAttributionV1 ?? null, first?.actionRequestAttributionV1 ?? null,
+  ))) {
+    throw new Error('Cannot combine distinct admitted request causes');
+  }
   const localIds: string[] = [];
   const userMessageSeqs: number[] = [];
   for (const prompt of prompts) {
@@ -128,8 +153,10 @@ export function combinePermissionModeQueuedPrompts(
   }
   const maxUserMessageSeq = userMessageSeqs.length === 0 ? null : Math.max(...userMessageSeqs);
   return {
+    ...(first?.discussionAddressing ? { discussionAddressing: first.discussionAddressing } : {}),
     text: prompts.map((prompt) => prompt.text).join('\n'),
     localId: first?.localId ?? null,
+    ...(first?.actionRequestAttributionV1 ? { actionRequestAttributionV1: first.actionRequestAttributionV1 } : {}),
     ...(first?.structuredInput ? { structuredInput: first.structuredInput } : {}),
     ...(first?.sessionMedia ? { sessionMedia: first.sessionMedia } : {}),
     ...(localIds.length === 0 ? {} : { localIds }),
@@ -142,5 +169,38 @@ export function combinePermissionModeQueuedPrompts(
       ? { inputContextBlock: first.inputContextBlock }
       : {}),
     ...(first?.inputProvenance ? { inputProvenance: first.inputProvenance } : {}),
+    ...(first?.returnedAnswer ? { returnedAnswer: first.returnedAnswer } : {}),
+    ...(prompts.some(prompt => prompt.returnedAnswerContext?.length)
+      ? { returnedAnswerContext: prompts.flatMap(prompt => prompt.returnedAnswerContext ?? []) } : {}),
+    ...(prompts.some(prompt => prompt.followDeliveries?.length)
+      ? { followDeliveries: prompts.flatMap(prompt => prompt.followDeliveries ?? []) } : {}),
   };
+}
+
+export function isNextTurnContextQueuedPrompt(prompt: PermissionModeQueuedPrompt): boolean {
+  return prompt.returnedAnswer?.delivery === 'next_turn'
+    || Boolean(prompt.followDeliveries?.length && prompt.followDeliveries.every(({ delivery }) =>
+      delivery.delivery === 'next_turn'));
+}
+
+export function appendNextTurnContextToQueuedPrompt(
+  prompt: PermissionModeQueuedPrompt,
+  context: readonly PermissionModeQueuedPrompt[],
+): PermissionModeQueuedPrompt {
+  const localIds = normalizePermissionModeQueuedPromptLocalIds(prompt);
+  const userMessageSeqs = normalizePermissionModeQueuedPromptUserMessageSeqs(prompt);
+  const answers = [...prompt.returnedAnswerContext ?? []];
+  const followDeliveries = [...prompt.followDeliveries ?? []];
+  for (const item of context) {
+    if (!isNextTurnContextQueuedPrompt(item)) throw new Error('Only protected next-turn information can join an input');
+    if (item.returnedAnswer) answers.push({ reply: item.returnedAnswer, text: item.text,
+      localId: item.localId, userMessageSeq: item.userMessageSeq ?? null });
+    followDeliveries.push(...item.followDeliveries ?? []);
+    // Retained information is represented context, not another native primary
+    // input or permission witness. Its exact identity travels with that context.
+  }
+  return { ...prompt, localIds, ...(userMessageSeqs.length ? { userMessageSeqs,
+    userMessageSeq: Math.max(...userMessageSeqs) } : {}),
+    ...(answers.length ? { returnedAnswerContext: answers } : {}),
+    ...(followDeliveries.length ? { followDeliveries } : {}) };
 }

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useIsFocused, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { createProviderErrorV1, type ProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import type { ModelVisibilityRefV1 } from '@happier-dev/protocol/providers/model-selection';
 import type { ProviderModelPickerSourceKind } from '@happier-dev/protocol/providers/catalog/modelPickerVisibility';
@@ -16,10 +16,9 @@ import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layou
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { Modal } from '@/modal';
 import { useAgentModelsProjection } from './useAgentModelsProjection';
 import { useProviderModelLoadAction } from '@/providers/hooks/useProviderModelLoadAction';
 import { useProviderModelPickerVisibility } from '@/providers/hooks/useProviderModelPickerVisibility';
@@ -30,7 +29,6 @@ import {
     type ProviderModelManagerSourceGrouping,
 } from '@/providers/models/ProviderModelManager';
 import { useProviderSettingsForServer } from '@/providers/hooks/useProviderSettings';
-import { applyProviderModelBulkAction } from '@/providers/models/applyProviderModelBulkAction';
 import { providerErrorFromRpcFailure } from '@/providers/actions/client';
 import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
 import { readProviderConnectionPickerKind } from '@/providers/catalog/accountProviderDeclarations';
@@ -55,6 +53,7 @@ import { isMachineAdministrationExecutionTargetCurrent } from '@/sync/domains/ma
 import { t } from '@/text';
 import { resolveAgentModelsSettingsAccess } from './resolveAgentModelsSettingsAccess';
 import { resolveAgentNativeModels, summarizeAgentModelVisibility } from './agentModelVisibility';
+import { useMachineAgentModels } from '@/components/sessions/actions/useMachineAgentModels';
 
 function AgentSourceVisibility(props: Readonly<{
     connectionId: string;
@@ -91,6 +90,7 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
     runtimeAgentId: string | null;
 }>) {
     const router = useRouter();
+    const focused = useIsFocused();
     const enabled = useFeatureEnabled('providers');
     const administration = useAgentAdministrationCatalog({ loadProjection: false });
     const administrationTargetSelection = administration.targetSelection;
@@ -118,6 +118,7 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
         };
     }, [administrationTargetSelection, executionTarget]);
     const projection = useAgentModelsProjection({
+        active: focused,
         enabled, machineId, serverId, agentTargetKey: props.agentTargetKey, connectionIds: modelConnectionIds,
     });
     const settingsAccess = React.useMemo(
@@ -161,11 +162,18 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
     }> | null>(null);
     const retireOperationError = React.useCallback(() => setOperationError(null), []);
     const accountLifetime = useRetireProviderStateOnAccountChange(retireOperationError);
+    const observedNativeModels = useMachineAgentModels({
+        agentTargetKey: props.agentTargetKey,
+        machineId,
+        serverId,
+        enabled: focused && executionTarget !== null,
+    });
     const nativeModels = React.useMemo(() => resolveAgentNativeModels({
         runtimeAgentId: props.runtimeAgentId,
         agentTargetKey: props.agentTargetKey,
         modelVisibilityByRef,
-    }), [props.agentTargetKey, props.runtimeAgentId, modelVisibilityByRef]);
+        ...(observedNativeModels ? { observedModels: observedNativeModels } : {}),
+    }), [props.agentTargetKey, props.runtimeAgentId, modelVisibilityByRef, observedNativeModels]);
 
     const showError = React.useCallback((
         error: ProviderErrorV1,
@@ -255,6 +263,7 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
         return group?.rows.some((row) => row.ref.modelId === modelId && row.loadState === 'loaded') === true;
     }, [projection.refreshWithResult, resolveCurrentExecutionTarget]);
     const modelLoad = useProviderModelLoadAction({
+        active: focused,
         machineId,
         serverId,
         refresh: refreshLoadedModel,
@@ -337,22 +346,9 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
         selected?: ModelVisibilityRefV1,
     ) => {
         if (!accountLifetime?.isCurrent() || !settingsAccess.writable) return;
-        await applyProviderModelBulkAction({
-            action,
-            changes: bulkChanges(action, selected),
-            confirm: async () => accountLifetime.isCurrent() && await Modal.confirm(
-                action === 'hideAll'
-                    ? t('settingsProviders.models.hideAll')
-                    : t('settingsProviders.models.showOnly'),
-                action === 'hideAll'
-                    ? t('settingsProviders.models.hideAllConfirmation')
-                    : t('settingsProviders.models.showOnlyConfirmation'),
-                { confirmText: t('common.continue'), ...(action === 'hideAll' ? { destructive: true } : {}) },
-            ) && accountLifetime.isCurrent(),
-            apply: async (changes) => {
-                await mutate({ action: 'bulkVisibility', ...(machineId ? { machineId } : {}), changes: [...changes] });
-            },
-        });
+        const changes = bulkChanges(action, selected);
+        if (changes.length === 0) return;
+        await mutate({ action: 'bulkVisibility', ...(machineId ? { machineId } : {}), changes: [...changes] });
     }, [accountLifetime, bulkChanges, machineId, mutate, settingsAccess.writable]);
 
     // These are Account settings: the page names no machine. Bulk operations are the one overflow;
@@ -405,7 +401,7 @@ export const AgentModelsScreen = React.memo(function AgentModelsScreen(props: Re
         }
         return latest > 0 ? latest : null;
     }, [managementGroups]);
-    const machineName = executionTarget ? getMachineDisplayName(executionTarget.machine) : null;
+    const machineName = executionTarget ? getMachineSentenceName(executionTarget.machine) : null;
     // Where the lists were read: the one place a computer shows on this page.
     const footer = machineName && listsCheckedAt !== null ? (
         <ItemGroup surface="none">

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { openSessionSystemRecord, type SessionSystemRecordPayloadResult } from './codec';
 
 const address = { owner: 'host', namespace: 'activity', kind: 'workflow_run.v1', localId: 'run-one' } as const;
@@ -7,7 +7,7 @@ const record = {
     id: 'record-one', address, content: { t: 'plain', v: { v: 1, title: 'ready' } },
     revision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ', createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z',
 };
-const schema = z.object({ v: z.literal(1), title: z.string() }).strict();
+const schema = z.strictObject({ v: z.literal(1), title: z.string() });
 function decode(value: unknown): SessionSystemRecordPayloadResult<z.infer<typeof schema>> {
     if (value && typeof value === 'object' && 'v' in value && value.v !== 1) return { status: 'unsupported_version', version: value.v };
     const parsed = schema.safeParse(value);

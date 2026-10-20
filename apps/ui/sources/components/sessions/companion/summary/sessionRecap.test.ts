@@ -1,6 +1,7 @@
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Message } from '@happier-dev/session-core/messages';
+import { SessionCapabilitiesSchema } from '@happier-dev/protocol/features/payload/capabilities/sessionCapabilities';
 
 import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
@@ -14,6 +15,8 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { readStoredSessionMessagesForAddress } from '@/sync/domains/messages/readStoredSessionMessagesForAddress';
 
 import { resolveSessionRecap } from './sessionRecap';
 
@@ -24,6 +27,7 @@ installDisconnectedServerSocketBoundary();
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { useSessionRecap } = await import('./useSessionRecap');
 const { projectSessionSummaryCard } = await import('./sessionSummaryProjection');
+const { restoreConnectionToActiveServer, disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
 beforeEach(async () => { await homes.reset(); await loadSyncSingletonForTests(); });
 afterEach(async () => { await standardCleanup(); await homes.reset(); });
 
@@ -50,19 +54,23 @@ describe('useSessionRecap delivered transcript fallback', () => {
         try {
             const home = await homes.addHome({ name: 'Recap Home', serverUrl: 'https://recap.test', accountId: 'account-a' });
             const address: SessionAddress = { serverId: home, sessionId: 'lead' };
-            const features = createRootLayoutFeaturesResponse({ capabilities: { session: { systemRecords: { protocolVersions: [1] } } } });
+            const features = createRootLayoutFeaturesResponse({ capabilities: { session: SessionCapabilitiesSchema.parse({ systemRecords: { protocolVersions: [1] } }) } });
             homes.answer(home, '/v1/features', { body: features });
             homes.answer(home, '/v1/features/authenticated', { body: features });
+            const credentials = await TokenStorage.getCredentialsForServerUrl('https://recap.test', { serverId: home });
+            if (!credentials) throw new Error('Recap Home credentials unavailable');
+            // Importing the singleton does not initialize it. Real sign-in/restore must
+            // precede transcript hydration so switching runs the shared custody reset.
+            await restoreConnectionToActiveServer(credentials);
+            expect(storage.getState().profileScope).toEqual({ serverId: home, accountId: 'account-a' });
             const synopsisPath = '/v2/sessions/lead/system-records?owner=host&namespace=memory&kind=synopsis.v1';
             homes.answer(home, synopsisPath, { select: () => ({ body: { records: [{ id: 'synopsis-one',
                 address: { owner: 'host', namespace: 'memory', kind: 'synopsis.v1', localId: 'latest' },
                 content: { t: 'plain', v: { v: 1, synopsis, seqTo: 5, updatedAtMs: 10 } }, revision,
                 createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z' }], nextCursor: null, hasNext: false } }) });
-            storage.setState({ profileScope: { serverId: home, accountId: 'account-a' },
-                sessions: { lead: createSessionFixture({ id: 'lead', serverId: home }, { memoryEnabled: true }) },
-                sessionListRowsByServerId: { [home]: { lead: createSessionListRenderableSessionFixture({ id: 'lead', serverId: home }) } },
+            storage.setState({ sessions: { lead: createSessionFixture({ id: 'lead', serverId: home }, { memoryEnabled: true }) },
+                sessionListRowsByServerId: { [home]: { lead: createSessionListRenderableSessionFixture({ id: 'lead' }) } },
                 sessionMessages: { lead: transcript([delivered('latest', 1, 20, 'New worker report')]) } });
-            publishAppliedActiveServerSnapshot({ serverId: home, serverUrl: 'https://recap.test', generation: 1 });
             const hook = await renderHook(() => useSessionRecap(address));
             await act(async () => { await vi.waitFor(() => expect(hook.getCurrent()?.text).toBe('Retained synopsis')); });
             synopsis = 'Restored synopsis';
@@ -84,13 +92,25 @@ describe('useSessionRecap delivered transcript fallback', () => {
             expect(hook.getCurrent()).toEqual({ source: 'worker_update', text: 'New worker report', atMs: 20 });
             // Switching Accounts must not relabel the retained transcript as the new Account's content.
             homes.answer(home, synopsisPath, { body: { records: [], nextCursor: null, hasNext: false } });
-            await act(async () => { await homes.switchAccount(home, 'account-b');
-                storage.setState({ profileScope: { serverId: home, accountId: 'account-b' } }); });
+            await act(async () => { await homes.switchAccount(home, 'account-b'); });
+            expect(storage.getState().profileScope).toEqual({ serverId: home, accountId: 'account-b' });
+            expect(storage.getState().sessions.lead).toBeUndefined();
+            expect(storage.getState().sessionMessages.lead).toBeUndefined();
+            expect(readStoredSessionMessagesForAddress(storage.getState(), address)).toEqual([]);
             expect(hook.getCurrent()).toBeNull();
-            await act(async () => storage.setState({ sessionMessages: { lead: transcript([delivered('b', 1, 30, 'Account B report')]) } }));
-            expect(hook.getCurrent()?.text).toBe('Account B report');
             await hook.unmount();
+            // A newly mounted reader must also start empty under the new Account,
+            // then read only its freshly hydrated same-id Session and transcript.
+            const remounted = await renderHook(() => useSessionRecap(address));
+            expect(remounted.getCurrent()).toBeNull();
+            await act(async () => storage.setState({
+                sessions: { lead: createSessionFixture({ id: 'lead', serverId: home }, { memoryEnabled: false }) },
+                sessionMessages: { lead: transcript([delivered('b', 1, 30, 'Account B report')]) },
+            }));
+            expect(remounted.getCurrent()?.text).toBe('Account B report');
+            await remounted.unmount();
         } finally {
+            await disconnectActiveServerConnection();
             await standardCleanup();
             act(() => { storage.setState(previous); publishAppliedActiveServerSnapshot(applied, available); });
         }

@@ -127,7 +127,7 @@ describe('buildNewSessionScreenVariantModel', () => {
         };
         const props = buildVariant(wizard, draft);
         expect(props.statusBadges?.map(badge => badge.key)).toEqual(['ordinary', 'managed-machine-progress']);
-        expect(props.statusBadges?.[1]).toMatchObject({ label: 'Waiting for guest SSH', tone: 'active' });
+        expect(props.statusBadges?.[1]).toMatchObject({ label: 'Waiting for guest SSH', tone: 'neutral' });
     });
 
     it('uses the operation owner observation when the controller is no longer reachable', () => {

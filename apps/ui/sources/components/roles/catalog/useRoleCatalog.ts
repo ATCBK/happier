@@ -99,21 +99,23 @@ const subscribeCatalog = (listener: () => void) => {
     return () => { listeners.delete(listener); unsubscribeOverrides(); };
 };
 const selectEntries = (entries: ReadonlyArray<RoleCatalogEntry>) => entries;
+const subscribeNoCatalog = () => () => {};
 
-function useRoleCatalogSelectionValue<T>(select: (entries: ReadonlyArray<RoleCatalogEntry>) => T, refreshOnMount = true, serverId?: string | null) {
+function useRoleCatalogSelectionValue<T>(select: (entries: ReadonlyArray<RoleCatalogEntry>) => T, refreshOnMount = true, serverId?: string | null, active = true) {
     const profileScope = useActiveServerAccountScope();
     const scope = useActiveServerAccountScope(serverId === undefined ? profileScope?.serverId ?? null : serverId);
     const scopeKey = scope ? serverAccountScopeKeySuffix(scope) : 'local';
     const read = React.useCallback(() => {
+        if (!active) return select(EMPTY_ENTRIES);
         const overrides = getPromptLibraryCatalogValue(scope, 'role-overrides').value?.overrides;
         const cell = lastKnownByScope.get(scopeKey);
         return select(cell?.snapshot.items && overrides ? cell.project({ items: cell.snapshot.items, overrides }) : EMPTY_ENTRIES);
-    }, [scopeKey, scope, select]);
-    const selection = React.useSyncExternalStore(subscribeCatalog, read, read);
-    React.useEffect(() => scope ? observePromptLibraryCatalog(scope) : undefined, [scopeKey]);
+    }, [active, scopeKey, scope, select]);
+    const selection = React.useSyncExternalStore(active ? subscribeCatalog : subscribeNoCatalog, read, read);
+    React.useEffect(() => active && scope ? observePromptLibraryCatalog(scope) : undefined, [active, scopeKey]);
     React.useEffect(() => {
-        if (scope && refreshOnMount) void loadRoleCatalog(scope);
-    }, [scopeKey, refreshOnMount]);
+        if (active && scope && refreshOnMount) void loadRoleCatalog(scope);
+    }, [active, scopeKey, refreshOnMount]);
     const refresh = React.useCallback(() => { if (scope) void loadRoleCatalog(scope); }, [scopeKey]);
     return { selection, refresh, scopeKey, scope };
 }
@@ -154,10 +156,10 @@ export function useRoleCatalogEntryValue(roleId: string | null, serverId?: strin
     return useRoleCatalogSelectionValue(select, refreshOnMount, serverId).selection;
 }
 
-/** Only the Orchestrator preview consumes the callable-role list, through the canonical renderer. */
+/** Delegating role previews consume the callable-role list through the canonical renderer. */
 export function useRoleCatalogPromptPreview(role: ResolvedRoleV1): string {
     const select = React.useCallback((entries: ReadonlyArray<RoleCatalogEntry>) => renderSessionRoleBlockV1({
         role, source: 'dispatch', availableRoles: entries.map((entry) => entry.role),
     }), [role]);
-    return useRoleCatalogSelectionValue(select, false).selection;
+    return useRoleCatalogSelectionValue(select, false, undefined, role.canDelegateToOtherRoles === true).selection;
 }

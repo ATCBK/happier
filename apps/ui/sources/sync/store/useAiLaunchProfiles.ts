@@ -22,8 +22,18 @@ export function useAiLaunchProfiles(_retainedSource?: unknown) {
 }
 
 export function useAiLaunchProfilesForLegacyUi(_retainedSource?: unknown) {
-    const profiles = useAiLaunchProfiles();
-    return React.useMemo(() => profiles.map(projectAiLaunchProfileForLegacyUi), [profiles]);
+    return useAiLaunchProfilesWithReadState().profiles;
+}
+
+/**
+ * The legacy-shaped profiles with whether the Account's profile read has not answered yet. A reader
+ * that offers "no profiles" must tell an empty answer from a read still on its way (a cold open).
+ */
+export function useAiLaunchProfilesWithReadState() {
+    const scope = getStorage()(useShallow((state) => state.settingsScope));
+    const catalog = useHomeAiLaunchProfileCatalog(scope);
+    const profiles = React.useMemo(() => catalog.profiles.map(projectAiLaunchProfileForLegacyUi), [catalog.profiles]);
+    return { profiles, loading: catalog.status === 'loading' && profiles.length === 0 };
 }
 
 /** Background-Home readers use the same captured mode-aware store, never the focused Account's rows. */

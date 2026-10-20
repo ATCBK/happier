@@ -210,7 +210,7 @@ export const API_RATE_LIMIT_GLOBAL_SERVER_CONFIG = defineServerConfigRegistry({
         editable: "home",
         section: "server",
         family: "rateLimits",
-        description: "Trust `X-Forwarded-*` from a reverse proxy: `true`, `false`, or the number of proxy hops.",
+        description: "Trust `X-Forwarded-*` only from the listed proxy addresses or CIDRs; `true` trusts all peers and `false` trusts none. Numeric hop counts are rejected.",
         docs: "self-hosting/env#networking--reverse-proxy",
     },
 });

@@ -104,6 +104,7 @@ describe('sendSessionMessage', () => {
         }));
         vi.doMock('@/session/transport/http/sessionsHttp', () => ({
             fetchSessionById,
+            fetchSessionTurnsProjection: vi.fn(async () => null),
         }));
         vi.doMock('@/session/transport/rpc/sessionRpc', () => ({
             callSessionRpc,
@@ -632,6 +633,7 @@ describe('sendSessionMessage', () => {
         }));
         vi.doMock('@/session/transport/http/sessionsHttp', () => ({
             fetchSessionById,
+            fetchSessionTurnsProjection: vi.fn(async () => null),
         }));
         vi.doMock('@/session/transport/rpc/sessionRpc', () => ({
             callSessionRpc,
@@ -735,6 +737,7 @@ describe('sendSessionMessage', () => {
         }));
         vi.doMock('@/session/transport/http/sessionsHttp', () => ({
             fetchSessionById,
+            fetchSessionTurnsProjection: vi.fn(async () => null),
         }));
         vi.doMock('@/session/transport/rpc/sessionRpc', () => ({
             callSessionRpc,
@@ -865,6 +868,7 @@ describe('sendSessionMessage', () => {
         }));
         vi.doMock('@/session/transport/http/sessionsHttp', () => ({
             fetchSessionById,
+            fetchSessionTurnsProjection: vi.fn(async () => null),
         }));
         vi.doMock('@/session/transport/socket/sessionSocketAgentState', async (importOriginal) => ({
             ...await importOriginal<typeof import('@/session/transport/socket/sessionSocketAgentState')>(),
@@ -942,6 +946,7 @@ describe('sendSessionMessage', () => {
         }));
         vi.doMock('@/session/transport/http/sessionsHttp', () => ({
             fetchSessionById,
+            fetchSessionTurnsProjection: vi.fn(async () => null),
         }));
         vi.doMock('@/session/transport/rpc/sessionRpc', () => ({
             callSessionRpc,
@@ -1034,6 +1039,7 @@ describe('sendSessionMessage', () => {
         }));
         vi.doMock('@/session/transport/http/sessionsHttp', () => ({
             fetchSessionById,
+            fetchSessionTurnsProjection: vi.fn(async () => null),
         }));
         vi.doMock('@/session/transport/rpc/sessionRpc', () => ({
             callSessionRpc,
@@ -1242,6 +1248,7 @@ describe('sendSessionMessage', () => {
         }));
         vi.doMock('@/session/transport/http/sessionsHttp', () => ({
             fetchSessionById,
+            fetchSessionTurnsProjection: vi.fn(async () => null),
         }));
         vi.doMock('@/session/transport/rpc/sessionRpc', () => ({
             callSessionRpc,
@@ -1359,6 +1366,7 @@ describe('sendSessionMessage', () => {
         }));
         vi.doMock('@/session/transport/http/sessionsHttp', () => ({
             fetchSessionById,
+            fetchSessionTurnsProjection: vi.fn(async () => null),
         }));
         vi.doMock('@/session/transport/rpc/sessionRpc', () => ({
             callSessionRpc,
@@ -1959,6 +1967,7 @@ describe('sendSessionMessage', () => {
         }));
         vi.doMock('@/session/transport/http/sessionsHttp', () => ({
             fetchSessionById,
+            fetchSessionTurnsProjection: vi.fn(async () => null),
         }));
         vi.doMock('@/session/transport/rpc/sessionRpc', () => ({
             callSessionRpc,

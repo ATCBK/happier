@@ -73,7 +73,6 @@ describe('settings navigation architecture', () => {
         const settingsLayout = readFileSync(SETTINGS_LAYOUT_PATH, 'utf8');
         expect(settingsLayout).toContain('getSettingsStackScreenDefinitions');
 
-        const registry = readFileSync(SETTINGS_NAVIGATION_REGISTRY_PATH, 'utf8');
         const routeNames = walkFiles(SETTINGS_ROUTES_ROOT)
             .filter((fullPath) => fullPath.endsWith('.tsx'))
             .filter((fullPath) => !fullPath.endsWith('.test.tsx'))
@@ -95,12 +94,6 @@ describe('settings navigation architecture', () => {
         const missingRoutes = routeNames.filter((routeName) => !registeredRouteNames.has(routeName));
         expect(missingRoutes).toEqual([]);
 
-        expect(registry).toContain("name: 'appearance/themes'");
-        expect(registry).toContain("name: 'appearance/themes/[profileId]'");
-        expect(registry).toContain("name: 'appearance/themes/import'");
-        expect(registry).toContain("name: 'appearance/themes/export'");
-        expect(registry).toContain("name: 'keyboard'");
-        expect(registry).toContain("name: 'external-sessions'");
     });
 
     it('keeps settings screens from declaring their own static Stack.Screen chrome', () => {

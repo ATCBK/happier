@@ -1,0 +1,31 @@
+{
+  "name": "@happier-qa/created-settings-actions",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "QA-only external author fixture for descriptor-first Account settings and Action parity.",
+  "happier": {
+    "manifest": ".happier-plugin/plugin.json"
+  },
+  "keywords": [
+    "happier-plugin",
+    "qa-only"
+  ],
+  "files": [
+    ".agents/skills/happier-plugin-authoring",
+    "dist"
+  ],
+  "scripts": {
+    "build": "hdev plugins dev build .",
+    "typecheck": "hdev plugins dev typecheck .",
+    "test": "hdev plugins test .",
+    "pack:plugin": "hdev plugins pack ."
+  },
+  "dependencies": {
+    "@happier-dev/plugin-sdk": "0.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "25.0.10",
+    "@typescript/native": "npm:typescript@7.0.2"
+  },
+  "private": true
+}

@@ -3,12 +3,14 @@ import { resolveReviewEngineInventoryTarget } from '../actions/executor/reviewEn
 import type { ActionExecuteResult } from '../actions/actionExecutionResult.js';
 import type { ActionId } from '../actions/actionIds.js';
 import type { PublicActionResultById } from '../actions/actionSpecs.js';
+import { AgentInventoryProbeInputSchema } from '../actions/actionSpecs.js';
 import { parseWorkflowDefinitionRefV1, formatWorkflowDefinitionRefV1 } from '../workflows/workflowDefinitionRefV1.js';
 import { DaemonProviderModelProjectionResponseV1Schema } from '../rpc/providers.js';
 import { AgentExecutionTargetV1Schema } from '../agents/executionTargetV1.js';
 import { BackendTargetKeyV2InputSchema } from '../backends/targets/backendTargetRefV2.js';
 import { SessionDirectoryIntentV1Schema } from '../sessions/creation/sessionDirectoryIntentV1.js';
-import { readCapabilitySelectionCarrierV1 } from '../reach/sessionCapabilitySelectionV1.js';
+import { readCapabilitySelectionCarrierV1, SessionCapabilitySelectionAuthoringV1Schema, setSessionCapabilitySelectionItemV1 } from '../reach/sessionCapabilitySelectionV1.js';
+import { SpawnCapabilitiesPreviewOutputV1Schema } from '../actions/specs/sessionCapabilities.js';
 import { resolveReviewNarratorPolicy, ReviewEngineCapabilitiesSchema } from '../reviews/reviewEngines.js';
 import { resolveActionBackendTargetSelection, resolveExecutionBackendTargetSelectionForValue, type ActionBackendTargetSelection } from '../actions/resolveActionBackendTargetSelection.js';
 import { readRecord, readRecordListProperty, readNonEmptyString, isRecord, hasOwn } from './inputRecords.js';
@@ -19,9 +21,13 @@ import type { InputOption, InputFieldHint } from './inputFields.js';
 import type { InputOptionsConsumerV1 } from './inputOptionsConsumer.js';
 import { VoiceTrackedSessionAddressV1Schema } from '../sessions/follow/voiceTrackedTargetsCompatibilityV1.js';
 import { parseSessionAwarenessListResultV1 } from '../sessions/awareness/action.js';
+import { SESSION_LIST_PAGE_MAX_LIMIT } from '../sessions/listing/query.js';
 import { isSessionAwarenessContentReadableV1 } from '../sessions/awareness/availability.js';
 import { readSessionAwarenessWorkStatusV1, readSessionWorkStateGroupV1 } from '../sessions/awareness/presentationV1.js';
+import { SessionAwarenessProjectionV1Schema, type SessionAwarenessProjectionV1 } from '../sessions/awareness/projectionV1.js';
+import type { JsonValue } from '../json/strictJsonValue.js';
 import { MachineTargetV1Schema } from '../machines/machineAccessV1.js';
+import { WorkspaceRefV1Schema } from '../workspaces/workspaceRefV1.js';
 import { MachineVitalsSnapshotV1Schema } from '../machines/vitals/machineVitalsRpcV1.js';
 import { normalizeUsageQuery, readUsageGroupByOptions, readUsagePeriodOptions } from './usageQuery.js';
 import { executeUsageAction } from '../actions/executor/usageActions.js';
@@ -44,13 +50,15 @@ export function normalizeResolvedOptions(value: unknown, options: Readonly<{ all
           ? item.value
           : typeof item?.id === 'string'
             ? item.id
-            : typeof item?.path === 'string'
-              ? item.path
-              : typeof item?.agentId === 'string'
-                ? item.agentId
-                : typeof item?.engineId === 'string'
-                  ? item.engineId
-                  : null;
+            : typeof item?.modelId === 'string'
+              ? item.modelId
+              : typeof item?.path === 'string'
+                ? item.path
+                : typeof item?.agentId === 'string'
+                  ? item.agentId
+                  : typeof item?.engineId === 'string'
+                    ? item.engineId
+                    : null;
       if (valueCandidate === null || (valueCandidate === '' && options.allowEmptyValue !== true)) return null;
       const labelCandidate =
         typeof item?.label === 'string'
@@ -179,6 +187,61 @@ function readDynamicOptionDirectory(
   return readNonEmptyString(input.directory) ?? readNonEmptyString(input.path);
 }
 
+const SESSION_GROUP_LABELS = { needsYou: 'Needs you', working: 'Working', recent: 'Recent' } as const;
+
+/**
+ * The one rule for which Sessions the picker offers, whether a Session arrives in the inventory scan or in a
+ * point read: archived Sessions are not offered (the scan also asks for `storage: 'active'`), a locked one is
+ * offered as a disabled option, and a gone one never arrives. Returns null when the Session is not offered.
+ */
+function readSessionAwarenessOption(serverId: string, session: SessionAwarenessProjectionV1) {
+  if (session.lifecycle === 'archived') return null;
+  const readable = isSessionAwarenessContentReadableV1(session.encryption);
+  const group = readSessionWorkStateGroupV1(readSessionAwarenessWorkStatusV1({ awareness: session }).bucket);
+  const option: InputOption = {
+    value: VoiceTrackedSessionAddressV1Schema.parse({ serverId, sessionId: session.sessionId }),
+    label: readable ? session.title ?? session.sessionId : session.sessionId,
+    description: SESSION_GROUP_LABELS[group],
+    ...(!readable ? { disabled: true } : {}),
+  };
+  return { group, option };
+}
+
+/**
+ * The `sessions` source's point check: each picked Session is answered by the one-Session status read
+ * instead of paging the whole Home, then judged by the same rule as the scan. A pick the Home reports gone
+ * has no option; a read that cannot answer is that read's own failure, not a reason to scan.
+ */
+async function readSessionOptionsForValues(params: Readonly<{
+  executor: Readonly<{ execute: (actionId: ActionId, input: unknown, ctx?: ActionExecutorContext) => Promise<ActionExecuteResult> }>;
+  ctx: ActionExecutorContext;
+  serverId: string;
+  values: readonly JsonValue[];
+}>): Promise<Extract<ActionExecuteResult, { ok: false }> | readonly InputOption[]> {
+  const options: InputOption[] = [];
+  for (const value of params.values) {
+    const address = VoiceTrackedSessionAddressV1Schema.safeParse(value);
+    // The inventory only ever offers this Home's Sessions, so any other pick has no option there either.
+    if (!address.success || address.data.serverId !== params.serverId) continue;
+    params.ctx.signal?.throwIfAborted();
+    const result = await params.executor.execute('session.status.get', { sessionId: address.data.sessionId }, params.ctx);
+    if (!result.ok) return result;
+    const status = readRecord(result.result);
+    if (status.ok === false) {
+      const code = typeof status.code === 'string' && status.code ? status.code : 'unavailable';
+      if (code === 'session_not_found') continue;
+      return { ok: false, errorCode: code, error: code };
+    }
+    const awareness = SessionAwarenessProjectionV1Schema.safeParse(status.awareness);
+    if (!awareness.success) return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+    // A host that resolves ids by prefix answers another Session when this exact id does not exist.
+    if (awareness.data.sessionId !== address.data.sessionId) continue;
+    const offered = readSessionAwarenessOption(params.serverId, awareness.data);
+    if (offered) options.push(offered.option);
+  }
+  return options;
+}
+
 /** Field choices restrict, never replace, the type's schema and declared Resource choices. */
 export async function resolveTypedInputFieldOptions(params: Omit<Parameters<typeof resolveInputOptions>[0], 'optionsSourceId'> &
   Readonly<{ field: InputFieldHint }>): ReturnType<typeof resolveInputOptions> {
@@ -216,6 +279,8 @@ export async function resolveInputOptions(params: Readonly<{
   optionsSourceId: string;
   input: Record<string, unknown>;
   consumer?: InputOptionsConsumerV1;
+  /** Picked values to check: a source that can answer them directly does not read its whole inventory. */
+  values?: readonly JsonValue[];
   includeSpawnModelCatalog?: boolean;
   readFailure: (result: unknown) => Extract<ActionExecuteResult, { ok: false }> | null;
   resolveSessionId: (input: unknown, ctx: ActionExecutorContext) => string | null;
@@ -277,6 +342,41 @@ export async function resolveInputOptions(params: Readonly<{
       .map(([value, label]) => ({ value, label })) };
   }
 
+  if (optionsSourceId === 'host-input:workspace') {
+    const selectedServerId = readNonEmptyString(ctx.serverId);
+    if (!selectedServerId) return { ok: false, errorCode: 'server_not_selected', error: 'server_not_selected' };
+    if (!deps.projectWorkspaceRefs) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:projects.list' };
+    const result = await deps.projectWorkspaceRefs({ serverId: selectedServerId }, ctx);
+    const failure = params.readFailure(result);
+    if (failure) return failure;
+    ctx.signal?.throwIfAborted();
+    // Machine names only tell apart the same checkout on two machines; an unreadable list leaves the path to do that.
+    // A host marks a row `named: false` when its label is not a real name (hidden or still loading), and supplies the word
+    // for a machine it does not list (`unlistedLabel`), so every checkout is named the way the host's own screens name it.
+    const machineList = await deps.machinesList({ serverId: selectedServerId, purpose: 'input' });
+    const machineLabels = new Map<string, string>();
+    let unlistedLabel: string | undefined;
+    if (!params.readFailure(machineList)) {
+      unlistedLabel = readNonEmptyString(readRecord(machineList).unlistedLabel);
+      for (const machine of readRecordListProperty(machineList, 'items')) {
+        const id = readNonEmptyString(machine.machineId) ?? readNonEmptyString(machine.id);
+        const label = readNonEmptyString(machine.label);
+        if (id && label && machine.named !== false) machineLabels.set(id, label);
+      }
+    }
+    const options: InputOption[] = [];
+    for (const row of readRecordListProperty(result, 'workspaceRefs')) {
+      const ref = WorkspaceRefV1Schema.safeParse(row);
+      if (!ref.success) return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+      // Recency changes whenever the checkout is opened; a saved pin must keep matching its option.
+      const { lastOpenedAtMs: _recency, ...stable } = ref.data;
+      const machineLabel = machineLabels.get(ref.data.machineId) ?? unlistedLabel;
+      options.push({ value: stable, label: ref.data.label ?? ref.data.rootPath.split(/[\\/]+/).filter(Boolean).at(-1) ?? ref.data.rootPath,
+        description: machineLabel ? `${machineLabel} · ${ref.data.rootPath}` : ref.data.rootPath });
+    }
+    return { ok: true, result: options };
+  }
+
   if (optionsSourceId === 'host-input:machine') {
     const selectedServerId = readNonEmptyString(ctx.serverId);
     if (!selectedServerId) return { ok: false, errorCode: 'server_not_selected', error: 'server_not_selected' };
@@ -318,7 +418,7 @@ export async function resolveInputOptions(params: Readonly<{
   if (optionsSourceId === inputTypeOptionsSourceId({ hostType: 'usageQuery', field: 'session' })) {
     // The Usage Session type stores a session id on the current Home: the same Home sessions, by name,
     // chosen in place like the Period (no picker dialog).
-    const sessions = await resolveInputOptions({ ...params, optionsSourceId: 'sessions' });
+    const sessions = await resolveInputOptions({ ...params, optionsSourceId: 'sessions', values: undefined });
     if (!sessions.ok) return sessions;
     return { ok: true, result: sessions.result.map(option => ({ ...option,
       value: VoiceTrackedSessionAddressV1Schema.parse(option.value).sessionId })) };
@@ -332,14 +432,20 @@ export async function resolveInputOptions(params: Readonly<{
   }
 
   if (optionsSourceId === 'sessions') {
-    const sessionServerId = readNonEmptyString(ctx.serverId);
+    // The admitted consumer owns the qualified values it compares with a saved pin.
+    // Transport still uses ctx's captured profile; profile aliases are not input identity.
+    const sessionServerId = readNonEmptyString(params.consumer?.kind === 'widget'
+      ? params.consumer.selectedSession?.serverId ?? params.consumer.surface.serverId : ctx.serverId);
     if (!sessionServerId) return { ok: false, errorCode: 'server_not_selected', error: 'server_not_selected' };
     // Enter through the existing Action owner so credential grants, the caller's
     // admitted corpus and marked-query admission also govern option discovery.
     const { createActionExecutor } = await import('../actions/actionExecutor.js');
     const executor = createActionExecutor(deps);
+    if (params.values) {
+      const direct = await readSessionOptionsForValues({ executor, ctx, serverId: sessionServerId, values: params.values });
+      return 'ok' in direct ? direct : { ok: true, result: direct };
+    }
     const groups: Record<'needsYou' | 'working' | 'recent', InputOption[]> = { needsYou: [], working: [], recent: [] };
-    const groupLabels = { needsYou: 'Needs you', working: 'Working', recent: 'Recent' } as const;
     const consumer = params.consumer;
     const project = consumer?.kind === 'widget' && consumer.surface.owner.kind === 'project'
       ? { serverId: consumer.surface.serverId, projectKey: consumer.surface.owner.projectId }
@@ -354,6 +460,8 @@ export async function resolveInputOptions(params: Readonly<{
         const result = await executor.execute('session.list', { view: 'awareness', ...(projectFilter ? { project: projectFilter } : {}), query: {
           v: 1, storage: 'active', includeInactive: true, scope: 'all_accessible', attention: 'any',
           audiences: [], tagIds: [], includeAttention: false,
+          // The picker reads the whole inventory, one round trip per page: ask for the largest page the Home's list allows.
+          limit: SESSION_LIST_PAGE_MAX_LIMIT,
           ...(cursor ? { cursor } : {}),
         } }, ctx);
         if (!result.ok) return result;
@@ -366,14 +474,8 @@ export async function resolveInputOptions(params: Readonly<{
             projectSessionIds.add(session.sessionId);
             continue;
           }
-          const readable = isSessionAwarenessContentReadableV1(session.encryption);
-          const group = readSessionWorkStateGroupV1(readSessionAwarenessWorkStatusV1({ awareness: session }).bucket);
-          groups[group].push({
-            value: VoiceTrackedSessionAddressV1Schema.parse({ serverId: sessionServerId, sessionId: session.sessionId }),
-            label: readable ? session.title ?? session.sessionId : session.sessionId,
-            description: groupLabels[group],
-            ...(!readable ? { disabled: true } : {}),
-          });
+          const offered = readSessionAwarenessOption(sessionServerId, session);
+          if (offered) groups[offered.group].push(offered.option);
         }
         cursor = page.hasNext ? page.nextCursor ?? undefined : undefined;
       } while (cursor);
@@ -491,14 +593,29 @@ export async function resolveInputOptions(params: Readonly<{
   if (optionsSourceId === 'agents.models.available') {
     const selectionArgs = await buildAgentInventorySelectionArgs({ deps, actionId, input });
     if (!selectionArgs) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+    // Configured model inventory is selected by definition, as on direct reads.
+    // The installed routing id stays private to the host's probe adapter.
+    const modelInventorySelection = actionId === 'session.spawn_new' && readRecord(input.agentTarget).definitionId !== undefined
+      ? { backendTargetKey: selectionArgs.backendTargetKey } : selectionArgs;
+    // Use the native producer for this exact launch context, including the selected
+    // Connected Account. A generic inventory read has no such account binding.
+    const probe = AgentInventoryProbeInputSchema.safeParse({
+      ...readRecord(input.probe),
+      ...(directory ? { cwd: directory } : {}),
+      ...(hasOwn(input, 'profileId') && input.profileId != null ? { profileId: input.profileId } : {}),
+      ...(hasOwn(input, 'connectedServices') && input.connectedServices != null ? { connectedServices: input.connectedServices } : {}),
+      ...(hasOwn(input, 'runtimeDescriptorV1') && input.runtimeDescriptorV1 != null ? { runtimeDescriptorV1: input.runtimeDescriptorV1 } : {}),
+    });
+    if (!probe.success) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
     const result = await deps.agentsModelsList({
-      ...selectionArgs,
+      ...modelInventorySelection,
       ...(machineId === undefined ? {} : { machineId }),
       ...(serverId === undefined ? {} : { serverId }),
       ...(typeof input.limit === 'number' ? { limit: input.limit } : {}),
       ...(params.includeSpawnModelCatalog ? { includeProviderProjection: true as const } : {}),
+      ...(machineId ? { probe: probe.data } : {}),
       ...(ctx.signal ? { signal: ctx.signal } : {}),
-    });
+    }, ctx);
     const failure = params.readFailure(result);
     if (failure) return failure;
     const options = normalizeResolvedOptions(result);
@@ -619,6 +736,32 @@ export async function resolveInputOptions(params: Readonly<{
     return { ok: true, result: normalizeResolvedOptions(result) };
   }
 
+  if (optionsSourceId === 'sessions.spawn.capabilities.preview') {
+    const selectionArgs = await buildAgentInventorySelectionArgs({ deps, actionId, input });
+    const selection = SessionCapabilitySelectionAuthoringV1Schema.safeParse(input.capabilitySelection === undefined ? {} : input.capabilitySelection);
+    if (!selectionArgs?.agentId || !machineId || !selection.success) {
+      return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+    }
+    // Preview owns Profile seed admission and the Machine projection. Options
+    // replace the whole field, so the draft item writer preserves other choices.
+    const { createActionExecutor } = await import('../actions/actionExecutor.js');
+    const result = await createActionExecutor(deps).execute('sessions.spawn.capabilities.preview', {
+      machineId,
+      agentId: selectionArgs.agentId,
+      ...(directory ? { directory } : {}),
+      ...(hasOwn(input, 'profileId') ? { profileId: input.profileId } : {}),
+      ...(hasOwn(input, 'capabilitySelection') ? { capabilitySelection: selection.data } : {}),
+    }, serverId ? { ...ctx, serverId } : ctx);
+    if (!result.ok) return result;
+    const preview = SpawnCapabilitiesPreviewOutputV1Schema.parse(result.result);
+    if (!preview.ok) return { ok: false, errorCode: preview.reason, error: preview.reason };
+    return { ok: true, result: [...preview.mcp.items, ...preview.skills.items].map(item => ({
+      value: setSessionCapabilitySelectionItemV1(selection.data, item.kind, item.id, 'on'),
+      label: item.title ?? item.name,
+      ...(item.selectable ? {} : { disabled: true }),
+    })) };
+  }
+
   if (optionsSourceId === 'sessions.spawn.mcp_servers.preview') {
     if (!deps.spawnMcpServersPreview) {
       return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:sessions.spawn.mcp_servers.preview' };
@@ -633,7 +776,7 @@ export async function resolveInputOptions(params: Readonly<{
         ? (hasOwn(input, 'capabilitySelection') ? { selection: readCapabilitySelectionCarrierV1(input)?.mcp } : {})
         : (hasOwn(input, 'selection') ? { selection: input.selection } : {})),
       ...(typeof input.limit === 'number' ? { limit: input.limit } : {}),
-    });
+    }, ctx);
     const failure = params.readFailure(result);
     if (failure) return failure;
     return { ok: true, result: normalizeResolvedOptions(result) };

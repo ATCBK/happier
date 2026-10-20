@@ -95,8 +95,8 @@ function isSessionListSessionIndexItem(item: SessionListIndexItem): item is Sess
 export type CommitSessionListDragIntentContext = Readonly<{
     scope?: SessionListDragIntent['scope'];
     /** Current canonical relation verdict, preloaded by the relation read owner. */
-    resolvePutSessionUnder?: (input: Readonly<{ serverId: string; sessionId: string; leadSessionId: string }>) =>
-        Readonly<{ allowed: true; expectedLeadSessionId: string | null }> | Readonly<{ allowed: false; reason: string }>;
+    resolvePutSessionUnder?: (input: Readonly<{ serverId: string; sessionId: string; managerSessionId: string }>) =>
+        Readonly<{ allowed: true; expectedManagerSessionId: string | null }> | Readonly<{ allowed: false; reason: string }>;
     /** Latest session-list index — the latest tree metadata is built from it. */
     latestItems: ReadonlyArray<SessionListIndexItem>;
     /** Same mounted owner's full personal pin tree and its current eligible rail projection. */
@@ -124,14 +124,14 @@ export type CommitSessionListDragIntentContext = Readonly<{
         folderId: string | null;
     }>) => Promise<void>;
     /**
-     * Puts the dragged Session under the target Session (`reportsTo`, R-03). The owner re-checks the
+     * Puts the dragged Session under the target Session (`manager`, R-03). The owner re-checks the
      * drop against the latest Sessions, asks the server, and says a refusal itself. Omitted, a drop
      * on a Session row never commits.
      */
     putSessionUnder?: (input: Readonly<{
         serverId: string;
         sessionId: string;
-        leadSessionId: string;
+        managerSessionId: string;
     }>) => Promise<'applied' | 'not-eligible' | 'refused' | 'unknown'>;
 }>;
 
@@ -379,7 +379,7 @@ function isSessionSiblingReorderBlockedByOrderingMode(params: Readonly<{
 
 export type SessionListDragAdmission =
     | Readonly<{ ok: false; reason: SessionListDragCommitNoOpReason; relationReason?: string }>
-    | Readonly<{ ok: true; effect: 'reports-to'; source: SessionListTreeRowMetadata; lead: SessionListTreeRowMetadata; expectedLeadSessionId: string | null }>
+    | Readonly<{ ok: true; effect: 'manager'; source: SessionListTreeRowMetadata; lead: SessionListTreeRowMetadata; expectedManagerSessionId: string | null }>
     | Readonly<{ ok: true; effect: 'organization'; tree: SessionListTreeModel; source: SessionListTreeDragSource; result: SessionListTreeDropResult }>;
 
 /** Admission and semantic destination projection share the mounted list's current index. */
@@ -414,7 +414,7 @@ export function resolveSessionListDragIntent(params: Readonly<{
     }
     if (intent.scope && sourceMetadata.serverId !== intent.scope.serverId) return noOp('scope-mismatch');
 
-    // A drop on a Session row puts the source under that Session: a `reportsTo` change, not a
+    // A drop on a Session row puts the source under that Session: a `manager` change, not a
     // folder or order change, so none of the container rebase below applies.
     if (intent.instructionKind === 'nest-into' && intent.targetRowId && isSessionTreeRowId(intent.targetRowId)) {
         const lead = tree.rowMetadataById.get(intent.targetRowId);
@@ -423,11 +423,11 @@ export function resolveSessionListDragIntent(params: Readonly<{
         if (lead.serverId !== sourceMetadata.serverId) return noOp('scope-mismatch');
         if (!context.putSessionUnder) return noOp('blocked-intent');
         const eligibility = context.resolvePutSessionUnder?.({ serverId: sourceMetadata.serverId,
-            sessionId: sourceMetadata.sessionId, leadSessionId: lead.sessionId });
+            sessionId: sourceMetadata.sessionId, managerSessionId: lead.sessionId });
         if (!eligibility) return { ok: false, reason: 'blocked-intent', relationReason: 'unavailable' };
         if (eligibility?.allowed === false) return { ok: false, reason: 'blocked-intent', relationReason: eligibility.reason };
-        return { ok: true, effect: 'reports-to', source: sourceMetadata, lead,
-            expectedLeadSessionId: eligibility.expectedLeadSessionId };
+        return { ok: true, effect: 'manager', source: sourceMetadata, lead,
+            expectedManagerSessionId: eligibility.expectedManagerSessionId };
     }
 
     // Resolve the destination container by stable id in the latest tree.
@@ -485,7 +485,7 @@ export async function commitSessionListDragIntent(params: Readonly<{
     const { context } = params;
     const admission = resolveSessionListDragIntent(params);
     if (!admission.ok) return noOp(admission.reason);
-    if (admission.effect === 'reports-to') {
+    if (admission.effect === 'manager') {
         return commitPutSessionUnder({ source: admission.source, lead: admission.lead, context });
     }
     const { tree, source, result } = admission;
@@ -533,7 +533,7 @@ async function commitPutSessionUnder(params: Readonly<{
     const outcome = await context.putSessionUnder({
         serverId: source.serverId,
         sessionId: source.sessionId,
-        leadSessionId: lead.sessionId,
+        managerSessionId: lead.sessionId,
     });
     if (outcome === 'applied') return { ok: true };
     if (outcome === 'unknown') return noOp('outcome-unknown');

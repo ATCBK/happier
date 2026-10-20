@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSessionFixture } from '@/dev/testkit';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
@@ -74,6 +74,19 @@ describe('Agent-realtime voice RPCs keep the server they were bound to', () => {
     }
     expect(network.requests).toEqual([expect.objectContaining({ targetId: SESSION_ID,
       method: 'session.agentRealtime.inspect', serverUrl: homeA.serverUrl, token: homeA.token })]);
+  });
+
+  it('retires an unanswered inspection when its runtime is revoked', async () => {
+    installSessionOn(homeA.id);
+    network.setRpcResponder(async () => await new Promise(() => {}));
+    const lease = createBundledConversationRuntimeHostLease();
+    const reading = lease.host.resolveAgentRealtimeVoiceConversationBinding!({
+      provider: PROVIDER, agent: AGENT, controlSessionId: SESSION_ID,
+      requestedTargetSessionAddress: { serverId: homeA.id, sessionId: SESSION_ID }, settings: {},
+    }).then(() => 'settled', () => 'settled');
+    await vi.waitFor(() => expect(network.requests.some(request => request.method === 'session.agentRealtime.inspect')).toBe(true));
+    lease.revoke();
+    await vi.waitFor(async () => expect(await Promise.race([reading, Promise.resolve('pending')])).toBe('settled'));
   });
 
   it('keeps start, watch and cleanup stop on the server captured when the attempt bound', async () => {

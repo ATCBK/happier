@@ -29,9 +29,10 @@ export type QualifiedConnectedAccountQuotaTransportContext = Readonly<{
 export async function readQualifiedConnectedAccountQuota(
     context: QualifiedConnectedAccountQuotaTransportContext,
 ): Promise<Readonly<{
-    snapshot: QualifiedConnectedAccountQuotaSnapshotV4;
+    snapshot: QualifiedConnectedAccountQuotaSnapshotV4 | null;
     recordId: ProviderAccountUsageRecordId;
     status: QualifiedConnectedAccountQuotaResponseV4['metadata']['status'];
+    diagnostics?: QualifiedConnectedAccountQuotaSnapshotV4['diagnostics'];
     refreshRequestedAt?: number;
 }> | null> {
     // The server serves and scopes the read; the opened response is checked against `ref`.
@@ -57,7 +58,11 @@ export async function readQualifiedConnectedAccountQuota(
             { code: 'qualified_connected_account_quota_invalid' },
         );
     }
-    return { snapshot: opened, recordId: response.sourceResolution.recordId, status: response.metadata.status,
+    // V4's numeric quota projection uses zero before any provider observation.
+    // Keep its record binding and failures, but do not publish an epoch-dated
+    // snapshot or infer quota support from that placeholder.
+    return { snapshot: opened.fetchedAt === 0 ? null : opened, recordId: response.sourceResolution.recordId, status: response.metadata.status,
+        ...(opened.diagnostics ? { diagnostics: opened.diagnostics } : {}),
         ...(response.metadata.refreshRequestedAt === undefined ? {} : { refreshRequestedAt: response.metadata.refreshRequestedAt }) };
 }
 

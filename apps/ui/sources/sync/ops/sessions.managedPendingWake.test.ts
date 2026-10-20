@@ -3,14 +3,17 @@ import { indexedDB, IDBKeyRange } from 'fake-indexeddb';
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 import { storage } from '@/sync/domains/state/storage';
 import { enqueuePendingMessageV2, updatePendingRequestedActionV2 } from '@/sync/engine/pending/pendingQueueV2';
 import { resetPendingQueueState, currentPendingEnqueueAck } from '@/sync/engine/pending/pendingQueueV2.testHelpers';
 import { submitSessionUserMessage } from '@/sync/domains/session/input/submitSessionUserMessage';
+import { buildResumeSessionBaseOptionsFromSession } from '@/sync/domains/session/resume/resumeSessionBase';
 import type { SessionSubmitPort } from '@/sync/domains/session/input/types';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
@@ -21,12 +24,15 @@ import { sync } from '@/sync/sync';
 import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-const daemonRpc = vi.hoisted(() => vi.fn(async (_request: unknown) => ({ type: 'success', sessionId: 'session-a' })));
-// The genuine process/network boundary; all pending admission and projection logic stays real.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: daemonRpc }));
 vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
-installDisconnectedServerSocketBoundary();
+// Keep Machine routing, Account custody and codecs real through the Socket.IO boundary.
+const daemonRequests = installSessionActionRpcBoundary(request => {
+    expect([`guest-a:${RPC_METHODS.SPAWN_HAPPY_SESSION}`, `guest-a:${RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE}`])
+        .toContain(request.method);
+    return { type: 'success', sessionId: 'session-a' };
+});
 installApprovalCommonModuleMocks();
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 beforeAll(loadSyncSingletonForTests);
@@ -39,7 +45,7 @@ beforeEach(() => {
 afterEach(async () => {
     await connection?.dispose();
     connection = undefined;
-    resetRuntimeFetch(); invalidateAccountEncryptionModeCache(); vi.restoreAllMocks(); vi.unstubAllGlobals(); daemonRpc.mockClear();
+    resetRuntimeFetch(); invalidateAccountEncryptionModeCache(); vi.restoreAllMocks(); vi.unstubAllGlobals(); daemonRequests.length = 0;
 });
 
 describe('accepted managed input native prerequisite', () => {
@@ -50,7 +56,7 @@ describe('accepted managed input native prerequisite', () => {
         const controller = { machineId: 'controller-a', installationId: 'installation-a' };
         const contribution = { pluginId: 'happier.machine.lima', localId: 'lima' };
         const session = createSessionFixture({
-            id: 'session-a', serverId: profileId, active: false, activeAt: 1, presence: 'offline', pendingVersion: 2,
+            id: 'session-a', serverId: profileId, active: false, activeAt: 1, presence: 0, pendingVersion: 2,
             metadata: { machineId: 'guest-a', path: '/project', flavor: 'claude', claudeSessionId: 'claude-a', claudeTranscriptPath: '/project/transcript.jsonl', host: 'guest' },
             pendingActivationAuthorization: { status: 'waiting', requestId: 'request-a', requestedAt: 10, managedWakeTargetV1: {
                 homeId: 'srv_home_a', managedId: 'managed-a', enrolledMachineId: 'guest-a', expectedIntentRevision: 1,
@@ -68,6 +74,7 @@ describe('accepted managed input native prerequisite', () => {
         });
         const paths: string[] = [];
         let admitted = false;
+        let observedPower = power;
         connection = await restoreServerAccountForTest({
             serverUrl: 'https://server-a', serverIdentityId: 'srv_home_a', accountId,
             credentials: { token: createAccountTokenForTests(accountId, { currentAccount: true }) },
@@ -82,6 +89,8 @@ describe('accepted managed input native prerequisite', () => {
                     recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' },
                 });
                 if (url.pathname === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
+                if (url.pathname === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'guest-a', accountId })]);
+                if (url.pathname === '/v1/machines/guest-a') return Response.json({ machine: createPlainMachineRowFixture({ id: 'guest-a', accountId }) });
                 if (url.pathname === '/v2/sessions' || url.pathname === '/v2/sessions/active') {
                     // Keep the authoritative initial list and later refreshes on
                     // the same real Session, rather than racing a store override.
@@ -92,6 +101,8 @@ describe('accepted managed input native prerequisite', () => {
                         }], nextCursor: null, hasNext: false,
                     }));
                 }
+                const bootstrap = createEmptyAccountBootstrapHttpResponse(url.pathname, init);
+                if (bootstrap) return bootstrap;
                 if (!['/v2/sessions/session-a/pending', '/v2/sessions/session-a', '/v1/machines/managed/actions/get'].includes(url.pathname)) {
                     return Response.json({ error: 'not_found' }, { status: 404 });
                 }
@@ -110,7 +121,7 @@ describe('accepted managed input native prerequisite', () => {
                     resource: { contributionRef: contribution, schemaVersion: 1, value: {} },
                     controller, allocation: 'bound', creationState: 'active', enrolledMachineId: 'guest-a',
                     desired: 'start', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: true,
-                    observation: { observedAt: 10, availability: 'present', power, storage: 'retained', daemon: power === 'running' ? 'connected' : 'disconnected' },
+                    observation: { observedAt: 10, availability: 'present', power: observedPower, storage: 'retained', daemon: observedPower === 'running' ? 'connected' : 'disconnected' },
                 });
             },
         });
@@ -137,7 +148,7 @@ describe('accepted managed input native prerequisite', () => {
         });
         const port: SessionSubmitPort = {
             enqueuePendingMessage: (sessionId, text, displayText, metaOverrides, options) => enqueuePendingMessageV2({
-                sessionId, session: beforeAdmission, text, displayText, metaOverrides, localId: options?.localId, encryption: null,
+                sessionId, session: beforeAdmission, text, displayText: displayText ?? undefined, metaOverrides, localId: options?.localId ?? undefined, encryption: null,
                 outboxScope: scope, request, serverWireMode: 'pending_input_v3', requestedAction: options?.requestedAction,
                 resumeWhenAvailable: options?.resumeWhenAvailable, accountLifetime: account.accountLifetime,
             }),
@@ -168,17 +179,35 @@ describe('accepted managed input native prerequisite', () => {
                 : { type: 'success', persistence: 'pending', localId: 'request-a', wake: { attempted: true, state: 'started' } });
             expect(storage.getState().sessionPending[session.id]?.messages).toHaveLength(1);
             expect(storage.getState().sessionPending[session.id]?.messages[0]?.source).toBe('local_outbound');
-            if (power === 'stopped') expect(daemonRpc).not.toHaveBeenCalled();
+            if (power === 'stopped') expect(daemonRequests).toEqual([]);
             else {
-                expect(daemonRpc).toHaveBeenCalled();
+                expect(daemonRequests).toHaveLength(1);
                 // Protected native qualification belongs to the host's read;
                 // the existing guest runtime RPC must not receive this carrier.
-                expect(daemonRpc.mock.calls[0]?.[0]).not.toHaveProperty('payload.pendingActivationAuthorization');
-                expect(daemonRpc.mock.calls[0]?.[0]).not.toHaveProperty('payload.managedWakeTargetV1');
+                expect(daemonRequests[0]?.params).not.toHaveProperty('pendingActivationAuthorization');
+                expect(daemonRequests[0]?.params).not.toHaveProperty('managedWakeTargetV1');
             }
             expect(paths).toContain('/v1/machines/managed/actions/get');
             expect(paths).toContain('/v2/sessions/session-a');
             expect(paths.indexOf('/v2/sessions/session-a/pending')).toBeLessThan(paths.lastIndexOf('/v2/sessions/session-a'));
+            if (power === 'stopped') {
+                const queued = storage.getState().sessionPending[session.id]?.messages;
+                const enqueueCount = paths.filter(path => path === '/v2/sessions/session-a/pending').length;
+                // An unresolved Start retains waiting authority. A later native
+                // observation can activate that exact input without rearming it.
+                observedPower = 'running';
+                const resume = buildResumeSessionBaseOptionsFromSession({ sessionId: session.id, session,
+                    resumeCapabilityOptions: {}, resumeTargetOverride: { machineId: 'guest-a', directory: '/project' } });
+                if (!resume) throw new Error('Expected the original resumable Session');
+                const resumed = await ensureSessionRuntimeForPendingInput({ ...resume,
+                    serverId: scope.serverId, accountLifetime: account.accountLifetime,
+                    pendingActivationAuthorization: session.pendingActivationAuthorization!,
+                });
+                expect(resumed, JSON.stringify(resumed)).toMatchObject({ type: 'success' });
+                expect(daemonRequests).toHaveLength(1);
+                expect(storage.getState().sessionPending[session.id]?.messages).toEqual(queued);
+                expect(paths.filter(path => path === '/v2/sessions/session-a/pending')).toHaveLength(enqueueCount);
+            }
         } finally { account.dispose(); }
     });
 });

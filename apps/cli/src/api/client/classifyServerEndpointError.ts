@@ -166,6 +166,24 @@ export function classifyServerEndpointError(
   error: unknown,
   options: Readonly<{ featureAbsentStatusCodes?: readonly number[] }> = {},
 ): ServerEndpointErrorClassification {
+  // Domain errors retain the original transport as their cause. An unknown
+  // wrapper code/message must not hide that transport's recovery disposition.
+  // Match the existing bounded cause readers above, including cyclic errors.
+  let current = error;
+  for (let depth = 0; depth <= 4; depth++) {
+    const classification = classifyServerEndpointErrorAtCause(current, options);
+    if (classification.kind !== 'protocol_error') return classification;
+    const cause = asRecord(current)?.cause;
+    if (cause === undefined || cause === current) break;
+    current = cause;
+  }
+  return { kind: 'protocol_error', retryable: false };
+}
+
+function classifyServerEndpointErrorAtCause(
+  error: unknown,
+  options: Readonly<{ featureAbsentStatusCodes?: readonly number[] }>,
+): ServerEndpointErrorClassification {
   const statusCode = readPreservedStatus(error) ?? undefined;
   if (statusCode === 401 || statusCode === 403) {
     return { kind: 'auth_failed', retryable: false, statusCode };
@@ -203,6 +221,7 @@ export function classifyServerEndpointError(
   if (
     code === 'HAPPIER_ACCOUNT_MODE_UNKNOWN'
     || code === 'state_sharing_lock_unavailable'
+    || code === 'database_connection_unavailable'
   ) {
     return {
       kind: 'dependency_unavailable',

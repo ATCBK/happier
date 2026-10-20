@@ -10,7 +10,7 @@ import { composeActionCliInput, parseActionCliCommandInput } from './parseComman
 describe('compiled Services command presentation', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(['localServices.actions.copyUrl', 'localServices.actions.openPreview',
+  it.each(['localServices.actions.copyUrl',
     'localServices.launcher.openPreview', 'localServices.publicPreview.copyUrl'] as const)(
     'keeps answering-client effect %s client-placed without public Machine RPC', actionId => {
       const spec = getActionSpec(actionId);
@@ -19,6 +19,12 @@ describe('compiled Services command presentation', () => {
       expect(listCompiledActionCliCommands().some(command => command.actionId === actionId)).toBe(false);
     },
   );
+
+  it('routes local service preview creation through the Machine owner', () => {
+    const spec = getActionSpec('localServices.actions.openPreview');
+    expect(spec.executionPlacement).toBe('machine');
+    expect(spec.surfaces.rpc).toBe(true);
+  });
 
   it('renders observed running URL-less Services without inventing a waiting endpoint', async () => {
     const command = findCompiledActionCliCommand(['services', 'launcher', 'snapshot'], listCompiledActionCliCommands());

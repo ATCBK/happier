@@ -18,11 +18,11 @@ import { ScmComparisonSchema, ScmComparisonSourceSchema } from '@happier-dev/plu
 
 import { bindCorpusCollections } from '../corpus/collections/bindCorpusCollections.js';
 import type { CorpusCollectionsV1 } from '../corpus/collections/bindCorpusCollections.js';
-import { renderSourceQualifiedId } from '../corpus/identity/components.js';
+import { renderSourceQualifiedId, sameTriageEntryReference } from '../corpus/identity/components.js';
 import { TRIAGE_SOURCES_CONTRIBUTION_POINT_REF_V1 } from '../manifest.js';
 import { requireTriageAccountStorage } from '../requiredAccountStorage.js';
 import { indexTriageAdmittedSourcesV1 } from './listEntries.js';
-import { unlinkEntryFromSession } from '../sessions/entrySessionLinks.js';
+import { createTriageSourceSessionRelations } from '../sessions/sourceSessionRelations.js';
 import type { TriageSessionActionInvokerV1 } from '../sessions/entrySessionOpen.js';
 import {
     materializationWorkspaceFacts,
@@ -65,6 +65,7 @@ export type TriageEntrySessionActionDepsV1 = Readonly<{
     collections: Pick<CorpusCollectionsV1, 'sessionLinks'>;
     /** The host invoker for the two generic Session Actions this start consumes. */
     execute: TriageSessionActionInvokerV1;
+    linkSession?: import('../sessions/entrySessionOrchestrator.js').TriageEntrySessionDepsV1['linkSession'];
     /** The exact current selected source operation for a pull-request start. */
     prepareReviewWorkspace?: TriageReviewWorkspacePreparationDepsV1;
     nowMs: () => number;
@@ -89,28 +90,9 @@ function destinationFrom(
         kind: 'new',
         creationKey: destination.creationKey,
         spawn: {
-            executionTarget: destination.spawn.executionTarget,
-            agentTarget: destination.spawn.agentTarget,
-            // The pressed action's configured Launch Profile is carried to the
-            // canonical creator that owns what it means. The remaining optional
-            // members are not Triage-authored defaults: they are the host's
-            // already-settled Session choices, forwarded in the spawn wire's
-            // own vocabulary without reinterpretation.
-            ...(destination.spawn.profileId === undefined
-                ? {}
-                : { profileId: destination.spawn.profileId }),
-            ...(destination.spawn.modelSelection === undefined
-                ? {}
-                : { modelSelection: destination.spawn.modelSelection }),
-            ...(destination.spawn.permissionMode === undefined
-                ? {}
-                : { permissionMode: destination.spawn.permissionMode }),
-            ...(destination.spawn.transcriptStorage === undefined
-                ? {}
-                : { transcriptStorage: destination.spawn.transcriptStorage }),
-            ...(destination.spawn.terminal === undefined
-                ? {}
-                : { terminal: destination.spawn.terminal }),
+            // The closed Action carrier already selected the allowed recipe
+            // fields. Forward them whole so this adapter cannot drop a choice.
+            ...destination.spawn,
         } as Extract<TriageEntrySessionDestinationV1, Readonly<{ kind: 'new' }>>['spawn'],
         materialization: destination.materialization,
     };
@@ -305,14 +287,18 @@ function isJsonRecord(value: JsonValue): value is Readonly<Record<string, JsonVa
 /**
  * The host separates the selected Connected Account from the submitted raw
  * source input. Reconstruct it only to compare against the semantic request
- * this start will materialize; the host performs the real reconstruction when
- * the admitted operation consumes the carrier.
+ * this start will materialize; native input is compared unchanged. The host
+ * performs account reconstruction when the admitted operation consumes the carrier.
  */
 function selectedPrepareInputMatchesRequest(
     selection: NonNullable<TriageStartEntrySessionInputV1['prepareReviewWorkspaceSelection']>,
     request: TriageReviewWorkspaceRequestV1,
 ): boolean {
     if (!isJsonRecord(selection.input)) return false;
+    if (selection.credentialRef === undefined) {
+        return !('account' in request.instance.binding)
+            && pluginJsonValuesEqual(selection.input, projectTriagePrepareReviewWorkspaceInputV1(request));
+    }
     const instance = selection.input.instance;
     if (!isJsonRecord(instance)) return false;
     const binding = instance.binding;
@@ -376,7 +362,7 @@ async function readCurrentPrepareReviewWorkspace(
         operation,
         execute: async (selectedOperation, _expectedInput, options) => await context.services.actions
             .executeAdmittedTargetedOperation(selectedOperation, selectedInput, {
-                expectedSelectedConnectedAccountRef: selected.credentialRef,
+                ...(selected.credentialRef === undefined ? {} : { expectedSelectedConnectedAccountRef: selected.credentialRef }),
                 ...(options?.signal === undefined ? {} : { signal: options.signal }),
             }),
         ...(context.signal ? { signal: context.signal } : {}),
@@ -451,6 +437,9 @@ export function createTriageStartPullRequestReviewActionHandler(): ActionHandler
     TriageStartPullRequestReviewResultV1
 > {
     return async (input, context: PluginInvocationContext) => {
+        if ('source' in input.review.instance.binding && input.review.instance.binding.source === 'accountData') {
+            return { v: 1, status: 'refused', reason: 'scopeRefused' };
+        }
         if (new Set(input.engineIds).size !== input.engineIds.length) {
             return { v: 1, status: 'refused', reason: 'reviewRejected' };
         }
@@ -605,6 +594,7 @@ export async function startTriageEntrySession(
     const orchestratorDeps = {
         collections: deps.collections,
         execute: deps.execute,
+        ...(deps.linkSession === undefined ? {} : { linkSession: deps.linkSession }),
         nowMs: deps.nowMs(),
         ...(deps.prepareReviewWorkspace === undefined
             ? {}
@@ -691,29 +681,22 @@ export async function startTriageEntrySession(
     return projectStartResult(result, input);
 }
 
-export async function unlinkTriageEntryFromSession(
-    input: TriageUnlinkEntryFromSessionActionInputV1,
-    deps: Pick<TriageEntrySessionActionDepsV1, 'collections' | 'signal'>,
-): Promise<TriageUnlinkEntryFromSessionActionResultV1> {
-    const result = await unlinkEntryFromSession({
-        collections: deps.collections,
-        entryRef: input.entryRef,
-        sessionId: input.sessionId,
-        ...(deps.signal ? { signal: deps.signal } : {}),
-    });
-    // The writer's own verdict, minus the storage tag: a row id is plaintext
-    // server metadata and nothing a surface renders needs one.
-    return { v: 1, status: result.status };
-}
-
 export function createTriageStartEntrySessionActionHandler(): ActionHandler<
     TriageStartEntrySessionInputV1,
     TriageStartEntrySessionResultV1
 > {
     return async (input, context: PluginInvocationContext) => {
         const prepareReviewWorkspace = await readCurrentPrepareReviewWorkspace(input, context);
+        const collections = bindCorpusCollections(requireTriageAccountStorage(context));
+        const relations = createTriageSourceSessionRelations(context, collections);
         return await startTriageEntrySession(input, {
-            collections: bindCorpusCollections(requireTriageAccountStorage(context)),
+            collections,
+            linkSession: async (link) => {
+                const result = await relations.write({ ...link,
+                    sourceInstanceId: link.sourceInstanceId ?? (sameTriageEntryReference(link.entryRef, input.entryRef) ? input.sourceInstanceId : undefined),
+                    linked: true });
+                return { status: result.status === 'linked' ? 'linked' : 'failed' };
+            },
             execute: async (actionId, actionInput, options) => {
                 const result = await context.services.actions.execute(
                     actionId,
@@ -736,11 +719,9 @@ export function createTriageUnlinkEntryFromSessionActionHandler(): ActionHandler
     TriageUnlinkEntryFromSessionActionInputV1,
     TriageUnlinkEntryFromSessionActionResultV1
 > {
-    return async (input, context: PluginInvocationContext) => await unlinkTriageEntryFromSession(
-        input,
-        {
-            collections: bindCorpusCollections(requireTriageAccountStorage(context)),
-            ...(context.signal ? { signal: context.signal } : {}),
-        },
-    );
+    return async (input, context: PluginInvocationContext) => {
+        const result = await createTriageSourceSessionRelations(context,
+            bindCorpusCollections(requireTriageAccountStorage(context))).write({ ...input, linked: false });
+        return { v: 1, status: result.status === 'linked' ? 'failed' : result.status };
+    };
 }

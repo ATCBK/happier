@@ -385,8 +385,11 @@ Archive retains the logo, so restore needs no re-upload.
 
 One Home-local page ordered by `(normalized name, teamId)`.
 
-- `scope: 'member'` lists the Teams the viewer actively belongs to. A suspended membership
-  confers nothing and is excluded.
+- `scope: 'member'` lists the viewer's readable Team summaries. A suspended native
+  membership remains discoverable for self-leave. When Team authentication qualifies,
+  `leave` is its only membership capability; without independent Home authority it has
+  no summary counts or roster/content access. A suspended source-managed
+  membership with neither Team visibility nor self-leave is withheld.
 - `scope: 'administered'` is an explicit request reserved to Home `manageAllTeams`. It does
   not widen the member directory and does not confer membership.
 - `archived` selects the active or archived page. They are separate queries, which keeps one
@@ -397,6 +400,8 @@ One Home-local page ordered by `(normalized name, teamId)`.
   error rather than silently restarting at page one.
 - Duplicate names remain correctly ordered and complete because the immutable ID breaks
   ties.
+- Cursors advance over scanned membership rows, including withheld summaries. A page may
+  therefore contain no items and still carry a `nextCursor` to continue the directory scan.
 
 An unreadable Team and an absent one produce the same answer, so Team existence cannot be
 probed. Team summaries never enumerate other Home Accounts.

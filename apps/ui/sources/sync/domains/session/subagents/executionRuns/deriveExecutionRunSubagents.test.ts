@@ -54,8 +54,8 @@ function deriveStatus(messages: readonly Message[], runId: string): string | und
 describe('deriveExecutionRunSubagents status derivation', () => {
     it('projects additive launch-origin fields from retained transcript tool payloads', () => {
         const launchOrigin = {
-            kind: 'session_discussion',
-            sessionId: 'session-1',
+            kind: 'discussion',
+            serverId: 'server-a',
             discussionId: 'discussion-1',
             messageIds: ['message-1'],
         };
@@ -76,8 +76,8 @@ describe('deriveExecutionRunSubagents status derivation', () => {
             state: 'running',
             input: {
                 launchOrigin: {
-                    kind: 'session_discussion',
-                    sessionId: 'session-1',
+                    kind: 'discussion',
+                    serverId: 'server-a',
                     discussionId: 'discussion-1',
                     messageIds: ['message-1'],
                 },
@@ -87,8 +87,8 @@ describe('deriveExecutionRunSubagents status derivation', () => {
         expect(deriveExecutionRunSubagents({ messages })[0]?.runRef).toMatchObject({
             runId: 'run_origin1111',
             launchOrigin: {
-                kind: 'session_discussion',
-                sessionId: 'session-1',
+                kind: 'discussion',
+                serverId: 'server-a',
                 discussionId: 'discussion-1',
                 messageIds: ['message-1'],
             },

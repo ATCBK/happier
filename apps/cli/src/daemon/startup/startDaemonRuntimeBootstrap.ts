@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 
 import type { ApiClient } from '@/api/api';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import type { LiveWorkProducerV1 } from '../lifecycle/managedActivity';
@@ -595,7 +596,7 @@ export async function startDaemonConnectedServiceRuntime(
   const connectedServicesQuotasEnabled =
     await resolveConnectedServicesQuotasDaemonEnabled({
       env: params.processEnv,
-      serverUrl: configuration.serverUrl,
+      serverUrl: resolveServerHttpBaseUrl(),
     });
   let connectedServiceQuotasCoordinator: ConnectedServiceQuotasCoordinator | null = null;
   let connectedServiceQuotasLoopHandle: ConnectedServiceQuotasLoopHandle = null;

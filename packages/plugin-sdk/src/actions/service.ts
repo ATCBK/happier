@@ -12,6 +12,7 @@ import {
   resolveEffectiveActionInputFields,
 } from './inputHints.js';
 import { PluginMachineExecutionOriginV1Schema } from './executionOrigin.js';
+import type { PluginMachineExecutionRoutingV1 } from './executionOrigin.js';
 import type {
   ActionExecuteResult,
   ActionApprovalRequestCreatedResult,
@@ -126,6 +127,7 @@ export type ContributedActionExecutionWithOriginResult<
  */
 export type ContributedActionExecutionWithOriginOptions = PluginCancellationOptions & Readonly<{
   expectedExecutionOrigin?: PluginMachineExecutionOriginV1;
+  expectedExecutionRouting?: PluginMachineExecutionRoutingV1;
 }>;
 
 /**

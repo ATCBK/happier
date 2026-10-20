@@ -229,6 +229,22 @@ occurrence rather than submitting another Run. Long-lived Services are separate
 from this finite command queue. A Service without a declared port may have an
 observed HTTP address, but no address is invented when listeners are ambiguous.
 
+In the 0.3 development implementation, an explicitly portable Service can use a
+worker's native command or selected environment. Happier copies current files
+through Sync before reviewing that destination's native facts and setup. Changed
+copied configuration or an unavailable native adapter prevents launch; it does
+not silently run in the host environment. Integrated package and live validation
+remain required, and native tool support still depends on the destination's
+qualified platform and version.
+
+Service destinations also offer the existing New Machine preset or one-off
+selection in the 0.3 development implementation. Choosing it does not acquire a
+machine: explicit Start or confirmed Move begins acquisition and waits for real
+enrollment before continuing. A running Service stays where it is during
+enrollment. Back or Cancel retires the continuation; an uncertain acquisition or
+Start is inspected rather than automatically submitted again. This flow does
+not create an agent Session and still needs integrated and live validation.
+
 Before retiring a worker copy, dispose of the actual work that depends on it;
 retirement reports queued commands, preparation, processes, Services or Sync
 dependencies rather than silently canceling them. Leaving the files and removing

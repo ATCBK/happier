@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
 import { getActionSpec } from './actionSpecs.js';
 import { AppShellActionOutputSchemas } from './appShellActionFamily.js';
+import { ActionsSettingsV1Schema } from './actionSettings.js';
+import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
 
 describe('app shell Actions', () => {
   it('accepts canonical Inbox Automation and approval pointers but rejects private approval bodies', () => {
@@ -52,7 +54,11 @@ describe('app shell Actions', () => {
   it.each(['session.work.get', 'inbox.get', 'inbox.mark_all_read'] as const)(
     'retains approval admission for voice %s before the answering owner executes', async actionId => {
       let ownerRead = false;
-      const executor = createActionExecutor({ isActionApprovalRequired: () => true,
+      const settings = ActionsSettingsV1Schema.parse({ v: 1,
+        actions: { [actionId]: { approvalRequiredSurfaces: ['voice'] } } });
+      const isActionApprovalRequired: NonNullable<ActionExecutorDeps['isActionApprovalRequired']> = (id, context) =>
+        isApprovalRequiredByActionsSettings(id, settings, context);
+      const executor = createActionExecutor({ isActionApprovalRequired,
         appShellAction: async () => { ownerRead = true; throw new Error('Owner must not execute before approval'); },
       } as unknown as ActionExecutorDeps);
       const input = actionId === 'session.work.get' ? { sessionId: 'lead' }

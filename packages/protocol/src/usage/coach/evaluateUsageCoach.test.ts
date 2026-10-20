@@ -89,6 +89,21 @@ describe('evidence-bound usage coach', () => {
         { ...accounting, contributions: accounting.contributions!.map(row => row.turnId === 'light-turn' ? { ...row, modelId: 'other-light' } : row) });
         const original = read();
         expect(original.status === 'finding' && changedTarget.status === 'finding' && original.finding.evidenceKey !== changedTarget.finding.evidenceKey).toBe(true);
+        // Large completed-request histories must not rescan the entire accounting history per request.
+        let contributionVisits = 0;
+        const history = [{ ...accounting.contributions![0]!, cost: { ...accounting.contributions![0]!.cost, reportedUsd: 100 } },
+            ...accounting.contributions!, { ...accounting.contributions![0]!, sessionId: 'other-session' },
+            ...Array.from({ length: 128 }, (_, index) => ({
+            ...accounting.contributions![0]!, id: `unrelated-${index}`, turnId: `unrelated-${index}`,
+        }))].map(row => ({ ...row, get sessionId() { contributionVisits += 1; return row.sessionId; } }));
+        const large = result({ accounting: { ...accounting, contributions: history },
+            detail: { coverage: 'partial', modelRequests: [...requests, ...Array.from({ length: 128 }, (_, index) => ({
+                ...requests[0]!, evidenceId: `unmatched-${index}`, turnId: `unmatched-${index}`,
+            }))] }, preferences: { v: 1, suppressions: [],
+                disabledChecks: USAGE_COACH_DETECTOR_IDS.filter(id => id !== 'model_misfit'), modelSuggestion: 'suggest_with_estimates' },
+        }, 'model_misfit');
+        expect(large).toEqual(original);
+        expect(contributionVisits).toBeLessThanOrEqual(history.length * 2);
     });
     it('reports zero calls only for a complete witnessed binding window independently of the partial transcript page', () => {
         const usage: UsageMcpBindingUsage = { v: 1, evidenceId: 'mcp-window', sessionId: 's', turnId: 't', observedAtMs: 50,
@@ -103,10 +118,18 @@ describe('evidence-bound usage coach', () => {
         expect(read([{ ...usage, bindings: [{ ...usage.bindings[0]!, toolCallCount: 1 }] }]).status).toBe('no_finding');
         expect(read([usage, { ...usage, evidenceId: 'second-window', observedAtMs: 80, window: { startMs: 60, endMs: 80 },
             bindings: [{ ...usage.bindings[0]!, toolCallCount: 1 }] }]).status).toBe('no_finding');
-        const old = { ...usage, evidenceId: 'old-catalog-window', bindings: [{ ...usage.bindings[0]!, catalogRevision: 39, toolCallCount: 1 }] };
+        const old = { ...usage, evidenceId: 'old-binding-window', observedAtMs: 40, window: { startMs: 10, endMs: 40 },
+            bindings: [{ ...usage.bindings[0]!, bindingRevision: 19, catalogRevision: 39, toolCallCount: 1 }] };
         expect(read([old, usage])).toMatchObject({ status: 'finding', finding: {
             evidence: [{ kind: 'mcp_usage', id: 'mcp-window', observedAtMs: 50 }] } });
         expect(read([old, { ...usage, coverage: 'partial' }]).status).toBe('insufficient_evidence');
+        const sameBinding = { ...old, bindings: [{ ...old.bindings[0]!, bindingRevision: 20 }] };
+        // Catalog edits elsewhere cannot erase a call witnessed for this configuration.
+        expect(read([sameBinding, usage]).status).toBe('no_finding');
+        const otherBinding = { ...usage, evidenceId: 'unrelated-window',
+            bindings: [{ ...usage.bindings[0]!, serverId: 'other-server', bindingId: 'other-binding', catalogRevision: 41, toolCallCount: 1 }] };
+        expect(read([usage, otherBinding])).toMatchObject({ status: 'finding', finding: {
+            measurements: [{ metric: 'unused_mcp_bindings', value: 1, unit: 'count' }] } });
     });
     it('admits a prepared review prompt rather than an arbitrary Session birth envelope', () => {
         const input = { executionTarget: { serverId: 'home', machineId: 'machine' },

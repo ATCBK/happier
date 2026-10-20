@@ -2,7 +2,7 @@ import { createUnavailableRuntimeActionExecutor, resolveRuntimeActionExecutionFa
 import { requiresAgentEgressRedaction } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { parseLocalServiceDomainActionRpcRequest, resolveLocalServiceActionKindForRuntimeActionId } from '@happier-dev/protocol/actions/specs/localServices';
 import { DaemonLocalServiceLauncherLeafRequestV1Schema, DaemonLocalServiceLauncherSnapshotRequestV1Schema, DaemonLocalServiceLauncherStartRequestV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
-import { DaemonLocalServicePreviewOpenOrCreateRequestV1Schema, DaemonLocalServicePreviewRevokeRequestV1Schema } from '@happier-dev/protocol/local/services/preview/v1';
+import { DaemonLocalServicePreviewOpenOrCreateRequestV1Schema, DaemonLocalServicePreviewRevokeRequestV1Schema, LocalServicePreviewServiceTargetV1Schema } from '@happier-dev/protocol/local/services/preview/v1';
 import { DaemonLocalServicePublicPreviewCopyUrlRequestV1Schema, DaemonLocalServicePublicPreviewCreateRequestV1Schema, DaemonLocalServicePublicPreviewRevokeRequestV1Schema, DaemonLocalServicePublicPreviewStatusRequestV1Schema, isLocalServicePublicPreviewCreateConfirmed, redactLocalServicePublicPreviewCreateResponseForAgentEgress, redactLocalServicePublicPreviewRevokeResponseForAgentEgress, redactLocalServicePublicPreviewSnapshotForAgentEgress } from '@happier-dev/protocol/local/services/public/v1';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { LocalServiceActionRequestV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
@@ -27,7 +27,7 @@ export type LocalServicesRuntimeActionRoutes = Readonly<{
     actionRoutes?: Pick<LocalServiceActionRoutes, 'execute'>;
     publicPreviewRoutes?: LocalServicePublicPreviewRoutes;
     relocateService?: (request: ProjectServiceRelocateInputV1, context: RuntimeActionExecuteArgs['context'],
-        executeCanonicalAction?: RuntimeActionExecuteArgs['executeCanonicalAction']) => Promise<ActionExecuteResult>;
+        executeCanonicalAction?: RuntimeActionExecuteArgs['executeCanonicalAction'], ingress?: RpcHandlerContext) => Promise<ActionExecuteResult>;
 }>;
 
 type CreateLocalServicesDaemonRuntimeActionExecutorInput = Readonly<{
@@ -137,6 +137,9 @@ function requiredFeatureGateIds(
         return ['localServices.publicPreview'];
     }
     if (actionId.startsWith('localServices.actions.')) {
+        if (actionId === 'localServices.actions.openPreview') {
+            return ['localServices.actions', 'localServices.preview'];
+        }
         if (actionId === 'localServices.actions.terminateDetected') {
             return ['localServices.actions', 'localServices.actions.terminate'];
         }
@@ -203,7 +206,7 @@ export function createLocalServicesDaemonRuntimeActionExecutor(
             if (!relocate) return disabledResult('local_services_runtime_action_unbacked');
             const request = ProjectServiceRelocateInputV1Schema.safeParse(parsed.input);
             if (!request.success) return invalidParametersResult;
-            const result = await relocate(request.data, args.context, args.executeCanonicalAction);
+            const result = await relocate(request.data, args.context, args.executeCanonicalAction, input.ingress);
             return result.ok ? result.result : result;
         }
 
@@ -366,8 +369,24 @@ export function createLocalServicesDaemonRuntimeActionExecutor(
             ) {
                 return invalidParametersResult;
             }
-            return await routes.execute(request.data, { ingress: input.ingress, actionContext: args.context,
+            const result = await routes.execute(request.data, { ingress: input.ingress, actionContext: args.context,
                 prepareStartAction: input.prepareStartAction });
+            if (args.actionId !== 'localServices.actions.openPreview') return result;
+            if (result.status !== 'succeeded') return previewLifecycleDisabledResult(result.reasonCode ?? 'action_not_allowed');
+            const previewRoutes = input.routes.previewRoutes;
+            if (!previewRoutes?.openOrCreate) return disabledResult('local_services_preview_routes_unavailable');
+            const target = request.data.target;
+            const serviceTarget = LocalServicePreviewServiceTargetV1Schema.safeParse(target);
+            const previewRequest = DaemonLocalServicePreviewOpenOrCreateRequestV1Schema.safeParse({
+                machineId: target.machineId,
+                ...(target.kind === 'inventory_entry'
+                    ? { inventoryEntryId: target.inventoryEntryId, ...(target.sessionId ? { sessionId: target.sessionId } : {}) }
+                    : serviceTarget.success ? { serviceTarget: serviceTarget.data }
+                        : { managedServiceId: target.managedServiceId, ...(target.sessionId ? { sessionId: target.sessionId } : {}) }),
+            });
+            if (!previewRequest.success) return invalidParametersResult;
+            const opened = await previewRoutes.openOrCreate(previewRequest.data, args.context.signal, input.ingress);
+            return opened.ok ? opened.response : previewLifecycleDisabledResult(opened.reasonCode);
         }
 
         return disabledResult('local_services_runtime_action_unbacked');

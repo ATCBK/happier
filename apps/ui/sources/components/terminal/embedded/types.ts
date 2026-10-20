@@ -1,7 +1,7 @@
 import type { EmbeddedTerminalWriteCompleteEvent } from './embeddedTerminalRendererHandle';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions';
 
-export type EmbeddedTerminalPaneStatus = 'idle' | 'connecting' | 'connected' | 'error' | 'exited';
+export type EmbeddedTerminalPaneStatus = 'idle' | 'connecting' | 'connected' | 'not-open' | 'error' | 'exited';
 
 export type EmbeddedTerminalDetectedUrl = Readonly<{
     url: string;
@@ -14,6 +14,10 @@ export type EmbeddedTerminalPaneController = Readonly<{
     /** A borrowed view of a process another lifecycle owns: it reads output, it never types, resets or restarts. */
     readOnly?: boolean;
     error: string | null;
+    /** Native exit observed from the terminal's retained stream. */
+    exitCode?: number | null;
+    /** `error` that followed a connected stream: the terminal started, then its connection dropped. */
+    connectionLost?: boolean;
     detectedUrl: EmbeddedTerminalDetectedUrl;
     onInput: (data: string) => void;
     onPaste: (data: string) => void | Promise<unknown>;

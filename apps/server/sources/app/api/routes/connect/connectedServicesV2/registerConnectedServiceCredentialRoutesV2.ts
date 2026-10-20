@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import type { Fastify } from "../../../types";
 import { CONNECTED_SERVICE_ERROR_CODES } from '@happier-dev/protocol/connect/connectedServiceErrors';
 import { ConnectedServiceCredentialMutationSupersededV1Schema, SealedConnectedServiceCredentialV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
@@ -40,17 +40,17 @@ export function registerConnectedServiceCredentialRoutesV2(
       }),
       body: z.object({
         sealed: SealedConnectedServiceCredentialV1Schema,
-        metadata: z.object({
+        metadata: z.optional(z.object({
           kind: z.enum(["oauth", "token"]),
-          providerEmail: z.string().min(1).nullable().optional(),
-          providerAccountId: z.string().min(1).nullable().optional(),
-          expiresAt: z.number().int().nonnegative().nullable().optional(),
-        }).optional(),
-        reconnect: z.object({
-          allowProviderIdentityChange: z.boolean().optional().default(false),
-        }).optional(),
+          providerEmail: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+          providerAccountId: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+          expiresAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+        })),
+        reconnect: z.optional(z.object({
+          allowProviderIdentityChange: z._default(z.optional(z.boolean()), false),
+        })),
         ...connectedServiceCredentialMutationGuardFields,
-      }).superRefine(validateConnectedServiceCredentialMutationGuard),
+      }).check(z.superRefine(validateConnectedServiceCredentialMutationGuard)),
       response: {
         200: z.object({ success: z.literal(true), credentialRevision: z.string() }),
         400: z.unknown(),
@@ -60,7 +60,7 @@ export function registerConnectedServiceCredentialRoutesV2(
           z.object({
             error: z.literal(CONNECTED_SERVICE_ERROR_CODES.credentialMutationSuperseded),
             reason: z.enum(["revision_mismatch", "refresh_lease_lost"]),
-            credentialRevision: z.string().nullable(),
+            credentialRevision: z.nullable(z.string()),
           }),
         ]),
       },
@@ -128,13 +128,13 @@ export function registerConnectedServiceCredentialRoutesV2(
       }),
       response: {
         200: z.object({
-          credentialRevision: z.string().optional(),
+          credentialRevision: z.optional(z.string()),
           sealed: SealedConnectedServiceCredentialV1Schema,
           metadata: z.object({
             kind: z.enum(["oauth", "token"]),
-            providerEmail: z.string().nullable().optional(),
-            providerAccountId: z.string().nullable().optional(),
-            expiresAt: z.number().int().nonnegative().nullable().optional(),
+            providerEmail: z.optional(z.nullable(z.string())),
+            providerAccountId: z.optional(z.nullable(z.string())),
+            expiresAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
           }),
         }),
         404: z.union([NotFoundSchema, z.object({ error: z.literal("connect_credential_not_found") })]),

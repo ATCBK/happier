@@ -14,11 +14,13 @@ import {
 } from '@happier-dev/protocol';
 import { RPC_METHODS, SESSION_RPC_METHODS, RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { createReactNavigationNativeMock } from '@/dev/testkit/mocks/reactNavigation';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderScreen, findTestInstanceByTypeWithProps } from '@/dev/testkit/render/renderScreen';
 import { createSessionFixture, createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 import type { createModalModuleMock } from '@/dev/testkit/mocks/modal';
 import type { Session, PendingMessage } from '@/sync/domains/state/storageTypes';
 import type { ResumeSessionResult } from '@/sync/ops/sessions';
@@ -35,12 +37,15 @@ import sodium from 'libsodium-wrappers';
 import { ManagedMachineV1Schema, type ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import type { AgentInputStatusBadge } from '@/components/sessions/agentInput/agentInputContracts';
 import type { SessionViewPresentation } from './embedded/embeddedSessionPresentation';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 
 // The shell statically imports Sync before the pane harness can bind its Socket.
 vi.mock('socket.io-client', async (importOriginal) => (
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal)
 ));
 // Substitute Metro's lazy loader only; the public factory and Action admission remain real.
+
 vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
     const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
     const { createFrontDoorActionExecuteForVitest } = await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary');
@@ -232,6 +237,9 @@ let resetQuotaSnapshot: ProviderAccountUsageSnapshotV1 | null = null;
 let heldResetQuotaRead: Readonly<{ entered(): void; release: Promise<void> }> | null = null;
 let managedInspectAskFirst = false;
 let managedWakeMachine: ManagedMachineV1 | null = null;
+let pendingReadOverride: (() => Response | Promise<Response>) | null = null;
+let inventoryReadOverride: (() => Promise<Response>) | null = null;
+let managedReadGate: Promise<void> | null = null;
 let approvalArtifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
 let projection: PluginProjectionV2 = PluginProjectionV2Schema.parse({ v: 2, generation: 1, familiesById: {} });
 
@@ -291,6 +299,7 @@ const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixture
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { clearSessionDraftValuesForSession, readSessionDraftValue, writeSessionDraftValue } = await import('@/dev/testkit/sessionDraftRepositoryTestkit');
 const runtime = installSessionPaneRuntimeTestHarness({
+    sessionSeq: 0,
     configureSocket,
     credentials: { token: createAccountTokenForTests('account-a', { currentAccount: true }) },
     features: () => {
@@ -302,6 +311,19 @@ const runtime = installSessionPaneRuntimeTestHarness({
     request: async (input, init) => {
         const url = new URL(String(input));
         const method = init?.method ?? 'GET';
+        if (method === 'GET' && url.pathname === '/v2/sessions/s1/pending' && pendingReadOverride) return pendingReadOverride();
+        if (method === 'GET' && url.pathname === '/v1/machines') {
+            if (inventoryReadOverride) return inventoryReadOverride();
+            const state = storage.getState();
+            const machines = state.profileScope ? state.machineListByServerId[state.profileScope.serverId] ?? [] : [];
+            return Response.json(machines.map(machine => ({
+                ...createPlainMachineRowFixture({ id: machine.id, accountId: 'account-a' }),
+                active: machine.active, activeAt: machine.activeAt,
+                metadata: encodePlainMachineStoredContent(machine.metadata), metadataVersion: machine.metadataVersion,
+                daemonState: machine.daemonState ? encodePlainMachineStoredContent(machine.daemonState) : null,
+                daemonStateVersion: machine.daemonStateVersion,
+            })));
+        }
         if (resetQuotaSnapshot && url.pathname.startsWith('/v4/connect/qualified/provider-account-usage/')) {
             if (url.pathname.endsWith('/sources/resolve') && heldResetQuotaRead) {
                 heldResetQuotaRead.entered();
@@ -318,7 +340,10 @@ const runtime = installSessionPaneRuntimeTestHarness({
                 observedAtMs: resetQuotaSnapshot.fetchedAtMs, record }], nextCursor: null });
             if (url.pathname.endsWith('/record')) return Response.json(record);
         }
-        if (url.pathname === '/v1/machines/managed/actions/get' && managedWakeMachine) return Response.json(managedWakeMachine);
+        if (url.pathname === '/v1/machines/managed/actions/get' && managedWakeMachine) {
+            await managedReadGate;
+            return Response.json(managedWakeMachine);
+        }
         if (url.pathname === '/v2/account/settings' && (sessionOpenDisabled || sessionOpenAskFirst || managedInspectAskFirst || resetStartAskFirst)) return Response.json({
             version: 1, content: { t: 'plain', v: {
                 actionsSettingsV1: { v: 1, actions: {
@@ -342,6 +367,7 @@ const runtime = installSessionPaneRuntimeTestHarness({
             httpWrites.push(write);
             if (url.pathname === '/v1/actions/machines.managed.inspect' && managedWakeMachine) {
                 const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
+                if (!envelope.target) throw new Error('Managed inspection requires its captured Machine target');
                 if (managedInspectAskFirst) {
                     // The native daemon, not a client-local policy mock, owns this
                     // Ask receipt. Persist its real signed origin through the Home Artifact codec.
@@ -381,12 +407,16 @@ const runtime = installSessionPaneRuntimeTestHarness({
             }
             if (url.pathname === '/v2/sessions/s1/pending/wake-message/withdraw') return Response.json({ ok: true, outcome: 'removed' });
             if (url.pathname === '/v2/sessions/s1/pending' && method === 'POST') return enqueueResponse(write);
-            if (url.pathname.startsWith('/v2/sessions/s1/pending/') && method === 'PATCH') return Response.json({ didUpdate: true });
+            if (url.pathname.startsWith('/v2/sessions/s1/pending/') && method === 'PATCH') {
+                // The route acknowledges the stored action it accepted, as the canonical result schema requires.
+                return Response.json({ ok: true, didUpdate: true, requestedAction: write.body.requestedAction });
+            }
         }
         return null;
     },
 });
 const { SessionView } = await import('./SessionView');
+const { SessionDraftHydrationBoundary } = await import('@/components/sessions/drafts/SessionDraftHydrationBoundary');
 const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
 const { emitSessionResumeRequest } = await import('@/components/sessions/model/sessionResumeRequests');
 const { publishMachineContributionRegistryProjectionInvalidation } = await import('@/sync/ops/machineContributionRegistryProjection');
@@ -472,18 +502,20 @@ async function publishDurablePendingState(row: PendingMessage, authorization: Se
 }
 
 describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
-    async function renderSessionView(props: { routeServerId?: string; presentation?: SessionViewPresentation } = {}) {
-        if (!storage.getState().machines['m-target']) setMachineOnline(true);
-        const screen = await renderScreen(
+    function sessionViewFrame(props: { routeServerId?: string; presentation?: SessionViewPresentation; presentationKey?: string } = {}) {
+        return (
             <DestinationInstanceHost tabId="queue-session" ref={{ kind: 'session', params: {
                 id: 's1', ...(props.routeServerId ? { serverId: props.routeServerId } : {}),
             } }} pathname="/session/s1" focused visible navigation={{
                 push: routerPushSpy, pushRetainingCurrent: routerPushSpy, replace: vi.fn(), back: vi.fn(),
             }}>
-                <SessionView id="s1" routeServerId={props.routeServerId} presentation={props.presentation} />
-            </DestinationInstanceHost>,
-            { wrapper: runtime.Wrapper },
+                <SessionView key={props.presentationKey} id="s1" routeServerId={props.routeServerId} presentation={props.presentation} />
+            </DestinationInstanceHost>
         );
+    }
+    async function renderSessionView(props: Parameters<typeof sessionViewFrame>[0] = {}) {
+        if (!storage.getState().machines['m-target']) setMachineOnline(true);
+        const screen = await renderScreen(sessionViewFrame(props), { wrapper: runtime.Wrapper });
         await flushHookEffects();
         return screen;
     }
@@ -513,6 +545,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         await flushHookEffects();
     }
     beforeEach(async () => {
+
         const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
         await prepareSessionDraftPersistenceStorage();
         (globalThis as { __DEV__?: boolean }).__DEV__ = false;
@@ -526,6 +559,9 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         heldResetQuotaRead = null;
         managedInspectAskFirst = false;
         managedWakeMachine = null;
+        pendingReadOverride = null;
+        inventoryReadOverride = null;
+        managedReadGate = null;
         approvalArtifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
         projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, familiesById: {} });
         clearDaemonMergedProjectionCacheForTests();
@@ -560,6 +596,108 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         (globalThis as { __DEV__?: boolean }).__DEV__ = previousDev;
     });
 
+    it.each(['managed_power_required', null, 'initial-pending-failure'] as const)(
+        'keeps the mounted wake line loading until Sync inventory and the protected read answer (hold: %s)', async holdReason => {
+        const { getSyncSingleton } = await import('@/sync/runtime/getSyncSingleton');
+        const controller = { machineId: 'controller', installationId: 'controller-installation' };
+        managedWakeMachine = ManagedMachineV1Schema.parse({ id: 'managed-guest', homeId: runtime.serverIdentityId, custodianAccountId: 'account-a',
+            launch: { provider: { pluginId: 'custom.native', localId: 'vm' }, schemaVersion: 1, name: 'Build box', choices: {} },
+            resource: { contributionRef: { pluginId: 'custom.native', localId: 'vm' }, schemaVersion: 1, value: {} },
+            controller, enrolledMachineId: 'm-target', creationState: 'active', allocation: 'bound',
+            desired: 'stop', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: true,
+            observation: { observedAt: 10, availability: 'present', power: 'stopped', storage: 'retained', daemon: 'disconnected' },
+        });
+        const inventory = deferred<void>();
+        const observation = deferred<void>();
+        const pendingRead = deferred<void>();
+        managedReadGate = observation.promise;
+        inventoryReadOverride = async () => {
+            await inventory.promise;
+            return Response.json(['m-target', 'controller'].map(id => ({
+                ...createPlainMachineRowFixture({ id, accountId: 'account-a' }), active: false, activeAt: 0,
+            })));
+        };
+        const pendingResponse = () => Response.json({ pending: [{ localId: 'wake-message', messageRole: 'user',
+            requestedAction: { v: 1, kind: 'enqueue' }, content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Keep my message' } } },
+            status: 'queued', deliveryStatus: { status: 'queued' }, position: 0, createdAt: 200, updatedAt: 200,
+            ...(holdReason === 'managed_power_required' ? { activationHoldReason: holdReason } : {}),
+        }] });
+        pendingReadOverride = holdReason === 'initial-pending-failure' ? async () => {
+            await pendingRead.promise;
+            throw new Error('Pending transport unavailable');
+        } : pendingResponse;
+        // A reload has no Machine inventory or pending read yet. Let the real
+        // Sync readers apply the responses rather than injecting projected rows.
+        storage.setState({ machines: {}, machineListByServerId: {}, machineListStatusByServerId: {}, sessionPending: {} });
+        updateSession({ pendingActivationAuthorization: { requestId: 'wake-message', requestedAt: 200, status: 'failed', failureCode: 'runtime_start_failed',
+            managedWakeTargetV1: { homeId: runtime.serverIdentityId, managedId: 'managed-guest', enrolledMachineId: 'm-target', expectedIntentRevision: 1,
+                controller, reason: 'admitted-work', origin: { kind: 'session-input', session: { homeId: runtime.serverIdentityId, sessionId: 's1' },
+                    pendingRequestId: 'wake-message', requestedAt: 200 } } } });
+        const inventoryRead = getSyncSingleton().refreshMachines();
+        const screen = await renderScreen(sessionViewFrame(), { wrapper: runtime.Wrapper });
+        const badge = () => (findAgentInput(screen).props.statusBadges as AgentInputStatusBadge[])
+            .find(candidate => candidate.key === 'session-managedWake');
+        try {
+            if (holdReason === 'initial-pending-failure') {
+                const initialRead = getSyncSingleton().fetchPendingMessages('s1').catch(error => error);
+                await act(async () => { inventory.resolve(); observation.resolve(); await inventoryRead; });
+                await vi.waitFor(() => {
+                    const content = badge()?.renderPopover?.({ open: true, anchorRef: { current: null }, onRequestClose: () => {} });
+                    expect(React.isValidElement<{ projection: { observedAt?: number } }>(content) && content.props.projection.observedAt).toBe(10);
+                });
+                expect(badge()?.testID).toBe('session.managedWake.loading.badge');
+                await act(async () => { pendingRead.resolve(); expect(await initialRead).toBeInstanceOf(Error); });
+                await vi.waitFor(() => expect(badge()?.testID).toBe('session.managedWake.deliveryUnknown.badge'));
+                expect(storage.getState().sessionPending.s1?.isLoaded ?? false).toBe(false);
+                pendingReadOverride = pendingResponse;
+                await act(async () => { await getSyncSingleton().fetchPendingMessages('s1'); });
+                await vi.waitFor(() => expect(badge()?.testID).toBe('session.managedWake.agentStartFailed.badge'));
+                const retained = storage.getState().sessionPending.s1!.messages;
+                pendingReadOverride = () => { throw new Error('Pending refresh unavailable'); };
+                await act(async () => {
+                    await expect(getSyncSingleton().fetchPendingMessages('s1')).rejects.toThrow('Pending refresh unavailable');
+                });
+                expect(storage.getState().sessionPending.s1!.messages).toBe(retained);
+                expect(badge()?.testID).toBe('session.managedWake.agentStartFailed.badge');
+                expect(pendingWrites()).toHaveLength(0);
+                expect(actionWrites()).toHaveLength(0);
+                expect(resumeCalls()).toHaveLength(0);
+                return;
+            }
+            await act(async () => { await getSyncSingleton().fetchPendingMessages('s1'); });
+            expect(storage.getState().sessionPending.s1).toMatchObject({ isLoaded: true, messages: [{ localId: 'wake-message' }] });
+            expect(badge()?.testID).toBe('session.managedWake.loading.badge');
+            expect(badge()?.label).toBe('common.loading');
+            if (holdReason) {
+                // Inventory answers first; the protected row still has not been read.
+                await act(async () => { inventory.resolve(); await inventoryRead; });
+                await vi.waitFor(() => expect(storage.getState().machineListStatusByServerId[runtime.serverId]).toBe('idle'));
+                expect(badge()?.testID).toBe('session.managedWake.loading.badge');
+                await act(async () => { observation.resolve(); });
+                await vi.waitFor(() => expect(queueLine(screen)?.text).toBe('managedWake.refused'));
+            } else {
+                // Protected row answers first; a stored failure must wait for inventory.
+                await act(async () => { observation.resolve(); });
+                await vi.waitFor(() => {
+                    const content = badge()?.renderPopover?.({ open: true, anchorRef: { current: null }, onRequestClose: () => {} });
+                    expect(React.isValidElement<{ projection: { observedAt?: number } }>(content) && content.props.projection.observedAt).toBe(10);
+                });
+                expect(storage.getState().machineListStatusByServerId[runtime.serverId]).not.toBe('idle');
+                expect(badge()?.testID).toBe('session.managedWake.loading.badge');
+                await act(async () => { inventory.resolve(); await inventoryRead; });
+                await vi.waitFor(() => expect(badge()?.testID).toBe('session.managedWake.agentStartFailed.badge'));
+                expect(badge()?.label).toBe('managedWake.agentFailed');
+            }
+            expect(pendingWrites()).toHaveLength(0);
+            expect(actionWrites()).toHaveLength(0);
+            expect(resumeCalls()).toHaveLength(0);
+        } finally {
+            inventory.resolve(); observation.resolve(); pendingRead.resolve();
+            await inventoryRead;
+            await screen.unmount();
+        }
+    });
+
     it.each(['waiting', 'starting', 'connecting', 'resuming', 'storageLost', 'resourceAbsent', 'unknown', 'unavailable', 'deliveryUnknown', 'agentStartFailed'] as const)(
         'mounts the managed %s badge and its observed-stage popover instead of a generic pending banner', async kind => {
         const controller = { machineId: 'controller', installationId: 'controller-installation' };
@@ -578,16 +716,24 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
             ...(kind === 'starting' ? { submittedNativeEffect: { intent: 'start', intentRevision: 1, requestId: 'start-a', controller } } : {}) });
         setMachineOnline(kind === 'resuming' || kind === 'agentStartFailed');
         storage.getState().applyMachines([createMachineFixture({ id: 'controller', active: false, activeAt: 0,
-            metadata: { host: 'Controller Mac', displayName: 'Controller Mac' } })], false, { sourceServerId: runtime.serverId });
+            metadata: { ...createMachineFixture().metadata!, host: 'Controller Mac', displayName: 'Controller Mac' } })], false, { sourceServerId: runtime.serverId });
         const row = { ...durablePendingRow('wake-message'), displayText: 'Original typed wake request' };
         await publishDurablePendingState(kind === 'deliveryUnknown' ? { ...row, pendingDeliveryStatus: 'server_delivering' } : row, {
-            requestId: row.localId!, requestedAt: 200, status: kind === 'agentStartFailed' ? 'failed' : 'waiting',
-            ...(kind === 'agentStartFailed' ? { failureCode: 'runtime_start_failed' as const } : {}),
+            requestId: row.localId!, requestedAt: 200,
+            ...(kind === 'agentStartFailed' ? { status: 'failed' as const, failureCode: 'runtime_start_failed' as const } : { status: 'waiting' as const }),
             managedWakeTargetV1: { homeId: runtime.serverIdentityId, managedId: 'managed-guest', enrolledMachineId: 'm-target', expectedIntentRevision: 1, controller,
                 reason: 'admitted-work', origin: { kind: 'session-input', session: { homeId: runtime.serverIdentityId, sessionId: 's1' },
                     pendingRequestId: row.localId!, requestedAt: 200 } },
         });
-        if (kind === 'waiting') writeExistingSessionDraft({ scope: scope(), sessionId: 's1', patch: { text: 'Another unsent draft' } });
+        if (kind === 'waiting') {
+            // Check now invalidates pending through the real Sync path. The
+            // retained server row must survive that read, just as it does live.
+            pendingReadOverride = () => Response.json({ pending: [{ localId: row.localId, messageRole: 'user',
+                requestedAction: row.pendingRequestedAction, content: { t: 'plain', v: row.rawRecord },
+                status: 'queued', deliveryStatus: { status: 'queued' }, position: 0, createdAt: row.createdAt, updatedAt: row.updatedAt,
+            }] });
+            writeExistingSessionDraft({ scope: scope(), sessionId: 's1', patch: { text: 'Another unsent draft' } });
+        }
         const screen = await renderSessionView();
         if (kind === 'resuming') await act(async () => { storage.getState().markSessionResuming('s1'); });
         let badge: AgentInputStatusBadge | undefined;
@@ -686,7 +832,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         resetStartAskFirst = true;
         await enableResetStartProtocol();
         storage.setState({ settings: { ...storage.getState().settings,
-            actionsSettingsV1: { v: 1, actions: { 'session.pending.resetStart.set': { approvalRequiredSurfaces: ['ui'] } } },
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'session.pending.resetStart.set': { approvalRequiredSurfaces: ['ui'] } } }),
         } });
         const screen = await renderSessionView();
         await changeText(screen, 'Wait for capacity');
@@ -794,16 +940,22 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         await setComposerAttachmentProjection({ [issueAttachmentCatalogEntry.id]: issueAttachmentCatalogEntry });
         writeSessionDraftValue(scope(), 's1', 'structuredInput.composerAttachments', composerAttachments);
         const screen = await renderSessionView();
-        expect(findAgentInput(screen).props.hasSendableAttachments).toBe(true);
-        await send(screen);
-        await vi.waitFor(() => expect(pendingWrites()).toHaveLength(1));
-        await waitForSubmittedDraft(screen);
-        expect(pendingWrites()[0]?.body).toMatchObject({
-            content: { t: 'plain', v: { meta: { happierStructuredInputV1: { v: 1, composerAttachments } } } },
-        });
-        expect(readSessionDraftValue(scope(), 's1', 'structuredInput.composerAttachments') ?? []).toEqual([]);
-        expect(findAgentInput(screen).props.hasSendableAttachments).toBe(false);
-        await screen.unmount();
+        try {
+            expect(findAgentInput(screen).props.hasSendableAttachments).toBe(true);
+            await send(screen);
+            await vi.waitFor(() => {
+                expect(modalMockState.current?.spies.alert.mock.calls).toEqual([]);
+                expect(pendingWrites()).toHaveLength(1);
+            });
+            await waitForSubmittedDraft(screen);
+            expect(pendingWrites()[0]?.body).toMatchObject({
+                content: { t: 'plain', v: { meta: { happierStructuredInputV1: { v: 1, composerAttachments } } } },
+            });
+            expect(readSessionDraftValue(scope(), 's1', 'structuredInput.composerAttachments') ?? []).toEqual([]);
+            expect(findAgentInput(screen).props.hasSendableAttachments).toBe(false);
+        } finally {
+
+             await screen.unmount(); }
     });
 
     it('keeps an uninstalled or incompatible persisted attachment visible, refuses its text send, and retains the draft until the exact current generation returns', async () => {
@@ -1031,6 +1183,51 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         await screen.unmount();
     });
 
+    it('does not alert from a Pending send that completes after its Session view unmounts', async () => {
+        updateSession({ active: true, presence: 'online', agentStateVersion: 1 });
+        const handoff = deferred<Response>();
+        enqueueResponse = async () => handoff.promise;
+        const screen = await renderSessionView({ routeServerId: runtime.serverId });
+        await changeText(screen, 'Send before leaving this Session');
+        await send(screen);
+        await vi.waitFor(() => expect(pendingWrites()).toHaveLength(1));
+        await screen.unmount();
+
+        await act(async () => { handoff.resolve(acceptedEnqueue(pendingWrites()[0]!)); });
+        await flushHookEffects();
+
+        expect(modalMockState.current?.spies.alert.mock.calls).toEqual([]);
+        expect(pendingWrites()).toHaveLength(1);
+        expect(resumeCalls()).toHaveLength(0);
+    });
+
+    it('keeps admitting a Pending send when the same destination replaces its responsive Session shell', async () => {
+        const handoff = deferred<Response>();
+        enqueueResponse = async () => handoff.promise;
+        resumeResponse = async () => ({ type: 'success', sessionId: 's1' });
+        const screen = await renderSessionView({ routeServerId: runtime.serverId, presentationKey: 'classic' });
+        const lifetime = screen.root.findByType(SessionDraftHydrationBoundary).props.lifetime as ServerAccountScopeLifetime;
+        try {
+            await changeText(screen, 'Continue through the phone layout');
+            await send(screen);
+            await vi.waitFor(() => expect(pendingWrites()).toHaveLength(1));
+            // The classic/cockpit experience owner replaces the presentation,
+            // while DestinationInstanceHost keeps the same Session destination.
+            await screen.update(sessionViewFrame({ routeServerId: runtime.serverId, presentationKey: 'cockpit' }));
+            expect(lifetime.isCurrent()).toBe(true);
+            expect(screen.root.findByType(SessionDraftHydrationBoundary).props.lifetime).toBe(lifetime);
+
+            await act(async () => { handoff.resolve(acceptedEnqueue(pendingWrites()[0]!)); });
+            await vi.waitFor(() => expect(resumeCalls()).toHaveLength(1));
+            expect(pendingWrites()).toHaveLength(1);
+            expect(modalMockState.current?.spies.alert.mock.calls).toEqual([]);
+        } finally {
+            handoff.resolve(acceptedEnqueue(pendingWrites()[0]!));
+            await screen.unmount();
+        }
+        expect(lifetime.isCurrent()).toBe(false);
+    });
+
     it('keeps the submitted draft clear while an ambiguous enqueue retains Pending custody', async () => {
         updateSession({ active: true, presence: 'online', agentStateVersion: 1 });
         enqueueResponse = async () => { throw new TypeError('Failed to fetch after issuing the Pending handoff'); };
@@ -1107,6 +1304,63 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         await screen.unmount();
     });
 
+    it.each(['resume', 'process_when_online', 'refused'] as const)(
+        'recovers a failed stopped managed wake through the ordinary pending owner (%s)', async entry => {
+        const controller = { machineId: 'controller', installationId: 'controller-installation' };
+        managedWakeMachine = ManagedMachineV1Schema.parse({ id: 'managed-guest', homeId: runtime.serverIdentityId, custodianAccountId: 'account-a',
+            launch: { provider: { pluginId: 'custom.native', localId: 'vm' }, schemaVersion: 1, name: 'Build box', choices: {} },
+            resource: { contributionRef: { pluginId: 'custom.native', localId: 'vm' }, schemaVersion: 1, value: {} },
+            controller, enrolledMachineId: 'm-target', creationState: 'active', allocation: 'bound',
+            desired: 'stop', desiredWhen: 'now', intentRevision: 1,
+            retention: { kind: 'unused', afterMs: 3600000, effect: 'stop' }, wakeOnAcceptedMessage: true,
+            observation: { observedAt: 10, availability: 'present', power: 'stopped', storage: 'retained', daemon: 'disconnected' },
+        });
+        setMachineOnline(false);
+        const row = { ...durablePendingRow('wake-message', 'enqueue'),
+            ...(entry === 'resume' ? {} : { pendingActivationHoldReason: entry === 'refused'
+                ? 'managed_power_required' as const : 'resume_not_requested' as const }),
+        };
+        // The Home read must retain its admitted row when PATCH invalidates the
+        // pending list; the harness's ordinary empty-list default cannot model it.
+        pendingReadOverride = () => Response.json({ pending: [{ localId: row.localId, messageRole: 'user',
+            requestedAction: row.pendingRequestedAction, content: { t: 'plain', v: row.rawRecord },
+            status: 'queued', deliveryStatus: { status: 'queued' }, position: 0, createdAt: row.createdAt, updatedAt: row.updatedAt,
+            ...(row.pendingActivationHoldReason ? { activationHoldReason: row.pendingActivationHoldReason } : {}),
+        }] });
+        await publishDurablePendingState(row, { requestId: row.localId!, requestedAt: 200,
+            status: 'failed', failureCode: 'managed_start_denied',
+            managedWakeTargetV1: { homeId: runtime.serverIdentityId, managedId: 'managed-guest', enrolledMachineId: 'm-target', expectedIntentRevision: 1, controller,
+                reason: 'admitted-work', origin: { kind: 'session-input', session: { homeId: runtime.serverIdentityId, sessionId: 's1' },
+                    pendingRequestId: row.localId!, requestedAt: 200 } },
+        });
+        writeExistingSessionDraft({ scope: scope(), sessionId: 's1', patch: { text: 'Keep my other draft' } });
+        const screen = await renderSessionView();
+        try {
+            // Wait for the real exact-resource read, not only the retained target.
+            await vi.waitFor(() => expect((findAgentInput(screen).props.statusBadges as AgentInputStatusBadge[])
+                .some(badge => badge.testID === 'session.managedWake.agentStartFailed.badge') || queueLine(screen)?.text === 'managedWake.refused'
+                || queueLine(screen)?.action?.label === 'session.pendingActivation.actions.process_when_online').toBe(true));
+            if (entry === 'process_when_online') await pressQueueLineAction(screen, 'session.pendingActivation.actions.process_when_online');
+            else await act(async () => { await emitSessionResumeRequest('s1'); });
+            if (entry === 'refused') {
+                expect(queueLine(screen)?.text).toBe('managedWake.refused');
+                expect(actionWrites()).toHaveLength(0);
+                expect(modalMockState.current?.spies.alert).toHaveBeenCalledWith('common.error', 'managedWake.refused');
+            } else {
+                await vi.waitFor(() => expect(actionWrites()).toHaveLength(1));
+                expect(actionWrites()[0]?.url.pathname).toContain('/v2/sessions/s1/pending/wake-message/');
+                expect(actionWrites()[0]?.body).toMatchObject({ requestedAction: { v: 1, kind: 'enqueue' }, resumeWhenAvailable: true });
+                expect(modalMockState.current?.spies.alert).not.toHaveBeenCalled();
+            }
+            expect(resumeCalls()).toHaveLength(0);
+            expect(pendingWrites()).toHaveLength(0);
+            expect(httpWrites.filter(write => write.url.pathname.includes('power.set'))).toHaveLength(0);
+            expect(findAgentInput(screen).props.value).toBe('Keep my other draft');
+            expect(storage.getState().sessionPending.s1.messages).toMatchObject([{ localId: 'wake-message', pendingDeliveryStatus: 'server_queued' }]);
+            expect(readSessionOwnerMetadataView(currentSession())?.codexSessionId).toBe('codex-session-1');
+        } finally { await screen.unmount(); }
+    });
+
     it('resumes through the canonical session action from the online queued status line', async () => {
         resumeResponse = async () => ({ type: 'success', sessionId: 's1' });
         const screen = await renderSessionView();
@@ -1171,7 +1425,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
     it('refuses a mounted manual resume when session.open is disabled on the owning Home', async () => {
         sessionOpenDisabled = true;
         storage.setState({ settings: { ...storage.getState().settings,
-            actionsSettingsV1: { v: 1, actions: { 'session.open': { disabledSurfaces: ['ui'] } } },
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'session.open': { disabledSurfaces: ['ui'] } } }),
         } });
         resumeResponse = async () => ({ type: 'success', sessionId: 's1' });
         const screen = await renderSessionView();
@@ -1188,7 +1442,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
     it('parks a mounted manual resume behind the owning Home Ask-first approval before launching a process', async () => {
         sessionOpenAskFirst = true;
         storage.setState({ settings: { ...storage.getState().settings,
-            actionsSettingsV1: { v: 1, actions: { 'session.open': { approvalRequiredSurfaces: ['ui'] } } },
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'session.open': { approvalRequiredSurfaces: ['ui'] } } }),
         } });
         resumeResponse = async () => ({ type: 'success', sessionId: 's1' });
         const screen = await renderSessionView();
@@ -1270,6 +1524,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
             await changeText(screen, 'Message to the shared live Session');
             await send(screen);
             await waitForSubmittedDraft(screen);
+            expect(modalMockState.current?.spies.alert.mock.calls).toEqual([]);
             expect(pendingWrites()).toHaveLength(1);
             expect(findAgentInput(screen).props.value).toBe('');
             expect(resumeCalls()).toHaveLength(0);
@@ -1283,7 +1538,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
             await act(async () => { storage.setState({ machineListByServerId: { [runtime.serverId]: [] }, machineListStatusByServerId: { [runtime.serverId]: 'idle' } }); });
             expect(storage.getState().machineListByServerId[runtime.serverId]).toEqual([]);
             expect(screen.findByTestId('session-requester-access-removed')).toBeTruthy();
-            expect(currentSession().metadata?.codexSessionId).toBe('codex-session-1');
+            expect(readSessionOwnerMetadataView(currentSession())?.codexSessionId).toBe('codex-session-1');
             await act(async () => { await emitSessionResumeRequest('s1'); });
             expect(resumeCalls()).toHaveLength(0);
             await screen.pressByTestIdAsync('session-requester-continue-elsewhere');
@@ -1292,7 +1547,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
             const { readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
             expect(readNewSessionDraftFromRepository({ scope: scope(), draftId: route.params.draftId }))
                 .toMatchObject({ selectedMachineId: null, executionTarget: null });
-            expect(currentSession().metadata?.codexSessionId).toBe('codex-session-1');
+            expect(readSessionOwnerMetadataView(currentSession())?.codexSessionId).toBe('codex-session-1');
             expect(resumeCalls()).toHaveLength(0);
         } finally {
             await screen.unmount();

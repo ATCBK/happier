@@ -28,7 +28,7 @@ describe('Remote host captured catalog mutation', () => {
         const writes: unknown[] = [];
         const context: owner.RemoteHostAccountContext = { serverId: 'home', accountId, credentials: { token: createAccountTokenForTests(accountId) },
             resolveAccountMode: async () => 'plain', resolveAccountEncryption: async () => ({ accountMode: 'plain', encryption: null }),
-            assertCurrent: () => {}, accountLifetime: { scope: { serverId: 'home', accountId }, isCurrent: () => true, onRetire: () => () => {} },
+            assertCurrent: () => {}, accountLifetime: { scope: { serverId: 'home', accountId }, isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
             mutateRawSettings: async () => { throw new Error('Destination-only credential replacement cannot write Settings'); },
             request: (async (path, init) => {
                 if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 4 }));
@@ -65,7 +65,7 @@ describe('Remote host captured catalog mutation', () => {
                 resolveAccountMode: async () => 'plain',
                 resolveAccountEncryption: async () => ({ accountMode: 'plain', encryption: null }),
                 assertCurrent: () => {},
-                accountLifetime: { scope, isCurrent: () => true, onRetire: () => () => {} },
+                accountLifetime: { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
                 mutateRawSettings: async () => { throw new Error('A currentness failure must not mutate Settings'); },
                 // Only Home HTTP is substituted; the canonical currentness admission and domain classification run together.
                 request: (async path => {
@@ -92,7 +92,7 @@ describe('Remote host captured catalog mutation', () => {
             resolveAccountMode: async () => 'plain',
             resolveAccountEncryption: async () => ({ accountMode: 'plain', encryption: null }),
             assertCurrent: () => {},
-            accountLifetime: { scope, isCurrent: () => true, onRetire: () => () => {} },
+            accountLifetime: { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
             mutateRawSettings: async () => { throw new Error('Unsupported catalog reads must not rewrite retained Settings'); },
             request: (async path => {
                 if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 4 }));
@@ -123,7 +123,7 @@ describe('Remote host captured catalog mutation', () => {
                 ...scope, credentials, request, resolveAccountMode,
                 resolveAccountEncryption: async () => ({ accountMode: await resolveAccountMode(), encryption: null }),
                 assertCurrent: () => {},
-                accountLifetime: { scope, isCurrent: () => true, onRetire: () => () => {} },
+                accountLifetime: { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
                 mutateRawSettings: async () => { throw new Error('Refused mode admission must not mutate Settings'); },
             };
             const result = await owner.readRemoteHostCatalogInContext(context);
@@ -154,7 +154,7 @@ describe('Remote host captured catalog mutation', () => {
         const context: owner.RemoteHostAccountContext = { serverId: 'home', accountId, credentials: { token: createAccountTokenForTests(accountId) },
             resolveAccountMode: async () => 'plain',
             resolveAccountEncryption: async () => ({ accountMode: 'plain', encryption: null }), assertCurrent: () => {},
-            accountLifetime: { scope: { serverId: 'home', accountId }, isCurrent: () => true, onRetire: () => () => {} },
+            accountLifetime: { scope: { serverId: 'home', accountId }, isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
             mutateRawSettings: async () => { throw new Error('The current source is already clean'); },
             // Home HTTP is the sole substituted boundary; resource opening and History normalization stay real.
             request: (async (path, init) => {
@@ -219,7 +219,7 @@ describe('Remote host captured catalog mutation', () => {
         const context = { serverId: 'home', accountId: 'account', credentials: { token: createAccountTokenForTests('account') },
             resolveAccountMode: async () => 'plain' as const,
             resolveAccountEncryption: async () => ({ accountMode: 'plain' as const, encryption: null }), assertCurrent: () => {},
-            accountLifetime: { scope: { serverId: 'home', accountId: 'account' }, isCurrent: () => true, onRetire: () => () => {} },
+            accountLifetime: { scope: { serverId: 'home', accountId: 'account' }, isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
             mutateRawSettings: async () => { throw new Error('A destination-only edit must not write Settings'); },
             request: (async (path, init) => {
                 if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 4 }));

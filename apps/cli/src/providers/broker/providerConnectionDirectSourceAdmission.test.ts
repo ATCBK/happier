@@ -21,7 +21,7 @@ import {
   subscribeActiveAccountSettingsSnapshot,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { hydrateSavedSecretCatalog } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { hydrateSavedSecretCatalog } from "@/settings/secrets/savedSecretCatalogRead";
 
 import {
   materializeProviderConnectionDirectCredential,

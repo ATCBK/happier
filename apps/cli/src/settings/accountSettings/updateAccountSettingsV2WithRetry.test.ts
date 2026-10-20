@@ -135,7 +135,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
     const result = await updateAccountSettingsV2OnceAgainstLatest({
       credentials: createTokenOnlyCredentialsStub(),
       mutate: raw => {
-        raw.analyticsOptOut = value;
+        Reflect.set(raw, 'analyticsOptOut', value);
         return raw;
       },
       deps: {
@@ -205,7 +205,7 @@ describe('updateAccountSettingsV2WithRetry', () => {
     const prepare = 'prepareAccountSettingsV2Content' in settingsContentOwner ? settingsContentOwner.prepareAccountSettingsV2Content : undefined;
     expect(typeof prepare).toBe('function');
     if (typeof prepare !== 'function') throw new Error('missing_composite_settings_preparation');
-    const raw = { opaque: { kept: true }, customSecret: { _isSecretValue: true, value: 'private-fixture' } };
+    const raw = { opaque: { kept: true }, customSecret: { _isSecretValue: true as const, value: 'private-fixture' } };
     expect(prepare({ credentials: createTokenOnlyCredentialsStub(), raw, envelopeKind: 'plain' })).toEqual({ t: 'plain', v: raw });
     const credentials = createLegacyCredentialsStub();
     const encrypted = prepare({ credentials, raw, envelopeKind: 'encrypted', randomBytes: length => new Uint8Array(length).fill(3) });

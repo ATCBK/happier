@@ -19,12 +19,13 @@ import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@h
 import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsRowReadResponseV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, ConnectedAccountCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { NOTIFICATION_CHANNELS_ROUTE_V1, NotificationChannelCatalogReadResponseV1Schema } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
+import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryRowReadResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { readProfileCatalog } from '@/sync/api/account/apiProfileCatalog';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { resetTeamActionClientForTests } from '@/sync/ops/teams/teamActionClient';
 import { createSavedSecretResource, deleteSavedSecretResource, updateSavedSecretResource, promotePersonalSavedSecretResource } from './savedSecretResourceOperations';
-import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { TokenStorage, type AuthCredentials, type HomeCredentialWriteRollback } from '@/auth/storage/tokenStorage';
 import { encodeBase64 } from '@/encryption/base64';
 import { upsertServerProfileOnly } from '@/sync/domains/server/serverRuntime';
 import { setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
@@ -52,13 +53,28 @@ installApprovalCommonModuleMocks();
 installDisconnectedServerSocketBoundary();
 beforeAll(loadSyncSingletonForTests);
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
-afterEach(async () => { await connection?.dispose(); connection = null; resetTeamActionClientForTests(); });
+const targetCredentialWrites: HomeCredentialWriteRollback[] = [];
+afterEach(async () => {
+    try { await connection?.dispose(); }
+    finally {
+        connection = null;
+        for (const write of targetCredentialWrites.splice(0).reverse()) await write.rollback();
+        resetTeamActionClientForTests();
+    }
+});
+
+async function persistTargetCredentials(serverUrl: string, serverId: string, credentials: AuthCredentials) {
+    const write = await TokenStorage.setCredentialsForServerUrlWithRollback(serverUrl, { serverId }, credentials);
+    if (!write) throw new Error('The destination Home credential write was refused');
+    targetCredentialWrites.push(write);
+}
 
 const emptyReferenceCatalogRows = new Map<string, unknown>([
     [NOTIFICATION_CHANNELS_ROUTE_V1, NotificationChannelCatalogReadResponseV1Schema.parse({ status: 'absent' })],
     [MCP_SERVER_CATALOG_ROWS_ROUTE_V1, McpServerCatalogRowReadResponseV1Schema.parse({ status: 'absent' })],
     [ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema.parse({ status: 'absent' })],
     [PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsRowReadResponseV1Schema.parse({ status: 'absent' })],
+    [`${PROMPT_LIBRARY_ROWS_ROUTE_V1}/registry-sources`, PromptLibraryRowReadResponseV1Schema.parse({ status: 'absent' })],
     [`${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/configurations`, ConnectedAccountCatalogRowReadResponseV1Schema.parse({ status: 'absent' })],
     [`${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`, ConnectedAccountCatalogRowReadResponseV1Schema.parse({ status: 'absent' })],
 ]);
@@ -88,9 +104,7 @@ describe('Saved Secret native responsibility review through its real delete owne
             } });
         const focusedEncryption = getSyncSingleton().encryption;
         expect(focusedEncryption).not.toBeNull();
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockImplementation(async url => (
-            new URL(url).origin === targetUrl ? targetCredentials : activeCredentials
-        ));
+        await persistTargetCredentials(targetUrl, targetHome.id, targetCredentials);
         const writes: unknown[] = [];
         const writeHomes: string[] = [];
         const actionsSettingsV1 = ActionsSettingsV1Schema.parse({ v: 1,
@@ -155,7 +169,7 @@ describe('Saved Secret native responsibility review through its real delete owne
                 return Response.json({ error: 'not_found' }, { status: 404 });
             } });
         expect(getSyncSingleton().encryption).toBeNull();
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockImplementation(async url => new URL(url).origin === targetUrl ? targetCredentials : activeCredentials);
+        await persistTargetCredentials(targetUrl, targetHome.id, targetCredentials);
         const scope = { serverId: resolveServerProfileScopeIdForIdentifier(targetHome.id), accountId };
         const secret = { id: 'personal-cross-home', name: 'Key', kind: 'token' as const, createdAt: 1, updatedAt: 2,
             encryptedValue: { _isSecretValue: true as const, encryptedValue: encryptSecretString('target-private', deriveSettingsSecretsKeySet(targetMaterial).writeKey) } };
@@ -249,6 +263,7 @@ describe('Saved Secret native responsibility review through its real delete owne
             const settled: ApprovalRequestV2 = { ...request, status: 'executed', updatedAtMs: settledAt, decision: { kind: 'approve', decidedAtMs: settledAt },
                 execution: { ok: true, executedAtMs: settledAt, result: { resourceId, settingsVersion: 5 } } };
             const observation: DecryptedArtifact = { id: artifact.id, header: buildApprovalRequestArtifactHeaderV1(settled), body: JSON.stringify(settled),
+                title: buildApprovalRequestArtifactHeaderV1(settled).title,
                 headerVersion: 2, bodyVersion: 2, seq: 2, createdAt: 1, updatedAt: 2, isDecrypted: true };
             expect(await pending.registration.onExecuted(observation)).toBe('consumed');
             expect(succeeded).toHaveBeenCalledWith({ ok: true, resourceRef: `happier:shared-secret:v1:${resourceId}` });
@@ -335,7 +350,8 @@ describe('Saved Secret native responsibility review through its real delete owne
         const referenceCensus = SavedSecretReferenceCensusV1Schema.parse({ accountMode: 'plain',
             remoteHosts: { revision: 'absent', resourceRefs: [] },
             notificationChannels: { revision: 'absent', resourceRefs: [] },
-            catalogs: { mcp: 'absent', acp: 'absent', providerConnections: 'absent', connectedConfigurations: 'absent', connectedPurposes: 'absent' },
+            catalogs: { mcp: 'absent', acp: 'absent', providerConnections: 'absent', connectedConfigurations: 'absent', connectedPurposes: 'absent',
+                registrySources: 'absent' },
             profileTransferRevision: profiles.controlRevision, profiles: {
                 referenceGuardRevision: profiles.referenceGuardRevision,
                 rows: [...profiles.records.map(({ record, revision }) => ({ id: record.id, revision })),

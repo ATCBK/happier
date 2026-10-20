@@ -44,7 +44,12 @@ export function InlineTextField(props: Readonly<{
     const handleLayout = React.useCallback((event: Readonly<{ nativeEvent: Readonly<{ layout: Readonly<{ width: number }> }> }>) => {
         const width = event.nativeEvent.layout.width;
         if (width <= 0 || measuredWidthRef.current === width) return;
+        const initialLayout = measuredWidthRef.current === null;
         measuredWidthRef.current = width;
+        // RNW already measures the initial text through onContentSizeChange.
+        // Only a later width change needs our wrapping correction; measuring
+        // every newly mounted title again serializes layout across the page.
+        if (initialLayout) return;
         // RNW reports content-size changes for text edits, not reflow when a
         // docked pane closes. Measure the same textarea at its new width.
         const input = inputRef.current as unknown as { style?: { height: string }; scrollHeight?: number } | null;

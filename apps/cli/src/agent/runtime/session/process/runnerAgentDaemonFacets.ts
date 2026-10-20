@@ -461,7 +461,7 @@ export async function createRunnerAgentDaemonFacets(input: Readonly<{
                     await listener(projectHostExternalTranscriptFollowEvent(
                       replayedEvent.event,
                     ))),
-                  EXTERNAL_SESSION_FOLLOW_LISTENER_TIMEOUT_MS,
+                  operation.projection === 'terminal' ? undefined : EXTERNAL_SESSION_FOLLOW_LISTENER_TIMEOUT_MS,
                   openSignal,
                 );
                 const acknowledgedWitness = readWitness();
@@ -644,7 +644,7 @@ export async function createRunnerAgentDaemonFacets(input: Readonly<{
                           await listener(projectHostExternalTranscriptFollowEvent(
                             replacementEvent.event,
                           ))),
-                        EXTERNAL_SESSION_FOLLOW_LISTENER_TIMEOUT_MS,
+                        operation.projection === 'terminal' ? undefined : EXTERNAL_SESSION_FOLLOW_LISTENER_TIMEOUT_MS,
                         reopenSignal,
                       );
                       const acknowledgedWitness = readWitness();
@@ -895,7 +895,7 @@ export async function createRunnerAgentDaemonFacets(input: Readonly<{
                       await listener(projectHostExternalTranscriptFollowEvent(
                         followEventResult.event,
                       ))),
-                    EXTERNAL_SESSION_FOLLOW_LISTENER_TIMEOUT_MS,
+                    operation.projection === 'terminal' ? undefined : EXTERNAL_SESSION_FOLLOW_LISTENER_TIMEOUT_MS,
                     openSignal,
                   );
                 } catch (error) {
@@ -945,7 +945,7 @@ export async function createRunnerAgentDaemonFacets(input: Readonly<{
                             ? normalized.code
                             : 'plugin_external_follow_failed',
                       }))),
-                    EXTERNAL_SESSION_FOLLOW_LISTENER_TIMEOUT_MS,
+                    operation.projection === 'terminal' ? undefined : EXTERNAL_SESSION_FOLLOW_LISTENER_TIMEOUT_MS,
                     openSignal,
                   ).catch(() => undefined);
                 }

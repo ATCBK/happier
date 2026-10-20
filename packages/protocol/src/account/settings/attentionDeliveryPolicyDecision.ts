@@ -2,6 +2,7 @@ import {
   PUSH_NOTIFICATION_SOUND_IDS,
   isPushNotificationBundledSoundId,
 } from '../../push/pushNotificationActions.js';
+import { resolveFollowDeliveryV1, resolveInboxItemAttentionV1 } from '../../sessions/follow/sessionFollowPolicyV1.js';
 import {
   ATTENTION_DELIVERY_CHANNEL_DEFAULT_QUIET_HOURS_BEHAVIOR,
   AttentionDeliveryChannelConfigSchema,
@@ -48,14 +49,17 @@ function timeToMinutes(value: string): number {
   return Number(hour) * 60 + Number(minute);
 }
 
-function getLocalTimeParts(now: Date, timezone: string): { minuteOfDay: number; day: string } {
-  const formatter = new Intl.DateTimeFormat('en-GB', {
+function createLocalTimeFormatter(timezone: string): Intl.DateTimeFormat {
+  return new Intl.DateTimeFormat('en-GB', {
     timeZone: timezone,
     weekday: 'short',
     hour: '2-digit',
     minute: '2-digit',
     hourCycle: 'h23',
   });
+}
+
+function getLocalTimeParts(now: Date, formatter: Intl.DateTimeFormat): { minuteOfDay: number; day: string } {
   const parts = formatter.formatToParts(now);
   const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0);
   const minute = Number(parts.find((part) => part.type === 'minute')?.value ?? 0);
@@ -84,11 +88,17 @@ function isQuietHoursActive(
   if (!policy.quietHours.enabled) return false;
   let localTimeParts: { minuteOfDay: number; day: string };
   try {
-    localTimeParts = getLocalTimeParts(now, currentTimezone ?? policy.quietHours.timezone);
+    localTimeParts = getLocalTimeParts(now, createLocalTimeFormatter(currentTimezone ?? policy.quietHours.timezone));
   } catch {
     return false;
   }
-  const { minuteOfDay, day } = localTimeParts;
+  return isQuietHoursActiveAtLocalTime(policy, localTimeParts);
+}
+
+function isQuietHoursActiveAtLocalTime(
+  policy: AttentionDeliveryPolicyV1,
+  { minuteOfDay, day }: { minuteOfDay: number; day: string },
+): boolean {
   return policy.quietHours.windows.some((window) => {
     const start = timeToMinutes(window.startLocalTime);
     const end = timeToMinutes(window.endLocalTime);
@@ -103,6 +113,43 @@ function isQuietHoursActive(
     if (minuteOfDay >= end) return false;
     return includesDay(PREVIOUS_WEEKDAY[day as keyof typeof PREVIOUS_WEEKDAY] ?? day);
   });
+}
+
+/** Exact next change of the canonical quiet-hours predicate, for one-shot wakeups.
+ * HH:mm schedules change on minute boundaries. Enumerate actual instants rather
+ * than converting wall times ourselves: IANA gaps, repeats and overnight days
+ * then have exactly the same meaning as delivery decisions. Callers retain this
+ * deadline until it elapses or their immutable policy changes, never per commit.
+ */
+export function readNextAttentionQuietHoursBoundaryMs(
+  policy: AttentionDeliveryPolicyV1,
+  now: Date,
+  currentTimezone?: string,
+): number | null {
+  if (!policy.quietHours.enabled || !Number.isFinite(now.getTime())) return null;
+  const days = Object.keys(PREVIOUS_WEEKDAY);
+  // An empty or fully covered weekly schedule cannot change. Check its only
+  // possible local transition points before searching actual time; this also
+  // avoids a made-up search horizon that could miss a DST-skipped weekly window.
+  const hasTransition = days.some((day) => policy.quietHours.windows.some((window) =>
+    [window.startLocalTime, window.endLocalTime].some((time) => {
+      const minuteOfDay = timeToMinutes(time);
+      return isQuietHoursActiveAtLocalTime(policy, { day, minuteOfDay }) !== isQuietHoursActiveAtLocalTime(policy, {
+        day: minuteOfDay === 0 ? PREVIOUS_WEEKDAY[day as keyof typeof PREVIOUS_WEEKDAY] : day,
+        minuteOfDay: minuteOfDay === 0 ? 1_439 : minuteOfDay - 1,
+      });
+    })));
+  if (!hasTransition) return null;
+  try {
+    const formatter = createLocalTimeFormatter(currentTimezone ?? policy.quietHours.timezone);
+    const active = isQuietHoursActiveAtLocalTime(policy, getLocalTimeParts(now, formatter));
+    for (let instant = (Math.floor(now.getTime() / 60_000) + 1) * 60_000; ; instant += 60_000) {
+      if (isQuietHoursActiveAtLocalTime(policy, getLocalTimeParts(new Date(instant), formatter)) !== active) return instant;
+    }
+  } catch {
+    // Match delivery admission for invalid/unavailable IANA zones or dates.
+    return null;
+  }
 }
 
 function resolveSound(params: {
@@ -210,6 +257,17 @@ export function resolveAttentionDeliveryPreviewBehavior(params: Readonly<{
   const eventConfig = policy.events[event] ?? AttentionDeliveryEventConfigSchema.parse({});
   const channelConfig = policy.channels[channel] ?? AttentionDeliveryChannelConfigSchema.parse({});
   const channelEventConfig = channelConfig.events[event] ?? AttentionDeliveryEventConfigSchema.parse({});
+  return resolveParsedPreviewBehavior({ policy, event, channel, eventConfig, channelConfig, channelEventConfig });
+}
+
+function resolveParsedPreviewBehavior({ policy, event, channel, eventConfig, channelConfig, channelEventConfig }: Readonly<{
+  policy: AttentionDeliveryPolicyV1;
+  event: string;
+  channel: string;
+  eventConfig: AttentionDeliveryEventConfig;
+  channelConfig: AttentionDeliveryChannelConfig;
+  channelEventConfig: AttentionDeliveryEventConfig;
+}>): AttentionPreviewBehavior {
   return channelEventConfig.previewBehavior
     ?? eventConfig.previewBehavior
     // Keep request previews independent of ready previews; explicit request policies take precedence.
@@ -232,7 +290,7 @@ export function resolveAttentionDeliveryPolicyDecision(
   const channelConfig = policy.channels[channel] ?? AttentionDeliveryChannelConfigSchema.parse({});
   const channelEventConfig = channelConfig.events[event] ?? AttentionDeliveryEventConfigSchema.parse({});
   const quietHoursActive = isQuietHoursActive(policy, now, params.currentTimezone);
-  const previewBehavior = resolveAttentionDeliveryPreviewBehavior({ policy, event, channel });
+  const previewBehavior = resolveParsedPreviewBehavior({ policy, event, channel, eventConfig, channelConfig, channelEventConfig });
   const sound = resolveSound({ policy, eventConfig, channelConfig, channelEventConfig, event });
 
   const base = {
@@ -262,6 +320,12 @@ export function resolveAttentionDeliveryPolicyDecision(
   }
   if (channelEventConfig.enabled === false) {
     return buildDecision({ ...base, delivery: 'suppress', reason: 'event_disabled' });
+  }
+  const follow = params.follow ? resolveFollowDeliveryV1(params.follow)
+    : params.inboxItemType ? resolveInboxItemAttentionV1(params.inboxItemType) : null;
+  if (follow && (!follow.person.inbox || !follow.person.push
+    && channel !== 'badge' && channel !== 'live_activity' && channel !== 'home_widget')) {
+    return buildDecision({ ...base, delivery: 'suppress', reason: 'follow_policy' });
   }
   if (params.sameSessionVisible === true) {
     return buildDecision({ ...base, delivery: 'suppress', reason: 'same_session_visible' });

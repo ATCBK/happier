@@ -25,7 +25,7 @@ import { getWidgetSharedInputIssuesV1 } from '../widgets/widgetSharedInputAdmiss
  * Named `WorkBoard` to stay apart from the per-session widget Board (`sessions/board/**`).
  */
 
-export const WORK_BOARD_ITEM_KINDS_V1 = ['session', 'workflow_run', 'workflow', 'machine'] as const;
+export const WORK_BOARD_ITEM_KINDS_V1 = ['session', 'workflow_run', 'workflow', 'machine', 'task'] as const;
 export type WorkBoardItemKindV1 = typeof WORK_BOARD_ITEM_KINDS_V1[number];
 
 /** Smart sections: mixed-kind memberships read from existing owners (Inbox, active runs, machines). */
@@ -38,22 +38,29 @@ export type WorkBoardModeV1 = typeof WORK_BOARD_MODES_V1[number];
 const IdentifierSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 
 /** A typed reference to one item on a Home. The same id on two Homes is two items. */
-export const BoardItemRefV1Schema = lazyZodSchema(() => z.strictObject({
-    kind: z.enum(WORK_BOARD_ITEM_KINDS_V1),
-    qualifiedId: z.strictObject({
+const BoardQualifiedIdV1Schema = lazyZodSchema(() => z.strictObject({
         /** The Home's portable identity (its server identity id, or its profile id when it has none). */
         serverId: IdentifierSchema,
         id: IdentifierSchema,
-    }),
 }));
+export const BoardItemRefV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.enum(['session', 'workflow_run', 'workflow', 'machine']), qualifiedId: BoardQualifiedIdV1Schema }),
+    // The plugin owns item identity and all live facts. A page is routing, never identity.
+    z.strictObject({ kind: z.literal('task'), qualifiedId: BoardQualifiedIdV1Schema, pluginId: IdentifierSchema }),
+]));
 const StoredBoardItemRefV1Schema = createStoredReadSchema(BoardItemRefV1Schema);
 export type BoardItemRefV1 = Readonly<{
-    kind: WorkBoardItemKindV1;
+    kind: Exclude<WorkBoardItemKindV1, 'task'>;
     qualifiedId: Readonly<{ serverId: string; id: string }>;
+}> | Readonly<{
+    kind: 'task';
+    qualifiedId: Readonly<{ serverId: string; id: string }>;
+    pluginId: string;
 }>;
 
 /** The one identity of a board item: dedupe key and `positionsByItemRef` key. */
 export function buildWorkBoardItemKeyV1(ref: BoardItemRefV1): string {
+    if (ref.kind === 'task') return JSON.stringify(['task', ref.qualifiedId.serverId.trim(), ref.pluginId.trim(), ref.qualifiedId.id.trim()]);
     return JSON.stringify([ref.kind, ref.qualifiedId.serverId.trim(), ref.qualifiedId.id.trim()]);
 }
 
@@ -64,7 +71,12 @@ export function readWorkBoardItemKeyV1(key: string): BoardItemRefV1 | null {
     } catch {
         return null;
     }
-    if (!Array.isArray(parsed) || parsed.length !== 3) return null;
+    if (!Array.isArray(parsed)) return null;
+    if (parsed.length === 4 && parsed[0] === 'task') {
+        const task = BoardItemRefV1Schema.safeParse({ kind: 'task', qualifiedId: { serverId: parsed[1], id: parsed[3] }, pluginId: parsed[2] });
+        return task.success ? task.data : null;
+    }
+    if (parsed.length !== 3 || parsed[0] === 'task') return null;
     const ref = BoardItemRefV1Schema.safeParse({
         kind: parsed[0],
         qualifiedId: { serverId: parsed[1], id: parsed[2] },
@@ -204,8 +216,9 @@ function normalizeSource(source: WorkBoardSourceV1): WorkBoardSourceV1 {
         ...(source.filter ? { filter: source.filter } : {}),
         picked: dedupeBy(
             source.picked.map((ref) => ({
-                kind: ref.kind,
+                ...ref,
                 qualifiedId: { serverId: ref.qualifiedId.serverId.trim(), id: ref.qualifiedId.id.trim() },
+                ...(ref.kind === 'task' ? { pluginId: ref.pluginId.trim() } : {}),
             })),
             buildWorkBoardItemKeyV1,
         ),

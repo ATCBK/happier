@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Tx } from "@/storage/inTx";
+import type { ResolvedTransactionResult, Tx } from "@/storage/inTx";
 import { createDbTransactionMock, installDbModuleMock } from "../api/testkit/dbMocks";
 
 const sessionUpdate = vi.fn();
@@ -16,7 +16,7 @@ function createTx(): Tx {
     return {
         $queryRawUnsafe: async () => [],
         session: { findUnique: sessionFindUnique, findMany: async () => [], update: sessionUpdate },
-        sessionReportsTo: { findMany: async () => [] },
+        sessionFollowEdge: { findMany: async () => [] },
         sessionMessage: { findMany: sessionMessageFindMany, create: sessionMessageCreate },
         account: { findUnique: accountFindUnique },
         accountSessionReadState: { updateMany: accountSessionReadStateUpdateMany },
@@ -28,7 +28,9 @@ function createTx(): Tx {
 const { transaction, wrapDb } = createDbTransactionMock(createTx);
 installDbModuleMock(() => ({ db: wrapDb({}) }));
 
-async function runInTransaction<T>(operation: (tx: Tx) => Promise<T>): Promise<T> {
+const nulRegressionWriter = await import("./sessionTranscriptWrite");
+
+async function runInTransaction<T>(operation: (tx: Tx) => Promise<T>): Promise<ResolvedTransactionResult<T>> {
     const { inTx } = await import("@/storage/inTx");
     return await inTx(operation);
 }
@@ -64,6 +66,38 @@ describe("canonical session transcript writer", () => {
             createdAt: new Date(1_000),
             updatedAt: new Date(1_000),
         });
+    });
+
+    it("normalizes NUL in tool output at the shared transcript storage owner", async () => {
+        // Only Prisma persistence is substituted; admission, normalization and transaction logic run unchanged.
+        sessionMessageCreate.mockImplementationOnce(async ({ data }: { data: Record<string, unknown> }) => ({
+            id: "nul-message", ...data, updatedAt: data.createdAt,
+        }));
+        const result = await runInTransaction(tx => nulRegressionWriter.writeSessionTranscriptMessageInTx(tx, {
+            sessionId: "session-1", writeAuthority: "historical_import", sessionEncryptionMode: "plain", storagePolicy: "optional",
+            localId: "nul-message", sidechainId: null, messageRole: "agent",
+            content: { t: "plain", v: { role: "agent", content: [{ type: "tool-result", content: "before\u0000after" }] } },
+        }));
+        expect(result).toMatchObject({ ok: true, message: {
+            content: { t: "plain", v: { role: "agent", content: [{ type: "tool-result", content: "beforeafter" }] } },
+        } });
+    });
+
+    it("normalizes NUL before historical batch duplicate and retry comparisons", async () => {
+        sessionMessageCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
+            id: "nul-history", ...data, sourceCreatedAt: null, sourceUpdatedAt: null,
+            transcriptObservationProvenance: null, deliveryResolution: null, updatedAt: data.createdAt,
+        }));
+        const item = { localId: "nul-history", sidechainId: null, messageRole: "agent" as const,
+            content: { t: "plain" as const, v: { role: "agent", text: "before\u0000after" } } };
+        const normalized = { ...item, content: { t: "plain" as const, v: { role: "agent", text: "beforeafter" } } };
+        const params = { sessionId: "session-1", storagePolicy: "optional" as const, items: [item, normalized] };
+        const first = await runInTransaction(tx => nulRegressionWriter.writeHistoricalSessionMessageBatchInTx(tx, params));
+        expect(first).toMatchObject({ ok: true, didWrite: true, messages: [{ content: normalized.content }] });
+        if (!first.ok) throw new Error("Historical batch unexpectedly rejected");
+        sessionMessageFindMany.mockResolvedValue(first.messages);
+        expect(await runInTransaction(tx => nulRegressionWriter.writeHistoricalSessionMessageBatchInTx(tx, params)))
+            .toMatchObject({ ok: true, didWrite: false, messages: [{ content: normalized.content }] });
     });
 
     it('stamps only an admitted same-Session surface identity beside an encrypted Message', async () => {

@@ -3,7 +3,8 @@ import type { Prisma } from '@prisma/client';
 import { notifySessionTranscriptMutationAfterCommit } from '../sessionTranscriptMutationObserver';
 import { revokeMachineInTx } from '@/app/machines/machineMutations';
 import { invalidateSessionFollowDestinationsForSessionDeleteInTx } from '@/app/session/follow/sessionFollowEdgeService';
-import { invalidateSessionReportsToForSessionDeleteInTx } from '@/app/session/relations/sessionReportsToService';
+import { invalidateSessionManagerForSessionDeleteInTx } from '@/app/session/follow/sessionManagerService';
+import { hasSessionFollowSessionSource } from '@/app/session/follow/sessionFollowSourceIdentity';
 import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { resolveSessionGrantedAccountIdsInTx } from '@/app/session/access/sessionRecipients';
 
@@ -29,21 +30,21 @@ export async function deleteSessionTree(
     deletedReports: number;
     deletedAccessKeys: number;
 }> {
-    const [grantedAccountIds, followEdges, reportsToEdges] = await Promise.all([
+    const [grantedAccountIds, followEdges, managerEdges] = await Promise.all([
         resolveSessionGrantedAccountIdsInTx(tx, { sessionId: params.sessionId }),
         tx.sessionFollowEdge.findMany({
             where: { sourceSessionId: params.sessionId },
             select: { destinationSessionId: true },
         }),
-        tx.sessionReportsTo.findMany({
-            where: { OR: [{ sessionId: params.sessionId }, { leadSessionId: params.sessionId }] },
-            select: { sessionId: true, leadSessionId: true },
+        tx.sessionFollowEdge.findMany({
+            where: { relation: 'manager', OR: [{ sourceSessionId: params.sessionId }, { destinationSessionId: params.sessionId }] },
+            select: { sourceSessionId: true, destinationSessionId: true },
         }),
     ]);
     await acquireSessionAccountCursorLocksInTx(tx, [
         params.sessionId,
         ...followEdges.map(edge => edge.destinationSessionId),
-        ...reportsToEdges.flatMap(edge => [edge.sessionId, edge.leadSessionId]),
+        ...managerEdges.filter(hasSessionFollowSessionSource).flatMap(edge => [edge.sourceSessionId, edge.destinationSessionId]),
     ], grantedAccountIds);
     const sessionWhere = params.sessionDeleteWhere
         ? {
@@ -112,7 +113,7 @@ export async function deleteSessionTree(
     await invalidateSessionFollowDestinationsForSessionDeleteInTx(tx, {
         sessionId: params.sessionId,
     });
-    await invalidateSessionReportsToForSessionDeleteInTx(tx, { sessionId: params.sessionId });
+    await invalidateSessionManagerForSessionDeleteInTx(tx, { sessionId: params.sessionId });
 
     const deletedSession = await tx.session.deleteMany({
         where: sessionWhere,

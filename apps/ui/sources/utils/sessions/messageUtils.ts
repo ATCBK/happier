@@ -1,38 +1,8 @@
 import { type DecryptedMessage } from '@/sync/domains/state/storageTypes';
 import { type ToolCall } from "@happier-dev/session-core/messages";
+import { stripMarkdown } from '@happier-dev/protocol/messages/markdownPlainText';
 
-/**
- * Extracts plain text from markdown by removing formatting.
- * Canonical markdown->plain-preview owner; reused by transcript navigation previews.
- */
-export function stripMarkdown(text: string): string {
-  return text
-    // Remove headers
-    .replace(/^#{1,6}\s+/gm, '')
-    // Remove table separator rows (|---|---| and :---: variants)
-    .replace(/^\s*\|?[\s:|-]+\|[\s:|-]*$/gm, '')
-    // Replace remaining table pipes with spaces
-    .replace(/\|/g, ' ')
-    // Remove bold and italic
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/\*([^*]+)\*/g, '$1')
-    .replace(/__([^_]+)__/g, '$1')
-    .replace(/_([^_]+)_/g, '$1')
-    // Remove inline code
-    .replace(/`([^`]+)`/g, '$1')
-    // Remove code blocks
-    .replace(/```[\s\S]*?```/g, '[code]')
-    // Remove links
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-    // Remove horizontal rules
-    .replace(/^---+$/gm, '')
-    // Remove list markers
-    .replace(/^\s*[-*+]\s+/gm, '')
-    .replace(/^\s*\d+\.\s+/gm, '')
-    // Clean up multiple whitespace
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+export { stripMarkdown };
 
 /**
  * Gets a readable summary of tool calls

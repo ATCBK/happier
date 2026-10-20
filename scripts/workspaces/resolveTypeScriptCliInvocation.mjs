@@ -18,16 +18,20 @@ export async function matchesNativeTypeScriptInputVersion(contents, version) {
 }
 
 export function shouldRouteTypeScriptCliThroughHstack(params) {
-  if (!params.args.includes('--noEmit')) return false;
+  if (params.args.length === 1 && ['--version', '-v', '--help', '-h'].includes(params.args[0])) return false;
   if (params.env.HAPPIER_DEV_TARGET_EXECUTION === '1') return false;
   if (params.env.HAPPIER_HSTACK_EXECUTION === '1') return false;
   if (params.env.HAPPIER_TYPECHECK_DISPATCHED === '1') return false;
+  // Keep already-admitted build descendants on their selected machine. This
+  // only selects transport; the native admission owner still validates tokens.
+  if (params.env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN) return false;
+  if (isWorkspaceBuildStartup({ env: params.env })) return false;
   return true;
 }
 
 export function requiresTypeScriptAdmission({ env = process.env, platform = process.platform } = {}) {
   return platform === 'linux' && !isWorkspaceBuildStartup({ env }) && (!env.CI || env.HAPPIER_DEV_TARGET_EXECUTION === '1'
-    || Boolean(env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN));
+    || env.HAPPIER_HSTACK_LOCAL_ADMISSION_REQUIRED === '1' || Boolean(env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN));
 }
 
 export function resolveTypeScriptCliInvocation(params) {
@@ -44,7 +48,7 @@ export function resolveTypeScriptCliInvocation(params) {
   const compilerPath = resolve(dirname(packageJsonPath), tscBin);
   const env = params.env ?? process.env;
   // Match the native local admission owner's ordinary CI exemption. Placed
-  // workers and descendants carrying an admission token still validate it.
+  // workers, explicit local overrides and admitted descendants retain guards.
   if (requiresTypeScriptAdmission({ env, platform: params.platform ?? process.platform })) {
     const admissionClass = params.admissionClass ?? resolveRemoteCommandPolicy(
       ['node', 'scripts/workspaces/runTypeScriptCli.mjs', ...(params.args ?? [])],

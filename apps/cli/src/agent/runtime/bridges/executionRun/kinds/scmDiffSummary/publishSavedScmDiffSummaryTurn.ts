@@ -1,3 +1,4 @@
+import { EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
 import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
 import { ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryMetadataSchema } from '@happier-dev/protocol/scm/diffSummary';
 import type { ScmDiffSummaryGenerateOutput, ScmDiffSummaryOutputKind, ScmDiffSummaryResultResponse } from '@happier-dev/protocol';
@@ -43,7 +44,7 @@ export async function readOrCreateSavedScmResult(start: ExecutionRunProfileStart
 function publicationCompletion(result: ScmDiffSummaryResultResponse, original?: ExecutionRunProfileBoundedCompleteResult) {
   if (!result.success) return null;
   return { ...(original ?? { status: 'succeeded' as const, summary: 'Walkthrough updated.' }),
-    toolResultOutput: result.result.output, structuredMeta: { kind: 'scm_diff_summary.v1', payload: result.result.output } };
+    toolResultOutput: result.result.output, structuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: result.result.output } };
 }
 
 async function publicationNotice(scope: ScmDiffSummaryResultScope, response: ScmDiffSummaryResultResponse,
@@ -54,7 +55,7 @@ async function publicationNotice(scope: ScmDiffSummaryResultScope, response: Scm
   return { status: 'succeeded', summary: response.error,
     toolResultOutput: readable.result.output, toolResultMeta: { scmResultUpdate: { status: response.errorCode,
       ...(response.latestRevision !== undefined ? { latestRevision: response.latestRevision } : {}) } },
-    structuredMeta: { kind: 'scm_diff_summary.v1', payload: readable.result.output },
+    structuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: readable.result.output },
     // A conflict stops multipart admissions rather than overwriting manual edits in a later part.
   };
 }
@@ -72,7 +73,7 @@ export async function publishSavedScmDiffSummaryTurn(params: ExecutionRunProfile
   if (!pending) return null;
   const currentParams = { ...params, start: { ...params.start, intentInput: { ...readScmDiffSummaryIntent(params.start.intentInput),
     outputs: [...new Set([...(saved.result.output.requestedOutputs ?? []), ...pending.outputs])] } },
-    previousStructuredMeta: { kind: 'scm_diff_summary.v1', payload: saved.result.output } };
+    previousStructuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: saved.result.output } };
   if (progressive) {
     const completion = complete(currentParams);
     if (!completion) return null;

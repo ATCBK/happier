@@ -84,7 +84,13 @@ function view(entries: readonly Entry[]) {
 async function render(
   entries: readonly Entry[],
   state: 'ready' | 'error' | 'machine_unreachable' | 'resolving' = 'ready',
-  options: Readonly<{ preview?: boolean }> = {},
+  options: Readonly<{
+    preview?: boolean;
+    knownRows?: Readonly<{ skills: number; mcp: number }>;
+    undo?: Parameters<
+      typeof import('./SessionCapabilitiesContent').SessionCapabilitiesContent
+    >[0]['undo'];
+  }> = {},
 ) {
   const { buildSessionCapabilitiesModel } =
     await import('./sessionCapabilitiesModel');
@@ -117,6 +123,8 @@ async function render(
         changes.push(change);
       }}
       onRetry={onRetry}
+      undo={options.undo}
+      knownRows={options.knownRows}
       machineName="nl2"
       testID="caps"
     />,
@@ -174,6 +182,35 @@ describe('SessionCapabilitiesContent', () => {
     ]);
   });
 
+  it('offers Undo in place for the last change and hands the press to its owner', async () => {
+    const onUndo = vi.fn();
+    const entries: readonly Entry[] = [
+      { kind: 'skill', id: 'code-review', ruleOn: true, override: null },
+    ];
+    const without = await render(entries);
+    expect(
+      without.screen.findAll((node) => node.props?.testID === 'caps:undo'),
+    ).toHaveLength(0);
+    const { screen } = await render(entries, 'ready', {
+      undo: { title: 'pdf', change: 'removed', onUndo },
+    });
+    expect(
+      screen.findAll((node) => node.props?.testID === 'caps:undo').length,
+    ).toBeGreaterThan(0);
+    const { t } = await import('@/text');
+    const { act } = await import('react');
+    const undo = screen.findAll(
+      (node) =>
+        node.props?.accessibilityLabel === t('capabilities.session.ask.undo') &&
+        typeof node.props?.onPress === 'function',
+    )[0];
+    if (!undo) throw new Error('no Undo control in the line');
+    await act(async () => {
+      await undo.props.onPress({});
+    });
+    expect(onUndo).toHaveBeenCalledTimes(1);
+  });
+
   it('says a failed preview once with its retry, and keeps an empty group with its own line', async () => {
     const failed = await render(
       [{ kind: 'skill', id: 'code-review', ruleOn: true, override: null }],
@@ -195,6 +232,38 @@ describe('SessionCapabilitiesContent', () => {
         (node) => node.props?.testID === 'caps:empty:skills',
       ),
     ).toHaveLength(0);
+  });
+
+  it('holds the groups open while the first preview loads: both headings, placeholder rows, a silent footer cost, and no empty claim', async () => {
+    const loading = await render([], 'resolving', { preview: false });
+    const ids = new Set(
+      loading.screen
+        .findAll((node) => typeof node.props?.testID === 'string')
+        .map((node) => node.props.testID as string),
+    );
+    expect(ids.has('caps:group:skills')).toBe(true);
+    expect(ids.has('caps:group:mcp')).toBe(true);
+    expect(ids.has('caps:resolving')).toBe(true);
+    expect([...ids].filter((id) => id.startsWith('caps:empty:'))).toEqual([]);
+    const { t } = await import('@/text');
+    expect(
+      loading.screen.findAll((node) => node.props?.children === t('capabilities.session.costUnknown')),
+    ).toHaveLength(0);
+  });
+
+  it('reserves the box the loaded groups will fill: what each held when last seen, else a full preview', async () => {
+    const placeholders = (screen: Awaited<ReturnType<typeof render>>['screen'], testID: string) =>
+      screen.findAll((node) => node.props?.testID === `${testID}:skeleton-row`).length;
+    const unknown = await render([], 'resolving', { preview: false });
+    const known = await render([], 'resolving', { preview: false, knownRows: { skills: 3, mcp: 9 } });
+    const fullPreview = placeholders(unknown.screen, 'caps:resolving');
+    // Unknown: a full preview in both groups. Known: 3 rows for the skills group; the MCP group (9) reserves a full
+    // preview and the "n more" line below it.
+    expect(placeholders(unknown.screen, 'caps:resolving:mcp')).toBe(fullPreview);
+    expect(placeholders(known.screen, 'caps:resolving')).toBeLessThan(fullPreview);
+    expect(placeholders(known.screen, 'caps:resolving:mcp')).toBe(fullPreview);
+    expect(known.screen.findAll((node) => node.props?.testID === 'caps:resolving-more:mcp').length).toBeGreaterThan(0);
+    expect(known.screen.findAll((node) => node.props?.testID === 'caps:resolving-more:skills')).toHaveLength(0);
   });
 
   it('says an offline machine once and never claims empty groups it could not check', async () => {

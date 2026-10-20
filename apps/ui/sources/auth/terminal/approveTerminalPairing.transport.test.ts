@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
+import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 
 import type { HomeEnrollmentTransport } from '@/auth/enrollment/homeEnrollmentTransport';
 import { encodeBase64 } from '@/encryption/base64';
@@ -13,11 +14,12 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('approveTerminalPairing transport ownership', () => {
-    it('rejects retained key material when the target Account is plain before issuing an approval', async () => {
+    it.each([200, 404])('requires authenticated Account mode and token-only reader support despite retained keys (mode status %s)', async (modeStatus) => {
         const request = vi.fn(async (path: string) => jsonResponse(
-            path === '/v1/account/encryption' ? { mode: 'plain', updatedAt: 0 }
+            path === '/v1/account/encryption/currentness' ? { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 }
                 : path.startsWith('/v1/auth/request/status') ? { status: 'pending', supportsV2: true }
                     : { success: true },
+            path === '/v1/account/encryption/currentness' ? modeStatus : 200,
         ));
         const descriptor = {
             v: 1 as const,
@@ -38,7 +40,7 @@ describe('approveTerminalPairing transport ownership', () => {
             close: async () => {},
         } satisfies HomeEnrollmentTransport;
         const machineKey = new Uint8Array(32).fill(3);
-        await expect(approveTerminalPairing({
+        const approval = approveTerminalPairing({
             target: transport,
             requesterPublicKey: tweetnacl.box.keyPair().publicKey,
             pairingContext: { secret: new Uint8Array(32).fill(7), createdAtMs: 1000, expiresAtMs: 61000 },
@@ -46,14 +48,16 @@ describe('approveTerminalPairing transport ownership', () => {
                 token: 'plain-account-token',
                 encryption: { machineKey: encodeBase64(machineKey), publicKey: encodeBase64(tweetnacl.box.keyPair.fromSecretKey(machineKey).publicKey) },
             },
-            supportsTokenOnly: true,
-        })).rejects.toThrow(/Account.*mode/);
+            supportsTokenOnly: false,
+        });
+        if (modeStatus === 404) await expect(approval).rejects.toMatchObject({ code: 'account-encryption-currentness-unavailable' });
+        else await expect(approval).rejects.toThrow(/Token-only.*compatible reader/);
         expect(request.mock.calls.some(([path]) => path === '/v1/auth/response')).toBe(false);
     });
 
-    it('uses the resolved Home transport for status and approval requests', async () => {
+    it.each([false, true])('submits approval only for the current E2EE key through the resolved Home transport (obsolete=%s)', async (obsolete) => {
         const request = vi.fn()
-            .mockResolvedValueOnce(jsonResponse({ mode: 'e2ee', updatedAt: 0 }))
+            .mockResolvedValueOnce(jsonResponse({ mode: 'e2ee', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: computeAccountEncryptionMigrateKeyFingerprintV1(tweetnacl.box.keyPair.fromSecretKey(new Uint8Array(32).fill(obsolete ? 4 : 3)).publicKey), updatedAt: 0 }))
             .mockResolvedValueOnce(jsonResponse({ status: 'pending', supportsV2: true }))
             .mockResolvedValueOnce(jsonResponse({ success: true }));
         const createRequest = vi.fn(() => request);
@@ -80,7 +84,7 @@ describe('approveTerminalPairing transport ownership', () => {
         const machineKey = new Uint8Array(32).fill(3);
         const publicKey = tweetnacl.box.keyPair.fromSecretKey(machineKey).publicKey;
 
-        await expect(approveTerminalPairing({
+        const approval = approveTerminalPairing({
             target: transport,
             requesterPublicKey: tweetnacl.box.keyPair().publicKey,
             pairingContext: {
@@ -96,11 +100,17 @@ describe('approveTerminalPairing transport ownership', () => {
                 },
             },
             supportsTokenOnly: false,
-        })).resolves.toBe('approved');
+        });
+        if (obsolete) {
+            await expect(approval).rejects.toThrow(/current Account content key/);
+            expect(request.mock.calls.map((call) => call[0])).toEqual(['/v1/account/encryption/currentness']);
+            return;
+        }
+        await expect(approval).resolves.toBe('approved');
 
         expect(createRequest).toHaveBeenCalledWith({ credentials: null });
         expect(request.mock.calls.map((call) => call[0])).toEqual([
-            '/v1/account/encryption',
+            '/v1/account/encryption/currentness',
             expect.stringContaining('/v1/auth/request/status?publicKey='),
             '/v1/auth/response',
         ]);

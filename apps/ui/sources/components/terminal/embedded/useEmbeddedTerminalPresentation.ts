@@ -6,7 +6,7 @@ import { createSessionTerminalLeafHandles } from '@/components/sessions/terminal
 import { useFindSurfaceRuntime } from '@/keyboard/KeyboardShortcutProvider';
 import { usePluginSurfaceFocusEligibility } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { getClipboardStringTrimmedSafe } from '@/utils/ui/clipboard';
-import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useTerminalApprovalOpener } from './useTerminalApprovalOpener';
 
 /** Mounted renderer presentation shared by Session and Project hosts; no process authority. */
 export function useEmbeddedTerminalPresentation(input: Readonly<{
@@ -15,10 +15,7 @@ export function useEmbeddedTerminalPresentation(input: Readonly<{
     terminalRef: React.MutableRefObject<EmbeddedTerminalRendererHandle | null>;
 }>) {
     const { controller, terminalKey } = input;
-    const router = useRouter();
-    const onOpenApproval = React.useMemo(() => controller.approvalId && controller.approvalServerId
-        ? () => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(controller.approvalId!)}?serverId=${encodeURIComponent(controller.approvalServerId!)}`)
-        : undefined, [controller.approvalId, controller.approvalServerId, router]);
+    const onOpenApproval = useTerminalApprovalOpener(controller);
     const seenBell = React.useRef(controller.terminalBell ?? null);
     if (input.focused) seenBell.current = controller.terminalBell ?? null;
     const unseenBell = controller.terminalBell && controller.terminalBell !== seenBell.current ? controller.terminalBell : null;

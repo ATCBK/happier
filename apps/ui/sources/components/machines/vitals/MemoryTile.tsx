@@ -8,8 +8,8 @@ import type { MachineResourceAttentionV1 } from '@happier-dev/protocol/machines/
 import type { MachineVitalsSampleV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsSampleV1';
 
 import { MachinePressureIndicator } from '@/components/machines/summary/MachinePressureIndicator';
-import { resolveMachineResourceToneColor } from '@/components/machines/summary/machineSummaryStripModel';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { formatMachineMemoryPressureSource, resolveMachineResourceToneColor } from '@/components/machines/summary/machineSummaryStripModel';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import {
   usageSignatureAccent,
   withUsageAccentAlpha,
@@ -42,7 +42,6 @@ import {
 } from './VitalsSheet';
 import {
   formatVitalsPercent,
-  formatVitalsPointTime,
   vitalsAreaWash,
   vitalsPercentScale,
 } from './vitalsFormat';
@@ -62,13 +61,6 @@ const COMPOSITION_KEYS = {
 } as const;
 /** Composition reads as ink steps, the heaviest first (lab: apps darkest, cached files lightest). */
 export const COMPOSITION_INK = [0.62, 0.42, 0.28, 0.18] as const;
-
-const SOURCE_KEYS = {
-  kernel_level: 'machineVitals.memory.source.kernel',
-  psi: 'machineVitals.memory.source.estimated',
-  events: 'machineVitals.memory.source.estimated',
-  none: 'machineVitals.memory.source.none',
-} as const;
 
 /**
  * Memory (lab `rv` O / OX, R10): pressure is the signal. Calm, the tile leads with what is free and the
@@ -128,17 +120,15 @@ export const MemoryTile = React.memo(function MemoryTile(
                 point.usedBytes === null || total <= 0
                   ? null
                   : Math.min(100, (point.usedBytes / total) * 100),
-              label: formatVitalsPointTime(point.t),
               ...(ink ? { color: ink } : {}),
             };
           }),
         },
         {
           id: 'memory-maximum', label: t('machineVitals.history.maximum'),
-          color: withUsageAccentAlpha(accent, 0.4), overlay: true, lineStyle: 'dotted',
+          color: withUsageAccentAlpha(accent, 0.55), overlay: true,
           points: props.timeline.points.map((point) => ({ id: String(point.t), x: point.t,
-            y: point.usedBytesMax === null || total <= 0 ? null : Math.min(100, point.usedBytesMax / total * 100),
-            label: formatVitalsPointTime(point.t) })),
+            y: point.usedBytesMax === null || total <= 0 ? null : Math.min(100, point.usedBytesMax / total * 100) })),
         },
       ];
       return {
@@ -160,24 +150,23 @@ export const MemoryTile = React.memo(function MemoryTile(
         id: 'memory',
         label: t('machineVitals.history.mean'),
         color: accent,
+        fillOpacity: vitalsAreaWash(theme.dark),
         points: props.timeline.points.map((point) => ({
           id: String(point.t),
           x: point.t,
           y: point.usedBytes,
-          label: formatVitalsPointTime(point.t),
         })),
       },
       {
         id: 'memory-maximum', label: t('machineVitals.history.maximum'),
-        color: withUsageAccentAlpha(accent, 0.4), overlay: true, lineStyle: 'dotted',
+        color: withUsageAccentAlpha(accent, 0.55), overlay: true,
         points: props.timeline.points.map((point) => ({ id: String(point.t), x: point.t,
-          y: point.usedBytesMax, label: formatVitalsPointTime(point.t) })),
+          y: point.usedBytesMax })),
       },
     ];
-    
     return {
       series,
-      variant: 'line' as const,
+      variant: 'area' as const,
       domain: { min: zoom.min, max: zoom.max },
       ticks: zoom.ticks.map((value) => ({ value, label: formatMachineBytes(value, 'memory') })),
       format: (value: number) => formatMachineBytes(value, 'memory'),
@@ -202,7 +191,7 @@ export const MemoryTile = React.memo(function MemoryTile(
     );
   }
   const free = machineBytesParts(memory.availableBytes, 'memory');
-  const sourceLabel = t(SOURCE_KEYS[memory.pressure.source]);
+  const sourceLabel = formatMachineMemoryPressureSource(memory.pressure.source);
   const since = reason ? formatHeld(props.nowMs - reason.since) : null;
   const value = pressured ? (
     <MachinePressureIndicator
@@ -322,7 +311,7 @@ export const MemoryTile = React.memo(function MemoryTile(
 function MemoryComposition(props: Readonly<{ memory: ReportedMemory }>) {
   const language = usePreferredLanguage();
   const { theme } = useUnistyles();
-  const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const pluginTheme = usePluginUiTheme(theme);
   const parts = props.memory.composition;
   const segments = React.useMemo(
     () =>

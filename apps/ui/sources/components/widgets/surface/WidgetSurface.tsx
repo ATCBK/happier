@@ -9,18 +9,19 @@ import { ConfiguredInstalledWidgetSurface, ConfiguredWidgetRefusal, UnavailableI
 import { BuiltinWidgetBody } from '@/components/sessions/companion/glances/BuiltinWidgetBody';
 import { describeAuthoredWidgetDefinitionV1, readWidgetDescriptor, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { DeclarativeWidgetDocument } from '@/components/widgets/DeclarativeWidgetDocument';
+import { WidgetMachineNoticeBoundary } from './WidgetMachineNotice';
 import type { PluginUiProjectionCurrentness } from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
 import type { WidgetPresentation } from '@/sync/domains/plugins/ui/widgetContract';
 import { useConfiguredWidgetTarget } from '@/sync/domains/widgets/useConfiguredWidgetTarget';
 import type { WidgetInputRepairOutcome } from '@/sync/domains/widgets/widgetBinding';
 import { useWidgetDefinition } from '@/sync/domains/widgets/useWidgetDefinition';
 import { useWidgetInstanceDescriptor } from './useWidgetInstanceDescriptor';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { storage, useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { storage, useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { HostedHtmlSurfaceAdapter } from '@/components/ui/surfaces/hostedHtml/HostedHtmlSurfaceAdapter';
 import { useSessionCallerHostedHtmlRuntime } from '@/components/ui/surfaces/hostedHtml/useSessionCallerHostedHtmlRuntime';
 import type { ConfiguredWidgetTargetResolution } from '@/sync/domains/widgets/widgetBinding';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 /** Placement supplies context and presentation, never executable target facts. */
 export type WidgetSurfaceProps = Readonly<{
@@ -67,7 +68,6 @@ function InstalledInstanceBody(props: WidgetSurfaceProps & Readonly<{ descriptor
         isCurrent={props.isCurrent}
         source={{ kind: 'installedSurface', surface: definition.surface }}
         guestNetworkOverride={props.instance.networkOverride}
-        recordRevision={props.recordRevision}
         presentation={props.presentation}
         onManagePlugin={props.onManagePlugin}
         onRepairInputs={props.onRepairInputs}
@@ -81,8 +81,7 @@ function AuthoredReadyBody(props: WidgetSurfaceProps & Readonly<{ descriptor: Wi
     const resolution = useConfiguredWidgetTarget(props);
     const latest = React.useRef(resolution);
     latest.current = resolution;
-    const viewer = useActiveServerAccountScope();
-    const lifetime = React.useMemo(() => captureActiveServerAccountScopeLifetime(), [viewer]);
+    const lifetime = useActiveServerAccountScopeLifetime();
     const definition = props.descriptor.authoredDefinition!;
     const isCurrent = React.useCallback(() => {
         if (latest.current !== resolution || resolution.status !== 'ready' || !lifetime?.isCurrent() || props.isCurrent?.() === false) return false;
@@ -103,7 +102,7 @@ function AuthoredReadyBody(props: WidgetSurfaceProps & Readonly<{ descriptor: Wi
         case 'html': return <AuthoredHtmlBody {...props} definition={definition} body={definition.body} resolution={resolution} isCurrent={isCurrent} />;
         case 'installed': return <ConfiguredInstalledWidgetSurface resolution={resolution} isCurrent={isCurrent} source={{ kind: 'installedSurface', surface: definition.body.surface }}
             guestNetworkOverride={props.instance.networkOverride ?? readWidgetDefinitionNetworkOverrideV1(definition)}
-            recordRevision={props.recordRevision} presentation={props.presentation} onManagePlugin={props.onManagePlugin}
+            presentation={props.presentation} onManagePlugin={props.onManagePlugin}
             onRepairInputs={props.onRepairInputs} onIntrinsicHeightChange={props.onIntrinsicHeightChange} reference={props.reference} testID={props.testID} />;
     }
 }
@@ -148,10 +147,25 @@ function AuthoredInstanceBody(props: WidgetSurfaceProps): React.ReactElement {
 
 /** One mounted instance body shared by Home, Board and Companion; hosts retain their frame. */
 function WidgetSurfaceBody(props: WidgetSurfaceProps): React.ReactElement {
-    // Native descendants own their Session/checkout admission, but cannot start
-    // new demand from a containing document whose read is no longer current.
-    if (props.instance.definition.kind === 'builtin' && props.isCurrent?.() === false) return <UnavailableInstalledWidget reasonKind="widget"
-        unresolved={{ state: props.isReadPending?.() === true ? 'loading' : 'unavailable', reasonCode: 'widget_scope_unavailable' }} testID={props.testID} />;
+    const builtin = props.instance.definition.kind === 'builtin';
+    const current = props.isCurrent?.() !== false;
+    const pending = !current && props.isReadPending?.() === true;
+    const nativeBody = builtin && props.descriptor ? <InstalledInstanceBody {...props} descriptor={props.descriptor} /> : null;
+    // Preserve the committed subtree, including its Resource subscription and
+    // admitted input, while the containing layout is reread. This is mounted
+    // presentation continuity, not admission for a new body or target.
+    const admitted = React.useRef<Readonly<{ scope: WidgetSurfaceRefV1; instanceId: string; body: React.ReactElement }> | null>(null);
+    const retainedBody = admitted.current?.instanceId === props.instance.id && sameStrictJsonValue(admitted.current.scope, props.scope)
+        ? admitted.current.body : null;
+    React.useLayoutEffect(() => {
+        if (current && nativeBody) admitted.current = { scope: props.scope, instanceId: props.instance.id, body: nativeBody };
+        else if (!builtin || !pending || !retainedBody) admitted.current = null;
+    });
+    if (builtin && !current) {
+        if (pending && retainedBody) return retainedBody;
+        return <UnavailableInstalledWidget reasonKind="widget"
+            unresolved={{ state: pending ? 'loading' : 'unavailable', reasonCode: 'widget_scope_unavailable' }} testID={props.testID} />;
+    }
     if (props.instance.definition.kind === 'artifact' || props.instance.definition.kind === 'inline') return <AuthoredInstanceBody {...props} />;
     if (!props.descriptor) {
         const establishing = props.instance.definition.kind === 'installed' && props.appRuntime.phase === 'establishing';
@@ -162,7 +176,7 @@ function WidgetSurfaceBody(props: WidgetSurfaceProps): React.ReactElement {
         return <ConfiguredWidgetRefusal resolution={{ status: 'unavailable', reasonCode: 'widget_type_unavailable', repair: { kind: 'type_unavailable' } }}
             testID={props.testID} onManagePlugin={props.onManagePlugin} />;
     }
-    return <InstalledInstanceBody {...props} descriptor={props.descriptor} />;
+    return nativeBody ?? <InstalledInstanceBody {...props} descriptor={props.descriptor} />;
 }
 
 /** One measured body box for all renderers. Reflow is presentation and never persists a size. */
@@ -183,7 +197,9 @@ export function WidgetSurface(props: WidgetSurfaceProps): React.ReactElement {
         [inherited, size, footprint, geometry]);
     // It fills the frame's body room, so a state that replaces the body can sit balanced in it.
     const body = <View testID={`${props.testID}.geometry`} onLayout={inherited ? undefined : onLayout} style={{ minWidth: 0, flexGrow: 1 }}>
-        <WidgetSurfaceBody {...props} />
+        <WidgetMachineNoticeBoundary testID={props.testID}>
+            <WidgetSurfaceBody {...props} />
+        </WidgetMachineNoticeBoundary>
     </View>;
     return inherited ? body : <WidgetPresentationProvider value={value}>{body}</WidgetPresentationProvider>;
 }

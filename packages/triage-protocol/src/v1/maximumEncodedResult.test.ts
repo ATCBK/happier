@@ -68,18 +68,24 @@ import {
  */
 
 const measuredSchemas = {
-    presentObservation: TriageSourceObservationV1Schema,
     getInput: TriageGetInputV1Schema,
-    detailInput: TriageDetailSurfaceInputV1Schema,
     prepareReviewWorkspaceInput: TriagePrepareReviewWorkspaceInputV1Schema,
     administrationInput: TriageSourceAdministrationActionInputV1Schema,
+} as const satisfies Readonly<Record<string, MeasurableSchemaV1>>;
+
+// Task relationship refs and source-native workflow declarations follow the
+// provider's actual set. They have no synthetic membership quota and therefore
+// no finite schema maximum; the canonical Action envelope remains the byte owner.
+const variableReadSchemas = {
+    presentObservation: TriageSourceObservationV1Schema,
+    detailInput: TriageDetailSurfaceInputV1Schema,
 } as const satisfies Readonly<Record<string, MeasurableSchemaV1>>;
 
 const derivedMaxima = deriveMaximumEncodedBytesByLabel(measuredSchemas);
 
 function reachableStringFields(): ReadonlyMap<string, PluginJsonSchema> {
     const fields = new Map<string, PluginJsonSchema>();
-    for (const schema of Object.values<MeasurableSchemaV1>(measuredSchemas)) {
+    for (const schema of Object.values<MeasurableSchemaV1>({ ...measuredSchemas, ...variableReadSchemas })) {
         collectSchemaStringFields(schema.jsonSchema, '(root)', fields);
     }
     return fields;
@@ -282,23 +288,24 @@ describe('maximum encoded value derivation', () => {
         // Pinned so that any bound, count, field, or grammar change reruns the
         // derivation instead of silently consuming the remaining headroom.
         // 2026-10-08: +2 × 1_041 for the snapshot's optional `authorLabel` and `designation` display lines.
+        // 019088e707 (2026-10-12): +1_046 for the source-authored optional `scopeDisplayName`.
         expect(derivedMaxima).toEqual({
-            presentObservation: 14_969,
             getInput: 11_496,
-            detailInput: 470_719,
             prepareReviewWorkspaceInput: 14_243,
             administrationInput: 8_325,
         });
     });
 
     it('leaves the scan result unbounded until the canonical Action envelope', () => {
-        expect(() => buildMaximalSchemaValue(TriageScanResultV1Schema, 'scan result'))
-            .toThrow();
+        expect(() => buildMaximalSchemaValue(TriageScanResultV1Schema.jsonSchema, 'scan result'))
+            .toThrow(/unbounded/u);
     });
 
-    it('keeps transient comparison input under the Action envelope while snapshots remain finite', () => {
+    it('leaves live relation sets and transient comparison data to the Action envelope', () => {
         expect(() => buildMaximalSchemaValue(TriageGetResultV1Schema.jsonSchema, 'get result'))
             .toThrow(/unbounded/u);
-        expect(derivedMaxima.presentObservation).toBe(14_969);
+        for (const [label, schema] of Object.entries(variableReadSchemas)) {
+            expect(() => buildMaximalSchemaValue(schema.jsonSchema, label)).toThrow(/unbounded/u);
+        }
     });
 });

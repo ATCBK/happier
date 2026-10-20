@@ -4,8 +4,9 @@ import type { TrackedSession } from '../types';
 import { createSessionProcessActionLifecycle } from './sessionProcessActionLifecycle';
 import { createStopSession } from './stopSession';
 import { createOnChildExited } from './onChildExited';
+import { createSessionStopOperationBarrier } from './sessionStopOperationBarrier';
 
-function fixture() {
+function fixture(recordExplicitStopIntent: (sessionId: string) => Promise<void> = async () => {}) {
   const tracked: TrackedSession = { pid: 300, startedBy: 'daemon', happySessionId: 'session-a',
     processStartTimeMs: 100, vendorResumeId: 'vendor-a', spawnOptions: { directory: '/repo' } };
   const peer: TrackedSession = { ...tracked, pid: 301, happySessionId: 'session-b' };
@@ -17,11 +18,49 @@ function fixture() {
     logDebug: () => {}, logWarn: () => {} });
   const lifecycle = createSessionProcessActionLifecycle({ pidToTrackedSession: sessions,
     markStopRequested: respawn.markStopRequested,
+    registerPhysicalStopEffect: createSessionStopOperationBarrier().registerPhysicalStopEffect,
+    recordExplicitStopIntent,
     stopSession: createStopSession({ pidToTrackedSession: sessions }) });
   return { tracked, peer, sessions, lifecycle, respawn, spawned: () => spawned };
 }
 
 describe('Session process Action lifecycle', () => {
+  it('keeps automatic Guard cleanup physical without authoring a person Stop hold', async () => {
+    const f = fixture(async () => { throw new Error('Guard cleanup must not write person Stop custody'); });
+    const stamp = await f.lifecycle.prepareKill({ targets: [{ pid: 300, start: { startTimeMs: 100 } }],
+      actionContext: { surface: 'rpc', authority: 'account_automation', actionCaller: { kind: 'host' } },
+    });
+    expect(await stamp?.()).toBe(true);
+    expect(f.tracked.stopRequestedAtMs).toEqual(expect.any(Number));
+    expect(f.tracked.stopRequestedReason).toBeUndefined();
+    expect(f.respawn.handleUnexpectedExit(f.tracked, { reason: 'process-exited', code: null, signal: 'SIGKILL' })).toBe('ignored');
+  });
+
+  it('keeps custodian cleanup of a guest runner physical without borrowing the guest Account for Stop metadata', async () => {
+    const f = fixture(async () => { throw new Error('Machine cleanup cannot borrow the guest Account'); });
+    f.tracked.requesterWorkAttributionV1 = { serverId: 'home', accountId: 'guest', machineId: 'machine', installationId: 'installed' };
+    const stamp = await f.lifecycle.prepareKill({ targets: [{ pid: 300, start: { startTimeMs: 100 } }],
+      actionContext: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } },
+      rpcContext: { signal: new AbortController().signal,
+        machineAdmission: { actorAccountId: 'custodian', custodianAccountId: 'custodian', machineId: 'machine',
+          installationId: 'installed', role: 'manage', encryptionMode: 'plain' },
+        verifyMachineAdmissionCurrent: async () => true,
+      },
+    });
+    expect(await stamp?.()).toBe(true);
+    expect(f.tracked.stopRequestedAtMs).toEqual(expect.any(Number));
+    expect(f.tracked.stopRequestedReason).toBeUndefined();
+    expect(f.respawn.handleUnexpectedExit(f.tracked, { reason: 'process-exited', code: null, signal: 'SIGKILL' })).toBe('ignored');
+  });
+
+  it('refuses a process kill when explicit Stop intent cannot be persisted', async () => {
+    const f = fixture(async () => { throw new Error('metadata unavailable'); });
+    const stamp = await f.lifecycle.prepareKill({ targets: [{ pid: 300, start: { startTimeMs: 100 } }] });
+    expect(await stamp?.()).toBe(false);
+    expect(f.tracked.stopRequestedAtMs).toBeUndefined();
+    expect(f.respawn.prepareAutomaticResumeAdmission('session-a')()).toBe(true);
+  });
+
   it('stamps only the exact runner in a tree before kill and prevents its actual respawn owner restarting it', async () => {
     const f = fixture();
     const stamp = await f.lifecycle.prepareKill({ targets: [{ pid: 299, start: { startTimeMs: 99 } },

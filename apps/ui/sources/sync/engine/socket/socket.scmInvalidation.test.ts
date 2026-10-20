@@ -154,7 +154,7 @@ describe('socket scm invalidation', () => {
       log: { log: vi.fn() },
     });
 
-    expect(invalidateScmMutationSpy).toHaveBeenCalledWith(sessionId);
+    expect(invalidateScmMutationSpy).toHaveBeenCalledWith(sessionId, undefined);
     expect(invalidateScmSpy).not.toHaveBeenCalled();
   });
 });

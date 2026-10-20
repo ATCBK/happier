@@ -10,6 +10,26 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 }));
 
 describe('machine terminal ops (server-scoped routing)', () => {
+    it('cancels a creation observer without releasing physical creation custody', async () => {
+        const { awaitPendingMachineTerminalCreation, trackPendingMachineTerminalCreation } = await import('./machineTerminal');
+        let finishCreation!: () => void;
+        const creation = trackPendingMachineTerminalCreation('machine-wait', 'terminal-wait', () =>
+            new Promise<void>(resolve => { finishCreation = resolve; }));
+        const controller = new AbortController();
+        let cancelled = false;
+        const observation = awaitPendingMachineTerminalCreation('machine-wait', 'terminal-wait', { signal: controller.signal })
+            .catch(() => { cancelled = true; });
+        controller.abort();
+        await vi.waitFor(() => expect(cancelled).toBe(true));
+        let stillPending = true;
+        const otherObservation = awaitPendingMachineTerminalCreation('machine-wait', 'terminal-wait').then(() => { stillPending = false; });
+        await Promise.resolve();
+        expect(stillPending).toBe(true);
+        finishCreation();
+        await Promise.all([creation, observation, otherObservation]);
+        expect(stillPending).toBe(false);
+    });
+
     beforeEach(() => {
         machineRpcWithServerScopeMock.mockReset();
     });

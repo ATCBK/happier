@@ -2,10 +2,8 @@ import { createHash } from 'node:crypto';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  VOICE_MODEL_PACK_CONTRIBUTION_MAX_FILES_V1,
-  type ModelPackManifest,
-} from '@happier-dev/protocol';
+import type { ModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
+import { VOICE_MODEL_PACK_CONTRIBUTION_MAX_FILES_V1 } from '@happier-dev/protocol/voice/modelPacks/contributionV1';
 
 import { deriveModelPackStagingPlan, installModelPackWithHost } from './installerCore.js';
 import { createMemoryModelPackInstallerHost, type MemoryHostState } from './installerCore.testHost.js';
@@ -634,3 +632,220 @@ describe('installModelPackWithHost (shared core)', () => {
 
 // Keep the state type referenced so test-host typing stays in sync.
 export type { MemoryHostState };
+
+describe('model-pack transfer intents from PR 560', () => {
+  it('reports final staging cleanup failures without hiding a successful install', async () => {
+    const memory = createMemoryModelPackInstallerHost();
+    const bytes = new Uint8Array([1]);
+    const url = 'https://example.com/model';
+    memory.serveFile(url, bytes);
+    const failure = new Error('temporary_directory_delete_failed');
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await installModelPackWithHost({ host: { ...memory.host, beginStaging: async (...args) => ({
+        ...await memory.host.beginStaging(...args), cleanup: async () => { throw failure; },
+      }) }, packId: 'example', manifest: manifestFor([{ path: 'model.bin', url, sha256: sha256Hex(bytes), sizeBytes: 1 }]), signal: new AbortController().signal });
+      expect(memory.read('example/model.bin')).toEqual(bytes);
+      expect(warning.mock.calls.flat()).toContain(failure);
+    } finally { warning.mockRestore(); }
+  });
+
+  it('resumes a network read failure from retained prefix bytes', async () => {
+    const memory = createMemoryModelPackInstallerHost();
+    const bytes = new Uint8Array([1, 2, 3]);
+    const url = 'https://example.com/model';
+    memory.serveFile(url, bytes);
+    let attempts = 0;
+    let cancelled = false;
+    await installModelPackWithHost({ host: { ...memory.host, openDownload: async request => {
+      attempts += 1;
+      if (attempts === 1) {
+        let reads = 0;
+        return { contentLength: 3, isPartial: false,
+          read: async () => { if (reads++ === 0) return bytes.slice(0, 1); throw Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }); },
+          cancel: async () => { cancelled = true; },
+        };
+      }
+      expect(cancelled).toBe(true);
+      expect(request.rangeStart).toBe(1);
+      expect(request.url).not.toBe(url);
+      return memory.host.openDownload({ ...request, url });
+    } }, packId: 'example', manifest: manifestFor([{ path: 'model.bin', url, sha256: sha256Hex(bytes), sizeBytes: 3 }]), signal: new AbortController().signal });
+    expect(attempts).toBe(2);
+    expect(memory.read('example/model.bin')).toEqual(bytes);
+  });
+
+  it.each([
+    new Error('Unable to download file: Error Domain=NSURLErrorDomain Code=-1005 "The network connection was lost."'),
+    new Error('Unable to download file: Error Domain=NSURLErrorDomain Code=-1009 "The Internet connection appears to be offline."'),
+    new Error('Unable to download file: Error Domain=NSURLErrorDomain Code=-1001 "The request timed out."'),
+    new Error('Unable to resolve host "example.com": No address associated with hostname'),
+    new Error('timeout'),
+    Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }),
+    new TypeError('fetch failed', { cause: Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' }) }),
+  ])('retries platform transport errors without losing their cause: %s', async (failure) => {
+    const memory = createMemoryModelPackInstallerHost();
+    const bytes = new Uint8Array([1]);
+    const url = 'https://example.com/model';
+    memory.serveFile(url, bytes);
+    let attempts = 0;
+    await installModelPackWithHost({ host: { ...memory.host, openDownload: async request => {
+      if (attempts++ === 0) throw failure;
+      return memory.host.openDownload({ ...request, url });
+    } }, packId: 'example', manifest: manifestFor([{ path: 'model.bin', url, sha256: sha256Hex(bytes), sizeBytes: 1 }]), signal: new AbortController().signal });
+    expect(attempts).toBe(2);
+    expect(memory.read('example/model.bin')).toEqual(bytes);
+  });
+
+  it.each([
+    new Error('Unable to download file: Error Domain=NSURLErrorDomain Code=-3003 "Cannot write to file"'),
+    new Error('write failed: ENOSPC (No space left on device)'),
+    new Error('native_start_failed'),
+  ])('does not retry permanent native failures: %s', async failure => {
+    const memory = createMemoryModelPackInstallerHost();
+    const bytes = new Uint8Array([1]);
+    let attempts = 0;
+    await expect(installModelPackWithHost({ host: { ...memory.host, openDownload: async () => { attempts += 1; throw failure; } },
+      packId: 'example', manifest: manifestFor([{ path: 'model.bin', url: 'https://example.com/model', sha256: sha256Hex(bytes), sizeBytes: 1 }]), signal: new AbortController().signal })).rejects.toBe(failure);
+    expect(attempts).toBe(1);
+  });
+
+  it('reports file counts only after the file has verified', async () => {
+    const memory = createMemoryModelPackInstallerHost();
+    const bytes = new Uint8Array([1, 2, 3]);
+    const url = 'https://example.com/model';
+    memory.serveFile(url, bytes);
+    const progress: unknown[] = [];
+    await installModelPackWithHost({ host: memory.host, packId: 'example',
+      manifest: manifestFor([{ path: 'model.bin', url, sha256: sha256Hex(bytes), sizeBytes: bytes.length }]),
+      signal: new AbortController().signal, onProgress: value => { progress.push(value); },
+    });
+    expect(progress.at(-1)).toMatchObject({ loaded: 3, total: 3, filesDone: 1, filesTotal: 1 });
+  });
+
+  it.each(['valid', 'missing', 'wrong digest', 'truncated'] as const)('reuses unchanged installed bytes only after verification: %s', async (state) => {
+    const memory = createMemoryModelPackInstallerHost();
+    const bytes = new Uint8Array([1, 2, 3]);
+    const changed = new Uint8Array([4, 5, 6]);
+    const stable = { path: 'stable.bin', url: 'https://example.com/stable', sha256: sha256Hex(bytes), sizeBytes: bytes.length };
+    const entry = { path: 'changed.bin', url: 'https://example.com/changed', sha256: sha256Hex(changed), sizeBytes: changed.length };
+    const prior = manifestFor([stable, { ...entry, sha256: '0'.repeat(64) }]);
+    const remote = { ...manifestFor([stable, entry]), version: 'v2' };
+    const installed: Record<string, Uint8Array> = state === 'missing' ? {} : { 'stable.bin': state === 'truncated' ? bytes.slice(0, 1) : state === 'wrong digest' ? changed : bytes };
+    memory.seedInstalled('example', { ...installed, 'changed.bin': bytes, 'dropped.bin': bytes }, prior);
+    memory.serveFile(stable.url, bytes);
+    memory.serveFile(entry.url, changed);
+    await installModelPackWithHost({ host: memory.host, packId: 'example', manifest: remote, priorManifest: prior, signal: new AbortController().signal });
+    expect(memory.requestedUrls()).toContain(entry.url);
+    expect(memory.requestedUrls().includes(stable.url)).toBe(state !== 'valid');
+    expect(memory.read('example/stable.bin')).toEqual(bytes);
+    expect(memory.read('example/changed.bin')).toEqual(changed);
+    expect(memory.read('example/dropped.bin')).toBeUndefined();
+    expect(memory.rangeRequestsFor(stable.url)).toEqual([]);
+  });
+
+  it('waits for aborted sibling responses to settle and preserves the first fatal failure', async () => {
+    const memory = createMemoryModelPackInstallerHost();
+    const bytes = new Uint8Array([1, 2, 3]);
+    const files = ['fatal', 'slow'].map(path => ({ path, url: `https://example.com/${path}`, sha256: sha256Hex(bytes), sizeBytes: bytes.length }));
+    let release!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    let started!: () => void;
+    const siblingStarted = new Promise<void>(resolve => { started = resolve; });
+    let settled = false;
+    let siblingAborted = false;
+    const outcome = installModelPackWithHost({ host: { ...memory.host, openDownload: async request => {
+      if (request.url.endsWith('/fatal')) { await siblingStarted; throw new Error('model_pack_download_failed:404'); }
+      request.signal.addEventListener('abort', () => { siblingAborted = true; }, { once: true });
+      started();
+      await waiting;
+      throw new Error('aborted');
+    } }, packId: 'example', manifest: manifestFor(files), signal: new AbortController().signal }).catch(error => { settled = true; return error; });
+    await siblingStarted;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(siblingAborted).toBe(true);
+    expect(settled).toBe(false);
+    release();
+    expect(await outcome).toMatchObject({ message: 'model_pack_download_failed:404' });
+    expect(memory.read('example/pack.json')).toBeUndefined();
+  });
+
+  it('cancels retry backoff promptly without another transfer', async () => {
+    const memory = createMemoryModelPackInstallerHost();
+    const bytes = new Uint8Array([1]);
+    const controller = new AbortController();
+    let attempts = 0;
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => { controller.abort(); });
+    try {
+      await expect(installModelPackWithHost({ host: { ...memory.host, openDownload: async () => { attempts += 1; throw new Error('model_pack_download_failed:503'); } },
+        packId: 'example', manifest: manifestFor([{ path: 'model.bin', url: 'https://example.com/model', sha256: sha256Hex(bytes), sizeBytes: 1 }]), signal: controller.signal })).rejects.toThrow('aborted');
+      expect(attempts).toBe(1);
+    } finally { warning.mockRestore(); }
+  });
+
+  it('does not retry local writes even when their error resembles a network failure', async () => {
+    const memory = createMemoryModelPackInstallerHost();
+    const bytes = new Uint8Array([1]);
+    const url = 'https://example.com/model';
+    memory.serveFile(url, bytes);
+    await expect(installModelPackWithHost({ host: { ...memory.host, beginStaging: async (...args) => ({
+      ...await memory.host.beginStaging(...args), appendDownloadedChunk: async () => { throw new Error('connection reset'); },
+    }) }, packId: 'example', manifest: manifestFor([{ path: 'model.bin', url, sha256: sha256Hex(bytes), sizeBytes: 1 }]), signal: new AbortController().signal })).rejects.toThrow('connection reset');
+    expect(memory.requestedUrls()).toEqual([url]);
+  });
+
+  it('downloads independent files concurrently and reports verified file counts', async () => {
+    const memory = createMemoryModelPackInstallerHost();
+    const bytes = new Uint8Array([1, 2, 3]);
+    const files = Array.from({ length: 12 }, (_, index) => ({
+      path: `lang/f${index}`, url: `https://example.com/f${index}`,
+      sha256: sha256Hex(bytes), sizeBytes: bytes.length,
+    }));
+    for (const entry of files) memory.serveFile(entry.url, bytes);
+    let active = 0;
+    let peak = 0;
+    let finalProgress: unknown;
+    await installModelPackWithHost({
+      host: {
+        ...memory.host,
+        openDownload: async (request) => {
+          active += 1;
+          peak = Math.max(peak, active);
+          await new Promise(resolve => setTimeout(resolve, 5));
+          active -= 1;
+          return memory.host.openDownload(request);
+        },
+      },
+      packId: 'example', manifest: manifestFor(files), signal: new AbortController().signal,
+      onProgress: progress => { finalProgress = progress; },
+    });
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(6);
+    expect(finalProgress).toMatchObject({ loaded: 36, total: 36, filesDone: 12, filesTotal: 12 });
+    for (const entry of files) expect(memory.read(`example/${entry.path}`)).toEqual(bytes);
+  });
+
+  it('retries a transient HTTP response using a cache-distinct URL', async () => {
+    const memory = createMemoryModelPackInstallerHost();
+    const bytes = new Uint8Array([1, 2, 3]);
+    const url = 'https://example.com/model.bin?v=one';
+    memory.serveFile(url, bytes);
+    const requests: string[] = [];
+    await installModelPackWithHost({
+      host: {
+        ...memory.host,
+        openDownload: async (request) => {
+          requests.push(request.url);
+          if (requests.length === 1) throw new Error('model_pack_download_failed:503');
+          return memory.host.openDownload({ ...request, url });
+        },
+      },
+      packId: 'example', manifest: manifestFor([{ path: 'model.bin', url, sha256: sha256Hex(bytes), sizeBytes: bytes.length }]),
+      signal: new AbortController().signal,
+    });
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).not.toBe(url);
+    expect(new URL(requests[1]!).searchParams.get('v')).toBe('one');
+    expect(memory.read('example/model.bin')).toEqual(bytes);
+  });
+});

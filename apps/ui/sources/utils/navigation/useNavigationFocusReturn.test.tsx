@@ -381,22 +381,16 @@ describe('useNavigationFocusReturn', () => {
         originalHidden = true;
         replacementHidden = false;
         (document as unknown as { activeElement: unknown }).activeElement = body;
-        await React.act(async () => {
-            screen.tree.update(<Harness instance="return" ready={false} />);
-        });
+        await screen.update(<Harness instance="return" ready={false} />);
         expect(originalFocus).not.toHaveBeenCalled();
         expect(visibleFocus).not.toHaveBeenCalled();
 
-        await React.act(async () => {
-            screen.tree.update(<Harness instance="return" ready />);
-        });
+        await screen.update(<Harness instance="return" ready />);
 
         expect(originalFocus).not.toHaveBeenCalled();
         expect(visibleFocus).toHaveBeenCalledOnce();
 
-        await React.act(async () => {
-            screen.tree.update(<Harness instance="later" ready />);
-        });
+        await screen.update(<Harness instance="later" ready />);
         expect(visibleFocus).toHaveBeenCalledOnce();
     });
 });

@@ -12,10 +12,16 @@ import { useNativeBackLayerBackHandler } from '@/components/ui/overlays/NativeBa
 import { RouteRemovalStepConsumer } from '@/utils/navigation/RouteRemovalStepConsumer';
 import { ESCAPE_LAYER_PRIORITIES, useEscapeLayer } from '@/keyboard/escape';
 import { PluginSurfaceFallback } from '@/components/sessions/panes/PluginSurfaceFallback';
+import { PluginPageBackStepProvider } from '@/components/plugins/shared/PluginPageBackStep';
+import { PluginPageIdentityHeaderProvider } from '@/components/plugins/shared/PluginPageIdentityHeader';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { PluginMachineExecutionOriginSelectorView } from '@/components/settings/machines/PluginMachineExecutionOriginSelector';
+import { useNavigationTitleChromeShowsTitle } from '@/components/ui/layout/navigationTitleChrome';
 import { isPluginSurfaceMachineBound, usePluginSurfaceExecutionOrigin } from '@/components/plugins/surfaces/pluginSurfaceExecutionOrigin';
 import { PageNavigationContextActionsProvider } from '@/components/ui/layout/NavigationHeaderActions';
+import { PageFrame } from '@/components/ui/layout/PageFrame';
+import { PageHeader } from '@/components/ui/layout/PageHeader';
+import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import {
     useScopedPluginSettingsDaemonTargetBinding,
@@ -60,7 +66,7 @@ export const PluginSettingsPageScreen = React.memo(function PluginSettingsPageSc
             : null
     ), [appShell.pluginUiProjection, locale, props.pageId, props.pluginId]);
     const needsMachineExecution = destination !== null && isPluginSurfaceMachineBound({
-        pluginId: destination.page.pluginId, renderer: destination.page.renderer, projection: appShell.pluginUiProjection,
+        pluginId: destination.page.pluginId, surface: destination.page, projection: appShell.pluginUiProjection,
     });
     const pageExecution = usePluginSurfaceExecutionOrigin({
         pluginId: props.pluginId ?? '',
@@ -68,15 +74,25 @@ export const PluginSettingsPageScreen = React.memo(function PluginSettingsPageSc
         entry: destination?.page,
         enabled: needsMachineExecution,
     });
+    const phoneTitleChrome = useNavigationTitleChromeShowsTitle();
     const executionChip = React.useMemo(() => needsMachineExecution ? <PluginMachineExecutionOriginSelectorView
-        selection={pageExecution.selection} presentation="chip"
+        selection={pageExecution.selection} presentation="chip" compact={phoneTitleChrome}
         groupTitle={t('settingsPlugins.executionOriginTitle')} testIDPrefix="plugin-page-execution" /> : null,
-    [needsMachineExecution, pageExecution.selection]);
-    const headerOptions = React.useMemo(() => ({ title: destination?.title, headerTitle: destination?.title ?? t('pluginSurfaces.appPage.title'),
-        headerRight: () => executionChip }), [destination?.title, executionChip]);
+    [needsMachineExecution, pageExecution.selection, phoneTitleChrome]);
+    // The page's name before its destination resolves is still its plugin's, never another page's.
+    const identityTitle = destination?.title
+        ?? (props.pluginId ? appShell.pluginUiProjection?.installedPackagesById[props.pluginId]?.displayName : undefined)
+        ?? null;
+    const headerOptions = React.useMemo(() => ({ title: identityTitle ?? undefined, headerTitle: identityTitle ?? t('pluginSurfaces.appPage.title'),
+        headerRight: () => executionChip }), [identityTitle, executionChip]);
     const renderPage = (body: React.ReactNode) => <PageNavigationContextActionsProvider actions={executionChip}>
         <Stack.Screen options={headerOptions} />{body}
     </PageNavigationContextActionsProvider>;
+    // A page that has loaded nothing keeps its identity above its state, in the page column, so the
+    // Settings Back sits on its header instead of floating over the state (`PluginSurfaceFallback`).
+    const renderFallbackPage = (fallback: React.ReactNode) => renderPage(props.pluginId && identityTitle
+        ? <PluginPageIdentityHeaderProvider pluginId={props.pluginId} title={identityTitle}>{fallback}</PluginPageIdentityHeaderProvider>
+        : <PageFrame content="column" style={{ flex: 1 }}>{fallback}</PageFrame>);
     const recoveryAction = React.useMemo(() => {
         const pluginId = props.pluginId;
         return pluginId
@@ -161,13 +177,13 @@ export const PluginSettingsPageScreen = React.memo(function PluginSettingsPageSc
         && !destination
         && (appShell.phase === 'establishing' || appShell.hasEstablishingMembers)
     ) {
-        return renderPage(<PluginSurfaceFallback testID="plugin-settings-page-loading" state="loading" />);
+        return renderFallbackPage(<PluginSurfaceFallback testID="plugin-settings-page-loading" state="loading" />);
     }
 
     if (subPath === null) {
         // An illegal location is not the page root: fail closed at this same
         // unavailable route instead of silently opening the page root.
-        return renderPage(
+        return renderFallbackPage(
             <PluginSurfaceFallback
                 testID="plugin-settings-page-unavailable"
                 reasonCode="plugin_surface_open_sub_path_invalid"
@@ -179,13 +195,13 @@ export const PluginSettingsPageScreen = React.memo(function PluginSettingsPageSc
     if (!destination) {
         // A removed, malformed, or stale page remains at its own
         // generic route. It is never redirected to a different plugin/page.
-        return renderPage(<PluginSurfaceFallback testID="plugin-settings-page-unavailable" action={recoveryAction} />);
+        return renderFallbackPage(<PluginSurfaceFallback testID="plugin-settings-page-unavailable" action={recoveryAction} />);
     }
 
     // The shared host evaluates policy before projecting resolving selection as
     // loading. Do not let a route-local loader swallow a real policy denial.
     if (destination.page.availability.state !== 'available' && destination.page.availability.state !== 'resolving') {
-        return renderPage(
+        return renderFallbackPage(
             <PluginSurfaceFallback
                 testID="plugin-settings-page-unavailable"
                 reasonCode={destination.page.availability.reason}
@@ -194,6 +210,24 @@ export const PluginSettingsPageScreen = React.memo(function PluginSettingsPageSc
         );
     }
 
+    const pageHost = (
+        <PluginSettingsPageHost
+            page={destination.page}
+            subPath={subPath}
+            pluginUiProjection={appShell.pluginUiProjection}
+            machineId={appShell.machineId}
+            serverId={appShell.serverId}
+            daemonSettingsTarget={daemonSettingsTarget}
+            perActiveServerIdentityId={administration.selectedServerIdentityId}
+            isDaemonSettingsTargetCurrent={isDaemonSettingsTargetCurrent}
+            settingsScopesEnabled={{ account: true, daemon: daemonSettingsTarget !== null }}
+            binding={binding}
+            unavailableAction={recoveryAction}
+            platform={appShell.platform}
+            projectionInteractionEnabled={appShell.phase === 'current'
+                && appShell.interactionEnabled}
+        />
+    );
     return renderPage(
         <>
             {/*
@@ -216,22 +250,21 @@ export const PluginSettingsPageScreen = React.memo(function PluginSettingsPageSc
                   * the keyboard layer stack.)
                   */}
                 <RouteRemovalStepConsumer active={isFocused && pageIsLive} consume={consumePageBack} />
-                <PluginSettingsPageHost
-                    page={destination.page}
-                    subPath={subPath}
-                    pluginUiProjection={appShell.pluginUiProjection}
-                    machineId={appShell.machineId}
-                    serverId={appShell.serverId}
-                    daemonSettingsTarget={daemonSettingsTarget}
-                    perActiveServerIdentityId={administration.selectedServerIdentityId}
-                    isDaemonSettingsTargetCurrent={isDaemonSettingsTargetCurrent}
-                    settingsScopesEnabled={{ account: true, daemon: daemonSettingsTarget !== null }}
-                    binding={binding}
-                    unavailableAction={recoveryAction}
-                    platform={appShell.platform}
-                    projectionInteractionEnabled={appShell.phase === 'current'
-                        && appShell.interactionEnabled}
-                />
+                <PluginPageBackStepProvider owner={locationOwner}>
+                {destination.page.renderer.kind === 'declarative'
+                    // A declarative page is the author's content only; like every Settings page it
+                    // sits in the page column with the page gutters instead of touching the window edge.
+                    // It opens with its title like every Settings page (the native header carries it on phones).
+                    // Its settings sections take the configuration-page anatomy (description above the rows).
+                    ? <PageFrame column="reading" style={{ flex: 1 }}>
+                        {destination.title ? <PageHeader title={destination.title} /> : null}
+                        <ListPresentationProvider value="page">{pageHost}</ListPresentationProvider>
+                    </PageFrame>
+                    // A rendered page draws its own header; when it has loaded nothing, the page keeps its identity.
+                    : <PluginPageIdentityHeaderProvider pluginId={destination.page.pluginId} title={destination.title ?? t('pluginSurfaces.appPage.title')}>
+                        {pageHost}
+                    </PluginPageIdentityHeaderProvider>}
+                </PluginPageBackStepProvider>
             </PluginSurfaceFocusEligibilityProvider>
         </>
     );

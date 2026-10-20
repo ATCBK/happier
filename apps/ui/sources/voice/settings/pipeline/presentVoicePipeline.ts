@@ -136,14 +136,17 @@ export function presentVoicePipeline(
             readiness: step.readiness ? presentReadiness(step.readiness, translate, progress, step.engine.title) : null,
         };
     });
-    const card = cardReadiness ? presentReadiness(cardReadiness, translate, null, serviceTitle ?? pipeline.steps[0]?.engine.title ?? t('voicePresence.title')) : null;
+    const serviceFact = cardReadiness ? presentReadiness(cardReadiness, translate, null, serviceTitle ?? pipeline.steps[0]?.engine.title ?? t('voicePresence.title')) : null;
+    // One message per state: a step that already says the service's fact keeps it, the card line is not repeated.
+    const card = serviceFact && steps.some((step) => step.readiness?.message === serviceFact.message
+        && step.readiness.recoveryAction === serviceFact.recoveryAction) ? null : serviceFact;
     const needYou = steps.filter((step) => step.readiness?.tone === 'needs_you' || step.readiness?.tone === 'blocked').length;
-    const overall = card ? card.tone : resolveVoiceReadinessTone(pipeline.readiness);
+    const overall = serviceFact ? serviceFact.tone : resolveVoiceReadinessTone(pipeline.readiness);
     const tone: VoiceReadinessTone = needYou > 0 ? 'needs_you' : overall ?? 'unknown';
-    const statusWord = card
-        ? card.tone === 'needs_you' || card.tone === 'blocked'
+    const statusWord = serviceFact
+        ? serviceFact.tone === 'needs_you' || serviceFact.tone === 'blocked'
             ? t('settingsVoice.pages.pipeline.needsYou')
-            : card.tone === 'working'
+            : serviceFact.tone === 'working'
                 ? t('settingsVoice.pages.pipeline.working')
                 : t('settingsVoice.pages.pipeline.waiting')
         : needYou > 1

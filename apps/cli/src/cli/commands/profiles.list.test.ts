@@ -1,145 +1,108 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ProfileRecordV1Schema, PROFILE_ROWS_ROUTE_V1, PROFILE_REFERENCE_GUARD_ROUTE_V1,
+  sealProfileRecordContentV1, type ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
+import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
+import { AUTHORING_MEMORY_ROUTE_V1 } from '@happier-dev/protocol/account/authoringMemory';
 
 import { handleProfilesCliCommand } from './profiles';
 import * as persistenceModule from '@/persistence';
-import * as accountSettingsModule from '@/settings/accountSettings/bootstrapAccountSettingsContext';
-import { captureConsoleLogAndMuteStdout } from '@/testkit/logger/captureOutput';
+import { resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
+import { captureConsoleJsonOutput } from '@/testkit/logger/captureOutput';
+
+let records: ProfileRecordV1[];
+
+beforeEach(() => {
+  records = [];
+  resetActiveAccountSettingsSnapshotForTests();
+  // Credentials and remote HTTP are the boundaries. Bootstrap, Account
+  // lifetime admission, Profile rows, and list projection remain real.
+  vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/v1/account/encryption/currentness') return {
+      status: 200, data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }),
+    };
+    if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+    if (path === '/v1/artifacts') return { status: 200, data: [] };
+    if (path === '/v2/account/settings') return {
+      status: 200, data: { version: 1, content: { t: 'plain', v: {} } },
+    };
+    if (path === PROFILE_ROWS_ROUTE_V1) return { status: 200, data: {
+      status: 'listed', rows: records.map(record => ({ id: record.id, revision: 1,
+        content: sealProfileRecordContentV1({ mode: 'plain', material: null, record }) })),
+      complete: true, nextCursor: null, referenceGuardRevision: 'absent', transferControl: { status: 'absent' }, diagnostics: [],
+    } };
+    if (path === PROFILE_REFERENCE_GUARD_ROUTE_V1) return { status: 200, data: { status: 'ready', revision: 'absent' } };
+    if (path === PROFILE_TRANSFER_ROUTE_V1 || path === `${AUTHORING_MEMORY_ROUTE_V1}/lastUsedProfile`) {
+      return { status: 200, data: { status: 'absent' } };
+    }
+    return { status: 404, data: {} };
+  });
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
+  resetActiveAccountSettingsSnapshotForTests();
+  process.exitCode = undefined;
 });
 
-describe('happier profiles list --json', () => {
-  it('lists built-in profiles when unauthenticated', async () => {
-    vi.spyOn(persistenceModule, 'readStoredCredentials').mockResolvedValue(null);
-    const bootstrapSpy = vi.spyOn(accountSettingsModule, 'bootstrapAccountSettingsContext');
-    const output = captureConsoleLogAndMuteStdout();
-
-    await handleProfilesCliCommand({
-      args: ['profiles', 'list', '--json'],
-      rawArgv: ['happier', 'profiles', 'list', '--json'],
-      terminalRuntime: null,
-    } as any);
-
-    expect(bootstrapSpy).not.toHaveBeenCalled();
-
-    const stdout = output.logs.join('\n').trim();
-    const payload = JSON.parse(stdout) as any;
-    expect(payload.ok).toBe(true);
-    expect(payload.kind).toBe('profiles_list');
-    expect(payload.data?.authenticated).toBe(false);
-    const profileIds = (payload.data?.profiles as Array<{ id: string }>).map((profile) => profile.id);
-    expect(profileIds).not.toContain('anthropic');
-    expect(profileIds).not.toContain('codex');
-    expect(profileIds).not.toContain('gemini');
-    expect(profileIds).toEqual(expect.arrayContaining(['deepseek', 'zai', 'openai']));
-  });
-
-  it('includes custom profiles when authenticated', async () => {
-    const credentials = {
-      token: 'x',
-      encryption: null,
-    } as const;
-
-    vi.spyOn(persistenceModule, 'readStoredCredentials').mockResolvedValue(credentials);
-    const bootstrapSpy = vi.spyOn(accountSettingsModule, 'bootstrapAccountSettingsContext').mockResolvedValue({
-      source: 'network',
-      settings: {
-        profiles: [
-          {
-            id: 'work',
-            name: 'Work',
-            compatibilityByTargetKey: { 'agent:claude': true, 'agent:codex': false },
-            envVarRequirements: [
-              { name: 'WORK_TOKEN', kind: 'secret', required: true },
-              { name: 'WORK_HOST', kind: 'config', required: true },
-              { name: 'OPTIONAL_SECRET', kind: 'secret', required: false },
-            ],
-          },
-        ],
-      },
-      settingsVersion: 1,
-      loadedAtMs: Date.now(),
-      whenRefreshed: null,
-    } as any);
-
-    const output = captureConsoleLogAndMuteStdout();
-
+async function listProfiles() {
+  const output = captureConsoleJsonOutput();
+  try {
     await handleProfilesCliCommand({
       args: ['profiles', 'list', '--refresh-settings', '--json'],
       rawArgv: ['happier', 'profiles', 'list', '--refresh-settings', '--json'],
       terminalRuntime: null,
-    } as any);
+    });
+    return output.json();
+  } finally { output.restore(); }
+}
 
-    expect(bootstrapSpy).toHaveBeenCalledWith(expect.objectContaining({ refresh: 'force' }));
-
-    const stdout = output.logs.join('\n').trim();
-    const payload = JSON.parse(stdout) as any;
-    expect(payload.ok).toBe(true);
-    expect(payload.kind).toBe('profiles_list');
-    expect(payload.data?.authenticated).toBe(true);
-    expect(payload.data?.profiles).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: 'work',
-          name: 'Work',
-          isBuiltIn: false,
-          requiredSecretEnvVarNames: ['WORK_TOKEN'],
-          requiredConfigEnvVarNames: ['WORK_HOST'],
-          supportedAgentIds: expect.arrayContaining(['claude']),
-        }),
-      ]),
-    );
-
-    const work = (payload.data?.profiles as any[]).find((p) => p?.id === 'work');
-    expect(work.supportedAgentIds).not.toContain('codex');
+describe('happier profiles list --json', () => {
+  it('does not advertise demoted historical profiles when unauthenticated', async () => {
+    vi.spyOn(persistenceModule, 'readStoredCredentials').mockResolvedValue(null);
+    expect(await listProfiles()).toMatchObject({
+      ok: true, kind: 'profiles_list', data: { authenticated: false, profiles: [] },
+    });
   });
 
-  it('includes canonical requiresMachineLoginTargetKey in json output without requiring legacy machine-login fields', async () => {
-    const credentials = {
-      token: 'x',
-      encryption: { type: 'legacy', secret: new Uint8Array(32) },
-    } as any;
-
-    vi.spyOn(persistenceModule, 'readStoredCredentials').mockResolvedValue(credentials);
-    vi.spyOn(accountSettingsModule, 'bootstrapAccountSettingsContext').mockResolvedValue({
-      source: 'network',
-      settings: {
-        profiles: [
-          {
-            id: 'custom-acp-login',
-            name: 'Custom ACP Login',
-            authMode: 'machineLogin',
-            compatibilityByTargetKey: { 'acpBackend:custom-preset': true },
-            requiresMachineLoginTargetKey: 'acpBackend:custom-preset',
-            envVarRequirements: [],
-          },
+  it('includes custom Account Profile rows when authenticated', async () => {
+    vi.spyOn(persistenceModule, 'readStoredCredentials').mockResolvedValue({ token: 'x', encryption: null });
+    records = [ProfileRecordV1Schema.parse({ v: 1, id: 'work', enabled: true, promptStack: [], secretBindings: {},
+      definition: { kind: 'legacy', profile: {
+        id: 'work', name: 'Work', compatibilityByTargetKey: { 'agent:claude': true, 'agent:codex': false },
+        envVarRequirements: [
+          { name: 'WORK_TOKEN', kind: 'secret', required: true },
+          { name: 'WORK_HOST', kind: 'config', required: true },
+          { name: 'OPTIONAL_SECRET', kind: 'secret', required: false },
         ],
-      },
-      settingsVersion: 1,
-      loadedAtMs: Date.now(),
-      whenRefreshed: null,
-    } as any);
+      } },
+    })];
+    const payload = await listProfiles();
+    expect(payload, JSON.stringify(payload)).toMatchObject({ ok: true, kind: 'profiles_list', data: { authenticated: true,
+      profiles: [expect.objectContaining({ id: 'work', name: 'Work', isBuiltIn: false,
+        requiredSecretEnvVarNames: ['WORK_TOKEN'], requiredConfigEnvVarNames: ['WORK_HOST'],
+        supportedAgentIds: expect.arrayContaining(['claude']),
+      })],
+    } });
+    expect(payload.data.profiles[0].supportedAgentIds).not.toContain('codex');
+  });
 
-    const output = captureConsoleLogAndMuteStdout();
-
-    await handleProfilesCliCommand({
-      args: ['profiles', 'list', '--json'],
-      rawArgv: ['happier', 'profiles', 'list', '--json'],
-      terminalRuntime: null,
-    } as any);
-
-    const payload = JSON.parse(output.logs.join('\n').trim()) as any;
-    expect(payload.data?.profiles).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: 'custom-acp-login',
-          authMode: 'machineLogin',
-          requiresMachineLoginTargetKey: 'acpBackend:custom-preset',
-        }),
-      ]),
-    );
-    const customAcpLogin = (payload.data?.profiles as any[]).find((profile) => profile?.id === 'custom-acp-login');
-    expect(customAcpLogin?.requiresMachineLogin).toBeUndefined();
+  it('includes canonical requiresMachineLoginTargetKey without legacy machine-login fields', async () => {
+    vi.spyOn(persistenceModule, 'readStoredCredentials').mockResolvedValue({ token: 'x', encryption: null });
+    records = [ProfileRecordV1Schema.parse({ v: 1, id: 'custom-acp-login', enabled: true, promptStack: [], secretBindings: {},
+      definition: { kind: 'legacy', profile: {
+        id: 'custom-acp-login', name: 'Custom ACP Login', authMode: 'machineLogin',
+        compatibilityByTargetKey: { 'acpBackend:custom-preset': true },
+        requiresMachineLoginTargetKey: 'acpBackend:custom-preset', envVarRequirements: [],
+      } },
+    })];
+    const payload = await listProfiles();
+    expect(payload, JSON.stringify(payload)).toMatchObject({ ok: true, data: { profiles: [expect.objectContaining({
+      id: 'custom-acp-login', authMode: 'machineLogin',
+      requiresMachineLoginTargetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:custom-preset',
+    })] } });
+    expect(payload.data.profiles[0]).not.toHaveProperty('requiresMachineLogin');
   });
 });

@@ -97,7 +97,7 @@ export const PluginOpenableContentViewerContributionV1Schema = lazyZodSchema(() 
   if (!normalized.success) {
     normalized.error.issues.forEach((issue) => void context.issues.push({
       ...issue,
-      path: issue.path === undefined ? [] : [...issue.path], input: ('input' in issue ? issue.input ?? context.value : context.value) }));
+      path: issue.path === undefined ? [] : [...issue.path], input: ('input' in issue ? issue.input ?? context.value : context.value) } as z.core.$ZodRawIssue));
     return z.NEVER;
   }
   return { id: value.id, destination: value.destination, ...normalized.data };
@@ -133,7 +133,7 @@ export const OpenableContentPreferenceSelectorV1Schema = lazyZodSchema(() => z.p
   if (!parsed.success) {
     parsed.error.issues.forEach((issue) => void context.issues.push({
       ...issue,
-      path: issue.path === undefined ? [] : [...issue.path], input: ('input' in issue ? issue.input ?? context.value : context.value) }));
+      path: issue.path === undefined ? [] : [...issue.path], input: ('input' in issue ? issue.input ?? context.value : context.value) } as z.core.$ZodRawIssue));
     return z.NEVER;
   }
   try {

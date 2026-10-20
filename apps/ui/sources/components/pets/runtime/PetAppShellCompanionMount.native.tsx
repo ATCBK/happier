@@ -50,7 +50,7 @@ import {
 import { useLocalSetting } from '@/sync/domains/state/storage';
 import { useReportSessionCockpitPetRect } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
-import { useApplyLocalSettings } from '@/sync/store/settingsWriters';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { useKeyboardHeight } from '@/hooks/ui/useKeyboardHeight';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
@@ -125,7 +125,6 @@ function NativePetCompanionLayer({
     const activity = usePetCompanionActivityModel({ dismissedTrayItemKeys });
     const petsCompanionPosition = useLocalSetting('petsCompanionPosition');
     const petsCompanionSizeScale = useLocalSetting('petsCompanionSizeScale');
-    const applyLocalSettings = useApplyLocalSettings();
     const dimensions = useWindowDimensions();
     const safeAreaInsets = useSafeAreaInsets();
     const keyboardHeight = useKeyboardHeight();
@@ -186,14 +185,14 @@ function NativePetCompanionLayer({
         onDragRelease: ({ target }) => reportPetRect({ ...target, width: measuredWidth, height: measuredHeight }),
         resolveDragState: resolvePetNativeDragAnimationState,
         onPositionChange: ({ point }) => {
-            applyLocalSettings({
+            getStorage().getState().applyLocalSettings({
                 petsCompanionPosition: createStoredPetCompanionPosition({
                     surface: 'mobile-app-shell',
                     point,
                     bounds,
                     viewport,
                 }),
-            });
+            }, { source: 'ui' });
         },
     });
     const effectiveState = reactionState ?? pan.dragState ?? activity.state;

@@ -3176,6 +3176,35 @@ export type ProvidersActionResultById = {
                 };
                 loadState: 'unknown' | 'loaded' | 'unloaded';
                 visibility: 'visible' | 'hidden_all_agents' | 'hidden_agent' | 'hidden_current_selection';
+                gatewaySlots?: {
+                    purpose: {
+                        consumer: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        purpose: string;
+                    };
+                    target: {
+                        kind: 'account';
+                        account: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        };
+                    } | {
+                        kind: 'group';
+                        service: {
+                            pluginId: string;
+                            localId: string;
+                        } | {
+                            pluginId: 'happier';
+                            localId: 'mcp-sign-in';
+                        };
+                        groupId: string;
+                    };
+                }[] | undefined;
                 application?: {
                     agentTargetKey: string;
                     implementationIdentity: {
@@ -3458,6 +3487,35 @@ export type ProvidersActionResultById = {
                 };
                 loadState: 'unknown' | 'loaded' | 'unloaded';
                 visibility: 'visible' | 'hidden_all_agents' | 'hidden_agent' | 'hidden_current_selection';
+                gatewaySlots?: {
+                    purpose: {
+                        consumer: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        purpose: string;
+                    };
+                    target: {
+                        kind: 'account';
+                        account: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        };
+                    } | {
+                        kind: 'group';
+                        service: {
+                            pluginId: string;
+                            localId: string;
+                        } | {
+                            pluginId: 'happier';
+                            localId: 'mcp-sign-in';
+                        };
+                        groupId: string;
+                    };
+                }[] | undefined;
                 application?: {
                     agentTargetKey: string;
                     implementationIdentity: {
@@ -3792,6 +3850,13 @@ export type ProvidersActionResultById = {
                 reasoningControls?: 'unknown' | 'supported' | 'unsupported' | undefined;
                 structuredOutput?: 'unknown' | 'supported' | 'unsupported' | undefined;
             } | undefined;
+            connectedAccountPurposes?: {
+                consumer: {
+                    pluginId: string;
+                    localId: string;
+                };
+                purpose: string;
+            }[] | undefined;
         }[];
         requestFingerprint: string;
     } | {

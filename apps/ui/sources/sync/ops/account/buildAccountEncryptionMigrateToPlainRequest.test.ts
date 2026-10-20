@@ -224,7 +224,7 @@ describe('buildAccountEncryptionMigrateToPlainRequest', () => {
   it('converts all 257 opened Profiles to Plain with captured revisions and no Account key requirement', async () => {
     const records = Array.from({ length: 257 }, (_, index) => ({ revision: index + 1, record: {
       v: 1 as const, id: `profile-${index}`, definition: { kind: 'artifact' as const, artifactId: `artifact-${index}` },
-      enabled: index % 2 === 0, promptStack: [], secretBindings: {},
+      enabled: index % 2 === 0, promptStack: [], secretBindings: {}, skillSeeds: [],
     } }));
     const material = resolveAccountScopedCryptoMaterialFromCredentials(createLegacyCredentials());
     const control = { v: 1 as const, phase: 'prepared' as const, sourceSettingsVersion: 7, migratedLogicalRevision: 519,

@@ -1,5 +1,6 @@
 import {
   deriveExternalSessionActivity,
+  readSessionInputPromptUserTextV1,
 } from '@happier-dev/plugin-sdk/sessions/external';
 import type { ExecService } from '@happier-dev/plugin-sdk/exec';
 import type { AgentExternalSessionsInvocation } from '@happier-dev/plugin-sdk/sessions/external';
@@ -31,6 +32,7 @@ import {
   selectCodexRolloutCandidateEntries,
 } from '../../../rollout/discovery/candidates.js';
 import { homeEntries as resolveHomeEntries } from '../../../rollout/discovery/homeEntries.js';
+import { CodexRolloutPreparation, parseCodexRolloutPreparationState } from '../../../rollout/discovery/preparation.js';
 import { readCodexSessionMetaFromRollout } from '../../../rollout/discovery/indexData.js';
 import {
   CODEX_ROLLOUT_TITLE_HEAD_BUDGET,
@@ -65,6 +67,13 @@ export class CodexExternalSessionCandidateSourceChangedError extends Error {
   constructor() {
     super('Codex rollout candidate source changed; refresh the candidate list.');
     this.name = 'CodexExternalSessionCandidateSourceChangedError';
+  }
+}
+
+export class CodexExternalSessionNativeListingUnavailableError extends Error {
+  constructor() {
+    super('Codex native session listing is unavailable; retry this candidate page.');
+    this.name = 'CodexExternalSessionNativeListingUnavailableError';
   }
 }
 
@@ -160,7 +169,7 @@ function toCodexAppServerCandidate(
   const title = typeof thread.name === 'string' && thread.name.trim()
     ? thread.name.trim()
     : typeof thread.preview === 'string' && thread.preview.trim()
-      ? thread.preview.trim()
+      ? readSessionInputPromptUserTextV1(thread.preview).replace(/\s+/g, ' ').trim()
       : undefined;
   const runtimeDescriptorV1 = buildCodexAgentRuntimeDescriptorV1({
     backendMode: 'appServer',
@@ -284,7 +293,9 @@ async function listCodexSessionCandidatesViaAppServerWithBudget(params: Readonly
   archived: CodexExternalSessionNativeCandidateCursorState;
 }> & CodexExternalSessionInvocationBounds): Promise<CodexAppServerCandidatePages> {
   throwIfCodexExternalSessionInvocationStopped(params);
-  const budgetMs = resolveCodexExternalSessionAppServerListBudgetMs(params.env);
+  if (params.active.done && params.archived.done) {
+    return Object.freeze({ active: null, archived: null, incomplete: false });
+  }
   const homeEntries = await resolveHomeEntries({
     source: params.source,
     activeServerDir: params.activeServerDir,
@@ -292,6 +303,7 @@ async function listCodexSessionCandidatesViaAppServerWithBudget(params: Readonly
     signal: params.signal,
     deadlineAtMs: params.deadlineAtMs,
     onProgress: params.onProgress,
+    preparation: params.preparation,
   });
   throwIfCodexExternalSessionInvocationStopped(params);
 
@@ -299,6 +311,11 @@ async function listCodexSessionCandidatesViaAppServerWithBudget(params: Readonly
   if (!homeEntry) {
     return Object.freeze({ active: null, archived: null, incomplete: false });
   }
+  // Proxy startup and stdio fallback share the caller's invocation deadline.
+  // Only callers without one use the standalone listing budget.
+  const budgetMs = params.deadlineAtMs === undefined
+    ? resolveCodexExternalSessionAppServerListBudgetMs(params.env)
+    : params.deadlineAtMs - Date.now();
   let incomplete = homeEntries.length > 1;
   const searchTerm = typeof params.searchTerm === 'string' ? params.searchTerm.trim().toLowerCase() : '';
   const processEnv = {
@@ -333,6 +350,7 @@ async function listCodexSessionCandidatesViaAppServerWithBudget(params: Readonly
           signal,
           deadlineAtMs: params.deadlineAtMs,
           onProgress: params.onProgress,
+          preparation: params.preparation,
         });
       } catch {
         throwIfCodexExternalSessionInvocationStopped(params);
@@ -351,6 +369,7 @@ async function listCodexSessionCandidatesViaAppServerWithBudget(params: Readonly
           signal,
           deadlineAtMs: params.deadlineAtMs,
           onProgress: params.onProgress,
+          preparation: params.preparation,
         });
       }
     } catch (error) {
@@ -549,6 +568,7 @@ async function listRolloutCandidateOrdering(params: Readonly<{
       signal: params.signal,
       deadlineAtMs: params.deadlineAtMs,
       onProgress: params.onProgress,
+      preparation: params.preparation,
     });
     if (selection.kind === 'direct' && selection.entries.length > 0) {
       return {
@@ -599,9 +619,11 @@ async function listRolloutCandidateOrdering(params: Readonly<{
       searchMode: params.searchMode,
     })),
     after,
+    includeTitles: params.searchTarget !== 'content',
     signal: params.signal,
     deadlineAtMs: params.deadlineAtMs,
     onProgress: params.onProgress,
+    preparation: params.preparation,
   });
   if (chunk.sourceChanged) {
     throw new CodexExternalSessionCandidateSourceChangedError();
@@ -638,6 +660,7 @@ async function listRolloutCandidateOrdering(params: Readonly<{
       signal: params.signal,
       deadlineAtMs: params.deadlineAtMs,
       onProgress: params.onProgress,
+      preparation: params.preparation,
     }),
     params,
   );
@@ -679,6 +702,7 @@ async function buildCodexMergedOrderingPage(
         signal: params.signal,
         deadlineAtMs: params.deadlineAtMs,
         onProgress: params.onProgress,
+        preparation: params.preparation,
       }),
     params,
   );
@@ -710,7 +734,7 @@ function buildRolloutScanCandidate(params: Readonly<{
     updatedAtMs,
     archived: group.archived,
     activity: deriveExternalSessionActivity({ updatedAtMs, env: params.env }),
-    details: { source: params.entry.source },
+    details: { source: params.entry.source, ...(params.entry.cwd ? { cwd: params.entry.cwd } : {}) },
   };
 }
 
@@ -748,6 +772,7 @@ async function scanBoundedRolloutCandidateChunk(params: Readonly<{
     signal: params.signal,
     deadlineAtMs: params.deadlineAtMs,
     onProgress: params.onProgress,
+    preparation: params.preparation,
   });
   if (chunk.sourceChanged) {
     throw new CodexExternalSessionCandidateSourceChangedError();
@@ -818,6 +843,8 @@ function selectBoundedCodexMergedCandidatePage(params: Readonly<{
   cursor: CodexExternalSessionIndexCursor;
   activePage: CodexAppServerCandidatePage | null;
   archivedPage: CodexAppServerCandidatePage | null;
+  /** A failed native listing permits partial rollout order, never completeness. */
+  nativeListingIncomplete?: boolean;
   limit: number;
   rolloutScan: Readonly<{
     current: CodexExternalSessionRolloutScanState;
@@ -899,7 +926,7 @@ function selectBoundedCodexMergedCandidatePage(params: Readonly<{
       // strict precedence lets a released rollout row remain canonical when a
       // later, older native twin arrives.
       if (
-        nativeContinuationUnknown
+        (nativeContinuationUnknown && params.nativeListingIncomplete !== true)
         || (
           nativeContinuationFrontierUpdatedAtMs !== null
           && row.updatedAtMs <= nativeContinuationFrontierUpdatedAtMs
@@ -1026,7 +1053,7 @@ export async function listCodexSessionCandidates(input: Readonly<{
     signal: input.signal,
     deadlineAtMs: input.scanDeadlineAtMs ?? input.deadlineAtMs,
   }) : undefined;
-  const params = contentSearchControl
+  let params: typeof input & CodexExternalSessionInvocationBounds = contentSearchControl
     ? { ...input, contentSearchControl, onProgress: contentSearchControl.checkWork }
     : input;
   throwIfCodexExternalSessionInvocationStopped(params);
@@ -1049,6 +1076,7 @@ export async function listCodexSessionCandidates(input: Readonly<{
       signal: params.signal,
       deadlineAtMs: params.deadlineAtMs,
       onProgress: params.onProgress,
+      preparation: params.preparation,
     });
   }
   const cursor = params.cursor
@@ -1059,6 +1087,19 @@ export async function listCodexSessionCandidates(input: Readonly<{
   let contentProgress = cursor.contentProgress === undefined ? undefined : parseCodexContentSearchProgress(cursor.contentProgress) ?? undefined;
   if (cursor.contentProgress !== undefined && (!contentProgress || search.target !== 'content')) throw new CodexExternalSessionCandidateSourceChangedError();
   if (search.target === 'content' && !params.ripgrep) return { candidates: [], nextCursor: null, contentCoverage: 'unsupported' };
+  if (contentSearchControl) {
+    const state = cursor.preparation === undefined ? undefined : parseCodexRolloutPreparationState(cursor.preparation);
+    if (cursor.preparation !== undefined && !state) throw new CodexExternalSessionCandidateSourceChangedError();
+    // Home admission and retained-path verification always run fresh, with the
+    // hard invocation bounds. Cooperative work is charged only after a new
+    // native preparation fact has been committed to this cursor.
+    const bounds = { signal: params.signal, deadlineAtMs: params.deadlineAtMs };
+    const homes = await resolveHomeEntries({ ...params, ...bounds, onProgress: undefined });
+    homes.sort((left, right) => compareCodexRolloutCandidateCodeUnits(left.codexHome, right.codexHome)
+      || compareCodexRolloutCandidateCodeUnits(JSON.stringify(left.source), JSON.stringify(right.source)));
+    params = { ...params, onProgress: undefined, preparation: new CodexRolloutPreparation(homes.map(({ codexHome }) => codexHome), contentSearchControl,
+      state ?? undefined, () => throwIfCodexExternalSessionInvocationStopped(bounds), () => { throw new CodexExternalSessionCandidateSourceChangedError(); }) };
+  }
   try {
     const rolloutOrdering = await listRolloutCandidateOrdering({
       source: params.source,
@@ -1072,6 +1113,7 @@ export async function listCodexSessionCandidates(input: Readonly<{
       signal: params.signal,
       deadlineAtMs: params.deadlineAtMs,
       onProgress: params.onProgress,
+      preparation: params.preparation,
     });
     const serveRolloutOnlyPage = async (ordering: Readonly<{
       rows: CodexMergedOrderingRow[];
@@ -1116,15 +1158,10 @@ export async function listCodexSessionCandidates(input: Readonly<{
       });
     }
 
-    // The existing native probe budget includes startup, fallback and teardown.
-    // If content discovery has already consumed that room, leave native ordering
-    // unresolved in the existing cursor and try it on the next invocation.
-    const deferNativeContentProbe = search.target === 'content'
-      && params.deadlineAtMs !== undefined
-      && params.deadlineAtMs - Date.now() <= resolveCodexExternalSessionAppServerListBudgetMs(params.env);
-    const appServerListing = deferNativeContentProbe
-      ? { active: null, archived: null, incomplete: true }
-      : params.searchMode === 'fast' && search.target !== 'content'
+    // The probe's existing budget is an upper bound, not a minimum amount of
+    // caller time. A short invocation must still be able to drain an empty or
+    // immediately available native stream and advance its real cursor.
+    const appServerListing = params.searchMode === 'fast' && search.target !== 'content'
       ? {
         active: null,
         archived: null,
@@ -1141,8 +1178,18 @@ export async function listCodexSessionCandidates(input: Readonly<{
         signal: params.signal,
         deadlineAtMs: params.deadlineAtMs,
         onProgress: params.onProgress,
+        preparation: params.preparation,
       });
     throwIfCodexExternalSessionInvocationStopped(params);
+    if (search.target === 'content' && appServerListing.incomplete
+      && !appServerListing.active && !appServerListing.archived
+      && rolloutOrdering.rows.length === 0 && rolloutOrdering.nextBoundary === null) {
+      // A native listing failure cannot discard independently readable rollout
+      // hits. Serve their advancing page with partial coverage first; once the
+      // rollout frontier is drained, retain this retryable native failure rather
+      // than publishing an unchanged success cursor or false completeness.
+      throw new CodexExternalSessionNativeListingUnavailableError();
+    }
     const nativeCursor = params.searchMode === 'fast' && search.target !== 'content'
       ? Object.freeze({
         ...cursor,
@@ -1155,6 +1202,7 @@ export async function listCodexSessionCandidates(input: Readonly<{
       cursor: nativeCursor,
       activePage: appServerListing.active,
       archivedPage: appServerListing.archived,
+      nativeListingIncomplete: search.target === 'content' && appServerListing.incomplete,
       limit,
       rolloutScan: {
         current: rolloutOrdering.scan,
@@ -1167,6 +1215,7 @@ export async function listCodexSessionCandidates(input: Readonly<{
       || (Boolean(searchTerm) && page.hasPendingNativeContinuation);
 
     let candidates: CodexExternalSessionCandidate[];
+    let completedContentRows = 0;
     let contentPartial = page.hasMore || appServerListing.incomplete;
     if (search.target === 'content' && params.ripgrep) {
       candidates = [];
@@ -1181,14 +1230,17 @@ export async function listCodexSessionCandidates(input: Readonly<{
         if (params.deadlineAtMs !== undefined && params.deadlineAtMs - startedAtMs <= longestRowMs) break;
         try {
           throwIfCodexExternalSessionInvocationStopped(params);
-          const built = await buildCodexMergedOrderingPage([row], params);
-          for (const candidate of built) {
-            if (contentProgress && contentProgress.remoteSessionId !== candidate.remoteSessionId) throw new CodexExternalSessionCandidateSourceChangedError();
-            const result = await searchCodexExternalTranscript({ ...params, remoteSessionId: candidate.remoteSessionId, query: searchTerm, ripgrep: params.ripgrep, files: filesById.get(candidate.remoteSessionId) ?? [], progress: contentProgress });
-            contentProgress = undefined;
-            contentPartial ||= result.partial || result.unsearchable;
-            if (result.match) candidates.push({ ...candidate, match: result.match });
-            else if (result.unsearchable) candidates.push(candidate);
+          if (contentProgress && contentProgress.remoteSessionId !== row.remoteSessionId) throw new CodexExternalSessionCandidateSourceChangedError();
+          const result = await searchCodexExternalTranscript({ ...params, remoteSessionId: row.remoteSessionId, query: searchTerm, ripgrep: params.ripgrep,
+            files: filesById.get(row.remoteSessionId) ?? [], progress: contentProgress });
+          contentProgress = undefined;
+          contentPartial ||= result.partial || result.unsearchable;
+          // Titles are output projection, not search preparation. Read them
+          // freshly only after the native codec has completed this row; keeping
+          // text in a continuation would make the cursor its authority.
+          if (result.match || result.unsearchable) {
+            const built = await buildCodexMergedOrderingPage([row], { ...params, preparation: undefined });
+            for (const candidate of built) candidates.push(result.match ? { ...candidate, match: result.match } : candidate);
           }
           processedRows += 1;
           longestRowMs = Math.max(longestRowMs, Date.now() - startedAtMs);
@@ -1205,11 +1257,13 @@ export async function listCodexSessionCandidates(input: Readonly<{
         page = selectBoundedCodexMergedCandidatePage({ ...pageSelection, limit: processedRows });
         contentPartial = true;
       }
+      completedContentRows = processedRows;
     } else candidates = await buildCodexMergedOrderingPage(page.rows, params);
     const result: CodexCandidateListPage = {
       candidates,
       nextCursor: page.hasMore
-        ? encodeCodexExternalSessionIndexCursor({ ...page.cursor, search, ...(contentProgress ? { contentProgress } : {}) })
+        ? encodeCodexExternalSessionIndexCursor({ ...page.cursor, search, ...(contentProgress ? { contentProgress } : {}),
+          ...(params.preparation && (contentProgress || completedContentRows === 0) ? { preparation: params.preparation.state } : {}) })
         : null,
       ...(searchIncomplete ? { searchIncomplete: true } : {}),
       ...(search.target === 'content' ? { contentCoverage: contentPartial ? 'partial' as const : 'complete' as const } : {}),
@@ -1245,13 +1299,14 @@ export async function listCodexSessionCandidates(input: Readonly<{
         }
         candidates[index] = { ...candidate, match: { ...match, snippet: contextSnippet(match.snippet, lower) } };
       }
+      if (!params.resultBudget.fits(result)) throw new Error('Codex candidate result byte budget cannot fit the continuation envelope.');
     }
     return result;
   } catch (error) {
     if (!(error instanceof ExternalSessionContentSearchYield)) throw error;
     const result: CodexCandidateListPage = {
       candidates: [],
-      nextCursor: encodeCodexExternalSessionIndexCursor({ ...cursor, search, ...(contentProgress ? { contentProgress } : {}) }),
+      nextCursor: encodeCodexExternalSessionIndexCursor({ ...cursor, search, ...(contentProgress ? { contentProgress } : {}), ...(params.preparation ? { preparation: params.preparation.state } : {}) }),
       contentCoverage: 'partial',
       searchIncomplete: true,
     };

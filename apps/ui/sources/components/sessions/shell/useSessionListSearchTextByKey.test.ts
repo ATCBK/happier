@@ -427,7 +427,7 @@ describe('mixed Session and Run search projection', () => {
     it('keeps unavailable private metadata out and clears Run search when the Account scope retires', async () => {
         const run = { type: 'workflow_run', serverId: 'home-a', runId: 'run-1' } as const;
         storage.setState({ profileScope: { serverId: 'home-a', accountId: 'account-a' }, workflowRunsById: {
-            'run-1': { ...workflowRunRowFromSummary(createWorkflowRunSummaryFixture()), metadata: { kind: 'unavailable' } },
+            'run-1': { ...workflowRunRowFromSummary(createWorkflowRunSummaryFixture()), metadata: { kind: 'unavailable', reason: 'content_unavailable' } },
         } });
         const items = [run];
         const hook = await renderHook(() => useSessionListSearchTextByKey(items, true));

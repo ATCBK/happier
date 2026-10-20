@@ -1,9 +1,9 @@
 import { persistentMachineWhere } from "@/app/machines/machineSelection";
 import { createHash } from "node:crypto";
 import type { Prisma } from "@prisma/client";
-import { afterTx, inTx, type Tx } from "@/storage/inTx";
+import { afterTx, inTx, transactionResult, type Tx } from "@/storage/inTx";
 import { isPrismaErrorCode } from "@/storage/prisma";
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { markAccountChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import { readMachineAvailabilityStateInTx } from "@/app/machines/machineStateGuards";
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
 import { acquireWorkflowPublicationLocksInTx } from "@/app/workflows/acquireWorkflowPublicationLocksInTx";
@@ -15,7 +15,7 @@ import { type AutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protoco
 import { emitAutomationRunTransition, emitAutomationRunUpdatedToMachineOnly } from "./automationChangePublisher";
 import { lockScopedAutomationTriggerInTx } from "./automationScopedTrigger";
 import { AUTOMATION_RUN_TERMINAL_STATES } from "./automationTypes";
-import { fetchAutomationAccountCurrentnessWitnessTx } from "./automationAccountCurrentness";
+import { captureAutomationAccountCurrentnessAfterPublication, fetchAutomationAccountCurrentnessWitnessTx } from "./automationAccountCurrentness";
 import { freezeAutomationRunInput } from "./automationRunAdmissionService";
 import {
     automationRunCauseSelect,
@@ -126,6 +126,7 @@ function projectAutomationV3ClaimReceiptResult(
             run: AutomationV3WorkerClaimedRunSchema.parse({
                 id: result.run.id,
                 automationId: null,
+                leaseExpiresAt: result.run.leaseExpiresAt?.getTime(),
                 attempt: result.run.attempt,
                 revision: result.run.revision,
                 ...(result.run.workflowResumeRequestedRevision === null ? {} : {
@@ -150,6 +151,7 @@ function projectAutomationV3ClaimReceiptResult(
         run: AutomationV3WorkerClaimedRunSchema.parse({
             id: result.run.id,
             automationId: result.run.automationId,
+            leaseExpiresAt: result.run.leaseExpiresAt?.getTime(),
             triggerId: result.run.triggerId,
             triggerRetired: result.run.triggerRetired ?? false,
             attempt: result.run.attempt,
@@ -407,12 +409,14 @@ async function findClaimCandidates(params: {
     machineId: string;
     now: Date;
     limit: number;
+    runIds?: readonly string[];
     expectedTriggerKind?: AutomationTriggerKind;
 
     recipeFeaturePolicy: AutomationRecipeFeaturePolicy;
     scope?: "session_scoped" | "workflow";
 }) {
     if (params.scope === "workflow" && !params.recipeFeaturePolicy.workflowsEnabled) return [];
+    if (params.runIds?.length === 0) return [];
     const activeScoped = await params.tx.automationRun.findMany({
         where: { accountId: params.accountId, triggerId: { not: null },
             automation: { is: { scopeSessionId: { not: null } } },
@@ -423,6 +427,7 @@ async function findClaimCandidates(params: {
     return await params.tx.automationRun.findMany({
         where: {
             accountId: params.accountId,
+            ...(params.runIds ? { id: { in: [...params.runIds] } } : {}),
             ...(params.scope === "session_scoped" ? { automation: { is: { scopeSessionId: { not: null } } } } : {}),
             ...(params.scope === "workflow" ? { AND: [{ OR: [
                 { workflowCustodyState: { not: null } },
@@ -847,28 +852,32 @@ export async function claimAutomationRun(params: {
 }): Promise<AutomationClaimResult> {
     const recipeFeaturePolicy = params.recipeFeaturePolicy ?? await resolveAutomationRecipeFeaturePolicy();
     const execute = async (): Promise<AutomationClaimResult> => await inTx(async (tx) => {
-        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId,
-            runWhere: { accountId: params.accountId, assignments: { some: { machineId: params.machineId } },
-                state: { notIn: [...AUTOMATION_RUN_TERMINAL_STATES] } } });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
-        if (accountFence.status === "account_not_found") {
-            return { run: null, accountCurrentness: null };
-        }
-        const machine = await tx.machine.findFirst({
-            where: {
-                accountId: params.accountId,
-                id: params.machineId,
-                ...persistentMachineWhere,
-                revokedAt: null,
-                replacedByMachineId: null,
-            },
-            select: { id: true, installationId: true },
-        });
-        if (!machine) {
-            return { run: null, accountCurrentness: null };
-        }
-
-        const now = new Date();
+        const candidateSearch = {
+            tx,
+            accountId: params.accountId,
+            machineId: params.machineId,
+            limit: 25,
+            expectedTriggerKind: params.expectedTriggerKind,
+            recipeFeaturePolicy,
+            scope: params.scope,
+        };
+        // Discover one bounded page before locking its composed publication
+        // audience, rather than censusing every assigned nonterminal Run
+        // before claim eligibility is known.
+        const discovered = await findClaimCandidates({ ...candidateSearch, now: new Date() });
+        const candidateRunIds = discovered.map(candidate => candidate.id);
+        const readCurrentMachineClaimTime = async () => {
+            const machine = await tx.machine.findFirst({
+                where: { accountId: params.accountId, id: params.machineId, ...persistentMachineWhere,
+                    revokedAt: null, replacedByMachineId: null },
+                select: { id: true, installationId: true },
+            });
+            const now = new Date();
+            return machine && (!params.claimRequest || (
+                machine.installationId === params.claimRequest.machineInstallationId
+                && params.claimRequest.expiresAt.getTime() > now.getTime()
+            )) ? now : null;
+        };
         const claimRequestNonceDigest = params.claimRequest
             ? deriveClaimRequestNonceDigest({
                 machineId: params.machineId,
@@ -876,15 +885,39 @@ export async function claimAutomationRun(params: {
                 nonce: params.claimRequest.nonce,
             })
             : null;
-        if (
-            params.claimRequest
-            && (
-                machine.installationId !== params.claimRequest.machineInstallationId
-                || params.claimRequest.expiresAt.getTime() <= now.getTime()
-            )
-        ) {
+        const settleClaimRequest = async (result: AutomationClaimResult) =>
+            claimRequestNonceDigest
+                ? await createClaimReceiptTx({
+                    tx,
+                    accountId: params.accountId,
+                    machineId: params.machineId,
+                    machineInstallationId: params.claimRequest!.machineInstallationId,
+                    claimRequestNonceDigest,
+                    expiresAt: params.claimRequest!.expiresAt,
+                    result,
+                })
+                : result;
+        if (candidateRunIds.length === 0) {
+            // A new empty request publishes no Run or Account content. Its
+            // receipt alone needs current Machine identity; it must not queue
+            // behind unrelated Account cursor publication. Existing receipts
+            // retain the fenced replay below: they can name a previously
+            // claimed Run whose transition-managed envelope must be readmitted.
+            const receipt = claimRequestNonceDigest
+                ? await tx.automationWorkerClaimReceipt.findUnique({ where: { id: claimRequestNonceDigest }, select: { id: true } })
+                : null;
+            if (!receipt) {
+                if (!await readCurrentMachineClaimTime()) return { run: null, accountCurrentness: null };
+                return await settleClaimRequest({ run: null, accountCurrentness: null });
+            }
+        }
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: candidateRunIds });
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
+        if (accountFence.status === "account_not_found") {
             return { run: null, accountCurrentness: null };
         }
+        const now = await readCurrentMachineClaimTime();
+        if (!now) return { run: null, accountCurrentness: null };
         if (claimRequestNonceDigest) {
             const replayed = await resolveClaimReceiptTx({
                 tx,
@@ -898,35 +931,18 @@ export async function claimAutomationRun(params: {
             });
             if (replayed !== undefined) return replayed;
         }
-        const settleClaimRequest = async (result: AutomationClaimResult) =>
-            claimRequestNonceDigest
-                ? await createClaimReceiptTx({
-                    tx,
-                    accountId: params.accountId,
-                    machineId: params.machineId,
-                    machineInstallationId: params.claimRequest!.machineInstallationId,
-                    claimRequestNonceDigest,
-                    expiresAt: params.claimRequest!.expiresAt,
-                    result,
-                })
-                : result;
         if (accountFence.status !== "ready") {
             return await settleClaimRequest({ run: null, accountCurrentness: null });
         }
         const leaseExpiresAt = resolveClaimLeaseExpiresAt({ now, leaseDurationMs: params.leaseDurationMs });
 
-        const candidatePageSize = 25;
-        // One bounded candidate page per claim attempt; frozen input validation
-        // decides admission for both current recipes and retained 0.2 data.
+        // Discovery preceded the publication and Account-mode fences. Re-read
+        // eligibility under those locks, using only the captured IDs: a new
+        // page could introduce an audience that this transaction never locked.
         const candidates = await findClaimCandidates({
-            tx,
-            accountId: params.accountId,
-            machineId: params.machineId,
+            ...candidateSearch,
             now,
-            limit: candidatePageSize,
-            expectedTriggerKind: params.expectedTriggerKind,
-            recipeFeaturePolicy,
-            scope: params.scope,
+            runIds: candidateRunIds,
         });
 
         for (let candidate of candidates) {
@@ -1090,7 +1106,7 @@ export async function claimAutomationRun(params: {
             }
             const projectedRun = await projectClaimedRunWithTriggerCurrentness(tx, run);
 
-            let cursor: number;
+            let cursor: AccountChangePublication;
             if (run.originKind === "direct") {
                 cursor = await markAccountChanged(tx, {
                     accountId: params.accountId,
@@ -1119,7 +1135,7 @@ export async function claimAutomationRun(params: {
                     accountId: params.accountId,
                     machineId: params.machineId,
                     run: { ...run, state: "pause_requested" },
-                    cursor,
+                    cursor: cursor.resolveCursor(),
                 }));
             } else if (run.originKind === "automation") {
                 const automationRun = projectAutomationOriginRun(projectedRun);
@@ -1130,12 +1146,12 @@ export async function claimAutomationRun(params: {
                         accountId: params.accountId,
                         run: automationRun,
                         previousState,
-                        cursor,
+                        cursor: cursor.resolveCursor(),
                     });
                 });
             }
 
-            return await settleClaimRequest({
+            const settled = await settleClaimRequest({
                 run: { ...projectedRun, recipeKind: recipeKindForClaimRun(projectedRun),
                     // The CAS consumed this request. Keep it only in this exact
                     // claim/receipt, never in the re-read mutable Run row.
@@ -1143,10 +1159,16 @@ export async function claimAutomationRun(params: {
                     causeWorkDepth: causeWorkDepth.workDepth },
                 accountCurrentness,
             });
+            const terminalCurrentness = captureAutomationAccountCurrentnessAfterPublication(tx, params.accountId);
+            return transactionResult(() => {
+                const accountCurrentness = terminalCurrentness.resolveResult();
+                if (!accountCurrentness) throw new Error("Automation Account currentness became unavailable during claim publication");
+                return { ...settled, accountCurrentness };
+            });
         }
 
         return await settleClaimRequest({ run: null, accountCurrentness: null });
-    });
+    }, { transactionClass: "automation-run-claim" });
 
     try {
         return await execute();
@@ -1174,7 +1196,7 @@ export async function claimAutomationRun(params: {
             // The winner should be visible after the unique-key conflict; if a
             // provider cannot expose it, fail closed as the same no-Run shape.
             return replayed ?? { run: null, accountCurrentness: null };
-        });
+        }, { transactionClass: "automation-run-claim-rejoin" });
     }
 }
 
@@ -1189,7 +1211,7 @@ export async function heartbeatAutomationRun(params: {
 }): Promise<{ ok: boolean; leaseExpiresAt: Date | null }> {
     return await inTx(async (tx) => {
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return { ok: false, leaseExpiresAt: null };
 
         const now = new Date();
@@ -1222,5 +1244,5 @@ export async function heartbeatAutomationRun(params: {
         }
 
         return { ok: true, leaseExpiresAt };
-    });
+    }, { transactionClass: "automation-run-heartbeat" });
 }

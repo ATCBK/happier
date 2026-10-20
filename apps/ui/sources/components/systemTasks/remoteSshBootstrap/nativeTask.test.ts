@@ -4,6 +4,18 @@ import type { SystemTaskSpec } from '@happier-dev/protocol';
 import { SystemTaskExecutionError } from '@happier-dev/cli-common/systemTasks';
 import type { NativeSshModule } from '@happier-dev/ssh-native';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
+import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { buildRemoteSelfDownloadFirstPartyInstallCommand } from '@happier-dev/cli-common/systemTasks';
+import { createHash } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 
 const HOME_TARGET = {
     profileId: 'home-profile',
@@ -45,20 +57,27 @@ function readInstallationTextResult(command: string) {
         return { status: 0, stdout: JSON.stringify({ platform: 'linux', arch: 'x86_64' }), stderr: '' };
     }
     if (command === VERIFIED_INSTALL_COMMAND) return { status: 0, stdout: '', stderr: '' };
+    if (command.includes('for version_path in')) return { status: 0, stdout: 'current=\nprevious=\n', stderr: '' };
     return null;
 }
 
 async function prepareApprovalBoundary(serverUrl: string, runtimeOrigin = serverUrl) {
+    const browser = await installBrowserRuntimeForTests({ url: serverUrl });
     const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
     const { setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
     const machineKey = new Uint8Array(32).fill(5);
     const publicKey = (await import('tweetnacl')).default.box.keyPair.fromSecretKey(machineKey).publicKey;
-    const credentials = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({
-        token: 'home-token',
+    const storedCredentials = {
+        token: createAccountTokenForTests('native-task-owner', { currentAccount: true }),
         encryption: { publicKey: Buffer.from(publicKey).toString('base64'), machineKey: Buffer.from(machineKey).toString('base64') },
-    });
+    };
+    const encryption = await createEncryptionFromAuthCredentials(storedCredentials);
+    const contentKey = (await import('tweetnacl')).default.box.keyPair.fromSecretKey(encryption.getContentPrivateKey()).publicKey;
+    const currentness = { mode: 'e2ee', version: 1, updatedAt: 0, signingKeyFingerprint: null,
+        contentKeyFingerprint: computeAccountEncryptionMigrateKeyFingerprintV1(contentKey),
+        recipientEnvelopeReadiness: { status: 'available' } };
     const approvals: Array<{ url: string; authorization: string | null; body: unknown }> = [];
     setRuntimeFetch(async (url, init) => {
         const target = new URL(String(url));
@@ -70,6 +89,7 @@ async function prepareApprovalBoundary(serverUrl: string, runtimeOrigin = server
             capabilities: { serverIdentity: { serverIdentityId: HOME_TARGET.homeServerIdentityId } },
         }));
         if (target.pathname === '/v1/account/encryption') return Response.json({ mode: 'e2ee', updatedAt: 0 });
+        if (target.pathname === '/v1/account/encryption/currentness') return Response.json(currentness);
         if (target.pathname === '/v1/auth/request/status') return Response.json({ status: 'pending', supportsV2: true });
         if (target.pathname === '/v1/auth/response') {
             approvals.push({ url: String(url), authorization: new Headers(init?.headers).get('Authorization'), body: JSON.parse(String(init?.body)) });
@@ -79,7 +99,9 @@ async function prepareApprovalBoundary(serverUrl: string, runtimeOrigin = server
     });
     const profile = await upsertAndActivateServer({ serverUrl });
     await setServerProfileIdentityForUrl(serverUrl, HOME_TARGET.homeServerIdentityId);
-    return { profile, credentials, approvals, dispose() { credentials.mockRestore(); resetRuntimeFetch(); } };
+    expect(await TokenStorage.setCredentialsForServerUrl(serverUrl, { serverId: profile.id }, storedCredentials)).toBe(true);
+    const credentials = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl');
+    return { profile, credentials, storedCredentials, approvals, dispose() { credentials.mockRestore(); resetRuntimeFetch(); browser.restore(); } };
 }
 
 function completeRemoteEnrollment(
@@ -99,8 +121,8 @@ function completeRemoteEnrollment(
         homeServerIdentityId,
         pairing: {
             secretB64Url: PAIRING_SECRET,
-            createdAtMs: input.createdAtMs ?? 123,
-            expiresAtMs: input.expiresAtMs ?? 456,
+            createdAtMs: input.createdAtMs ?? Date.now(),
+            expiresAtMs: input.expiresAtMs ?? Date.now() + 60_000,
         },
         supportsTokenOnly: true,
         pairingRequirement: 'v3',
@@ -205,6 +227,7 @@ describe('runNativeRemoteSshBootstrapTask', () => {
     });
 
     it('installs the remote CLI through the verified native self-download hook for fresh remotes', async () => {
+        if (process.platform === 'win32') return; // Remote shell fixtures require a POSIX test host.
         const loaded = await import('./nativeTask').catch(() => null);
         expect(loaded).not.toBeNull();
 
@@ -225,6 +248,24 @@ describe('runNativeRemoteSshBootstrapTask', () => {
             cancelRequest: vi.fn(async () => undefined),
         } satisfies NativeSshModule;
         const commands: string[] = [];
+        const home = await mkdtemp(join(tmpdir(), 'happier-native-retention-'));
+        const installRoot = join(home, '.happier', 'cli');
+        for (const id of ['0.9.0', '1.0.0', '1.1.0', 'local-stable-1792190545251']) {
+            await mkdir(join(installRoot, 'versions', id), { recursive: true });
+            await writeFile(join(installRoot, 'versions', id, 'happier'), id);
+        }
+        await symlink('versions/1.1.0', join(installRoot, 'current'));
+        await symlink('versions/1.0.0', join(installRoot, 'previous'));
+        const payload = join(home, 'payload');
+        await mkdir(payload);
+        await writeFile(join(payload, 'happier'), '#!/bin/sh\nexit 0\n');
+        const archive = join(home, 'payload.tar.gz');
+        await promisify(execFile)('tar', ['-czf', archive, '-C', home, 'payload']);
+        const installCommand = buildRemoteSelfDownloadFirstPartyInstallCommand({
+            componentId: 'happier-cli', versionId: '1.2.3',
+            archive: { name: 'payload.tar.gz', url: pathToFileURL(archive).href },
+            expectedSha256: createHash('sha256').update(await readFile(archive)).digest('hex'),
+        });
         const commandRunner = {
             runJsonCommand: vi.fn(async ({ command }: { command: string }) => {
                 commands.push(command);
@@ -254,25 +295,33 @@ describe('runNativeRemoteSshBootstrapTask', () => {
                         stderr: '',
                     };
                 }
-                return { status: 0, stdout: '', stderr: '' };
+                if (command === installCommand) {
+                    expect((await readdir(join(installRoot, 'versions'))).sort()).toEqual(['1.0.0', '1.1.0']);
+                }
+                const result = await promisify(execFile)('/bin/sh', ['-c', command], { env: { ...process.env, HOME: home } });
+                return { status: 0, ...result };
             }),
         };
 
-        await expect(loaded!.runNativeRemoteSshBootstrapTask({
-            taskId: 'task-a',
-            nativeModule,
-            spec: createRemoteBootstrapSpec(),
-            commandRunner,
-            resolveInstallPlan: async () => ({
-                binaryPath: '$HOME/.happier/cli/current/happier',
-                versionId: '1.2.3',
-                source: 'https://downloads.example.test/happier.tar.gz',
-                command: 'verified self-download install command',
-            }),
-        })).resolves.toEqual({
-            machineId: 'machine-fresh',
-        });
-        expect(commands).toContain('verified self-download install command');
+        try {
+            await expect(loaded!.runNativeRemoteSshBootstrapTask({
+                taskId: 'task-a',
+                nativeModule,
+                spec: createRemoteBootstrapSpec(),
+                commandRunner,
+                resolveInstallPlan: async () => ({
+                    binaryPath: '$HOME/.happier/cli/current/happier',
+                    versionId: '1.2.3',
+                    source: 'https://downloads.example.test/happier.tar.gz',
+                    command: installCommand,
+                }),
+            })).resolves.toEqual({
+                machineId: 'machine-fresh',
+            });
+            expect(commands).toContain(installCommand);
+            expect((await readdir(join(installRoot, 'versions'))).sort()).toEqual(['1.1.0', '1.2.3']);
+            expect(await readFile(join(installRoot, 'previous', 'happier'), 'utf8')).toBe('1.1.0');
+        } finally { await rm(home, { recursive: true, force: true }); }
     });
 
     it('normalizes failed auth status probes as unauthenticated so pairing can continue', async () => {
@@ -336,6 +385,7 @@ describe('runNativeRemoteSshBootstrapTask', () => {
     });
 
     it('approves local terminal auth after the user accepts remote provisioning', async () => {
+        const pairingWindow = { createdAtMs: Date.now(), expiresAtMs: Date.now() + 60_000 };
         const loaded = await import('./nativeTask').catch(() => null);
         expect(loaded).not.toBeNull();
 
@@ -382,7 +432,7 @@ describe('runNativeRemoteSshBootstrapTask', () => {
                 return { ok: true, data: {} };
             }),
             runTextCommand: vi.fn(async (options: { command: string; onStdoutChunk?: (text: string) => void }) =>
-                readInstallationTextResult(options.command) ?? completeRemoteEnrollment(options)),
+                readInstallationTextResult(options.command) ?? completeRemoteEnrollment(options, pairingWindow)),
         };
         const approveLocalAuthRequest = vi.fn(async () => undefined);
 
@@ -403,8 +453,7 @@ describe('runNativeRemoteSshBootstrapTask', () => {
             homeServerIdentityId: 'srv_home_identity',
             pairing: {
                 secretB64Url: PAIRING_SECRET,
-                createdAtMs: 123,
-                expiresAtMs: 456,
+                ...pairingWindow,
             },
             supportsTokenOnly: true,
             endpointUrl: 'https://relay.example.test',
@@ -594,7 +643,7 @@ describe('runNativeRemoteSshBootstrapTask', () => {
                 prompt: async () => ({ approved: true }),
             })).resolves.toMatchObject({ machineId: 'machine-paired' });
             expect(boundary.approvals).toEqual([{
-                url: 'https://relay.example.test/v1/auth/response', authorization: 'Bearer home-token',
+                url: 'https://relay.example.test/v1/auth/response', authorization: `Bearer ${boundary.storedCredentials.token}`,
                 body: expect.objectContaining({ publicKey, responseKind: 'dataKey', response: expect.any(String) }),
             }]);
             expect(boundary.credentials).toHaveBeenCalledWith(
@@ -726,7 +775,7 @@ describe('runNativeRemoteSshBootstrapTask', () => {
                 endpointId: irohEndpointId,
             }));
             expect(boundary.approvals).toEqual([expect.objectContaining({
-                url: 'http://127.0.0.1:45992/v1/auth/response', authorization: 'Bearer home-token',
+                url: 'http://127.0.0.1:45992/v1/auth/response', authorization: `Bearer ${boundary.storedCredentials.token}`,
                 body: expect.objectContaining({ responseKind: 'dataKey' }),
             })]);
             expect(release).toHaveBeenCalledTimes(1);

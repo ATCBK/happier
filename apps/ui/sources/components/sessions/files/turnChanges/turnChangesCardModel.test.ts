@@ -33,14 +33,14 @@ describe('summarizeTurnChanges', () => {
         expect(comparisons).toBe(0);
     });
 
-    it('uses the tree folder identity for trimmed and mixed-separator paths', () => {
+    it('keeps literal folder spaces distinct while accepting mixed separators', () => {
         const summary = summarizeTurnChanges([
             file(' src\\nested\\one.ts ', 1, 0),
             file('src//nested/two.ts', 1, 0),
             file('/docs\\guide.md', 1, 0),
             file('root.ts', 1, 0),
         ]);
-        expect(summary).toEqual({ fileCount: 4, folderCount: 2, added: 4, removed: 0, linesKnown: true });
+        expect(summary).toEqual({ fileCount: 4, folderCount: 3, added: 4, removed: 0, linesKnown: true });
     });
 
     it('totals every file and counts the folders the tree opens with', () => {

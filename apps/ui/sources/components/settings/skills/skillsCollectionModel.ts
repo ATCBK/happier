@@ -1,15 +1,17 @@
 import type { PromptFoldersV1 } from '@happier-dev/protocol';
-import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import { isReadOnlySkillProvenanceV1, type SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import { resolveSkillPlanKindV1 } from '@happier-dev/protocol/prompts/library/skills/resolveSessionSkillPlanV1';
 import { getAgentCore, isBundledAgentId } from '@happier-dev/agents';
 
 import type { CapabilitySource } from '@/components/capabilities/facts/CapabilityFacts';
 import type { HomeOrbitBody } from '@/components/atmosphere/orbit/homeOrbitScene';
+import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import {
   projectReachOnMachines,
   type ReachMachine,
 } from '@/sync/domains/capabilities/reach/useReachProjection';
 
+import { t } from '@/text';
 import { groupRowsByFolder } from '@/components/settings/prompts/collection/promptCollectionModel';
 
 import { isSkillOff } from './status/skillStatus';
@@ -19,6 +21,14 @@ export const SKILLS_NEW_ROUTE = '/settings/skills/new';
 export const skillHref = (skillId: string) =>
   `${SKILLS_COLLECTION_ROUTE}/${encodeURIComponent(skillId)}`;
 
+/**
+ * A skill is shown by its name, never its id: a skill whose content could not be read carries its id
+ * where the name would be, so that reads as no name.
+ */
+export function skillDisplayName(name: string | null | undefined, skillId: string): string {
+  return name && name !== skillId ? name : t('capabilities.skills.home.unnamed');
+}
+
 /** The collection offers a search field only once it no longer fits at a glance (the Machines rule). */
 export const SKILLS_SEARCH_THRESHOLD = 8;
 
@@ -26,7 +36,8 @@ export const SKILLS_SEARCH_THRESHOLD = 8;
 export function skillSource(
   item: Pick<SkillListItemV1, 'provenance'>,
   machineName: (machineId: string) => string,
-): CapabilitySource {
+  installedPlugins?: PluginUiProjectionModel['installedPackagesById'] | null,
+): CapabilitySource | undefined {
   const provenance = item.provenance;
   switch (provenance.kind) {
     case 'written':
@@ -34,6 +45,11 @@ export function skillSource(
       return { kind: 'you' };
     case 'first_party':
       return { kind: 'happier' };
+    case 'plugin': {
+      const pluginName = installedPlugins?.[provenance.pluginId]?.displayName;
+      // Source facts are optional while the canonical plugin metadata is unavailable.
+      return pluginName ? { kind: 'plugin', pluginName } : undefined;
+    }
     case 'machine':
       return {
         kind: 'machine',
@@ -45,7 +61,8 @@ export function skillSource(
         label:
           repositoryLabel(provenance.registry.ref.kind === 'gitTree' ? provenance.registry.ref.repo : undefined) ??
           repositoryLabel(provenance.registry.sourceUrl) ??
-          provenance.registry.sourceId,
+          // Outside GitHub the person knows a source by where it lives, never by its internal id.
+          hostOf(provenance.registry.sourceUrl),
       };
     case 'link': {
       const repository = repositoryLabel(provenance.url);
@@ -166,6 +183,18 @@ export type SkillsReach = Readonly<{
  * reaching an Agent there whose per-Machine declaration permits P3 delivery. A cold bundled catalog
  * can use its generated manifest facts; an unknown external Agent never counts as reached.
  */
+/**
+ * The legend's count for one machine: how many skills reach its known Agents (last known when offline).
+ * A roster still being completed (an Agent added through a plugin not yet described) keeps the count of
+ * the Agents already known, as the Where sentence does; only a machine with no known Agent is unknown.
+ * A first visit has decided nothing yet, so every machine reads 0.
+ */
+export function skillsReachLegendCount(row: SkillsReachMachine, firstVisit: boolean): number | null {
+  if (firstVisit) return 0;
+  if (row.machine.agentInventoryComplete === false && row.machine.agentIds.length === 0) return null;
+  return row.skillIds.length;
+}
+
 export function buildSkillsReach(
   items: readonly SkillListItemV1[],
   machines: readonly ReachMachine[],
@@ -270,6 +299,15 @@ export type SkillsPresent =
       catchUp: readonly string[];
     }>;
 
+/**
+ * Whether the person has a skill of their own. The canonical list always carries the built-in skill
+ * (P6 §4.1), and plugins add theirs; neither makes a library non-empty: an Account with only those is a
+ * brand-new library.
+ */
+export function hasOwnSkills(items: readonly SkillListItemV1[]): boolean {
+  return items.some((item) => !isReadOnlySkillProvenanceV1(item.provenance));
+}
+
 export function resolveSkillsPresent(
   input: Readonly<{
     items: readonly SkillListItemV1[];
@@ -279,7 +317,7 @@ export function resolveSkillsPresent(
   }>,
 ): SkillsPresent {
   const { reach } = input;
-  if (input.items.length === 0) return { kind: 'new' };
+  if (!hasOwnSkills(input.items)) return { kind: 'new' };
   if (input.firstVisit) return { kind: 'first', ...input.firstVisit };
   if (reach.machines.length === 0) return { kind: 'noMachines' };
   const on = input.items.filter((item) => !isSkillOff(item)).length;

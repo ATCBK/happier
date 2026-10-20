@@ -10,13 +10,44 @@ function normalizePid(value) {
   return Number.isInteger(pid) && pid > 1 ? pid : null;
 }
 
-export function parseLinuxProcStartTime(statText) {
+function parseLinuxProcFields(statText) {
   const raw = String(statText ?? '').trim();
   const commandEnd = raw.lastIndexOf(') ');
   if (commandEnd < 0) return null;
-  const fieldsFromState = raw.slice(commandEnd + 2).trim().split(/\s+/);
-  const startTime = String(fieldsFromState[19] ?? '').trim();
+  return raw.slice(commandEnd + 2).trim().split(/\s+/);
+}
+
+export function parseLinuxProcStartTime(statText) {
+  const startTime = String(parseLinuxProcFields(statText)?.[19] ?? '').trim();
   return /^\d+$/.test(startTime) ? startTime : null;
+}
+
+export function observeProcessLivenessSync(pid, {
+  killImpl = process.kill,
+  platform = process.platform,
+  readFileSyncImpl = readFileSync,
+} = {}) {
+  const n = Number(pid);
+  if (!Number.isFinite(n) || n <= 0) return { status: 'dead', reason: 'invalid_pid' };
+  let reason = 'signal_probe';
+  try {
+    killImpl(n, 0);
+  } catch (error) {
+    if (error?.code === 'ESRCH') return { status: 'dead', reason: 'not_found' };
+    if (error?.code === 'EPERM') reason = 'permission_denied_but_present';
+    else return { status: 'inconclusive', reason: error?.code ?? 'liveness_probe_failed', error };
+  }
+  if (platform === 'linux') {
+    try {
+      const stat = readFileSyncImpl(`/proc/${n}/stat`, 'utf8');
+      // An unreaped process still passes signal 0 but has already departed.
+      // Missing procfs evidence must not turn a genuinely live owner into dead.
+      if (stat.startsWith(`${n} (`) && parseLinuxProcFields(stat)?.[0] === 'Z') {
+        return { status: 'dead', reason: 'zombie' };
+      }
+    } catch {}
+  }
+  return { status: 'alive', reason };
 }
 
 export function parseLinuxProcStartTimeMs(statText) {

@@ -16,6 +16,7 @@ import { decodeBase64, encodeBase64 } from '@/encryption/base64';
 import { openAes256GcmBytes, sealAes256GcmBytes } from '@/encryption/aes256GcmBytes';
 import { getRandomBytes } from '@/platform/cryptoRandom';
 import type { PeerTcpTunnelClientStream } from '@/sync/domains/machines/peer/mediation/tunnel';
+import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
 import type { DaemonSpeechStreamRelayEncryptionFailure } from './daemonSpeechStreamDiagnostics';
 
 import type {
@@ -44,18 +45,28 @@ export type DaemonSpeechStreamTunnelTransportOptions = Readonly<{
   }>) => void;
 }>;
 
-const DEFAULT_RESPONSE_TIMEOUT_MS = 10_000;
+function relayFailure(step: string, cause: unknown) {
+  const failure = new Error(`daemon_voice_inference_relay_${step}_failed`, { cause });
+  return Object.defineProperty({
+    ok: false as const,
+    error: 'daemon_voice_inference_relay_encryption_failed',
+    errorCode: 'internal_error' as const,
+  }, 'cause', { value: failure, enumerable: false });
+}
 
-function resolvePcmPacketBudget(maxFrameBytes: number, encrypted: boolean): number {
-  if (!encrypted) return Math.floor(maxFrameBytes / 2) * 2;
+function resolveEncryptedPcmPacketOverheadBytes(): number {
   // Only ciphertext grows with the PCM. Derive the data-envelope overhead from
   // its real encoder, including the GCM tag and unpadded base64url expansion.
   const ciphertext = encodeBase64(new Uint8Array(PEER_APPLICATION_ENCRYPTION_AUTH_TAG_BYTES_V1), 'base64url');
-  const overhead = encodePeerApplicationEncryptedFrameV1({
+  return encodePeerApplicationEncryptedFrameV1({
     v: 1, kind: 'data',
     nonceBase64Url: encodeBase64(new Uint8Array(PEER_APPLICATION_ENCRYPTION_NONCE_BYTES_V1), 'base64url'),
     ciphertextBase64Url: ciphertext,
   }).byteLength - ciphertext.length;
+}
+
+function resolvePcmPacketBudget(maxFrameBytes: number, encrypted: boolean, overhead: number): number {
+  if (!encrypted) return Math.floor(maxFrameBytes / 2) * 2;
   const ciphertextBytes = Math.min(PEER_APPLICATION_ENCRYPTION_CIPHERTEXT_MAX_BYTES_V1, Math.floor((maxFrameBytes - overhead) * 3 / 4));
   return Math.max(0, Math.floor((ciphertextBytes - PEER_APPLICATION_ENCRYPTION_AUTH_TAG_BYTES_V1) / 2) * 2);
 }
@@ -163,8 +174,9 @@ export function createDaemonSpeechStreamTunnelTransport(
   options: DaemonSpeechStreamTunnelTransportOptions,
 ): DaemonSpeechStreamTransport {
   const direction = options.direction ?? 'client_to_daemon';
+  const encryptedPacketOverheadBytes = options.peerApplicationEncryption ? resolveEncryptedPcmPacketOverheadBytes() : 0;
   const maxPcm16ChunkBytes = options.maxFrameBytes === undefined
-    ? undefined : resolvePcmPacketBudget(options.maxFrameBytes, Boolean(options.peerApplicationEncryption));
+    ? undefined : resolvePcmPacketBudget(options.maxFrameBytes, Boolean(options.peerApplicationEncryption), encryptedPacketOverheadBytes);
   const resolveSubstreamId = options.resolveSubstreamId ?? createDaemonSpeechStreamTunnelSubstreamId;
   let encryptionSession: Readonly<{
     streamId: string;
@@ -212,7 +224,9 @@ export function createDaemonSpeechStreamTunnelTransport(
       stream: options.stream,
       substreamId,
       seq: sequence,
-      timeoutMs: options.responseTimeoutMs ?? DEFAULT_RESPONSE_TIMEOUT_MS,
+      // This is the binary carrier for the same Machine operation as the RPC
+      // compatibility path, including queued send and native inference work.
+      timeoutMs: options.responseTimeoutMs ?? DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS,
       send: async () => {
         const previous = sendTail;
         let release!: () => void;
@@ -310,6 +324,11 @@ export function createDaemonSpeechStreamTunnelTransport(
 
   return {
     ...(maxPcm16ChunkBytes === undefined ? {} : { maxPcm16ChunkBytes }),
+    // Application admission retains the encrypted envelope until recognition
+    // consumes it. Charge its actual unpadded Base64 size against that credit.
+    measureInFlightChunkBytes: pcm16ByteLength => options.peerApplicationEncryption
+      ? encryptedPacketOverheadBytes + Math.ceil((pcm16ByteLength + PEER_APPLICATION_ENCRYPTION_AUTH_TAG_BYTES_V1) * 4 / 3)
+      : pcm16ByteLength,
     start: async (input: DaemonVoiceInferenceSttStreamStartRequest): Promise<DaemonVoiceInferenceSttStreamStartResponse> => {
       const response = await options.controlTransport.start({
         ...input,
@@ -367,7 +386,7 @@ export function createDaemonSpeechStreamTunnelTransport(
         options.onRelayEncryptionFailure?.({ step, reason });
         contentKey?.fill(0);
         await options.controlTransport.cancel({ streamId: response.streamId, generation: response.generation }).catch(() => undefined);
-        return { ok: false, error: 'daemon_voice_inference_relay_encryption_failed', errorCode: 'internal_error' };
+        return relayFailure(step, error);
       }
     },
     chunk: async (input: DaemonSpeechStreamTransportChunkRequest): Promise<DaemonVoiceInferenceSttStreamChunkResponse> => {
@@ -395,20 +414,23 @@ export function createDaemonSpeechStreamTunnelTransport(
           return { ok: false, error: 'daemon_voice_inference_relay_encryption_not_ready', errorCode: 'internal_error' };
         }
         const sequence = input.seq + 1;
+        let step = 'send';
         try {
           const responseBytes = await sendSubstreamPayload(substreamId, sequence, async () => await sealRequest({
             phase: 'data', sequence, plaintext: carrierFrame.payloadBytes, session,
           }));
           if (!responseBytes) throw new Error('daemon_voice_inference_substream_response_unavailable');
+          step = 'open';
           const plaintext = await openEncryptedResponse({ phase: 'data', sequence, responseBytes, session });
           lastDataCarrierSequence = Math.max(lastDataCarrierSequence, sequence);
+          step = 'parse';
           const response = SttStreamChunkResponseSchema.parse(JSON.parse(new TextDecoder().decode(plaintext)));
           if (response.ok) {
             options.onRelayAuthenticatedEvidence?.({ phase: 'data', ackSeq: response.ackSeq });
           }
           return response;
-        } catch {
-          return { ok: false, error: 'daemon_voice_inference_relay_encryption_failed', errorCode: 'internal_error' };
+        } catch (error) {
+          return relayFailure(step, error);
         }
       }
       const responseBytes = await sendSubstreamPayload(substreamId, input.seq, () => carrierFrame.payloadBytes);
@@ -425,6 +447,7 @@ export function createDaemonSpeechStreamTunnelTransport(
       const session = encryptionSession;
       if (!options.peerApplicationEncryption || !session) return await options.controlTransport.finish(input);
       const sequence = lastDataCarrierSequence + 1;
+      let step = 'send';
       try {
         const responseBytes = await sendSubstreamPayload(session.substreamId, sequence, async () => await sealRequest({
           phase: 'finish',
@@ -433,14 +456,16 @@ export function createDaemonSpeechStreamTunnelTransport(
           session,
         }));
         if (!responseBytes) throw new Error('daemon_voice_inference_substream_response_unavailable');
+        step = 'open';
         const plaintext = await openEncryptedResponse({ phase: 'finish', sequence, responseBytes, session });
+        step = 'parse';
         const response = SttStreamFinishResponseSchema.parse(JSON.parse(new TextDecoder().decode(plaintext)));
         if (response.ok) {
           options.onRelayAuthenticatedEvidence?.({ phase: 'finish', ackSeq: response.ackSeq });
         }
         return response;
-      } catch {
-        return { ok: false, error: 'daemon_voice_inference_relay_encryption_failed', errorCode: 'internal_error' };
+      } catch (error) {
+        return relayFailure(step, error);
       } finally {
         session.contentKey.fill(0);
         encryptionSession = null;

@@ -1,5 +1,6 @@
 import type { Theme } from '@/theme';
 import Color from 'color';
+import { HAPPIER_SKELETON_INK_ALPHA } from '@happier-dev/plugin-ui/environment';
 import { buildRaisedEdgeColors, deriveRaisedEdgeInk, deriveSurfaceFinishInk } from '../raisedEdge';
 import { createVerticalGradient } from '../verticalGradient';
 
@@ -61,6 +62,15 @@ const deriveRaisedEdgeInkForProfile = (theme: Theme, baseTheme: Theme): string =
         : deriveRaisedEdgeInk(theme.colors.text.primary, theme.dark)
 );
 
+// Loading placeholders take the profile's own text ink at the shared strength (`@happier-dev/plugin-ui/environment`
+// → `skeletonInk.ts`), so they stay visible on every profile's surfaces; the base themes carry the same values.
+// A skeleton ink the profile set explicitly is kept as set.
+const deriveSkeletonInk = (theme: Theme, explicitOverrides: ReadonlySet<string>): string => (
+    explicitOverrides.has('surface.skeleton')
+        ? theme.colors.surface.skeleton
+        : Color(theme.colors.text.primary).alpha(HAPPIER_SKELETON_INK_ALPHA).rgb().string()
+);
+
 export const deriveThemeColors = (theme: Theme, baseTheme: Theme, explicitOverrides: ReadonlySet<string> = new Set()): Theme => {
     const raisedEdgeInk = deriveRaisedEdgeInkForProfile(theme, baseTheme);
     const finishInk = explicitOverrides.has('effect.surfaceFinish')
@@ -90,6 +100,10 @@ export const deriveThemeColors = (theme: Theme, baseTheme: Theme, explicitOverri
                 info: { ...theme.colors.state.info, textForeground: statusText('info') },
                 neutral: { ...theme.colors.state.neutral, textForeground: statusText('neutral') },
             },
+            surface: {
+                ...theme.colors.surface,
+                skeleton: deriveSkeletonInk(theme, explicitOverrides),
+            },
             effect: {
                 ...theme.colors.effect,
                 surfaceHighlight: raisedEdgeInk,
@@ -107,6 +121,12 @@ export const deriveThemeColors = (theme: Theme, baseTheme: Theme, explicitOverri
             fab: {
                 ...theme.colors.fab,
                 gradient: deriveFabGradient(theme, baseTheme),
+            },
+            // The selected dot sits inside an unfilled ring on the row's own surface, so it takes the
+            // ring's selection ink. A dot the profile set explicitly is kept as set.
+            radio: {
+                ...theme.colors.radio,
+                dot: explicitOverrides.has('control.radio.dot') ? theme.colors.radio.dot : theme.colors.radio.active,
             },
             segmentedControl: {
                 ...theme.colors.segmentedControl,

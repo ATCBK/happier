@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import { SessionTriggerAddRequestV1Schema, SessionTriggerListRequestV1Schema, SessionTriggerListResultV1Schema, SessionTriggerRemoveRequestV1Schema, SessionTriggerUpdateRequestV1Schema, WorkflowTriggerAddRequestV1Schema, WorkflowTriggerListRequestV1Schema, WorkflowTriggerListResultV1Schema, WorkflowTriggerRemoveRequestV1Schema, WorkflowTriggerRemoveResultV1Schema, WorkflowTriggerUpdateRequestV1Schema, WorkflowTriggerWriteResultV1Schema, type WorkflowTriggerSetV1 } from '@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1';
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
@@ -160,6 +160,14 @@ export async function updateWorkflowTrigger(request: z.input<typeof WorkflowTrig
     );
 }
 
+export function removeWorkflowTrigger(
+    request: z.input<typeof WorkflowTriggerRemoveRequestV1Schema> & Readonly<{ triggerId: string }>,
+    options?: CallOptions,
+): Promise<z.output<typeof WorkflowTriggerWriteResultV1Schema>>;
+export function removeWorkflowTrigger(
+    request: z.input<typeof WorkflowTriggerRemoveRequestV1Schema>,
+    options?: CallOptions,
+): Promise<z.output<typeof WorkflowTriggerRemoveResultV1Schema>>;
 export async function removeWorkflowTrigger(request: z.input<typeof WorkflowTriggerRemoveRequestV1Schema>, options: CallOptions = {}): Promise<z.output<typeof WorkflowTriggerRemoveResultV1Schema>> {
     return callTriggerAction(
         'workflow.trigger.remove',

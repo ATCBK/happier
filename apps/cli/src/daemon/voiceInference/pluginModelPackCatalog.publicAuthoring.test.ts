@@ -2,10 +2,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createServer } from 'node:http';
 
 import { describe, expect, it } from 'vitest';
 
 import { ingestPluginManifestV2, type ParsedPluginManifestV2 } from '@happier-dev/protocol';
+import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionInputV1Schema,
+  PluginAvailabilityIntentReadActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability/actions';
 
 import {
   loadInstalledPlugins,
@@ -84,6 +87,28 @@ async function projectLoadedPlugins(
 
 async function installPublicAuthoringFixture() {
   const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-public-authoring-home-'));
+  const controllerIdentity = { machineId: 'voice-pack-machine', installationId: 'voice-pack-installation' };
+  // Managed-resource removal admission crosses Home HTTP even for a local
+  // development plugin. Keep that transport real with an empty resource census.
+  const home = createServer(async (request, response) => {
+    if (request.method !== 'POST' || request.url !== PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intent.read']) {
+      response.writeHead(404).end();
+      return;
+    }
+    let body = '';
+    for await (const chunk of request) body += chunk;
+    expect(PluginAvailabilityIntentReadActionInputV1Schema.parse(JSON.parse(body))).toMatchObject({
+      pluginId, includeManagedResources: true, controller: controllerIdentity, homeId: 'voice-pack-home',
+    });
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify(PluginAvailabilityIntentReadActionOutputV1Schema.parse({
+      availabilityCursor: 0, hostingCapability: { enabled: false }, intent: null, release: null,
+      uiArtifacts: [], packageAssets: [], managedResources: [], managedResourcesReviewed: true,
+    })));
+  });
+  await new Promise<void>(resolve => home.listen(0, '127.0.0.1', resolve));
+  const homeAddress = home.address();
+  if (!homeAddress || typeof homeAddress === 'string') throw new Error('Expected fixture Home address');
   let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | null = null;
   let owner: ReturnType<typeof createDaemonPluginRuntimeOwner> | null = null;
   let disposed = false;
@@ -96,7 +121,11 @@ async function installPublicAuthoringFixture() {
       try {
         await runtime?.dispose();
       } finally {
-        await rm(happyHomeDir, { recursive: true, force: true });
+        try {
+          await new Promise<void>((resolve, reject) => home.close(error => error ? reject(error) : resolve()));
+        } finally {
+          await rm(happyHomeDir, { recursive: true, force: true });
+        }
       }
     }
   }
@@ -115,6 +144,10 @@ async function installPublicAuthoringFixture() {
     owner = createDaemonPluginRuntimeOwner({
       happyHomeDir,
       staleCandidateCleanup: 'disabled',
+      managedResourcePreflight: {
+        credentials: { token: 'voice-pack-account-token', encryption: null },
+        serverUrl: `http://127.0.0.1:${homeAddress.port}`, homeId: 'voice-pack-home', controller: controllerIdentity,
+      },
       reloadController: runtime.controller,
       connectedAccounts: connectedAccounts.owner,
       reconcileConnectedAccountPurposePublication: connectedAccounts.reconcileRegistryPublication,
@@ -158,10 +191,11 @@ async function installPublicAuthoringFixture() {
       happyHomeDir,
       controller: runtime.controller,
       async setEnabled(enabled: boolean) {
-        await expect(changeService.requestPluginChange({
+        const result = await changeService.requestPluginChange({
           kind: enabled ? 'enable' : 'disable',
           pluginId,
-        })).resolves.toMatchObject({ kind: 'committed', pluginId });
+        });
+        expect(result, JSON.stringify(result)).toMatchObject({ kind: 'committed', pluginId });
       },
       dispose,
     };

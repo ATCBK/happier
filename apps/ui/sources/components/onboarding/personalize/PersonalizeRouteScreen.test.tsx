@@ -11,6 +11,25 @@ import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionP
 import type { PersonalizeFlow } from './usePersonalizeFlow';
 import { WorkspaceNavigationContext, type WorkspaceNavigationContextValue } from '@/components/appShell/workspace/WorkspaceNavigationContext';
 import { createWorkspaceState } from '@/components/appShell/workspace/workspaceState';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { createDesktopSecureStorageBoundary } from '@/dev/testkit/mocks/desktopSecureStorage';
+
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+const themeHomes = createHomeGovernanceHarness();
+let themeConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+
+async function admitPersonalizeAccount() {
+    installHomeGovernanceBoundaries(themeHomes);
+    await themeHomes.addHome({ name: 'Personalize', serverUrl: 'https://personalize-route.test', accountId: 'alice', currentAccount: true });
+    await loadSyncSingletonForTests();
+    themeConnection = await restoreServerAccountForTest({ serverUrl: 'https://personalize-route.test', accountId: 'alice', request: themeHomes.request });
+    return { serverId: themeConnection.serverId, accountId: 'alice' };
+}
 
 const boundary = vi.hoisted(() => ({ width: 1440, height: 940, notificationGranted: false, requestNotificationPermission: vi.fn(), setTheme: vi.fn() }));
 // OS notification permission is an external boundary; the diagnostics hook and step remain real.
@@ -93,7 +112,10 @@ function route(phone: boolean) {
     return <WorkspaceNavigationContext.Provider value={workspace(phone)}><PersonalizeRouteScreen /></WorkspaceNavigationContext.Provider>;
 }
 
-afterEach(() => { standardCleanup(); boundary.width = 1440; boundary.height = 940; boundary.notificationGranted = false;
+afterEach(async () => { standardCleanup();
+    await themeConnection?.dispose(); themeConnection = undefined;
+    await themeHomes.reset();
+    boundary.width = 1440; boundary.height = 940; boundary.notificationGranted = false;
     boundary.requestNotificationPermission.mockClear(); vi.mocked(Modal.show).mockClear();
     boundary.setTheme.mockClear();
     setReducedMotionPreferenceOverride(null); vi.unstubAllGlobals(); });
@@ -210,10 +232,12 @@ describe('Personalize responsive route', () => {
     });
 
     it('commits the selected Light draft after resizing to phone and back and keeps it through Style', async () => {
+        const scope = await admitPersonalizeAccount();
         vi.stubGlobal('navigator', { userAgent: 'Desktop browser', maxTouchPoints: 0 });
         setReducedMotionPreferenceOverride(true);
         storage.setState({ settings: settingsDefaults, localSettings: { ...localSettingsDefaults, themePreference: 'dark' },
-            settingsScope: { serverId: 'home-a', accountId: 'alice' } });
+            settingsScope: scope, profileScope: scope });
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         const account = storage.getState().settings;
         const screen = await renderScreen(route(false));
         const flow = (): PersonalizeFlow => screen.root.findByType(PersonalizeStepBody).props.flow;
@@ -279,16 +303,20 @@ describe('Personalize responsive route', () => {
 
     it('keeps notification choices on a supported desktop and asks permission only from Allow', async () => {
         vi.stubGlobal('navigator', { userAgent: 'Tauri desktop', maxTouchPoints: 0 });
+        const secureStorage = createDesktopSecureStorageBoundary();
+        vi.stubGlobal('__TAURI_INTERNALS__', { invoke: secureStorage.invoke });
+        const scope = await admitPersonalizeAccount();
         storage.setState({ settings: settingsDefaults, localSettings: localSettingsDefaults,
-            settingsScope: { serverId: 'home-a', accountId: 'alice' } });
+            settingsScope: scope, profileScope: scope });
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         setReducedMotionPreferenceOverride(true);
         const screen = await renderScreen(route(false));
         await act(async () => { screen.root.findByType(PersonalizeStepBody).props.flow.open('notifications'); });
         expect(screen.findByTestId('personalize-flow-needs-you')).not.toBeNull();
         expect(screen.findByTestId('personalize-flow-preview')).not.toBeNull();
         expect(boundary.requestNotificationPermission).not.toHaveBeenCalled();
-        await act(async () => { screen.pressByTestId('personalize-flow-allow'); });
-        expect(boundary.notificationGranted).toBe(true);
+        await screen.pressByTestIdAsync('personalize-flow-allow');
+        await vi.waitFor(() => expect(boundary.notificationGranted).toBe(true));
         expect(screen.findByTestId('personalize-flow-allow')).toBeNull();
     });
 

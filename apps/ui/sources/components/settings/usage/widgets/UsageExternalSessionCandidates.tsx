@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { matchesUsageSourceAccountingScope, type UsageSourceV1 } from '@happier-dev/protocol/usage/usageSources';
@@ -6,7 +7,7 @@ import type { UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import { resolveExternalSessionBrowseTargetForQualifiedSource } from '@/components/sessions/external/browse/resolveExternalSessionBrowseSourceOptions';
 import { useExternalSessionBrowseCandidates, readExternalSessionBrowseCandidateKey } from '@/components/sessions/external/browse/useExternalSessionBrowseCandidates';
-import { openExternalSessionCandidate, type ExternalSessionCandidateOpenState } from '@/components/sessions/external/browse/openExternalSessionCandidate';
+import { cancelExternalSessionCandidateOpen, openExternalSessionCandidate, type ExternalSessionCandidateOpenState } from '@/components/sessions/external/browse/openExternalSessionCandidate';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
@@ -37,6 +38,7 @@ export function UsageExternalSessionCandidates(props: Readonly<{
     agentIds?: readonly string[];
     testID: string;
 }>) {
+    const presentationActive = useLayoutPresentationActive();
     const projected = useDaemonMergedProjectionInputs({ machineId: props.source.machineId,
         serverId: props.lifetime.scope.serverId, enabled: props.online && props.lifetime.isCurrent() });
     const target = React.useMemo(() => {
@@ -72,11 +74,10 @@ export function UsageExternalSessionCandidates(props: Readonly<{
     const current = React.useRef({ target, browseScope, historyAllowed });
     current.current = { target, browseScope, historyAllowed };
     React.useEffect(() => {
-        state.current.requestToken++;
-        state.current.linkingCandidateKey = null;
+        cancelExternalSessionCandidateOpen(state.current);
         setLinking(null);
-        return () => { state.current.requestToken++; state.current.linkingCandidateKey = null; };
-    }, [browseScope, historyAllowed]);
+        return () => { cancelExternalSessionCandidateOpen(state.current); };
+    }, [browseScope, historyAllowed, presentationActive]);
     const execute = React.useMemo(() => createFrontDoorActionExecute(), []);
     const router = useRouter();
     if (!target || !props.lifetime.isCurrent()) return null;
@@ -143,7 +144,7 @@ export function UsageOutsideSessions(props: Readonly<{ serverId: string; query: 
             query={props.query} testID={`${props.testID}.${machine.id}`} />)}</OutsideBrowsePage>;
 }
 
-function OutsideBrowsePage(props: Readonly<{ testID: string; children: React.ReactNode }>) {
+export function OutsideBrowsePage(props: Readonly<{ testID: string; children: React.ReactNode }>) {
     const [waiting, setWaiting] = React.useState<ReadonlySet<string>>(() => new Set());
     const [request, setRequest] = React.useState(0);
     const register = React.useCallback((key: string) => {

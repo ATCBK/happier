@@ -2,12 +2,14 @@ import { createHash, randomBytes } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import tweetnacl from "tweetnacl";
 import { db } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
+import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
+import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import { getOrCreateServerIdentityId, initializeServerIdentityCache, readCachedServerIdentityIdForHotPath } from "@/app/serverIdentity/serverIdentity";
 import { getPublicUrl } from "@/storage/blob/files";
 import { resolveAccountDisplayLabelV1 } from "@/app/account/profile/accountDisplayProfile";
 import {
     readRequiredAuthenticatedHomeConnectionDescriptor,
+    readPreparedHomeCredentialDestination,
 } from "@/app/features/homeConnectionDescriptorPublication";
 import { createHomeConnectionDescriptorContinuityStoreForServer } from "@/app/features/homeConnectionDescriptorContinuity";
 import type { HomeApprovalGate } from "@/app/auth/homeApprovalGateContract";
@@ -172,7 +174,7 @@ export async function readAccountDirectoryMe(accountId: string): Promise<Account
 }
 
 export async function listAccountHomeDirectory(accountId: string) {
-    return inTx(async (tx) => {
+    return inReadSnapshot(async (tx) => {
         const account = await tx.account.findUnique({ where: { id: accountId }, select: { preferredHomeServerIdentityId: true } });
         if (!account) throw new AccountDirectoryError("not_found", "Account not found");
         const rows = await tx.accountHomeDirectoryEntry.findMany({
@@ -185,7 +187,7 @@ export async function listAccountHomeDirectory(accountId: string) {
             preferredHomeServerIdentityId: account.preferredHomeServerIdentityId ?? null,
             homes: rows.map((row) => mapHomeRow(row, account.preferredHomeServerIdentityId ?? null)),
         });
-    }, { isolationLevel: "Serializable", /* Directory entries and their preferred Home must come from one snapshot. */ readOnly: true });
+    });
 }
 
 async function upsertAccountHomeDirectoryEntryInTx(
@@ -280,26 +282,31 @@ export async function upsertAccountHomeDirectoryEntry(params: Readonly<{
     if (body.connectionDescriptor.homeServerIdentityId !== params.homeServerIdentityId) {
         throw new AccountDirectoryError("invalid_request", "Home identity does not match descriptor");
     }
-    return inTx((tx) => upsertAccountHomeDirectoryEntryInTx(tx, {
-        accountId: params.accountId,
-        homeServerIdentityId: params.homeServerIdentityId,
-        label: body.label,
-        connectionDescriptor: body.connectionDescriptor,
-    }), { isolationLevel: "Serializable" /* Descriptor revision comparison and preference admission span directory and Account rows. */ });
+    return inTx(async (tx) => {
+        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+        return upsertAccountHomeDirectoryEntryInTx(tx, {
+            accountId: params.accountId,
+            homeServerIdentityId: params.homeServerIdentityId,
+            label: body.label,
+            connectionDescriptor: body.connectionDescriptor,
+        });
+    }, { isolationLevel: 'Serializable' /* Descriptor revision and first-Home preference predicates must survive concurrent directory writes. */ });
 }
 
 export async function deleteAccountHomeDirectoryEntry(params: Readonly<{ accountId: string; homeServerIdentityId: string }>): Promise<void> {
     await inTx(async (tx) => {
+        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
         await tx.accountHomeDirectoryEntry.deleteMany({ where: { accountId: params.accountId, homeServerIdentityId: params.homeServerIdentityId } });
         await tx.account.updateMany({
             where: { id: params.accountId, preferredHomeServerIdentityId: params.homeServerIdentityId },
             data: { preferredHomeServerIdentityId: null },
         });
-    }, { isolationLevel: "Serializable" /* Pair directory deletion with preference admission without leaving a dangling preferred Home. */ });
+    }, { isolationLevel: 'Serializable' /* Clearing preference and deleting its Home must serialize with the setter's existence check. */ });
 }
 
 export async function setPreferredAccountHome(params: Readonly<{ accountId: string; homeServerIdentityId: string | null }>): ReturnType<typeof listAccountHomeDirectory> {
     await inTx(async (tx) => {
+        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
         if (params.homeServerIdentityId !== null) {
             const exists = await tx.accountHomeDirectoryEntry.findUnique({
                 where: { accountId_homeServerIdentityId: { accountId: params.accountId, homeServerIdentityId: params.homeServerIdentityId } },
@@ -308,7 +315,7 @@ export async function setPreferredAccountHome(params: Readonly<{ accountId: stri
             if (!exists) throw new AccountDirectoryError("preferred_home_not_found", "Home is not present in the directory");
         }
         await tx.account.updateMany({ where: { id: params.accountId }, data: { preferredHomeServerIdentityId: params.homeServerIdentityId } });
-    }, { isolationLevel: "Serializable" /* The directory-entry existence check and Account preference write are one admission. */ });
+    }, { isolationLevel: 'Serializable' /* The selected Home must still exist when its preference commits. */ });
     return listAccountHomeDirectory(params.accountId);
 }
 
@@ -633,12 +640,17 @@ function validateAssertionAgainstLink(
     if (signatureStatus !== "ok") throw new AccountDirectoryError("invalid_assertion");
 }
 
-export type HomeConnectionDescriptorResolver = (tx?: Tx) => Promise<HomeConnectionDescriptorV1 | undefined>;
+/** Final checks receive only the descriptor prepared by this redemption before its transaction. */
+export type HomeConnectionDescriptorResolver = (
+    tx?: Tx,
+    prepared?: HomeConnectionDescriptorV1,
+) => Promise<HomeConnectionDescriptorV1 | undefined>;
 
 function createCurrentHomeConnectionDescriptorResolver(
     env: NodeJS.ProcessEnv,
 ): HomeConnectionDescriptorResolver {
-    return async (tx) => {
+    return async (tx, prepared) => {
+        if (tx) return prepared ? readPreparedHomeCredentialDestination({ env, prepared }) : undefined;
         // The canonical descriptor publication binds to the server identity
         // primed once at startup. Establish it through the canonical owner so
         // the dual-role classification cannot collapse the recoverable
@@ -647,13 +659,12 @@ function createCurrentHomeConnectionDescriptorResolver(
         // sequence. No-op wherever startup already primed the cache; a
         // storage-less environment still fails soft to null and stays
         // classified not-dual-role.
-        if (!tx) await initializeServerIdentityCache(env);
+        await initializeServerIdentityCache(env);
         const continuityStore = createHomeConnectionDescriptorContinuityStoreForServer(env);
         if (!continuityStore) return undefined;
-        return readRequiredAuthenticatedHomeConnectionDescriptor({
+        return await readRequiredAuthenticatedHomeConnectionDescriptor({
             env,
             continuityStore,
-            tx,
         });
     };
 }
@@ -662,10 +673,11 @@ async function validateCredentialDestination(
     assertion: HomeLoginAssertionV1,
     resolveHomeConnectionDescriptor: HomeConnectionDescriptorResolver,
     tx?: Tx,
-): Promise<void> {
+    prepared?: HomeConnectionDescriptorV1,
+): Promise<HomeConnectionDescriptorV1> {
     let descriptor: HomeConnectionDescriptorV1 | undefined;
     try {
-        descriptor = await resolveHomeConnectionDescriptor(tx);
+        descriptor = await resolveHomeConnectionDescriptor(tx, prepared);
     } catch {
         throw new AccountDirectoryError(
             "home_redemption_unavailable",
@@ -687,6 +699,7 @@ async function validateCredentialDestination(
             "Home credential destination does not match the assertion",
         );
     }
+    return descriptor;
 }
 
 export async function redeemHomeLoginAssertion(params: Readonly<{
@@ -726,7 +739,7 @@ export async function redeemHomeLoginAssertion(params: Readonly<{
     if (!isValidBoxBundlePublicKey(clientPublicKey)) throw new AccountDirectoryError("invalid_client_key");
     const resolveHomeConnectionDescriptor = params.resolveHomeConnectionDescriptor
         ?? createCurrentHomeConnectionDescriptorResolver(params.env ?? process.env);
-    await validateCredentialDestination(assertion, resolveHomeConnectionDescriptor);
+    const preparedHomeConnectionDescriptor = await validateCredentialDestination(assertion, resolveHomeConnectionDescriptor);
     const eligibility = await enforceLoginEligibility({
         accountId: link.accountId,
         env: params.env ?? process.env,
@@ -823,10 +836,12 @@ export async function redeemHomeLoginAssertion(params: Readonly<{
             currentApprovalExpiresAtMs = currentApproval.expiresAt.getTime();
         }
         // Approval binds the assertion signing bytes, including the destination
-        // digest. Re-read the canonical Home owner after every transactional
+        // digest. Re-read live destination facts at the canonical Home owner after every transactional
         // trust check and immediately before issuance, so a destination change
         // while approval was pending cannot produce a usable Home credential.
-        await validateCredentialDestination(assertion, resolveHomeConnectionDescriptor, tx);
+        // Native observation and continuity publication were prepared before
+        // opening this transaction; final validation performs no external IO.
+        await validateCredentialDestination(assertion, resolveHomeConnectionDescriptor, tx, preparedHomeConnectionDescriptor);
         if (params.nowMs === undefined) {
             const issuanceBoundaryNowMs = Date.now();
             if (assertion.expiresAtMs <= issuanceBoundaryNowMs) {

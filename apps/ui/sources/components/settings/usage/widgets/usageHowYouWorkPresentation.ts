@@ -34,6 +34,20 @@ export function formatUsageDuration(ms: number): string {
   });
 }
 
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+
+/**
+ * "7 days", "14 hours": how far back a rolling window reaches, said in the whole calendar units a person picks a
+ * period by ("Last 7 days") rather than as the exact measured span ("153 h 59 min") that period resolves to
+ * partway through a day. Rounds up to the unit, so the window is never claimed shorter than it is.
+ */
+export function formatUsageLookbackPeriod(ms: number): string {
+  const unit = (value: number, name: 'day' | 'hour') =>
+    new Intl.NumberFormat(getPreferredLanguage(), { style: 'unit', unit: name, unitDisplay: 'long' }).format(value);
+  return ms >= DAY_MS ? unit(Math.ceil(ms / DAY_MS), 'day') : unit(Math.max(1, Math.ceil(ms / HOUR_MS)), 'hour');
+}
+
 /**
  * "3h 12m", "18m", "40s": the same measured duration at a width that never wraps inside a statistic cell, from
  * the platform's own narrow unit names for the reader's language. A measured nothing reads "0m", never blank.
@@ -87,7 +101,8 @@ export type UsageTodayMachineGroup = Readonly<{
 
 /**
  * Today's slice of each witnessed lane, in minutes from the day's start, grouped by machine. Each busy
- * span is its own row (a run's gaps are not busy); waits are hatched rows of their own.
+ * span and wait is its own interval (a run's gaps are not busy; waits are hatched), and one run's
+ * intervals share a track so the machine's lane packs them onto one line.
  */
 export function groupUsageTodayLanes(
   lanes: Lanes,
@@ -134,6 +149,8 @@ export function groupUsageTodayLanes(
         group.intervals.push({
           id: `${lane.workId}:busy:${index}`,
           label: title,
+          lane: group.label,
+          track: lane.workId,
           ...clipped,
           order: clipped.start,
           color: labels.agentColor(lane.agentId ?? ''),
@@ -146,6 +163,8 @@ export function groupUsageTodayLanes(
         group.intervals.push({
           id: `${lane.workId}:wait:${span.evidenceId}`,
           ...clipped,
+          lane: group.label,
+          track: lane.workId,
           order: clipped.start,
           label: `${title} · ${t(
             span.kind === 'child_wait'

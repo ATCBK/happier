@@ -451,7 +451,8 @@ describe('the mounted PostHog Overview', () => {
         expect(bodyText.match(/57/gu) ?? []).toHaveLength(1);
         expect(bodyText.match(/96/gu) ?? []).toHaveLength(1);
         await expect(page.getByText('6 hours ago')).resolves.toBeDefined();
-        expect(document.querySelector('[role="img"]')?.getAttribute('aria-label') ?? '').toContain('9');
+        await act(async () => { await page.press(await page.getByRole('button', { name: 'Details' })); });
+        await expect(page.getByText('9')).resolves.toBeDefined();
         // The chrome the story removed: no observation metadata, no empty-facts state, no
         // pending-field badges (Severity is answered beside this panel).
         for (const gone of ['Observation', 'Observed', 'No projected facts', 'Read only in the detail plane:']) {

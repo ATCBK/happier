@@ -1,5 +1,5 @@
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     WorkflowRunRecipientCensusResponseV1Schema,
     materializeWorkflowAcceptedSnapshotV1,
@@ -11,15 +11,20 @@ import { createDeferred, createRootLayoutFeaturesResponse, flushHookEffects, ren
 import { createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { workflowRunRowFromSummary, workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
+await loadSyncSingletonForTests();
 const { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
 const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { getActiveServerSnapshot, setActiveServer } = await import('@/sync/domains/server/serverRuntime');
 const { getStorage } = await import('@/sync/domains/state/storageStore');
 const { publishAppliedActiveServerRuntimeAvailability, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
-const { useSessionManagedWorkflowRuns } = await import('./useSessionManagedWorkflowRuns');
+const { useSessionManagedWorkflowRuns } = await import('@/components/workflows/run/useContextManagedWorkflowRuns');
+const { useSessionWorkSourcesOwner } = await import('../work/sessionWorkSources');
+const { useSessionAgentActivity } = await import('@/hooks/session/useSessionAgentActivity');
 
 const accountId = 'managed-home-account';
 const run = createWorkflowRunSummaryFixture({
@@ -27,7 +32,7 @@ const run = createWorkflowRunSummaryFixture({
     origin: { kind: 'direct', originSessionId: 'session-1' },
 });
 const route = '/v3/automations/runs/workflow-storage';
-let listResponse: unknown;
+let listResponse: Record<string, unknown>;
 let homeA: string;
 let homeB: string;
 let previous = getStorage().getState();
@@ -54,8 +59,10 @@ beforeEach(async () => {
     homeB = await home.addHome({ name: 'Managed Home B', serverUrl: 'https://managed-home-b.test', accountId, active: false });
     if (run.origin.kind !== 'direct') throw new Error('Managed Home fixture requires direct Run provenance');
     const materialized = await materializeWorkflowAcceptedSnapshotV1({
-        definition: createWorkflowDefinitionFixture({ blocks: [{ kind: 'wait', id: 'wait',
-            document: { text: 'Continue', references: [], attachments: [] } }] }),
+        definition: createWorkflowDefinitionFixture({ defaults: {
+            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+            conversation: { kind: 'origin_session' },
+        } }),
         admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true },
         context: { source: { kind: 'inline' }, inputs: {}, machineId: run.machineId,
             executionTarget: { kind: 'session' }, workspaceTarget: { project: { machineId: run.machineId, directory: '/repo', checkoutRootPath: '/repo' } },
@@ -85,6 +92,165 @@ afterEach(async () => {
 });
 
 describe('Session-managed Workflow exact Home reads through the real Account owner', () => {
+    it('reads Discussion membership from its captured Home while another Home has the same Run id', async () => {
+        const { useServerCredentialAccountScopeBindings } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+        const { useContextManagedWorkflowRuns } = await import('@/components/workflows/run/useContextManagedWorkflowRuns');
+        const addressedRun = { ...run, state: 'running' as const, origin: { kind: 'direct' as const } };
+        const materialized = await materializeWorkflowAcceptedSnapshotV1({
+            definition: createWorkflowDefinitionFixture({ blocks: [{ kind: 'wait', id: 'wait',
+                document: { text: 'Wait', references: [], attachments: [] } }] }),
+            admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true },
+            context: { source: { kind: 'inline' }, inputs: {}, machineId: run.machineId,
+                executionTarget: { kind: 'session' }, workspaceTarget: { project: { machineId: run.machineId, directory: '/repo', checkoutRootPath: '/repo' } },
+                origin: { kind: 'direct', discussion: { discussion: { serverId: homeB, discussionId: 'discussion-1' }, messageId: 'question-1', throughSeq: 1 } },
+                authorization: { principal: { kind: 'host' } } },
+        });
+        if (!materialized.ok) throw new Error('discussion_fixture_materialization_failed');
+        const accepted = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+            binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId: run.id }, acceptedSnapshot: materialized.snapshot }));
+        home.answer(homeB, route, { body: { ...listResponse, runs: [addressedRun],
+            acceptedEnvelopesByRunId: { [run.id]: accepted } } });
+        getStorage().getState().upsertWorkflowRuns([workflowRunRowFromSummary({ ...run, state: 'failed' })], { serverId: homeA, accountId });
+        const requestedHomes = [homeB];
+        const hook = await renderHook(() => {
+            const bindings = useServerCredentialAccountScopeBindings(requestedHomes);
+            return useContextManagedWorkflowRuns({ resource: { kind: 'discussion', id: 'discussion-1' }, serverId: homeB,
+                accountLifetime: bindings.get(homeB) ?? undefined });
+        });
+        await flushHookEffects({ cycles: 40 });
+        expect(hook.getCurrent().runs.map(value => [value.id, value.state])).toEqual([[run.id, 'running']]);
+        expect(getStorage().getState().workflowRunsById[workflowRunStoreKey(run.id, { serverId: homeA, accountId })]?.summary?.state).toBe('failed');
+        expect(home.requestsFor(route).every(request => request.serverId === homeB)).toBe(true);
+    });
+    it('retains Work membership and attention after an offline consumer remount, then replaces them on recovery', async () => {
+        const useWork = () => useSessionWorkSourcesOwner({
+            sessionId: 'session-1', serverId: homeA, ownerMetadata: null,
+            agentActivity: useSessionAgentActivity({ sessionId: 'session-1', serverId: homeA }),
+        });
+        const first = await renderHook(useWork);
+        expect(first.getCurrent().projection.workflows.map(item => item.key)).toEqual([`run:${run.id}`]);
+        expect([...first.getCurrent().managedRuns.attentionRunIds]).toEqual([run.id]);
+        const readAt = first.getCurrent().managedRuns.lastSuccessfulReadAt;
+        await first.unmount();
+        home.answer(homeA, route, { status: 503, body: {} });
+
+        const remounted = await renderHook(useWork);
+        expect(remounted.getCurrent().projection.workflows.map(item => item.key)).toEqual([`run:${run.id}`]);
+        expect([...remounted.getCurrent().managedRuns.attentionRunIds]).toEqual([run.id]);
+        expect(remounted.getCurrent().managedRuns).toMatchObject({
+            phase: 'loaded', refreshFailed: true, lastSuccessfulReadAt: readAt,
+        });
+        // A fresh empty result is authoritative even though the exact Run body remains loaded.
+        home.answer(homeA, route, { body: { runs: [], acceptedEnvelopesByRunId: {}, keyCensusByRunId: {} } });
+        await act(async () => { remounted.getCurrent().managedRuns.retry(); });
+        await flushHookEffects();
+        expect(remounted.getCurrent().projection.workflows).toEqual([]);
+        expect([...remounted.getCurrent().managedRuns.attentionRunIds]).toEqual([]);
+        expect(remounted.getCurrent().managedRuns).toMatchObject({ phase: 'loaded', refreshFailed: false });
+        await remounted.unmount();
+    });
+
+    it.each(['Session', 'relation', 'Home', 'Account'] as const)('does not reuse a successful window for another %s on offline remount', async changed => {
+        const first = await renderHook(() => useSessionManagedWorkflowRuns({ sessionId: 'session-1', serverId: homeA }));
+        expect(first.getCurrent().runs.map(entry => entry.id)).toEqual([run.id]);
+        await first.unmount();
+        home.answer(homeA, route, { status: 503, body: {} });
+        home.answer(homeB, route, { status: 503, body: {} });
+        if (changed === 'Home') await act(async () => { await activateHome(homeB); });
+        if (changed === 'Account') await act(async () => {
+            await home.switchAccount(homeA, 'other-account');
+            getStorage().getState().activateProfileScope({ serverId: homeA, accountId: 'other-account' });
+            publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        });
+        const next = await renderHook(() => useSessionManagedWorkflowRuns({
+            sessionId: changed === 'Session' ? 'session-2' : 'session-1',
+            serverId: changed === 'Home' ? homeB : homeA,
+            relation: changed === 'relation' ? 'destination' : 'origin',
+        }));
+        expect(next.getCurrent().runs).toEqual([]);
+        expect([...next.getCurrent().attentionRunIds]).toEqual([]);
+        expect(next.getCurrent().lastSuccessfulReadAt).toBeNull();
+        await next.unmount();
+    });
+
+    it('retains a destination window across an offline remount without borrowing origin membership', async () => {
+        const useDestination = () => useSessionManagedWorkflowRuns({ sessionId: 'session-1', serverId: homeA, relation: 'destination' });
+        const first = await renderHook(useDestination);
+        expect(first.getCurrent().runs.map(entry => entry.id)).toEqual([run.id]);
+        await first.unmount();
+        home.answer(homeA, route, { status: 503, body: {} });
+        const next = await renderHook(useDestination);
+        expect(next.getCurrent().runs.map(entry => entry.id)).toEqual([run.id]);
+        expect(next.getCurrent()).toMatchObject({ phase: 'loaded', refreshFailed: true });
+        await next.unmount();
+    });
+
+    it('keeps the Work projection and its successful-read time through Home failure, loading and retry', async () => {
+        const now = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+        const hook = await renderHook(() => useSessionWorkSourcesOwner({
+            sessionId: 'session-1', serverId: homeA, ownerMetadata: null,
+            agentActivity: useSessionAgentActivity({ sessionId: 'session-1', serverId: homeA }),
+        }));
+        try {
+            expect(hook.getCurrent().projection.workflows.map(item => item.key)).toEqual([`run:${run.id}`]);
+            const retained = hook.getCurrent().projection.workflows;
+            const asOf = 1_800_000_000_000;
+            // A network failure is not a new Account or evidence that Work is empty.
+            await act(async () => {
+                primeServerFeaturesSnapshot({ serverId: homeA, snapshot: { status: 'error', reason: 'network' } });
+            });
+            expect(hook.getCurrent().projection.workflows).toBe(retained);
+            expect(hook.getCurrent().managedRuns).toMatchObject({
+                phase: 'loaded', refreshFailed: true, lastSuccessfulReadAt: asOf,
+            });
+
+            const response = createDeferred<void>();
+            home.answer(homeA, route, { body: listResponse, respondAfter: response.promise });
+            home.answer(homeA, '/v1/features', { body: createRootLayoutFeaturesResponse() });
+            now.mockReturnValue(1_800_000_060_000);
+            await act(async () => {
+                hook.getCurrent().managedRuns.retry();
+            });
+            await flushHookEffects();
+            expect(hook.getCurrent().projection.workflows).toBe(retained);
+            expect(hook.getCurrent().managedRuns).toMatchObject({ lastSuccessfulReadAt: asOf });
+            await act(async () => { response.resolve(); });
+            await flushHookEffects();
+            expect(hook.getCurrent().managedRuns).toMatchObject({
+                phase: 'loaded', refreshFailed: false, lastSuccessfulReadAt: 1_800_000_060_000,
+            });
+
+            home.answer(homeA, route, { status: 503, body: {} });
+            now.mockReturnValue(1_800_000_120_000);
+            await act(async () => { hook.getCurrent().managedRuns.retry(); });
+            await flushHookEffects();
+            expect(hook.getCurrent().projection.workflows).toBe(retained);
+            expect(hook.getCurrent().managedRuns).toMatchObject({
+                phase: 'loaded', refreshFailed: true, lastSuccessfulReadAt: 1_800_000_060_000,
+            });
+            // The existing retry re-reads the canonical window and may legitimately prove it empty.
+            home.answer(homeA, route, { body: { runs: [], acceptedEnvelopesByRunId: {}, keyCensusByRunId: {} } });
+            await act(async () => { hook.getCurrent().managedRuns.retry(); });
+            await flushHookEffects();
+            expect(hook.getCurrent().projection.workflows).toEqual([]);
+            expect(hook.getCurrent().managedRuns).toMatchObject({ phase: 'loaded', refreshFailed: false });
+            // An explicit feature decision still withdraws the retained window.
+            home.answer(homeA, route, { body: listResponse });
+            await act(async () => { hook.getCurrent().managedRuns.retry(); });
+            await flushHookEffects();
+            expect(hook.getCurrent().projection.workflows).toHaveLength(1);
+            await act(async () => {
+                primeServerFeaturesSnapshot({ serverId: homeA, snapshot: { status: 'ready',
+                    features: createRootLayoutFeaturesResponse({ features: { workflows: { enabled: false } } }) } });
+            });
+            expect(hook.getCurrent().projection.workflows).toEqual([]);
+            expect(hook.getCurrent().managedRuns).toMatchObject({ phase: 'idle', lastSuccessfulReadAt: null });
+        } finally {
+            now.mockRestore();
+            await hook.unmount();
+        }
+    });
+
     it.each(['other Home', 'missing Home'] as const)('fails closed for %s without reading or publishing active Home Runs', async (target) => {
         expect(captureActiveServerAccountScopeLifetime()?.scope).toEqual({ serverId: homeA, accountId });
         const hook = await renderHook(() => useSessionManagedWorkflowRuns({
@@ -103,7 +269,7 @@ describe('Session-managed Workflow exact Home reads through the real Account own
         const hook = await renderHook(() => useSessionManagedWorkflowRuns({ sessionId: 'session-1', serverId: homeA }));
         expect(hook.getCurrent().phase).toBe('loaded');
         expect(hook.getCurrent().runs.map((entry) => entry.id)).toEqual([run.id]);
-        expect(getStorage().getState().workflowRunsById[run.id]?.summary).toEqual({
+        expect(getStorage().getState().workflowRunsById[workflowRunStoreKey(run.id)]?.summary).toEqual({
             ...run,
             startedBy: 'user',
             where: { machineId: run.machineId, directory: '/repo' },

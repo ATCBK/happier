@@ -1,19 +1,21 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStderr, captureStdout } from '@/testkit/logger/captureOutput';
+import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
 
-const executeFromCredentials = vi.fn();
-const executeDirect = vi.fn();
-const resolveSessionTarget = vi.fn(async (idOrPrefix: string) => ({ ok: true as const, sessionId: idOrPrefix }));
-const createCliActionExecutorFromCredentials = vi.fn(() => ({
-  execute: executeFromCredentials,
-  resolveSessionTarget,
-}));
-const createCliActionExecutor = vi.fn(() => ({ execute: executeDirect }));
-const resolveSessionTransportContext = vi.fn();
-const resolveSessionIdOrPrefix = vi.fn();
-const fetchSessionById = vi.fn();
-const listExecutionRuns = vi.fn();
+const { executeFromCredentials, executeDirect, resolveSessionTarget, createCliActionExecutorFromCredentials,
+  createCliActionExecutor, resolveSessionTransportContext, resolveSessionIdOrPrefix, fetchSessionById,
+  listExecutionRuns } = vi.hoisted(() => {
+  const executeFromCredentials = vi.fn();
+  const executeDirect = vi.fn();
+  const resolveSessionTarget = vi.fn(async (idOrPrefix: string) => ({ ok: true as const, sessionId: idOrPrefix }));
+  return { executeFromCredentials, executeDirect, resolveSessionTarget,
+    createCliActionExecutorFromCredentials: vi.fn(() => ({ execute: executeFromCredentials, resolveSessionTarget })),
+    createCliActionExecutor: vi.fn(() => ({ execute: executeDirect })),
+    resolveSessionTransportContext: vi.fn(), resolveSessionIdOrPrefix: vi.fn(), fetchSessionById: vi.fn(), listExecutionRuns: vi.fn(),
+  };
+});
 
 vi.mock('@/session/actions/createCliActionExecutorFromCredentials', () => ({
   createCliActionExecutorFromCredentials,
@@ -41,7 +43,7 @@ vi.mock('@/session/services/executionRuns', () => ({
 
 const credentials = {
   token: 'token_test',
-  encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) },
+  encryption: null,
 };
 
 type JsonCommandCase = Readonly<{
@@ -145,8 +147,20 @@ function captureJsonProcessOutput(): Readonly<{
 }
 
 describe('happier session --json output purity', () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.clearAllMocks();
+    // Account-policy bootstrap is real; only the remote HTTP service is replaced.
+    vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/encryption/currentness') return {
+        status: 200, data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }),
+      };
+      if (path === '/v2/account/settings') return {
+        status: 200, data: { version: 1, content: { t: 'plain', v: {} } },
+      };
+      return { status: 404, data: {} };
+    });
     executeFromCredentials.mockImplementation(async (actionId: string) => actionResultFor(actionId));
     executeDirect.mockImplementation(async (actionId: string) => actionResultFor(actionId));
     resolveSessionTransportContext.mockResolvedValue({
@@ -155,6 +169,7 @@ describe('happier session --json output purity', () => {
       rawSession: { id: 'sess-1', metadata: {}, encryptionMode: 'plain' },
       ctx: null,
       mode: 'plain' as const,
+      accountEncryptionCurrentness: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }),
     });
     resolveSessionIdOrPrefix.mockResolvedValue({ ok: true, sessionId: 'sess-1' });
     fetchSessionById.mockResolvedValue({ id: 'sess-1', metadata: {}, encryptionMode: 'plain' });
@@ -191,7 +206,7 @@ describe('happier session --json output purity', () => {
       await handleSessionCommand(argv, { readCredentialsFn: async () => credentials });
 
       const parsed = output.parse() as { ok?: unknown; kind?: unknown };
-      expect(parsed.ok).toBe(true);
+      expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
       expect(parsed.kind).toBe(expectedKind);
       output.assertPure();
     } finally {

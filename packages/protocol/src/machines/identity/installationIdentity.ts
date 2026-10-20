@@ -16,8 +16,9 @@ export { MachineInstallationPublicKeySchema, MachineInstallationPrivateKeySchema
     MachineInstallationPublicIdentityV1Schema, type MachineInstallationPublicIdentityV1 } from './installationKeySchemas.js';
 import { SocketRpcMachineAdmissionContextV1Schema } from '../machineAccessV1.js';
 import { ManagedActivityReadRequestV1Schema } from '../managed/managedIntentV1.js';
-import { SessionActionRpcOriginV1Schema, WorkspaceSyncSourceRoutingV1Schema, WorkspaceSyncTargetRoutingV1Schema, WorkspaceSyncSourceWriterTargetRoutingV1Schema, WorkspaceSyncSourceExecutionV1Schema, WorkspaceSyncSeedRoutingV1Schema } from '../../rpc/socket.js';
+import { SessionActionRpcOriginV1Schema, SessionPermissionDecisionAuthenticationV1Schema, WorkspaceSyncSourceRoutingV1Schema, WorkspaceSyncTargetRoutingV1Schema, WorkspaceSyncSourceWriterTargetRoutingV1Schema, WorkspaceSyncSourceExecutionV1Schema, WorkspaceSyncSeedRoutingV1Schema } from '../../rpc/socket.js';
 import { RPC_METHODS } from '../../rpc/methods.js';
+import { SessionPermissionAccountUserDecisionActorV1Schema } from '../../sessions/permissions/v1.js';
 import { ExternalActionActionIdV1Schema, ExternalActionRequestIdV1Schema, ExternalActionWorkflowOriginV1Schema, ExternalActionExecutionAuthorizationV1Schema } from '../../actions/externalActionApi.js';
 import {
     ContentPublicKeyFingerprintSchema,
@@ -46,6 +47,14 @@ export const RequesterSessionCurrentnessPurposeV1Schema = lazyZodSchema(() => z.
 }));
 export type RequesterSessionCurrentnessPurposeV1 = z.infer<typeof RequesterSessionCurrentnessPurposeV1Schema>;
 
+/** Existing Session decision actor, rechecked by the original installed executor. */
+export const SessionApprovalDecisionCurrentnessV1Schema = lazyZodSchema(() => z.strictObject({
+    sessionId: z.string().check(z.minLength(1)),
+    actor: SessionPermissionAccountUserDecisionActorV1Schema,
+    authentication: SessionPermissionDecisionAuthenticationV1Schema,
+}));
+export type SessionApprovalDecisionCurrentnessV1 = z.infer<typeof SessionApprovalDecisionCurrentnessV1Schema>;
+
 export const MachineInstallationProofPayloadV1Schema = lazyZodSchema(() => z.strictObject({
     version: z.literal(1),
     installationId: z.string().check(z.trim(), z.minLength(1)),
@@ -54,6 +63,10 @@ export const MachineInstallationProofPayloadV1Schema = lazyZodSchema(() => z.str
     replacementReason: z.optional(MachineReplacementReasonSchema),
     contentPublicKeyFingerprint: z.optional(ContentPublicKeyFingerprintSchema),
     accountId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    sessionCreation: z.optional(z.strictObject({
+        sourceExecutionDigest: z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u)),
+        requestBodyDigest: z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u)),
+    })),
     externalActionOrigin: z.optional(z.strictObject({
         homeId: z.string().check(z.trim(), z.minLength(1)),
         actionId: ExternalActionActionIdV1Schema,
@@ -65,6 +78,7 @@ export const MachineInstallationProofPayloadV1Schema = lazyZodSchema(() => z.str
         context: SocketRpcMachineAdmissionContextV1Schema,
         method: z.optional(z.string().check(z.minLength(1))),
         purpose: z.optional(RequesterSessionCurrentnessPurposeV1Schema),
+        sessionDecision: z.optional(SessionApprovalDecisionCurrentnessV1Schema),
         workspaceSyncSourceRouting: z.optional(WorkspaceSyncSourceRoutingV1Schema),
         workspaceSyncTargetRouting: z.optional(WorkspaceSyncTargetRoutingV1Schema),
         workspaceSyncSourceWriterTargetRouting: z.optional(WorkspaceSyncSourceWriterTargetRoutingV1Schema),
@@ -75,6 +89,12 @@ export const MachineInstallationProofPayloadV1Schema = lazyZodSchema(() => z.str
         managedTarget: z.optional(z.lazy(() => ManagedActivityReadRequestV1Schema)),
         managedIdleDecision: z.optional(z.strictObject({ kind: z.literal('idle'), since: z.number().check(z.nonnegative()), confirmedAt: z.number().check(z.nonnegative()) })),
     }).check(z.superRefine((admission, ctx) => {
+        if (admission.sessionDecision && (admission.method !== `${admission.sessionDecision.sessionId}:${RPC_METHODS.APPROVAL_REQUEST_DECIDE}`
+            || admission.purpose || admission.custodySubjectAccountId || admission.workspaceSyncSourceRouting
+            || admission.workspaceSyncTargetRouting || admission.workspaceSyncSourceWriterTargetRouting || admission.workspaceSyncSourceExecution
+            || admission.workspaceSyncSeedRouting || admission.callerInputAuthorization || admission.managedTarget || admission.managedIdleDecision)) {
+            ctx.addIssue({ code: 'custom', message: 'Session approval currentness must bind only the exact decision' });
+        }
         if ((admission.method === undefined) === (admission.purpose === undefined)) {
             ctx.addIssue({ code: 'custom', message: 'Machine admission must bind exactly one method or currentness purpose' });
         }
@@ -83,11 +103,17 @@ export const MachineInstallationProofPayloadV1Schema = lazyZodSchema(() => z.str
             || admission.custodySubjectAccountId || admission.managedTarget || admission.managedIdleDecision)) {
             ctx.addIssue({ code: 'custom', message: 'Requester Session currentness cannot authorize another Machine purpose' });
         }
-        if (admission.callerInputAuthorization && !admission.workspaceSyncSourceRouting
+        const moveChild = (admission.callerInputAuthorization?.binding.actionId === 'projects.service.relocate'
+            || admission.callerInputAuthorization?.binding.actionId === 'discussion.second_opinion.start'
+                && admission.workspaceSyncSourceExecution?.externalActionExecution.effectActionId === 'session.spawn_new'
+                && (admission.method?.endsWith(`:${RPC_METHODS.SESSION_SPAWN_NEW}`)
+                    || admission.method?.endsWith(`:${RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT}`)))
+            && admission.workspaceSyncSourceExecution?.originalActionEnvelope !== undefined;
+        if (admission.callerInputAuthorization && !moveChild && !admission.workspaceSyncSourceRouting
             && !admission.workspaceSyncTargetRouting && !admission.workspaceSyncSourceWriterTargetRouting && !admission.workspaceSyncSeedRouting) {
             ctx.addIssue({ code: 'custom', message: 'Retained handoff authorization requires an exact workspace purpose' });
         }
-        if (admission.workspaceSyncSourceExecution && !admission.workspaceSyncSourceRouting
+        if (admission.workspaceSyncSourceExecution && !moveChild && !admission.workspaceSyncSourceRouting
             && !admission.workspaceSyncSourceWriterTargetRouting && !admission.workspaceSyncSeedRouting) {
             ctx.addIssue({ code: 'custom', message: 'Retained source execution requires an exact source workspace purpose' });
         }
@@ -107,6 +133,11 @@ export const MachineInstallationProofPayloadV1Schema = lazyZodSchema(() => z.str
     })),
     managedPolicyCensus: z.optional(z.strictObject({ homeId: z.string().check(z.minLength(1)) })),
 }).check(z.superRefine((value, ctx) => {
+    if (value.sessionCreation && (!value.accountId || value.externalActionOrigin || value.rpcAdmission
+        || value.managedPolicy || value.managedPolicyCensus || value.replacesMachineId || value.replacementReason
+        || value.contentPublicKeyFingerprint)) {
+        ctx.addIssue({ code: 'custom', message: 'Session birth proof must bind only its exact native body and source' });
+    }
     if (!value.externalActionOrigin) return;
     if (!value.accountId) ctx.addIssue({ code: 'custom', path: ['accountId'], message: 'Session Action origin requires the authenticated requester' });
     if (value.externalActionOrigin.requestId !== value.externalActionOrigin.origin.requestId) {
@@ -148,6 +179,10 @@ export function buildMachineInstallationProofPayloadBytes(
             ? { contentPublicKeyFingerprint: normalized.contentPublicKeyFingerprint }
             : null),
         ...(normalized.accountId ? { accountId: normalized.accountId } : null),
+        ...(normalized.sessionCreation ? { sessionCreation: {
+            sourceExecutionDigest: normalized.sessionCreation.sourceExecutionDigest,
+            requestBodyDigest: normalized.sessionCreation.requestBodyDigest,
+        } } : {}),
         ...(normalized.externalActionOrigin ? { externalActionOrigin: {
             homeId: normalized.externalActionOrigin.homeId,
             actionId: normalized.externalActionOrigin.actionId,
@@ -167,6 +202,7 @@ export function buildMachineInstallationProofPayloadBytes(
                 },
                 method: normalized.rpcAdmission.method,
                 ...(normalized.rpcAdmission.purpose ? { purpose: normalized.rpcAdmission.purpose } : {}),
+                ...(normalized.rpcAdmission.sessionDecision ? { sessionDecision: normalized.rpcAdmission.sessionDecision } : {}),
                 ...(normalized.rpcAdmission.workspaceSyncSourceRouting ? {
                     workspaceSyncSourceRouting: normalized.rpcAdmission.workspaceSyncSourceRouting,
                 } : {}),

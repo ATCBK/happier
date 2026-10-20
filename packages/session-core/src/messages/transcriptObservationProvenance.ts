@@ -1,5 +1,6 @@
 import { isRecoveredHistoryTranscriptObservationProvenance } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { MessageActionReferenceV1Schema } from '@happier-dev/protocol/sessions/messages/messageActionReferenceV1';
+import { FollowDeliveryProjectionV1Schema, type FollowDeliveryProjectionV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowDeliveryProjectionV1';
 import type { MessageActionReferenceV1, SessionMessageDeliveryResolutionV1, SessionTranscriptObservationProvenanceV1 } from '@happier-dev/protocol';
 import type { TranscriptAccountActorMetadata } from "./transcriptAccountActor.js";
 
@@ -15,6 +16,7 @@ export type TranscriptObservationMetadata = {
     sourceUpdatedAt?: number;
     transcriptObservationProvenance?: SessionTranscriptObservationProvenanceV1;
     deliveryResolution?: SessionMessageDeliveryResolutionV1;
+    followDeliveryProjection?: FollowDeliveryProjectionV1;
     /** Opaque server-issued identity; runtime resolves its current action state. */
     messageActionReference?: MessageActionReferenceV1;
 };
@@ -29,6 +31,11 @@ export function applyTranscriptObservationMetadata(
         target.transcriptObservationProvenance = source.transcriptObservationProvenance;
     }
     if (source?.deliveryResolution !== undefined) target.deliveryResolution = source.deliveryResolution;
+    if (source) {
+        const projection = FollowDeliveryProjectionV1Schema.safeParse(source.followDeliveryProjection);
+        if (projection.success) target.followDeliveryProjection = projection.data;
+        else delete target.followDeliveryProjection;
+    }
     if (source) {
         // Unlike descriptive observation metadata, this reference authorizes a
         // later action resolution. A known source that omits or corrupts it

@@ -28,9 +28,23 @@ describe('ReviewCommentThread', () => {
             />,
         );
 
-        await pressTestInstanceAsync(screen.findByTestId('review-thread-reply'), 'review-thread-reply');
+        await pressTestInstanceAsync(screen.findByTestId('review-comment-root-1-reply'), 'review-comment-root-1-reply');
 
         expect(onReply).toHaveBeenCalledWith({ parentCommentId: 'root-1' });
+    });
+
+    it('offers one Reply for the whole thread, on the root comment\'s action row', async () => {
+        const screen = await renderScreen(
+            <ReviewCommentThread
+                root={buildReviewCommentFixture({ id: 'root-1', state: 'open' })}
+                replies={[buildReviewCommentFixture({ id: 'reply-1', parentCommentId: 'root-1', threadId: 'root-1', createdAt: 2 })]}
+                labels={reviewCommentLabelsFixture}
+                cardActions={{ onTransition: vi.fn() }}
+                onReply={vi.fn()}
+            />,
+        );
+        expect(screen.findAllHostsByTestId('review-comment-root-1-reply')).toHaveLength(1);
+        expect(screen.findByTestId('review-comment-reply-1-reply')).toBeNull();
     });
 
     it('disables replies for closed tombstoned and redacted threads', async () => {
@@ -44,7 +58,7 @@ describe('ReviewCommentThread', () => {
                 testID="closed-thread"
             />,
         );
-        expect(closed.findByTestId('closed-thread-reply')?.props.accessibilityState).toMatchObject({ disabled: true });
+        expect(closed.findByTestId('review-comment-closed-1-reply')?.props.accessibilityState).toMatchObject({ disabled: true });
 
         const redacted = await renderScreen(
             <ReviewCommentThread
@@ -55,7 +69,7 @@ describe('ReviewCommentThread', () => {
                 testID="redacted-thread"
             />,
         );
-        expect(redacted.findByTestId('redacted-thread-reply')?.props.accessibilityState).toMatchObject({ disabled: true });
+        expect(redacted.findByTestId('review-comment-redacted-1-reply')?.props.accessibilityState).toMatchObject({ disabled: true });
 
         const tombstoned = await renderScreen(
             <ReviewCommentThread
@@ -69,7 +83,7 @@ describe('ReviewCommentThread', () => {
                 testID="deleted-thread"
             />,
         );
-        expect(tombstoned.findByTestId('deleted-thread-reply')?.props.accessibilityState).toMatchObject({ disabled: true });
+        expect(tombstoned.findByTestId('review-comment-deleted-1-reply')?.props.accessibilityState).toMatchObject({ disabled: true });
         expect(onReply).not.toHaveBeenCalled();
     });
 });

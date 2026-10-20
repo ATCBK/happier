@@ -7,7 +7,7 @@ import { useUnistyles } from 'react-native-unistyles';
 
 import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { ICON_SIZE } from '@/components/ui/icons/Icon';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { resolveExecutionRunAgentMarkId } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
 import { getPreferredLanguage, t } from '@/text';
 import { RunWorkNotifications } from '@/components/sessions/work/RunWorkNotifications';
@@ -16,18 +16,19 @@ import type { SessionScmReviewComparison } from '@/components/sessions/panes/det
 import { resolveScmDiffSummaryDiscussionTarget } from '@/sync/domains/scm/diffSummary/discussion';
 import { writeExistingSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { ScmDiffSummaryModelPicker } from '@/components/settings/sourceControl/ScmDiffSummaryModelPicker';
-import { ScmDiffSummaryStartOptions, scmDiffSummaryStartOptionsOf, useOpenExplainChangesSetting, useSummaryModelChoice } from '@/components/sessions/files/comparison/ScmDiffSummaryStartOptions';
+import { ScmDiffSummaryStartOptions, scmDiffSummaryPrerequisiteOf, scmDiffSummaryStartOptionsOf, useOpenExplainChangesSetting, useSummaryModelChoice } from '@/components/sessions/files/comparison/ScmDiffSummaryStartOptions';
 import { applySavedScmDiffSummaryResult } from '@/sync/ops/scmDiffSummary/generate';
 import { getStorage } from '@/sync/domains/state/storage';
 import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
-import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 
 import type { useScmDiffSummaryBinding } from '@/components/sessions/files/comparison/useScmDiffSummaryBinding';
 import { WalkthroughView, type WalkthroughViewLayout } from './WalkthroughView';
 import { buildWalkthroughReading, EMPTY_WALKTHROUGH_READING, type WalkthroughStop } from './walkthroughReading';
 import { useWalkthroughReviewedMarks } from './useWalkthroughReviewedMarks';
-import { WalkthroughSavedActions } from './WalkthroughSavedActions';
+import { useWalkthroughSavedActions } from './WalkthroughSavedActions';
+import type { ScmComparisonMenuSection } from '@/components/sessions/files/comparison/ScmComparisonMoreMenu';
 import { useWalkthroughReview } from '@/components/sessions/reviews/walkthrough/useWalkthroughReview';
 import { ReviewExplainFindingsButton, useSessionWalkthroughReviewPresentation } from '@/components/sessions/reviews/walkthrough/SessionWalkthroughReview';
 import { ReviewWalkthroughSteps } from '@/components/sessions/reviews/walkthrough/ReviewWalkthroughParts';
@@ -44,8 +45,8 @@ export type ScmWalkthroughViewProps = Readonly<{
     scopeDetail?: string | null;
     layout: WalkthroughViewLayout;
     active?: boolean;
-    /** The comparison bar, drawn by the review destination above every view, with this view's own actions. */
-    renderBar: (actions: React.ReactNode) => React.ReactNode;
+    /** The comparison bar, drawn by the review destination above every view, with this view's own actions and menu rows. */
+    renderBar: (actions: React.ReactNode, sections?: readonly ScmComparisonMenuSection[], review?: React.ReactNode) => React.ReactNode;
     onShowFiles: () => void;
     onOpenFile: (path: string) => void;
     /** Hands the person to the Session composer, whose recipient now names the generator. */
@@ -63,17 +64,17 @@ export type ScmWalkthroughViewProps = Readonly<{
 export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: ScmWalkthroughViewProps) {
     // The comparison's saved result, restore/reread and START: the one binding Walkthrough and Commits share.
     const bound = props.bound;
-    const { scope, machine, machineReachable, canControl, canSend, launch, viewModel, capturedComparison, cwd, operations,
-        error, setError, model, setModel, modelChoices, modelAvailable, selected, starting } = bound;
+    const { scope, machine, machineReachability, canControl, canSend, launch, viewModel, capturedComparison, cwd, operations,
+        error, setError, model, setModel, modelChoices, modelAvailable, starting } = bound;
     const modelChoice = useSummaryModelChoice(modelChoices);
     const displayHomeId = scope?.serverId ?? props.serverId;
     // Subscribe to attribution, not heartbeat objects. Exact Home lookup and
     // machine naming stay at their existing owners while the machine is offline.
-    const machineName = getStorage()(state => getMachineDisplayName(
+    const machineName = getStorage()(state => getMachineSentenceName(
         resolveServerScopedMachine(state, displayHomeId, props.displayMachineId ?? '') ?? { absence: 'unlisted' },
     ));
     const observedAtMs = viewModel?.observedAtMs ?? null;
-    const offline = capturedComparison && !machineReachable ? {
+    const offline = capturedComparison && machineReachability === 'unreachable' ? {
         machine: machineName,
         time: observedAtMs === null ? t('common.unavailable')
             : formatWithCachedDateTimeFormatter(observedAtMs, getPreferredLanguage(), { dateStyle: 'medium', timeStyle: 'short' }),
@@ -94,7 +95,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
         })
         : null), [capturedComparison, marks.record, viewModel?.analysis, viewModel?.outputs?.walkthrough, viewModel?.savedResult?.walkthroughProvenance]);
 
-    const discussion = React.useMemo(() => (runId && props.sessionId
+    const discussion = React.useMemo(() => (props.sessionId
         ? resolveScmDiffSummaryDiscussionTarget({
             sessionId: props.sessionId,
             serverId: props.serverId,
@@ -150,7 +151,9 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
     // The generator's own transcript is the existing run destination, never the human discussion thread.
     const router = useRouter();
     const conversationHref = discussion?.kind === 'continue' ? discussion.href : null;
-    const conversationAction = conversationHref ? (
+    const phone = props.layout === 'phone';
+    // A phone lists it as a named row of the comparison menu; the wide bar keeps the quiet icon.
+    const conversationAction = conversationHref && !phone ? (
         <IconButton
             testID="walkthrough-open-conversation"
             variant="plain"
@@ -202,12 +205,12 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
             if (!done.ok) setError(done.error);
         }
         : null), [bound.isCurrent, bound.host.sessionId, bound.host.machineId, canSend, cwd, explainTargets, props.serverId, scope, reading?.phase, review, savedForExplain, setError, viewModel?.producer?.runId]);
-    const reviewActions = review ? (
-        <>
-            {onExplain ? <ReviewExplainFindingsButton running={explaining} onPress={() => { void onExplain(); }} /> : null}
-            <ReviewWalkthroughSteps progress={review.progress} />
-        </>
-    ) : null;
+    // A walkthrough the review wrote already reads with its findings (lab WT5-R6): Explain is offered only over a
+    // walkthrough written before or apart from the review (WT5-R2).
+    const explainOffered = onExplain && viewModel?.producer?.kind !== 'review';
+    const explainAction = review && (explainOffered || explaining)
+        ? <ReviewExplainFindingsButton running={explaining} onPress={() => { if (onExplain) void onExplain(); }} /> : null;
+    const reviewStatus = review ? <ReviewWalkthroughSteps progress={review.progress} phone={phone} /> : null;
 
     const { theme } = useUnistyles();
     const markAgentId = resolveExecutionRunAgentMarkId(viewModel?.latestRun?.backendTarget, theme);
@@ -217,12 +220,38 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
         ? (stop: WalkthroughStop) => setReviewed(stop.changeRefs, !stop.reviewed)
         : undefined), [marksAvailable, setReviewed]);
 
+    // The saved result's operations are rows of the comparison menu; what they open renders under the header.
+    const savedActions = useWalkthroughSavedActions(saved && cwd && key && operations ? {
+        result: saved, cwd, operations,
+        nativeDiscussion: !sessionId,
+        nativeDiscussionReply,
+        onUndo, undoing,
+        undoInNotice: Boolean(saved.updateNotice && onUndo),
+        phone: props.layout === 'phone',
+        canGenerate: canSend && launch.canLaunchExecutionRuns,
+        disabledReason: !canControl ? t('walkthroughStart.unavailable') : null,
+        onResult: (result) => { if (bound.isCurrent()) applySavedScmDiffSummaryResult(key, result); },
+        onError: (failure) => { if (bound.isCurrent()) setError(failure.error); },
+    } : null);
+    const conversationSection = React.useMemo<ScmComparisonMenuSection | null>(() => (conversationHref && phone ? {
+        id: 'conversation',
+        items: [{ id: 'open', testID: 'walkthrough-open-conversation', title: t('walkthrough.openConversation'),
+            icon: <Icon name="chat-circle-dots" size={ICON_SIZE.sm} color={theme.colors.text.secondary} /> }],
+        onSelect: () => router.push(conversationHref as never),
+    } : null), [conversationHref, phone, router, theme.colors.text.secondary]);
+    const savedSections = React.useMemo(() => {
+        const sections = [conversationSection, savedActions.section].filter((section): section is ScmComparisonMenuSection => Boolean(section));
+        return sections.length > 0 ? sections : undefined;
+    }, [conversationSection, savedActions.section]);
+
     return (
         <View style={{ flex: 1, minHeight: 0 }}>
-            {props.renderBar(<>{reviewActions}{conversationAction}</>)}
+            {props.renderBar(<>{explainAction}{conversationAction}</>, savedSections, reviewStatus)}
             {modelChoice.choosing ? <ScmDiffSummaryModelPicker value={model} onChange={setModel} modelChoices={modelChoices} machineId={machine?.machineId} serverId={props.serverId} /> : null}
             <WalkthroughView
                 reading={reading ?? EMPTY_WALKTHROUGH_READING}
+                restoreState={bound.restoreState}
+                onRetryRestore={bound.retryRestore}
                 scopeLabel={props.scopeLabel}
                 scopeDetail={props.scopeDetail}
                 modelLabel={viewModel?.producer?.modelId ?? null}
@@ -237,35 +266,29 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
                 onAsk={onAsk}
                 onOpenFile={props.onOpenFile}
                 onShowFiles={props.onShowFiles}
-                update={saved?.updateNotice ? { message: t('walkthrough.saved.updated'), onUndo } : null}
+                // The band is the way back from the last change; without Undo the reading's own provenance marks carry it.
+                update={saved?.updateNotice && onUndo ? { title: t('walkthrough.saved.updated'), onUndo } : null}
                 stale={capturedComparison?.freshness === 'stale' ? { ...(canSend && launch.canLaunchExecutionRuns ? { onRefresh: () => {
                     if (!bound.isCurrent()) return;
-                    if (!selected.success || !modelAvailable) modelChoice.choose();
+                    if (!modelAvailable) modelChoice.choose();
                     else void onStart();
                 } } : {}) } : null}
                 start={{ options: <ScmDiffSummaryStartOptions {...scmDiffSummaryStartOptionsOf(bound, { testID: 'walkthrough-start-options', modelTestID: 'walkthrough-model-choice',
-                        prerequisite: !selected.success || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns ? t('walkthroughStart.unavailable') : null,
+                        prerequisite: scmDiffSummaryPrerequisiteOf(bound),
                         onEnableExplain: openExplainSetting })} />,
-                    onStart, busy: starting, disabled: Boolean(bound.startBlocker) || !selected.success || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns }}
+                    onStart, busy: starting, disabled: Boolean(bound.startBlocker) || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns }}
                 failure={bound.generationFailure}
                 onEnableExplain={openExplainSetting}
                 onRetry={onStart}
                 onChooseModel={modelChoice.choose}
-                endedConversation={saved && sessionId && discussion?.kind !== 'continue' ? { onStartNew, onAskSession } : null}
+                endedConversation={saved && sessionId && discussion?.kind === 'unavailable' ? { onStartNew, onAskSession } : null}
                 notify={machine?.machineId && cwd && runId && capturedComparison && viewModel?.resultId
                     ? <RunWorkNotifications serverId={props.serverId}
                         source={{ kind: 'execution_run', machineId: machine.machineId, runId, ...(sessionId ? { sessionId } : {}) }}
                         project={{ machineId: machine.machineId, directory: cwd }}
                         selectedOutput={{ output: 'walkthrough', comparisonId: capturedComparison.id, resultId: viewModel.resultId,
                             message: t('sessionWork.notify.walkthroughUpdate') }} /> : null}
-                savedActions={saved && cwd && key && operations ? <WalkthroughSavedActions result={saved} cwd={cwd} operations={operations}
-                    nativeDiscussion={!sessionId}
-                    nativeDiscussionReply={nativeDiscussionReply}
-                    onUndo={onUndo} undoing={undoing}
-                    canGenerate={canSend && launch.canLaunchExecutionRuns}
-                    disabledReason={!canControl ? t('walkthroughStart.unavailable') : null}
-                    onResult={(result) => { if (bound.isCurrent()) applySavedScmDiffSummaryResult(key, result); }}
-                    onError={(failure) => { if (bound.isCurrent()) setError(failure.error); }} /> : null}
+                savedActions={savedActions.panel}
             />
         </View>
     );

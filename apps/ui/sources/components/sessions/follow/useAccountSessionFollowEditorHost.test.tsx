@@ -98,13 +98,14 @@ describe('shared Account Session Follow editor host', () => {
         expect(navigation.push).not.toHaveBeenCalled();
         const editor = hook.getCurrent().editor;
         expect(React.isValidElement(editor)).toBe(true);
-        expect(editor?.props).toMatchObject({
-            open: true,
-            autoFocusOnOpen: true,
+        // The control places its parts in the one Follow panel, anchored to the trigger it returns focus to.
+        const panel = editor?.props.frame({ title: 'Follow it', subtitle: 'How much', mark: null, body: null, footer: null });
+        expect(panel?.props).toMatchObject({
             anchorRef: hook.getCurrent().anchorRef,
             focusReturnRef: hook.getCurrent().triggerRef,
+            title: 'Follow it',
         });
-        await act(async () => editor?.props.onRequestClose());
+        await act(async () => panel?.props.onRequestClose());
         expect(hook.getCurrent().editor).toBeNull();
         await hook.unmount();
     });

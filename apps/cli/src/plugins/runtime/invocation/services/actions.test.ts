@@ -14,6 +14,11 @@ import { PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
 import { createBrowserDaemonRuntimeActionExecutor } from '@/daemon/browser/actions/runtimeActionExecutor';
 import { createBrowserDaemonControlBroker } from '@/daemon/browser/control/broker';
 import { createBrowserDaemonControlRoutes } from '@/daemon/browser/control/routes';
+import { createBrowserAutomationOwnerRegistry } from '@/daemon/browser/automation/owners';
+import { createBrowserAutomationDaemonService } from '@/daemon/browser/automation/service';
+import { createBrowserAutomationCdpAdapter } from '@/daemon/browser/automation/adapters/cdp';
+import { createControlAdapterAutomationTransport } from '@/daemon/browser/automation/adapters/controlBridge';
+import { createBrowserSidecarCdpControlAdapter } from '@/daemon/browser/sidecar/controlAdapter';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
 
 import {
@@ -23,8 +28,10 @@ import {
 } from './actions';
 import { createPluginActionCallerMaterializationFixture } from './actionCaller.testkit';
 import { createProductionPluginInvocationServiceOwners } from './production';
+import { resolvePluginMachineExecutionOrigin } from '@/plugins/runtime/resolvePluginMachineExecutionOrigin';
 import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 import { createCommittedContributedActionInvoker } from '../actions/createCommittedContributedActionDeps';
+import { createHostContributedActionInvoker } from '../actions/hostContributedActionInvoker';
 import { createTargetActionInvocationRegistry } from '../targetActionRegistry';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import type { ResolvedActionContribution } from '@/plugins/projection/registry/types';
@@ -43,6 +50,9 @@ type TestActionExecutorOverrides = Partial<Pick<
     | 'sessionUserActionAnswer'
     | 'pluginWebhookAction'
     | 'sessionList'
+    | 'approvalsCreate'
+    | 'sessionSendMessage'
+    | 'invokeContributedAction'
 >>;
 
 function createActionExecutorForTest(overrides: TestActionExecutorOverrides = {}) {
@@ -104,7 +114,97 @@ function readPluginCallerId(context: ActionExecutorContext | undefined): string 
     return caller?.kind === 'plugin' ? caller.pluginId : null;
 }
 
+function createContributedActionExecutorForTest(invokeContributedAction: InvokeContributedAction,
+    seed?: Parameters<typeof createPluginInvocationActionsService>[0]['seed'],
+    resolveOrigin?: NonNullable<Parameters<typeof createHostContributedActionInvoker>[0]['resolveCurrentPluginExecutionOrigin']>) {
+    return createActionExecutorForTest({ invokeContributedAction: createHostContributedActionInvoker({
+        invokeContributedAction,
+        revalidatePluginActionCallerOccurrence: async () => seed?.isOccurrenceCurrent() ?? true,
+        revalidatePluginActionCallerMaterialization: async ref => {
+            if (!seed) return true;
+            const current = seed.resolveCurrentPluginMaterializationRef?.();
+            return current?.pluginId === ref.pluginId && current.machineId === ref.machineId
+                && current.materializationId === ref.materializationId;
+        },
+        ...(seed?.resolveCurrentPluginExecutionOrigin ? { resolveCurrentPluginExecutionOrigin: async () =>
+            await seed.resolveCurrentPluginExecutionOrigin!() } : resolveOrigin ? { resolveCurrentPluginExecutionOrigin: resolveOrigin } : {}),
+    }) });
+}
+
+function createContributedActionServiceForTest(params: Omit<Parameters<typeof createPluginInvocationActionsService>[0], 'actionExecutor'>) {
+    return createPluginInvocationActionsService({ ...params,
+        actionExecutor: createContributedActionExecutorForTest(params.invokeContributedAction, params.seed) });
+}
+
 describe('plugin invocation ActionsService', () => {
+    it.each(['source', 'source-machine', 'source-with-materialization', 'materialization'] as const)('stamps the exact %s origin through production services and the real target handler', async (kind) => {
+        const sourceCustody = { kind: 'development' as const, registeredRootId: 'caller-root' };
+        let machineId = 'machine-1';
+        let currentSource = sourceCustody;
+        let changeDuringHandler = false;
+        const resolveOrigin = () => resolvePluginMachineExecutionOrigin({
+            pluginId: 'acme.caller', context: { serverIdentityId: 'srv_home-1', machineId },
+            ...(kind === 'materialization' ? { materializationId: 'caller-materialization' } : { sourceCustody: currentSource }),
+        });
+        expect(resolveOrigin()).not.toBeNull();
+        let targets: ReturnType<typeof createTargetActionInvocationRegistry>;
+        const invokeContributedAction: InvokeContributedAction = async request => {
+            const result = await targets.invoke({
+                pluginId: request.action.pluginId, localId: request.action.localId,
+                input: request.input, surface: request.surface, invocationSurface: request.surface,
+                caller: request.caller, signal: request.signal,
+            });
+            if (result.status === 'deferred') throw new Error('Safe fixture must not request approval');
+            return result;
+        };
+        const owners = createProductionPluginInvocationServiceOwners({
+            actionExecutor: createContributedActionExecutorForTest(invokeContributedAction, undefined, async () => resolveOrigin()), invokeContributedAction,
+            resolveCurrentPluginExecutionOrigin: async () => resolveOrigin(),
+        });
+        const occurrenceId = createPluginRuntimeOccurrenceId('acme.provider');
+        targets = createTargetActionInvocationRegistry({
+            actions: [{ pluginId: 'acme.provider', pluginVersion: '1.0.0', occurrenceId,
+                sourceCustody: { kind: 'development', registeredRootId: 'provider-root' }, localId: 'read-caller',
+                definition: { id: 'read-caller', dangerLevel: 'safe', scopes: ['global'], surfaces: ['plugin'], inputSchema: { type: 'object' }, resultSchema: {} },
+                handler: async (_input, context) => {
+                    const caller = StrictJsonValueSchema.parse(context.caller);
+                    if (changeDuringHandler) {
+                        if (kind === 'source' || kind === 'source-with-materialization') currentSource = { ...sourceCustody, registeredRootId: 'replacement-root' };
+                        else machineId = 'replacement-machine';
+                    }
+                    return caller;
+                },
+            }],
+            resolveAuthorizationFacts: target => ({ generation: { targetGeneration: target.occurrenceId,
+                desiredGeneration: target.occurrenceId, appliedGeneration: target.occurrenceId },
+                resourceSelections: [], scopedGrants: [], operatingSystemAuthorization: [] }),
+            createServices: owners.createServices, resolveHostBinding: owners.resolveHostBinding,
+            readCurrentPluginOccurrenceId: pluginId => pluginId === 'acme.provider' ? occurrenceId : null,
+        });
+        try {
+            const service = owners.createServices({
+                plugin: { id: 'acme.caller', version: '1.0.0' },
+                contribution: { id: 'caller', qualifiedId: 'acme.caller/caller' },
+                occurrenceId: 'caller-occurrence', sourceCustody,
+                correlationId: 'source-origin-callback', surface: 'background',
+                signal: new AbortController().signal, isOccurrenceCurrent: () => true,
+                // The real release-less registry also publishes a materialization;
+                // its current execution origin remains source custody.
+                ...(kind === 'materialization' || kind === 'source-with-materialization' ? { resolveCurrentPluginMaterializationRef: () => ({
+                    pluginId: 'acme.caller', machineId, materializationId: 'caller-materialization',
+                }) } : {}),
+            }, owners.createOrdinaryServiceBinding('caller-occurrence', 'source-origin-callback')).actions;
+            await expect(service.execute({ pluginId: 'acme.provider', localId: 'read-caller' }, {}))
+                .resolves.toMatchObject({ executionOrigin: resolveOrigin(),
+                    contribution: { id: 'caller', qualifiedId: 'acme.caller/caller' }, originSurface: 'background' });
+            changeDuringHandler = true;
+            await expect(service.execute({ pluginId: 'acme.provider', localId: 'read-caller' }, {}))
+                .rejects.toMatchObject({ code: 'plugin_action_caller_unavailable' });
+        } finally {
+            targets.dispose();
+            await owners.dispose();
+        }
+    });
     it.each([
         { name: 'autonomous background', initiatingActionCaller: undefined, startedBy: 'trigger' },
         { name: 'host', initiatingActionCaller: { kind: 'host' }, startedBy: 'user' },
@@ -1142,24 +1242,34 @@ describe('plugin invocation ActionsService', () => {
     });
 
     it('reaches the canonical daemon browser owner with host-stamped identity and composed cancellation', async () => {
-        const dispatchCommand = vi.fn(async (command: Readonly<{ commandId: string }>) => ({
-            v: 1 as const,
-            commandId: command.commandId,
-            status: 'dispatched' as const,
-            adapterKind: 'chromiumSidecar' as const,
-            events: [],
-        }));
-        const broker = createBrowserDaemonControlBroker();
-        broker.registerAdapter({
-            adapterKind: 'chromiumSidecar',
-            ownsView: ({ browserSessionId, viewId }) => (
-                browserSessionId === 'browser-session-1' && viewId === 'view-1'
-            ),
-            supportsOpenView: () => false,
-            dispatchCommand,
+        const view = { browserSessionId: 'browser-session-1', viewId: 'view-1' };
+        // Only Chromium's CDP transport is substituted; view binding and input
+        // control use the same composed owners as the daemon.
+        const transport = {
+            openPage: async () => ({ targetId: 'target', sessionId: 'cdp-session' }),
+            dispatchPageCommand: vi.fn(async ({ method }: { method: string }) => method === 'Page.getFrameTree'
+                ? { frameTree: { frame: { id: 'frame', loaderId: 'document', url: 'https://example.com' } } }
+                : { frameId: 'frame', loaderId: 'document' }),
+            dispatchBrowserCommand: async () => ({ success: true }),
+        };
+        const owners = createBrowserAutomationOwnerRegistry();
+        const adapter = createBrowserSidecarCdpControlAdapter({
+            browserSessionId: view.browserSessionId, sidecarId: 'sidecar', transport,
+            resolveInputControl: owners.getInputControl,
         });
+        const automation = createBrowserAutomationDaemonService({ owners,
+            adapter: createBrowserAutomationCdpAdapter({ transport: createControlAdapterAutomationTransport({ adapter,
+                contextCapture: { transport, resolvePageHandle: adapter.resolvePageHandle, getNavigationState: adapter.getNavigationState },
+            }) }), subscribeViewLifecycle: adapter.subscribeViewLifecycle,
+        });
+        await adapter.dispatchCommand({ kind: 'openView', commandId: 'open', ...view, platform: 'web',
+            focus: true,
+            target: { kind: 'externalUrl', targetId: 'external', url: 'https://example.com' } });
+        transport.dispatchPageCommand.mockClear();
+        const broker = createBrowserDaemonControlBroker();
+        broker.registerAdapter(adapter);
         const canonicalBrowserExecute = createBrowserDaemonRuntimeActionExecutor({
-            control: createBrowserDaemonControlRoutes({ broker }),
+            control: createBrowserDaemonControlRoutes({ broker, automation: () => automation }),
             featureGate: {
                 isEnabled: () => true,
                 refresh: async () => {},
@@ -1197,28 +1307,37 @@ describe('plugin invocation ActionsService', () => {
             invokeContributedAction: vi.fn(),
         });
 
-        await expect(service.execute('browser.navigate', {
-            kind: 'navigate',
-            commandId: 'command-1',
-            browserSessionId: 'browser-session-1',
-            viewId: 'view-1',
-            url: 'https://example.com',
-        }, { signal: caller.signal })).resolves.toMatchObject({
-            v: 1,
-            commandId: 'command-1',
-            status: 'dispatched',
-        });
+        try {
+            await expect(service.execute('browser.navigate', {
+                kind: 'navigate',
+                commandId: 'command-1',
+                browserSessionId: 'browser-session-1',
+                viewId: 'view-1',
+                url: 'https://example.com',
+            }, { signal: caller.signal })).resolves.toMatchObject({
+                v: 1,
+                commandId: 'command-1',
+                status: 'dispatched',
+            });
 
-        expect(runtimeActionExecute).toHaveBeenCalledOnce();
-        expect(runtimeActionExecute.mock.calls[0]?.[0].context).toMatchObject({
-            surface: 'plugin',
-            actionCaller: { kind: 'plugin', pluginId: 'acme.browser' },
-        });
-        const signal = runtimeActionExecute.mock.calls[0]?.[0].context.signal;
-        expect(signal).toBeInstanceOf(AbortSignal);
-        expect(signal).not.toBe(retirement.signal);
-        expect(signal).not.toBe(caller.signal);
-        expect(dispatchCommand).toHaveBeenCalledOnce();
+            expect(runtimeActionExecute).toHaveBeenCalledOnce();
+            expect(runtimeActionExecute.mock.calls[0]?.[0].context).toMatchObject({
+                surface: 'plugin',
+                actionCaller: { kind: 'plugin', pluginId: 'acme.browser' },
+            });
+            const signal = runtimeActionExecute.mock.calls[0]?.[0].context.signal;
+            expect(signal).toBeInstanceOf(AbortSignal);
+            expect(signal).not.toBe(retirement.signal);
+            expect(signal).not.toBe(caller.signal);
+            expect(transport.dispatchPageCommand).toHaveBeenCalledWith(expect.objectContaining({
+                method: 'Page.navigate', params: { url: 'https://example.com' },
+            }));
+            caller.abort();
+            expect(signal?.aborted).toBe(true);
+        } finally {
+            automation.dispose();
+            adapter.dispose();
+        }
     });
 
     it('binds host action execution to the plugin surface and host-stamped caller identity', async () => {
@@ -1275,6 +1394,8 @@ describe('plugin invocation ActionsService', () => {
                     kind: 'plugin',
                     pluginId: 'acme.memory',
                     contributionLocalId: 'search',
+                    contributionQualifiedId: 'acme.memory/actions/search',
+                    originSurface: 'cli',
                     materialization: callerMaterialization.materialization,
                     occurrenceId: 'memory-occurrence-a',
                     sourceCustody: { kind: 'development', registeredRootId: 'memory-root' },
@@ -1333,10 +1454,101 @@ describe('plugin invocation ActionsService', () => {
                 sessionInputSource: {
                     sourceSessionId: 'session-1',
                     sourceTurnId: 'turn-1',
+                    sourceInputId: 'input-1',
                     via: 'action',
                 },
             }),
         );
+    });
+
+    it('keeps each requester through production services and the real Action executor without changing executor authority', async () => {
+        const contexts: ActionExecutorContext[] = [];
+        const executor = createActionExecutorForTest({
+            // Session-list transport is the system boundary; host admission stays real.
+            sessionList: async ({ context }) => { contexts.push(context); return { sessions: [] }; },
+        });
+        let accountId = 'bob';
+        const owners = createProductionPluginInvocationServiceOwners({ actionExecutor: executor,
+            invokeContributedAction: async () => { throw new Error('No contributed effect expected'); } });
+        const services = owners.createServices({
+            plugin: { id: 'acme.agent', version: '1.0.0' },
+            resolveCurrentPluginMaterializationRef: createPluginActionCallerMaterializationFixture('acme.agent').resolveCurrentPluginMaterializationRef,
+            contribution: { id: 'agent', qualifiedId: 'acme.agent/agents/agent' },
+            occurrenceId: 'requester-occurrence', correlationId: 'requester-invocation', surface: 'agent',
+            session: { id: 'bot' }, signal: new AbortController().signal, isOccurrenceCurrent: () => true,
+            readActiveTurnAdmissionWitness: () => ({
+                inputId: `${accountId}-input`, turnId: `${accountId}-turn`, userMessageSeq: 1, userMessageSeqs: [1],
+                callerPermissionMode: 'default',
+                causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'read-only' },
+                actionRequestAttributionV1: { requestRef: `${accountId}-input`,
+                    requester: { serverId: 'home', accountId }, persona: { serverId: 'home', sessionId: 'bot' }, origin: null },
+            }),
+        }, owners.createOrdinaryServiceBinding('requester-occurrence', 'requester-invocation'));
+        try {
+            await services.actions.execute('session.list', {});
+            accountId = 'carol';
+            await services.actions.execute('session.list', {});
+            expect(contexts.map(context => ({ authority: context.authority, attribution: context.actionRequestAttributionV1 })))
+                .toEqual(['bob', 'carol'].map(requester => ({ authority: 'account_automation', attribution: {
+                    requestRef: `${requester}-input`, requester: { serverId: 'home', accountId: requester },
+                    persona: { serverId: 'home', sessionId: 'bot' }, origin: null,
+                } })));
+        } finally { await owners.dispose(); }
+    });
+
+    it('refuses an unsigned shared requester through production services before preview or effect', async () => {
+        let approval: unknown;
+        const effects: string[] = [];
+        const executor = createActionExecutorForTest({
+            approvalsCreate: async ({ request }) => { approval = request; return { artifactId: 'bob-preview' }; },
+            sessionSendMessage: async ({ message }) => { effects.push(message); return { status: 'accepted', localId: 'effect' }; },
+        });
+        const owners = createProductionPluginInvocationServiceOwners({ actionExecutor: executor,
+            invokeContributedAction: async () => { throw new Error('No contributed effect expected'); } });
+        const id = 'shared-plugin-request';
+        const services = owners.createServices({ plugin: { id: 'acme.agent', version: '1.0.0' },
+            resolveCurrentPluginMaterializationRef: createPluginActionCallerMaterializationFixture('acme.agent').resolveCurrentPluginMaterializationRef,
+            contribution: { id: 'post', qualifiedId: 'acme.agent/actions/post' },
+            occurrenceId: id, sourceCustody: { kind: 'development', registeredRootId: 'fixture-root' },
+            correlationId: id, surface: 'plugin', session: { id: 'bot' },
+            approvalContext: { runtimeAccountId: 'alice', serverId: 'home', defaultSessionId: 'bot',
+                actionRequestAttributionV1: { requestRef: 'bob-input', requester: { serverId: 'home', accountId: 'bob' },
+                    persona: { serverId: 'home', sessionId: 'bot' }, origin: null } },
+            signal: new AbortController().signal, isOccurrenceCurrent: () => true,
+        }, owners.createOrdinaryServiceBinding(id, id));
+        try {
+            await expect(services.actions.execute('session.message.send', { sessionId: 'bot', message: 'Review this update', idempotencyKey: 'shared-plugin-request' }))
+                .rejects.toMatchObject({ code: 'approval_origin_unavailable' });
+            expect(approval).toBeUndefined();
+            expect(effects).toEqual([]);
+        } finally { await owners.dispose(); }
+    });
+
+    it('keeps a finite invocation cause, but never reuses it when an active-turn owner reports no cause', async () => {
+        const contexts: ActionExecutorContext[] = [];
+        const executor = createActionExecutorForTest({ sessionList: async ({ context }) => {
+            contexts.push(context); return { sessions: [] };
+        } });
+        const owners = createProductionPluginInvocationServiceOwners({ actionExecutor: executor,
+            invokeContributedAction: async () => { throw new Error('No contributed effect expected'); } });
+        const cause = { requestRef: 'bob-input', requester: { serverId: 'home', accountId: 'bob' },
+            persona: { serverId: 'home', sessionId: 'bot' }, origin: null };
+        try {
+            for (const activeOwner of [false, true]) {
+                const id = `finite-${activeOwner}`;
+                const services = owners.createServices({ plugin: { id: 'acme.agent', version: '1.0.0' },
+                    resolveCurrentPluginMaterializationRef: createPluginActionCallerMaterializationFixture('acme.agent').resolveCurrentPluginMaterializationRef,
+                    contribution: { id: 'agent', qualifiedId: 'acme.agent/agents/agent' },
+                    occurrenceId: id, correlationId: id, surface: 'agent', session: { id: 'bot' },
+                    actionRequestAttributionV1: cause,
+                    ...(activeOwner ? { readActiveTurnAdmissionWitness: () => ({ inputId: 'autonomous', turnId: 'autonomous-turn',
+                        userMessageSeq: null, userMessageSeqs: [] }) } : {}),
+                    signal: new AbortController().signal, isOccurrenceCurrent: () => true,
+                }, owners.createOrdinaryServiceBinding(id, id));
+                await services.actions.execute('session.list', {});
+            }
+            expect(contexts.map(context => context.actionRequestAttributionV1)).toEqual([cause, undefined]);
+        } finally { await owners.dispose(); }
     });
 
     it('propagates the Agent active-turn admission witness through composed invocation services', async () => {
@@ -1386,6 +1598,7 @@ describe('plugin invocation ActionsService', () => {
                 sessionInputSource: {
                     sourceSessionId: 'session-1',
                     sourceTurnId: 'turn-1',
+                    sourceInputId: 'input-1',
                     via: 'action',
                 },
             }),
@@ -1597,57 +1810,6 @@ describe('plugin invocation ActionsService', () => {
         expect(pluginPermissionGrantAction).toHaveBeenCalledTimes(1);
     });
 
-    it('invokes an exact contributed action reference through the committed registry owner', async () => {
-        const invokeContributedAction = vi.fn<InvokeContributedAction>(async () => ({
-            status: 'executed' as const,
-            value: { accepted: true },
-        }));
-        const signal = new AbortController().signal;
-        const callerMaterialization = createPluginActionCallerMaterializationFixture('acme.caller', {
-            materializationId: 'materialization-caller-current',
-        });
-        const service = createPluginInvocationActionsService({
-            seed: {
-                plugin: { id: 'acme.caller', version: '1.0.0' },
-                contribution: { id: 'caller', qualifiedId: 'acme.caller/actions/caller' },
-                occurrenceId: 'caller-occurrence-1', sourceCustody: { kind: 'development', registeredRootId: 'caller-root' },
-                surface: 'agent',
-                resolveCurrentPluginMaterializationRef: callerMaterialization.resolveCurrentPluginMaterializationRef,
-                session: { id: 'session-1' },
-                signal,
-                isOccurrenceCurrent: () => true,
-            },
-            actionExecutor: { execute: vi.fn() },
-            invokeContributedAction,
-        });
-
-        await expect(service.execute(
-            { pluginId: 'acme.target', localId: 'publish' },
-            { title: 'Ready' },
-        )).resolves.toEqual({ accepted: true });
-        expect(invokeContributedAction).toHaveBeenCalledWith({
-            action: { pluginId: 'acme.target', localId: 'publish' },
-            input: { title: 'Ready' },
-            surface: 'plugin',
-            originSurface: 'agent',
-            initiatingActionCaller: {
-                kind: 'plugin', pluginId: 'acme.caller', contributionLocalId: 'caller',
-                occurrenceId: 'caller-occurrence-1', sourceCustody: { kind: 'development', registeredRootId: 'caller-root' },
-                materialization: callerMaterialization.materialization,
-            },
-            caller: {
-                kind: 'plugin',
-                pluginId: 'acme.caller',
-                contribution: { id: 'caller', qualifiedId: 'acme.caller/actions/caller' },
-                occurrenceId: 'caller-occurrence-1', sourceCustody: { kind: 'development', registeredRootId: 'caller-root' },
-                materialization: callerMaterialization.materialization,
-                originSurface: 'agent',
-            },
-            sessionId: 'session-1',
-            signal,
-        });
-    });
-
     it('withholds a contributed result when the host-stamped caller materialization changes during dispatch', async () => {
         const initialCaller = createPluginActionCallerMaterializationFixture('acme.caller', {
             materializationId: 'materialization-caller-before',
@@ -1662,7 +1824,7 @@ describe('plugin invocation ActionsService', () => {
                 value: { accepted: true },
             };
         });
-        const service = createPluginInvocationActionsService({
+        const service = createContributedActionServiceForTest({
             seed: {
                 plugin: { id: 'acme.caller', version: '1.0.0' },
                 contribution: { id: 'caller', qualifiedId: 'acme.caller/actions/caller' },
@@ -1672,7 +1834,6 @@ describe('plugin invocation ActionsService', () => {
                 signal: new AbortController().signal,
                 isOccurrenceCurrent: () => true,
             },
-            actionExecutor: { execute: vi.fn() },
             invokeContributedAction,
         });
 
@@ -1710,7 +1871,7 @@ describe('plugin invocation ActionsService', () => {
             cause: original,
         });
         const callerMaterialization = createPluginActionCallerMaterializationFixture('acme.caller');
-        const service = createPluginInvocationActionsService({
+        const service = createContributedActionServiceForTest({
             seed: {
                 plugin: { id: 'acme.caller', version: '1.0.0' },
                 contribution: { id: 'caller', qualifiedId: 'acme.caller/actions/caller' },
@@ -1720,7 +1881,6 @@ describe('plugin invocation ActionsService', () => {
                 signal: new AbortController().signal,
                 isOccurrenceCurrent: () => true,
             },
-            actionExecutor: { execute: vi.fn() },
             // Boundary fixture intentionally models a malformed richer result
             // that must not cross the generic service boundary.
             invokeContributedAction: vi.fn<InvokeContributedAction>(async () => richResult),
@@ -1766,7 +1926,7 @@ describe('plugin invocation ActionsService', () => {
             diagnostics: [{ code: 'fixture_diagnostic', severity: 'error', message: 'quota exhausted' }],
         });
         const callerMaterialization = createPluginActionCallerMaterializationFixture('acme.caller');
-        const service = createPluginInvocationActionsService({
+        const service = createContributedActionServiceForTest({
             seed: {
                 plugin: { id: 'acme.caller', version: '1.0.0' },
                 contribution: { id: 'caller', qualifiedId: 'acme.caller/actions/caller' },
@@ -1776,7 +1936,6 @@ describe('plugin invocation ActionsService', () => {
                 signal: new AbortController().signal,
                 isOccurrenceCurrent: () => true,
             },
-            actionExecutor: { execute: vi.fn() },
             invokeContributedAction: vi.fn<InvokeContributedAction>(async () => Object.freeze({
                 status: 'failed' as const,
                 code: target.code,
@@ -1806,7 +1965,7 @@ describe('plugin invocation ActionsService', () => {
 
     it('preserves only the generic proof that a contributed handler never began', async () => {
         const callerMaterialization = createPluginActionCallerMaterializationFixture('acme.caller');
-        const service = createPluginInvocationActionsService({
+        const service = createContributedActionServiceForTest({
             seed: {
                 plugin: { id: 'acme.caller', version: '1.0.0' },
                 contribution: { id: 'caller', qualifiedId: 'acme.caller/actions/caller' },
@@ -1816,7 +1975,6 @@ describe('plugin invocation ActionsService', () => {
                 signal: new AbortController().signal,
                 isOccurrenceCurrent: () => true,
             },
-            actionExecutor: { execute: vi.fn() },
             invokeContributedAction: vi.fn<InvokeContributedAction>(async () => (
                 Object.freeze({
                     status: 'unavailable' as const,
@@ -1863,7 +2021,7 @@ describe('plugin invocation ActionsService', () => {
         const callerMaterialization = createPluginActionCallerMaterializationFixture('acme.caller', {
             materializationId: 'materialization-caller-current',
         });
-        const service = createPluginInvocationActionsService({
+        const service = createContributedActionServiceForTest({
             seed: {
                 plugin: { id: 'acme.caller', version: '1.0.0' },
                 contribution: { id: 'caller', qualifiedId: 'acme.caller/actions/caller' },
@@ -1873,14 +2031,16 @@ describe('plugin invocation ActionsService', () => {
                 signal,
                 isOccurrenceCurrent: () => true,
             },
-            actionExecutor: { execute: vi.fn() },
             invokeContributedAction,
         });
 
         await expect(service.executeWithExecutionOrigin(
             { pluginId: 'acme.target', localId: 'publish' },
             { title: 'Ready' },
-            { expectedExecutionOrigin: executionOrigin },
+            {
+                expectedExecutionOrigin: executionOrigin,
+                expectedExecutionRouting: { serverIdentityId: 'srv_action_origin_fixture', machineId: 'machine-target', pluginId: 'acme.target' },
+            },
         )).resolves.toEqual({
             result: { accepted: true },
             executionOrigin,
@@ -1891,6 +2051,7 @@ describe('plugin invocation ActionsService', () => {
             surface: 'plugin',
             captureExecutionOrigin: true,
             expectedExecutionOrigin: executionOrigin,
+            expectedExecutionRouting: { serverIdentityId: 'srv_action_origin_fixture', machineId: 'machine-target', pluginId: 'acme.target' },
             caller: {
                 kind: 'plugin',
                 pluginId: 'acme.caller',
@@ -1911,7 +2072,13 @@ describe('plugin invocation ActionsService', () => {
         expect(invokeContributedAction.mock.calls[1]?.[0]).not.toHaveProperty('executionOrigin');
     });
 
-    it('rejects a malformed expected execution origin before contributed Action dispatch', async () => {
+    it.each([
+        { expectedExecutionOrigin: { serverIdentityId: 'not-a-server-identity', materializationRef: {
+            pluginId: 'acme.target', machineId: 'machine-target', materializationId: 'materialization-target-current',
+        } } },
+        { expectedExecutionRouting: { serverIdentityId: 'not-a-server-identity', machineId: 'machine-target', pluginId: 'acme.target' } },
+        { expectedExecutionRouting: { serverIdentityId: 'srv_action_origin_fixture', machineId: 'machine-target', pluginId: 'acme.target', materializationId: 'not-routing' } },
+    ])('rejects a malformed expected target before contributed Action dispatch (%j)', async (options) => {
         const invokeContributedAction = vi.fn(async () => ({
             status: 'executed' as const,
             value: { accepted: true },
@@ -1925,7 +2092,7 @@ describe('plugin invocation ActionsService', () => {
             },
         }));
         const callerMaterialization = createPluginActionCallerMaterializationFixture('acme.caller');
-        const service = createPluginInvocationActionsService({
+        const service = createContributedActionServiceForTest({
             seed: {
                 plugin: { id: 'acme.caller', version: '1.0.0' },
                 contribution: { id: 'caller', qualifiedId: 'acme.caller/actions/caller' },
@@ -1935,82 +2102,17 @@ describe('plugin invocation ActionsService', () => {
                 signal: new AbortController().signal,
                 isOccurrenceCurrent: () => true,
             },
-            actionExecutor: { execute: vi.fn() },
             invokeContributedAction,
         });
 
         await expect(Reflect.apply(service.executeWithExecutionOrigin, service, [
             { pluginId: 'acme.target', localId: 'publish' },
             { title: 'Ready' },
-            {
-                expectedExecutionOrigin: {
-                    serverIdentityId: 'not-a-server-identity',
-                    materializationRef: {
-                        pluginId: 'acme.target',
-                        machineId: 'machine-target',
-                        materializationId: 'materialization-target-current',
-                    },
-                },
-            },
+            options,
         ])).rejects.toMatchObject({
             code: 'plugin_action_execution_origin_invalid',
         });
         expect(invokeContributedAction).not.toHaveBeenCalled();
-    });
-
-    it('keeps a background contributed-action call on the target plugin surface', async () => {
-        const invokeContributedAction = vi.fn(async () => ({
-            status: 'executed' as const,
-            value: { accepted: true },
-        }));
-        const signal = new AbortController().signal;
-        const callerMaterialization = createPluginActionCallerMaterializationFixture('acme.background', {
-            materializationId: 'materialization-background-current',
-        });
-        const service = createPluginInvocationActionsService({
-            seed: {
-                plugin: { id: 'acme.background', version: '1.0.0' },
-                contribution: {
-                    id: 'gateway-supervisor',
-                    qualifiedId: 'acme.background/backgroundServices/gateway-supervisor',
-                },
-                occurrenceId: 'background-occurrence-1', sourceCustody: { kind: 'development', registeredRootId: 'background-root' },
-                surface: 'background',
-                resolveCurrentPluginMaterializationRef: callerMaterialization.resolveCurrentPluginMaterializationRef,
-                signal,
-                isOccurrenceCurrent: () => true,
-            },
-            actionExecutor: { execute: vi.fn() },
-            invokeContributedAction,
-        });
-
-        await expect(service.execute(
-            { pluginId: 'acme.target', localId: 'publish' },
-            { title: 'Ready' },
-        )).resolves.toEqual({ accepted: true });
-        expect(invokeContributedAction).toHaveBeenCalledWith({
-            action: { pluginId: 'acme.target', localId: 'publish' },
-            input: { title: 'Ready' },
-            surface: 'plugin',
-            originSurface: 'background',
-            initiatingActionCaller: {
-                kind: 'plugin', pluginId: 'acme.background', contributionLocalId: 'gateway-supervisor',
-                occurrenceId: 'background-occurrence-1', sourceCustody: { kind: 'development', registeredRootId: 'background-root' },
-                materialization: callerMaterialization.materialization,
-            },
-            caller: {
-                kind: 'plugin',
-                pluginId: 'acme.background',
-                contribution: {
-                    id: 'gateway-supervisor',
-                    qualifiedId: 'acme.background/backgroundServices/gateway-supervisor',
-                },
-                occurrenceId: 'background-occurrence-1', sourceCustody: { kind: 'development', registeredRootId: 'background-root' },
-                materialization: callerMaterialization.materialization,
-                originSurface: 'background',
-            },
-            signal,
-        });
     });
 
     it('fails closed instead of inventing caller authority when its own materialization is unavailable', async () => {
@@ -2018,7 +2120,7 @@ describe('plugin invocation ActionsService', () => {
             status: 'executed' as const,
             value: { accepted: true },
         }));
-        const service = createPluginInvocationActionsService({
+        const service = createContributedActionServiceForTest({
             seed: {
                 plugin: { id: 'acme.unbound', version: '1.0.0' },
                 contribution: { id: 'caller', qualifiedId: 'acme.unbound/actions/caller' },
@@ -2027,7 +2129,6 @@ describe('plugin invocation ActionsService', () => {
                 signal: new AbortController().signal,
                 isOccurrenceCurrent: () => true,
             },
-            actionExecutor: { execute: vi.fn() },
             invokeContributedAction,
         });
 

@@ -12,7 +12,7 @@ import { UseServiceAsHomeSheet } from '@/components/homes/journeys/serviceHome/U
 import { HomeAddForm } from '@/components/homes/add/HomeAddForm';
 import { PhoneWelcomeDoorway } from '@/components/homes/journeys/phone/PhoneWelcomeDoorway';
 import { WelcomeActionList, type WelcomeActionAdmission } from '@/components/onboarding/preAuth/WelcomeActionList';
-import { useJourneyAccountService } from '@/components/homes/journeys/useJourneyAccountService';
+import { useJourneyAccountService, type JourneyAccountService } from '@/components/homes/journeys/useJourneyAccountService';
 import type { AccountDirectoryAuthMethodDiscovery } from '@/auth/accountDirectory/accountDirectoryAuthClient';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { useIsTablet } from '@/utils/platform/responsive';
@@ -30,6 +30,7 @@ import { AccountDirectorySession } from '@/sync/domains/accountDirectory/account
 import { resolveServerProfileScopeId } from '@/sync/domains/server/serverProfiles';
 import type { AccountPostAuthInput, AccountPostAuthResult } from '@/sync/ops/accountDirectory/completeAccountServicePostAuth';
 import type { AccountDirectoryHomeEntryV1 } from '@happier-dev/protocol/auth/accountDirectory';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 
 /**
  * Dev-only specimen of the Homes journeys (lab `hjourneys`), rendered through the real components
@@ -153,7 +154,7 @@ function FrameBody(props: Readonly<{ frame: Frame }>) {
         case 'continuation-stop-waiting':
         case 'continuation-relink':
         case 'continuation-open':
-            return <AccountServiceContinuationSpecimen frame={props.frame} discovery={service.discovery} />;
+            return <AccountServiceContinuationSpecimen frame={props.frame} service={service} />;
     }
 }
 
@@ -161,6 +162,43 @@ const inertController = new AbortController();
 inertController.abort();
 const INERT_FIXTURE_SIGNAL = inertController.signal;
 const FIXTURE_CREDENTIAL_TOKEN_DIGEST = 'fixture-account-credential-binding';
+const FIXTURE_ACCOUNT_SERVICE_IDENTITY = 'srv_continuation_fixture';
+const FIXTURE_ACCOUNT_DIRECTORY_CAPABILITY = {
+    version: 1 as const,
+    homeDirectory: true,
+    homeEnrollment: true,
+    homeLoginAssertion: {
+        keyId: 'a'.repeat(64),
+        publicKeyBase64Url: 'A'.repeat(43),
+    },
+};
+
+function resolveContinuationFixtureService(service: JourneyAccountService): AccountDirectoryAuthMethodDiscovery {
+    if (service.discovery) return service.discovery;
+    const serverIdentityId = service.entry.endpoint.serverIdentityId ?? FIXTURE_ACCOUNT_SERVICE_IDENTITY;
+    const endpointUrl = service.entry.endpoint.url;
+    return {
+        endpointUrl,
+        serverIdentityId,
+        canonicalServerUrl: endpointUrl,
+        capability: FIXTURE_ACCOUNT_DIRECTORY_CAPABILITY,
+        keyLoginAvailable: false,
+        oauthProviderIds: [],
+        preferredProvisionProviderId: null,
+        authenticationCatalog: { provenance: 'legacy', methods: [] },
+        authenticationActions: [],
+        accountServiceDisplayName: service.entry.endpoint.displayName ?? null,
+        snapshot: {
+            status: 'ready',
+            serverIdentityId,
+            features: createRootLayoutFeaturesResponse({ capabilities: {
+                serverIdentity: { serverIdentityId },
+                server: { canonicalServerUrl: endpointUrl },
+                accountDirectory: FIXTURE_ACCOUNT_DIRECTORY_CAPABILITY,
+            } }),
+        },
+    };
+}
 
 function createFixtureHome(
     homeServerIdentityId: string,
@@ -213,46 +251,53 @@ function createContinuationResult(
 }
 
 /**
- * Authenticated C16 fixture. It uses the device's existing journey-service discovery and injects
- * only the real card's result props while borrowing every Account, approval and current-context
- * provider from the signed-in app shell. Mutating operations retain an already-aborted signal, so
- * an approved request settles before it can reach Account/Home state. Stop-waiting remains live:
- * without a matching pending enrollment it changes only this card.
+ * Authenticated fixture. It injects a synthetic post-auth service/result pair while borrowing every
+ * Account, approval and current-context provider from the signed-in app shell. A selected Account
+ * Service is intentionally not required: PAR-07 starts from an already-authenticated Home Account.
+ * Mutating operations retain an already-aborted signal, so an approved request settles before it can
+ * reach Account/Home state. Stop-waiting remains live: without a matching pending enrollment it
+ * changes only this card.
  */
 function AccountServiceContinuationSpecimen(props: Readonly<{
     frame: ContinuationFrame;
-    discovery: AccountDirectoryAuthMethodDiscovery | null;
+    service: JourneyAccountService;
 }>) {
     const generation = useServerProfilesGeneration();
     const activeHome = useActiveServerSnapshot();
+    const discovery = React.useMemo(() => resolveContinuationFixtureService(props.service), [
+        props.service.discovery,
+        props.service.entry.endpoint.displayName,
+        props.service.entry.endpoint.serverIdentityId,
+        props.service.entry.endpoint.url,
+    ]);
     const profile = React.useMemo(() => listServerProfiles().find(
         (candidate) => resolveServerProfileScopeId(candidate) === activeHome.serverId,
     ) ?? null, [activeHome.serverId, generation]);
     const openHomeServerIdentityId = profile?.serverIdentityId ?? null;
-    const session = React.useMemo(() => props.discovery ? new AccountDirectorySession({
-        endpoint: props.discovery.endpointUrl,
-        serverIdentityId: props.discovery.serverIdentityId,
-    }, { capability: props.discovery.capability }) : null, [
-        props.discovery?.endpointUrl,
-        props.discovery?.serverIdentityId,
-        props.discovery?.capability,
+    const session = React.useMemo(() => discovery ? new AccountDirectorySession({
+        endpoint: discovery.endpointUrl,
+        serverIdentityId: discovery.serverIdentityId,
+    }, { capability: discovery.capability }) : null, [
+        discovery?.endpointUrl,
+        discovery?.serverIdentityId,
+        discovery?.capability,
     ]);
     const initialResult = React.useMemo(() => openHomeServerIdentityId
         ? createContinuationResult(props.frame, openHomeServerIdentityId)
         : null, [openHomeServerIdentityId, props.frame]);
     const [result, setResult] = React.useState<AccountPostAuthResult | null>(initialResult);
     React.useEffect(() => setResult(initialResult), [initialResult]);
-    const input = React.useMemo<AccountPostAuthInput | null>(() => props.discovery && session && openHomeServerIdentityId ? {
-        service: props.discovery,
+    const input = React.useMemo<AccountPostAuthInput | null>(() => discovery && session && openHomeServerIdentityId ? {
+        service: discovery,
         session,
         credentialTokenDigest: FIXTURE_CREDENTIAL_TOKEN_DIGEST,
         intent: props.frame === 'continuation-refresh' || props.frame === 'continuation-retry' || props.frame === 'continuation-choose'
             ? { kind: 'enter', target: { kind: 'automatic' } }
             : { kind: 'enroll', homeServerIdentityId: openHomeServerIdentityId },
         ...(props.frame === 'continuation-stop-waiting' ? {} : { signal: INERT_FIXTURE_SIGNAL }),
-    } : null, [openHomeServerIdentityId, props.discovery, props.frame, session]);
+    } : null, [discovery, openHomeServerIdentityId, props.frame, session]);
     if (!input || !result) {
-        return <Text style={styles.caption}>The signed-in Account Service and current Home are required for this frame.</Text>;
+        return <Text style={styles.caption}>The current Home is required for this frame.</Text>;
     }
     return (
         <PluginSurfaceFocusEligibilityProvider active currentUiContextActive>

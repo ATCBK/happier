@@ -14,6 +14,7 @@ import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { findGestureByKind } from '@/dev/testkit/mocks/gestureHandler';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization/keys';
 import { buildSessionListServerScopedRowKey } from '@/sync/domains/session/listing/sessionListKeyNormalization';
 import { SESSION_LIST_ROW_HEIGHT_DEFAULT } from './sessionListRowHeights';
@@ -22,6 +23,7 @@ import { applySessionOrganizationLegacyTestSettings } from './sessionOrganizatio
 import { createUseSettingMock, createUseSettingMutableMockFromReader } from '@/dev/testkit/mocks/storage';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
+import { buildProjectAccountRowPhysicalKeyV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -34,6 +36,7 @@ const routerPushSpy = vi.hoisted(() => vi.fn());
 const openUniversalSearchSpy = vi.hoisted(() => vi.fn());
 const fetchMoreSessionsMock = vi.hoisted(() => vi.fn(async () => undefined));
 const refreshSessionsMock = vi.hoisted(() => vi.fn<() => Promise<undefined>>(async () => undefined));
+const hydrateSessionListRowsMock = vi.hoisted(() => vi.fn(async (_addresses: readonly { serverId: string; sessionId: string }[]) => undefined));
 const markSessionListScrollActivityMock = vi.hoisted(() => vi.fn());
 const preloadEnrichedMarkdownRuntimeSpy = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 const home = createHomeGovernanceHarness();
@@ -367,9 +370,7 @@ vi.mock('react-native-unistyles', async () => {
 vi.mock('expo-router', async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         return createExpoRouterMock({
-            get pathname() {
-                return nativeBoundary.pathname;
-            },
+            pathname: () => nativeBoundary.pathname,
             router: {
                 push: routerPushSpy,
                 replace: vi.fn(),
@@ -395,15 +396,11 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
         return createStorageModuleMock({
             importOriginal,
             overrides: {
-                useWorkspaceRefs: () => workspaceRefsV1,
+                useWorkspaceRefs: actual.useWorkspaceRefs,
                 useSetting: createUseSettingMock({ fallback: (key) => {
-                    if (key === 'compactSessionView') return false;
-                    if (key === 'compactSessionViewMinimal') return false;
                     if (key === 'sessionListIdentityDisplay') return sessionListIdentityDisplay;
                     if (key === 'sessionTagsEnabled') return true;
                     if (key === 'sessionListOrderingModeV1') return sessionListOrderingModeV1;
-                    // This touched contract subscribes to the real Account setting owner.
-                    if (key === 'workspaceRefsV1') return actual.useSetting('workspaceRefsV1');
                     if (key === 'workspacePathDisplayModeV1') return workspacePathDisplayModeV1;
                     return null;
                 } }),
@@ -436,7 +433,7 @@ vi.mock('@/sync/ops', async (importOriginal) => {
     return createSyncOpsModuleMock({
         importOriginal,
         overrides: {
-            sessionStopWithServerScope: vi.fn(async () => ({ success: true })),
+            sessionStopWithServerScope: vi.fn(async (sessionId: string) => ({ success: true, sessionId, stopped: true as const })),
             sessionArchiveWithServerScope: vi.fn(async () => ({ success: true })),
         },
     });
@@ -446,6 +443,7 @@ vi.mock('@/sync/sync', () => ({
     sync: {
         fetchMoreSessions: fetchMoreSessionsMock,
         refreshSessions: refreshSessionsMock,
+        hydrateSessionListRows: hydrateSessionListRowsMock,
         markSessionListScrollActivity: markSessionListScrollActivityMock,
     },
 }));
@@ -698,6 +696,7 @@ describe('SessionsList (native virtualization)', () => {
         routerPushSpy.mockClear();
         openUniversalSearchSpy.mockClear();
         fetchMoreSessionsMock.mockClear();
+        hydrateSessionListRowsMock.mockClear();
         refreshSessionsMock.mockReset();
         refreshSessionsMock.mockResolvedValue(undefined);
         markSessionListScrollActivityMock.mockClear();
@@ -727,10 +726,17 @@ describe('SessionsList (native virtualization)', () => {
         // These host rows represent the focused Account's restored native cache.
         // Credential observers must be able to prove its Account before retaining them.
         setWarmCacheAccountScope('account-a');
-        home.answer(homeA, pinPath, { body: { pin: { sessionId: 'sess_a', sortKey: null, pinnedAt: 1 } } });
+        home.answer(homeA, pinPath, { body: { pin: { sessionId: 'sess_a', sortKey: null, pinnedAt: 1, listPinned: true, railPinned: false } } });
         home.answer(homeA, tagsPath, { body: { sessionId: 'sess_a', tagIds: ['fixture-tag-2'] } });
+        const activeHome = listServerProfiles().find(profile => profile.id === homeA);
+        const accountId = activeHome ? home.findByServerUrl(activeHome.serverUrl)?.accountId : null;
+        if (!activeHome || !accountId) throw new Error('The native list fixture has no signed-in Home Account');
+        const scope = { serverId: resolveServerProfileScopeId(activeHome), accountId };
+        await realStorage.getState().activateSettingsScope(scope, []);
+        realStorage.getState().activateProfileScope(scope, []);
+        realStorage.getState().activateSessionLocalStateScope(scope);
         realStorage.setState({ sessionListRowsByServerId: storageState.sessionListRowsByServerId });
-        realStorage.getState().applySettingsLocal({ workspaceRefsV1: [] });
+        realStorage.getState().clearProjectAccountRowsScope();
         resetServerFeaturesClientForTests();
         const ordinaryFeatures = createRootLayoutFeaturesResponse({
                 // This fixture is the ordinary, unfiltered pane producer. The
@@ -1359,7 +1365,8 @@ describe('SessionsList (native virtualization)', () => {
         expect(rowWrapper.props.collapsable).toBe(false);
     });
 
-    it('opens the iOS native context menu when the row reports its long press (K1: the long press is the menu)', async () => {
+    it.each(['ios', 'android'] as const)('opens the %s native context menu when the row reports its long press', async (platform) => {
+        nativeBoundary.platformOs = platform;
         const screen = await renderSessionsList();
         const initialListProps = virtualizedListState.current?.props;
         expect(initialListProps).toBeTruthy();
@@ -1370,6 +1377,7 @@ describe('SessionsList (native virtualization)', () => {
         await act(async () => {
             row.props.onNativeContextMenuOpenChange(true);
         });
+
 
         const open = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
         expect(open.props.nativeContextMenuOpen).toBe(true);
@@ -1385,7 +1393,8 @@ describe('SessionsList (native virtualization)', () => {
         expect(closed.props.nativeContextMenuOpen).toBe(false);
     });
 
-    it('suppresses iOS native context menu activation while the native list is being scrolled', async () => {
+    it.each(['ios', 'android'] as const)('suppresses %s native context menu activation while the native list is being scrolled', async (platform) => {
+        nativeBoundary.platformOs = platform;
         const screen = await renderSessionsList();
         const listProps = virtualizedListState.current?.props;
         const row = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
@@ -1416,7 +1425,8 @@ describe('SessionsList (native virtualization)', () => {
         expect(opened.props.nativeContextMenuOpen).toBe(true);
     });
 
-    it('closes an open iOS native context menu when native list scrolling starts', async () => {
+    it.each(['ios', 'android'] as const)('closes an open %s native context menu when native list scrolling starts', async (platform) => {
+        nativeBoundary.platformOs = platform;
         const screen = await renderSessionsList();
         const listProps = virtualizedListState.current?.props;
         const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
@@ -1436,7 +1446,8 @@ describe('SessionsList (native virtualization)', () => {
         expect(closed.props.nativeContextMenuOpen).toBe(false);
     });
 
-    it('ignores stale iOS native context menu close requests from another row', async () => {
+    it.each(['ios', 'android'] as const)('ignores stale %s native context menu close requests from another row', async (platform) => {
+        nativeBoundary.platformOs = platform;
         const screen = await renderSessionsList();
         const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
 
@@ -1467,15 +1478,15 @@ describe('SessionsList (native virtualization)', () => {
         expect(findRecordedGestureDetectors(screen)).toHaveLength(0);
     });
 
-    it('keeps Android session rows free of drag gestures and native inline context menus outside Organize mode', async () => {
+    it('shares Android context-menu state without drag gestures outside Organize mode', async () => {
         nativeBoundary.platformOs = 'android';
 
         const screen = await renderSessionsList();
 
         const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
         expect(first.props.dragGripGesture).toBeUndefined();
-        expect(first.props.nativeContextMenuOpen).toBeUndefined();
-        expect(first.props.onNativeContextMenuOpenChange).toBeUndefined();
+        expect(first.props.nativeContextMenuOpen).toBe(false);
+        expect(first.props.onNativeContextMenuOpenChange).toEqual(expect.any(Function));
         expect(findRecordedGestureDetectors(screen)).toHaveLength(0);
     });
 
@@ -1644,12 +1655,9 @@ describe('SessionsList (native virtualization)', () => {
         syncPerformanceTelemetry.configure({ enabled: true, slowThresholdMs: 0 });
         syncPerformanceTelemetry.reset();
         try {
-            expect(emitStatusDemand).toHaveBeenCalledTimes(1);
-            expect(emitStatusDemand.mock.calls[0]?.[1]).toMatchObject({
-                entries: expect.arrayContaining([
-                    expect.objectContaining({ demand: 'loaded' }),
-                ]),
-            });
+            // A transport registers with an empty replacement to clear previous
+            // demand; mounting a list must not add loaded-row entries to it.
+            expect(emitStatusDemand.mock.calls.every(([, payload]) => payload.entries.length === 0)).toBe(true);
             const initialProps = virtualizedListState.current?.props;
             expect(initialProps).toBeTruthy();
             expect(typeof initialProps?.onViewableItemsChanged).toBe('function');
@@ -1673,8 +1681,11 @@ describe('SessionsList (native virtualization)', () => {
                 await Promise.resolve();
             });
 
-            expect(emitStatusDemand).toHaveBeenCalledTimes(2);
-            const visibleDemand = emitStatusDemand.mock.calls[1]?.[1] as {
+            const nonemptyDemands = emitStatusDemand.mock.calls
+                .map(([, payload]) => payload)
+                .filter(payload => payload.entries.length > 0);
+            expect(nonemptyDemands).toHaveLength(1);
+            const visibleDemand = nonemptyDemands[0] as {
                 entries: Array<{ demand: string }>;
             };
             expect(visibleDemand.entries).toHaveLength(13);
@@ -1712,6 +1723,49 @@ describe('SessionsList (native virtualization)', () => {
             syncPerformanceTelemetry.configure({ enabled: false });
             syncPerformanceTelemetry.reset();
         }
+    });
+
+    it('demands hydration only for actual visible rows and retires demand on blur and unmount', async () => {
+        const { getVisibleSessionListSurfaces, getVisibleSessionSurfaces } = await import('@/sync/domains/session/sessionSurfaceVisibility');
+        const screen = await renderSessionsList();
+        expect(hydrateSessionListRowsMock).not.toHaveBeenCalled();
+        expect(getVisibleSessionListSurfaces()).toEqual([]);
+        const listProps = expectPresent(virtualizedListState.current?.props, 'expected list props');
+        const node = expectPresent(listProps.data.find((item: { id: string }) => item.id === buildSessionListIndexNodeId({
+            type: 'session', serverId: 'srv_server_a', sessionId: 'sess_a',
+        })), 'expected Session node');
+        const secondNode = expectPresent(listProps.data.find((item: { id: string }) => item.id === buildSessionListIndexNodeId({
+            type: 'session', serverId: 'srv_server_a', sessionId: 'sess_b',
+        })), 'expected second Session node');
+        const publish = async (nodes = [node]) => {
+            await act(async () => listProps.onViewableItemsChanged({
+                changed: [], viewableItems: nodes.map((item, index) => ({ item, key: item.id, index, isViewable: true })),
+            }));
+        };
+        await publish();
+        const addresses = [{ serverId: 'srv_server_a', sessionId: 'sess_a' }];
+        expect(getVisibleSessionListSurfaces()).toEqual(addresses);
+        expect(getVisibleSessionSurfaces()).toEqual([]);
+        expect(hydrateSessionListRowsMock.mock.calls).toEqual([[addresses]]);
+        await publish();
+        expect(hydrateSessionListRowsMock.mock.calls).toEqual([[addresses]]);
+        const secondAddress = { serverId: 'srv_server_a', sessionId: 'sess_b' };
+        await publish([node, secondNode]);
+        expect(getVisibleSessionListSurfaces()).toEqual([...addresses, secondAddress]);
+        expect(hydrateSessionListRowsMock.mock.calls).toEqual([[addresses], [[secondAddress]]]);
+        await publish([secondNode]);
+        expect(getVisibleSessionListSurfaces()).toEqual([secondAddress]);
+        expect(hydrateSessionListRowsMock.mock.calls).toEqual([[addresses], [[secondAddress]]]);
+        await screen.update(<SessionsList surfaceOwnership={{ visible: true, interactive: false, dataActive: false }} />);
+        expect(getVisibleSessionListSurfaces()).toEqual([]);
+        await publish();
+        expect(getVisibleSessionListSurfaces()).toEqual([]);
+        expect(hydrateSessionListRowsMock.mock.calls).toEqual([[addresses], [[secondAddress]]]);
+        await screen.update(<SessionsList surfaceOwnership={{ visible: true, interactive: true, dataActive: true }} />);
+        expect(getVisibleSessionListSurfaces()).toEqual([secondAddress]);
+        expect(hydrateSessionListRowsMock.mock.calls).toEqual([[addresses], [[secondAddress]], [[secondAddress]]]);
+        await screen.unmount();
+        expect(getVisibleSessionListSurfaces()).toEqual([]);
     });
 
     it('keeps native virtualized node data stable when an equivalent session-list refresh only replaces data objects', async () => {
@@ -1926,7 +1980,8 @@ describe('SessionsList (native virtualization)', () => {
     });
 
     it('shows an Open project action for project headers with a resolvable WorkspaceRef', async () => {
-        realStorage.getState().applySettingsLocal({ workspaceRefsV1: [
+        realStorage.setState({ profileScope: { serverId: 'srv_server_a', accountId: 'account-a' } });
+        applyProjectAccountRowsFixture(realStorage, { workspaceRefs: [
             {
                 id: 'wr_1',
                 serverId: 'srv_server_a',
@@ -1953,7 +2008,9 @@ describe('SessionsList (native virtualization)', () => {
         const items = findFirstDropdownMenuItems(screen);
         expect(items.some((item) => item?.id === 'openProject')).toBe(true);
         await act(async () => {
-            realStorage.getState().applySettingsLocal({ workspaceRefsV1: [] });
+            applyProjectAccountRowsFixture(realStorage, { workspaceRefs: [], revisionsByPhysicalKey: {
+                [buildProjectAccountRowPhysicalKeyV1({ kind: 'workspace-ref', serverId: 'srv_server_a', id: 'wr_1' })]: 1,
+            } });
         });
         expect(findFirstDropdownMenuItems(screen).some((item) => item?.id === 'openProject')).toBe(false);
     });
@@ -1989,8 +2046,10 @@ describe('SessionsList (native virtualization)', () => {
             serverId: homeA, serverUrl: 'https://server-a.example.test', input: { pinned: true }, token: home.findByServerUrl('https://server-a.example.test')?.token,
         })]);
         const { storage } = await import('@/sync/domains/state/storageStore');
-        expect(storage.getState().sessionOrganizationPinsBySessionKey[buildSessionOrganizationSessionKey('srv_server_a', 'sess_a')]).toEqual({
-            sessionId: 'sess_a', sortKey: null, pinnedAt: 1,
+        await waitForHomeGovernance(() => {
+            expect(storage.getState().sessionOrganizationPinsBySessionKey[buildSessionOrganizationSessionKey('srv_server_a', 'sess_a')]).toEqual({
+                sessionId: 'sess_a', sortKey: null, pinnedAt: 1, listPinned: true, railPinned: false,
+            });
         });
     });
 
@@ -2277,12 +2336,24 @@ describe('SessionsList (native virtualization)', () => {
         expect(refreshSessionsMock).not.toHaveBeenCalled();
     });
 
-    it('loads more sessions from native scroll proximity when the backend does not emit onEndReached', async () => {
+    it('loads another page only for advancing viewport demand, not mount or repeated end callbacks', async () => {
         await renderSessionsListWithSurfaceOwnership({
             visible: true,
             interactive: true,
             dataActive: true,
         });
+
+        await act(async () => {
+            virtualizedListState.current?.props?.onEndReached?.();
+            virtualizedListState.current?.props?.onScroll?.({
+                nativeEvent: {
+                    contentOffset: { y: 0 },
+                    contentSize: { height: 120 },
+                    layoutMeasurement: { height: 240 },
+                },
+            });
+        });
+        expect(fetchMoreSessionsMock).not.toHaveBeenCalled();
 
         await act(async () => {
             virtualizedListState.current?.props?.onScroll?.({
@@ -2294,7 +2365,22 @@ describe('SessionsList (native virtualization)', () => {
             });
         });
 
-        expect(markSessionListScrollActivityMock).toHaveBeenCalledTimes(1);
+        expect(fetchMoreSessionsMock).not.toHaveBeenCalled();
+        await act(async () => {
+            virtualizedListState.current?.props?.onScrollBeginDrag?.();
+            virtualizedListState.current?.props?.onScroll?.({
+                nativeEvent: {
+                    contentOffset: { y: 720 },
+                    contentSize: { height: 1000 },
+                    layoutMeasurement: { height: 240 },
+                },
+            });
+        });
+        expect(fetchMoreSessionsMock).toHaveBeenCalledTimes(1);
+        await act(async () => {
+            virtualizedListState.current?.props?.onEndReached?.();
+            virtualizedListState.current?.props?.onEndReached?.();
+        });
         expect(fetchMoreSessionsMock).toHaveBeenCalledTimes(1);
     });
 

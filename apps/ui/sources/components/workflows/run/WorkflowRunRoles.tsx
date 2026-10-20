@@ -33,6 +33,9 @@ export function WorkflowRunRoles(props: Readonly<{
     onChange: (overrides: readonly RoleOverrideV1[]) => void;
     pending: boolean;
     prefix: string;
+    serverId?: string | null;
+    machineId?: string | null;
+    directory?: string | null;
 }>) {
     const catalog = useRoleCatalog();
     const presentEngine = useRoleEnginePresentation();
@@ -60,6 +63,7 @@ export function WorkflowRunRoles(props: Readonly<{
                 {!pluginJsonValuesEqual(original.selection.engine ?? null, current.selection.engine ?? null)
                     ? <Text>{`${originalEngine.label ?? t('roles.rail.defaultEngine')} → ${engine.label ?? t('roles.rail.defaultEngine')}`}</Text> : null}
                 <RoleEngineField engine={current.selection.engine} label={engine.label} leading={engine.icon}
+                    serverId={props.serverId} machineId={props.machineId} directory={props.directory}
                     disabled={props.pending} onChange={(value) => change({ engine: value })} testID={`${props.prefix}-role-${roleId}-engine`} />
             </FieldItem>
             <SegmentedChoiceItem title={t('workflows.page.sections.eachStepRunsIn')}

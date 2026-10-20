@@ -1,6 +1,6 @@
 // Load the real Workflow schema owner before the contribution's cyclic SDK graph.
 import '@happier-dev/protocol/workflows/workflowV1';
-import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,16 +16,30 @@ import type {
 } from '@happier-dev/plugin-sdk/exec/protocol-clients';
 
 import { createCodexExternalSessionsContribution } from './contribution.js';
-import { ExternalSessionCandidateMatchV1Schema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
+import { AgentExternalSessionTranscriptRawRecordSchema } from '@happier-dev/plugin-sdk/sessions/external';
+import { ExternalSessionRefreshReadDiagnosticV1Schema } from '@happier-dev/protocol/sessions/external/secureRefreshV1';
+import { ExternalSessionCandidateV1Schema, ExternalSessionCandidateMatchV1Schema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
 import { parseCodexContentSearchProgress } from './transcriptSource.js';
+import { decodeCodexExternalSessionIndexCursor } from './candidates.js';
+import { parseCodexRolloutPreparationState } from '../../../rollout/discovery/preparation.js';
 
 const contentReadClock = vi.hoisted(() => ({ advance: null as (() => void) | null,
+  onDirectoryRead: null as (() => void) | null,
+  onMetadataRead: null as (() => void) | null,
   slowOffset: 64 * 1024,
   onRead: null as ((position: number, length: number) => Promise<void>) | null }));
 // Native filesystem and clock are the only substituted boundaries.
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
+  return { ...actual, stat: async (...args: Parameters<typeof actual.stat>) => {
+    const metadata = await actual.stat(...args);
+    contentReadClock.onMetadataRead?.();
+    return metadata;
+  }, readdir: async (...args: Parameters<typeof actual.readdir>) => {
+    const entries = await actual.readdir(...args);
+    contentReadClock.onDirectoryRead?.();
+    return entries;
+  }, open: async (...args: Parameters<typeof actual.open>) => {
     const handle = await actual.open(...args);
     return new Proxy(handle, { get(target, property) {
       if (property === 'read') return async (...readArgs: Parameters<typeof target.read>) => {
@@ -170,6 +184,15 @@ describe('Codex public Agent External Sessions contribution', () => {
       contentReadClock.slowOffset = fixtureBytes.indexOf(Buffer.from('"type":"world_state"')) + 64 * 1024;
       const laterPath = join(day, `rollout-2026-07-23T07-00-00-${laterId}.jsonl`);
       await writeFile(laterPath, jsonl({ type: 'session_meta', payload: { id: laterId, cwd: '/repo' } }) + message('assistant', 'body-only phrase next file', 0));
+      // These native carriers are characterized by pinnedRecorderGrammar.test.ts
+      // from Codex 0.145.0 / 0.157.1 recorder output. The second stream belongs
+      // to the same root family and contributes to its chronological ordinal.
+      const childId = '33333333-3333-3333-3333-333333333333';
+      await writeFile(join(day, `rollout-2026-07-23T08-00-01-${childId}.jsonl`),
+        jsonl({ type: 'session_meta', payload: { id: childId, session_id: id, cwd: '/repo',
+          source: { subagent: { thread_spawn: { parent_thread_id: id, depth: 1 } } },
+          thread_source: 'subagent', parent_thread_id: id } })
+        + message('assistant', 'child stream reply', 3));
       const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: codexHome } });
       const source = { kind: 'codexHome', home: 'user', homePath: codexHome };
       const ripgrep = { run: async () => ({ exitCode: 0, stdout: `${path}\0${laterPath}\0`, stderr: '' }) };
@@ -186,6 +209,7 @@ describe('Codex public Agent External Sessions contribution', () => {
         expect(result.ok).toBe(true);
         if (!result.ok) throw new Error(result.message);
         for (const candidate of result.value.candidates) {
+          ExternalSessionCandidateV1Schema.parse(candidate);
           if (candidate.match) ExternalSessionCandidateMatchV1Schema.parse(candidate.match);
           hits.push(candidate);
         }
@@ -193,7 +217,7 @@ describe('Codex public Agent External Sessions contribution', () => {
         expect(seen.has(result.value.nextCursor)).toBe(false);
         // The native cursor remains inside the real strict result byte budget
         // even with ten thousand projected rows before the slow suffix.
-        expect(Buffer.byteLength(result.value.nextCursor)).toBeLessThan(8 * 1024);
+        expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(invocation().maxSerializedBytes);
         seen.add(result.value.nextCursor);
         firstCursor ??= result.value.nextCursor;
         const envelope = JSON.parse(Buffer.from(result.value.nextCursor, 'base64url').toString()) as Record<string, unknown>;
@@ -203,7 +227,7 @@ describe('Codex public Agent External Sessions contribution', () => {
         cursor = result.value.nextCursor;
       }
       expect(cursor).toBeUndefined();
-      expect(hits).toMatchObject([{ remoteSessionId: id, match: { snippet: 'body-only phrase active', messageIndex: 10_005 } }, { remoteSessionId: laterId, match: { snippet: 'body-only phrase next file', messageIndex: 0 } }]);
+      expect(hits).toMatchObject([{ remoteSessionId: id, match: { snippet: 'body-only phrase active', messageIndex: 10_006 } }, { remoteSessionId: laterId, match: { snippet: 'body-only phrase next file', messageIndex: 0 } }]);
       expect(firstCursor).toBeDefined();
       if (!firstCursor) throw new Error('Expected native progress');
       contentReadClock.advance = null;
@@ -234,11 +258,15 @@ describe('Codex public Agent External Sessions contribution', () => {
         }
       };
       await expect(contribution.listCandidates({ ...invocation(), source, maxItems: 1, searchTarget: 'content', searchTerm: 'body-only phrase',
-        cursor: firstCursor, scanDeadlineAtMs: now + 10_000, ripgrep })).resolves.toMatchObject({ ok: false, code: 'source_invalid' });
+        cursor: firstCursor, scanDeadlineAtMs: now + 10_000, ripgrep })).resolves.toMatchObject({ ok: true, value: {
+          candidates: [{ remoteSessionId: id, match: { snippet: 'body-only phrase active', messageIndex: 10_006 } }], contentCoverage: 'partial',
+        } });
       expect(changedAtFinalRow).toBe(true);
       contentReadClock.onRead = null;
       await expect(contribution.listCandidates({ ...invocation(), source, maxItems: 1, searchTarget: 'content', searchTerm: 'body-only phrase',
-        cursor: firstCursor, scanDeadlineAtMs: now + 10_000, ripgrep })).resolves.toMatchObject({ ok: false, code: 'source_invalid' });
+        cursor: semanticCursor, scanDeadlineAtMs: now + 10_000, ripgrep })).resolves.toMatchObject({ ok: true, value: {
+          candidates: [{ remoteSessionId: id, match: { snippet: 'body-only phrase active', messageIndex: 10_006 } }], contentCoverage: 'partial',
+        } });
     } finally { contentReadClock.advance = null; contentReadClock.onRead = null; contentReadClock.slowOffset = 64 * 1024; Date.now = clock; await rm(root, { recursive: true, force: true }); }
   });
   it('yields content work at its cooperative scan deadline while retaining hard invocation enforcement', async () => {
@@ -275,6 +303,182 @@ describe('Codex public Agent External Sessions contribution', () => {
         ripgrep: { run: async () => ({ exitCode: 0, stdout: `${rolloutPath}\0`, stderr: '' }) } });
       expect(resumed).toMatchObject({ ok: true, value: { candidates: [{ remoteSessionId, match: { snippet: expect.stringContaining('body-only phrase') } }], contentCoverage: 'complete' } });
     } finally { Date.now = clock; await rm(root, { recursive: true, force: true }); }
+  });
+
+  it.each(['directory', 'metadata', 'linked root'] as const)('advances preparation under equally slow %s reads before transcript matching', async (slowBoundary) => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-content-preparation-'));
+    const clock = Date.now;
+    let now = clock();
+    try {
+      const codexHome = join(root, 'codex-home');
+      const sessionsDir = join(codexHome, 'sessions', '2026', '07', '23');
+      const remoteSessionId = '11111111-1111-1111-1111-111111111111';
+      const rolloutPath = join(sessionsDir, `rollout-2026-07-23T08-00-00-${remoteSessionId}.jsonl`);
+      if (slowBoundary === 'linked root') {
+        await mkdir(codexHome, { recursive: true });
+        const nativeSessions = join(root, 'native-sessions');
+        await mkdir(nativeSessions);
+        await symlink(nativeSessions, join(codexHome, 'sessions'), process.platform === 'win32' ? 'junction' : 'dir');
+      }
+      await mkdir(sessionsDir, { recursive: true });
+      await writeFile(rolloutPath, [
+        jsonl({ type: 'session_meta', timestamp: '2026-07-23T08:00:00.000Z', payload: { id: remoteSessionId, cwd: '/repo' } }),
+        jsonl({ type: 'response_item', timestamp: '2026-07-23T08:01:00.000Z', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'preparation body-only phrase' }] } }),
+      ].join(''));
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: codexHome } });
+      Date.now = () => now;
+      if (slowBoundary !== 'metadata') contentReadClock.onDirectoryRead = () => { now += 60; };
+      else contentReadClock.onMetadataRead = () => { now += 60; };
+      let cursor: string | undefined;
+      const hits: string[] = [];
+      for (let page = 0; page < 30; page += 1) {
+        const result = await contribution.listCandidates({ ...invocation(),
+          source: { kind: 'codexHome', home: 'user', homePath: codexHome },
+          maxItems: 1, searchTarget: 'content', searchTerm: 'preparation body-only phrase',
+          // Rewalking both native owners cannot fit this real outer deadline;
+          // a committed directory step fits each cooperative page.
+          deadlineAtMs: now + (slowBoundary === 'metadata' ? 30_000 : 300),
+          scanDeadlineAtMs: now + 100, ...(cursor ? { cursor } : {}),
+          ripgrep: { run: async () => ({ exitCode: 0, stdout: `${rolloutPath}\0`, stderr: '' }) },
+        });
+        if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+        for (const candidate of result.value.candidates) {
+          const parsed = ExternalSessionCandidateV1Schema.parse({ ...candidate, agentId: 'codex', source: { kind: 'codexHome', home: 'user', homePath: codexHome } });
+          if (parsed.match) hits.push(parsed.remoteSessionId);
+        }
+        if (!result.value.nextCursor) { cursor = undefined; break; }
+        expect(result.value.nextCursor).not.toBe(cursor);
+        cursor = result.value.nextCursor;
+      }
+      expect(cursor).toBeUndefined();
+      expect(hits).toEqual([remoteSessionId]);
+    } finally {
+      contentReadClock.onDirectoryRead = null;
+      contentReadClock.onMetadataRead = null;
+      Date.now = clock;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reauthorizes preparation references and rejects changed directory sources before reading transcripts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-preparation-source-'));
+    const clock = Date.now;
+    let now = clock();
+    try {
+      const codexHome = join(root, 'codex-home');
+      const sessionsDir = join(codexHome, 'sessions', '2026', '07', '23');
+      const remoteSessionId = '11111111-1111-1111-1111-111111111111';
+      await mkdir(sessionsDir, { recursive: true });
+      await writeFile(join(sessionsDir, `rollout-2026-07-23T08-00-00-${remoteSessionId}.jsonl`), jsonl({ type: 'session_meta', payload: { id: remoteSessionId } }));
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: codexHome } });
+      Date.now = () => now;
+      contentReadClock.onDirectoryRead = () => { now += 60; };
+      const request = { ...invocation(), source: { kind: 'codexHome' as const, home: 'user' as const, homePath: codexHome },
+        maxItems: 1, searchTarget: 'content' as const, searchTerm: 'body-only phrase' };
+      const first = await contribution.listCandidates({ ...request, scanDeadlineAtMs: now + 100 });
+      if (!first.ok || !first.value.nextCursor) throw new Error('Expected a preparation continuation');
+      const raw = decodeCodexExternalSessionIndexCursor(first.value.nextCursor);
+      const preparation = parseCodexRolloutPreparationState(raw?.preparation);
+      if (!raw || !preparation) throw new Error('Expected a strict native preparation cursor');
+      const preparedBytes = Buffer.byteLength(JSON.stringify(first.value), 'utf8');
+      await expect(contribution.listCandidates({ ...request, scanDeadlineAtMs: now + 100,
+        maxSerializedBytes: preparedBytes - 1 })).resolves.toMatchObject({ ok: false, code: 'agent_error' });
+      const unsafe = { ...raw, preparation: { ...preparation, directories: [{ ...preparation.directories[0], ref: { home: 0, path: '../outside' } }] } };
+      await expect(contribution.listCandidates({ ...request, scanDeadlineAtMs: now + 100,
+        cursor: Buffer.from(JSON.stringify(unsafe)).toString('base64url') })).resolves.toMatchObject({ ok: false, code: 'source_invalid' });
+      const aborted = new AbortController();
+      aborted.abort();
+      await expect(contribution.listCandidates({ ...request, signal: aborted.signal, scanDeadlineAtMs: now + 100,
+        cursor: first.value.nextCursor })).resolves.toMatchObject({ ok: false, code: 'cancelled' });
+      // A cached directory kind cannot authorize a replacement symlink.
+      await rm(join(codexHome, 'sessions', '2026'), { recursive: true });
+      const outside = join(root, 'outside');
+      await mkdir(outside);
+      await symlink(outside, join(codexHome, 'sessions', '2026'), process.platform === 'win32' ? 'junction' : 'dir');
+      const directories = await Promise.all(preparation.directories.map(async (entry) => {
+        const current = await stat(join(codexHome, entry.ref.path), { bigint: true });
+        return { ...entry, generation: `${current.dev}:${current.ino}:${current.birthtimeNs}` };
+      }));
+      const forged = { ...raw, preparation: { ...preparation, directories } };
+      await expect(contribution.listCandidates({ ...request, scanDeadlineAtMs: now + 100,
+        cursor: first.value.nextCursor })).resolves.toMatchObject({ ok: false, code: 'source_invalid' });
+      await expect(contribution.listCandidates({ ...request, scanDeadlineAtMs: now + 100,
+        cursor: Buffer.from(JSON.stringify(forged)).toString('base64url') })).resolves.toMatchObject({ ok: false, code: 'source_invalid' });
+    } finally {
+      contentReadClock.onDirectoryRead = null;
+      Date.now = clock;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['arrival', 'append', 'replace', 'remove'] as const)('resumes captured preparation across native file %s with physical identity checks', async (change) => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-preparation-file-'));
+    const clock = Date.now;
+    let now = clock();
+    try {
+      const codexHome = join(root, 'codex-home');
+      const sessionsDir = join(codexHome, 'sessions', '2026', '07', '23');
+      const remoteSessionId = '11111111-1111-1111-1111-111111111111';
+      const rolloutPath = join(sessionsDir, `rollout-2026-07-23T08-00-00-${remoteSessionId}.jsonl`);
+      const text = [
+        jsonl({ type: 'session_meta', payload: { id: remoteSessionId } }),
+        jsonl({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'body-only phrase' }] } }),
+      ].join('');
+      await mkdir(sessionsDir, { recursive: true });
+      await writeFile(rolloutPath, text);
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: codexHome } });
+      Date.now = () => now;
+      contentReadClock.onMetadataRead = () => { now += 60; };
+      const request = { ...invocation(), source: { kind: 'codexHome' as const, home: 'user' as const, homePath: codexHome },
+        maxItems: 1, searchTarget: 'content' as const, searchTerm: 'body-only phrase' };
+      let cursor: string | undefined;
+      let saved: ReturnType<typeof decodeCodexExternalSessionIndexCursor> = null;
+      let preparation: ReturnType<typeof parseCodexRolloutPreparationState> = null;
+      for (let page = 0; page < 20; page += 1) {
+        const result = await contribution.listCandidates({ ...request, scanDeadlineAtMs: now + 100, ...(cursor ? { cursor } : {}) });
+        if (!result.ok || !result.value.nextCursor) throw new Error('Expected a preparation continuation');
+        cursor = result.value.nextCursor;
+        saved = decodeCodexExternalSessionIndexCursor(cursor);
+        preparation = parseCodexRolloutPreparationState(saved?.preparation);
+        if (preparation?.files.length) break;
+      }
+      if (!saved || !preparation?.files.length) throw new Error('Expected a source-bound file preparation fact');
+      contentReadClock.onMetadataRead = null;
+      const beforeDirectory = await stat(sessionsDir, { bigint: true });
+      const beforeFile = await stat(rolloutPath, { bigint: true });
+      if (change === 'arrival') await writeFile(join(sessionsDir, 'rollout-new.jsonl'), jsonl({ type: 'session_meta', payload: { id: 'new-session' } }));
+      else if (change === 'append') await appendFile(rolloutPath, jsonl({ type: 'event_msg', payload: { type: 'agent_message', message: 'new native reply' } }));
+      else {
+        await rename(rolloutPath, join(root, 'previous-rollout.jsonl'));
+        if (change === 'replace') await writeFile(rolloutPath, text);
+      }
+      const afterDirectory = await stat(sessionsDir, { bigint: true });
+      expect([afterDirectory.dev, afterDirectory.ino, afterDirectory.birthtimeNs]).toEqual([beforeDirectory.dev, beforeDirectory.ino, beforeDirectory.birthtimeNs]);
+      if (change === 'arrival') {
+        // The directory's freshness changes, but neither captured physical operand does.
+        expect([afterDirectory.mtimeNs, afterDirectory.ctimeNs]).not.toEqual([beforeDirectory.mtimeNs, beforeDirectory.ctimeNs]);
+      }
+      if (change === 'arrival' || change === 'append') {
+        const afterFile = await stat(rolloutPath, { bigint: true });
+        expect([afterFile.dev, afterFile.ino, afterFile.birthtimeNs]).toEqual([beforeFile.dev, beforeFile.ino, beforeFile.birthtimeNs]);
+        await expect(contribution.listCandidates({ ...request, cursor,
+          ripgrep: { run: async () => ({ exitCode: 0, stdout: `${rolloutPath}\0`, stderr: '' }) },
+        })).resolves.toMatchObject({ ok: true, value: { candidates: [{ remoteSessionId, match: { snippet: expect.stringContaining('body-only phrase') } }] } });
+      } else {
+        // Keep directory observations current to reach the native file-stat catch.
+        const directories = await Promise.all(preparation.directories.map(async (entry) => {
+          const current = await stat(join(codexHome, entry.ref.path), { bigint: true });
+          return { ...entry, generation: `${current.dev}:${current.ino}:${current.birthtimeNs}` };
+        }));
+        await expect(contribution.listCandidates({ ...request,
+          cursor: Buffer.from(JSON.stringify({ ...saved, preparation: { ...preparation, directories } })).toString('base64url'),
+        })).resolves.toMatchObject({ ok: false, code: 'source_invalid' });
+      }
+    } finally {
+      contentReadClock.onMetadataRead = null;
+      Date.now = clock;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('uses the invocation ExecService to list native app-server threads', async () => {
@@ -341,7 +545,7 @@ describe('Codex public Agent External Sessions contribution', () => {
     }
   });
 
-  it('returns a typed failure instead of a cursor when a current rollout record is unsupported', async () => {
+  it('publishes readable fallback rows through the public contribution for unsupported native records', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-public-unsupported-record-'));
     try {
       const codexHome = join(root, 'codex-home');
@@ -364,17 +568,34 @@ describe('Codex public Agent External Sessions contribution', () => {
       });
       const source = { kind: 'codexHome', home: 'user', homePath: codexHome } as const;
 
-      await expect(contribution.pageTranscript({
+      const unsupportedPage = await contribution.pageTranscript({
         source,
         remoteSessionId,
         direction: 'older',
         maxItems: 20,
         ...invocation(),
-      })).resolves.toMatchObject({
-        ok: false,
-        code: 'agent_error',
-        retryable: false,
       });
+      expect(unsupportedPage.ok).toBe(true);
+      if (!unsupportedPage.ok) throw new Error('Expected a readable unsupported-record page');
+      expect(unsupportedPage.value.truncated).toBe(false);
+      expect(unsupportedPage.value.items).toHaveLength(1);
+      expect(AgentExternalSessionTranscriptRawRecordSchema.safeParse(unsupportedPage.value.items[0]?.raw).success).toBe(true);
+      expect(unsupportedPage.value.items[0]).toMatchObject({ messageRole: 'agent', raw: { content: { type: 'acp', agentId: 'codex' } } });
+
+      const manyUnsupported = Array.from({ length: 230 }, () => jsonl({ type: 'unsupported_record', payload: { ignored: true } })).join('');
+      await appendFile(rolloutPath, manyUnsupported);
+      const densePage = await contribution.pageTranscript({ source, remoteSessionId, direction: 'older', maxItems: 210,
+        ...invocation({ maxSerializedBytes: 1024 * 1024 }) });
+      if (!densePage.ok) throw new Error('Expected a readable dense unsupported-record page');
+      expect(densePage.value.items).toHaveLength(210);
+      const denseDiagnostic = densePage.value.diagnostics?.find((diagnostic) => diagnostic.code === 'external_sessions_transcript_unsupported_record');
+      expect(ExternalSessionRefreshReadDiagnosticV1Schema.safeParse(denseDiagnostic).success).toBe(true);
+      expect(denseDiagnostic).toMatchObject({ count: 210, positions: expect.any(Array) });
+      expect(denseDiagnostic?.positions).toHaveLength(200);
+      const smallPage = await contribution.pageTranscript({ source, remoteSessionId, direction: 'older', maxItems: 1,
+        ...invocation({ maxSerializedBytes: 1024 * 1024 }) });
+      if (!smallPage.ok) throw new Error('Expected one readable unsupported-record row');
+      expect(smallPage.value.diagnostics).toEqual([{ code: 'external_sessions_transcript_unsupported_record', severity: 'benign', count: 1, positions: [expect.any(Number)] }]);
 
       await writeFile(rolloutPath, [
         jsonl({
@@ -405,17 +626,27 @@ describe('Codex public Agent External Sessions contribution', () => {
         type: 'response_item',
         payload: { type: 'unrecognized_current_shape' },
       }));
-      await expect(contribution.readAfterTranscript({
+      const unsupportedAfter = await contribution.readAfterTranscript({
         source,
         remoteSessionId,
         cursor: initial.value.tailCursor,
         maxItems: 20,
         ...invocation(),
-      })).resolves.toMatchObject({
-        ok: false,
-        code: 'agent_error',
-        retryable: false,
       });
+      expect(unsupportedAfter.ok).toBe(true);
+      if (!unsupportedAfter.ok || unsupportedAfter.value.outcome !== 'advanced') throw new Error('Expected an advanced unsupported-record page');
+      expect(unsupportedAfter.value.items).toHaveLength(1);
+      expect(AgentExternalSessionTranscriptRawRecordSchema.safeParse(unsupportedAfter.value.items[0]?.raw).success).toBe(true);
+      expect(unsupportedAfter.value.diagnostics).toContainEqual(expect.objectContaining({ code: 'external_sessions_transcript_unsupported_record', severity: 'benign' }));
+      await appendFile(rolloutPath, manyUnsupported);
+      const denseAfter = await contribution.readAfterTranscript({ source, remoteSessionId, cursor: unsupportedAfter.value.nextCursor,
+        maxItems: 230, ...invocation({ maxSerializedBytes: 1024 * 1024 }) });
+      if (!denseAfter.ok || denseAfter.value.outcome !== 'advanced') throw new Error('Expected dense unsupported-record forward progress');
+      expect(denseAfter.value.items).toHaveLength(230);
+      const afterDiagnostic = denseAfter.value.diagnostics?.find((diagnostic) => diagnostic.code === 'external_sessions_transcript_unsupported_record');
+      expect(ExternalSessionRefreshReadDiagnosticV1Schema.safeParse(afterDiagnostic).success).toBe(true);
+      expect(afterDiagnostic).toMatchObject({ count: 230 });
+      expect(afterDiagnostic?.positions).toHaveLength(200);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -544,6 +775,10 @@ describe('Codex public Agent External Sessions contribution', () => {
       const activeServerDir = join(root, 'active-server');
       const contribution = createCodexExternalSessionsContribution({ env });
       const source = { kind: 'codexHome', home: 'user' } as const;
+      expect(await contribution.resolveSource({ source, ...invocation(), includeAccountingSource: false })).toEqual({
+        ok: true,
+        value: { source: { kind: 'codexHome', home: 'user', homePath: codexHome }, transcriptMediaReadRoots: [codexHome] },
+      });
       const resolvedSource = await contribution.resolveSource({ source, ...invocation() });
       expect(resolvedSource).toEqual({
         ok: true,
@@ -554,6 +789,8 @@ describe('Codex public Agent External Sessions contribution', () => {
             rootPath: codexHome,
             rootField: 'homePath',
             resourceKey: expect.stringMatching(/^codex:accounting:[A-Za-z0-9_-]{43}$/u),
+            accountingSources: ['codex-native-accounting'],
+            discoveredFileCount: 2,
             changeObservation: 'watch_file_changes',
             watchFileChanges: {
               files: [firstFile, join(sessionsDir, `rollout-2026-07-23T09-00-00-${secondSessionId}.jsonl`)],

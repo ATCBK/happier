@@ -10,8 +10,14 @@ import { createRegisteredSessionStateFieldMutation } from './sessionClientDurabl
 import {
     SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1,
     SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1,
+    SessionTranscriptObservationInputSchema,
 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { resolveSessionClientConnectionContract } from '../sessionClientConnectionContract';
+import { createRoleActionExecutor } from '@/session/actions/roleActions';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import { applyRegisteredSessionStateFieldMutationToMetadata } from './applyRegisteredSessionStateFieldMutation';
+import { readSessionRolesV1, writeSessionRoleConfigurationV1ToMetadata } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
+import { parseRuntimeSessionClientDurableMutation } from './sessionClientDurableMutationPersistence';
 
 function serverContract(mode: 'session_sync_v2_pending_input_v1' | 'released_server_v0_2_1') {
     return {
@@ -213,6 +219,72 @@ function createStorageExhaustedError(): NodeJS.ErrnoException {
 }
 
 describe('createRuntimeSessionClientDurableMutationOutbox', () => {
+    it.each(['Keep acknowledged Notes', ''])('retains acknowledged Notes %j beside a later Role override through deferred delivery and journal reopen', async notes => {
+        const sessionId = 'role-notes-neighbors';
+        let metadata = writeSessionRoleConfigurationV1ToMetadata(createTestMetadata(), { overrides: {}, sessionRoles: {}, notes: 'Original Notes' });
+        const params = { token: 'token', sessionId, initiallyActive: false, flushOnReady: false,
+            getSocket: () => null, requestReconnect: () => undefined,
+            deliverRegisteredSessionStateFieldMutation: async (mutation: RegisteredSessionStateFieldMutationV1) => {
+                metadata = applyRegisteredSessionStateFieldMutationToMetadata(metadata, mutation);
+                return { delivered: true, settlement: 'applied' as const };
+            },
+        };
+        const outbox = createRuntimeSessionClientDurableMutationOutbox(params);
+        await outbox.awaitReady();
+        const execute = createRoleActionExecutor({ sessionId, readSessionMetadata: () => metadata,
+            readSettingsOverrides: () => ({ status: 'ready', overrides: {} }),
+            stageSessionStateMutation: mutation => outbox.enqueueRegisteredSessionStateFieldMutation(mutation),
+        });
+        const context = { authority: 'present_user' as const, surface: 'rpc' as const };
+        await expect(execute({ actionId: 'session.notes.set', input: { sessionId, notes }, context }))
+            .resolves.toEqual({ updated: true });
+        await expect(execute({ actionId: 'session.roles.override.set', input: { sessionId, roleId: 'reviewer', secondOpinion: 'encouraged' }, context }))
+            .resolves.toEqual({ updated: true });
+        await outbox.close();
+        const saved = persistenceMocks.save.mock.calls.at(-1)?.[1] ?? [];
+        // Run the produced journal through its actual strict recovery consumer.
+        persistenceMocks.load.mockResolvedValue(saved.flatMap(row => parseRuntimeSessionClientDurableMutation(row, sessionId, true).mutations));
+        metadata = writeSessionRoleConfigurationV1ToMetadata(metadata, { overrides: { scout: { roleId: 'scout', workspaceWrites: 'deny' } },
+            sessionRoles: {}, notes: 'Original Notes' });
+        const reopened = createRuntimeSessionClientDurableMutationOutbox(params);
+        try {
+            await reopened.awaitReady();
+            await reopened.activateDelivery();
+            await reopened.flush('flush');
+            expect(readSessionRolesV1(metadata)).toMatchObject({ notes, overrides: {
+                reviewer: { secondOpinion: 'encouraged' }, scout: { workspaceWrites: 'deny' },
+            } });
+        } finally { await reopened.close(); }
+    });
+    it('keeps a later complete Role configuration after an intervening Notes edit', async () => {
+        const sessionId = 'role-configuration-order';
+        let metadata = createTestMetadata();
+        const outbox = createRuntimeSessionClientDurableMutationOutbox({ token: 'token', sessionId,
+            initiallyActive: false, flushOnReady: false, getSocket: () => null, requestReconnect: () => undefined,
+            deliverRegisteredSessionStateFieldMutation: async mutation => {
+                metadata = applyRegisteredSessionStateFieldMutationToMetadata(metadata, mutation);
+                return { delivered: true, settlement: 'applied' as const };
+            },
+        });
+        const configuration = (notes: string) => createRegisteredSessionStateFieldMutation({ sessionId,
+            fieldId: 'intent.sessionRoles', source: 'ui',
+            op: { kind: 'set', value: { overrides: {}, sessionRoles: {}, notes } },
+        });
+        try {
+            await outbox.awaitReady();
+            await outbox.enqueueRegisteredSessionStateFieldMutation(configuration('First complete configuration'));
+            const execute = createRoleActionExecutor({ sessionId, readSessionMetadata: () => metadata,
+                readSettingsOverrides: () => ({ status: 'ready', overrides: {} }),
+                stageSessionStateMutation: mutation => outbox.enqueueRegisteredSessionStateFieldMutation(mutation),
+            });
+            await execute({ actionId: 'session.notes.set', input: { sessionId, notes: 'Intervening edit' },
+                context: { authority: 'present_user', surface: 'rpc' } });
+            await outbox.enqueueRegisteredSessionStateFieldMutation(configuration('Final complete configuration'));
+            await outbox.activateDelivery();
+            await outbox.flush('flush');
+            expect(readSessionRolesV1(metadata)?.notes).toBe('Final complete configuration');
+        } finally { await outbox.close(); }
+    });
     it('retains distinct reviewed context intents rather than coalescing neighbor edits as one field snapshot', async () => {
         const outbox = createRuntimeSessionClientDurableMutationOutbox({ token: 'token', sessionId: 'context-neighbors',
             initiallyActive: false, flushOnReady: false, getSocket: () => null, requestReconnect: () => undefined });
@@ -244,14 +316,14 @@ describe('createRuntimeSessionClientDurableMutationOutbox', () => {
             source: 'ui', expectedMetadataRevision: 4, op: { kind: 'set', value: { kind: 'detach', entryId: 'session.instructions' } } });
         const waiter = outbox.enqueueRegisteredSessionStateFieldMutationAndWaitForDelivery(mutation).catch((error: unknown) => error);
         await drainAsyncWork();
-        await outbox.flush();
+        await outbox.flush('flush');
         expect(persistenceMocks.appendDeadLetters.mock.calls[0]?.[1]).toEqual(expect.arrayContaining([
             expect.objectContaining({ reason: 'metadata_tuple_conflict', queuedMutation: expect.objectContaining({
                 payload: expect.objectContaining({ expectedMetadataRevision: 4, op: mutation.op }),
             }) }),
         ]));
         await expect(waiter).resolves.toMatchObject({ code: 'metadata_tuple_conflict' });
-        await outbox.flush();
+        await outbox.flush('flush');
         expect(deliveries).toBe(1);
     });
     beforeEach(() => {
@@ -567,6 +639,42 @@ describe('createRuntimeSessionClientDurableMutationOutbox', () => {
         ))).toHaveLength(3);
         expect(persistenceMocks.save.mock.calls.at(-1)?.[1]).toEqual([]);
         await outbox.close();
+    });
+
+    it.each(['recover', 'abort', 'close'] as const)('exposes exact committed custody after prompt local admission (%s)', async completion => {
+        persistenceMocks.save.mockResolvedValue(undefined);
+        const socket = createConnectedSocket();
+        socket.connected = false;
+        const outbox = createRuntimeSessionClientDurableMutationOutbox({
+            token: 'token', sessionId: 'session-1', flushOnReady: false,
+            getSocket: () => socket, requestReconnect: () => undefined,
+        });
+        const controller = new AbortController();
+        try {
+            await outbox.setSessionSyncPendingInputServerContract(serverContract('session_sync_v2_pending_input_v1'));
+            const result = await outbox.enqueueTranscriptMessage(createTranscriptMutation({
+                localId: 'ready-original', sidechainId: null, text: 'proven terminal original',
+            }), { observeCommitSignal: controller.signal });
+            expect(result).toMatchObject({ persisted: true, delivered: false, localId: 'ready-original' });
+            expect(result.whenCommitted).toBeInstanceOf(Promise);
+            let settled = false;
+            void result.whenCommitted!.then(() => { settled = true; });
+            await drainAsyncWork();
+            expect(settled).toBe(false);
+            if (completion === 'recover') {
+                socket.connected = true;
+                await outbox.flush('connect');
+                await expect(result.whenCommitted).resolves.toEqual({ localId: 'ready-original', committedSequence: 1 });
+                expect(persistenceMocks.save.mock.calls.at(-1)?.[1]).toEqual([]);
+            } else {
+                if (completion === 'abort') controller.abort();
+                else await outbox.close();
+                await expect(result.whenCommitted).resolves.toBeNull();
+                expect(persistenceMocks.save.mock.calls.at(-1)?.[1]).toEqual([
+                    expect.objectContaining({ mutationId: 'transcript:session-1:ready-original' }),
+                ]);
+            }
+        } finally { controller.abort(); await outbox.close(); }
     });
 
     it('waits for exact transcript delivery through a failed flush before allowing ordered input acceptance', async () => {
@@ -986,16 +1094,22 @@ describe('createRuntimeSessionClientDurableMutationOutbox', () => {
         await outbox.close();
     });
 
-    it('does not report a definitively invalid transcript dead letter as delivered', async () => {
+    it('does not report a definitively invalid transcript dead letter as delivered or block later output', async () => {
         persistenceMocks.save.mockResolvedValue(undefined);
+        let rejectObservation = true;
         const socket = {
             connected: true,
             emit: vi.fn(),
-            emitWithAck: vi.fn(async (event: string) => (
-                event === SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1
-                    ? { ok: true, capability: 'session-transcript-observation-v1' }
-                    : { ok: false, error: 'invalid_observation' }
-            )),
+            emitWithAck: vi.fn(async (event: string, payload: unknown) => {
+                if (event === SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1) {
+                    return { ok: true, capability: 'session-transcript-observation-v1' };
+                }
+                const observation = SessionTranscriptObservationInputSchema.parse(payload);
+                return rejectObservation ? { ok: false, error: 'invalid_observation' } : {
+                    ok: true, status: 'observed', id: 'later-message', seq: 2,
+                    localId: observation.localId, didWrite: true, ingestedAt: Date.now(),
+                };
+            }),
         };
         const { createRuntimeSessionClientDurableMutationOutbox } = await import(
             './createRuntimeSessionClientDurableMutationOutbox'
@@ -1033,6 +1147,11 @@ describe('createRuntimeSessionClientDurableMutationOutbox', () => {
             })],
             expect.objectContaining({ custody: 'runtime', sessionId: 'session-1' }),
         );
+        rejectObservation = false;
+        await expect(outbox.enqueueTranscriptMessage(createTranscriptMutation({
+            localId: 'later-valid-transcript', sidechainId: null, text: 'later valid output',
+        }))).resolves.toMatchObject({ persisted: true, delivered: true, localId: 'later-valid-transcript' });
+        expect(persistenceMocks.save.mock.calls.at(-1)?.[1]).toEqual([]);
         await outbox.close();
     });
 
@@ -1394,7 +1513,7 @@ describe('createRuntimeSessionClientDurableMutationOutbox', () => {
         await oldHandle.close();
     });
 
-    it('serializes a same-session reopen behind final-handle close', async () => {
+    it('serializes a same-session reopen behind final-handle close and exposes its committed Activity tail', async () => {
         const initialLoad = createDeferred();
         persistenceMocks.load.mockImplementationOnce(async () => {
             await initialLoad.promise;
@@ -1417,14 +1536,36 @@ describe('createRuntimeSessionClientDurableMutationOutbox', () => {
             sessionId: 'session-1',
             getSocket: createConnectedSocket,
             requestReconnect: () => undefined,
+            deliverRegisteredSessionStateFieldMutation: async (mutation) => (
+                createExactActivitySettlement(mutation, 'applied', 7)
+            ),
         });
 
-        expect(persistenceMocks.load).toHaveBeenCalledTimes(1);
-        initialLoad.resolve();
-        await closePromise;
-        await reopenedHandle.flush('flush');
-        expect(persistenceMocks.load).toHaveBeenCalledTimes(2);
-        await reopenedHandle.close();
+        try {
+            expect(persistenceMocks.load).toHaveBeenCalledTimes(1);
+            expect(reopenedHandle.readRuntimeActivitySnapshotTail()).toEqual({ sequence: 0, custody: null, settlement: null });
+            initialLoad.resolve();
+            await closePromise;
+            await reopenedHandle.flush('flush');
+            expect(persistenceMocks.load).toHaveBeenCalledTimes(2);
+            await reopenedHandle.setSessionSyncPendingInputServerContract(serverContract('session_sync_v2_pending_input_v1'));
+            await expect(reopenedHandle.enqueueRegisteredSessionStateFieldMutationAndWaitForDelivery(
+                createActivityMutation({ observedAt: 100, state: 'idle' }),
+            )).resolves.toMatchObject({ status: 'applied', committedRevision: 7 });
+            expect(reopenedHandle.readRuntimeActivitySnapshotTail()).toMatchObject({
+                custody: null,
+                settlement: {
+                    desiredValue: { state: 'idle', activeCount: 0 },
+                    result: 'applied',
+                    committedProjection: { state: 'idle', activeCount: 0, observedAt: 100, revision: 7 },
+                    committedRevision: 7,
+                },
+            });
+        } finally {
+            initialLoad.resolve();
+            await closePromise;
+            await reopenedHandle.close();
+        }
     });
 
     it('keeps a reopened enqueue behind blocked final-close persistence', async () => {

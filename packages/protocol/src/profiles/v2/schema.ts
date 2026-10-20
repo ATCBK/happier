@@ -26,7 +26,7 @@ export const LEGACY_AI_LAUNCH_RESERVED_ENV_NAMES_V1 = Object.freeze(new Set([
   'GEMINI_API_KEY', 'GEMINI_MODEL', 'GOOGLE_GENAI_USE_VERTEXAI',
 ]));
 
-const LaunchProfileModelSelectionV1Schema = lazyZodSchema(() => z.pipe(z.transform((value) => {
+const LaunchProfileModelSelectionV1Schema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const record = value as Record<string, unknown>;
   const ref = record.ref;

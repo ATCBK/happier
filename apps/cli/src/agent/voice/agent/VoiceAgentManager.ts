@@ -112,6 +112,7 @@ export class VoiceAgentManager {
   private readonly voiceAgents = new Map<string, VoiceAgentInstance>();
   private readonly startingVoiceAgents = new Map<string, {
     cancelled: boolean;
+    abortController: AbortController;
     runtime: ExecutionRunHostRuntime | null;
     provisionalCleanup: (() => Promise<void>) | null;
     settled: Promise<void>;
@@ -305,7 +306,9 @@ export class VoiceAgentManager {
     let preparation: VoicePromptPreparation;
     try {
       preparation = await this.resolvePromptPreparation({ ...voiceAgent.systemAppendBlocksContext,
-        signal: backend.getRuntimeLifetimeSignal() });
+        signal: stream
+          ? AbortSignal.any([backend.getRuntimeLifetimeSignal(), stream.preparationAbortController.signal])
+          : backend.getRuntimeLifetimeSignal() });
     } catch (error) {
       ensureCurrent();
       throw error;
@@ -333,6 +336,7 @@ export class VoiceAgentManager {
     prompt: string,
     durableUserTranscriptLocalId?: string,
     executionRunId?: string,
+    signal: AbortSignal = backend.getRuntimeLifetimeSignal(),
   ): Promise<SessionFollowPreparedContext | null> {
     // Follow settlement is defined only at the canonical provider-input outcome
     // boundary. A retained runtime without that boundary must not receive Follow
@@ -341,7 +345,7 @@ export class VoiceAgentManager {
     const followContext = await this.prepareFollowContext?.({
       executionRunId,
       requiredPrompt: prompt,
-      signal: backend.getRuntimeLifetimeSignal(),
+      signal,
     }) ?? null;
     if (!followContext) return null;
     return {
@@ -673,7 +677,7 @@ export class VoiceAgentManager {
 
   async start(
     params: VoiceAgentStartParams,
-    options?: Readonly<{ createRuntime?: BackendFactory }>,
+    options?: Readonly<{ createRuntime?: BackendFactory; signal?: AbortSignal }>,
   ): Promise<VoiceAgentStartResult> {
     if (this.disposed) {
       throw new VoiceAgentError('VOICE_AGENT_START_FAILED', 'Manager is disposed');
@@ -714,6 +718,7 @@ export class VoiceAgentManager {
     });
     const startOccurrence = {
       cancelled: false,
+      abortController: new AbortController(),
       runtime: null as ExecutionRunHostRuntime | null,
       provisionalCleanup: null as (() => Promise<void>) | null,
       settled: startSettled,
@@ -721,9 +726,18 @@ export class VoiceAgentManager {
     };
     this.startingVoiceAgents.set(voiceAgentId, startOccurrence);
     this.notifyActivityChanged(voiceAgentId);
+    const startSignal = options?.signal
+      ? AbortSignal.any([startOccurrence.abortController.signal, options.signal])
+      : startOccurrence.abortController.signal;
+    const cancelStart = (): void => {
+      startOccurrence.cancelled = true;
+      void startOccurrence.provisionalCleanup?.().catch(() => {});
+    };
+    startSignal.addEventListener('abort', cancelStart, { once: true });
     const ensureCurrentStart = (): void => {
       if (
         this.disposed
+        || startSignal.aborted
         || startOccurrence.cancelled
         || this.startingVoiceAgents.get(voiceAgentId) !== startOccurrence
       ) {
@@ -736,11 +750,12 @@ export class VoiceAgentManager {
     let chatBackendForCleanup: ExecutionRunHostRuntime | undefined;
     let instanceForCleanup: VoiceAgentInstance | null = null;
     try {
+      ensureCurrentStart();
       const systemAppendBlocksContext = {
         profileId: params.profileId ?? null,
         sessionId: params.contextSessionId ?? null,
       };
-      const preparation = await this.resolvePromptPreparation(systemAppendBlocksContext);
+      const preparation = await this.resolvePromptPreparation({ ...systemAppendBlocksContext, signal: startSignal });
       ensureCurrentStart();
       const systemAppendBlocks = preparation.systemAppendBlocks;
       const memoryRecallGuidanceEnabled = preparation.memoryRecallGuidanceEnabled;
@@ -776,6 +791,7 @@ export class VoiceAgentManager {
       startOccurrence.provisionalCleanup = () => instanceForCleanup
         ? instanceForCleanup.dispose()
         : this.disposeRuntimeOnce(chatBackend);
+      ensureCurrentStart();
 
       const clearChatBuffer = () => {
         if (instanceForCleanup) instanceForCleanup.chatBuffer = '';
@@ -925,6 +941,7 @@ export class VoiceAgentManager {
       }
       throw new VoiceAgentError('VOICE_AGENT_START_FAILED', e instanceof Error ? e.message : 'start failed');
     } finally {
+      startSignal.removeEventListener('abort', cancelStart);
       if (this.startingVoiceAgents.get(voiceAgentId) === startOccurrence) {
         this.startingVoiceAgents.delete(voiceAgentId);
         this.notifyActivityChanged(voiceAgentId);
@@ -941,6 +958,7 @@ export class VoiceAgentManager {
     const startingIds = [...this.startingVoiceAgents.keys()];
     for (const occurrence of this.startingVoiceAgents.values()) {
       occurrence.cancelled = true;
+      occurrence.abortController.abort();
       void occurrence.provisionalCleanup?.().catch(() => {});
     }
     this.startingVoiceAgents.clear();
@@ -1085,6 +1103,7 @@ export class VoiceAgentManager {
       run: Promise.resolve(),
       completedHistory: false,
       cancelled: false,
+      preparationAbortController: new AbortController(),
       deltaHold: '',
       outputSpeechBuffer: '',
       outputSpeechText: '',
@@ -1140,6 +1159,7 @@ export class VoiceAgentManager {
           prompt,
           params.durableUserTranscriptLocalId,
           params.voiceAgentId,
+          AbortSignal.any([voiceAgent.chatBackend.getRuntimeLifetimeSignal(), stream.preparationAbortController.signal]),
         );
         // Follow hydration is an awaited network read, so a barge-in or explicit
         // cancel can land while it is pending. Delivery is the provider effect
@@ -1410,6 +1430,7 @@ export class VoiceAgentManager {
       const starting = this.startingVoiceAgents.get(params.voiceAgentId);
       if (!starting) throw new VoiceAgentError('VOICE_AGENT_NOT_FOUND', 'Voice agent not found');
       starting.cancelled = true;
+      starting.abortController.abort();
       this.beginRetirement(params.voiceAgentId, async () => {
         await starting.settled;
       });
@@ -1492,6 +1513,9 @@ export class VoiceAgentManager {
     }
 
     stream.cancelled = true;
+    // Prompt and Follow reads belong to this turn, not the retained native
+    // Session. Cancel must release them before joining the turn's settlement.
+    stream.preparationAbortController.abort();
     stream.deltaHold = '';
     stream.outputSpeechBuffer = '';
     stream.suppressActionDeltas = true;

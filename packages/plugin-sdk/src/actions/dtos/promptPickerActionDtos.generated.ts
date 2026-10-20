@@ -9,6 +9,9 @@ export type PromptPickerActionInputById = {
             kind: 'session';
             sessionId: string;
         } | {
+            kind: 'discussion';
+            discussionId: string;
+        } | {
             kind: 'newSession';
             instanceId: string;
         } | {
@@ -37,6 +40,9 @@ export type PromptPickerActionResultById = {
         composerRef: {
             kind: 'session';
             sessionId: string;
+        } | {
+            kind: 'discussion';
+            discussionId: string;
         } | {
             kind: 'newSession';
             instanceId: string;

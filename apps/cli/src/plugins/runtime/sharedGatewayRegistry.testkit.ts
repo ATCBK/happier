@@ -3,11 +3,14 @@ import { join } from 'node:path';
 
 import { vi } from 'vitest';
 import type { ProviderContributionV1 } from '@happier-dev/protocol';
+import type { ProviderCatalogProbeModelV1 } from '@happier-dev/protocol/providers/catalog/merge';
 
 import { createConnectedAccountPurposeBindingOwner, type ConnectedAccountPurposeBindingOwnerDependencies } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 import { createManagedProviderOperationAuthority } from '@/daemon/connectedServices/purposeBindings/managedProviderOperationAuthority';
 import { createConnectedAccountRequestAuthSubjectRegistry } from '@/daemon/connectedServices/requestAuth/ConnectedAccountRequestAuthSubjectRegistry';
 import * as persistence from '@/persistence';
+import { configuration } from '@/configuration';
+import { readInstallationIdentityIfExistsSync } from '@/daemon/identity/store';
 import { loadInstalledPlugins } from '@/plugins/discovery/load/installed';
 import { createMergedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { projectLoadedPluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
@@ -22,6 +25,7 @@ import { resolveExecutablePluginRuntimeRegistry } from './resolveExecutablePlugi
 /** Real installed Provider, purpose authority, registry and OS gateway fixture. */
 export function createSharedGatewayRegistryTestkit(input: Readonly<{
     directory: string;
+    happyHomeDir?: string;
     controller?: PluginReloadController;
     pluginId?: string;
     peerId?: string;
@@ -29,9 +33,11 @@ export function createSharedGatewayRegistryTestkit(input: Readonly<{
     credential?: ProviderContributionV1['credential'];
     compatibilityOverrides?: ProviderContributionV1['compatibilityOverrides'];
     catalog?: ProviderContributionV1['catalog'];
+    catalogModels?: readonly ProviderCatalogProbeModelV1[];
+    holdResponseForInput?: string;
 }>) {
     const { directory } = input;
-    const happyHomeDir = join(directory, 'home');
+    const happyHomeDir = input.happyHomeDir ?? join(directory, 'home');
     const pluginId = input.pluginId ?? 'acme.shared-registry';
     const peerId = input.peerId ?? 'acme.unrelated-registry';
     const controller = input.controller ?? createPluginReloadController();
@@ -45,7 +51,8 @@ export function createSharedGatewayRegistryTestkit(input: Readonly<{
     // Only persistent account selection is a boundary. Purpose admission,
     // subject custody, capability files and plugin loading execute for real.
     const purposeBindingOwner = createConnectedAccountPurposeBindingOwner({
-        store: { read: async () => ({ v: 1, bindings: [] }), update: unexpected },
+        store: { read: async () => ({ v: 1, bindings: [] }), update: unexpected,
+            subscribe: () => ({ dispose() {} }) },
         selectTarget: unexpected, resolveTarget: input.resolveAccountTarget ?? unexpected, materializeAccount: unexpected,
         projectTargetAccounts: unexpected, assertTargetAccountMaterializable: unexpected,
     });
@@ -72,7 +79,7 @@ export function createSharedGatewayRegistryTestkit(input: Readonly<{
                         capabilities: { streaming: 'supported', toolRoundTrips: 'supported', statefulResponses: 'unknown', reasoningControls: 'supported' } }],
                     catalog: input.catalog ?? { source: 'static', manualModelPolicy: 'allowed', staticModels: [{ id: 'example', name: 'Example' }] },
                     managedRuntime: { kind: 'managed', sharing: 'connectionMachine', endpointTemplateIds: ['api'],
-                        connectedAccounts: [{ purpose: 'upstream', service: 'accounts', required: false, materializationKinds: ['httpHeaders'] }],
+                        connectedAccounts: [{ purpose: 'upstream', title: { key: 'upstream.title', fallback: 'Upstream account' }, service: 'accounts', required: false, materializationKinds: ['httpHeaders'] }],
                         requestAuthUses: [{ purpose: 'upstream', materialization: { kind: 'httpHeaders', origin: 'https://api.example.test', headerNames: ['authorization'] } }] } }],
             } : {},
         }));
@@ -83,7 +90,11 @@ export function createSharedGatewayRegistryTestkit(input: Readonly<{
             await copyFile(process.execPath, executablePath);
             await chmod(executablePath, 0o755);
         }
-        const script = `require("node:fs").writeFileSync(${JSON.stringify(join(directory, 'gateway-started'))},String(process.pid));require("node:http").createServer((req,res)=>res.end(req.url==="/pid"?String(process.pid):"ok")).listen(Number(process.env.PORT),"127.0.0.1")`;
+        const catalogModels = input.catalogModels ?? [{ id: 'example' }];
+        const script = `const fs=require("node:fs");fs.writeFileSync(${JSON.stringify(join(directory, 'gateway-started'))},String(process.pid));fs.appendFileSync(${JSON.stringify(join(directory, 'gateway-starts'))},String(process.pid)+"\\n");require("node:http").createServer((req,res)=>{if(req.method==="POST"&&req.url==="/v1/responses"){let body="";req.on("data",chunk=>{body+=chunk});req.on("end",()=>{let input;try{input=JSON.parse(body).input}catch{}fs.appendFileSync(${JSON.stringify(join(directory, 'gateway-inputs'))},input+"\\n");if(${input.holdResponseForInput === undefined ? 'true' : `input!==${JSON.stringify(input.holdResponseForInput)}`})res.end("ok")});return;}if(req.url==="/v1/models"){res.setHeader("content-type","application/json");res.end(JSON.stringify({object:"list",data:${JSON.stringify(catalogModels.map(model => ({ ...model, object: 'model',
+          ...(model.connectedAccountPurposes ? { happier_connected_account_purposes: model.connectedAccountPurposes,
+            connectedAccountPurposes: undefined } : {}),
+        })))} }));return;}res.end(req.url==="/pid"?String(process.pid):"ok")}).listen(Number(process.env.PORT),"127.0.0.1")`;
         await writeFile(join(root, 'daemon.mjs'), gateway ? `export function activate(api) {
             api.connectedAccounts.register('accounts', {
                 authentication: { modes: { manual: { kind: 'manual', async complete() {
@@ -125,6 +136,11 @@ export function createSharedGatewayRegistryTestkit(input: Readonly<{
         return await resolveExecutablePluginRuntimeRegistry({ happyHomeDir, contributes, generationAuthority,
             ...(serving ? { servingPluginOccurrences: serving.occurrencesByPluginId, retainedActivationRegistryLeases: serving.leases } : {}),
             managedProviderOperationAuthority: operationAuthority, resolveCurrentMachineId: () => 'machine',
+            readDaemonRequesterWorkAttribution: () => {
+                const installation = readInstallationIdentityIfExistsSync(join(happyHomeDir, 'installation-identity.json'));
+                return installation ? { serverId: configuration.activeServerId, accountId: 'account', machineId: 'machine',
+                    installationId: installation.installationId } : null;
+            },
             resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'home', machineId: 'machine' }),
         });
     };

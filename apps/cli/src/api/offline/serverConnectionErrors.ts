@@ -50,7 +50,7 @@
 
 import axios from 'axios';
 import chalk from 'chalk';
-import { writeConsoleLogBestEffort } from '@/utils/writeConsoleBestEffort';
+import { writeConsoleErrorBestEffort } from '@/utils/writeConsoleBestEffort';
 import { exponentialBackoffDelay } from '@/utils/time';
 import { logger } from '@/ui/logger';
 import { isAuthenticationError } from '@/api/client/httpStatusError';
@@ -114,6 +114,11 @@ export interface OfflineReconnectionHandle<TSession> {
     isReconnected: () => boolean;
 }
 
+/** Shared Home-unavailable pacing; ten failures saturates the delay, not the retries. */
+export function resolveOfflineReconnectionBackoffDelayMs(failureCount: number): number {
+    return exponentialBackoffDelay(failureCount, 5000, 60000, 10);
+}
+
 /**
  * Starts background reconnection with exponential backoff.
  * Backend-agnostic: works for Claude, Codex, or any future backend.
@@ -173,7 +178,7 @@ export function startOfflineReconnection<TSession>(
     const initialDelayMs = config.initialDelayMs ?? 5000;
     const getBackoffDelayMs =
         config.backoffDelayMs ??
-        ((failureCount: number) => exponentialBackoffDelay(failureCount, 5000, 60000, 10));
+        resolveOfflineReconnectionBackoffDelayMs;
 
     /**
      * Core reconnection attempt logic.
@@ -331,12 +336,13 @@ class OfflineState {
                 return `${f.operation} failed: ${desc}${url}`;
             })
             .join('; ');
-        writeConsoleLogBestEffort(`⚠️  Happier server unreachable, offline mode with auto-reconnect enabled - error details: ${summary}`);
+        // Warnings must not corrupt a finite command's machine-readable stdout.
+        writeConsoleErrorBestEffort(`⚠️  Happier server unreachable, offline mode with auto-reconnect enabled - error details: ${summary}`);
 
         // Print detail lines if present - consistent 3-space indent with arrow
         const allDetails = [...this.failures.values()]
             .flatMap(f => f.details || []);
-        allDetails.forEach(line => writeConsoleLogBestEffort(chalk.yellow(`   → ${line}`)));
+        allDetails.forEach(line => writeConsoleErrorBestEffort(chalk.yellow(`   → ${line}`)));
     }
 }
 

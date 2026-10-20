@@ -114,10 +114,10 @@ export function ShareSheet<TRow extends ShareGrantRowModel>(props: ShareSheetPro
             autoFocusInputOnWeb={presentation === 'compact'} autoFocusInputOnNative={false}
             surface={presentation === 'inline' ? 'none' : undefined}
             bodyFooter={presentation !== 'compact' && !directoryKind ? <ShareHelp adapter={adapter} testID={`${idPrefix}${adapter.namespace}-help`} /> : undefined}
-            fillAvailableSpace={presentation === 'full'} heightBehavior={presentation === 'compact' ? 'stabilizedContentHeight' : 'content'}
+            fillAvailableSpace={presentation === 'full'} heightBehavior={presentation === 'full' ? 'content' : 'stabilizedContentHeight'}
             pagination={source ? { hasMore: source.hasMore, loadingMore: source.loadingMore, requestKey: source.cursor,
                 error: source.error?.message, onEndReached: () => actions.loadMore(source.kind), onRetry: () => actions.retryDirectory(source.kind),
                 loadingLabel: t('common.loading'), moreLabel: t('shareSheet.browseAll'), retryLabel: t('common.retry'),
-                endReachedLabel: t('shareSheet.allLoaded') } : undefined} />
+                endReachedLabel: source.candidates.length === 0 ? '' : t('shareSheet.allLoaded') } : undefined} />
     </HappierShareSheet>;
 }

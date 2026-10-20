@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionPersonalAttentionReasonV1 } from '@happier-dev/protocol';
+import { PersonalFollowOnceOccurrenceV1Schema } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import type { Message } from '@happier-dev/session-core/messages';
 import { createReducer } from '@happier-dev/session-core/reducer';
 
@@ -9,7 +10,9 @@ import { buildActivityOverviewFromCandidates } from '@/activity/attention/buildA
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 import { storage } from '@/sync/domains/state/storageStore';
 
-import { buildInboxSessionPresentation } from './buildInboxSessionPresentation';
+import { buildInboxSessionPresentation, classifyInboxSessionCandidate } from './buildInboxSessionPresentation';
+import { buildInboxWorkGroups } from './buildInboxWorkGroups';
+import { buildInboxItems } from '@/components/inbox/inboxItems';
 
 function candidate(
     id: string,
@@ -38,6 +41,63 @@ function candidate(
 }
 
 describe('buildInboxSessionPresentation', () => {
+    it.each(['ready', 'cancelled', 'failed'] as const)('retains the accepted original %s completion while a newer turn is working, anchoring only known source context', (event) => {
+        for (const transcriptSeq of [18, 0, undefined]) {
+            const onceDelivery = PersonalFollowOnceOccurrenceV1Schema.parse({ event, turnId: 'original-turn',
+                agentStateVersion: 4, ...(transcriptSeq === undefined ? {} : { transcriptSeq }) });
+            const base = candidate('once-session', [event === 'failed' ? 'failed' : 'ready_after_read'], 'server-a', {
+                active: true, activeAt: 1_000, latestTurnId: 'newer-turn', latestTurnStatus: 'in_progress',
+            });
+            const session = { ...base.session, viewer: { ...base.session.viewer!,
+                follow: { ...base.session.viewer!.follow, onceDelivery },
+            } };
+            const current = buildSessionActivityAttention({ session, nowMs: 1_000 });
+            const sessionPresentation = buildInboxSessionPresentation({ overview: buildActivityOverviewFromCandidates([current]) });
+            const workGroups = buildInboxWorkGroups({ sessionEntries: sessionPresentation.sessionsNeedingAttention,
+                workflowRuns: [], automationRuns: [], automationServerId: null, openApprovals: [], stalledSessions: [], landings: [],
+                snoozed: [], resolveSession: () => session, resolveOriginRunId: () => null });
+            const input = { sessionPresentation, workGroups, workflowServerId: null, accountServerId: 'server-a', notices: [] };
+            const rows = buildInboxItems(input);
+            expect(rows).toHaveLength(1);
+            expect(rows[0]).toMatchObject({ type: 'update', source: { onceDelivery } });
+            expect(rows[0]?.pageRoute).toBe(`/session/once-session?serverId=server-a${transcriptSeq ? `&jumpSeq=${transcriptSeq}` : ''}`);
+            expect(buildInboxItems(input, rows)).toBe(rows);
+
+            const revisedDelivery = { ...onceDelivery, agentStateVersion: 5 };
+            const revise = (value: typeof current) => ({ ...value, session: { ...value.session,
+                viewer: { ...value.session.viewer!, follow: { ...value.session.viewer!.follow, onceDelivery: revisedDelivery } } } });
+            const revised = buildInboxItems({ ...input,
+                sessionPresentation: { ...sessionPresentation, readySessions: sessionPresentation.readySessions.map(revise) },
+                workGroups: workGroups.map(group => ({ ...group, items: group.items.map(item => item.kind === 'session'
+                    ? { ...item, entry: { ...item.entry, candidate: revise(item.entry.candidate) } } : item) })),
+            }, rows);
+            expect(revised[0]?.source).toMatchObject({ onceDelivery: revisedDelivery });
+        }
+    });
+
+    it('preserves a blocked question type from the actual pending request owner', () => {
+        const question = candidate('blocked-question', ['user_action_required'], 'server-a', {
+            active: true, activeAt: 1_000,
+            agentState: { requests: { blocked: { tool: 'AskUserQuestion', kind: 'user_action', arguments: {}, createdAt: 950,
+                questionV1: { mode: 'wait', type: 'blocked', lasting: false }, currentHandler: { kind: 'person' },
+            } } },
+        });
+        const sessionPresentation = buildInboxSessionPresentation({ overview: buildActivityOverviewFromCandidates([question]) });
+        const workGroups = buildInboxWorkGroups({ sessionEntries: sessionPresentation.sessionsNeedingAttention,
+            workflowRuns: [], automationRuns: [], automationServerId: null, openApprovals: [], stalledSessions: [], landings: [],
+            snoozed: [], resolveSession: () => question.session, resolveOriginRunId: () => null });
+        expect(buildInboxItems({ workGroups, sessionPresentation, workflowServerId: null, accountServerId: 'server-a', notices: [] })[0])
+            .toMatchObject({ type: 'blocked', view: 'needs_you' });
+    });
+
+    it('does not offer an inactive native dialog as an answerable Inbox request', () => {
+        const inactive = candidate('inactive', ['user_action_required'], 'server-a', { active: false,
+            agentState: { requests: { dialog: { tool: 'AskUserQuestion', kind: 'user_action',
+                source: 'claude_unified_terminal_dialog_choice', arguments: {}, createdAt: 950 } } } });
+        const result = buildInboxSessionPresentation({ overview: buildActivityOverviewFromCandidates([inactive]) });
+        expect(result.sessionsNeedingAttention[0]?.pendingUserActions).toEqual([]);
+        expect(result.pendingRequestHydrationTargets).toEqual([]);
+    });
     it('does not recover a missing exact-Home transcript from the ambient same-id session', () => {
         const previous = storage.getState();
         const foreignMessage: Message = { id: 'foreign', kind: 'tool-call', localId: null, createdAt: 950,
@@ -59,7 +119,7 @@ describe('buildInboxSessionPresentation', () => {
 
     it('requests exact-Home hydration for summary-only decisions, not quiet or unreadable rows', () => {
         const permission = candidate('permission', ['permission_required']);
-        const question = candidate('question', ['user_action_required'], 'server-b');
+        const question = candidate('question', ['user_action_required'], 'server-b', { active: true, activeAt: 1_000 });
         const locked = { ...candidate('locked', ['permission_required']), awareness: { ...permission.awareness, encryption: 'locked' as const } };
         const result = buildInboxSessionPresentation({ overview: buildActivityOverviewFromCandidates([
             permission, question, locked, candidate('quiet', []),
@@ -108,6 +168,13 @@ describe('buildInboxSessionPresentation', () => {
         const reminder = candidate('reminder', ['reminder_due']);
         const manual = candidate('manual', ['manual']);
 
+        // Summary admission and the eventual row consume this one classification.
+        // Manual attention remains an Updates row and is not cleared by session read.
+        expect(classifyInboxSessionCandidate(manual)).toEqual({ section: 'needs_attention', type: 'update' });
+        expect(classifyInboxSessionCandidate(permissionAndUnread)).toEqual({ section: 'needs_attention', type: 'approval' });
+        expect(classifyInboxSessionCandidate(mentioned)).toEqual({ section: 'needs_attention', type: 'mention' });
+        expect(classifyInboxSessionCandidate(readyAfterRead)).toEqual({ section: 'ready', type: 'update' });
+
         const presentation = buildInboxSessionPresentation({
             overview: buildActivityOverviewFromCandidates([
                 failed,
@@ -130,6 +197,16 @@ describe('buildInboxSessionPresentation', () => {
             'manual',
         ]));
         expect(presentation.sessionsNeedingAttention).toHaveLength(6);
+        const rows = buildInboxItems({ sessionPresentation: presentation,
+            workGroups: buildInboxWorkGroups({ sessionEntries: presentation.sessionsNeedingAttention,
+                workflowRuns: [], automationRuns: [], automationServerId: null, openApprovals: [], stalledSessions: [],
+                landings: [], snoozed: [], resolveSession: () => null, resolveOriginRunId: () => null }),
+            workflowServerId: null, accountServerId: 'server-a', notices: [],
+        });
+        expect(Object.fromEntries(rows.map(row => [row.source.id, [row.type, row.view]]))).toMatchObject({
+            failed: ['update', 'updates'], permission: ['approval', 'needs_you'], discussion: ['update', 'updates'],
+            mentioned: ['mention', 'mentions'], reminder: ['update', 'updates'], manual: ['update', 'updates'], ready: ['update', 'updates'],
+        });
         expect(presentation.readySessions.map((entry) => entry.sessionId)).toEqual(['ready']);
         // Discussion unread and mentions are Discussion-owned: a session-scoped
         // manual read does not clear them, so Inbox never offers them here.
@@ -166,8 +243,8 @@ describe('buildInboxSessionPresentation', () => {
         expect(presentation.markAllReadTargets).toHaveLength(0);
     });
 
-    it('defers read-only attention while the canonical runtime projection is working', () => {
-        const workingUnread = candidate('working-unread', ['unread'], 'server-a', {
+    it.each(['unread', 'ready_after_read'] as const)('defers ordinary %s attention while the canonical runtime projection is working', (reason) => {
+        const workingUnread = candidate('working-unread', [reason], 'server-a', {
             active: true,
             presence: 'online',
             latestTurnStatus: 'in_progress',

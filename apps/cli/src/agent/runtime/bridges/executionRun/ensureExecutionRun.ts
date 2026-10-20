@@ -37,9 +37,11 @@ export async function ensureExecutionRun(args: Readonly<{
   runId: string;
   params: Readonly<{
     resume?: boolean;
+    signal?: AbortSignal;
     /** Host-only: the caller will couple bounded recovery to an admitted input. */
     inputFollowsResume?: boolean;
     causalPermissionAuthority?: SessionInputCausalPermissionAuthorityV1;
+    actionRequestAttributionV1?: import('@happier-dev/protocol/actions/actionRequestAttributionV1').ActionRequestAttributionV1;
   }>;
   runs: Map<string, ExecutionRunState>;
   controllers: Map<string, ExecutionRunController>;
@@ -52,6 +54,7 @@ export async function ensureExecutionRun(args: Readonly<{
     permissionMode: string;
     workspaceWrites?: 'allow' | 'deny';
     causalPermissionAuthority?: SessionInputCausalPermissionAuthorityV1;
+    actionRequestAttributionV1?: import('@happier-dev/protocol/actions/actionRequestAttributionV1').ActionRequestAttributionV1;
     modelId?: string;
     modelSelection?: ProviderBoundModelRef;
     sessionConfigOptionOverrides?: AcpConfigOptionOverridesV1;
@@ -68,6 +71,8 @@ export async function ensureExecutionRun(args: Readonly<{
   voiceAgentManager: VoiceAgentManager;
   onPublicStateUpdated?: (runId: string) => void;
   profileCatalog?: ExecutionRunProfileContributionCatalog;
+  readNativeOfferedModel?: ExecutionRunController['readNativeOfferedModel'];
+  nativeModelRegistry?: ExecutionRunController['nativeModelRegistry'];
   attachRetainedRunSessionInput?: AttachRetainedRunSessionInput;
   registerRunOccurrence?: RegisterExecutionRunOccurrence;
 }>): Promise<ExecutionRunEnsureResult> {
@@ -141,6 +146,8 @@ export async function ensureExecutionRun(args: Readonly<{
     const voiceCtrl: ExecutionRunVoiceAgentController = {
       kind: 'voice_agent',
       ...(args.profileCatalog ? { profileCatalog: args.profileCatalog } : {}),
+      readNativeOfferedModel: args.readNativeOfferedModel,
+      nativeModelRegistry: args.nativeModelRegistry,
       controllerOccurrenceId,
       voiceAgentId: args.runId,
       cancelled: false,
@@ -216,6 +223,7 @@ export async function ensureExecutionRun(args: Readonly<{
         disabledActionIds: config.disabledActionIds,
         resumeHandle,
       }, {
+        ...(args.params.signal ? { signal: args.params.signal } : {}),
         createRuntime: ({
           backendTarget,
           backendId,
@@ -242,6 +250,7 @@ export async function ensureExecutionRun(args: Readonly<{
             ...(args.params.causalPermissionAuthority
               ? { causalPermissionAuthority: args.params.causalPermissionAuthority }
               : {}),
+            ...(args.params.actionRequestAttributionV1 ? { actionRequestAttributionV1: args.params.actionRequestAttributionV1 } : {}),
             start: {
               ...resumeBackendOptions.start,
               ...(start ?? {}),
@@ -307,6 +316,7 @@ export async function ensureExecutionRun(args: Readonly<{
         backendTarget,
         permissionMode,
         ...(causalPermissionAuthority ? { causalPermissionAuthority } : {}),
+        ...(args.params.actionRequestAttributionV1 ? { actionRequestAttributionV1: args.params.actionRequestAttributionV1 } : {}),
         accountSettings,
         onConnectedServicesSelection,
         onConnectedServicesRegistration,
@@ -318,9 +328,12 @@ export async function ensureExecutionRun(args: Readonly<{
     writeActivityMarker: args.writeActivityMarker,
     getNowMs: args.getNowMs,
     profileCatalog: args.profileCatalog,
+    readNativeOfferedModel: args.readNativeOfferedModel,
+    nativeModelRegistry: args.nativeModelRegistry,
     ...(args.params.causalPermissionAuthority
       ? { causalPermissionAuthority: args.params.causalPermissionAuthority }
       : {}),
+    ...(args.params.actionRequestAttributionV1 ? { actionRequestAttributionV1: args.params.actionRequestAttributionV1 } : {}),
     ...(args.onPublicStateUpdated ? { onPublicStateUpdated: args.onPublicStateUpdated } : {}),
     requireReplayCapture: run.runClass === 'long_lived',
     onModelOutput: () => {

@@ -185,7 +185,7 @@ export type SentryTagValuesRouteInputV1 = SentryIssueRouteInputV1 & Readonly<{
 /** The value distribution of one tag key on one issue. */
 export function buildSentryTagValuesUrl(input: SentryTagValuesRouteInputV1): string {
   const origin = assertRoutableSentryInstance(input.instance);
-  if (!SENTRY_TAG_KEY_PATTERN.test(input.tagKey)) {
+  if (!isSentryRoutableTagKey(input.tagKey)) {
     throw new Error('A Sentry tag-values route requires a single-segment provider tag key.');
   }
   const url = new URL(
@@ -200,5 +200,5 @@ export function buildSentryTagValuesUrl(input: SentryTagValuesRouteInputV1): str
 
 /** `true` when a tag key is addressable, for a projector that must drop the rest. */
 export function isSentryRoutableTagKey(tagKey: string): boolean {
-  return SENTRY_TAG_KEY_PATTERN.test(tagKey);
+  return tagKey !== '.' && tagKey !== '..' && SENTRY_TAG_KEY_PATTERN.test(tagKey);
 }

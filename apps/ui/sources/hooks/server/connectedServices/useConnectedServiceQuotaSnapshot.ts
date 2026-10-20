@@ -108,11 +108,8 @@ export function useConnectedServiceQuotaSnapshot(params: Readonly<{
             serviceId,
             profileId,
             resolveAccountMode,
-            assertOperationAllowed: (operation) =>
-                assertLegacyOperationAllowed(serviceId, operation),
         };
     }, [
-        assertLegacyOperationAllowed,
         activeServer.generation,
         activeServer.serverId,
         credentialHealthUsable,
@@ -144,6 +141,13 @@ export function useConnectedServiceQuotaSnapshot(params: Readonly<{
     const [consumeRecoveryCreditPendingTarget, setConsumeRecoveryCreditPendingTarget] = React.useState<Readonly<{
         providerCreditId: string | null;
     }> | null>(null);
+    const consumeLifetime = React.useMemo(() => ({ controller: new AbortController() }), [key, recoveryCreditMachineId]);
+    React.useEffect(() => {
+        if (consumeLifetime.controller.signal.aborted) consumeLifetime.controller = new AbortController();
+        const controller = consumeLifetime.controller;
+        setConsumeRecoveryCreditPendingTarget(null);
+        return () => controller.abort();
+    }, [consumeLifetime]);
     const snapshotSuccessKey = snapshot ? `${snapshot.serviceId}:${snapshot.profileId}:${snapshot.fetchedAt}` : null;
 
     React.useEffect(() => {
@@ -154,8 +158,10 @@ export function useConnectedServiceQuotaSnapshot(params: Readonly<{
     const refresh = React.useCallback(async () => {
         if (!key || !loadContext) return;
         setActionError(null);
-        await refreshQuotaSnapshot(key, loadContext);
-    }, [key, loadContext]);
+        await refreshQuotaSnapshot(key, { ...loadContext,
+            assertOperationAllowed: (operation, signal) => assertLegacyOperationAllowed(serviceId, operation, signal),
+        });
+    }, [assertLegacyOperationAllowed, key, loadContext, serviceId]);
 
     const consumeRecoveryCredit = React.useCallback(async (providerCreditId?: string | null) => {
         if (!recoveryCreditSummary) return;
@@ -164,6 +170,8 @@ export function useConnectedServiceQuotaSnapshot(params: Readonly<{
             return;
         }
         if (!key || !loadContext) return;
+        const signal = consumeLifetime.controller.signal;
+        if (signal.aborted) return;
         // Redeem the row's specific credit when provided, else the summary default.
         const targetCreditId = providerCreditId ?? null;
         setConsumeRecoveryCreditPendingTarget({ providerCreditId: targetCreditId ?? null });
@@ -171,9 +179,12 @@ export function useConnectedServiceQuotaSnapshot(params: Readonly<{
         try {
             const result = await consumeQuotaRecoveryCredit(key, {
                 ...loadContext,
+                assertOperationAllowed: (operation, admissionSignal) => assertLegacyOperationAllowed(serviceId, operation, admissionSignal),
                 machineId: recoveryCreditMachineId,
                 providerCreditId: targetCreditId,
+                signal,
             });
+            if (signal.aborted) return;
             if (!result.ok) {
                 setActionError(result.error);
             } else {
@@ -181,9 +192,9 @@ export function useConnectedServiceQuotaSnapshot(params: Readonly<{
                 if (noticeKey) await Modal.alert(t('common.info'), t(noticeKey));
             }
         } finally {
-            setConsumeRecoveryCreditPendingTarget(null);
+            if (!signal.aborted) setConsumeRecoveryCreditPendingTarget(null);
         }
-    }, [key, loadContext, recoveryCreditMachineId, recoveryCreditSummary]);
+    }, [assertLegacyOperationAllowed, consumeLifetime, key, loadContext, recoveryCreditMachineId, recoveryCreditSummary, serviceId]);
 
     return {
         snapshot,

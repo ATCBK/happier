@@ -23,6 +23,8 @@ export const ACCOUNT_DISPLAY_SETTING_ANALYTICS = defineAccountSettingAnalytics({
     sessionThinkingInlineChrome: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
     showLineNumbers: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
     showLineNumbersInToolViews: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
+    showChatCodeBlockWrapControls: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
+    wrapChatCodeBlocks: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
     wrapLinesInDiffs: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
     sessionReplayStrategy: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
     sessionReplayRecentMessagesCount: {
@@ -83,6 +85,6 @@ export const ACCOUNT_DISPLAY_SETTING_ANALYTICS = defineAccountSettingAnalytics({
     tabBarSize: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
     glassBlurEnabled: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
     glassBlurIntensity: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
-    glassTintIntensity: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
+    glassTintIntensity: { trackCurrentState: true, trackChanges: true, valueKind: 'count', privacy: 'safe', identityScope: 'person' },
     composerSurfaceStyle: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
 });

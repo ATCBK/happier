@@ -1,3 +1,4 @@
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
@@ -72,7 +73,7 @@ describe('confidential continuation Artifact custody', () => {
           metadata: JSON.stringify({ machineId: 'machine' }) };
         const reviewedRequest = { ...request, serverId, sessionId };
         let created: ApprovalRequest | null = null;
-        await createActionExecutor({ approvalsCreate: async ({ request }) => {
+        await createActionExecutor({ ...createUnavailableActionTransportDeps(), approvalsCreate: async ({ request }) => {
           created = request; return { artifactId: 'approval' };
         }, isActionApprovalRequired: () => false }).execute('computer.secret.fill', reviewedRequest, {
           surface: registrationKind === 'daemon startup owner' ? 'ui' : 'agent',
@@ -179,7 +180,7 @@ describe('confidential continuation Artifact custody', () => {
           const stored = await createCliApprovalsArtifactStore({ credentials, getAccountEncryptionMode: async () => 'plain' })
             .approvalsGet({ artifactId: 'approval', serverId });
           expect(JSON.stringify(stored)).not.toContain(value);
-          expect(stored?.actionArgs).toEqual(reviewedRequest);
+          expect(ApprovalRequestV2Schema.parse(stored).actionArgs).toEqual(reviewedRequest);
           expect(ApprovalRequestV2Schema.parse(stored).executionOriginV1).toEqual(approval.executionOriginV1);
         } finally { await machineRegistration?.dispose(); uninstall(); await startup?.dispose(); }
       });
@@ -195,7 +196,7 @@ describe('confidential continuation Artifact custody', () => {
     { name: 'uncertain issued delivery is not retried', localHome: 'home', hostIdentity: 'srv_verified_home', identitySource: 'bound', mode: 'plain', code: 'delivery_unknown' },
   ] as const)('consumes the credential-backed private RPC through the installed trusted producer: $name', async ({ localHome, hostIdentity, identitySource, mode, code }) => {
     let created: ApprovalRequest | null = null;
-    await createActionExecutor({ approvalsCreate: async ({ request }) => {
+    await createActionExecutor({ ...createUnavailableActionTransportDeps(), approvalsCreate: async ({ request }) => {
       created = request; return { artifactId: 'approval' };
     }, isActionApprovalRequired: () => false }).execute('computer.secret.fill', request, {
       surface: 'agent', authority: 'account_automation', serverId: 'home', serverIdentityId: 'srv_verified_home',
@@ -277,14 +278,14 @@ describe('confidential continuation Artifact custody', () => {
       expect(JSON.stringify(record)).not.toContain(value);
       const stored = await createCliApprovalsArtifactStore({ credentials, getAccountEncryptionMode: async () => 'plain' })
         .approvalsGet({ artifactId: 'approval', serverId: 'home' });
-      expect(stored?.actionArgs).toEqual(request);
+      expect(ApprovalRequestV2Schema.parse(stored).actionArgs).toEqual(request);
       expect(JSON.stringify(stored)).not.toContain(value);
       expect(ApprovalRequestV2Schema.parse(stored).executionOriginV1).toEqual(approval.executionOriginV1);
     } finally { uninstall(); }
   });
   it('rechecks the deciding shared human admission after preparation through the real relay handler', async () => {
     let created: ApprovalRequest | null = null;
-    const creator = createActionExecutor({ approvalsCreate: async ({ request }) => {
+    const creator = createActionExecutor({ ...createUnavailableActionTransportDeps(), approvalsCreate: async ({ request }) => {
       created = request; return { artifactId: 'approval' };
     }, isActionApprovalRequired: () => false });
     await creator.execute('computer.secret.fill', request, { surface: 'agent', authority: 'account_automation',
@@ -309,7 +310,7 @@ describe('confidential continuation Artifact custody', () => {
       getAccountEncryptionMode: async () => 'plain' });
     let decidingHumanCurrent = true;
     let effects = 0;
-    const executor = createActionExecutor({ ...store, isApprovalExecutionOriginCurrent: async () => true,
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...store, isApprovalExecutionOriginCurrent: async () => true,
       // This port is the physical OS delivery boundary. Its awaited preparation
       // retires Bob's Home grant; the original requester's origin remains current.
       confidentialSecretFill: async ({ isCurrent }) => {
@@ -339,7 +340,7 @@ describe('confidential continuation Artifact custody', () => {
   });
   it('uses the real approval transition and HTTP revision CAS to issue only one concurrent effect', async () => {
     let created: ApprovalRequest | null = null;
-    const creator = createActionExecutor({ approvalsCreate: async ({ request }) => {
+    const creator = createActionExecutor({ ...createUnavailableActionTransportDeps(), approvalsCreate: async ({ request }) => {
       created = request; return { artifactId: 'approval' };
     }, isActionApprovalRequired: () => false });
     await creator.execute('computer.secret.fill', request, { surface: 'agent', authority: 'account_automation',
@@ -363,7 +364,7 @@ describe('confidential continuation Artifact custody', () => {
     const store = createCliApprovalsArtifactStore({ credentials: { token: 'token', encryption: null },
       getAccountEncryptionMode: async () => 'plain' });
     let effects = 0;
-    const executor = createActionExecutor({ ...store, isApprovalExecutionOriginCurrent: async () => true,
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...store, isApprovalExecutionOriginCurrent: async () => true,
       confidentialSecretFill: async ({ isCurrent }) => {
         expect(await isCurrent()).toBe(true);
         effects += 1;
@@ -383,7 +384,7 @@ describe('confidential continuation Artifact custody', () => {
   });
   it.each(['alice', undefined])('keeps the deciding actor independent of the stored requester for saved material: %s', async runtimeAccountId => {
     let created: ApprovalRequest | null = null;
-    await createActionExecutor({ approvalsCreate: async ({ request }) => {
+    await createActionExecutor({ ...createUnavailableActionTransportDeps(), approvalsCreate: async ({ request }) => {
       created = request; return { artifactId: 'approval' };
     }, isActionApprovalRequired: () => false }).execute('computer.secret.fill', request, {
       surface: 'agent', authority: 'account_automation', serverId: 'home', runtimeAccountId: 'alice',
@@ -422,7 +423,7 @@ describe('confidential continuation Artifact custody', () => {
     });
     const store = createCliApprovalsArtifactStore({ credentials: { token: 'token', encryption: null },
       getAccountEncryptionMode: async () => 'plain' });
-    const executor = createActionExecutor({ ...store, isApprovalExecutionOriginCurrent: async () => true,
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...store, isApprovalExecutionOriginCurrent: async () => true,
       confidentialSecretFill: consumer });
     expect(await executor.continueConfidentialApprovalRequest({ v: 1, artifactId: 'approval', requestId: 'request',
       actionId: 'computer.secret.fill', request, choice: { kind: 'saved', ref: 'personal', fingerprint: 'personal:personal:1', revision: null },

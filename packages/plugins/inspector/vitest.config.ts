@@ -14,6 +14,10 @@ const packageRoot = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(packageRoot, '../../..');
 
 const workspacePackages: readonly WorkspacePackageSpec[] = [
+  { packageName: '@happier-dev/protocol', packageSourceRoot: resolve(repoRoot, 'packages/protocol/src') },
+  { packageName: '@happier-dev/agents', packageSourceRoot: resolve(repoRoot, 'packages/agents/src') },
+  { packageName: '@happier-dev/cli-common', packageSourceRoot: resolve(repoRoot, 'packages/cli-common/src') },
+  { packageName: '@happier-dev/triage-protocol', packageSourceRoot: resolve(repoRoot, 'packages/triage-protocol/src') },
   {
     packageName: '@happier-dev/plugin-sdk',
     packageSourceRoot: resolve(repoRoot, 'packages/plugin-sdk/src'),

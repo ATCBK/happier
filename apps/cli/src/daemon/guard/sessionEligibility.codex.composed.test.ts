@@ -1,12 +1,13 @@
-import { expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { openCodexNativeAppServerSession } from '../../../../../packages/plugins/codex/src/agent/runtime/appServer/native';
 import { withCodexNativeAttachFixture } from '../../../../../packages/plugins/codex/src/agent/runtime/appServer/runtime.nativeAttach.test-support';
 import { RuntimeDescriptorV1Schema } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
 import { createSessionOwnerMetadataV1, SessionOwnerMetadataV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
-import { createNativeAgentRuntimeSessionPlanFixture, createNativeSessionClientTestPort, createExternalContributionFixtures,
+import { createNativeAgentRuntimeSessionPlanFixture, createNativeSessionClientTestPort,
   createSessionHostServiceOwners } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit';
+import { resolveBackendEngineAdapterResolution } from '@/agent/runtime/registry/engineRegistry';
 import { withHostSessionRuntimeIdentityPublication } from '@/agent/runtime/identity/publication/withHostSession';
 import { subscribeSessionRuntimePublicationToMetadata } from '@/agent/runtime/identity/metadata/subscription';
 import { createCliRuntimeSessionStateBridge } from '@/agent/runtime/state/bridge';
@@ -20,24 +21,28 @@ import { buildInactiveSessionResumeSpawnOptions } from '../sessions/runtimeSnaps
 import { prepareExecuteSpawnSessionRequest } from '../startup/prepareExecuteSpawnSessionRequest';
 import { evaluateSessionEligibility } from './sessionEligibility';
 import type { TrackedSession } from '../types';
+import { sessionStop } from './actuators/sessionStop';
 
-it.skipIf(process.platform === 'win32')('persists the real fresh Codex native open descriptor through the host plan and admits the same inactive Session', async () => {
-  const fixture = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
-    runtimeOptions: { pluginIds: ['happier.agent.codex'] } });
-  try {
+let fixture: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+beforeAll(async () => { fixture = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+  runtimeOptions: { pluginIds: ['happier.agent.codex'] } }); });
+afterAll(async () => {
+  try { await fixture?.dispose(); }
+  finally { await pluginReloadController.shutdown(); }
+});
+
+it.skipIf(process.platform === 'win32')('persists fresh Codex native identity, admits automatic stop, and answers the next input after inactive admission', async () => {
     await withCodexNativeAttachFixture(async ({ exec, directory }) => {
       const sessionId = 'codex-resume-proof';
       const credentials = { token: 'codex-resume-proof', encryption: null };
-      const contribution = createExternalContributionFixtures('codex');
-      await fixture.registry.acquireAgentCatalogEntry?.('codex');
-      const agent = fixture.registry.contributes.agentDefinitionsById.get('codex');
+      const resolution = await resolveBackendEngineAdapterResolution('codex', { runtimeRegistry: fixture.registry });
       const lease = fixture.registry.agentRuntimesByAgentId.get('codex');
-      if (!agent || !lease) throw new Error('Admitted Codex declaration unavailable');
+      if (!resolution || !lease) throw new Error('Admitted Codex declaration unavailable');
       const session = createNativeSessionClientTestPort(sessionId);
       await session.updateMetadata(metadata => ({ ...metadata, path: directory, machineId: 'machine-1', flavor: 'codex' }));
       const nativePlan = await createNativeAgentRuntimeSessionPlanFixture({
         runtime: { sessions: { open: openCodexNativeAppServerSession } },
-        lease, backend: contribution.backend, agent,
+        lease, backend: resolution.backend, agent: resolution.agent,
         createSessionHostServiceOwners,
         // The process/native IPC boundary is the canonical Codex socket fixture.
         createInvocationServices: async () => ({ ...createUnavailablePluginServices(), exec }),
@@ -73,14 +78,34 @@ it.skipIf(process.platform === 'win32')('persists the real fresh Codex native op
         });
         const unsubscribe = subscribeSessionRuntimePublicationToMetadata({ session: session as never,
           sessionState: state.engine, runtime: created.operations, providerSessionMetadataKey: 'codexSessionId' });
-        await vi.waitFor(() => expect(session.getMetadataSnapshot().codexSessionId).toBe('fresh-thread'));
-        unsubscribe();
+        const stopMessages = created.operations.subscribeRuntimeEvents(unsubscribe.observeRuntimeEvent);
+        try {
+          await created.operations.sendTurnPrompt('Initial message', { localId: 'initial-input', turnId: 'initial-turn' });
+          await created.operations.waitForTurnCompletion();
+          await vi.waitFor(() => expect(session.getMetadataSnapshot().codexSessionId).toBe('fresh-thread'));
+        } finally { stopMessages(); unsubscribe(); }
         const persisted = session.getMetadataSnapshot();
         const rawSession = { ...createSessionNotificationContextFixture(sessionId), machineId: 'machine-1', path: directory,
           encryptionMode: 'plain' as const, metadata: JSON.stringify(persisted) };
         const options = buildInactiveSessionResumeSpawnOptions({ sessionId, rawSession, metadata: persisted });
-        expect(options).toMatchObject({ resume: 'fresh-thread', runtimeDescriptorV1: metadata.runtimeDescriptorV1 });
+        expect(options).toMatchObject({ existingSessionId: sessionId, runtimeDescriptorV1: metadata.runtimeDescriptorV1 });
         if (!options) throw new Error('Persisted native open is not resumable');
+        const tracked: TrackedSession = { pid: 42, happySessionId: sessionId, startedBy: 'daemon' };
+        const resume = { sessionId, rawSession, metadata: persisted };
+        const inventory = { coverage: 'complete' as const, items: (['session', 'input', 'agents', 'attention'] as const).map(category => ({
+          category, ownerRef: tracked, attribution: { kind: 'unknown' as const }, state: 'settled' as const, settledAt: 20,
+        })) };
+        const eligibility = await evaluateSessionEligibility({ tracked, inventory, draft: { status: 'absent' }, resume });
+        expect(eligibility).toMatchObject({ eligible: true, resumeOptions: options });
+        const root = { owner: { kind: 'session' as const, sessionId }, pid: tracked.pid,
+          start: { startTimeMs: 1 }, live: true, ownerCreatedAtMs: 0 };
+        expect(await sessionStop({ candidate: { kind: 'session', root, settledAt: 20,
+          target: { kind: 'session', root, tracked, eligibility, label: 'Codex' } },
+          signal: new AbortController().signal, readCurrentTracked: () => tracked,
+          readCurrentEligibility: async () => await evaluateSessionEligibility({ tracked, inventory, draft: { status: 'absent' }, resume }),
+          // Runner termination is an OS boundary; dispose the real native runtime.
+          stopSession: async () => { await created.operations.resetOrDisposeRuntime(); return true; },
+        })).toEqual({ status: 'stopped' });
         // Only Home HTTP is substituted. Identity, decryption, snapshot and native resume admission stay real.
         const http = vi.spyOn(axios, 'get').mockImplementation(async input => {
           const url = new URL(String(input));
@@ -94,10 +119,34 @@ it.skipIf(process.platform === 'win32')('persists the real fresh Codex native op
             request: { options, credentials }, validateEnvVarRecordStrict,
           }));
           expect(admitted).toMatchObject({ effectiveResume: 'fresh-thread', runtimeDescriptorV1: metadata.runtimeDescriptorV1 });
+          if ('type' in admitted) throw new Error('Inactive admission refused the automatically stopped Session');
+          const resumed = await openCodexNativeAppServerSession({
+            kind: 'resume', providerSessionId: admitted.effectiveResume, sessionId, cwd: directory,
+            runtimeDescriptorV1: admitted.runtimeDescriptorV1,
+            launchEnvironment: { values: { CODEX_HOME: directory }, unset: [] },
+            configuration: { mode: { value: null, updatedAtMs: 0 }, model: { value: 'fixture-model', updatedAtMs: 1 },
+              permissionIntent: { value: 'read-only', updatedAtMs: 1 }, options: {} }, mcpServers: {},
+          }, { signal: new AbortController().signal,
+            services: { ...createUnavailablePluginServices(), exec }, session: { id: sessionId, services: {} },
+            ui: { title: { set: async () => undefined } },
+          } as never);
+          try {
+            const events: unknown[] = [];
+            const subscription = resumed.watch(event => { events.push(event); });
+            await resumed.send({ inputIds: ['wake-input'], input: { text: 'Next message' },
+              delivery: { kind: 'newTurn', turnId: 'wake-turn' } });
+            await vi.waitFor(() => expect(events).toEqual(expect.arrayContaining([
+              expect.objectContaining({ kind: 'message-delta', channel: 'assistant', text: 'answered-next-message' }),
+            ])));
+            await subscription.dispose();
+          } finally { await resumed.dispose(); }
         } finally { http.mockRestore(); }
       } finally { await created.operations.resetOrDisposeRuntime(); }
-    });
-  } finally { await fixture.dispose(); }
+    }, { onTurnStart: ({ socket, params, turnId }) => {
+      socket.send(JSON.stringify({ method: 'item/agentMessage/delta', params: { threadId: params.threadId, turnId,
+        itemId: 'wake-answer', delta: 'answered-next-message' } }));
+      socket.send(JSON.stringify({ method: 'turn/completed', params: { threadId: params.threadId, turn: { id: turnId, status: 'completed' } } }));
+    } });
 });
 
 it('keeps a descriptor-less Codex Session that inactive admission cannot resume', async () => {

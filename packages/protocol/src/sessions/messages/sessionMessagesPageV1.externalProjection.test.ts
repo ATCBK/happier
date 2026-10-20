@@ -21,12 +21,15 @@ describe('external-shareable message page', () => {
         accountActor: { accountId: 'private-account' },
         inputAdmissionReceipt: { issuer: 'authenticatedMachine' },
         externalShareableActor: 'machine',
-      }],
+      }, { id: 'm2', seq: 2, createdAt: 1 }],
       hasMore: false, nextAfterSeq: null,
       externalShareableSnapshot: { turns: [] },
     });
     expect(page.messages[0]).toMatchObject({ id: 'm1', seq: 1, externalShareableActor: 'machine' });
     expect(page.messages[0]?.content).toBeUndefined();
+    expect(page.messages[1]).toMatchObject({ id: 'm2', seq: 2 });
+    expect(page.messages[1]?.content).toBeUndefined();
+    expect(page.messages[1]?.externalShareableActor).toBeUndefined();
     expect(page.messages[0]).not.toHaveProperty('accountActor');
     expect(page.messages[0]).not.toHaveProperty('inputAdmissionReceipt');
   });

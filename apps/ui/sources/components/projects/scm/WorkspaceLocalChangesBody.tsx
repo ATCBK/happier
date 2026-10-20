@@ -124,7 +124,7 @@ export const WorkspaceLocalChangesBody = React.memo(function WorkspaceLocalChang
                         commitStrategy: controls.scmCommitStrategy, stage: !selected(file), surface: 'files', onAfterToggle: controls.refresh,
                     }); } : undefined}
                     trailingElement={<ScmChangeOverflowMenu title={file.fileName} filePath={file.fullPath}
-                        onDiscard={writeEnabled && snapshot.capabilities.writeDiscard ? () => fireAndForget(applyWorkspaceFileDiscardAction({
+                        onDiscard={writeEnabled && snapshot.capabilities?.writeDiscard ? () => fireAndForget(applyWorkspaceFileDiscardAction({
                             scope: props.scope, machineId: props.scope.machineId, rootPath: props.scope.rootPath,
                             file, snapshot, scmWriteEnabled: writeEnabled, commitStrategy: controls.scmCommitStrategy,
                             surface: 'files', refreshAll: controls.refresh,
@@ -152,7 +152,7 @@ export const WorkspaceLocalChangesBody = React.memo(function WorkspaceLocalChang
                     ) : null}
                 />
             ) : null}
-            {changedFiles.length > 0 && writeEnabled && snapshot.capabilities.writeCommit ? (
+            {changedFiles.length > 0 && writeEnabled && snapshot.capabilities?.writeCommit ? (
                 <ScmCommitComposerCard
                     theme={theme}
                     commitActionLabel={t('common.commit')}

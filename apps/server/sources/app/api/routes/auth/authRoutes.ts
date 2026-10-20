@@ -9,7 +9,7 @@ import { registerAccountErasureRoute } from "./registerAccountErasureRoute";
 import { resolveTerminalAuthRequestPolicyFromEnv, terminalAuthRequestExpiresAt } from "./terminalAuthRequestPolicy";
 import { resolveEffectiveHomeAuthMethods } from "@/app/auth/methods/effectiveHomeAuthMethods";
 import { resolveAuthMethodRegistry } from "@/app/auth/methods/registry";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { registerHomeLoginRoute } from "@/app/accountDirectory/accountDirectoryRoutes";
 import type { HomeConnectionDescriptorResolver } from "@/app/accountDirectory/accountDirectoryService";
 import { registerHomeLoginApprovalRoutes } from "./homeApprovalGate";

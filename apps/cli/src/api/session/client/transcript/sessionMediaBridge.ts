@@ -1,4 +1,6 @@
 import { basename } from 'node:path';
+import { ReviewCommentsMessageMetaV1Schema } from '@happier-dev/protocol/messages/structured/reviewCommentsV1';
+import { SessionAttachmentsMessageMetaV1Schema } from '@happier-dev/protocol/messages/structured/sessionAttachmentsInputV1';
 
 import { createTransferPathAllowanceRegistry } from '@/transfers/targets/createTransferPathAllowanceRegistry';
 import {
@@ -143,7 +145,17 @@ function sanitizeBridgeMetaValue(value: unknown): unknown {
 function sanitizeBridgeMeta(meta: Record<string, unknown> | undefined): Record<string, unknown> {
     if (!meta) return {};
     const sanitized = sanitizeBridgeMetaValue(meta);
-    return isRecord(sanitized) ? sanitized : {};
+    const result = isRecord(sanitized) ? sanitized : {};
+    // Authored typed content is not a provider media-source bag. Its exact
+    // snapshots and upload descriptors survive the generic source redaction;
+    // schemas remain closed and upload readers still own path authorization.
+    const review = ReviewCommentsMessageMetaV1Schema.safeParse(meta.happier);
+    if (review.success) result.happier = review.data;
+    for (const key of ['happier', 'happierAttachments'] as const) {
+        const attachments = SessionAttachmentsMessageMetaV1Schema.safeParse(meta[key]);
+        if (attachments.success) result[key] = attachments.data;
+    }
+    return result;
 }
 
 function sanitizeOrigin(origin: SessionMediaOrigin): SessionMediaOrigin {

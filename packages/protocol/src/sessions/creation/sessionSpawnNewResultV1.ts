@@ -92,6 +92,26 @@ const SessionSpawnNewErrorCodeV1Schema = lazyZodSchema(() => z.union([
 ]));
 export type SessionSpawnNewErrorCodeV1 = z.infer<typeof SessionSpawnNewErrorCodeV1Schema>;
 
+/** Content-free predicates; diagnostic facts never supply target or caller authority. */
+export const SessionSpawnNewIncompatibleTargetV1Schema = lazyZodSchema(() => z.strictObject({
+  reason: z.enum([
+    'initial_access_unsupported',
+    'target_preparation_rpc_unavailable',
+    'target_preparation_invalid_result',
+    'checkout_unavailable',
+    'session_spawn_protocol_unavailable',
+    'creation_lookup_unavailable',
+    'initial_trigger_protocol_unavailable',
+    'context_memory_protocol_unavailable',
+    'spawn_rpc_unavailable',
+    'creation_settlement_unavailable',
+    'requester_credentials_unavailable',
+    'daemon_rpc_unavailable',
+    'terminal_host_unavailable',
+  ]),
+}));
+export type SessionSpawnNewIncompatibleTargetV1 = z.infer<typeof SessionSpawnNewIncompatibleTargetV1Schema>;
+
 /**
  * Public Session creation settlement. Once a Session id exists, optional
  * initial-input admission stays nested so callers cannot mistake a rejected
@@ -123,10 +143,17 @@ export const SessionSpawnNewResultV1Schema = lazyZodSchema(() => z.union([
     agentId: z.optional(z.string().check(z.refine((value) => value.trim().length > 0))),
     providerError: z.optional(ProviderErrorV1Schema),
     terminalHostError: z.optional(TerminalHostUnavailableSpawnErrorDetailSchema),
+    incompatibleTarget: z.optional(SessionSpawnNewIncompatibleTargetV1Schema),
     launchError: z.optional(SessionSpawnLaunchErrorV1Schema),
   }).check(z.superRefine((value, context) => {
-    if (value.launchError && value.code !== 'spawn_failed') {
-      context.addIssue({ code: "custom", path: ['launchError'], message: 'Launch causes accompany spawn failures only.' });
+    if (value.incompatibleTarget && (value.code !== 'incompatible_target' || value.retryable)) {
+      context.addIssue({ code: 'custom', path: ['incompatibleTarget'], message: 'Incompatibility predicates require a non-retryable incompatible target.' });
+    }
+    if (value.launchError && value.code !== 'spawn_failed' && value.code !== 'agent_signed_out') {
+      context.addIssue({ code: "custom", path: ['launchError'], message: 'Launch causes accompany spawn failures or signed-out Agent recovery only.' });
+    }
+    if (value.launchError && value.code === 'agent_signed_out' && value.launchError.code !== value.code) {
+      context.addIssue({ code: 'custom', path: ['launchError'], message: 'Agent recovery must match the signed-out refusal.' });
     }
     if (value.terminalHostError && (value.code !== 'incompatible_target' || value.retryable)) {
       context.addIssue({ code: "custom", path: ['terminalHostError'], message: 'Terminal host setup failures require a non-retryable incompatible target.' });

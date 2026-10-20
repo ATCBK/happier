@@ -54,6 +54,7 @@ describe('managed lifecycle presentation', () => {
       launch: { provider, schemaVersion: 1, name: 'Bound resource', choices: {} },
       controller: { machineId: 'controller', installationId: 'installation' }, allocation: 'bound', creationState: 'active',
       resource: { contributionRef: provider, schemaVersion: 1, value: { instance: 'happier-qb-design', cpus: 2, mounts: [] } },
+      cleanup: { disposition: 'unavailable', reason: 'native_records_missing' },
       desired: 'start', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false });
     const screen = await renderScreen(<ManagedCreationProgress machine={machine} />);
     const identity = screen.tree.findAll(node => typeof node.type === 'string' && node.props.testID === 'managed-machine.recovery');
@@ -161,5 +162,82 @@ describe('managed lifecycle presentation', () => {
     const screen = await renderScreen(<ManagedCreationDisabledBanner testID="off" />);
     await act(async () => { screen.pressByTestId('off:change'); });
     expect(routerBoundary.spies.push).toHaveBeenCalledWith('/settings/machines/defaults');
+  });
+});
+
+describe('created machine resource rows (UIR5)', () => {
+  const provider = { pluginId: 'custom.provisioner', localId: 'native' };
+  async function boundMachine(overrides: Record<string, unknown> = {}) {
+    const { ManagedMachineV1Schema } = await import('@happier-dev/protocol/machines/managed/managedMachineV1');
+    return ManagedMachineV1Schema.parse({ id: 'studio', homeId: 'home', custodianAccountId: 'owner',
+      launch: { provider, schemaVersion: 1, name: 'Lima', choices: {} },
+      controller: { machineId: 'controller', installationId: 'installation' }, enrolledMachineId: 'guest', allocation: 'bound', creationState: 'active',
+      resource: { contributionRef: provider, schemaVersion: 1, value: { instance: 'happier-studio', cpus: 2 } },
+      observation: { observedAt: 5, availability: 'present', power: 'stopped', storage: 'unknown', daemon: 'disconnected' },
+      desired: 'stop', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false, ...overrides });
+  }
+  const testIds = (screen: Awaited<ReturnType<typeof renderScreen>>, id: string) =>
+    screen.tree.findAll(node => typeof node.type === 'string' && node.props.testID === id);
+
+  it('keeps native identity out of a healthy created machine and names the row after the machine', async () => {
+    const { ManagedCreationProgress } = await import('./ManagedCreationProgress');
+    const machine = await boundMachine();
+    const screen = await renderScreen(<ManagedCreationProgress machine={machine} title="lima-happier-studio" handlers={{ checkNow: vi.fn() }} />);
+    expect(testIds(screen, 'managed-machine.recovery')).toHaveLength(0);
+    expect(screen.getTextContent()).not.toContain('instance: happier-studio');
+    expect(screen.getTextContent()).toContain('lima-happier-studio');
+  });
+
+  it('reads freshness on the state row it qualifies and offers Check now once', async () => {
+    const { ManagedCreationProgress } = await import('./ManagedCreationProgress');
+    const machine = await boundMachine();
+    const checkNow = vi.fn();
+    const screen = await renderScreen(<ManagedCreationProgress machine={machine} handlers={{ checkNow }} />);
+    expect(testIds(screen, 'managed-machine.observation')).toHaveLength(1);
+    expect(testIds(screen, 'managed-machine.observation-check')).toHaveLength(0);
+    expect(testIds(screen, 'managed-machine.progress:checkNow')).toHaveLength(1);
+    const healthy = await renderScreen(<ManagedCreationProgress machine={await boundMachine({
+      observation: { observedAt: 5, availability: 'present', power: 'running', storage: 'retained', daemon: 'connected' } })}
+      handlers={{ checkNow }} />);
+    expect(testIds(healthy, 'managed-machine.observation-check')).toHaveLength(1);
+  });
+
+  it('keeps one freshness when the created-machine list could not be re-read: its time, the reason and Retry', async () => {
+    const { ManagedCreationProgress } = await import('./ManagedCreationProgress');
+    const retry = vi.fn();
+    const screen = await renderScreen(<ManagedCreationProgress machine={await boundMachine()} handlers={{ checkNow: vi.fn() }}
+      staleRead={{ retry }} />);
+    expect(testIds(screen, 'managed-machine.observation')).toHaveLength(1);
+    const { t } = await import('@/text');
+    expect(screen.getTextContent()).toContain(t('managedMachines.detail.loadFailed'));
+    const retryButtons = testIds(screen, 'managed-machine.observation-retry');
+    expect(retryButtons).toHaveLength(1);
+    expect(testIds(screen, 'managed-machine.observation-check')).toHaveLength(0);
+  });
+
+  it('never says a local machine may bill', async () => {
+    const { ManagedCreationProgress } = await import('./ManagedCreationProgress');
+    const machine = await boundMachine({ enrolledMachineId: undefined, cleanup: { disposition: 'unavailable', reason: 'native_records_missing' } });
+    const local = { ...machine, reviewedFacts: { launch: machine.launch, controller: machine.controller, optionStatus: 'current' as const,
+      billing: { location: 'local' as const, stoppedBilling: 'not-billed' as const }, prerequisites: [], retentionCapabilities: { supportedIntents: ['stop' as const] },
+      retention: machine.retention, wakeOnAcceptedMessage: false } };
+    const screen = await renderScreen(<ManagedCreationProgress machine={local} />);
+    expect(screen.getTextContent()).not.toContain('may still be billed');
+  });
+
+  it('shows a held approval wait as needing the user, with its exact Ask one press away', async () => {
+    const { ManagedCreationProgress } = await import('./ManagedCreationProgress');
+    const machine = await boundMachine({ observation: { observedAt: 5, availability: 'present', power: 'running', storage: 'retained', daemon: 'connected' } });
+    const reviewApproval = vi.fn();
+    const operation = { serverId: machine.homeId, observation: 'available' as const, isUnavailableProjection: false,
+      snapshot: { version: 1 as const, operationId: 'policy-stop', revision: 3, actionId: 'machines.managed.power.set', state: 'running' as const,
+        scope: { accountId: 'owner', machineId: machine.controller.machineId }, title: 'Stop', createdAt: 1, startedAt: 2,
+        domainRef: { kind: 'managedMachine' as const, id: machine.id, resource: machine.resource, controller: machine.controller },
+        cancellation: 'supported' as const, progress: { kind: 'phase' as const, phase: 'waiting_for_approval', label: 'Waiting for approval',
+          approval: { kind: 'approval_request_created' as const, artifactId: 'ask-1', actionId: 'machines.managed.power.set' } } } };
+    const screen = await renderScreen(<ManagedCreationProgress machine={machine} operation={operation as never} reviewApproval={reviewApproval} />);
+    expect(screen.getTextContent()).toContain('Waiting for your approval');
+    await act(async () => { screen.pressByTestId('managed-machine.installation-review'); });
+    expect(reviewApproval).toHaveBeenCalledWith('ask-1');
   });
 });

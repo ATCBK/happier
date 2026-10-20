@@ -26,6 +26,12 @@ private func serializedBody(_ payload: [AnyHashable: Any]) -> String {
 
 @main struct NotificationServiceTests {
   static func main() {
+    var stalled = readyAlert
+    stalled["event"] = ["type": "source_unavailable", "stalledOccurrence": ["turnId": "turn-a", "publisherFence": 123]]
+    precondition(ActivityRemoteAlert(remoteUserInfo: ["body": stalled])?.eventIdentity == "stalled:turn-a:123",
+                 "the original presence witness must keep the same cross-leg identity")
+    stalled["event"] = ["type": "source_unavailable", "stalledOccurrence": ["turnId": "turn-a", "publisherFence": -1]]
+    precondition(ActivityRemoteAlert(remoteUserInfo: ["body": stalled]) == nil, "invalid presence witness admitted")
     // A recognized alert keeps the Home's already-permitted copy and only gains
     // the canonical grouping identity.
     var delivered: UNNotificationContent?

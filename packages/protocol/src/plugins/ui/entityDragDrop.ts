@@ -79,7 +79,7 @@ export type EntityDragKindV1 = Exclude<EntityDragItemV1['kind'], 'plugin'> | `pl
 export function isEntityDragKindV1(kind: unknown): kind is EntityDragKindV1 {
     return typeof kind === 'string' && (kind.startsWith('plugin:')
         ? parseQualifiedPluginContributionKey(kind.slice(7)) !== null
-        : kind !== 'plugin' && EntityDragItemV1Schema._zod.def.options.some(option => option.shape.kind.value === kind));
+        : kind !== 'plugin' && EntityDragItemV1Schema._zod.def.options.some(option => option.shape.kind._zod.def.values[0] === kind));
 }
 
 export function entityDragKindV1(item: EntityDragItemV1): EntityDragKindV1 {

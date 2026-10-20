@@ -5,14 +5,22 @@ import type {
   ActionOperationFailureV1,
   ActionExecuteResult,
 } from '@happier-dev/protocol/actions';
-import { ActionOperationDomainRefV1Schema, ActionOperationFailureV1Schema, ActionOperationObservationV1Schema } from '@happier-dev/protocol/actions/operations/v1';
+import { ActionOperationDomainRefV1Schema, ActionOperationFailureV1Schema, ActionOperationObservationV1Schema,
+  canRetainProjectSetupReviewV1, ManagedControllerRequestFailureDetailsV1Schema } from '@happier-dev/protocol/actions/operations/v1';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
-import { ProjectPrepareNoLaunchResultV1Schema, ProjectSetupConsentFailureDetailsV1Schema } from '@happier-dev/protocol/actions/projectActionFamily';
+import { ProjectPrepareNoLaunchResultV1Schema } from '@happier-dev/protocol/actions/projectActionFamily';
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
+import { normalizeSessionCreationSelectionIdentityV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
+import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import { normalizeWorkspaceRootPathV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
+import type { ProjectServiceRelocateInputV1, ProjectServiceMoveStartClaimResultV1 } from '@happier-dev/protocol/workspaces/projectServiceRelocationV1';
 
 import { parseActionOperationProgressUpdate } from './actionOperationProgress';
+import { createActionOperationSetupReview } from './actionOperationSetupReview';
 import type { RequesterWorkAttributionV1 } from '@/daemon/lifecycle/requesterWorkAttribution';
 import type { ActionOperationStore } from './actionOperationStore';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 import type {
   ActionOperationOwnerUpdate,
   ActionOperationProgressUpdate,
@@ -20,6 +28,7 @@ import type {
   ActionOperationScope,
   ResolvedTrackedAction,
   ActionOperationReviewContinuation,
+  ActionOperationSetupDecision,
 } from './actionOperationTypes';
 
 type ActiveInvocation = Readonly<{
@@ -32,19 +41,23 @@ type ActiveInvocation = Readonly<{
   notifyCancellationRequested: () => void;
   resumeSetupReview: () => void;
   refreshSetupReview: () => Promise<void>;
+  decideSetupReview: (decision: ActionOperationSetupDecision) => Promise<void>;
+  serviceMoveStart?: { claimed: boolean };
 }>;
 
 function terminalResult(snapshot: import('@happier-dev/protocol/actions').ActionOperationSnapshotV1): ActionExecuteResult | null {
-  if (snapshot.state === 'succeeded') return { ok: true, result: snapshot.result };
+  const metadata = snapshot.operationCredentialUses ? { operationCredentialUses: snapshot.operationCredentialUses } : {};
+  if (snapshot.state === 'succeeded') return { ok: true, result: snapshot.result, ...metadata };
   if (snapshot.state === 'failed') {
     return {
       ok: false,
       errorCode: snapshot.error?.errorCode ?? 'action_operation_failed',
       error: snapshot.error?.error ?? 'action_operation_failed',
       ...(snapshot.error?.details ? { details: snapshot.error.details } : {}),
+      ...metadata,
     };
   }
-  if (snapshot.state === 'cancelled') return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
+  if (snapshot.state === 'cancelled') return { ok: false, errorCode: 'cancelled', error: 'cancelled', ...metadata };
   return null;
 }
 
@@ -59,11 +72,13 @@ function projectThrownFailure(error: unknown): ActionOperationFailureV1 {
     && typeof error.code === 'string' && error.code.trim()
     ? error.code.trim()
     : 'action_operation_failed';
+  const managed = ManagedControllerRequestFailureDetailsV1Schema.safeParse(error && typeof error === 'object' && 'details' in error ? error.details : undefined);
   return {
     errorCode: code,
     error: error instanceof Error && error.message.trim()
       ? error.message
       : 'action_operation_failed',
+    ...(managed.success && (!managed.data.code || managed.data.code === code) ? { details: managed.data } : {}),
   };
 }
 
@@ -80,7 +95,17 @@ function isFiniteProjectCommand(actionId: string): boolean {
   return actionId === 'projects.script.run' || actionId === 'projects.compute.exec' || actionId === 'projects.prepare';
 }
 
+function isRetryableSessionCreation(actionId: string, result: ActionExecuteResult): boolean {
+  if (actionId !== 'session.spawn_new' || !result.ok) return false;
+  const settlement = SessionSpawnNewResultV1Schema.safeParse(result.result);
+  return settlement.success && settlement.data.type === 'error' && settlement.data.retryable;
+}
+
 function isUnconfirmedOwnedOutcome(actionId: string, result: ActionExecuteResult): boolean {
+  if (actionId === 'machines.managed.power.set' || actionId === 'machines.managed.delete' || actionId === 'machines.managed.rebuild'
+    || actionId === 'machines.managed.acquire' || actionId === 'machines.managed.bootstrap.retry') {
+    return !result.ok && result.errorCode === 'action_outcome_unknown';
+  }
   if (actionId === 'daemon.filesystem.upload' || actionId === 'daemon.filesystem.download' || actionId === 'daemon.filesystem.copy') {
     return !result.ok && result.errorCode === 'indeterminate';
   }
@@ -106,6 +131,8 @@ export function createActionOperationRunner(deps: Readonly<{
     scope: ActionOperationScope;
     requesterWorkAttributionV1?: RequesterWorkAttributionV1;
     cancellation?: 'unsupported' | 'supported';
+    /** Report the canonical receipt even when an exact request rejoins a settled operation. */
+    onOperation?: (operation: import('@happier-dev/protocol/actions').ActionOperationSnapshotV1) => void;
     execute: (context: Readonly<{
       actionRequestId?: string;
       resumeActionRequest?: true;
@@ -131,9 +158,15 @@ export function createActionOperationRunner(deps: Readonly<{
     const existing = request.requestId
       ? deps.store.findByRequestIdentity(request.scope, request.actionId, request.requestId)
       : null;
-    const inputIdentity = createCanonicalJsonSigningInput(request.input === undefined ? null : request.input);
+    const spawnInput = request.actionId === 'session.spawn_new' ? SessionSpawnNewInputV2Schema.safeParse(request.input) : null;
+    const inputIdentity = createCanonicalJsonSigningInput(spawnInput?.success
+      ? { ...spawnInput.data, ...normalizeSessionCreationSelectionIdentityV1(spawnInput.data) }
+      : request.input === undefined ? null : request.input);
     if (existing && !deps.store.hasMatchingInputIdentity(existing.operationId, inputIdentity)) {
-      return { ok: false, errorCode: 'action_request_input_conflict', error: 'action_request_input_conflict' };
+      return await timeWebLatencyPhase('action.operation.input_conflict', () => ({
+        ok: false as const, errorCode: 'action_request_input_conflict', error: 'action_request_input_conflict',
+      }), undefined, () => ({ operationId: existing.operationId,
+        ...(request.requestId ? { executionRequestId: request.requestId } : {}), inputIdentityEqual: false }));
     }
     const invoke = async (
       operationId: string,
@@ -141,51 +174,12 @@ export function createActionOperationRunner(deps: Readonly<{
       resumeActionRequest = false,
     ): Promise<ActionExecuteResult> => {
       const controller = new AbortController();
-      let resumeSetupReview = () => {};
-      let refreshSetupReview = async () => {};
+      const retainedReview = createActionOperationSetupReview({ signal: controller.signal,
+        publish: details => { deps.store.updateSetupReview(operationId, details); } });
       const operationReview: ActionOperationReviewContinuation = {
-        waitForResume: async (details, producer) => {
-          if (!isFiniteProjectCommand(action.actionId)) throw new Error('action_operation_unavailable');
-          const parsed = ProjectSetupConsentFailureDetailsV1Schema.parse(details);
-          if (controller.signal.aborted) throw controller.signal.reason ?? createCancellationRequestError();
-          await new Promise<void>((resolve, reject) => {
-            let current = true;
-            let refreshing: Promise<void> | undefined;
-            const cleanup = () => {
-              current = false;
-              controller.signal.removeEventListener('abort', abort);
-              resumeSetupReview = () => {};
-              refreshSetupReview = async () => {};
-              deps.store.updateSetupReview(operationId, undefined);
-            };
-            const abort = () => { cleanup(); reject(controller.signal.reason ?? createCancellationRequestError()); };
-            const resume = () => { if (current) { cleanup(); resolve(); } };
-            resumeSetupReview = () => {
-              // An exact-request rejoin must not run alongside its producer's
-              // current source/target review inside the retained reservation.
-              if (refreshing) void refreshing.then(resume, () => undefined);
-              else resume();
-            };
-            refreshSetupReview = () => {
-              if (!producer || !current) return Promise.resolve();
-              if (!refreshing) {
-                refreshing = (async () => {
-                  const reviewed = await producer.review();
-                  if (!current || controller.signal.aborted) return;
-                  if (reviewed) deps.store.updateSetupReview(operationId, ProjectSetupConsentFailureDetailsV1Schema.parse(reviewed));
-                  else resume();
-                })().catch(error => {
-                  if (current) {
-                    cleanup();
-                    reject(error);
-                  }
-                }).finally(() => { refreshing = undefined; });
-              }
-              return refreshing;
-            };
-            controller.signal.addEventListener('abort', abort, { once: true });
-            deps.store.updateSetupReview(operationId, parsed);
-          });
+        waitForResume: (details, producer) => {
+          if (!canRetainProjectSetupReviewV1(action.actionId)) return Promise.reject(new Error('action_operation_unavailable'));
+          return retainedReview.operationReview.waitForResume(details, producer);
         },
       };
       const cancellationListeners = new Set<() => void>();
@@ -242,6 +236,9 @@ export function createActionOperationRunner(deps: Readonly<{
               else accept({ ok: true, result });
             } },
           });
+          if (executionResult.operationCredentialUses) {
+            deps.store.updateCredentialUses(operationId, executionResult.operationCredentialUses);
+          }
           if (isRecoverableIndeterminateHandoff(action.actionId, executionResult)) {
             return executionResult;
           }
@@ -289,9 +286,9 @@ export function createActionOperationRunner(deps: Readonly<{
             }
           } else {
             const failure = { errorCode: executionResult.errorCode, error: executionResult.error };
-            // Only named finite Project consent/refusal producers carry public
-            // redacted facts. Arbitrary executor details remain private.
-            const reviewedFailure = isFiniteProjectCommand(action.actionId)
+            // Only named Project and managed-controller producers carry these
+            // validated public facts. Arbitrary executor details remain private.
+            const reviewedFailure = isFiniteProjectCommand(action.actionId) || action.actionId.startsWith('machines.managed.')
               ? ActionOperationFailureV1Schema.safeParse({ ...failure, details: executionResult.details }) : null;
             deps.store.fail(operationId, reviewedFailure?.success ? reviewedFailure.data : failure);
           }
@@ -316,17 +313,24 @@ export function createActionOperationRunner(deps: Readonly<{
           }
           throw error;
         } finally {
+          // An indeterminate Move retains an observation, not an executing
+          // coordinator. Its retired AbortController cannot clean up an unknown
+          // native instance; do not advertise a cancellation owner that is gone.
+          if (action.actionId === 'projects.service.relocate') deps.store.updateCancellation(operationId, 'unsupported');
           active.delete(operationId);
         }
       });
       const response = Promise.race([result, acceptance]);
       active.set(operationId, { actionId: action.actionId, scope: request.scope, controller, cancellation, result, response,
-        resumeSetupReview: () => resumeSetupReview(),
-        refreshSetupReview: () => refreshSetupReview(),
+        ...(action.actionId === 'projects.service.relocate' ? { serviceMoveStart: { claimed: false } } : {}),
+        resumeSetupReview: retainedReview.resume,
+        refreshSetupReview: retainedReview.refresh,
+        decideSetupReview: retainedReview.decide,
         notifyCancellationRequested: () => { for (const listener of cancellationListeners) listener(); } });
       return await response;
     };
     if (existing) {
+      request.onOperation?.(existing);
       const invocation = active.get(existing.operationId);
       if (invocation) {
         if (existing.setupReview) invocation.resumeSetupReview();
@@ -336,22 +340,28 @@ export function createActionOperationRunner(deps: Readonly<{
         return { ok: true, result: { operation: existing } };
       }
       const settled = terminalResult(existing);
-      if (settled) return settled;
-      if (existing.state === 'running' && action.actionId === 'session.handoff') {
-        return await invoke(existing.operationId, existing.cancellation);
+      if (settled) {
+        if (!isRetryableSessionCreation(action.actionId, settled)) return settled;
+        // An explicit same-input retry gets a new execution receipt, not a
+        // rewind of terminal evidence. The ordinary creator still owns the
+        // unchanged creation key, tag and nonce and must create-or-rejoin it.
+      } else {
+        if (existing.state === 'running' && action.actionId === 'session.handoff') {
+          return await invoke(existing.operationId, existing.cancellation);
+        }
+        if (existing.state === 'running' && action.actionId === 'session.spawn_new') {
+          // Re-entry observes the already-owned creation nonce; it never submits
+          // another Session after an unconfirmed native outcome.
+          return await invoke(existing.operationId, existing.cancellation, true);
+        }
+        if (existing.state === 'running' && action.actionId === 'machines.managed.acquire'
+          && existing.observation?.kind === 'outcome_uncertain') {
+          // The exact original requester/input retains the continuation. The
+          // enrolled acquisition owner observes its row without buying again.
+          return await invoke(existing.operationId, existing.cancellation);
+        }
+        return { ok: false, errorCode: 'action_operation_unavailable', error: 'action_operation_unavailable' };
       }
-      if (existing.state === 'running' && action.actionId === 'session.spawn_new') {
-        // Re-entry observes the already-owned creation nonce; it never submits
-        // another Session after an unconfirmed native outcome.
-        return await invoke(existing.operationId, existing.cancellation, true);
-      }
-      if (existing.state === 'running' && action.actionId === 'machines.managed.acquire'
-        && existing.observation?.kind === 'outcome_uncertain') {
-        // The exact original requester/input retains the continuation. The
-        // enrolled acquisition owner observes its row without buying again.
-        return await invoke(existing.operationId, existing.cancellation);
-      }
-      return { ok: false, errorCode: 'action_operation_unavailable', error: 'action_operation_unavailable' };
     }
     // Final retirement closes only new finite admission. Exact request replay
     // above still observes the original retained invocation and its Stop owner.
@@ -360,7 +370,7 @@ export function createActionOperationRunner(deps: Readonly<{
     }
     const operationId = generateOperationId();
     const cancellation = request.cancellation ?? 'unsupported';
-    deps.store.create({
+    const created = deps.store.create({
       operationId,
       actionId: action.actionId,
       scope: request.scope,
@@ -371,6 +381,7 @@ export function createActionOperationRunner(deps: Readonly<{
       ...(request.domainRef ? { domainRef: request.domainRef } : {}),
       inputIdentity,
     });
+    request.onOperation?.(created);
     if (!isFiniteProjectCommand(action.actionId)) deps.store.markRunning(operationId);
     return await invoke(operationId, cancellation);
   };
@@ -422,9 +433,38 @@ export function createActionOperationRunner(deps: Readonly<{
   return Object.freeze({
     observe,
     cancel,
+    claimServiceMoveStart(scope: ActionOperationQueryScope, requestId: string, input: ProjectServiceRelocateInputV1): ProjectServiceMoveStartClaimResultV1 {
+      const snapshot = deps.store.findByRequestIdentity(scope, 'projects.service.relocate', requestId);
+      const invocation = snapshot ? active.get(snapshot.operationId) : undefined;
+      if (!snapshot || snapshot.state !== 'running' || snapshot.observation
+        || snapshot.progress?.kind !== 'phase' || snapshot.progress.phase !== 'starting'
+        || !invocation?.serviceMoveStart || invocation.controller.signal.aborted
+        || !deps.store.hasMatchingInputIdentity(snapshot.operationId, createCanonicalJsonSigningInput(input))) {
+        return { kind: 'refused', reasonCode: 'service_move_not_starting' };
+      }
+      if (invocation.serviceMoveStart.claimed) return { kind: 'refused', reasonCode: 'service_move_start_already_claimed' };
+      // No await between currentness and consumption. The existing invocation
+      // retires this permission on cancellation, settlement or coordinator exit.
+      invocation.serviceMoveStart.claimed = true;
+      return { kind: 'claimed' };
+    },
     async refreshSetupReview(scope: ActionOperationQueryScope, operationId: string): Promise<void> {
       if (!deps.store.get(scope, operationId)?.setupReview) return;
       await active.get(operationId)?.refreshSetupReview();
+    },
+    /** Called only by the admitted human projects.prepare path; retains original execution custody. */
+    async decideSetupReview(scope: ActionOperationQueryScope, operationId: string, workspace: WorkspaceAddressV1,
+      phase: 'setup' | 'teardown', decision: ActionOperationSetupDecision) {
+      const snapshot = deps.store.get(scope, operationId);
+      const invocation = active.get(operationId);
+      const target = snapshot?.domainRef;
+      if (!snapshot?.setupReview || !invocation || invocation.controller.signal.aborted || target?.kind !== 'projectCommand'
+        || target.serverId !== workspace.serverId || target.machineId !== workspace.machineId
+        || target.workspaceRefId !== workspace.workspaceId
+        || normalizeWorkspaceRootPathV1(target.cwd) !== normalizeWorkspaceRootPathV1(workspace.rootPath)
+        || (target.purpose === 'teardown' ? 'teardown' : 'setup') !== phase) return null;
+      await invocation.decideSetupReview(decision);
+      return deps.store.get(scope, operationId);
     },
     /** Final ingress is already closed; every registration shares this one Stop pass and settlement wait. */
     retireProjectFiniteOperations(): Promise<void> {

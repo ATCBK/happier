@@ -43,7 +43,7 @@ describe('Browser surface pane header', () => {
     it('publishes live machine names only for the workspace and retracts the header in viewer mode', async () => {
         const machine = createMachineFixture({
             id: 'preview-machine',
-            metadata: { host: 'preview.local', displayName: 'Preview Computer', platform: 'linux', happyCliVersion: 'test', happyHomeDir: '/tmp/happier' },
+            metadata: { host: 'preview.local', displayName: 'Preview Computer', platform: 'linux', happyCliVersion: 'test', happyHomeDir: '/tmp/happier', homeDir: '/tmp' },
         });
         getStorage().setState({ machines: { [machine.id]: machine } });
         const screen = await renderScreen(<Harness presentation="workspace" />);
@@ -53,7 +53,7 @@ describe('Browser surface pane header', () => {
         await screen.update(<Harness presentation="viewer" />);
         expect(headerText()).toBe('');
         await act(async () => {
-            getStorage().setState({ machines: { [machine.id]: { ...machine, metadata: { ...machine.metadata, displayName: 'Renamed Computer' } } } });
+            getStorage().setState({ machines: { [machine.id]: { ...machine, metadata: { ...machine.metadata!, displayName: 'Renamed Computer' } } } });
         });
         expect(headerText()).toBe('');
 

@@ -1,9 +1,12 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { parseAccountApiTokenCredentialV1 } from '@happier-dev/protocol';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 
@@ -128,12 +131,29 @@ function daysFromNow(expiresAt: unknown): number {
 }
 
 describe('Settings → Embeds detail (create, real token controller)', () => {
+    it('leaves token revocation confirmation to the Action executor', async () => {
+        const harness = await createApiTokenSettingsControllerHarness({ mode: 'plain' });
+        const { Modal } = await import('@/modal');
+        const confirmation = vi.spyOn(Modal, 'confirm').mockResolvedValue(true);
+        harness.controller.setCreateDraft({ label: 'Revocation target', expiryPreset: 'none' });
+        await harness.controller.createToken();
+        const token = harness.controller.getState().tokens[0]!;
+        expect(token).toBeDefined();
+        confirmation.mockClear();
+        const { useApiTokenOperations } = await import('../apiTokens/useApiTokenOperations');
+        const hook = await renderHook(() => useApiTokenOperations(harness.controller));
+        await act(async () => { expect(await hook.getCurrent().revoke(token)).toBe(true); });
+        expect(harness.controller.getState().tokens).toEqual([]);
+        expect(confirmation).toHaveBeenCalledTimes(1);
+        expect(harness.requests.filter(request => request.path.endsWith('/revoke'))).toHaveLength(1);
+        await hook.unmount();
+    }, 180_000);
     it('disables new session creation when the only present machine is unreachable', async () => {
         const harness = await createApiTokenSettingsControllerHarness({ mode: 'plain' });
         const { storage } = await import('@/sync/domains/state/storageStore');
         const machine = createMachineFixture({ id: 'embed-target', activeAt: Date.now() });
-        storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { 'srv_token-ui': [machine] } });
-        recordMachineRequestFailed({ serverId: 'srv_token-ui', machineId: machine.id });
+        storage.getState().applyMachines([machine], true, { sourceServerId: harness.scope.serverId });
+        recordMachineRequestFailed({ ...harness.scope, machineId: machine.id });
         const screen = await renderCreate(harness);
         await until(() => expect(harness.controller.getState().encryptionAvailability).toBe('plain'));
         expect(screen.findByTestId('settings-embed-sessions-switch')?.props.disabled).toBe(true);
@@ -183,6 +203,8 @@ describe('Settings → Embeds detail (create, real token controller)', () => {
 
     it('creates a plain-account embed key that keeps approvals (default mode only) and never expires by default', async () => {
         const harness = await createApiTokenSettingsControllerHarness({ mode: 'plain' });
+        const { Modal } = await import('@/modal');
+        vi.spyOn(Modal, 'confirm').mockResolvedValue(true);
         const screen = await renderCreate(harness);
         await until(() => expect(harness.controller.getState().encryptionAvailability).toBe('plain'));
 
@@ -215,7 +237,6 @@ describe('Settings → Embeds detail (create, real token controller)', () => {
             expect(harness.controller.getState().reveal).not.toBeNull();
         });
 
-        const { Modal } = await import('@/modal');
         const { ApiTokenCreateModal } = await import('../apiTokens/ApiTokenCreateModal');
         expect(Modal.show).toHaveBeenCalledWith(expect.objectContaining({
             component: ApiTokenCreateModal,
@@ -276,7 +297,18 @@ describe('Settings → Embeds detail (create, real token controller)', () => {
         await until(() => expect(harness.controller.getState().encryptionAvailability).toBe('ready'));
         expect(resumed.findByTestId('settings-embed-e2ee-trust')).toBeTruthy();
 
+        let approveCreate!: (approved: boolean) => void;
+        const pendingConfirmation = new Promise<boolean>((resolve) => { approveCreate = resolve; });
+        const { Modal } = await import('@/modal');
+        const confirmation = vi.spyOn(Modal, 'confirm').mockReturnValue(pendingConfirmation);
         await resumed.pressByTestIdAsync('settings-embed-create');
+        await until(() => expect(confirmation).toHaveBeenCalledTimes(1));
+        // Action confirmation is intentionally pre-transport: while the person reviews it, the
+        // controller is pending and the Home has not received a token-create request.
+        expect(harness.controller.getState()).toMatchObject({ createPending: true, createError: null, reveal: null });
+        expect(createRequests(harness.requests)).toHaveLength(0);
+
+        await act(async () => { approveCreate(true); });
         await until(() => {
             expect(harness.controller.getState().createError).toBeNull();
             expect(harness.controller.getState().reveal).not.toBeNull();

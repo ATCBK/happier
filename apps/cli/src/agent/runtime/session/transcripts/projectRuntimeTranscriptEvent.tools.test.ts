@@ -65,24 +65,20 @@ function createRuntimeToolProjectionFixture(
     durableRows.set(opts.localId, body);
     return { persisted: true as const, delivered: true as const };
   });
+  const session = {
+    sessionId: 'session-1',
+    sendUserTextMessage: vi.fn(),
+    sendAgentMessageCommitted: vi.fn(async () => undefined),
+    sendAgentMessageEphemeral,
+    getEphemeralStreamConnectionEpoch: vi.fn(() => 1),
+    enqueueAgentMessageCommitted,
+  };
   return {
     durableRows,
     durableWrites,
     sendOrder,
-    runtimeMessageDeltaBridge: {
-      appendAssistantDelta: vi.fn(),
-      appendThinkingDelta: vi.fn(),
-      discardStream: vi.fn(),
-      flushAll: vi.fn(async () => []),
-    },
-    session: {
-      sessionId: 'session-1',
-      sendUserTextMessage: vi.fn(),
-      sendAgentMessageCommitted: vi.fn(async () => undefined),
-      sendAgentMessageEphemeral,
-      getEphemeralStreamConnectionEpoch: vi.fn(() => 1),
-      enqueueAgentMessageCommitted,
-    },
+    runtimeMessageDeltaBridge: createKeyedStreamedTranscriptBridge({ provider: 'codex', createSessionForStream: () => session }),
+    session,
   };
 }
 
@@ -182,6 +178,7 @@ describe('projectRuntimeTranscriptEvent tool lifecycle', () => {
     'retains session-scoped tools without flushing or changing the foreground turn: %j', async (scope) => {
       const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
       const fixture = createRuntimeToolProjectionFixture();
+      fixture.runtimeMessageDeltaBridge.appendAssistantDelta({ streamKey: 'foreground', sidechainId: null, foregroundTurnId: 'foreground', deltaText: 'Before ' });
       const tracker = new NormalizedToolTurnChangeTracker({ provider: 'codex' });
       tracker.beginTurn({ turnId: 'foreground', agentTurnId: 'native-foreground', sequence: 1 });
       const project = (event: Record<string, unknown>) => projectRuntimeTranscriptEvent({
@@ -197,7 +194,9 @@ describe('projectRuntimeTranscriptEvent tool lifecycle', () => {
         sidechainId: 'sidechainId' in scope ? scope.sidechainId ?? null : null, toolCallId: 'call-1' });
       expect(fixture.durableRows.get(identity.callLocalId)).toMatchObject({ type: 'tool-call', callId: 'call-1', ...('sidechainId' in scope ? { sidechainId: scope.sidechainId } : {}) });
       expect(fixture.durableRows.get(identity.resultLocalId)).toMatchObject({ type: 'tool-result', callId: 'call-1' });
-      expect(fixture.runtimeMessageDeltaBridge.flushAll).not.toHaveBeenCalled();
+      fixture.runtimeMessageDeltaBridge.appendAssistantDelta({ streamKey: 'foreground', sidechainId: null, foregroundTurnId: 'foreground', deltaText: 'after' });
+      await fixture.runtimeMessageDeltaBridge.flushAll({ reason: 'turn-end' });
+      expect([...fixture.durableRows.values()].filter(row => row.type === 'message')).toEqual([{ type: 'message', message: 'Before after' }]);
       expect(tracker.completeTurn({ sessionId: 'session-1', turnId: 'foreground', agentTurnId: 'native-foreground', sequence: 20, status: 'completed' })).toBeNull();
     },
   );

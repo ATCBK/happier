@@ -7,6 +7,7 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Modal } from '@/modal';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
+import { getErrorMessage } from '@/utils/errors/getErrorMessage';
 import { resolveSessionGoalFailurePresentation } from '@/sync/ops/sessionGoalOperationFailure';
 import type { SessionWorkStateSnapshot } from '@/sync/domains/session/workState/sessionWorkStateTypes';
 
@@ -74,8 +75,8 @@ export function useSessionWorkStateGoalController(params: Readonly<{
      */
     continuation?: SessionGoalContinuationContext | null;
     onRequestClose: () => void;
-    onSetGoal?: (request: SessionWorkStateGoalSetRequest) => Promise<SessionWorkStateGoalOperationResult>;
-    onClearGoal?: () => Promise<SessionWorkStateGoalOperationResult>;
+    onSetGoal?: (request: SessionWorkStateGoalSetRequest, signal?: AbortSignal) => Promise<SessionWorkStateGoalOperationResult>;
+    onClearGoal?: (signal?: AbortSignal) => Promise<SessionWorkStateGoalOperationResult>;
 }>): Readonly<{ content: React.ReactNode; guardedRequestClose: () => Promise<void>; dirty: boolean }> {
     const { theme } = useUnistyles();
     const goal = resolveEditableGoalItem(params.snapshot);
@@ -108,16 +109,38 @@ export function useSessionWorkStateGoalController(params: Readonly<{
     const onRequestClose = params.onRequestClose;
     const onSetGoal = params.onSetGoal;
     const onClearGoal = params.onClearGoal;
+    // A dismissed surface no longer owns completion UI for its outstanding request. The RPC may
+    // still commit natively; its later snapshot remains authoritative when the control is reopened.
+    const mutationLifetimeRef = React.useRef({ active: open, cancellation: new AbortController() });
+    React.useEffect(() => {
+        const lifetime = { active: open, cancellation: new AbortController() };
+        mutationLifetimeRef.current = lifetime;
+        if (!open) {
+            setBusy(false);
+            setConfirmation(IDLE_GOAL_CONFIRMATION);
+        }
+        return () => {
+            lifetime.active = false;
+            lifetime.cancellation.abort();
+        };
+    }, [open]);
+
+    const closeGoalControl = React.useCallback(() => {
+        mutationLifetimeRef.current.active = false;
+        mutationLifetimeRef.current.cancellation.abort();
+        setBusy(false);
+        setConfirmation(IDLE_GOAL_CONFIRMATION);
+        onRequestClose();
+    }, [onRequestClose]);
 
     // Confirmation: once the work-state signature moves off the captured baseline, the mutation has
     // been observed natively — close the popover and drop the pending state.
     React.useEffect(() => {
         if (!open || confirmation.phase !== 'pending') return;
         if (resolveGoalConfirmation(confirmation, currentSignature).phase === 'idle') {
-            setConfirmation(IDLE_GOAL_CONFIRMATION);
-            onRequestClose();
+            closeGoalControl();
         }
-    }, [confirmation, currentSignature, onRequestClose, open]);
+    }, [closeGoalControl, confirmation, currentSignature, open]);
 
     // Timeout: if confirmation is slow (commonly the /goal inject is queued behind an in-flight turn),
     // do NOT tear the pending state down or raise an error — soften the copy and keep waiting. It
@@ -138,6 +161,7 @@ export function useSessionWorkStateGoalController(params: Readonly<{
     const dirty = !mutating && draftObjective.trim() !== (goal?.title ?? '').trim();
 
     const guardedRequestClose = React.useCallback(async () => {
+        const lifetime = mutationLifetimeRef.current;
         if (dirty) {
             const discard = await Modal.confirm(
                 t('session.workState.dirtyCloseTitle'),
@@ -146,37 +170,49 @@ export function useSessionWorkStateGoalController(params: Readonly<{
             );
             if (!discard) return;
         }
-        onRequestClose();
-    }, [dirty, onRequestClose]);
+        if (lifetime.active) closeGoalControl();
+    }, [closeGoalControl, dirty]);
 
     const runGoalMutation = React.useCallback(async (request: SessionWorkStateGoalSetRequest) => {
         if (!onSetGoal) return;
+        const lifetime = mutationLifetimeRef.current;
+        if (!lifetime.active) return;
         const baseline = goalSignature(goal);
         setBusy(true);
         const noOp = isNoOpGoalMutation(goal, request);
         try {
-            const result = await onSetGoal(request);
+            const result = await onSetGoal(request, lifetime.cancellation.signal);
+            if (!lifetime.active) return;
             if (result.ok) {
                 if (noOp) {
                     // No native work-state change will arrive (the source dedupes), so do not
                     // strand the popover in "setting goal…" — the request is already satisfied (D-3).
-                    onRequestClose();
+                    closeGoalControl();
                 } else {
                     // Keep the popover open in a pending state until the native work-state confirms.
                     setConfirmation(beginGoalConfirmation(baseline));
                 }
             } else {
-                onRequestClose();
+                closeGoalControl();
                 const presentation = resolveSessionGoalFailurePresentation(result);
                 Modal.alert(presentation.title, presentation.message);
             }
+        } catch (error) {
+            if (!lifetime.active) return;
+            closeGoalControl();
+            const presentation = resolveSessionGoalFailurePresentation({
+                ok: false,
+                error: getErrorMessage(error) || t('session.workState.goal.errorUnknown'),
+            });
+            Modal.alert(presentation.title, presentation.message);
         } finally {
-            setBusy(false);
+            if (lifetime.active) setBusy(false);
         }
-    }, [goal, onRequestClose, onSetGoal]);
+    }, [closeGoalControl, goal, onSetGoal]);
 
     const clearGoal = React.useCallback(async () => {
         if (!onClearGoal) return;
+        const lifetime = mutationLifetimeRef.current;
         // U-2: confirm BEFORE closing the popover so declining the destructive prompt keeps the
         // surface open instead of dismissing it out from under the user.
         const confirmed = await Modal.confirm(
@@ -184,11 +220,12 @@ export function useSessionWorkStateGoalController(params: Readonly<{
             t('session.workState.goal.clearBody'),
             { confirmText: t('session.workState.goal.clear'), destructive: true },
         );
-        if (!confirmed) return;
-        onRequestClose();
+        if (!confirmed || !lifetime.active) return;
         setBusy(true);
         try {
-            const result = await onClearGoal();
+            const result = await onClearGoal(lifetime.cancellation.signal);
+            if (!lifetime.active) return;
+            closeGoalControl();
             if (!result.ok) {
                 const presentation = resolveSessionGoalFailurePresentation(result);
                 Modal.alert(presentation.title, presentation.message);
@@ -196,10 +233,18 @@ export function useSessionWorkStateGoalController(params: Readonly<{
             }
             // Clearing the goal turns Keep going off in the same action (R-M9).
             await detachKeepGoing();
+        } catch (error) {
+            if (!lifetime.active) return;
+            closeGoalControl();
+            const presentation = resolveSessionGoalFailurePresentation({
+                ok: false,
+                error: getErrorMessage(error) || t('session.workState.goal.errorUnknown'),
+            });
+            Modal.alert(presentation.title, presentation.message);
         } finally {
-            setBusy(false);
+            if (lifetime.active) setBusy(false);
         }
-    }, [detachKeepGoing, onClearGoal, onRequestClose]);
+    }, [closeGoalControl, detachKeepGoing, onClearGoal]);
 
     const resumeGoal = React.useCallback(async () => {
         if (goal?.statusReason !== 'budgetLimited') {

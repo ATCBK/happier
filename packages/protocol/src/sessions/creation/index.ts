@@ -8,4 +8,5 @@ export * from './sessionCreationTargetPreparationV1.js';
 export * from './sessionServerStartV1.js';
 export * from './sessionSpawnBudget.js';
 export * from './sessionCreateOriginV1.js';
+export * from './sessionDiscussionParticipantV1.js';
 export * from './sessionInitialTriggerAdmissionV1.js';

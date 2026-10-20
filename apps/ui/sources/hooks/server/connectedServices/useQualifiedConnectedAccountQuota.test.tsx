@@ -6,7 +6,8 @@ import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { resolveConnectedServiceSettingsErrorMessage } from '@/components/settings/connectedServices/connectedServiceSettingsErrors';
 import { __resetQualifiedConnectedAccountQuotaSnapshotStore } from './qualifiedConnectedAccountQuotaSnapshotStore';
-import { createQualifiedQuotaTestHarness, quotaTestRef as ref, quotaTestSnapshot as snapshot, quotaTestResponse } from './qualifiedConnectedAccountQuotaTestHarness';
+import { createQualifiedQuotaTestHarness, quotaTestRef as ref, quotaTestSnapshot as snapshot, quotaTestResponse, quotaTestProviderUsageSnapshot } from './qualifiedConnectedAccountQuotaTestHarness';
+import { projectProviderAccountUsageSnapshotToQualifiedConnectedAccountQuotaSnapshotV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { useQualifiedConnectedAccountQuota } from './useQualifiedConnectedAccountQuota';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes';
@@ -45,6 +46,39 @@ describe('useQualifiedConnectedAccountQuota', () => {
         expect(hook.getCurrent()).toMatchObject({ supported: true, usageRecordId: quotaTestResponse().sourceResolution.recordId, error: null });
         expect(boundary.read).toHaveBeenCalledWith(ref);
         expect(boundary.controls).toEqual([]);
+    });
+
+    it.each([false, true])('carries no observation for an unloaded usage record without losing its record identity (failed refresh=%s)', async failedRefresh => {
+        const unobserved = projectProviderAccountUsageSnapshotToQualifiedConnectedAccountQuotaSnapshotV4({
+            snapshot: { ...quotaTestProviderUsageSnapshot(0), state: 'not_loaded', confidence: 'unknown', meters: [],
+                ...(failedRefresh ? { diagnostics: [{ kind: 'provider_http', status: 429, observedAtMs: 5, retryAtMs: 10 }] } : {}),
+            },
+            ref,
+        });
+        const response = quotaTestResponse(unobserved);
+        boundary.read.mockImplementation(async () => Response.json({
+            ...response, metadata: { ...response.metadata, status: failedRefresh ? 'error' : 'unavailable',
+                ...(failedRefresh ? { refreshRequestedAt: 1 } : {}),
+            },
+        }));
+        const hook = await renderHook(() => useQualifiedConnectedAccountQuota(ref), { wrapper: Wrapper });
+        await vi.waitFor(() => expect(hook.getCurrent().loading).toBe(false));
+        expect(hook.getCurrent()).toMatchObject({
+            snapshot: null, usageRecordId: response.sourceResolution.recordId, supported: null, refreshing: false,
+            error: failedRefresh ? t('connectedServices.errors.quotaRefreshRetryAt', {
+                error: `${t('connectedServices.errors.quotaRefreshFailed')} (HTTP 429)`,
+                time: new Date(10).toLocaleString(),
+            }) : null,
+        });
+
+        // A real observation with no quota windows still has an honest read time.
+        boundary.read.mockImplementation(async () => Response.json(quotaTestResponse(snapshot)));
+        await act(async () => {
+            publishHomeAccountChange(boundary.context().serverBasis.serverId,
+                [PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1]);
+        });
+        await vi.waitFor(() => expect(hook.getCurrent().snapshot).toEqual(snapshot));
+        expect(hook.getCurrent().supported).toBe(true);
     });
 
     it('refreshes the exact account through the persisted selected machine and reloads its observation', async () => {

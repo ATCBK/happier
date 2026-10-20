@@ -25,6 +25,36 @@ const attachment = {
 } as const;
 
 describe('admitSessionStructuredInputV1', () => {
+  it('projects source review context once without changing its Session or prompt', () => {
+    const reviewComments = { sessionId: 'source-session', comments: [{
+      id: 'comment-1', filePath: 'src/index.ts', source: 'file',
+      anchor: { kind: 'line', filePath: 'src/index.ts', line: 2 },
+      snapshot: { selectedLines: ['const value = 1;'], beforeContext: [], afterContext: [] },
+      body: '  Keep the original anchor\n', createdAt: 1,
+    }] };
+    const legacyAttachments = { kind: 'attachments.v1', payload: { attachments: [{
+      name: 'notes.txt', path: '.happier/uploads/messages/source-session/file/notes.txt',
+      mimeType: 'text/plain', sizeBytes: 12,
+    }] } };
+    const admitted = admitSessionStructuredInputV1({ text: 'Existing rendered prompt', meta: {
+      happier: legacyAttachments,
+      [HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]: { v: 1, reviewComments },
+    } });
+    expect(admitted.text).toBe('Existing rendered prompt');
+    expect(admitted.meta.happier).toEqual({ kind: 'review_comments.v1', payload: reviewComments });
+    expect(admitted.meta.happierAttachments).toEqual(legacyAttachments);
+    expect(admitted.structuredInput).not.toHaveProperty('reviewComments');
+    expect(admitSessionStructuredInputV1({ text: admitted.text, meta: admitted.meta })).toEqual(admitted);
+    const transformed = preserveComposerAttachmentSelectionAcrossSessionInputTransformV1({
+      sourceMeta: { [HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]: { v: 1, reviewComments } },
+      transformedMeta: { [HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]: {
+        v: 1, reviewComments: { ...reviewComments, sessionId: 'target-session' },
+      } },
+    });
+    expect(transformed?.happier).toEqual(admitted.meta.happier);
+    expect(transformed?.[HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]).not.toHaveProperty('reviewComments');
+  });
+
   it('rejects malformed browser context with a typed admission result before reservation', () => {
     expect(() => validateSessionStructuredInputIngressV1({ meta: {
       happierBrowserContext: { kind: 'browser_context.v1', payload: { contexts: [], attachments: [] } },

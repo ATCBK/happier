@@ -3,6 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import type { RenderWithAppProvidersOptions } from '@/dev/testkit';
 import type { FocusReturnTarget } from '@/keyboard/focusReturn';
 
 type HardwareBackHandler = () => boolean | null | undefined;
@@ -242,8 +243,8 @@ function NestedPaneHarness(props: Readonly<{ innerActive: boolean }>): React.Rea
     );
 }
 
-function createNodeMock(element: React.ReactElement): NativeNode | null {
-    const props = (element as React.ReactElement<NativeElementProps>).props;
+function createNodeMock(element: Parameters<NonNullable<RenderWithAppProvidersOptions['createNodeMock']>>[0]): NativeNode | null {
+    const props: NativeElementProps = element.props;
     if (props?.accessible === true) {
         if (props.accessibilityLabel === 'Details panel') return nativeNodes.outerFocusAnchor;
         if (props.accessibilityLabel === 'Right sidebar') return nativeNodes.outerFocusAnchor;

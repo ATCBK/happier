@@ -111,8 +111,8 @@ type RemoteHistoryStoreRecord = {
  * A transport failure leaves the cursor, `hasMore` and `pagesLoaded` untouched, so every caller
  * that re-drives history — the transcript-navigation continuation effect on each transcript store
  * update, composer prefetch on each ArrowUp — would otherwise re-issue the same request against an
- * already failing (possibly rate-limiting) endpoint. The floor keeps the failing cursor retryable
- * without letting it be retried faster than this.
+ * already failing (possibly rate-limiting) endpoint. The floor suppresses automatic re-drives;
+ * an explicit Retry can request the same cursor immediately.
  */
 export const USER_MESSAGE_HISTORY_REMOTE_RETRY_COOLDOWN_MS = 30_000;
 
@@ -208,6 +208,7 @@ function updateRemoteHistoryState(cacheKey: string, update: (previous: RemoteHis
 function requestRemoteHistoryPage(params: Readonly<{
     turnProjection: boolean;
     includeLatest?: boolean;
+    explicitRetry?: boolean;
     cacheKey: string | null;
     initialBeforeSeq: number | null;
     sessionId: string | null;
@@ -232,7 +233,7 @@ function requestRemoteHistoryPage(params: Readonly<{
     const pending = remoteHistoryInFlightByCursorKey.get(cursorKey);
     if (pending) return pending;
     const retryFloorMs = remoteHistoryRetryFloorMsByCursorKey.get(cursorKey);
-    if (retryFloorMs !== undefined && Date.now() < retryFloorMs) return Promise.resolve();
+    if (!params.explicitRetry && retryFloorMs !== undefined && Date.now() < retryFloorMs) return Promise.resolve();
 
     const cacheKey = params.cacheKey;
     const request = sync.fetchUserMessageHistoryPage(params.sessionId, {
@@ -530,7 +531,7 @@ export function useUserMessageHistoryEntries(opts: UserMessageHistoryEntriesOpti
     }, [acceptedSessions, enabled, inventory, opts.scope, serverId, sessionId, sourceAvailable, source.sessionMessages, source.sessions]);
 
     const nextSessionId = inventory.find((id) => acceptedSessions[id]?.hasMore !== false || acceptedSessions[id]?.startedFromLatest !== true) ?? null;
-    const loadMore = React.useCallback(async () => {
+    const loadPage = React.useCallback(async (explicitRetry: boolean) => {
         if (!enabled || !serverId || pendingRef.current) return;
         const demandKey = contextKey;
         setAccepted((previous) => ({
@@ -547,7 +548,7 @@ export function useUserMessageHistoryEntries(opts: UserMessageHistoryEntriesOpti
             accountId: activeScope?.accountId ?? null,
         });
         try {
-            await requestRemoteHistoryPage({ cacheKey, sessionId: nextSessionId, initialBeforeSeq: null, turnProjection, includeLatest: true });
+            await requestRemoteHistoryPage({ cacheKey, sessionId: nextSessionId, initialBeforeSeq: null, turnProjection, includeLatest: true, explicitRetry });
             if (pending.cancelled || contextRef.current.key !== demandKey || !contextRef.current.enabled) return;
             const state = readRemoteHistoryState(cacheKey, null);
             setAccepted((previous) => ({
@@ -562,6 +563,8 @@ export function useUserMessageHistoryEntries(opts: UserMessageHistoryEntriesOpti
             }
         }
     }, [activeScope?.accountId, contextKey, enabled, nextSessionId, roleQuerySupported, serverId, turnProjection]);
+    const loadMore = React.useCallback(() => loadPage(false), [loadPage]);
+    const retry = React.useCallback(() => loadPage(true), [loadPage]);
 
     // Ordinary, archived and strict-query memberships each retain independent pagination in the
     // Account inventory owner. The union of cached rows cannot attest that archived/shared sessions
@@ -582,7 +585,7 @@ export function useUserMessageHistoryEntries(opts: UserMessageHistoryEntriesOpti
             totalSessions: inventory.length,
         },
         loadMore,
-        retry: loadMore,
+        retry,
         stop,
     };
 }

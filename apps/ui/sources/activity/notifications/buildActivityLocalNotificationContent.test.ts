@@ -1,5 +1,6 @@
 import {
     PUSH_NOTIFICATION_ANDROID_CHANNEL_IDS,
+    PUSH_NOTIFICATION_ACTION_IDS,
     PUSH_NOTIFICATION_CATEGORY_IDS,
 } from '@happier-dev/protocol';
 import { describe, expect, it } from 'vitest';
@@ -13,6 +14,37 @@ installActivityNotificationRuntimeCommonModuleMocks({
 });
 
 describe('buildActivityLocalNotificationContent', () => {
+    it('links an above-cap notification to its owning session without an inline answer', async () => {
+        const { buildActivityLocalNotificationContent } = await import('./buildActivityLocalNotificationContent');
+        const { parseNotificationTap } = await import('./notificationRouting');
+        const notification = buildActivityLocalNotificationContent({
+            event: {
+                kind: 'agent-request', event: 'user_action_required',
+                address: { serverId: 'server-b', sessionId: 'session-five' },
+                requestId: 'request-five',
+                requestKind: 'user_action',
+                toolName: 'AskUserQuestion',
+                toolArgs: { questions: Array.from({ length: 5 }, (_, index) => ({ question: `Question ${index}?` })) },
+            },
+            session: null,
+            serverUrl: 'https://home-b.example.test',
+        });
+        expect(notification.body).toBe('Answer all 5 in Happier');
+        expect(notification.data).toMatchObject({ serverId: 'server-b', sessionId: 'session-five', requestId: 'request-five' });
+        expect(notification.expo.categoryIdentifier).toBe(PUSH_NOTIFICATION_CATEGORY_IDS.userActionRequestV1);
+        const tap = parseNotificationTap({
+            defaultActionIdentifier: 'default',
+            response: {
+                actionIdentifier: PUSH_NOTIFICATION_ACTION_IDS.userActionOpenV1,
+                notification: { request: { content: { data: notification.data } } },
+            },
+        });
+        expect(tap?.command).toMatchObject({
+            kind: 'openSession', serverId: 'server-b', sessionId: 'session-five',
+            route: '/session/session-five?serverId=server-b',
+        });
+    });
+
     it('keeps Follow classification and exact message identity while applying preview privacy', async () => {
         const { buildActivityLocalNotificationContent } = await import('./buildActivityLocalNotificationContent');
         const event = {
@@ -204,6 +236,22 @@ describe('buildActivityLocalNotificationContent', () => {
                 channelId: PUSH_NOTIFICATION_ANDROID_CHANNEL_IDS.userActionRequestsV1,
             },
         });
+    });
+
+    it('titles a notification by the same Session name the list and header show, not only its summary', async () => {
+        const { buildActivityLocalNotificationContent } = await import('./buildActivityLocalNotificationContent');
+        const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+        const notification = buildActivityLocalNotificationContent({
+            event: {
+                kind: 'agent-request', event: 'permission_required',
+                address: { serverId: 'server-a', sessionId: 'session-named' },
+                requestId: 'req-named', requestKind: 'permission',
+                toolName: 'Bash', toolArgs: { command: 'ls' },
+            },
+            session: createSessionFixture({ id: 'session-named', metadata: { name: 'Deploy bot', path: '/work/app', host: 'box' } as never }),
+            serverUrl: 'https://stack.example.test',
+        });
+        expect(notification.title).toBe('Deploy bot');
     });
 
     it('extracts the first question for snake_case ask-user-question notifications', async () => {

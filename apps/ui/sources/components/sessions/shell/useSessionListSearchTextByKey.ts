@@ -1,4 +1,5 @@
 import { readSessionDirectoryKind } from '@happier-dev/protocol/sessions/metadata/directory';
+import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
 import { t } from '@/text';
 import * as React from 'react';
 import { useShallow } from 'zustand/react/shallow';
@@ -195,7 +196,7 @@ function buildWorkflowRunSearchText(
         // The caller supplies only rows from the current Account-owned window. A Run's bare id
         // resolves solely in that map and only for its exact active Home; Session partitions stay separate.
         if (!areServerProfileIdentifiersEquivalent(entry.serverId, scope.serverId)) continue;
-        const row = state.workflowRunsById[entry.runId];
+        const row = state.workflowRunsById[workflowRunStoreKey(entry.runId)];
         if (!row) continue;
         const parts = [entry.runId];
         if (row.metadata?.kind === 'available') {
@@ -249,9 +250,9 @@ function createSessionListSearchTextProjectionSelector(
         const runsUnchanged = previousState !== null
             && (previousState.profileScope === state.profileScope || areServerAccountScopesEqual(previousState.profileScope, state.profileScope))
             && runKeys.every(({ runId }) => (
-                previousState!.workflowRunsById?.[runId]?.metadata === state.workflowRunsById?.[runId]?.metadata
-                && previousState!.workflowRunsById?.[runId]?.summary?.where === state.workflowRunsById?.[runId]?.summary?.where
-                && Boolean(previousState!.workflowRunsById?.[runId]) === Boolean(state.workflowRunsById?.[runId])
+                previousState!.workflowRunsById?.[workflowRunStoreKey(runId)]?.metadata === state.workflowRunsById?.[workflowRunStoreKey(runId)]?.metadata
+                && previousState!.workflowRunsById?.[workflowRunStoreKey(runId)]?.summary?.where === state.workflowRunsById?.[workflowRunStoreKey(runId)]?.summary?.where
+                && Boolean(previousState!.workflowRunsById?.[workflowRunStoreKey(runId)]) === Boolean(state.workflowRunsById?.[workflowRunStoreKey(runId)])
             ));
         if (previousResult && sessionsUnchanged && runsUnchanged) {
             previousState = state;

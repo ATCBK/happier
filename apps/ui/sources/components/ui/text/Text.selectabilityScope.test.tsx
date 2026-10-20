@@ -26,7 +26,7 @@ vi.mock('@/constants/Typography', async (importOriginal) => {
   };
 });
 
-vi.mock('@/sync/store/hooks', () => ({
+vi.mock('@/sync/store/settingsReadHooks', () => ({
   useLocalSetting: () => 1,
 }));
 
@@ -104,7 +104,7 @@ describe('Text (selectability scope)', () => {
     ]));
   });
 
-  it('suppresses normal browser focus chrome while marking the field for forced-colors accessibility', async () => {
+  it('suppresses normal browser focus chrome while preserving focus and blur handlers', async () => {
     const { TextInput } = await import('./Text');
 
     const onFocus = vi.fn();
@@ -119,7 +119,6 @@ describe('Text (selectability scope)', () => {
     expect(input.props.style).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ boxShadow: expect.anything() }),
     ]));
-    expect(input.props['data-happier-text-input']).toBe('true');
 
     input.props.onFocus?.({});
     input.props.onBlur?.({});

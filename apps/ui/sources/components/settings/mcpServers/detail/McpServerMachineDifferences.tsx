@@ -10,7 +10,7 @@ import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Modal } from '@/modal';
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
-import { McpBindingOverridesEditorModal } from '../McpBindingOverridesEditorModal';
+import { McpMachineDifferenceEditorModal } from './McpMachineDifferenceEditorModal';
 import { Icon } from '@/components/ui/icons/Icon';
 import {
   ExpandableItem,
@@ -31,7 +31,7 @@ function describeOverride(override: McpServerConfigOverrideV1): string {
   if (override.stdio?.cwd)
     parts.push(
       t('capabilities.mcp.config.differsFolder', {
-        path: override.stdio.cwd.path,
+        path: override.stdio.cwd.t === 'path' ? override.stdio.cwd.path : t('capabilities.mcp.config.sessionFolder'),
       }),
     );
   if (override.remote?.url)
@@ -78,12 +78,12 @@ export const McpServerMachineDifferences = React.memo(
       const key = reachPlaceKeyV1(target);
       const { target: _target, ...fields } = current ?? { target };
       Modal.show({
-        component: McpBindingOverridesEditorModal,
+        component: McpMachineDifferenceEditorModal,
         props: {
-          overrides: current ? fields : undefined,
-          serverTransport: props.server.transport,
+          server: props.server,
+          current: current ? fields : undefined,
           secrets: props.secrets,
-          ...(props.scope === undefined ? {} : { scope: props.scope }),
+          scope: props.scope,
           onSubmit: (next: Omit<McpServerConfigOverrideV1, 'target'> | undefined) => {
             onChangeServer((server) => {
               const rest = (server.configOverrides ?? []).filter((item) => reachPlaceKeyV1(item.target) !== key);
@@ -113,7 +113,7 @@ export const McpServerMachineDifferences = React.memo(
         onOpenChange={setPickOpen}
         variant="selectable"
         search={choices.length > 8}
-        searchPlaceholder={t('machinePicker.searchPlaceholder')}
+        searchPlaceholder={t('newSession.machinePicker.searchPlaceholder')}
         showCategoryTitles={false}
         connectToTrigger
         items={choices}

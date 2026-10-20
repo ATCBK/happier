@@ -1,3 +1,5 @@
+import { lazyZodSchema } from '@happier-dev/protocol/lazyZodSchema';
+import * as z from 'zod/mini';
 import axios from 'axios';
 import { readSessionWorkStateV1FromMetadata } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateV1';
 import { readSessionWorkStatePrimaryItemV1 } from '@happier-dev/protocol/sessions/work/state/sessionWorkStatePrimary';
@@ -62,8 +64,8 @@ export function createProductionWorkflowSessionContextReader(params: ContextRead
       const workState = readSessionWorkStateV1FromMetadata(metadata);
       const goalItem = workState ? readSessionWorkStatePrimaryItemV1(workState.items.filter((item) => item.kind === 'goal'), workState.primaryItemId) : null;
       // Project known goal fields through the existing owner schema and exclude native usage.
-      const goal = goalItem ? WorkflowSessionContextGoalV1Schema.strip().parse({ ...goalItem,
-        ...(goalItem.goalCapabilities ? { goalCapabilities: WorkflowSessionContextGoalV1Schema.shape.goalCapabilities.unwrap().strip().parse(goalItem.goalCapabilities) } : {}),
+      const goal = goalItem ? lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(WorkflowSessionContextGoalV1Schema)).parse({ ...goalItem,
+        ...(goalItem.goalCapabilities ? { goalCapabilities: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(WorkflowSessionContextGoalV1Schema.shape.goalCapabilities._zod.def.innerType).parse(goalItem.goalCapabilities) } : {}),
       }) : undefined;
       const usage = includeUsage ? await readUsage(params, target.sessionId, goal?.startedAt ?? goal?.createdAt)
         : { kind: 'unavailable' as const };

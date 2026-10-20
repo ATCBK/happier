@@ -63,7 +63,6 @@ describe('projectMachineAgentConnectedServices', () => {
 
     it.each([
         { status: 'needs_reauth' as const },
-        { status: 'refresh_failed_retryable' as const },
         { expiresAt: 1_000 },
         { authenticationModeId: null },
         { authenticationModeId: 'missing-mode' },
@@ -74,6 +73,25 @@ describe('projectMachineAgentConnectedServices', () => {
             ...defaults, profile: { ...profileDefaults, connectedAccountsV4: [account(overrides)] },
         });
         expect(projected.acme).toEqual([expect.objectContaining({ connected: true, healthy: false })]);
+    });
+
+    it('admits a retryable profile for daemon preparation without borrowing a healthy sibling', () => {
+        const connectedServices = projectMachineAgentConnectedServices({
+            ...defaults, profile: { ...profileDefaults, connectedAccountsV4: [
+                account({ status: 'needs_reauth', ref: { service, accountId: 'revoked' } }),
+                account({ status: 'refresh_failed_retryable' }),
+            ] },
+        }).acme;
+        const selected = (profileId: string) => resolveMachineAgentSignIn({
+            native: { status: 'signedOut', loginSupport: 'login_terminal' }, connectedServices,
+            credentialBindings: { v: 2, bindingsByServiceId: { 'acme.agent/account': {
+                source: 'connected', selection: 'profile', profileId,
+            } } },
+        });
+        expect(selected('work').status).toBe('signedIn');
+        expect(selected('revoked')).toMatchObject({ status: 'signedOut', connectedAccountFailure: {
+            code: 'connected_service_credential_reconnect_required', serviceId: 'acme.agent/account', profileId: 'revoked',
+        } });
     });
 
     it('requires account configuration only when the exact authentication mode owns it', () => {
@@ -194,7 +212,7 @@ describe('projectMachineAgentConnectedServices', () => {
             ...legacyDefaults, profile: { ...profileDefaults, connectedServicesV2: [{
                 ...legacyDefaults.profile.connectedServicesV2[0], profiles: [{ ...legacyDefaults.profile.connectedServicesV2[0].profiles[1], status: 'refresh_failed_retryable' }],
             }] },
-        }).codex).toEqual([expect.objectContaining({ connected: true, healthy: false })]);
+        }).codex).toEqual([expect.objectContaining({ connected: true, healthy: true })]);
         expect(projectMachineAgentConnectedServices({ ...legacyDefaults, entries: [] }).codex)
             .toEqual([expect.objectContaining({ connected: false, healthy: false })]);
         expect(projectMachineAgentConnectedServices({ ...legacyDefaults, entries: [{ ...legacyEntry, executable: false }] }).codex)

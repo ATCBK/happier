@@ -25,6 +25,7 @@ import { renderSourceQualifiedId } from '../corpus/identity/components.js';
 import type { TriageAdmittedGetExecutorV1 } from '../composer/resolveForDispatch.js';
 import { TRIAGE_SOURCES_CONTRIBUTION_POINT_REF_V1 } from '../manifest.js';
 import { requireTriageAccountStorage } from '../requiredAccountStorage.js';
+import { toTriageWireObservation } from '../projection/listWindowWire.js';
 import { isTriageAccountCaller } from './callerSource.js';
 import {
   indexTriageAdmittedSourcesV1,
@@ -173,7 +174,7 @@ export function createTriageReobserveEntryActionHandler(): ActionHandler<
     });
     if (result.kind === 'observed') {
       const { entryRef, ...observation } = result.observation;
-      return { kind: 'observed', entryRef, observation };
+      return { kind: 'observed', entryRef, observation: toTriageWireObservation(observation) };
     }
     return result.kind === 'unavailable'
       ? { kind: 'unavailable' }

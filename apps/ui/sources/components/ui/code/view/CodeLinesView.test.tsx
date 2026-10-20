@@ -134,9 +134,7 @@ describe('CodeLinesView', () => {
         const beforeContentContainerStyle = before.props.contentContainerStyle;
         const beforeListFooterComponent = before.props.ListFooterComponent;
 
-        await renderer.act(async () => {
-            rendered.tree.update(<CodeLinesView lines={lines} />);
-        });
+        await rendered.update(<CodeLinesView lines={lines} />);
 
         const after = findFirstByType(rendered.tree, 'FlatList');
         if (!after) {

@@ -89,7 +89,8 @@ describe('WebPromptModal', () => {
             const pressable = getNodeByTestID(screen, testID);
             const text = getTextContent(pressable);
 
-            expect(pressable.props.accessibilityRole).toBe('button');
+            // Web renders the shared pressable's ARIA role.
+            expect(pressable.props.role ?? pressable.props.accessibilityRole).toBe('button');
             expect(pressable.props.accessibilityLabel).toBe(text);
         }
     });

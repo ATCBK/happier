@@ -62,6 +62,11 @@ function resolveDeploymentRuntimeFingerprint(instance: OidcAuthProviderInstanceC
             canonicalSet(instance.allow.groupsAll),
             instance.fetchUserInfo ? "1" : "0",
             instance.storeRefreshToken ? "1" : "0",
+            ...(instance.tokenExchange ? [
+                canonicalSet(instance.tokenExchange.allowedClientIds),
+                instance.tokenExchange.clientIdClaim ?? "",
+                instance.tokenExchange.subjectClaim,
+            ] : []),
         ],
     );
     return `deployment:v1:${digest}`;

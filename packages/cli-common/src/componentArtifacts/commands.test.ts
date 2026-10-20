@@ -193,7 +193,7 @@ describe('execOrThrow', () => {
 });
 
 describe('compileBunBinary', () => {
-    it('can disable standalone executable dotenv and bunfig autoloading', async () => {
+    it('controls package metadata loading independently of ambient executable configuration', async () => {
         const tempRoot = mkdtempSync(join(tmpdir(), 'cli-common-bun-config-'));
         try {
             const entrypoint = join(tempRoot, 'index.mjs');
@@ -208,6 +208,7 @@ describe('compileBunBinary', () => {
                 bunCommand: 'bun',
                 autoloadDotenv: false,
                 autoloadBunfig: false,
+                autoloadPackageJson: true,
                 defines: { 'process.env.NODE_ENV': '"production"' },
                 runCommand: async (cmd, args) => {
                     calls.push({ cmd, args });
@@ -217,6 +218,7 @@ describe('compileBunBinary', () => {
 
             expect(calls[0]?.args).toContain('--no-compile-autoload-dotenv');
             expect(calls[0]?.args).toContain('--no-compile-autoload-bunfig');
+            expect(calls[0]?.args).toContain('--compile-autoload-package-json');
             expect(calls[0]?.args).toContain('--define=process.env.NODE_ENV="production"');
         } finally {
             rmSync(tempRoot, { recursive: true, force: true });
@@ -245,7 +247,7 @@ describe('compileBunBinary', () => {
             expect(calls).toEqual([
                 {
                     cmd: 'bun',
-                    args: ['build', '--compile', '--no-cache', '--target=bun-windows-x64', entrypoint, '--outfile', outfile],
+                    args: ['build', '--compile', '--no-cache', '--target=bun-windows-x64', entrypoint, '--outfile', outfile, '--no-compile-autoload-bunfig'],
                     cwd: process.cwd(),
                 },
             ]);
@@ -283,6 +285,7 @@ describe('compileBunBinary', () => {
                     '--target=bun-linux-x64-baseline',
                     `--entrypoint=${entrypoint}`,
                     `--outfile=${outfile}`,
+                    '--no-compile-autoload-bunfig',
                     '--external=redis',
                 ],
             }]);

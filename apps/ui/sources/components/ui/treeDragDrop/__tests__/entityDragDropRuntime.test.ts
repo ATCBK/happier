@@ -8,8 +8,8 @@ import { dispatchEscapeToLayerStack, ESCAPE_LAYER_PRIORITIES, registerEscapeLaye
 
 const scope = { serverId: 'home-a', accountId: 'account-a' };
 const session: EntityDragItemV1 = { kind: 'session', scope, address: { serverId: scope.serverId, sessionId: 'child' } };
-const allowed: EntityDropAdmissionV1 = { status: 'allowed', effect: { actionId: 'session.reports_to.set', input: { sessionId: 'child', leadSessionId: 'lead' }, preview: { verb: 'Put under', target: 'Lead', consequence: 'Both keep running' } } };
-const refusal: EntityDropAdmissionV1 = { status: 'refused', reason: { code: 'reports_to_forbidden', message: 'Cannot take reports' } };
+const allowed: EntityDropAdmissionV1 = { status: 'allowed', effect: { actionId: 'session.manager.set', input: { sessionId: 'child', managerSessionId: 'lead' }, preview: { verb: 'Put under', target: 'Lead', consequence: 'Both keep running' } } };
+const refusal: EntityDropAdmissionV1 = { status: 'refused', reason: { code: 'manager_forbidden', message: 'Cannot take reports' } };
 
 function fixture() {
     const runtime = createEntityDragDropRuntime();
@@ -114,7 +114,7 @@ describe('mounted entity drag owner', () => {
         const release = carry.release();
         expect(f.runtime.getSnapshot().phase).toBe('pending');
         sourceBounds = { x: 10, y: 20, width: 300, height: 40 };
-        const outcome: EntityDropOutcomeV1 = { status: 'refused', reason: { code: 'reports_to_forbidden', message: 'Cannot take reports' } };
+        const outcome: EntityDropOutcomeV1 = { status: 'refused', reason: { code: 'manager_forbidden', message: 'Cannot take reports' } };
         finish(outcome);
         expect(await release).toEqual(outcome);
         retire();
@@ -261,7 +261,7 @@ describe('mounted entity drag owner', () => {
     it('omits unchanged chooser destinations while retaining denied and pending choices and pointer admission', async () => {
         const f = fixture();
         const unchanged = ['same-position', 'no-change', 'board-no-change', 'widget_position_unchanged', 'workspace_tab_already_here'];
-        const codes = [...unchanged, 'reports_to_forbidden', 'widget_admission_pending'];
+        const codes = [...unchanged, 'manager_forbidden', 'widget_admission_pending'];
         f.runtime.registerTarget({ ...f.target,
             listDestinations: () => codes.map(code => ({ destination: code, label: code })),
             resolve: ({ destination }) => ({ status: 'refused', reason: { code: String(destination), message: 'Unavailable' } }),
@@ -270,7 +270,7 @@ describe('mounted entity drag owner', () => {
             resolve: () => ({ status: 'refused', reason: { code: 'same-position', message: 'Already here' } }),
         });
         expect(f.runtime.getDestinations('source').map(destination => destination.label)).toEqual([
-            'reports_to_forbidden', 'widget_admission_pending',
+            'manager_forbidden', 'widget_admission_pending',
         ]);
         const carry = f.runtime.begin('source', 'pointer')!;
         carry.choose('unchanged-direct');
@@ -469,5 +469,16 @@ describe('mounted entity drag owner', () => {
         f.retireSource();
         expect(f.runtime.getSnapshot().phase).toBe('idle');
         expect(f.runtime.getSnapshot().item).toBeNull();
+    });
+});
+
+describe('a target that keeps the carried card clear of its region', () => {
+    it('publishes that region for the selected target only', () => {
+        const f = fixture();
+        const clear = { x: 0, y: 0, width: 400, height: 300 };
+        f.retireTarget();
+        f.runtime.registerTarget({ ...f.target, getClearBounds: () => clear });
+        expect(f.runtime.getTargetClearBounds('target')).toEqual(clear);
+        expect(f.runtime.getTargetClearBounds('other')).toBeNull();
     });
 });

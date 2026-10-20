@@ -10,6 +10,7 @@ import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
 import { AIBackendProfileSchema } from '@happier-dev/protocol/profiles/backendProfileSchema';
 import { PROFILE_PROVIDER_CONVERSION_ROUTE_V1, ProfileProviderConversionMutationV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { DEFAULT_PROVIDER_SETTINGS_V1, ProviderSettingsV1Schema } from '@happier-dev/protocol/providers/settings/v1';
@@ -89,7 +90,7 @@ describe('public legacy Profile conflict confirmation', () => {
       migratedAt: 20, processEnv: process.env });
     const candidate = baseContext.candidates.find(entry => entry.kind === 'connection' && entry.sourceProfileId === 'deepseek');
     if (!candidate || candidate.kind !== 'connection' || !candidate.selectedModel) throw new Error('Expected a model-bearing migration candidate');
-    const winnerId = 'pc-review-winner';
+    const winnerId = ProviderConnectionIdSchema.parse('pc-review-winner');
     const initialSettings = ProviderSettingsV1Schema.parse({ ...DEFAULT_PROVIDER_SETTINGS_V1,
       connections: [{ ...candidate.connection, id: winnerId, revision: 1 }],
       secretBindingsByConnectionId: { [winnerId]: { account: { [descriptor.credentialBinding.credentialSlotId]: winnerReference } } },

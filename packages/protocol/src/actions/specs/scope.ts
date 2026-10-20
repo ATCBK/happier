@@ -1,5 +1,5 @@
 import { ScopeActionInputSchemas, ScopeActionOutputSchemas } from '../scopeActionFamily.js';
-import type { PreNormalizedActionSpec } from '../actionSpecs.js';
+import type { ActionSpecProjectionMetadata, PreNormalizedActionSpec } from '../actionSpecs.js';
 
 const clientView = {
   safety: 'safe', requiredAuthority: 'account_automation', executionPlacement: 'client', placements: [],
@@ -8,7 +8,15 @@ const clientView = {
   inputHints: { fields: [] },
 } as const;
 
-export const SCOPE_ACTION_SPECS = [
+type ScopeActionSpec = {
+  [Id in keyof typeof ScopeActionInputSchemas]: ActionSpecProjectionMetadata & typeof clientView & Readonly<{
+    id: Id;
+    approval: { result: 'required' };
+    inputSchema: (typeof ScopeActionInputSchemas)[Id];
+    outputSchema: (typeof ScopeActionOutputSchemas)[Id];
+  }>;
+}[keyof typeof ScopeActionInputSchemas];
+export const SCOPE_ACTION_SPECS: readonly ScopeActionSpec[] = [
   { ...clientView, id: 'workflow.library.view.get', approval: {result: 'required'}, title: 'Read Workflow Library view',
     examples: { voice: { argsExample: '{}' } }, bindings: { sdkMethod: 'workflow.libraryView.get' },
     description: 'Read the focused mounted Workflow Library view, offered views, search text and visible loaded row keys on this client.', sideEffectClass: 'read',

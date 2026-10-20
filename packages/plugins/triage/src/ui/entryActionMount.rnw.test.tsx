@@ -32,6 +32,7 @@ import {
     TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1,
     TriageStartEntrySessionInputV1Schema,
     type TriageStartEntrySessionInputV1,
+    type TriageStartEntrySessionResultV1,
 } from '../actions/entrySessionProtocol.js';
 import {
     listTriageEntries,
@@ -39,6 +40,9 @@ import {
     type TriageAdmittedSourceV1,
 } from '../actions/listEntries.js';
 import { TriageListEntriesInputV1Schema } from '../actions/listEntriesProtocol.js';
+import { reobserveTriageEntry } from '../actions/reobserveEntry.js';
+import { TRIAGE_REOBSERVE_ENTRY_ACTION_LOCAL_ID_V1, TriageReobserveEntryInputV1Schema } from '../actions/reobserveEntryProtocol.js';
+import { toTriageWireObservation } from '../projection/listWindowWire.js';
 import { listTriagePinnedEntries } from '../actions/userMarks.js';
 import {
     TRIAGE_LIST_PINNED_ENTRIES_ACTION_LOCAL_ID_V1,
@@ -124,6 +128,17 @@ const PREPARE_REVIEW_WORKSPACE_OPERATION = Object.freeze({
     role: 'prepareReviewWorkspace',
     action: { pluginId: SOURCE.pluginId, localId: 'prepare-review-workspace' },
 }) satisfies PluginUiTargetedContributionOperationV1;
+
+const GET_OPERATION = Object.freeze({
+    ...PREPARE_REVIEW_WORKSPACE_OPERATION,
+    role: 'get',
+    action: { pluginId: SOURCE.pluginId, localId: 'get' },
+}) satisfies PluginUiTargetedContributionOperationV1;
+
+const PR_COMPARISON = { kind: 'pullRequest', locator: {
+    providerId: 'forge', repository: 'example/repository', number: 17,
+    baseOid: 'a'.repeat(40), headOid: 'b'.repeat(40),
+} } as const;
 
 /**
  * The source's own declared descriptor, as this mount's targeted snapshot
@@ -224,13 +239,20 @@ type Harness = Readonly<{
     formalReviewReady: boolean;
     /** Every chooser engine-list request reached through this physical mount. */
     reviewEngineListRequests: readonly unknown[];
+    comparisonOpens: readonly unknown[];
+    setEntryListed(listed: boolean): void;
 }>;
 
 function createHarness(options: Readonly<{
     formalReviewReady?: boolean;
+    reviewRevisionOnlyOnGet?: boolean;
     includeSecondEntry?: boolean;
     issue?: boolean;
     involvement?: readonly ('author' | 'assignee' | 'reviewRequested')[];
+    /** The durable detail read answers `unavailable`, so the detail never becomes ready. */
+    detailUnavailable?: boolean;
+    comparisonRead?: () => Promise<unknown>;
+    comparisonOpen?: () => Promise<unknown>;
 }> = {}): Harness {
     const descriptor = options.issue === true
         ? { ...DESCRIPTOR, kinds: DESCRIPTOR.kinds.map((kind) => ({ ...kind, workflowSubject: 'issue' })) }
@@ -239,6 +261,7 @@ function createHarness(options: Readonly<{
     control.sourceInstances.seed(toCorpusStoredValue(instanceRow()));
     const startRequests: TriageStartEntrySessionInputV1[] = [];
     const reviewEngineListRequests: unknown[] = [];
+    const comparisonOpens: unknown[] = [];
     const formalReviewReady = options.formalReviewReady === true;
     let draftSettles = true;
     let registry: Readonly<{ items: readonly unknown[]; truncated: boolean }> = {
@@ -256,6 +279,7 @@ function createHarness(options: Readonly<{
         delivery: 'notRequested',
     }];
     let startResultIndex = 0;
+    let entryListed = true;
 
     const admitted = [{
         contributor: SOURCE_CONTRIBUTOR,
@@ -271,13 +295,13 @@ function createHarness(options: Readonly<{
     const executeScan: TriageAdmittedOperationExecutorV1 = async () => ({
         kind: 'complete',
         observations: [
-            {
+            ...(entryListed ? [{
                 kind: 'present',
                 localRef: { kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' },
                 locator: testkitLocator(),
                 snapshot: testkitSnapshot({
                     title: ENTRY_TITLE,
-                    ...(formalReviewReady ? {
+                    ...(formalReviewReady && !options.reviewRevisionOnlyOnGet ? {
                         reviewRevision: {
                             baseSha: 'a'.repeat(40),
                             headSha: 'b'.repeat(40),
@@ -288,7 +312,7 @@ function createHarness(options: Readonly<{
                 viewer: testkitViewer(options.involvement === undefined ? {} : { involvement: [...options.involvement] }),
                 sourceUpdatedAtMs: 3_000,
                 repository: REPOSITORY,
-            },
+            } as const] : []),
             ...(options.includeSecondEntry === true ? [{
                 kind: 'present' as const,
                 localRef: { kindId: 'pull-request', collisionScope: 'example/repository', entryId: '18' },
@@ -303,7 +327,31 @@ function createHarness(options: Readonly<{
     } satisfies TriageScanResultV1);
 
     async function executeAction(request: Readonly<{ action: unknown; input: unknown }>): Promise<unknown> {
+        if (typeof request.action === 'object' && request.action !== null
+            && 'localId' in request.action && request.action.localId === 'get') {
+            return options.comparisonRead?.();
+        }
         const action = String(request.action);
+        if (action === TRIAGE_REOBSERVE_ENTRY_ACTION_LOCAL_ID_V1) {
+            const result = await reobserveTriageEntry(TriageReobserveEntryInputV1Schema.parse(request.input), {
+                readConfiguredInstance: async () => configuredInstance(),
+                readAdmittedSources: async () => admitted,
+                // The external source's authoritative get can carry revision facts absent from its scan.
+                executeGet: async (_operation, input) => ({
+                    kind: 'present', localRef: input.localRef, locator: testkitLocator(),
+                    snapshot: testkitSnapshot({ title: input.localRef.entryId === '18' ? SECOND_ENTRY_TITLE : ENTRY_TITLE,
+                        ...(formalReviewReady ? {
+                            reviewRevision: { baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40), nativeRevision: 'revision-1' },
+                        } : {}) }),
+                    viewer: testkitViewer(options.involvement === undefined ? {} : { involvement: [...options.involvement] }),
+                    repository: REPOSITORY,
+                }),
+                nowMs: () => Date.now() + 1,
+            });
+            if (result.kind !== 'observed') return result;
+            const { entryRef, ...observation } = result.observation;
+            return { kind: 'observed', entryRef, observation: toTriageWireObservation(observation) };
+        }
         if (action === TRIAGE_LIST_PINNED_ENTRIES_ACTION_LOCAL_ID_V1) {
             return await listTriagePinnedEntries(
                 TriageListPinnedEntriesInputV1Schema.parse(request.input),
@@ -311,6 +359,7 @@ function createHarness(options: Readonly<{
             );
         }
         if (action === TRIAGE_READ_ENTRY_DETAIL_ACTION_LOCAL_ID_V1) {
+            if (options.detailUnavailable === true) return { kind: 'unavailable' };
             // The descriptor is what the offered controls are chosen from; the
             // instance is the one the window selected for this row.
             return TriageReadEntryDetailResultV1Schema.parse({
@@ -320,6 +369,7 @@ function createHarness(options: Readonly<{
             });
         }
         if (action === 'projects.list') return registry;
+        if (action === 'session.open') { comparisonOpens.push(request.input); return options.comparisonOpen?.() ?? null; }
         if (action === 'sessions.spawn.profiles.list') return { items: profiles };
         if (action === 'agents.backends.list') return { items: backends };
         if (action === 'prompts.invocation.resolve') {
@@ -390,10 +440,13 @@ function createHarness(options: Readonly<{
         get reviewEngineListRequests() {
             return reviewEngineListRequests;
         },
+        comparisonOpens,
+        setEntryListed: (listed) => { entryListed = listed; },
     };
 }
 
 const mounted: PluginUiTestkit[] = [];
+const refreshMountedShell = new WeakMap<PluginUiTestkit, (trigger?: 'view' | 'manual') => Promise<unknown>>();
 
 /** How many times this mount opened the host's New Session surface. */
 let draftsOpened = 0;
@@ -402,7 +455,7 @@ let draftSeeds: unknown[] = [];
 /** Seeds handed to the host-owned New Session authoring surface. */
 let newSessionSeeds: unknown[] = [];
 
-async function mountShell(harness: Harness): Promise<PluginUiTestkit> {
+async function mountShell(harness: Harness, hostedDetail: boolean | Readonly<{ available: boolean }> = false, chooseDraft?: (signal: AbortSignal) => Promise<PluginUiSessionServerStartDraftV1 | null>): Promise<PluginUiTestkit> {
     const ephemeralSharedScope = createTriageEphemeralSharedScopeFixture();
     let fixture!: PluginUiTestkit;
     await act(async () => {
@@ -427,9 +480,9 @@ async function mountShell(harness: Harness): Promise<PluginUiTestkit> {
                                     version: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1,
                                 },
                                 descriptor: harness.descriptor,
-                                operations: harness.formalReviewReady
+                                operations: [GET_OPERATION, ...(harness.formalReviewReady
                                     ? [PREPARE_REVIEW_WORKSPACE_OPERATION]
-                                    : [],
+                                    : [])],
                                 surfaces: [],
                             }],
                         }],
@@ -438,6 +491,7 @@ async function mountShell(harness: Harness): Promise<PluginUiTestkit> {
             }),
             adapter: createPluginUiRnwSemanticSurfaceAdapter({
                 ephemeralSharedScope, overlays: true,
+                ...(hostedDetail ? { detailsPane: typeof hostedDetail === 'boolean' ? { available: true } : hostedDetail } : {}),
                 // The native/web focus adapter is a genuine host boundary, as in the review chooser harness.
                 physicalFocus(target) { target.focus(); return true; },
             }),
@@ -445,7 +499,7 @@ async function mountShell(harness: Harness): Promise<PluginUiTestkit> {
                 publishCurrentUiContext: () => undefined,
                 executeAction: async ({ action, input }) =>
                     await harness.executeAction({ action, input }) as never,
-                selectActionInput: async ({ request }) => {
+                selectActionInput: async ({ request, signal }) => {
                     if ('operation' in request) {
                         const operation = request.operation;
                         return {
@@ -480,6 +534,10 @@ async function mountShell(harness: Harness): Promise<PluginUiTestkit> {
                     }
                     draftsOpened += 1;
                     draftSeeds.push(request.draft);
+                    if (chooseDraft) {
+                        const draft = await chooseDraft(signal);
+                        return draft === null ? { kind: 'cancelled' } : { kind: 'serverStartDraft', draft };
+                    }
                     return harness.draftSettles()
                         ? { kind: 'serverStartDraft', draft: SETTLED_DRAFT } as never
                         : { kind: 'cancelled' } as never;
@@ -492,6 +550,7 @@ async function mountShell(harness: Harness): Promise<PluginUiTestkit> {
         });
     });
     mounted.push(fixture);
+    refreshMountedShell.set(fixture, (trigger = 'view') => refreshTriageListWindow(trigger, fixture.context.hostApi, ephemeralSharedScope));
     await act(async () => {
         await refreshTriageListWindow('view', fixture.context.hostApi, ephemeralSharedScope);
     });
@@ -530,6 +589,269 @@ afterEach(async () => {
 const PREPARATION_UNSUPPORTED_COPY = 'This source cannot prepare a review workspace, so actions that need one cannot start here.';
 
 describe('the entry action controls on the mounted detail header', () => {
+    it.each([true, false])('keeps the recipe owner when the host pane relocates (opened beside page=%s)', async (openedBeside) => {
+        let beside = openedBeside;
+        let finishRecipe!: (draft: PluginUiSessionServerStartDraftV1 | null) => void;
+        let chooserSignal!: AbortSignal;
+        const harness = createHarness({ comparisonRead: async () => ({
+            kind: 'present',
+            localRef: { kindId: ENTRY_REF.kindId, collisionScope: ENTRY_REF.collisionScope, entryId: ENTRY_REF.entryId },
+            locator: testkitLocator(), snapshot: testkitSnapshot({ title: ENTRY_TITLE }), viewer: testkitViewer(),
+            comparisonSource: PR_COMPARISON,
+        }) });
+        harness.setStartResults([{ v: 1, type: 'linked', sessionId: 'session-a',
+            disposition: 'created', delivery: 'none', finalOpen: 'deferred' } satisfies TriageStartEntrySessionResultV1]);
+        const shell = await mountShell(harness, { get available() { return beside; } }, (signal) => {
+            chooserSignal = signal;
+            return new Promise((resolve) => { finishRecipe = resolve; });
+        });
+        await openTheRow(shell);
+        await pressAction(shell, 'More actions');
+        await pressAction(shell, 'Walk through');
+        expect(draftsOpened).toBe(1);
+        for (const next of [!openedBeside, openedBeside]) {
+            beside = next;
+            await act(async () => { await shell.updateSurface(shell.context.surface); });
+            await settle();
+            expect(chooserSignal.aborted).toBe(false);
+        }
+        await act(async () => { finishRecipe(SETTLED_DRAFT); });
+        await settle();
+        expect(harness.startRequests).toHaveLength(1);
+        expect(harness.comparisonOpens).toEqual([{ sessionId: 'session-a', serverId: 'server-a',
+            destination: { kind: 'scmReview', comparison: PR_COMPARISON, view: 'walkthrough' } }]);
+        expect(draftsOpened).toBe(1);
+    }, 60_000);
+
+    it('withdraws the pending chooser when its entry owner retires', async () => {
+        let chooserSignal!: AbortSignal;
+        let finishRecipe!: (draft: PluginUiSessionServerStartDraftV1 | null) => void;
+        const harness = createHarness({ includeSecondEntry: true, comparisonRead: async () => ({
+            kind: 'present',
+            localRef: { kindId: ENTRY_REF.kindId, collisionScope: ENTRY_REF.collisionScope, entryId: ENTRY_REF.entryId },
+            locator: testkitLocator(), snapshot: testkitSnapshot({ title: ENTRY_TITLE }), viewer: testkitViewer(),
+            comparisonSource: PR_COMPARISON,
+        }) });
+        const shell = await mountShell(harness, true, (signal) => {
+            chooserSignal = signal;
+            return new Promise((resolve) => { finishRecipe = resolve; });
+        });
+        await openTheRow(shell);
+        await pressAction(shell, 'More actions');
+        await pressAction(shell, 'Walk through');
+        await act(async () => { await shell.updatePageLocation(buildTriageRouteSubPathV1({
+            ...TRIAGE_ROUTE_DEFAULT_LENS_V1, selection: SECOND_ENTRY_REF,
+        })); });
+        await settle();
+        expect(chooserSignal.aborted).toBe(true);
+        // Even a late submit cannot become a creation for the replacement entry.
+        await act(async () => { finishRecipe(SETTLED_DRAFT); });
+        await settle();
+        expect(harness.startRequests).toEqual([]);
+        expect(harness.comparisonOpens).toEqual([]);
+    }, 60_000);
+
+    it.each([
+        { hosted: false, openFails: false, confirmed: false },
+        { hosted: true, openFails: false, confirmed: false },
+        { hosted: false, openFails: true, confirmed: false },
+        { hosted: true, openFails: true, confirmed: false },
+        { hosted: true, openFails: false, confirmed: true },
+        { hosted: true, openFails: true, confirmed: true },
+    ])('settles a pinned recipe when a source refresh removes its selected entry: %j', async ({ hosted, openFails, confirmed }) => {
+        let finishRecipe!: (draft: PluginUiSessionServerStartDraftV1 | null) => void;
+        let finishStart!: (result: TriageStartEntrySessionResultV1) => void;
+        let reads = 0;
+        const harness = createHarness({ comparisonRead: async () => {
+            reads += 1;
+            return {
+                kind: 'present',
+                localRef: { kindId: ENTRY_REF.kindId, collisionScope: ENTRY_REF.collisionScope, entryId: ENTRY_REF.entryId },
+                locator: testkitLocator(), snapshot: testkitSnapshot({ title: ENTRY_TITLE }), viewer: testkitViewer(),
+                comparisonSource: PR_COMPARISON,
+            };
+        }, ...(openFails ? { comparisonOpen: async () => { throw new Error('Navigation unavailable'); } } : {}) });
+        const startResult = { v: 1, type: 'linked', sessionId: 'session-a',
+            disposition: 'created', delivery: 'none', finalOpen: 'deferred' } satisfies TriageStartEntrySessionResultV1;
+        harness.setStartResults([confirmed ? () => new Promise<TriageStartEntrySessionResultV1>((resolve) => { finishStart = resolve; }) : startResult]);
+        const shell = await mountShell(harness, hosted, () => new Promise((resolve) => { finishRecipe = resolve; }));
+        await openTheRow(shell);
+        await pressAction(shell, 'More actions');
+        await pressAction(shell, 'Walk through');
+        expect(draftsOpened).toBe(1);
+        if (confirmed) {
+            await act(async () => { finishRecipe(SETTLED_DRAFT); });
+            await settle();
+            expect(harness.startRequests).toHaveLength(1);
+        }
+        // A new source walk drops the row without changing the reader's selection or pinned refs.
+        harness.setEntryListed(false);
+        await act(async () => { await refreshMountedShell.get(shell)!('manual'); });
+        await settle();
+        await expect(shell.getByText('This entry is no longer in the list')).resolves.toBeDefined();
+        await act(async () => {
+            if (confirmed) finishStart(startResult);
+            else finishRecipe(SETTLED_DRAFT);
+        });
+        await settle();
+        expect(harness.startRequests).toHaveLength(1);
+        expect(harness.comparisonOpens).toEqual([{ sessionId: 'session-a', serverId: 'server-a',
+            destination: { kind: 'scmReview', comparison: PR_COMPARISON, view: 'walkthrough' } }]);
+        expect(reads).toBe(1);
+        expect(draftsOpened).toBe(1);
+        if (openFails) {
+            await expect(shell.getByText('The session was created and linked, but Happier could not open it.')).resolves.toBeDefined();
+        }
+    }, 60_000);
+
+    it.each([false, true].flatMap((hosted) => ['opened', 'open failed', 'cancelled', 'entry retired'].map((outcome) => ({ hosted, outcome }))))(
+        'settles the Walk through recipe after a wide-phone-wide resize while the chooser is pending: %j', async ({ hosted, outcome }) => {
+        let finishRecipe!: (draft: PluginUiSessionServerStartDraftV1 | null) => void;
+        const harness = createHarness({ includeSecondEntry: outcome === 'entry retired', comparisonRead: async () => ({
+            kind: 'present',
+            localRef: { kindId: ENTRY_REF.kindId, collisionScope: ENTRY_REF.collisionScope, entryId: ENTRY_REF.entryId },
+            locator: testkitLocator(), snapshot: testkitSnapshot({ title: ENTRY_TITLE }), viewer: testkitViewer(),
+            comparisonSource: PR_COMPARISON,
+        }), ...(outcome === 'open failed' ? { comparisonOpen: async () => { throw new Error('Navigation unavailable'); } } : {}) });
+        harness.setStartResults([{ v: 1, type: 'linked', sessionId: 'session-a',
+            disposition: 'created', delivery: 'none', finalOpen: 'deferred' } satisfies TriageStartEntrySessionResultV1]);
+        const shell = await mountShell(harness, hosted, () => new Promise((resolve) => { finishRecipe = resolve; }));
+        const resize = async (width: number) => {
+            const stage = document.querySelector(`[data-testid="${TRIAGE_SHELL_FILL_TEST_ID_V1}:stage"]`)!;
+            const onLayout = (stage as unknown as { __reactLayoutHandler: (event: unknown) => void }).__reactLayoutHandler;
+            await act(async () => { onLayout({ nativeEvent: { layout: { x: 0, y: 0, width, height: 940 } } }); });
+            await settle();
+        };
+        await resize(1440);
+        await openTheRow(shell);
+        await pressAction(shell, 'More actions');
+        await pressAction(shell, 'Walk through');
+        expect(draftsOpened).toBe(1);
+        expect(harness.startRequests).toHaveLength(0);
+        await resize(390);
+        if (!hosted) expect(document.querySelector(`[data-testid="${TRIAGE_DETAIL_FOOTER_TEST_ID_V1}"]`)).not.toBeNull();
+        await resize(1440);
+        expect(document.querySelector(`[data-testid="${TRIAGE_DETAIL_FOOTER_TEST_ID_V1}"]`)).toBeNull();
+        if (outcome === 'entry retired') {
+            await act(async () => { await shell.updatePageLocation(buildTriageRouteSubPathV1({
+                ...TRIAGE_ROUTE_DEFAULT_LENS_V1, selection: SECOND_ENTRY_REF,
+            })); });
+            await settle();
+        }
+        await act(async () => { finishRecipe(outcome === 'cancelled' ? null : SETTLED_DRAFT); });
+        await settle();
+        if (outcome === 'cancelled' || outcome === 'entry retired') {
+            expect(harness.startRequests).toEqual([]);
+            expect(harness.comparisonOpens).toEqual([]);
+            if (outcome === 'entry retired') {
+                expect([...document.querySelectorAll('[role="heading"]')].some(node => node.textContent === SECOND_ENTRY_TITLE)).toBe(true);
+            }
+            return;
+        }
+        expect(harness.startRequests).toHaveLength(1);
+        expect(harness.comparisonOpens).toEqual([{ sessionId: 'session-a', serverId: 'server-a',
+            destination: { kind: 'scmReview', comparison: PR_COMPARISON, view: 'walkthrough' } }]);
+        expect(draftsOpened).toBe(1);
+        if (outcome === 'open failed') {
+            await expect(shell.getByText('The session was created and linked, but Happier could not open it.')).resolves.toBeDefined();
+        }
+    }, 60_000);
+
+    it.each([false, true])('hands off Walk through after the detail refreshes during its comparison read (hosted=%s)', async (hosted) => {
+        let finishRead!: (result: unknown) => void;
+        let reads = 0;
+        const harness = createHarness({ comparisonRead: async () => {
+            reads += 1;
+            return await new Promise((resolve) => { finishRead = resolve; });
+        } });
+        harness.setStartResults([{ v: 1, type: 'linked', sessionId: 'session-a',
+            disposition: 'created', delivery: 'none', finalOpen: 'deferred' } satisfies TriageStartEntrySessionResultV1]);
+        const shell = await mountShell(harness, hosted);
+        await openTheRow(shell);
+        await pressAction(shell, 'More actions');
+        await pressAction(shell, 'Walk through');
+        expect(reads).toBe(1);
+        // Re-admission temporarily withdraws the source descriptor while the same selected entry reloads.
+        const { targetedContributions: _targeted, ...readingSurface } = shell.context.surface;
+        await act(async () => { await shell.updateSurface({ ...readingSurface, machineConnectionPending: true }); });
+        await act(async () => { await refreshMountedShell.get(shell)!(); });
+        await act(async () => { await shell.updateSurface(shell.context.surface); });
+        await settle();
+        await act(async () => { finishRead({
+            kind: 'present',
+            localRef: { kindId: ENTRY_REF.kindId, collisionScope: ENTRY_REF.collisionScope, entryId: ENTRY_REF.entryId },
+            locator: testkitLocator(), snapshot: testkitSnapshot({ title: ENTRY_TITLE }), viewer: testkitViewer(),
+            comparisonSource: PR_COMPARISON,
+        }); });
+        await settle();
+        expect(draftsOpened).toBe(1);
+        expect(harness.startRequests).toHaveLength(1);
+        expect(harness.startRequests[0]?.finalOpen).toBe('deferred');
+        expect(harness.comparisonOpens).toEqual([{ sessionId: 'session-a', serverId: 'server-a',
+            destination: { kind: 'scmReview', comparison: PR_COMPARISON, view: 'walkthrough' } }]);
+        expect(reads).toBe(1);
+    }, 60_000);
+
+    it('keeps a comparison failure visible after source re-admission', async () => {
+        let failRead!: (reason: Error) => void;
+        const shell = await mountShell(createHarness({ comparisonRead: async () =>
+            await new Promise((_resolve, reject) => { failRead = reject; }) }));
+        await openTheRow(shell);
+        await pressAction(shell, 'More actions');
+        await pressAction(shell, 'Walk through');
+        const { targetedContributions: _targeted, ...readingSurface } = shell.context.surface;
+        await act(async () => { await shell.updateSurface({ ...readingSurface, machineConnectionPending: true }); });
+        await act(async () => { failRead(new Error('Source unavailable')); });
+        await act(async () => { await shell.updateSurface(shell.context.surface); });
+        await settle();
+        await expect(shell.getByText('This source cannot open a comparison for this pull request.')).resolves.toBeDefined();
+        expect(draftsOpened).toBe(0);
+    }, 60_000);
+
+    it('retires a pending Walk through when the reader selects another entry', async () => {
+        let finishRead!: (result: unknown) => void;
+        const harness = createHarness({ includeSecondEntry: true, comparisonRead: async () =>
+            await new Promise((resolve) => { finishRead = resolve; }) });
+        const shell = await mountShell(harness);
+        await openTheRow(shell);
+        await pressAction(shell, 'More actions');
+        await pressAction(shell, 'Walk through');
+        await act(async () => { await shell.updatePageLocation(buildTriageRouteSubPathV1({
+            ...TRIAGE_ROUTE_DEFAULT_LENS_V1, selection: SECOND_ENTRY_REF,
+        })); });
+        await settle();
+        await act(async () => { finishRead({
+            kind: 'present',
+            localRef: { kindId: ENTRY_REF.kindId, collisionScope: ENTRY_REF.collisionScope, entryId: ENTRY_REF.entryId },
+            locator: testkitLocator(), snapshot: testkitSnapshot({ title: ENTRY_TITLE }), viewer: testkitViewer(),
+            comparisonSource: PR_COMPARISON,
+        }); });
+        await settle();
+        expect(draftsOpened).toBe(0);
+        expect(harness.comparisonOpens).toEqual([]);
+        expect(harness.startRequests).toEqual([]);
+        await expect(shell.getByText(SECOND_ENTRY_TITLE)).resolves.toBeDefined();
+    }, 60_000);
+    it('makes formal review available after reading the selected source, even when its scan omitted revision facts', async () => {
+        const harness = createHarness({ formalReviewReady: true, reviewRevisionOnlyOnGet: true });
+        const shell = await mountShell(harness);
+        await openTheRow(shell);
+        await pressAction(shell, 'More actions');
+        const review = await shell.getByRole('button', { name: 'Review' });
+        expect(review.state?.disabled).not.toBe(true);
+        await expect(shell.queryByText(PREPARATION_UNSUPPORTED_COPY)).resolves.toBeUndefined();
+    });
+    it('keeps Review leading, disabled, for someone else\'s pull request whose detail could not be read', async () => {
+        // The source can prepare a review workspace; only this entry's read is missing. The verb belongs to the
+        // entry's kind, so a failed read never swaps Review for the issue verb, nor says the source cannot prepare.
+        const harness = createHarness({ formalReviewReady: true, detailUnavailable: true });
+        const shell = await mountShell(harness);
+        await openTheRow(shell);
+        const review = await shell.getByRole('button', { name: 'Review' });
+        expect(review.state?.disabled).toBe(true);
+        await expect(shell.queryByRole('button', { name: 'Fix' })).resolves.toBeUndefined();
+        await expect(shell.queryByText(PREPARATION_UNSUPPORTED_COPY)).resolves.toBeUndefined();
+    }, 60_000);
     it('gives a newly selected entry its own action controller while the prior entry is still starting', async () => {
         const harness = createHarness({ includeSecondEntry: true });
         harness.setActions([{
@@ -984,6 +1306,7 @@ describe('the entry action controls on the mounted detail header', () => {
 
         // The blocked arm is the one whose DECLARED mode is `pull_request`,
         // independent of its label or target arm.
+        await pressAction(shell, 'More actions');
         const blocked = await shell.findByRole('button', { name: 'Repair pull request' });
 
         // This fixture admits no preparation operation, so this action would

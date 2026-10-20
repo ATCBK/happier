@@ -1,7 +1,6 @@
-import { t } from '@/text';
 import { resolveAbsolutePath } from '@/utils/path/pathUtils';
 
-export function formatPathRelativeToHome(path: string, homeDir?: string): string {
+export function formatPathRelativeToHome(path: string, homeDir?: string | null): string {
     if (!homeDir) return path;
 
     const normalizedHome = homeDir.replace(/[\\/]+/g, '/').replace(/\/+$/, '');
@@ -23,9 +22,11 @@ export function formatPathRelativeToHome(path: string, homeDir?: string): string
     return `~/${remainder.replace(/^[\\/]+/, '').replace(/[\\/]+/g, '/')}`;
 }
 
-/** Session workspace labels share one home-directory rule, including the composer chip. */
+/**
+ * Session workspace labels share one home-directory rule, including the composer chip. A path Session
+ * at the machine home is `~`; "No folder" belongs only to managed Sessions, which never reach this.
+ */
 export function formatSessionPath(path: string, homeDir?: string): string {
     // Literal home aliases remain meaningful before the machine's home metadata hydrates.
-    const relativePath = formatPathRelativeToHome(path, homeDir || '~');
-    return relativePath === '~' ? t('sessions.workspace.noFolder') : relativePath;
+    return formatPathRelativeToHome(path, homeDir || '~');
 }

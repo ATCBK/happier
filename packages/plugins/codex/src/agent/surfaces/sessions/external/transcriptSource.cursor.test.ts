@@ -3,11 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
+import { AgentExternalSessionTranscriptRawRecordSchema } from '@happier-dev/plugin-sdk/sessions/external';
+import { projectCodexExternalSessionTranscriptPageToAgent } from './models.js';
 
 import {
   decodeCodexExternalBackwardCursor,
   pageCodexExternalSessionTranscript,
   readAfterCodexExternalSessionTranscript,
+  searchCodexExternalTranscript,
 } from './transcriptSource.js';
 
 function jsonl(value: unknown): string {
@@ -131,6 +134,95 @@ function decodeSingleStreamCursor(cursor: string): Record<string, unknown> {
 }
 
 describe('Codex external transcript cursor generations', () => {
+  it('resumes inside one native row with semantic state from before that row', async () => {
+    const fixture = await createFixture();
+    try {
+      const filePath = join(fixture.dayDir, `rollout-2026-07-23T08-00-00-${fixture.remoteSessionId}.jsonl`);
+      await writeFile(filePath, rollout({ remoteSessionId: fixture.remoteSessionId,
+        timestamp: '2026-07-23T08:00:00.000Z', messages: ['before completion'] }));
+      const params = { ...sourceParams(fixture), maxBytes: 64 * 1024, maxItems: 1 };
+      const tail = await readAfterCodexExternalSessionTranscript({ ...params, cursor: 'tail' });
+      if (!tail.nextCursor) throw new Error('Expected tail watermark');
+      // A completion for a previously unseen child emits its missing spawn
+      // anchor and the completion from the same native row.
+      await appendFile(filePath, jsonl({ type: 'response_item', payload: { type: 'message', role: 'user',
+        content: [{ type: 'input_text', text: '<subagent_notification>{"agent_id":"child-thread","status":{"completed":"done"}}</subagent_notification>' }] } }));
+      const first = await readAfterCodexExternalSessionTranscript({ ...params, cursor: tail.nextCursor });
+      expect(first.items).toHaveLength(1);
+      expect(first.items[0]?.raw).toMatchObject({ content: { data: { type: 'tool-call', callId: 'child-thread' } } });
+      if (!first.nextCursor) throw new Error('Expected same-row continuation');
+      const second = await readAfterCodexExternalSessionTranscript({ ...params, cursor: first.nextCursor });
+      expect(second.items).toHaveLength(1);
+      expect(second.items[0]?.raw).toMatchObject({ content: { data: { type: 'tool-call-result', callId: 'child-thread' } } });
+      expect(second.items[0]?.id).not.toBe(first.items[0]?.id);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('reconstructs pending native collaboration from cursor row references and suppresses later duplicate spawns', async () => {
+    const fixture = await createFixture();
+    try {
+      const filePath = join(fixture.dayDir, `rollout-2026-07-23T08-00-00-${fixture.remoteSessionId}.jsonl`);
+      await writeFile(filePath, rollout({ remoteSessionId: fixture.remoteSessionId,
+        timestamp: '2026-07-23T08:00:00.000Z', messages: ['before collaboration'] }));
+      const params = { ...sourceParams(fixture), maxBytes: 64 * 1024, maxItems: 10 };
+      const tail = await readAfterCodexExternalSessionTranscript({ ...params, cursor: 'tail' });
+      if (!tail.nextCursor) throw new Error('Expected tail watermark');
+      await appendFile(filePath, jsonl({ type: 'response_item', payload: { type: 'function_call', name: 'spawn_agent',
+        call_id: 'pending-spawn', arguments: JSON.stringify({ prompt: 'correlated native prompt', nickname: 'worker' }) } }));
+      const pending = await readAfterCodexExternalSessionTranscript({ ...params, cursor: tail.nextCursor });
+      if (!pending.nextCursor) throw new Error('Expected pending-call continuation');
+      await appendFile(filePath, jsonl({ type: 'response_item', payload: { type: 'function_call_output',
+        call_id: 'pending-spawn', output: JSON.stringify({ agent_id: 'child-thread' }) } }));
+      const spawned = await readAfterCodexExternalSessionTranscript({ ...params, cursor: pending.nextCursor });
+      expect(spawned.items).toHaveLength(1);
+      expect(spawned.items[0]?.raw).toMatchObject({ content: { data: { name: 'SubAgent', callId: 'child-thread',
+        input: { prompt: 'correlated native prompt', nickname: 'worker' } } } });
+      if (!spawned.nextCursor) throw new Error('Expected spawned continuation');
+      await appendFile(filePath, jsonl({ type: 'event_msg', payload: { type: 'collab_agent_spawn_end', new_thread_id: 'child-thread' } }));
+      const duplicate = await readAfterCodexExternalSessionTranscript({ ...params, cursor: spawned.nextCursor });
+      expect(duplicate.items).toEqual([]);
+      expect(duplicate.nextCursor).not.toBe(spawned.nextCursor);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves rollback selection, prefix echo suppression and inherited timestamps across bounded forward pages', async () => {
+    const fixture = await createFixture();
+    try {
+      const filePath = join(fixture.dayDir, `rollout-2026-07-23T08-00-00-${fixture.remoteSessionId}.jsonl`);
+      const message = (role: 'user' | 'assistant', text: string) => jsonl({
+        type: 'response_item', timestamp: '2026-07-23T08:01:00.000Z',
+        payload: { type: 'message', role, content: [{ type: role === 'user' ? 'input_text' : 'output_text', text }] },
+      });
+      await writeFile(filePath, rollout({ remoteSessionId: fixture.remoteSessionId,
+        timestamp: '2026-07-23T08:00:00.000Z', messages: ['prefix echo'] }));
+      const tail = await readAfterCodexExternalSessionTranscript({ ...sourceParams(fixture), cursor: 'tail', maxBytes: 64 * 1024, maxItems: 2 });
+      if (!tail.nextCursor) throw new Error('Expected a tail watermark');
+      await appendFile(filePath, [message('assistant', 'prefix echo'), message('user', 'abandoned question'),
+        message('assistant', 'abandoned answer'), jsonl({ type: 'event_msg', payload: { type: 'thread_rolled_back', num_turns: 1 } }),
+        message('user', 'second abandoned question'), message('assistant', 'second abandoned answer'),
+        jsonl({ type: 'event_msg', payload: { type: 'thread_rolled_back', num_turns: 2 } }),
+        message('user', 'kept question'), jsonl({ type: 'unknown_native_record' }), message('assistant', 'kept answer')].join(''));
+      let cursor = tail.nextCursor;
+      const items: Awaited<ReturnType<typeof readAfterCodexExternalSessionTranscript>>['items'][number][] = [];
+      for (let pageIndex = 0; pageIndex < 10; pageIndex += 1) {
+        const page = await readAfterCodexExternalSessionTranscript({ ...sourceParams(fixture), cursor, maxBytes: 64 * 1024, maxItems: 2 });
+        items.push(...page.items);
+        if (!page.nextCursor || page.nextCursor === cursor) break;
+        cursor = page.nextCursor;
+      }
+      expect(items.map(item => item.raw.role === 'user' ? (item.raw.content as { text: string }).text : readTranscriptItemMessage(item)))
+        .toEqual(['kept question', 'Agent emitted an unsupported content block.', 'kept answer']);
+      expect(items[1]?.createdAtMs).toBe(Date.parse('2026-07-23T08:01:00.000Z'));
+      expect(new Set(items.map(item => item.id)).size).toBe(items.length);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   it('rejects empty anchored backward vectors', () => {
     expect(decodeCodexExternalBackwardCursor(encodeCursorRecord({
       v: 5,
@@ -357,7 +449,12 @@ describe('Codex external transcript cursor generations', () => {
     }
   });
 
-  it('fails before yielding a successor cursor for unsupported current rollout records', async () => {
+  it.each([
+    jsonl({ type: 'unsupported_record', payload: { privateNativeValue: 'must not be disclosed' } }),
+    jsonl({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: null } }),
+    '{malformed native json}\n',
+    jsonl({ type: 'event_msg', payload: { type: 'thread_rolled_back', num_turns: 'invalid' } }),
+  ])('keeps unsupported native records visible across backward and forward paging (%#)', async (unsupportedLine) => {
     const fixture = await createFixture();
     try {
       const rolloutPath = join(
@@ -367,30 +464,38 @@ describe('Codex external transcript cursor generations', () => {
       await writeFile(
         rolloutPath,
         [
-          jsonl({
-            type: 'session_meta',
-            timestamp: '2026-07-23T08:00:00.000Z',
-            payload: {
-              id: fixture.remoteSessionId,
-              timestamp: '2026-07-23T08:00:00.000Z',
-              cwd: '/repo/codex-transcript-cursor',
-            },
-          }),
-          jsonl({
-            type: 'unsupported_record',
-            timestamp: '2026-07-23T08:00:01.000Z',
-            payload: { ignored: true },
-          }),
+          rollout({ remoteSessionId: fixture.remoteSessionId, timestamp: '2026-07-23T08:00:00.000Z', messages: ['before unsupported record'] }),
+          unsupportedLine,
+          jsonl({ type: 'response_item', timestamp: '2026-07-23T08:00:03.000Z', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'before unsupported record' }] } }),
         ].join(''),
         'utf8',
       );
 
-      await expect(pageCodexExternalSessionTranscript({
+      const page = await pageCodexExternalSessionTranscript({
         ...sourceParams(fixture),
         direction: 'older',
         maxBytes: 64 * 1024,
         maxItems: 20,
-      })).rejects.toThrow(/unsupported rollout record/u);
+      });
+      expect(page.truncated).toBe(false);
+      expect(page.items.map(readTranscriptItemMessage)).toEqual(['before unsupported record', 'Agent emitted an unsupported content block.', 'before unsupported record']);
+      const fallback = page.items[1]!;
+      expect(fallback).toMatchObject({ messageRole: 'agent', raw: { role: 'agent', content: { type: 'acp', agentId: 'codex' } } });
+      expect(AgentExternalSessionTranscriptRawRecordSchema.safeParse(fallback.raw).success).toBe(true);
+      expect(projectCodexExternalSessionTranscriptPageToAgent(page)?.items).toHaveLength(3);
+      expect(JSON.stringify(page)).not.toContain('privateNativeValue');
+      expect(page.diagnostics).toContainEqual(expect.objectContaining({ code: 'external_sessions_transcript_unsupported_record', severity: 'benign', count: 1 }));
+      const newest = await pageCodexExternalSessionTranscript({ ...sourceParams(fixture), direction: 'older', maxBytes: 64 * 1024, maxItems: 1 });
+      expect(newest.items.map(transcriptItemText)).toEqual(['before unsupported record']);
+      expect(newest.items[0]?.id).toBe(page.items[2]?.id);
+      expect(newest.hasMore).toBe(true);
+      const middle = await pageCodexExternalSessionTranscript({ ...sourceParams(fixture), direction: 'older', cursor: newest.nextCursor!, maxBytes: 64 * 1024, maxItems: 1 });
+      expect(middle.truncated).toBe(false);
+      expect(middle.items.map(readTranscriptItemMessage)).toEqual(['Agent emitted an unsupported content block.']);
+      expect(middle.nextCursor).not.toBe(newest.nextCursor);
+      const oldest = await pageCodexExternalSessionTranscript({ ...sourceParams(fixture), direction: 'older', cursor: middle.nextCursor!, maxBytes: 64 * 1024, maxItems: 1 });
+      expect(oldest.items.map(transcriptItemText)).toEqual(['before unsupported record']);
+      expect(oldest.hasMore).toBe(false);
 
       await writeFile(
         rolloutPath,
@@ -410,28 +515,133 @@ describe('Codex external transcript cursor generations', () => {
       if (!initial.tailCursor) throw new Error('Expected a Codex tail cursor');
 
       await appendFile(rolloutPath, [
-        jsonl({
-          type: 'response_item',
-          timestamp: '2026-07-23T08:00:02.000Z',
-          payload: { type: 'unrecognized_current_shape' },
-        }),
+        unsupportedLine,
         jsonl({
           type: 'response_item',
           timestamp: '2026-07-23T08:00:03.000Z',
           payload: {
             type: 'message',
             role: 'assistant',
-            content: [{ type: 'output_text', text: 'must not bypass unsupported record' }],
+            content: [{ type: 'output_text', text: 'visible after unsupported record' }],
           },
         }),
       ].join(''));
 
-      await expect(readAfterCodexExternalSessionTranscript({
+      const after = await readAfterCodexExternalSessionTranscript({
         ...sourceParams(fixture),
         cursor: initial.tailCursor,
         maxBytes: 64 * 1024,
-        maxItems: 20,
-      })).rejects.toThrow(/unsupported rollout record/u);
+        maxItems: 1,
+      });
+      expect(after.items.map(readTranscriptItemMessage)).toEqual(['Agent emitted an unsupported content block.']);
+      expect(after.readAfterOutcome).toBeUndefined();
+      expect(after.diagnostics).toContainEqual(expect.objectContaining({ code: 'external_sessions_transcript_unsupported_record', severity: 'benign', count: 1 }));
+      expect(after.items[0]?.id).toBe((await pageCodexExternalSessionTranscript({ ...sourceParams(fixture), direction: 'older', maxBytes: 64 * 1024, maxItems: 20 })).items.find((item) => readTranscriptItemMessage(item) === 'Agent emitted an unsupported content block.')?.id);
+      const continued = await readAfterCodexExternalSessionTranscript({ ...sourceParams(fixture), cursor: after.nextCursor!, maxBytes: 64 * 1024, maxItems: 20 });
+      expect(continued.items.map(transcriptItemText)).toEqual(['visible after unsupported record']);
+      expect(continued.truncated).toBe(false);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('retries an incomplete native tail without publishing a fallback or skipping its completed message', async () => {
+    const fixture = await createFixture();
+    try {
+      const path = join(fixture.dayDir, `rollout-2026-07-23T08-00-00-${fixture.remoteSessionId}.jsonl`);
+      await writeFile(path, rollout({ remoteSessionId: fixture.remoteSessionId, timestamp: '2026-07-23T08:00:00.000Z', messages: ['initial item'] }));
+      const initial = await pageCodexExternalSessionTranscript({ ...sourceParams(fixture), direction: 'older', maxBytes: 64 * 1024, maxItems: 20 });
+      await appendFile(path, '{"type":"response_item","payload":');
+      const incomplete = await readAfterCodexExternalSessionTranscript({ ...sourceParams(fixture), cursor: initial.tailCursor!, maxBytes: 64 * 1024, maxItems: 20 });
+      expect(incomplete.items).toEqual([]);
+      expect(incomplete.diagnostics).toBeUndefined();
+      expect(incomplete.nextCursor).toBe(initial.tailCursor);
+      await appendFile(path, '{"type":"message","role":"assistant","content":[{"type":"output_text","text":"completed native tail"}]}}\n');
+      const completed = await readAfterCodexExternalSessionTranscript({ ...sourceParams(fixture), cursor: incomplete.nextCursor!, maxBytes: 64 * 1024, maxItems: 20 });
+      expect(completed.items.map(transcriptItemText)).toEqual(['completed native tail']);
+      expect(completed.truncated).toBe(false);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['2026-07-23T07:59:59.500Z', '2026-07-23T08:00:01.500Z'])('keeps missing-timestamp fallback paging and search ordinals consistent across streams (%s)', async (childTimestamp) => {
+    const fixture = await createFixture();
+    try {
+      const rootPath = join(fixture.dayDir, `rollout-2026-07-23T08-00-00-${fixture.remoteSessionId}.jsonl`);
+      const native = rollout({ remoteSessionId: fixture.remoteSessionId, timestamp: '2026-07-23T08:00:00.000Z', messages: ['before unsupported', 'after unsupported'] }).split('\n');
+      native.splice(2, 0, '{malformed native json}');
+      native.splice(1, 0, JSON.stringify({ type: 'event_msg', timestamp: '2026-07-23T08:00:00.000Z', payload: { type: 'collab_agent_spawn_end', new_thread_id: '22222222-2222-2222-2222-222222222222' } }));
+      await writeFile(rootPath, native.join('\n'));
+      const childPath = join(fixture.dayDir, 'rollout-child-thread.jsonl');
+      await writeFile(childPath, rollout({ remoteSessionId: '22222222-2222-2222-2222-222222222222', rootSessionId: fixture.remoteSessionId, timestamp: childTimestamp, messages: ['child output'] }));
+      const complete = await pageCodexExternalSessionTranscript({ ...sourceParams(fixture), direction: 'older', maxBytes: 64 * 1024, maxItems: 20 });
+      expect(complete.items).toHaveLength(5);
+      for (const maxItems of [1, 2]) {
+        let cursor: string | undefined;
+        const ids: string[] = [];
+        for (let pageIndex = 0; pageIndex < 6; pageIndex += 1) {
+          const page = await pageCodexExternalSessionTranscript({ ...sourceParams(fixture), direction: 'older', cursor, maxBytes: 64 * 1024, maxItems });
+          expect(page.truncated).toBe(false);
+          ids.unshift(...page.items.map((item) => item.id));
+          if (!page.hasMore) break;
+          expect(page.nextCursor).not.toBe(cursor);
+          cursor = page.nextCursor ?? undefined;
+        }
+        expect(ids).toEqual(complete.items.map((item) => item.id));
+      }
+      for (const query of ['after unsupported', 'child output']) {
+        const search = await searchCodexExternalTranscript({ ...sourceParams(fixture), query, ripgrep: { run: async () => ({ exitCode: 0, stdout: `${rootPath}\0${childPath}\0`, stderr: '' }) } });
+        expect(search.match?.messageIndex).toBe(complete.items.findIndex((item) => readTranscriptItemMessage(item) === query));
+        expect(search.partial).toBe(true);
+      }
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves the scanner oversized-row boundary in backward pages and legacy semantic bootstrap', async () => {
+    const fixture = await createFixture();
+    try {
+      const filePath = join(fixture.dayDir, `rollout-2026-07-23T08-00-00-${fixture.remoteSessionId}.jsonl`);
+      await writeFile(
+        filePath,
+        rollout({
+          remoteSessionId: fixture.remoteSessionId,
+          timestamp: '2026-07-23T08:00:00.000Z',
+          messages: ['oldest item', '🙂'.repeat(2_100_000), 'newest item'],
+        }),
+      );
+      const first = await pageCodexExternalSessionTranscript({
+        ...sourceParams(fixture),
+        direction: 'older',
+        maxBytes: 64 * 1024,
+        maxItems: 1,
+      });
+      expect(first.items.map(transcriptItemText)).toEqual(['newest item']);
+      expect(first.hasMore).toBe(true);
+      if (!first.nextCursor) throw new Error('Expected a Codex browse cursor');
+
+      await expect(pageCodexExternalSessionTranscript({
+        ...sourceParams(fixture),
+        direction: 'older',
+        cursor: first.nextCursor,
+        maxBytes: 64 * 1024,
+        maxItems: 1,
+      })).resolves.toMatchObject({
+        items: [],
+        nextCursor: null,
+        hasMore: false,
+        truncated: true,
+      });
+      if (!first.tailCursor) throw new Error('Expected a tail watermark');
+      await expect(readAfterCodexExternalSessionTranscript({ ...sourceParams(fixture), cursor: first.tailCursor,
+        maxBytes: 64 * 1024, maxItems: 1 })).resolves.toMatchObject({ items: [], readAfterOutcome: 'already_current' });
+      await appendFile(filePath, jsonl({ type: 'response_item', timestamp: '2026-07-23T09:00:00.000Z', payload: {
+        type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'after oversized native row' }],
+      } }));
+      await expect(readAfterCodexExternalSessionTranscript({ ...sourceParams(fixture), cursor: first.tailCursor,
+        maxBytes: 64 * 1024, maxItems: 1 })).rejects.toThrow('oversized native record');
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }
@@ -1596,6 +1806,9 @@ describe('Codex external transcript cursor generations', () => {
                 ...(entry as Record<string, unknown>),
                 nextOffsetBytes: lineStartOffsetBytes,
                 subIndex: 1,
+                // Exercise the record-count fence independently of the newer
+                // optional semantic facts at the original, later watermark.
+                semanticState: undefined,
               }
             : entry
         )),

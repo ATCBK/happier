@@ -9,6 +9,17 @@ const field = { kind: 'session_context_field', field: 'usage.tokensUsed' };
 const when = { kind: 'exists', value: field };
 
 describe('workflow session context contract', () => {
+  it('accepts Discussion context in leaf inputs and rejects it as a condition or loop source', () => {
+    for (const scope of ['addressing_message', 'so_far']) {
+      const discussion = { kind: 'discussion_context', scope };
+      expect(validateWorkflowDefinition({ version: 1, blocks: [{ ...step, input: [discussion] }] }).valid).toBe(true);
+      expect(validateWorkflowDefinition({ version: 1, blocks: [{ kind: 'action', id: 'act', actionId: 'notify_me', input: { context: discussion } }] }).valid).toBe(true);
+      expect(validateWorkflowDefinition({ version: 1, blocks: [{ kind: 'if', id: 'if',
+        when: { kind: 'exists', value: discussion }, then: [step], otherwise: [] }] }).valid).toBe(false);
+      expect(validateWorkflowDefinition({ version: 1, blocks: [{ kind: 'loop', id: 'loop', body: [step],
+        repetition: { kind: 'items', items: discussion, execution: 'sequential', failurePolicy: 'fail_stop' } }] }).valid).toBe(false);
+    }
+  });
   it('admits context only as Agent or Action input and number fields only at the specified condition positions', () => {
     expect(validateWorkflowDefinition({ version: 1, blocks: [{ ...step, input: [context] }] }).valid).toBe(true);
     expect(validateWorkflowDefinition({ version: 1, blocks: [{ kind: 'action', id: 'act', actionId: 'notify_me', input: { context } }] }).valid).toBe(true);

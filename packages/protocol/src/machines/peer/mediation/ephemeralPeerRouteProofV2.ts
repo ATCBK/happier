@@ -18,7 +18,7 @@ const PEER_ROUTE_PROOF_DIGEST_BYTES_V2 = 32;
 const PEER_ROUTE_PROOF_NONCE_BYTES_V2 = 16;
 const PEER_ROUTE_PROOF_SIGNATURE_BYTES_V2 = 64;
 
-function fixedBase64UrlSchema(decodedLength: number): z.ZodMiniString {
+function fixedBase64UrlSchema(decodedLength: number): z.ZodMiniString<string> {
   return z.string().check(z.refine((value) => decodeCanonicalBase64UrlFixedLength(value, decodedLength) !== null, `Expected canonical unpadded base64url encoding of ${decodedLength} bytes`));
 }
 

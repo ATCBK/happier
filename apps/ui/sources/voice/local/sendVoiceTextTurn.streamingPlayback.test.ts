@@ -13,7 +13,8 @@ import { readLocalConversationVoiceSettings } from '@/sync/domains/settings/voic
 import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
 import { createRetainedVoiceAgentRpcBoundary } from '@/dev/testkit/harness/voiceAgentRpcBoundary';
-import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SessionResumeRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionResumeRequestV1';
 import { ExecutionRunTurnStreamReadRequestSchema, ExecutionRunTurnStreamStartV2RequestSchema,
   ExecutionRunTurnStreamStartResponseSchema, ExecutionRunTurnStreamReadResponseSchema,
   ExecutionRunTurnStreamCancelResponseSchema, ExecutionRunUserTranscriptCommitResponseSchema,
@@ -218,17 +219,24 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
     speechBoundary.reset();
     retainedAgent = await createRetainedVoiceAgentRpcBoundary({ handleOtherRpc: answerVoiceAgentRpc });
     const nativeSdkRpc = speechBoundary.machineRpc.getMockImplementation();
-    speechBoundary.machineRpc.mockImplementation(async request =>
-      request.method.startsWith('execution.run.')
+    speechBoundary.machineRpc.mockImplementation(async request => {
+      if (request.method === RPC_METHODS.SPAWN_HAPPY_SESSION || request.method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE) {
+        const resume = SessionResumeRequestV1Schema.parse(request.payload);
+        expect(request.machineId).toBe('machine-1');
+        expect(resume).toMatchObject({ type: 'resume-session', sessionId: 'carrier-s1', directory: '/workspace/s1' });
+        return { type: 'success', sessionId: resume.sessionId };
+      }
+      return request.method.startsWith('execution.run.')
         ? retainedAgent.dispatch(request.method, request.payload)
-        : nativeSdkRpc?.(request));
+        : nativeSdkRpc?.(request);
+    });
     turnIndex = 0;
     streamMode = 'speech';
     playbackStarted = undefined;
     observedStatuses.length = 0;
     streamEvents.clear();
     account = await serveAccountHomes({ homes: [{ key: 'voice', serverUrl: 'https://streaming-voice.test',
-      accountId: 'account-a', settings: buildAccountSettings() }], route: async request => {
+      accountId: 'account-a', currentAccount: true, settings: buildAccountSettings() }], route: async request => {
         const machineReply = speechBoundary.answerMachineHttpRequest(request.url, 'machine-1', 'account-a');
         if (machineReply) return machineReply;
         const metadataReply = await sessionMetadata.handle(request.url.toString(), {
@@ -420,14 +428,12 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
 
     expect(outcome).toMatchObject({
       ok: false,
-      error: { kind: 'tts_failed', reason: 'provider_unavailable' },
+      error: { kind: 'tts_failed', code: 'provider_unavailable' },
     });
     expect(speechSynthesizeRpc).toHaveBeenCalledTimes(1);
     expect(encodedAudio.start).not.toHaveBeenCalled();
-    expect(voiceConversationRuntimeMachine.getSnapshot().error).toMatchObject({
-      kind: 'tts_failed',
-      reason: expect.stringContaining('provider_unavailable'),
-    });
+    // Capture retirement and terminal failure publication belong to the caller.
+    expect(voiceConversationRuntimeMachine.getSnapshot().error).toBeNull();
   });
 
   it('aborts queued and active playback exactly once when the canonical turn is cancelled', async () => {

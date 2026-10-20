@@ -8,10 +8,13 @@ export function resolveRunnerRuntimeDisposalReason(
 }
 
 export async function abortAndDisposeRunnerRuntime(input: Readonly<{
+  /** Runs first: input claimed but not yet dispatched is handed back before disposal can take time. */
+  retireUndispatchedInput: () => void;
   abortActiveTurn: () => Promise<void>;
   disposeRuntime: (reason: RuntimeTurnDisposeReason) => Promise<void>;
   reason: RuntimeTurnDisposeReason;
 }>): Promise<void> {
+  input.retireUndispatchedInput();
   // Native cancellation can wait for a terminal provider event forever. The
   // cancellation owner handles its diagnostics; retirement is best effort and
   // must not hold disposal or runner termination behind that acknowledgement.
@@ -20,6 +23,7 @@ export async function abortAndDisposeRunnerRuntime(input: Readonly<{
 }
 
 export async function requestExplicitRunnerStop(input: Readonly<{
+  retireUndispatchedInput: () => void;
   abortActiveTurn: () => Promise<void>;
   disposeRuntime: (reason: RuntimeTurnDisposeReason) => Promise<void>;
   requestTermination: (event: RunnerTerminationEvent) => void;

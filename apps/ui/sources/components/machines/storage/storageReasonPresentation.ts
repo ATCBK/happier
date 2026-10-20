@@ -1,4 +1,5 @@
 import type { HappierStorageCategoryIdV1, StorageItemV1, StorageReasonV1 } from '@happier-dev/protocol/storage/storageV1';
+import { StorageEvidenceCodeV1Schema, StorageEvidenceV1Schema } from '@happier-dev/protocol/storage/storageV1';
 
 import type { IconName } from '@/components/ui/icons/iconRegistry.generated';
 import type { StatusPillVariant } from '@/components/ui/status/StatusPill';
@@ -6,8 +7,8 @@ import { t } from '@/text';
 
 /**
  * The one storage kind → words/marks table (plan 40 §7(g) `RS.reason` / `RS.verdict`): each category's
- * name and glyph, and how an item's verdict reads as a chip. The daemon sends codes and counts; every
- * word is decided here. Tiers are R42's: Forbidden (refused, with the reason) and Keep (stays unless a
+ * name and glyph, and how an item's verdict reads as a chip. Category, reason and evidence codes
+ * receive their display labels here. Tiers are R42's: Forbidden (refused, with the reason) and Keep (stays unless a
  * person confirms what is lost) — there is no "Protected".
  */
 
@@ -34,6 +35,18 @@ export function storageCategoryTitle(categoryId: HappierStorageCategoryIdV1): st
 /** The ring legend's short name ("Caches" beside "Plugin and tool caches"). */
 export function storageCategoryShortTitle(categoryId: HappierStorageCategoryIdV1): string {
     return t(`machineStorage.categories.${categoryId}.short`);
+}
+
+/** Evidence describes what was checked; native recognizer and manifest identifiers stay private. */
+export function storageEvidenceLabel(code: string): string {
+    const known = StorageEvidenceCodeV1Schema.safeParse(code);
+    if (known.success) return t(`machineStorage.evidence.${known.data}`);
+    const evidence = StorageEvidenceV1Schema.safeParse(code);
+    if (evidence.success) {
+        if (evidence.data.startsWith('recognizer:')) return t('machineStorage.evidence.recognizer');
+        if (evidence.data.startsWith('manifest:')) return t('machineStorage.evidence.manifest');
+    }
+    return t('machineStorage.evidence.unknown');
 }
 
 export function storageReasonLabel(reason: StorageReasonV1): string {
@@ -63,17 +76,16 @@ export type StorageVerdictChip = Readonly<{
 }>;
 
 /**
- * An item's verdict as its row's chip: the good news reads quietly (a plain mark), a reason to stop
- * reads as a bordered pill, and an item that can go because its work is done reads as a filled one.
+ * An item's verdict as its row's chip: the good news (Safe, Can delete), a caution and a check read quietly
+ * (a plain mark and word); a reason to stop (Keep, Forbidden) reads as a bordered pill.
  */
 export function describeStorageVerdict(item: Pick<StorageItemV1, 'verdict' | 'reason'>): StorageVerdictChip {
     const reason = storageReasonLabel(item.reason);
     const withReason = (word: string) => ({ label: `${word} · ${reason}`, word, detail: reason });
     switch (item.verdict) {
         case 'safe':
-            return CAN_DELETE_REASONS.has(item.reason.code)
-                ? { variant: 'success', chrome: 'pill', icon: 'check', ...withReason(t('machineStorage.verdicts.canDelete')) }
-                : { variant: 'success', chrome: 'plain', icon: 'check-circle', ...withReason(t('machineStorage.verdicts.safe')) };
+            return { variant: 'success', chrome: 'plain', icon: 'check-circle',
+                ...withReason(t(CAN_DELETE_REASONS.has(item.reason.code) ? 'machineStorage.verdicts.canDelete' : 'machineStorage.verdicts.safe')) };
         case 'caution':
             return { variant: 'attention', chrome: 'plain', icon: 'warning-circle', ...withReason(t('machineStorage.verdicts.caution')) };
         case 'keep':

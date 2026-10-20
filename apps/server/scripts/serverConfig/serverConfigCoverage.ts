@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import ts from 'typescript';
 
 import { findServerConfigEntry, type ServerConfigRegistry } from '@happier-dev/protocol';
 
@@ -7,7 +8,7 @@ import { findServerConfigEntry, type ServerConfigRegistry } from '@happier-dev/p
  * Server configuration coverage (plan §3.14, invariant I8): every environment key server source
  * reads must be declared in the server configuration registry.
  *
- * The scan is textual and deliberately over-inclusive:
+ * The scan is syntax-aware and deliberately over-inclusive within executable code:
  * - raw accesses on any identifier ending in `env`/`Env` (`process.env.X`, `env['X']`,
  *   `safeEnv.X`, `env[FEATURE_ENV_KEYS.x]`, `env[SOME_KEY_CONSTANT]`);
  * - helper calls that pass an env and a key literal (`readTrimmed(env, 'X')`);
@@ -46,21 +47,15 @@ const RAW_INDEX_CONSTANT = new RegExp(String.raw`${ENV_ID}\s*(?:\?\.)?\[\s*(${NA
 const HELPER_LITERAL = new RegExp(String.raw`${ENV_ID}\s*,\s*['"\`](${NAME})['"\`]`, 'g');
 const PREFIXED_LITERAL = /['"`]((?:HAPPIER|HAPPY|HANDY)_[A-Z0-9_]*[A-Z0-9])['"`]/g;
 
-/** Removes comments while keeping line numbers, so documentation never counts as a read. */
-export function stripComments(source: string): string {
-    return source
-        .replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, ' '))
-        .replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
-}
-
 function lineOf(source: string, index: number): number {
     let line = 1;
     for (let i = 0; i < index; i += 1) if (source.charCodeAt(i) === 10) line += 1;
     return line;
 }
 
-function readLocalConstant(source: string, identifier: string): string | null {
-    const match = new RegExp(String.raw`\b${identifier}\s*(?::[^=]+)?=\s*['"\`](${NAME})['"\`]`).exec(source);
+function readLocalConstant(source: string, identifier: string, identifiers: ReadonlySet<number>): string | null {
+    const pattern = new RegExp(String.raw`\b${identifier}\s*(?::[^=]+)?=\s*['"\`](${NAME})['"\`]`, 'g');
+    const match = [...source.matchAll(pattern)].find((candidate) => identifiers.has(candidate.index!));
     return match?.[1] ?? null;
 }
 
@@ -68,27 +63,58 @@ export function scanServerConfigReads(
     input: ServerConfigSourceFile,
     indirection: ServerConfigIndirection,
 ): Readonly<{ reads: ServerConfigRead[]; unresolved: UnresolvedServerConfigRead[] }> {
-    const source = stripComments(input.source);
+    let source = input.source;
+    const parsed = ts.createSourceFile(input.file, source, ts.ScriptTarget.Latest);
+    const identifiers = new Set<number>();
+    const literals = new Set<number>();
+    const trivia: ts.TextRange[] = [];
+    const visit = (node: ts.Node): void => {
+        if (node.kind >= ts.SyntaxKind.FirstJSDocNode && node.kind <= ts.SyntaxKind.LastJSDocNode) return;
+        const start = node.getStart(parsed);
+        if (ts.isIdentifier(node)) identifiers.add(start);
+        if (ts.isStringLiteralLike(node)) literals.add(start);
+        if (node.kind >= ts.SyntaxKind.FirstToken && node.kind <= ts.SyntaxKind.LastToken && start > node.pos) {
+            trivia.push({ pos: node.pos, end: start });
+        }
+        for (const child of node.getChildren(parsed)) visit(child);
+    };
+    visit(parsed);
+    // Mask parsed trivia only: comment-like text inside bundle strings remains data, and
+    // real reads separated by comments still match without changing source offsets or lines.
+    const parts: string[] = [];
+    let end = 0;
+    for (const range of trivia) {
+        parts.push(source.slice(end, range.pos), source.slice(range.pos, range.end).replace(/[^\r\n]/g, ' '));
+        end = range.end;
+    }
+    parts.push(source.slice(end));
+    source = parts.join('');
     const reads: ServerConfigRead[] = [];
     const unresolved: UnresolvedServerConfigRead[] = [];
     const push = (name: string, index: number) => reads.push({ name, file: input.file, line: lineOf(source, index) });
 
     for (const pattern of [RAW_DOT, RAW_INDEX_LITERAL, HELPER_LITERAL]) {
-        for (const match of source.matchAll(pattern)) push(match[1]!, match.index!);
+        for (const match of source.matchAll(pattern)) {
+            if (identifiers.has(match.index!)) push(match[1]!, match.index!);
+        }
     }
     for (const match of source.matchAll(RAW_INDEX_FEATURE)) {
+        if (!identifiers.has(match.index!)) continue;
         const name = indirection.featureEnvKeys[match[1]!];
         if (name) push(name, match.index!);
         else unresolved.push({ expression: match[0], file: input.file, line: lineOf(source, match.index!) });
     }
     for (const match of source.matchAll(RAW_INDEX_CONSTANT)) {
+        if (!identifiers.has(match.index!)) continue;
         const identifier = match[1]!;
         const imported = indirection.constants[identifier];
-        const name = readLocalConstant(source, identifier) ?? (typeof imported === 'string' ? imported : null);
+        const name = readLocalConstant(source, identifier, identifiers) ?? (typeof imported === 'string' ? imported : null);
         if (name) push(name, match.index!);
         else unresolved.push({ expression: match[0], file: input.file, line: lineOf(source, match.index!) });
     }
-    for (const match of source.matchAll(PREFIXED_LITERAL)) push(match[1]!, match.index!);
+    for (const match of source.matchAll(PREFIXED_LITERAL)) {
+        if (literals.has(match.index!)) push(match[1]!, match.index!);
+    }
     return { reads, unresolved };
 }
 

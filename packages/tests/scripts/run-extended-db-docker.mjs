@@ -40,6 +40,8 @@ export function resolveExtendedDbStepTimeoutMs(env) {
 }
 
 function formatCommand(cmd, args) {
+  // Database container environment arguments contain credentials.
+  if (cmd === 'docker' && args[0] === 'run') return 'docker run';
   return `${cmd} ${args.join(' ')}`.trim();
 }
 
@@ -81,7 +83,7 @@ function runCapture(cmd, args, opts = {}) {
   if (res.status !== 0) {
     const stderr = typeof res.stderr === 'string' ? res.stderr : '';
     const stdout = typeof res.stdout === 'string' ? res.stdout : '';
-    throw new Error(`Command failed: ${cmd} ${args.join(' ')}\n${stdout}\n${stderr}`.trim());
+    throw new Error(`Command failed: ${formatCommand(cmd, args)}\n${stdout}\n${stderr}`.trim());
   }
   return (typeof res.stdout === 'string' ? res.stdout : '').trim();
 }
@@ -175,11 +177,12 @@ export async function main(argv = process.argv) {
   const plan = buildDbContainerPlan({ db, name: nameArg });
 
   let shouldCleanup = !keep;
+  let containerId;
   const cleanup = () => {
-    if (!shouldCleanup) return;
+    if (!shouldCleanup || !containerId) return;
     try {
       // `--rm` should handle this, but SIGINT/early exits can leave containers behind.
-      spawnSync('docker', ['rm', '-f', plan.name], { stdio: 'ignore', env: dockerEnv(), timeout: dockerCommandTimeoutMs });
+      spawnSync('docker', ['rm', '-f', containerId], { stdio: 'ignore', env: dockerEnv(), timeout: dockerCommandTimeoutMs });
     } catch {
       // ignore
     }
@@ -196,11 +199,8 @@ export async function main(argv = process.argv) {
 
   try {
     const envPairs = Object.entries(plan.env).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
-    // If the container name already exists (from a previous interrupted run), remove it first.
-    spawnSync('docker', ['rm', '-f', plan.name], { stdio: 'ignore', env: dockerEnv(), timeout: dockerCommandTimeoutMs });
-
     console.log(`[extended-db] Starting ${db} container (${plan.image})...`);
-    runOrThrow(
+    const startedId = runCapture(
       'docker',
       [
       'run',
@@ -223,11 +223,14 @@ export async function main(argv = process.argv) {
       ],
       { env: dockerEnv(), timeoutMs: dockerCommandTimeoutMs },
     );
+    if (!/^[a-f0-9]{64}$/.test(startedId)) throw new Error('Docker did not return an exact container id');
+    containerId = startedId;
+    console.log(`[extended-db] Started container: ${containerId}`);
 
     console.log(`[extended-db] Waiting for ${db} healthcheck...`);
-    await waitForHealthy(plan.name, 120_000);
+    await waitForHealthy(containerId, 120_000);
 
-    const portLine = runCapture('docker', ['port', plan.name, `${plan.ports.containerPort}/tcp`], {
+    const portLine = runCapture('docker', ['port', containerId, `${plan.ports.containerPort}/tcp`], {
       env: dockerEnv(),
       timeoutMs: dockerCommandTimeoutMs,
     }).split('\n')[0];
@@ -251,7 +254,7 @@ export async function main(argv = process.argv) {
     // If the run succeeded and we're in keep mode, make that obvious.
     if (keep) {
       shouldCleanup = false;
-      console.log(`[extended-db] Keeping container: ${plan.name}`);
+      console.log(`[extended-db] Keeping container: ${containerId}`);
     }
   } finally {
     cleanup();

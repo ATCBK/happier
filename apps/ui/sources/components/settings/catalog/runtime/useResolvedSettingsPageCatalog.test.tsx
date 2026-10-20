@@ -463,6 +463,7 @@ describe('useResolvedSettingsPageCatalog', () => {
         expect(hook.getCurrent().search('machine pools')).toContainEqual({
             id: 'machinePoolsNew',
             route: '/settings/machines/pools/new',
+            matchText: 'machine pools',
         });
 
         await hook.unmount();
@@ -667,12 +668,12 @@ describe('useResolvedSettingsPageCatalog', () => {
         const hook = await renderHook(() => useResolvedSettingsPageCatalog());
 
         const results = hook.getCurrent().search('notificatons');
-        expect(results.some((result: any) => result.id === 'notifications')).toBe(true);
+        expect(results.some(result => result.id === 'notifications')).toBe(true);
 
         await hook.unmount();
     });
 
-    it('offers exact words and aliases before typo matches without losing neighboring settings', async () => {
+    it('requires explainable matches without losing title typos, explicit aliases or neighboring settings', async () => {
         const { en } = await import('@/text/translations/en');
         const { SETTINGS_PAGE_DECLARATIONS } = await import('../settingsPageDeclarations');
         const { flattenSettingsPageCatalog, SETTINGS_PAGE_CATALOG } = await import('../pageCatalog');
@@ -701,11 +702,21 @@ describe('useResolvedSettingsPageCatalog', () => {
             const hook = await renderHook(() => useResolvedSettingsPageCatalog());
             try {
                 const search = hook.getCurrent().search;
+                const { buildSettingsSearchRows, indexSettingsSearchPages } = await import('../../shell/settingsSearchRows');
+                const pages = indexSettingsSearchPages(hook.getCurrent().tree);
+                // Real English declarations formerly admitted fuzzy-only matches in unrelated pages.
+                expect(search('harbor')).toEqual([]);
+                const typoRows = buildSettingsSearchRows(search('notificatons'), pages);
+                expect(typoRows.pageRows[0]).toMatchObject({ id: 'notifications', title: 'Notifications' });
                 for (const query of ['ollama', 'model']) {
                     const results = search(query);
                     expect(results[0]?.id).toBe('providers');
                     if (query === 'ollama') expect(results.every(result => result.id === 'providers')).toBe(true);
                     if (query === 'model') expect(results.some(result => result.setting?.anchor === 'appearance.themeMode')).toBe(false);
+                    const rows = buildSettingsSearchRows(results, pages);
+                    for (const row of [...rows.pageRows, ...rows.settingRows]) {
+                        expect(`${row.title} ${row.subtitle ?? ''}`.toLowerCase()).toContain(query);
+                    }
                 }
                 for (const [query, anchor] of [
                     ['density', 'appearance.density'],
@@ -728,6 +739,8 @@ describe('useResolvedSettingsPageCatalog', () => {
 
     it('exposes Remote Hosts only on Tauri desktop when remoteHosts.management is enabled', async () => {
         featureGateState.enabled = () => true;
+        // Exercise the displayed title; a translation key is not the real searchable label.
+        searchWordsState.overrides['settings.remoteHostsTitle'] = 'Remote hosts';
 
         const { useResolvedSettingsPageCatalog } = await import('./useResolvedSettingsPageCatalog');
         settingsState.tauriDesktop = false;
@@ -746,6 +759,7 @@ describe('useResolvedSettingsPageCatalog', () => {
         const disabledHook = await renderHook(() => useResolvedSettingsPageCatalog());
         expect(flattenIds(disabledHook.getCurrent().tree)).not.toContain('remoteHosts');
         await disabledHook.unmount();
+        searchWordsState.overrides = {};
     });
 
     it('includes the Desktop app page only on Tauri desktop builds', async () => {
@@ -792,14 +806,14 @@ describe('useResolvedSettingsPageCatalog', () => {
         await hook.unmount();
     });
 
-    it('finds every prospective auto-follow preference at its Notifications row', async () => {
+    it('finds every prospective auto-follow preference on Coordination, where Follow automatically lives', async () => {
         const { useResolvedSettingsPageCatalog } = await import('./useResolvedSettingsPageCatalog');
         const hook = await renderHook(() => useResolvedSettingsPageCatalog());
         for (const field of ['assigned', 'direct', 'team', 'group']) {
-            const anchor = `notifications.autoFollow${field[0]!.toUpperCase()}${field.slice(1)}`;
+            const anchor = `coordination.autoFollow${field[0]!.toUpperCase()}${field.slice(1)}`;
             expect(hook.getCurrent().search(`session.follow.preferences.${field}`)).toContainEqual(expect.objectContaining({
-                id: 'notifications',
-                route: `/settings/notifications?setting=${anchor}`,
+                id: 'coordination',
+                route: `/settings/coordination?setting=${anchor}`,
                 setting: expect.objectContaining({ anchor }),
             }));
         }

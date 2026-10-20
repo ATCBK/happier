@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { randomUUID } from 'node:crypto';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
-import { classifyHomeDomainHttpMutationFailureV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
+import { classifyHomeDomainHttpMutationFailureV1, readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 import { AccountSettingsV2GetResponseSchema, AccountSettingsV2UpdateResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { commitMcpServerCatalogMutationV1, loadMcpServerCatalogV1, readRetainedMcpServerCatalogSourceV1, type McpServerCatalogMutationV1,
   type McpServerCatalogSnapshotV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
@@ -15,14 +15,16 @@ import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import type { StoredCredentials } from '@/persistence';
 import { configuration } from '@/configuration';
+import { runWithoutRequesterSessionCurrentnessCheckpoint } from "@/daemon/sessionEncryption/requesterCurrentness";
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { commitActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot,
   getActiveAccountSettingsSnapshotLifetimeToken, type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { readAccountSettingsV2Raw, replaceAccountSettingsV2RawForOwnerCutover } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
 import { normalizeCliAccountSettingsHistoryAfterTransfer } from '@/settings/accountSettings/accountSettingsHistoryNormalization';
-import { createInvocationSavedSecretOperationContextV1, importLegacySavedSecretsForOperation,
-  captureSavedSecretReferencesForOperation, type SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1, type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
+import { importLegacySavedSecretsForOperation } from "@/settings/secrets/hydrateSavedSecretCatalog";
+import { captureSavedSecretReferencesForOperation } from "@/settings/secrets/savedSecretCatalogRead";
 
 export function createCliMcpServerStore(input: Readonly<{ credentials: StoredCredentials; serverId?: string;
   signal?: AbortSignal; hasPendingCleanup?: () => boolean }>) {
@@ -90,8 +92,11 @@ function createCapturedStore(input: Readonly<{
     // Acknowledged effects remain truthful after retirement; private reads do not.
     if (body === undefined) await verifyCurrent();
     if (response.status < 200 || response.status >= 300 && response.status !== 409) {
-      throw Object.assign(new Error('MCP Account transport unavailable'), { code: response.status === 401 ? 'unauthorized'
-        : response.status === 403 ? 'forbidden' : response.status === 404 ? 'unsupported' : 'unreachable' });
+      const rollback = readHomeDomainConfirmedRollbackV1(response.status, response.data);
+      throw Object.assign(new Error('MCP Account transport unavailable'), { code: rollback?.code ?? (
+        body !== undefined && response.status >= 500 ? 'outcome_unknown'
+        : response.status === 401 ? 'unauthorized'
+        : response.status === 403 ? 'forbidden' : response.status === 404 ? 'unsupported' : 'unreachable') });
     }
     return response.data as unknown;
   };
@@ -146,10 +151,11 @@ function createCapturedStore(input: Readonly<{
     return result.data;
   };
   let admittedCatalog: McpServerCatalogSnapshotV1 | undefined;
-  const readCatalog = async (onReady?: (catalog: McpServerCatalogSnapshotV1) => void) => {
+  const readCatalog = async (onReady?: (catalog: McpServerCatalogSnapshotV1) => void,
+    options?: Readonly<{ maintainSource?: false }>) => {
     const context = await readStorageContext();
     let absent = false;
-    const catalog = await loadMcpServerCatalogV1({ ...context, signal: input.signal,
+    const catalog = await loadMcpServerCatalogV1({ ...context, signal: input.signal, ...options,
       readRow: async () => { const row = await readRow(); absent = row.status === 'absent'; return row; },
       hasPendingCleanup: input.hasPendingCleanup,
       onReadyBeforeCleanup: async catalog => {
@@ -161,7 +167,7 @@ function createCapturedStore(input: Readonly<{
         onReady?.(catalog);
       },
       transfer: {
-        readSourceSnapshot: async () => {
+        readSourceSnapshot: () => runWithoutRequesterSessionCurrentnessCheckpoint(async () => {
           // The SavedSecret owner rewrites personal references before the domain
           // captures its first activation CAS. Raw census never calls this path.
           const source = await readSourceSnapshot();
@@ -176,9 +182,9 @@ function createCapturedStore(input: Readonly<{
               operationContext: captured, signal: input.signal }));
           }
           return readSourceSnapshot();
-        },
-        initializeCatalog: writeCatalog,
-        replaceSource: async value => {
+        }),
+        initializeCatalog: value => runWithoutRequesterSessionCurrentnessCheckpoint(() => writeCatalog(value)),
+        replaceSource: value => runWithoutRequesterSessionCurrentnessCheckpoint(async () => {
           const current = await readStorageContext();
           if (current.mode !== context.mode) throw Object.assign(new Error('Account mode changed'), { code: 'account-mode-mismatch' });
           const response = await replaceAccountSettingsV2RawForOwnerCutover({ credentials: input.credentials, signal: input.signal,
@@ -190,10 +196,10 @@ function createCapturedStore(input: Readonly<{
           return response.success ? { status: 'applied' as const, settingsVersion: response.version }
             : response.error === 'version-mismatch' ? { status: 'conflict' as const, currentSettingsVersion: response.currentVersion }
               : { status: 'rejected' as const };
-        },
-        normalizeHistory: value => normalizeCliAccountSettingsHistoryAfterTransfer({ credentials: input.credentials,
+        }),
+        normalizeHistory: value => runWithoutRequesterSessionCurrentnessCheckpoint(() => normalizeCliAccountSettingsHistoryAfterTransfer({ credentials: input.credentials,
           serverBaseUrl: base, signal: input.signal, destinationAuthority: value,
-          isCurrent: async () => { try { await verifyCurrent(); return true; } catch { return false; } } }),
+          isCurrent: async () => { try { await verifyCurrent(); return true; } catch { return false; } } })),
       } });
     const admitted = await readStorageContext();
     await verifyCurrent();
@@ -204,14 +210,9 @@ function createCapturedStore(input: Readonly<{
     await input.publishCatalog?.(result);
     return result;
   };
-  /** Return the admitted row while the same captured loader retains optional maintenance to terminal. */
+  /** Finite operations use the same admission owner without starting optional retained maintenance. */
   const readCatalogForOperation = async (): Promise<McpServerCatalogSnapshotV1> => {
-    let resolveAdmission!: (catalog: McpServerCatalogSnapshotV1) => void;
-    const admission = new Promise<McpServerCatalogSnapshotV1>(resolve => { resolveAdmission = resolve; });
-    const work = readCatalog(resolveAdmission);
-    // The full work handle remains observed even after first-ready wins.
-    void work.catch(() => undefined);
-    return Promise.race([work, admission]);
+    return readCatalog(undefined, { maintainSource: false });
   };
   return { assertCurrent: input.assertCurrent, readRow, readStorageContext, readSourceSnapshot, readCatalog, readCatalogForOperation, writeCatalog,
     mutate: async (change: McpServerCatalogMutationV1, expectedRevision?: number | 'absent', capturedCatalog?: McpServerCatalogSnapshotV1) => {

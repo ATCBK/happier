@@ -103,7 +103,9 @@ function shelfKeyFor(kind: PluginContributionKind): PluginKindShelfKey | null {
     case 'registrySources':
     case 'atmospherePictures':
     case 'dragSources':
+    case 'workItems':
     case 'dropTargets':
+    case 'skills':
       return null;
   }
   kind satisfies never;

@@ -1,42 +1,69 @@
 import * as React from 'react';
-import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { McpServerCatalogEntryV1Schema } from '@happier-dev/protocol/mcp/servers/settingsV1';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { resolveSavedSecretReference } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 
-const boundary = vi.hoisted(() => ({ execute: vi.fn() }));
+const boundary = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
-// The mounted Action and modal/navigation hosts are boundaries. Detail, status and editors stay real.
-vi.mock('@/components/approvals/useMountedActionExecution', () => ({ useMountedActionExecution: () => ({ execute: boundary.execute, ready: true, isCurrent: () => true, approval: {} }) }));
+// The daemon transport is the boundary; mounted Action admission, status and editors stay real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () =>
+  (await import('@/dev/testkit/mocks/serverScopedRpc')).createServerScopedMachineRpcBoundaryMock(boundary.rpc));
+const harness = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(harness);
 const { Modal } = await import('@/modal');
 const { getStorage } = await import('@/sync/domains/state/storageStore');
 const { McpServerDetailPage } = await import('./McpServerDetailPage');
 const { ValueRefEditorModal } = await import('@/components/ui/forms/valueRefs/ValueRefEditorModal');
-const { McpSignInSection } = await import('../signIn/McpSignInSection');
+const { McpServerWhereAndTools } = await import('./McpServerDetailBody');
 
 const base = McpServerCatalogEntryV1Schema.parse({ id: 'linear', name: 'linear', transport: 'http', env: {}, createdAt: 1, updatedAt: 1,
   remote: { url: 'https://mcp.linear.app/mcp', headers: {} } });
 const unavailable = { resolveReference: (ref: string) => resolveSavedSecretReference(null, [], ref) };
+let catalogServer = base;
+let disposeActionLoader: (() => void) | undefined;
 
 async function page(server = base) {
+  catalogServer = server;
   let draft = server;
   const commit = vi.fn();
   const tree = await renderScreen(<McpServerDetailPage server={server} draftServer={draft} catalogRevision={null} secrets={[]} secretAvailability={unavailable}
-    scope={null} configurationSaveState="idle" onCommitConfiguration={commit} onRemove={() => {}} approvalNotice={null}
+    scope={getStorage().getState().settingsScope} configurationSaveState="idle" onCommitConfiguration={commit} onRemove={() => {}} onDuplicate={() => {}} approvalNotice={null}
     onChangeServer={updater => { draft = updater(draft); }} />);
   return { tree, commit, draft: () => draft };
 }
-beforeEach(() => {
-  boundary.execute.mockReset();
+beforeEach(async () => {
+  await harness.reset();
+  const { resetScopedHomeActionExecutorsForTests } = await import('@/sync/ops/actions/scopedHomeActionExecutor');
+  resetScopedHomeActionExecutorsForTests();
+  disposeActionLoader = await installRealActionExecutorModuleLoader();
+  boundary.rpc.mockReset();
   vi.mocked(Modal.show).mockClear();
-  getStorage().setState({ settingsScope: null });
+  const serverId = await harness.addHome({ name: 'MCP recovery', serverUrl: 'https://mcp-detail-recovery.test',
+    serverIdentityId: 'srv_mcp_detail_recovery', accountId: 'owner', currentAccount: true });
+  const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+  const scope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'owner' };
+  const machine = createMachineFixture({ id: 'mcp-machine', activeAt: Date.now() });
+  const state = getStorage().getState();
+  getStorage().setState({ settingsScope: scope, profileScope: scope, isDataReady: true,
+    machines: { [machine.id]: machine }, machineListByServerId: { [serverId]: [machine] },
+    machineListStatusByServerId: { [serverId]: 'idle' },
+    settings: { ...state.settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {}, approvalWaivedSurfaces: {
+      'mcp.servers.signIn.start': ['ui'],
+    } }) } });
+  harness.answer(serverId, '/v1/account/entity-rows/mcp', { select: () => ({ body: {
+    status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, servers: [catalogServer], bindings: [] } },
+  } }) });
 });
-afterEach(standardCleanup);
+afterEach(async () => { await standardCleanup(); disposeActionLoader?.(); disposeActionLoader = undefined; });
 
 describe('saved MCP detail recovery wiring', () => {
   it('the real missing-key banner opens the ValueRef editor and saves the repaired reference', async () => {
@@ -55,8 +82,10 @@ describe('saved MCP detail recovery wiring', () => {
 
   it('client refusal keeps the API-key alternative and saves through the existing header editor', async () => {
     const current = await page(McpServerCatalogEntryV1Schema.parse({ ...base, remote: { ...base.remote, auth: { kind: 'oauth' } } }));
-    boundary.execute.mockResolvedValue({ ok: false, errorCode: 'client_refused', error: 'client_refused' });
-    await act(async () => { await current.tree.findByType(McpSignInSection).props.signIn.start(); });
+    boundary.rpc.mockRejectedValue(Object.assign(new Error('client_refused'), { code: 'client_refused' }));
+    await waitForHomeGovernance(() => expect(current.tree.findByType(McpServerWhereAndTools).props.detail.execution.ready).toBe(true));
+    await current.tree.pressByTestIdAsync('mcp.server.signin:not-connected:action');
+    await waitForHomeGovernance(() => expect(current.tree.findByTestId('mcp.server.signin:client-refused:action')).not.toBeNull());
     await current.tree.pressByTestIdAsync('mcp.server.signin:client-refused:action');
     expect(Modal.show).toHaveBeenCalled();
     const opened = vi.mocked(Modal.show).mock.calls.at(-1)![0];

@@ -9,8 +9,11 @@ import { SessionEncryption } from '@/sync/encryption/sessionEncryption';
 import { Encryption } from '@/sync/encryption/encryption';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import { createDeferred, createMachineFixture } from '@/dev/testkit';
-import { fetchAndApplyMachines } from '@/sync/engine/machines/syncMachines';
+import { buildMachineActivityPlaceholder, fetchAndApplyMachines } from '@/sync/engine/machines/syncMachines';
+import { readMachineEncryptionContextInput } from '@/sync/encryption/machineEncryption';
 import { encodeBase64 } from '@happier-dev/protocol';
+import { createFakeCryptoWorker } from '@/sync/encryption/nativeCryptoWorker/fakeCryptoWorker';
+import { readMachineInventoryRowReadiness } from '@/sync/domains/machines/resolveServerScopedMachines';
 import {
     markSessionSurfaceVisible,
     resetSessionSurfaceVisibilityForTests,
@@ -100,7 +103,7 @@ function buildBaseParams(overrides: Partial<Omit<Parameters<typeof handleUpdateC
             removeSessionEncryption: () => {},
             decryptEncryptionKey,
             initializeMachines,
-        } as unknown as Parameters<typeof handleUpdateContainer>[0]['encryption'],
+        },
         artifactDataKeys: new Map(),
         applySessions: vi.fn(),
         fetchSessions: vi.fn(),
@@ -127,10 +130,9 @@ function buildBaseParams(overrides: Partial<Omit<Parameters<typeof handleUpdateC
         ...params,
         readAccountMode: async () => 'e2ee' as const,
         ...overrides,
-        encryption: params.encryption === null || typeof params.encryption !== 'object' || params.encryption instanceof Encryption ? params.encryption : {
-            ...params.encryption,
-            captureMachineEncryptionContext: machineContextOwner.captureMachineEncryptionContext.bind(machineContextOwner),
-        } as Parameters<typeof handleUpdateContainer>[0]['encryption'],
+        encryption: params.encryption === null || typeof params.encryption !== 'object' || params.encryption instanceof Encryption
+            ? params.encryption
+            : Object.assign(machineContextOwner, params.encryption),
     };
 }
 
@@ -475,6 +477,99 @@ describe('socket update handling: new-machine', () => {
 describe('socket update handling: update-machine (missing encryption)', () => {
     beforeEach(() => {
         storage.setState(initialStorageState, true);
+    });
+
+    it('opens current metadata after a newer socket hint during key admission, without admitting the old daemon state', async () => {
+        const secret = new Uint8Array(32).fill(17);
+        const encryption = await Encryption.create(secret);
+        const key = new Uint8Array(32).fill(23);
+        const envelope = encodeBase64(await encryption.encryptEncryptionKey(key), 'base64');
+        const machineId = 'cold-hint';
+        await encryption.initializeMachines(new Map([[machineId, key]]));
+        const cipher = encryption.getMachineEncryption(machineId)!;
+        const machine = createMachineFixture({ id: machineId, metadataVersion: 1, daemonStateVersion: 1,
+            activeAt: Date.now(), dataEncryptionKey: envelope, storageMode: 'e2ee',
+            operationProtocolCapabilities: { sessionSpawn: { protocolVersions: [1] } }, operationProtocolCapabilitiesRevision: 1,
+            keyBasis: { dataEncryptionKey: envelope, metadataVersion: 1, daemonStateVersion: 1 } });
+        const metadata = await cipher.encryptMetadata(machine.metadata!);
+        const daemonState = await cipher.encryptDaemonState({ status: 'running', httpPort: 3000 });
+        const nextState = { status: 'running', httpPort: 4000 };
+        const nextCiphertext = await cipher.encryptDaemonState(nextState);
+        encryption.removeMachineEncryption(machineId);
+        storage.setState({ machines: {}, machineDisplayById: {}, machineListByServerId: {}, machineListStatusByServerId: {} });
+        const entered = createDeferred<void>(), release = createDeferred<void>();
+        const worker = createFakeCryptoWorker();
+        encryption.configureNativeCryptoWorker({ routing: { mode: 'require', minPayloadBytes: 0 }, worker: {
+            ...worker, decryptDataKeyEnvelopeV1: async request => {
+                entered.resolve(); await release.promise; return worker.decryptDataKeyEnvelopeV1(request);
+            },
+        } });
+        const credentials = { token: 'header.eyJzdWIiOiJhY2NvdW50LTEifQ==.signature',
+            secret: encodeBase64(secret, 'base64url') };
+        const pending = fetchAndApplyMachines({ credentials, encryption, expectedAccountMode: 'e2ee',
+            sourceServerId: 'home-1', machineDataKeys: new Map(),
+            request: async () => Response.json([{ ...machine, metadata, daemonState }]),
+            getMachineSnapshot: () => storage.getState().machines,
+            getExistingMachine: id => storage.getState().machines[id],
+            applyMachineDisplayEntries: rows => storage.getState().replaceMachineDisplays(rows),
+            applyMachines: (rows, replace) => storage.getState().applyMachines(rows, replace),
+        });
+        const hint = { id: 'newer-state-hint', seq: 2, createdAt: machine.updatedAt + 1,
+            body: { t: 'update-machine' as const, machineId,
+                keyBasis: { dataEncryptionKey: envelope, metadataVersion: 1, daemonStateVersion: 2 },
+                daemonState: { version: 2, value: nextCiphertext } } };
+        try {
+            await entered.promise;
+            await handleUpdateContainer({ ...buildBaseParams({ encryption, credentials }), updateData: hint });
+            release.resolve(); await pending;
+            expect(storage.getState().machines[machineId]).toMatchObject({ metadata: machine.metadata, metadataVersion: 1,
+                daemonStateVersion: 1, keyBasis: { daemonStateVersion: 2 } });
+            expect(readMachineInventoryRowReadiness(storage.getState().machines[machineId]!)).toBe('pending');
+            await handleUpdateContainer({ ...buildBaseParams({ encryption, credentials }), updateData: { ...hint, id: 'opened-state-hint', seq: 3 } });
+            expect(storage.getState().machines[machineId]).toMatchObject({ metadata: machine.metadata, daemonState: nextState,
+                daemonStateVersion: 2, availability: { kind: 'available' } });
+            expect(readMachineInventoryRowReadiness(storage.getState().machines[machineId]!)).toBe('available');
+        } finally { release.resolve(); await pending; }
+    });
+
+    it.each(['complete', 'content-only'] as const)('keeps an exact-read Machine cipher when its unchanged %s hint reaches a presence-only store row', async (hint) => {
+        const encryption = await Encryption.create(new Uint8Array(32).fill(17));
+        const machineId = 'cold-exact-read';
+        const key = new Uint8Array(32).fill(23);
+        const envelope = encodeBase64(await encryption.encryptEncryptionKey(key), 'base64');
+        const access = { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'use' as const,
+            resourceMode: 'e2ee' as const, accessState: 'ready' as const };
+        const keyBasis = { dataEncryptionKey: envelope, metadataVersion: 1, daemonStateVersion: 1 };
+        // An exact RPC read can admit crypto before the fleet list has hydrated
+        // its presence shell. That shell is not a second key-context authority.
+        encryption.captureMachineEncryptionContext(machineId,
+            readMachineEncryptionContextInput({ dataEncryptionKey: envelope, keyBasis, access }, 'owner'));
+        await encryption.initializeMachines(new Map([[machineId, key]]));
+        const cipher = encryption.getMachineEncryption(machineId);
+        if (!cipher) throw new Error('Fixture Machine cipher was not admitted');
+        const metadata = createMachineFixture().metadata!;
+        const ciphertext = await cipher.encryptMetadata(metadata);
+        storage.getState().applyMachines([buildMachineActivityPlaceholder({ id: machineId, active: true, activeAt: 200 })]);
+        const params = buildBaseParams({ encryption,
+            credentials: { token: `e30.${btoa(JSON.stringify({ sub: 'owner' }))}.signature` } });
+        await handleUpdateContainer({ ...params, updateData: {
+            id: 'unchanged-current-key-hint', seq: 2, createdAt: 200,
+            body: { t: 'update-machine', machineId, keyBasis, metadata: { value: ciphertext, version: 1 },
+                ...(hint === 'complete' ? { dataEncryptionKey: envelope, access } : {}) },
+        } });
+        expect(encryption.getMachineEncryption(machineId) === cipher).toBe(true);
+        expect(storage.getState().machines[machineId]?.availability?.kind).not.toBe('locked');
+        expect(storage.getState().machines[machineId]?.metadata?.host).toBe(metadata.host);
+        // Retaining an unchanged context must not retain execution after the
+        // same published envelope loses its recipient access.
+        await handleUpdateContainer({ ...params, updateData: {
+            id: 'recipient-access-withdrawn', seq: 3, createdAt: 201,
+            body: { t: 'update-machine', machineId, dataEncryptionKey: envelope, keyBasis,
+                access: { ...access, accessState: 'refused' } },
+        } });
+        expect(encryption.getMachineEncryption(machineId)).toBeNull();
+        expect(storage.getState().machines[machineId]).toMatchObject({ metadata: null, daemonState: null,
+            availability: { kind: 'locked' } });
     });
 
     it('does not let a held old list undo a later current key hint at unchanged content versions', async () => {

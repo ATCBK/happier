@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore } from 'zustand/vanilla';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { getPreferredLanguage, setPreferredLanguageFromSettings, t } from '@/text/i18n';
 import { es } from '@/text/translations/es';
 
 import { settingsDefaults, type Settings } from '@/sync/domains/settings/settings';
+import { isActionEnabledInState, isActionApprovalRequiredInState, resolveActionsSettingsV1FromState } from '@/sync/domains/settings/actionsSettings';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { loadAccountSettings } from '@/sync/domains/state/accountSettingsPersistence';
 import { clearPersistence } from '@/sync/domains/state/persistence';
-import { createInitialSessionSplitCanvasSnapshot } from '@/sync/domains/session/sessionSplitCanvasPersistence';
 
 const store = vi.hoisted(() => new Map<string, string>());
 
@@ -160,6 +161,33 @@ describe('createSettingsDomain settings projection reference stability', () => {
         expect(getState().settingsVersion).toBe(2);
     });
 
+    it('reuses Actions policy on unchanged echoes and observes local and remote policy changes immediately', async () => {
+        const { getState } = createTestStore();
+        const context = { surface: 'ui', authority: 'present_user' } as const;
+        const disabledPolicy = normalizeActionsSettingsV1({ v: 1, actions: {
+            'session.stop': { enabled: false, approvalRequiredSurfaces: ['ui'] },
+        } });
+        await getState().activateSettingsScope(scope);
+        getState().applySettingsForScope(scope, buildServerEchoSettings({ actionsSettingsV1: disabledPolicy }), 1);
+        const initial = resolveActionsSettingsV1FromState(getState());
+
+        getState().applySettingsForScope(scope, buildServerEchoSettings({ actionsSettingsV1: disabledPolicy, analyticsOptOut: true }), 2);
+        expect(resolveActionsSettingsV1FromState(getState())).toBe(initial);
+        expect(isActionEnabledInState(getState(), 'session.stop', context)).toBe(false);
+        expect(isActionApprovalRequiredInState(getState(), 'session.stop', context)).toBe(true);
+
+        getState().applySettingsLocal({ actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
+            actions: { 'session.stop': { enabled: true } }, approvalWaivedSurfaces: { 'session.stop': ['ui'] },
+        }) });
+        expect(isActionEnabledInState(getState(), 'session.stop', context)).toBe(true);
+        expect(isActionApprovalRequiredInState(getState(), 'session.stop', context)).toBe(false);
+        expect(resolveActionsSettingsV1FromState(getState())).not.toBe(initial);
+
+        getState().applySettingsForScope(scope, buildServerEchoSettings({ actionsSettingsV1: disabledPolicy }), 3);
+        expect(isActionEnabledInState(getState(), 'session.stop', context)).toBe(false);
+        expect(isActionApprovalRequiredInState(getState(), 'session.stop', context)).toBe(true);
+    });
+
     it('still applies a local write that changes a nested collection', async () => {
         const { getState } = createTestStore();
         await getState().activateSettingsScope(scope);
@@ -187,12 +215,11 @@ describe('createSettingsDomain settings projection reference stability', () => {
         expect(getState().settings.favoriteDirectories).toBe(favoritesBeforeLocalWrite);
     });
 
-    it('restores device layout and Administration memory only for their exact Account and Home', async () => {
+    it('restores device Administration memory only for their exact Account and Home', async () => {
         const { getState } = createTestStore();
         const targets = { agents: { serverIdentityId: 'srv_one', machineId: 'machine-a' } };
-        const layouts = { workspace: createInitialSessionSplitCanvasSnapshot({ sessionId: 'session-a', scope }) };
         await getState().activateSettingsScope(scope);
-        getState().applySettingsLocal({ machineAdministrationTargetsLocalV1: targets, sessionSplitCanvasLayoutsV1: layouts });
+        getState().applySettingsLocal({ machineAdministrationTargetsLocalV1: targets });
 
         for (const otherScope of [
             { ...scope, accountId: 'account-b' },
@@ -200,10 +227,8 @@ describe('createSettingsDomain settings projection reference stability', () => {
         ]) {
             await getState().activateSettingsScope(otherScope);
             expect(getState().settings.machineAdministrationTargetsLocalV1).toEqual({});
-            expect(getState().settings.sessionSplitCanvasLayoutsV1).toEqual({});
         }
         await getState().activateSettingsScope(scope);
         expect(getState().settings.machineAdministrationTargetsLocalV1).toEqual(targets);
-        expect(getState().settings.sessionSplitCanvasLayoutsV1).toEqual(layouts);
     });
 });

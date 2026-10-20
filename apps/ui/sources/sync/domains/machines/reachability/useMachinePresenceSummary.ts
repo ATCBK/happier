@@ -9,6 +9,7 @@ import { isMachineVisibleForSelection } from '@/sync/domains/machines/identity/f
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import {
     isMachineReachable,
+    readMachineRequestReachabilityRevision,
     subscribeMachineRequestReachability,
 } from '@/sync/domains/machines/reachability/machineReachability';
 import { getMachineDisplayName, isMachineOnline, readMachineStatusNextRefreshAtMs } from '@/utils/sessions/machineUtils';
@@ -59,14 +60,14 @@ export function useMachinePresenceSummaries(
     const readMachines = React.useCallback(() => ids.map(machineId => machineId
         ? resolveServerScopedMachine(store.getState() as MachinePresenceStorageState, targetServerId, machineId) : null),
     [store, targetServerId, ids]);
-    const getSnapshot = React.useCallback((): readonly MachinePresenceSummary[] => {
+    const readSnapshot = React.useCallback((nowMs: number): readonly MachinePresenceSummary[] => {
         const next = readMachines().map((machine, index): MachinePresenceSummary => {
             const name = machine ? getMachineDisplayName(machine).trim() || null : null;
             const homeDir = machine?.metadata?.homeDir?.trim() || null;
             const reachability = resolveSessionMachineReachabilityState({
                 // Missing credential identity is unknown, not a transport-offline verdict.
                 machineIsKnown: Boolean(machine && scope),
-                machineIsOnline: machine ? isMachineReachable(scope, machine) : false,
+                machineIsOnline: machine ? isMachineReachable(scope, machine, nowMs) : false,
             });
             const lastSeenAt = reachability === 'unreachable' && typeof machine?.activeAt === 'number' && machine.activeAt > 0
                 ? machine.activeAt : null;
@@ -77,8 +78,7 @@ export function useMachinePresenceSummaries(
         if (next.length !== cached.current.length || next.some((value, index) => value !== cached.current[index])) cached.current = next;
         return cached.current;
     }, [readMachines, scope, ids]);
-    const subscribe = useMachinePresenceSubscription(readMachines);
-    return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+    return useMachinePresenceSnapshot(readMachines, readSnapshot);
 }
 
 export type MachinePresenceMembership = Readonly<{
@@ -105,8 +105,7 @@ export function useMachinePresenceMembership(serverId: string | null): MachinePr
         }) ?? [] : activeMachines;
         return machines.filter(isMachineVisibleForSelection);
     }, [store, targetServerId]);
-    const getSnapshot = React.useCallback(() => {
-        const nowMs = Date.now();
+    const readSnapshot = React.useCallback((nowMs: number) => {
         const machines = readMachines();
         const onlineMachineIds = machines.filter(machine => isMachineReachable(scope, machine, nowMs))
             .map(machine => machine.id).sort((left, right) => left.localeCompare(right));
@@ -121,6 +120,48 @@ export function useMachinePresenceMembership(serverId: string | null): MachinePr
         }
         return cached.current;
     }, [readMachines, scope]);
+    return useMachinePresenceSnapshot(readMachines, readSnapshot);
+}
+
+/** React reads one immutable projection until one of its subscribed sources moves. */
+function useMachinePresenceSnapshot<T>(
+    readMachines: Parameters<typeof useMachinePresenceSubscription>[0],
+    readSnapshot: (nowMs: number) => T,
+): T {
+    const store = getStorage();
+    const getSnapshot = React.useMemo(() => {
+        let cached: Readonly<{
+            machines: ReturnType<typeof store.getState>['machines'];
+            machineListByServerId: ReturnType<typeof store.getState>['machineListByServerId'];
+            machineListStatusByServerId: ReturnType<typeof store.getState>['machineListStatusByServerId'];
+            machinePresenceById: ReturnType<typeof store.getState>['machinePresenceById'];
+            machinePresenceByServerId: ReturnType<typeof store.getState>['machinePresenceByServerId'];
+            clockNowMs: number;
+            requestRevision: number;
+            value: T;
+        }> | undefined;
+        return () => {
+            const state = store.getState();
+            const clockNowMs = sessionListRuntimeClock.getNowMs();
+            const requestRevision = readMachineRequestReachabilityRevision();
+            if (cached && cached.machines === state.machines
+                && cached.machineListByServerId === state.machineListByServerId
+                && cached.machineListStatusByServerId === state.machineListStatusByServerId
+                && cached.machinePresenceById === state.machinePresenceById
+                && cached.machinePresenceByServerId === state.machinePresenceByServerId
+                && cached.clockNowMs === clockNowMs
+                && cached.requestRevision === requestRevision) return cached.value;
+            // Wall time is captured only at a source transition. Reading it on
+            // every getSnapshot can cross a lease between React's consistency
+            // reads before the shared deadline callback has delivered its event.
+            const value = readSnapshot(Date.now());
+            cached = { machines: state.machines, machineListByServerId: state.machineListByServerId,
+                machineListStatusByServerId: state.machineListStatusByServerId,
+                machinePresenceById: state.machinePresenceById, machinePresenceByServerId: state.machinePresenceByServerId,
+                clockNowMs, requestRevision, value };
+            return value;
+        };
+    }, [store, readSnapshot]);
     const subscribe = useMachinePresenceSubscription(readMachines);
     return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
@@ -142,7 +183,13 @@ function useMachinePresenceSubscription(
             else sessionListRuntimeClock.requestWake(token, next);
             listener();
         };
-        const stopStore = store.subscribe(refresh);
+        const stopStore = store.subscribe((state, previous) => {
+            if (state.machines !== previous.machines
+                || state.machineListByServerId !== previous.machineListByServerId
+                || state.machineListStatusByServerId !== previous.machineListStatusByServerId
+                || state.machinePresenceById !== previous.machinePresenceById
+                || state.machinePresenceByServerId !== previous.machinePresenceByServerId) refresh();
+        });
         const stopClock = sessionListRuntimeClock.subscribe(refresh);
         const stopRequests = subscribeMachineRequestReachability(refresh);
         refresh();

@@ -97,6 +97,14 @@ export function projectTriageSessionPlacementCandidateV1(
     });
 }
 
+/** Choice and saved-project evidence travel separately, including Ask and fixed placement. */
+export function projectTriageActionPlacementCandidatesV1(
+    placement: TriageActionPlacementV1,
+): readonly PluginUiSessionPlacementCandidateV1[] {
+    return (placement.kind === 'launch' ? [placement.candidate] : placement.candidates)
+        .map(projectTriageSessionPlacementCandidateV1);
+}
+
 /**
  * The seed the host's composer admits, or `null` when Triage has nothing to
  * say and the host should use its own defaults.
@@ -153,11 +161,7 @@ export function triageNewSessionDraftSeedV1(
         ?? (placement !== undefined && 'checkoutIntent' in placement ? placement : undefined);
     const candidates = actionContext?.candidates ?? (actionSeed === undefined || !('placement' in actionSeed)
         ? undefined
-        : actionSeed.placement.kind === 'launch'
-            ? [projectTriageSessionPlacementCandidateV1(actionSeed.placement.candidate)]
-            : actionSeed.placement.kind === 'prefill'
-                ? actionSeed.placement.candidates.map(projectTriageSessionPlacementCandidateV1)
-                : undefined);
+        : projectTriageActionPlacementCandidatesV1(actionSeed.placement));
     const seed = {
         ...(agentId ? { agentId } : {}),
         ...(actionSeed?.profileId === undefined ? {} : { profileId: actionSeed.profileId }),

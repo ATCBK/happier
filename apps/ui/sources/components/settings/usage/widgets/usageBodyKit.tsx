@@ -2,21 +2,20 @@ import * as React from 'react';
 import type { PluginUiThemeV1 } from '@happier-dev/plugin-sdk/ui';
 import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import type { UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import type { UsageBuiltinWidgetIdV1 } from '@happier-dev/protocol/widgets';
 import type {
   UsageQueryResultSlice,
   UsageQuerySourceState,
 } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { AgentCatalogIdentityIcon } from '@/agents/presentation/AgentCatalogIdentityIcon';
 import { resolveAgentCatalogProjection } from '@/agents/backendCatalog/agentCatalogProjection';
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
 import { USAGE_METER_METRICS } from '@/components/settings/connectedServices/usage/UsageMeterRow';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
-import { HAPPIER_FRESHNESS_LINE_METRICS, HappierSkeletonBlock } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_FRESHNESS_LINE_METRICS, HappierListOverflowFooter, HappierSkeletonBlock, leadHappierListRows } from '@happier-dev/plugin-ui/presentation';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { useWidgetPresentation } from '@happier-dev/plugin-ui';
 import {
@@ -36,6 +35,8 @@ import { useProjectAccountRows } from '@/sync/domains/workspaces/projectAccountR
 import { projectProjectListV1 } from '@happier-dev/protocol/workspaces';
 import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { resolveWorkspaceRefDisplayName } from '@/components/projects/resolveWorkspaceRefDisplayName';
+import { useUsageDisclosureCommand } from './usageMountedControls';
+import { isWidgetResourceQuietRefresh } from '@/components/widgets/frame/widgetFrameResourceActivity';
 
 /** What every Usage body receives from the one dispatcher: admitted facts, never a fetch handle. */
 export type UsageBodyProps = Readonly<{
@@ -50,7 +51,7 @@ export type UsageBodyProps = Readonly<{
 
 export function useUsagePluginTheme(): PluginUiThemeV1 {
   const { theme } = useUnistyles();
-  return React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  return usePluginUiTheme(theme);
 }
 
 /** Exact shown dates; a date range does not establish a rolling preset identity. */
@@ -71,15 +72,21 @@ export function useUsageProjectLabels(serverId: string): ReadonlyMap<string, str
       || !areServerProfileIdentifiersEquivalent(rows.scope.serverId, serverId)) return labels;
     const projection = projectProjectListV1({ serverId, workspaceRefs: rows.workspaceRefs,
       organizations: rows.organizations, normalizeServerId: resolveServerProfileScopeIdForIdentifier });
-    for (const group of [...projection.projectGroups, ...projection.hiddenProjectGroups]) {
+    const groups = [...projection.projectGroups, ...projection.hiddenProjectGroups];
+    const refs = groups.flatMap(group => {
       const ref = group.items[0];
-      if (ref) labels.set(group.projectKey.projectKey, resolveWorkspaceRefDisplayName(ref));
+      const label = rows.organizations.find(row => row.key.projectKey === group.projectKey.projectKey)?.value.label;
+      return ref ? [{ ...ref, ...(label ? { label } : {}) }] : [];
+    });
+    for (const group of groups) {
+      const ref = refs.find(ref => ref.id === group.items[0]?.id && ref.serverId === group.items[0]?.serverId);
+      if (ref) labels.set(group.projectKey.projectKey, resolveWorkspaceRefDisplayName(ref, refs));
     }
     // The opened snapshot supplies Home/Account authority. Native opaque keys
     // retain their producing CLI profile namespace, which is not a UI Home id
     // or routing grant; join those keys only within this admitted snapshot.
     for (const row of rows.organizations) {
-      if (row.value.label) labels.set(row.key.projectKey, row.value.label);
+      if (row.value.label && !labels.has(row.key.projectKey)) labels.set(row.key.projectKey, row.value.label);
     }
     return labels;
   }, [rows, serverId]);
@@ -141,16 +148,53 @@ export function UsageBodyReading(props: Readonly<{
    * The body's known shape, so the room it will fill is held from the first frame: `meters` rows of a
    * name, a bar and a caption (a list of allowance windows), or the `mix` of four figures over a strip.
    */
-  shape?: Readonly<{ kind: 'meters'; rows: number }> | Readonly<{ kind: 'mix' }> | Readonly<{ kind: 'summary' }> | Readonly<{ kind: 'strip' }> | Readonly<{ kind: 'capacity' }>;
+  shape?: Readonly<{ kind: 'meters'; rows: number }> | Readonly<{ kind: 'mix' }> | Readonly<{ kind: 'summary' }> | Readonly<{ kind: 'strip' }> | Readonly<{ kind: 'capacity' }>
+    /** A sized chart: its plot at the settled height, then the axis, legend and note room around it. */
+    /** `peak`: the settled chart draws its peak figure above the plot, so the held room includes it. */
+    | Readonly<{ kind: 'chart'; plotPx: number; peak?: boolean }>;
+  /**
+   * The reads this body waits on. After {@link USAGE_READING_NOTE_AFTER_MS} a body still reading says so, once,
+   * in its own reserved line ("Still reading activity"), instead of holding a skeleton with no word indefinitely.
+   */
+  waitingOn?: Readonly<{ slice: UsageQueryResultSlice; sources: readonly string[] }>;
 }>) {
   const { theme } = useUnistyles();
   const reducedMotion = useReducedMotionPreference();
-  const color = theme.colors.surface.pressedOverlay;
+  const color = theme.colors.surface.skeleton;
   const shape = props.shape;
   // A body narrower than this (a phone) wraps the cost figure's caption onto a second line.
   const bodyWidth = useWidgetPresentation()?.geometry?.width;
   const narrow = bodyWidth !== undefined && bodyWidth < NARROW_BODY_PX;
   const pageHasDetail = useUsageWidgetPageHasCoverageDetail();
+  const note = useUsageReadingNote(props.waitingOn);
+  const noteLine = props.waitingOn ? (
+    <View testID={`${props.testID}.note`} style={readingStyles.noteSlot}>
+      {note ? <SurfaceFreshnessLine testID={`${props.testID}.noteLine`} busy reason={note} /> : null}
+    </View>
+  ) : null;
+  if (shape?.kind === 'chart') {
+    // Bars standing on the plot's floor at the settled plot height, then the axis and legend lines; the room
+    // under them is the chart's own chrome, so the settled chart lands without moving anything below.
+    const chrome = resolveUsageChartChromePx(bodyWidth, { peak: shape.peak === true });
+    return (
+      <View testID={props.testID} style={{ minHeight: shape.plotPx + chrome }}>
+        <View testID={`${props.testID}.plot`} style={{ height: shape.plotPx }}>
+          <View style={readingStyles.chartBars}>
+            {USAGE_READING_CHART_BARS.map((share, index) => (
+              <View key={index} style={readingStyles.chartBar}>
+                <HappierSkeletonBlock color={color} width="100%" height={Math.max(8, Math.round(shape.plotPx * share))} radius={3} reducedMotion={reducedMotion} />
+              </View>
+            ))}
+          </View>
+        </View>
+        <View style={readingStyles.chartChrome}>
+          <SkeletonLine color={color} width="100%" height={1} radius={0} reducedMotion={reducedMotion} slotHeight={14} />
+          <SkeletonLine color={color} width="42%" height={10} radius={4} reducedMotion={reducedMotion} slotHeight={18} />
+          {noteLine}
+        </View>
+      </View>
+    );
+  }
   if (shape?.kind === 'meters') {
     return (
       <View testID={props.testID} style={readingStyles.meters}>
@@ -205,7 +249,7 @@ export function UsageBodyReading(props: Readonly<{
             </View>
           ))}
         </View>
-        <SkeletonLine color={color} width="36%" height={12} radius={4} reducedMotion={reducedMotion} slotHeight={20} />
+        <SkeletonLine color={color} width="36%" height={12} radius={4} reducedMotion={reducedMotion} slotHeight={SETTLED_QUIET_LINE_PX} />
         {pageHasDetail ? null : <View style={{ minHeight: HAPPIER_FRESHNESS_LINE_METRICS.minHeightPx }} />}
       </View>
     );
@@ -253,12 +297,36 @@ export function UsageBodyReading(props: Readonly<{
       <HappierSkeletonBlock color={color} width="28%" height={28} radius={6} reducedMotion={reducedMotion} />
       <HappierSkeletonBlock color={color} width="100%" height={8} radius={4} reducedMotion={reducedMotion} />
       <HappierSkeletonBlock color={color} width="56%" height={12} radius={4} reducedMotion={reducedMotion} />
+      {noteLine}
     </View>
   );
 }
 
 /** Below this body width the cost figure's caption ("estimated where not reported") wraps to two lines. */
 const NARROW_BODY_PX = 360;
+/**
+ * How long a first read may hold a bare skeleton before its body says what it is still reading. A skeleton
+ * reads as "arriving" for a few seconds; past that, a silent one reads as stuck. The read itself is not cut.
+ */
+export const USAGE_READING_NOTE_AFTER_MS = 15_000;
+/** The reading chart's bar profile (share of the plot), a calm uneven skyline rather than a flat block. */
+const USAGE_READING_CHART_BARS = [0.34, 0.52, 0.41, 0.66, 0.48, 0.3, 0.58, 0.72, 0.44, 0.38, 0.6, 0.5, 0.28, 0.46] as const;
+
+/** Which of a body's reads are still outstanding, named by read family once the wait has run past its bound. */
+function useUsageReadingNote(waitingOn: Readonly<{ slice: UsageQueryResultSlice; sources: readonly string[] }> | undefined): string | null {
+  const [late, setLate] = React.useState(false);
+  const waiting = waitingOn !== undefined;
+  React.useEffect(() => {
+    if (!waiting) return;
+    const timer = setTimeout(() => setLate(true), USAGE_READING_NOTE_AFTER_MS);
+    return () => clearTimeout(timer);
+  }, [waiting]);
+  if (!late || !waitingOn) return null;
+  const names = [...new Set(readUsageCoverageGaps(waitingOn.slice, waitingOn.sources)
+    .filter(gap => gap.status === 'pending' || gap.status === 'not_loaded')
+    .map(gap => usageSourceTitle(usagePageReadFamily(gap.source))))];
+  return names.length ? t('usage.board.page.coveragePending', { sources: names.join(', ') }) : null;
+}
 /** The Coach's Overview strip with its findings in (one row of three columns) measures this tall. */
 export const SETTLED_COACH_STRIP_BODY_PX = 118;
 const readingStyles = StyleSheet.create(() => ({
@@ -278,30 +346,83 @@ const readingStyles = StyleSheet.create(() => ({
   summaryStats: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 24, rowGap: 16 },
   summaryStat: { flexGrow: 1, flexBasis: 100, minWidth: 0, gap: 2 },
   summaryStatLead: { flexGrow: 2, flexBasis: 168, minWidth: 0, gap: 2 },
-  // The Capacity body's gap, and the cells row's settled height (measured on Home: figure 70, cells 104, pool line 20).
+  // The Capacity body's gap, and the cells row's settled height (measured on Home: figure 70, cells 104, pool line 18).
   capacity: { gap: 18 },
   capacityHero: { gap: 4 },
   capacityCells: { height: 104, flexDirection: 'row', columnGap: 12 },
   capacityCell: { flex: 1, minWidth: 0, gap: 12, justifyContent: 'center' },
   strip: { minHeight: SETTLED_COACH_STRIP_BODY_PX, flexDirection: 'row', columnGap: 36, paddingVertical: 4 },
+  chartBars: { flex: 1, flexDirection: 'row', alignItems: 'flex-end', columnGap: 6 },
+  chartBar: { flex: 1, minWidth: 0 },
+  chartChrome: { paddingTop: 4 },
+  // The note's line is held from the first frame, so saying it moves nothing.
+  noteSlot: { minHeight: HAPPIER_FRESHNESS_LINE_METRICS.minHeightPx, justifyContent: 'center' },
   stripColumn: { flex: 1, gap: 10 },
 }));
 
 /** True while every read a body depends on is still outstanding (pending or not yet loaded). */
+/**
+ * The room a sized usage chart's frame keeps around its plot: the axis, the legend and a one-line coverage
+ * note (`chrome`), plus the peak figure's room when the chart draws one (`peak`, StackedSeriesChart's
+ * `showPeakValue`). Below `narrowFramePx` (a Board's Medium card, a rail) the legend's "Show all" wraps onto a
+ * second line (`narrowChrome`), which the plot leaves room for, so the coverage note is never cut by the frame.
+ * Daily usage and Usage flow share the anatomy and this one rule; only Daily draws the peak.
+ */
+export const USAGE_CHART_FRAME_PX = Object.freeze({ chrome: 84, narrowFrame: 420, narrowChrome: 20, peak: 32, plot: 252 });
+
+/**
+ * A sized chart's plot height: what its frame leaves after the chrome, never more than its declared plot
+ * (`plot`, lab wgusage-CD) and never less than `minPx`. A grown or content-height cell tells the body its own
+ * box, so without the ceiling the plot would follow every pixel it was given; with it, a tall cell keeps the
+ * chart's height and leaves the rest of its space empty. `minPx` must itself fit the cell, or the floor pushes
+ * the footer past the frame's edge.
+ */
+export function resolveUsageChartPlotPx(
+  geometry: Readonly<{ width: number; height: number }> | undefined,
+  minPx: number,
+  options?: Readonly<{ peak?: boolean }>,
+): number {
+  const chrome = resolveUsageChartChromePx(geometry?.width, options);
+  return Math.max(minPx, Math.min(USAGE_CHART_FRAME_PX.plot, (geometry?.height ?? USAGE_CHART_FRAME_PX.plot + chrome) - chrome));
+}
+
+export function resolveUsageChartChromePx(frameWidth: number | undefined, options?: Readonly<{ peak?: boolean }>): number {
+  const width = frameWidth ?? USAGE_CHART_FRAME_PX.narrowFrame;
+  return USAGE_CHART_FRAME_PX.chrome
+    + (width < USAGE_CHART_FRAME_PX.narrowFrame ? USAGE_CHART_FRAME_PX.narrowChrome : 0)
+    + (options?.peak ? USAGE_CHART_FRAME_PX.peak : 0);
+}
+
 export function isUsageReadOutstanding(slice: UsageQueryResultSlice, sources: readonly string[]): boolean {
   const gaps = readUsageCoverageGaps(slice, sources);
   return gaps.length > 0 && gaps.every(gap => gap.status === 'pending' || gap.status === 'not_loaded');
 }
 
+const USAGE_ACCOUNTING_SOURCES = ['accounting'] as const;
+
 /** "No usage in this period" only once the usage read answered; until then the body is loading. */
 export function UsageBodyNoUsage(props: Readonly<{
   slice: UsageQueryResultSlice;
   testID: string;
+  onRetry: () => void;
   /** The shape the body will take, so its first read holds that room. */
   readingShape?: React.ComponentProps<typeof UsageBodyReading>['shape'];
 }>) {
   if (isUsageReadOutstanding(props.slice, ['accounting']))
-    return <UsageBodyReading testID={`${props.testID}.loading`} {...(props.readingShape ? { shape: props.readingShape } : {})} />;
+    return <UsageBodyReading testID={`${props.testID}.loading`} waitingOn={{ slice: props.slice, sources: USAGE_ACCOUNTING_SOURCES }} {...(props.readingShape ? { shape: props.readingShape } : {})} />;
+  if (!props.slice.accounting)
+    return (
+      <SurfaceStateCard
+        testID={`${props.testID}.unavailable`}
+        kind={props.slice.sources.some(source => source.source === 'accounting' && source.status === 'error') ? 'error' : 'unavailable'}
+        layout="inline"
+        size="line"
+        replacesContent={false}
+        title={t('usage.board.page.readFailedTitle')}
+        reason={t('usage.board.page.readFailedReason')}
+        action={{ label: t('common.retry'), onPress: props.onRetry }}
+      />
+    );
   return (
     <UsageBodyInsufficient
       testID={`${props.testID}.empty`}
@@ -383,7 +504,9 @@ export function readUsageCoverageGaps(
   }
   if (accounting && (accounting.status !== 'complete' || accounting.range.complete !== true || accounting.reasons.length > 0)
     && !gaps.some(source => source.source === 'accounting')) {
-    gaps.unshift({ source: 'accounting', status: accounting.status === 'complete' ? 'partial' : accounting.status });
+    const asOfMs = slice.sources.find(source => source.source === 'accounting')?.asOfMs;
+    gaps.unshift({ source: 'accounting', status: accounting.status === 'complete' ? 'partial' : accounting.status,
+      ...(asOfMs === undefined ? {} : { asOfMs }) });
   }
   const unique = new Map<string, UsageQuerySourceState>();
   const severity = { available: 0, unsupported: 1, unknown: 2, stale: 3, partial: 4, not_loaded: 5, pending: 6, error: 7 };
@@ -441,14 +564,33 @@ export type UsageCoverageLineMode = 'hidden' | 'failed' | 'detail';
  * and its detail, and the page header says once what is still being read, so a body keeps a line only
  * for a failed read (with Retry). Hosts without those page indicators keep the full detail line.
  */
-export function usageCoverageLineMode(gaps: readonly Pick<UsageQuerySourceState, 'status'>[], pageHasDetail: boolean): UsageCoverageLineMode {
+export function usageCoverageLineMode(gaps: readonly (Pick<UsageQuerySourceState, 'status'> & { source?: string })[], pageHasDetail: boolean): UsageCoverageLineMode {
   if (gaps.length === 0) return 'hidden';
-  if (gaps.some(gap => gap.status === 'error')) return pageHasDetail ? 'failed' : 'detail';
+  // A failed page read is said once by the page header (`describeUsagePageFailedSources`); only a
+  // widget's own failed read (a comparison, a pool selection) keeps its line beside the body.
+  const ownFailure = gaps.some(gap => gap.status === 'error' && !(gap.source !== undefined && isUsagePageReadSource(gap.source)));
+  if (gaps.some(gap => gap.status === 'error')) return pageHasDetail ? ownFailure ? 'failed' : 'hidden' : 'detail';
   return pageHasDetail ? 'hidden' : 'detail';
 }
 
 /** The page header's one "Still reading …" fact: every source any view's read still waits on, named once. */
 const USAGE_PAGE_READ_SOURCES: ReadonlySet<string> = new Set(['accounting', 'quota', 'work', 'how_you_work']);
+
+function usagePageReadFamily(source: string): string {
+  return source.startsWith('quota:') ? 'quota' : source;
+}
+
+function isUsagePageReadSource(source: string): boolean {
+  return USAGE_PAGE_READ_SOURCES.has(usagePageReadFamily(source));
+}
+
+/** The page header's one "Couldn't read …" fact: every shared read that failed, named once for the page. */
+export function describeUsagePageFailedSources(slices: readonly Pick<UsageQueryResultSlice, 'sources'>[]): string | null {
+  const names = [...new Set(slices.flatMap(slice => slice.sources
+    .filter(source => source.status === 'error' && isUsagePageReadSource(source.source))
+    .map(source => usageSourceTitle(usagePageReadFamily(source.source)))))];
+  return names.length ? t('usage.board.page.coverageFailed', { sources: names.join(', ') }) : null;
+}
 
 export function readUsagePageAsOfMs(slices: readonly Pick<UsageQueryResultSlice, 'sources' | 'quota'>[]): number | null {
   // Older observations retain their own dates in source detail. The page names
@@ -469,12 +611,13 @@ export function readUsagePageAsOfMs(slices: readonly Pick<UsageQueryResultSlice,
   return latest;
 }
 
-export function describeUsagePagePendingSources(slices: readonly Pick<UsageQueryResultSlice, 'sources'>[]): string | null {
+export function describeUsagePagePendingSources(slices: readonly Pick<UsageQueryResultSlice, 'sources' | 'accounting'>[]): string | null {
   // Only the page's shared reads; a widget's own read (a pool selection) is said by that widget.
   const names = [...new Set(slices.flatMap(slice => slice.sources
     // Not loaded also describes intentionally undemanded private evidence.
     // Only its producer's pending state establishes that a read is in flight.
-    .filter(source => source.status === 'pending')
+    .filter(source => source.status === 'pending' && !isWidgetResourceQuietRefresh(source.asOfMs !== undefined
+      || source.source === 'accounting' && slice.accounting !== undefined))
     // A sibling can already supply the aggregate quota while this account is still being read.
     // Keep qualified identity at the Resource; the shared header names its read family only once.
     .map(source => source.source.startsWith('quota:') ? 'quota' : source.source)
@@ -525,7 +668,7 @@ export function UsageCoverageLine(
       testID={props.testID}
       busy={pending}
       tone={failed ? 'warning' : 'neutral'}
-      reason={[...(asOf === null ? [] : [t('surfaceState.asOf', { time: formatUsageObservedAt(asOf) })]), usageCoverageSummary(props.slice, props.sources)].join(' · ')}
+      reason={[...(asOf === null ? [] : [t('usage.board.page.oldestSourceUpdate', { time: formatUsageObservedAt(asOf) })]), usageCoverageSummary(props.slice, props.sources)].join(' · ')}
       {...(failed && props.onRetry
         ? { action: { label: t('common.retry'), onPress: props.onRetry } }
         : {})}
@@ -541,15 +684,8 @@ export function UsageAgentMark(props: Readonly<{ agentId: string; serverId: stri
         size={props.size ?? ICON_SIZE.sm} {...(props.color ? { color: props.color } : {})} />;
 }
 
-/** A list leads with its largest rows; a long tail stays one press away, never a wall. */
-const LEADING_ROWS = 6;
-/** A tail this short is shown whole: a disclosure for a row or two is only noise. */
-const SHORT_TAIL_ROWS = 2;
-
-export function leadingUsageRows<Row>(rows: readonly Row[], expanded: boolean): Readonly<{ rows: readonly Row[]; hidden: number }> {
-  if (expanded || rows.length <= LEADING_ROWS + SHORT_TAIL_ROWS) return { rows, hidden: 0 };
-  return { rows: rows.slice(0, LEADING_ROWS), hidden: rows.length - LEADING_ROWS };
-}
+/** A list leads with its largest rows; a long tail stays one press away (the shared plugin-ui owner). */
+export const leadingUsageRows = leadHappierListRows;
 
 /** An allowance account reports a session and a longer window; this only sizes the room held while reads arrive. */
 const EXPECTED_WINDOWS_PER_ACCOUNT = 2;
@@ -604,33 +740,46 @@ export function useUsageMeterListFirstReadReserve(
 
 /**
  * The height a settled list body has shown, kept while it stays open. Its optional lines (the pace alert, the
- * shared reason, the legend) come and go with every read, so the body keeps the tallest height it has drawn and
- * they come and go inside it. The floor starts over when the viewer changes the list's own shape (Show all, a
- * resize), so a deliberate collapse is never held open. Before the first settle the first-read reserve holds the room.
+ * shared reason, the legend) come and go with every read, so once the body has settled and a re-read begins it keeps
+ * the tallest height it has drawn and they come and go inside it. The cold read's own first settle is not a re-read:
+ * the floor follows the drawn height up or down until the first re-read, so late arrivals (stored dismissals,
+ * hidden findings) shrink the body once instead of leaving blank room. The floor starts over when the viewer changes
+ * the list's own shape (Show all, a resize), so a deliberate collapse is never held open. Before the first settle the
+ * first-read reserve holds the room. `onLayout` belongs on a view that does not carry the floor as its own min height.
  */
 export function useSettledBodyHeightFloor(settled: boolean, shapeKey: string): Readonly<{
   minHeight: number | undefined;
   onLayout: (event: LayoutChangeEvent) => void;
 }> {
-  const [floor, setFloor] = React.useState<Readonly<{ shapeKey: string; height: number }>>({ shapeKey, height: 0 });
+  const [floor, setFloor] = React.useState<Readonly<{ shapeKey: string; height: number; keepTallest: boolean }>>({ shapeKey, height: 0, keepTallest: false });
   const onLayout = React.useCallback((event: LayoutChangeEvent) => {
     if (!settled) return;
     const height = Math.ceil(event.nativeEvent.layout.height);
-    setFloor((current) => current.shapeKey !== shapeKey ? { shapeKey, height }
-      : height > current.height ? { shapeKey, height } : current);
+    setFloor((current) => current.shapeKey !== shapeKey ? { shapeKey, height, keepTallest: false }
+      : current.keepTallest && height <= current.height ? current : { ...current, height });
   }, [settled, shapeKey]);
-  // A re-read puts accounts back to pending: the floor recorded while settled stays, only new layouts wait for a settle.
+  // A re-read puts accounts back to pending: the floor recorded while settled stays and from then on only grows.
+  React.useEffect(() => {
+    if (!settled) setFloor((current) => current.height > 0 && !current.keepTallest ? { ...current, keepTallest: true } : current);
+  }, [settled]);
   return { minHeight: floor.shapeKey === shapeKey && floor.height > 0 ? floor.height : undefined, onLayout };
 }
 
-/** The one Show all · N / Show less control under a led list (Breakdowns, Session value). */
-export function UsageShowAllRows(props: Readonly<{ total: number; complete?: boolean; expanded: boolean; onToggle: () => void; testID: string }>) {
+/**
+ * The one footer under a led list (Projections, Breakdowns, Session value, How you work): the shared plugin-ui
+ * overflow footer with Usage's words, plus the page's local command. `unlisted` is what the list cannot show
+ * ("+10 windows not reported"), said once beside the toggle. Draws nothing when there is nothing to fold or report.
+ */
+export function UsageShowAllRows(props: Readonly<{
+  label: string; total: number; hidden: number; complete?: boolean; expanded: boolean; onToggle: () => void;
+  unlisted?: string | null; testID: string;
+}>) {
+  const theme = useUsagePluginTheme();
+  useUsageDisclosureCommand(props.label, props.expanded, props.onToggle, props.hidden > 0 || props.expanded);
   return (
-    <View style={showAllStyles.action}>
-      <RoundButton size="small" display="inverted" testID={props.testID}
-        title={props.expanded ? t('usage.showLess') : `${t(props.complete === false ? 'usage.showAvailable' : 'usage.showAll')} · ${props.total}`} onPress={props.onToggle} />
-    </View>
+    <HappierListOverflowFooter theme={theme} label={props.label} total={props.total} hidden={props.hidden}
+      expanded={props.expanded} onToggle={props.onToggle} complete={props.complete} unlisted={props.unlisted ?? null}
+      labels={{ showAll: t('usage.showAll'), showAvailable: t('usage.showAvailable'), showLess: t('usage.showLess') }}
+      testID={props.testID} />
   );
 }
-
-const showAllStyles = StyleSheet.create(() => ({ action: { alignSelf: 'flex-start' } }));

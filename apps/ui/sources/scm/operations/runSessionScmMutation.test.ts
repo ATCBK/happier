@@ -130,6 +130,22 @@ describe('runSessionScmMutation', () => {
         expect(run).toHaveBeenCalledTimes(1);
     });
 
+    it('treats a declined Action confirmation as nothing having happened: no log entry, no refresh, no retry', async () => {
+        const state = createOperationState();
+        // The shape the real SCM facade hands back when the person presses Cancel.
+        const { normalizeUiScmFacadeResult, isScmActionNotRun } = await import('@/sync/ops/scm/scmActionInvocation');
+        const declined = normalizeUiScmFacadeResult<{ success: boolean }>({ success: false, errorCode: 'approval_canceled', error: 'approval_canceled' });
+        const run = vi.fn(async () => declined);
+        const refreshAfterMutation = vi.fn(async () => {});
+        const result = await runSessionScmMutation({ state, sessionId: 's1', operation: 'branch_merge', cwd: '/repo', fallbackError: 'failed', run, refreshAfterMutation });
+        expect(result).toMatchObject({ started: true });
+        expect(result.started && isScmActionNotRun(result.response)).toBe(true);
+        expect(state.log).toEqual([]);
+        expect(refreshAfterMutation).not.toHaveBeenCalled();
+        expect(run).toHaveBeenCalledTimes(1);
+        expect(state.inFlight).toBeNull();
+    });
+
     it('retains the same canonical outcome in the shared workspace operation log', () => {
         createOperationState();
         const scope = projectManager.getProjectForSession('s1')!.key;

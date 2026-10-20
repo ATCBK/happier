@@ -219,6 +219,24 @@ describe('InstalledWidgetSurface', () => {
         expect(state.mounts).toHaveLength(0);
     });
 
+    it('says a failed choices read is retryable, not that the pinned value was removed', async () => {
+        const instance: WidgetInstanceV1 = { v: 1, id: 'read-failed', definition: { kind: 'installed', surface: source.surface },
+            bindings: { period: { kind: 'value', value: '7d' } } };
+        const descriptor = { inputs: { fields: [{ path: 'period', title: 'Period', widget: 'select' as const, optionsSourceId: 'usage.periods' }] } };
+        const retry = vi.fn();
+        const resolution = { ...withWidgetInputRepairOutcome({ status: 'unavailable' as const, reasonCode: 'action_failed',
+            fields: [{ path: 'period', status: 'unavailable' as const, reasonCode: 'action_failed' }] }, { instance, descriptor }), retry };
+        const screen = await renderScreen(<ConfiguredWidgetRefusal resolution={resolution} testID="read-failed" />);
+        const card = screen.tree.findByType(SurfaceStateCard).props;
+        const { t } = await import('@/text');
+        // The card names the widget that could not load (SB11); only the setup step names the choices.
+        expect(card.title).toBe(t('widgetAdd.widgetLoadFailed'));
+        expect(card.reason).toBeUndefined();
+        expect(card.action?.label).toBe(t('common.retry'));
+        await screen.pressByTestIdAsync('read-failed-retry');
+        expect(retry).toHaveBeenCalledTimes(1);
+    });
+
     it('retires the mounted lifetime when an exact Session target changes under the same instance revision', async () => {
         const current = runtime();
         const render = (sessionId: string) => React.createElement(InstalledWidgetSurface, {
@@ -228,7 +246,7 @@ describe('InstalledWidgetSurface', () => {
         });
         const screen = await renderScreen(render('session-a'));
         const firstKey = state.mounts.at(-1)!.mountInstanceKey;
-        await act(async () => { screen.tree.update(render('session-b')); });
+        await screen.update(render('session-b'));
         const mountedB = state.mounts.at(-1)!;
         expect(mountedB.sessionId).toBe('session-b');
         expect(mountedB.mountInstanceKey).not.toBe(firstKey);
@@ -352,14 +370,10 @@ describe('InstalledWidgetSurface', () => {
         const screen = await renderScreen(renderWidget(runtime()));
         const firstMountKey = state.mounts[0]!.mountInstanceKey;
 
-        await act(async () => {
-            screen.tree.update(renderWidget(runtime({ pluginUiProjection: null, phase: 'establishing' })));
-        });
+        await screen.update(renderWidget(runtime({ pluginUiProjection: null, phase: 'establishing' })));
         expect(state.mounts).toHaveLength(1);
 
-        await act(async () => {
-            screen.tree.update(renderWidget(runtime()));
-        });
+        await screen.update(renderWidget(runtime()));
         expect(state.mounts).toHaveLength(2);
         expect(state.mounts[1]!.mountInstanceKey).not.toBe(firstMountKey);
     });
@@ -377,9 +391,7 @@ describe('InstalledWidgetSurface', () => {
         const screen = await renderScreen(renderWidget('revision-a'));
         const firstMountKey = state.mounts[0]!.mountInstanceKey;
 
-        await act(async () => {
-            screen.tree.update(renderWidget('revision-b'));
-        });
+        await screen.update(renderWidget('revision-b'));
 
         expect(state.mounts).toHaveLength(2);
         expect(state.mounts[1]!.launchInput).toEqual({ view: 'revision-b' });
@@ -439,23 +451,19 @@ describe('InstalledWidgetSurface', () => {
         const firstMountKey = state.mounts[0]!.mountInstanceKey;
         expect(state.mounts).toHaveLength(1);
 
-        // An unrelated plugin bumps the coarse projection generation while this
-        // widget's immutable generation is unchanged: the live mount must survive
+        // Projection and custody generations change while this widget's installed
+        // occurrence is unchanged: the live mount must survive
         // without losing transient plugin state. The host re-renders (so the
         // mount spy observes another render) but the physical lifetime key must
         // stay identical.
-        await act(async () => {
-            screen.tree.update(renderWidget(runtime({
-                pluginUiProjection: projectionWithExact(8, 'gen-exact-2', 'occurrence-1'),
-            })));
-        });
+        await screen.update(renderWidget(runtime({
+            pluginUiProjection: projectionWithExact(8, 'gen-exact-2', 'occurrence-1'),
+        })));
         expect(state.mounts.at(-1)!.mountInstanceKey).toBe(firstMountKey);
 
-        await act(async () => {
-            screen.tree.update(renderWidget(runtime({
-                pluginUiProjection: projectionWithExact(9, 'gen-exact-2', 'occurrence-2'),
-            })));
-        });
+        await screen.update(renderWidget(runtime({
+            pluginUiProjection: projectionWithExact(9, 'gen-exact-2', 'occurrence-2'),
+        })));
         expect(state.mounts.at(-1)!.mountInstanceKey).not.toBe(firstMountKey);
 
     });

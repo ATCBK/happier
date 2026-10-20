@@ -26,7 +26,7 @@ import {
     warmMachineFileBrowserDirectoryCache,
     warmMachineFileBrowserRoots,
 } from '@/sync/domains/input/machineFileBrowser';
-import { machineCreateDirectory } from '@/sync/ops/machines';
+import { workspaceCreateDirectory } from '@/sync/ops/workspaceFileSystem';
 import { useWorkspaceFileQuery } from '@/sync/domains/workspaces/files/useWorkspaceFileQuery';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
@@ -263,6 +263,7 @@ function toRootEntries(machineId: string, serverId?: string | null) {
 
 export function MachinePathBrowserView(props: MachinePathBrowserViewProps): React.ReactElement {
     const { theme } = useUnistyles();
+    const folderCaller = React.useMemo(() => new AbortController(), [props.machineId, props.serverId]);
     const browserListRef = React.useRef<VirtualizedListRef | null>(null);
     const lastScrolledSelectionRef = React.useRef<string | null>(null);
     const shouldAutoScrollInitialSelectionRef = React.useRef(false);
@@ -295,6 +296,10 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
     const [expandedPaths, setExpandedPaths] = React.useState<string[]>(() => initialExpandedPaths);
     const shouldAutoSelectInitialPathRef = React.useRef(true);
     const [isCreatingFolder, setIsCreatingFolder] = React.useState(false);
+    React.useEffect(() => {
+        setIsCreatingFolder(false);
+        return () => folderCaller.abort();
+    }, [folderCaller]);
     const contextMenuAnchorRef = React.useRef<View | null>(null);
     const [contextMenuDirectoryPath, setContextMenuDirectoryPath] = React.useState<string | null>(null);
     const inlineLayoutStyle = React.useMemo(() => {
@@ -346,9 +351,9 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
         });
     }, [includeFiles, props.machineId, props.serverId, usesRootsListing]);
 
-    const loadDirectoryEntries = React.useCallback(async (directoryPath: string): Promise<LazyDirectoryTreeLoadResult> => {
+    const loadDirectoryEntries = React.useCallback(async (directoryPath: string, signal: AbortSignal): Promise<LazyDirectoryTreeLoadResult> => {
         if (usesRootsListing && directoryPath === '') {
-            const result = await listMachineFileBrowserRoots({ machineId: props.machineId, serverId: props.serverId });
+            const result = await listMachineFileBrowserRoots({ machineId: props.machineId, serverId: props.serverId, signal });
             if (!result.ok) return result;
             return {
                 ok: true,
@@ -365,6 +370,7 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
             directoryPath,
             includeFiles,
             serverId: props.serverId,
+            signal,
         });
         if (!result.ok) return result;
         return {
@@ -381,9 +387,9 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
         };
     }, [includeFiles, props.machineId, props.serverId, usesRootsListing]);
 
-    const warmDirectoryEntries = React.useCallback(async (directoryPath: string): Promise<LazyDirectoryTreeLoadResult> => {
+    const warmDirectoryEntries = React.useCallback(async (directoryPath: string, signal: AbortSignal): Promise<LazyDirectoryTreeLoadResult> => {
         if (usesRootsListing && directoryPath === '') {
-            const result = await warmMachineFileBrowserRoots({ machineId: props.machineId, serverId: props.serverId });
+            const result = await warmMachineFileBrowserRoots({ machineId: props.machineId, serverId: props.serverId, signal });
             if (!result.ok) return result;
             return {
                 ok: true,
@@ -400,6 +406,7 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
             directoryPath,
             includeFiles,
             serverId: props.serverId,
+            signal,
         });
         if (!result.ok) return result;
         return {
@@ -489,7 +496,8 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
     });
     const deepSearchLoading = deepSearch.isSearching;
     const deepSearchError = deepSearch.error
-        ? deepSearch.error.errorCode === 'path_not_allowed' ? t('errors.permissionDenied')
+        ? deepSearch.error.errorCode === 'root_not_found' ? t('errors.workspaceFolderMissing')
+            : deepSearch.error.errorCode === 'path_not_allowed' ? t('errors.permissionDenied')
             : deepSearch.error.errorCode === 'method_unavailable' ? t('errors.daemonUnavailableBody')
                 : t('errors.searchFailed')
         : null;
@@ -774,6 +782,7 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
             { placeholder: t('promptLibrary.folderPlaceholder') },
         );
         if (typeof raw !== 'string') return;
+        if (folderCaller.signal.aborted) return;
         const trimmed = raw.trim();
         if (!trimmed) return;
 
@@ -781,7 +790,12 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
 
         try {
             setIsCreatingFolder(true);
-            const res = await machineCreateDirectory(props.machineId, nextDirectoryPath, { serverId: props.serverId });
+            const res = await workspaceCreateDirectory({
+                machineId: props.machineId,
+                serverId: props.serverId,
+                rootPath: directoryPath,
+            }, nextDirectoryPath, { signal: folderCaller.signal });
+            if (folderCaller.signal.aborted) return;
             if (!res.success) {
                 Modal.alert(t('common.error'), res.error || t('files.createFolderFailed'));
                 return;
@@ -798,11 +812,12 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
             setSelectedPath(nextDirectoryPath);
             closeContextMenu();
         } catch (error) {
+            if (folderCaller.signal.aborted) return;
             Modal.alert(t('common.error'), error instanceof Error ? error.message : t('files.createFolderFailed'));
         } finally {
-            setIsCreatingFolder(false);
+            if (!folderCaller.signal.aborted) setIsCreatingFolder(false);
         }
-    }, [closeContextMenu, enableContextMenu, isCreatingFolder, props.machineId, props.serverId, retryDirectory]);
+    }, [closeContextMenu, enableContextMenu, folderCaller, isCreatingFolder, props.machineId, props.serverId, retryDirectory]);
 
     const chromeActions = React.useMemo(() => {
         if (!useCardChrome) return null;

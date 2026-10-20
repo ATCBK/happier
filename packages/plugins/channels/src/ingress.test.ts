@@ -1,5 +1,5 @@
-import { PluginError } from '@happier-dev/plugin-sdk';
-import type { PluginMachineExecutionOriginV1 } from '@happier-dev/plugin-sdk/actions';
+import { arePluginMachineExecutionOriginsEqual, PluginError } from '@happier-dev/plugin-sdk';
+import { arePluginMachineExecutionRoutingsEqual, getPluginMachineExecutionRouting, type PluginMachineExecutionOriginV1, type PluginMachineExecutionRoutingV1 } from '@happier-dev/plugin-sdk/actions';
 import type { SessionSendRequest, SessionSummary } from '@happier-dev/plugin-sdk/sessions';
 import type {
   JsonValue,
@@ -65,11 +65,13 @@ import {
   CHANNEL_DELIVERIES_COLLECTION,
   CHANNEL_STATE_COLLECTION,
 } from './collections.js';
-import { isChannelStateJsonRecord, readConversationConnectionUpdateRow, readConversationBindingUpdateRow } from './accountLocalBindingPolicy.js';
-import { startConversationConnectionTransfer } from './connectionLifecycle.js';
+import { isChannelStateJsonRecord, readConversationConnectionUpdateRow, readConversationBindingUpdateRow, withConversationConnectionPayload } from './accountLocalBindingPolicy.js';
+import { getConversationConnectionExecutionRouting, getConversationConnectionTransportOrigin, startConversationConnectionTransfer } from './connectionLifecycle.js';
 import type { ConversationConnectionTransportOriginV1 } from './connectionLifecycle.js';
 import { pollTelegramObservations } from '../../channel-telegram/src/channelActions.js';
 import { createConversationPairingManager } from './pairing.js';
+import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { CHANNELS_PLUGIN, PLUGIN_MANIFEST } from './manifest.js';
 
 /**
  * Retained payloads are read back as opaque JSON here. These fixtures rebuild
@@ -118,9 +120,6 @@ function payloadTransportOrigin(
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Expected the retained connection payload to carry a transport origin.');
   }
-  if (!('materializationRef' in value)) {
-    throw new Error('Expected retained transport custody to name its materialization.');
-  }
   return value as ConversationConnectionTransportOriginV1;
 }
 
@@ -164,6 +163,11 @@ const telegramAutomationEventAdmitAction = Object.freeze({
   }),
 });
 
+const telegramExecutionOrigin = {
+  serverIdentityId: 'srv_account_one',
+  materializationRef: { machineId: 'machine-1', materializationId: 'telegram-install-1', pluginId: telegramProviderPluginId },
+} as const;
+
 const telegramConnectionAuthority = {
   providerPluginId: telegramProviderPluginId,
   providerContributionSelection: {
@@ -176,11 +180,7 @@ const telegramConnectionAuthority = {
   },
   transportOrigin: {
     serverIdentityId: 'srv_account_one',
-    materializationRef: {
-      machineId: 'machine-1',
-      materializationId: 'telegram-install-1',
-      pluginId: telegramProviderPluginId,
-    },
+    machineId: 'machine-1',
   },
   providerConnectionKey: 'telegram-bot:12345',
   providerConfig: { botUsername: 'happier_bot' },
@@ -500,10 +500,13 @@ function replaceConnectionPayload(
   if (existing === undefined) throw new Error('Expected the Channel connection state row.');
   const connection = record(existing.value);
   const payload = record(connection.payload);
-  const next = stateRow({
-    ...connection,
-    payload: { ...payload, ...patch },
-  }, existing.revision + 1);
+  const nextPayload = { ...payload, ...patch };
+  if (!isChannelStateJsonRecord(nextPayload)) throw new Error('Expected a JSON connection payload.');
+  const next = stateRow(withConversationConnectionPayload({
+    row: jsonStateRow(existing),
+    payload: nextPayload,
+    updatedAt: payloadNumber(connection, 'updated-at'),
+  }), existing.revision + 1);
   rows.set(next.rowId, next);
   return next;
 }
@@ -531,20 +534,16 @@ function advanceConnectionAuthorityEpoch(rows: Map<string, StoredStateRow>): Sto
 
 function replaceConnectionTransportOrigin(
   rows: Map<string, StoredStateRow>,
-  materializationId: string,
+  machineId: string,
 ): StoredStateRow {
   const existing = rows.get('connection-1');
   if (existing === undefined) throw new Error('Expected the Channel connection state row.');
   const payload = record(record(existing.value).payload);
   const transportOrigin = record(payload.transportOrigin);
-  const materializationRef = record(transportOrigin.materializationRef);
   return replaceConnectionPayload(rows, {
     transportOrigin: {
       ...transportOrigin,
-      materializationRef: {
-        ...materializationRef,
-        materializationId,
-      },
+      machineId,
     },
   });
 }
@@ -565,10 +564,7 @@ function replaceConnectionDuringCapturedPoll(input: Readonly<{
     enabled: input.incumbentOverlapSafety === 'destructive' ? false : true,
     transportOrigin: {
       ...current.payload.transportOrigin,
-      materializationRef: {
-        ...current.payload.transportOrigin.materializationRef,
-        materializationId: 'telegram-install-replacement',
-      },
+      machineId: 'machine-replacement',
     },
     overlapSafety: input.replacementOverlapSafety ?? 'safe',
     pendingOldTransportStop: {
@@ -964,11 +960,19 @@ function createIngressHarness(options: IngressHarnessOptions = {}) {
   const executeAdmittedTargetedOperationWithExecutionOrigin = vi.fn(async (
     operation: unknown,
     input: JsonValue,
-    executionOptions: Readonly<{ signal: AbortSignal }>,
+    executionOptions: Readonly<{ signal: AbortSignal; expectedExecutionOrigin?: PluginMachineExecutionOriginV1; expectedExecutionRouting?: PluginMachineExecutionRoutingV1 }>,
   ) => {
     const executionOrigin = options.getPollExecutionOrigin?.()
       ?? options.pollExecutionOrigin
-      ?? initialConnection.payload.transportOrigin;
+      ?? telegramExecutionOrigin;
+    // This is the host Action boundary: reject a misrouted target before its
+    // provider callback or poll body can produce an effect.
+    if ((executionOptions.expectedExecutionRouting !== undefined
+      && !arePluginMachineExecutionRoutingsEqual(executionOptions.expectedExecutionRouting, getPluginMachineExecutionRouting(executionOrigin)))
+      || (executionOptions.expectedExecutionOrigin !== undefined
+        && !arePluginMachineExecutionOriginsEqual(executionOptions.expectedExecutionOrigin, executionOrigin))) {
+      throw new PluginError({ code: 'plugin_action_execution_origin_mismatch', message: 'The provider route differs from its retained target.' });
+    }
     if (operation === telegramAutomationEventAdmitAction) {
       const callIndex = executeAdmittedTargetedOperationWithExecutionOrigin.mock.calls
         .filter(([calledOperation]) => calledOperation === telegramAutomationEventAdmitAction).length - 1;
@@ -1040,6 +1044,7 @@ function createIngressHarness(options: IngressHarnessOptions = {}) {
         if (request.index === 'by-kind') return row.value['record-kind'] === prefix[0];
         if (request.index === 'by-connection') return row.value['connection-id'] === prefix[0];
         if (request.index === 'by-binding') return row.value['binding-id'] === prefix[0];
+        if (request.index === 'by-attention') return row.value.attention === prefix[0];
         if (request.index === 'by-connection-binding-v2') {
           return row.value['connection-id'] === prefix[0]
             && (row.value['binding-id'] ?? null) === prefix[1]
@@ -1234,7 +1239,8 @@ function createIngressHarness(options: IngressHarnessOptions = {}) {
       },
       occurrenceId: 'channels-ingress-telegram-fixture-occurrence',
       sourceCustody: { kind: 'development', registeredRootId: 'channels-ingress-telegram-root' },
-      materialization: channelConnection().payload.transportOrigin.materializationRef,
+      materialization: telegramExecutionOrigin.materializationRef,
+      executionOrigin: telegramExecutionOrigin,
     },
     signal: new AbortController().signal,
     services,
@@ -1311,12 +1317,12 @@ function routerFixture(rows: Map<string, StoredStateRow>, unmatched = false): vo
   }));
 }
 
-function topicObservation(occurrenceId: string, principalId = 'telegram:user:42', messageText?: string): ConversationProviderObservationIngestInputV1 {
+function topicObservation(occurrenceId: string, principalId = 'telegram:user:42', messageText?: string, label?: string): ConversationProviderObservationIngestInputV1 {
   const input = observation({ occurrenceId, messageRevision: '1', transport: 'socket', messageText });
   const full = fullTextIngress(input);
   return { ...input, entry: { ...input.entry, observation: { kind: 'fullText', observation: {
     ...full,
-    endpoint: { kind: 'thread', audience: 'direct', id: 'telegram:topic:7', parentId: 'telegram:chat:100' },
+    endpoint: { kind: 'thread', audience: 'direct', id: 'telegram:topic:7', parentId: 'telegram:chat:100', ...(label ? { label } : {}) },
     actor: { ...full.actor, principalId },
   } } } };
 }
@@ -1337,6 +1343,34 @@ function threadSpawnBoundary(actionId: string, input: JsonValue): JsonValue {
 }
 
 describe('thread router admission', () => {
+  it.each([
+    { reason: 'actorUnattributable', kind: 'unknown', principalId: null },
+    { reason: 'actorNotAllowed', kind: 'human', principalId: 'private-unlisted@example.test' },
+    { reason: 'botSenderDisabled', kind: 'bot', principalId: 'telegram:user:42' },
+  ] as const)('projects the real $reason drop without message or sender evidence', async ({ reason, kind, principalId }) => {
+    const harness = createIngressHarness();
+    const input = observation({ messageRevision: 'private-revision', messageText: 'private-message-content' });
+    const normalized = fullTextIngress(input);
+    const rejected = {
+      ...input,
+      entry: { ...input.entry, observation: {
+        kind: 'fullText' as const,
+        observation: { ...normalized, actor: { ...normalized.actor, kind, principalId } },
+      } },
+    };
+    await ingestConversationProviderObservationForInvocation(rejected, harness.context);
+    expect(harness.send).not.toHaveBeenCalled();
+    // The real ingress writer's retained row crosses the same strict Action
+    // reader used by Agents/MCP, rather than a reconstructed attention DTO.
+    const kit = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: CHANNELS_PLUGIN,
+      services: { storage: harness.context.services.storage } });
+    try {
+      const attention = await kit.invokeAction('ingress/attention-v1', {}, { surface: 'agent' });
+      expect(attention).toMatchObject({ obligations: [{ kind: 'terminal', category: 'informational', reason }] });
+      expect(JSON.stringify(attention)).not.toMatch(/private-|telegram:user:42|Ada|telegram:message:5/);
+    } finally { await kit.dispose(); }
+  });
+
   it('routes real Telegram forum-topic observations from the existing poll provider', async () => {
     let pollNumber = 0;
     const bornSessions = new Set<string>();
@@ -1363,7 +1397,7 @@ describe('thread router admission', () => {
         caller: { kind: 'plugin', pluginId: 'happier.channels',
           contribution: { id: 'ingress-supervisor', qualifiedId: 'happier.channels/background/ingress-supervisor' },
           occurrenceId: 'topic-provider-fixture', sourceCustody: { kind: 'development', registeredRootId: 'topic-fixture' },
-          materialization: channelConnection().payload.transportOrigin.materializationRef },
+          materialization: telegramExecutionOrigin.materializationRef },
         signal,
         // Genuine HTTP and credential-materialization boundaries; the provider parser and core are real.
         services: { connectedAccounts: { materialize: async () => ({ kind: 'environment', env: { TELEGRAM_BOT_TOKEN: '12345:fixture-token' } }) },
@@ -1421,17 +1455,33 @@ describe('thread router admission', () => {
   it('spawns a forum topic once and admits replay/follow-up through an ordinary sender-only child', async () => {
     const harness = createIngressHarness({ connection: socketChannelConnection(), availableSessionIds: ['session-2'], execute: threadSpawnWithBirthBoundary });
     routerFixture(harness.rows);
-    const first = topicObservation('topic-first');
-    await ingestConversationProviderObservationForInvocation(first, harness.context);
-    await ingestConversationProviderObservationForInvocation(first, harness.context);
-    await ingestConversationProviderObservationForInvocation(topicObservation('topic-follow-up'), harness.context);
+    const first = topicObservation('topic-first', 'telegram:user:42', undefined, 'Furniture lead');
+    const admit = async (input: ConversationProviderObservationIngestInputV1) => {
+      try {
+        await ingestConversationProviderObservationForInvocation(input, harness.context);
+      } catch (cause) {
+        const custody = [...harness.rows.values()]
+          .filter(row => row.value['record-kind'] === 'ingress-obligation')
+          .map(row => {
+            const payload = record(row.value.payload);
+            return { lifecycle: payload.lifecycle, disposition: payload.disposition, nonAdmission: payload.nonAdmission };
+          });
+        throw new Error(`Forum ingress ${fullTextIngress(input).occurrenceId} at ${Date.now()}: ${JSON.stringify(custody)}`, { cause });
+      }
+    };
+    await admit(first);
+    await admit(first);
+    await admit(topicObservation('topic-follow-up'));
     const children = [...harness.rows.values()].filter(row => record(row.value.payload).parentBindingId === 'binding-1');
     expect(children).toHaveLength(1);
     expect(children[0]?.value.payload).toMatchObject({
+      endpoint: { label: 'Furniture lead' },
       target: { kind: 'session', sessionId: 'session-2' }, allowedPrincipalIds: ['telegram:user:42'],
     });
     expect(harness.send.mock.calls.map(([request]) => sentUserTextRequest(request).text)).toEqual(['Hello from Telegram', 'Hello from Telegram']);
-    expect(harness.execute.mock.calls.filter(([action]) => action === 'session.spawn_new')).toHaveLength(1);
+    const births = harness.execute.mock.calls.filter(([action]) => action === 'session.spawn_new');
+    expect(births).toHaveLength(1);
+    expect(births[0]?.[1]).toMatchObject({ title: 'Furniture lead' });
     await ingestConversationProviderObservationForInvocation(topicObservation('other-sender', 'telegram:user:43'), harness.context);
     expect(harness.send).toHaveBeenCalledTimes(2);
   });
@@ -1439,7 +1489,9 @@ describe('thread router admission', () => {
   it('records unmatched routes without spawning or retaining their content', async () => {
     const harness = createIngressHarness({ connection: socketChannelConnection() });
     routerFixture(harness.rows, true);
-    await ingestConversationProviderObservationForInvocation(topicObservation('unmatched'), harness.context);
+    const input = topicObservation('unmatched', 'telegram:user:42', undefined, 'Rejected private subject');
+    Object.assign(fullTextIngress(input).endpoint, { parentLabel: 'Rejected private mailbox' });
+    await ingestConversationProviderObservationForInvocation(input, harness.context);
     expect(harness.send).not.toHaveBeenCalled();
     expect(harness.execute).not.toHaveBeenCalled();
     const obligation = [...harness.rows.values()].find(row => row.value['record-kind'] === 'ingress-obligation');
@@ -1447,6 +1499,7 @@ describe('thread router admission', () => {
     await runConversationIngressRetentionForInvocation({}, harness.context);
     const census = [...harness.rows.values()].find(row => row.value['record-kind'] === 'ingress-census');
     expect(JSON.stringify(census?.value)).not.toContain('Hello from Telegram');
+    expect(JSON.stringify(census?.value)).not.toContain('Rejected private');
   });
 
   it('stops children when their router is disabled and rejoins its creation key after child deletion', async () => {
@@ -3612,8 +3665,8 @@ describe('Conversation provider observation ingress', () => {
     const challenge = manager.createChallenge({
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
-      pairingRequestId: 'pairing-request-1',
-      materialization: socketConnection.payload.transportOrigin.materializationRef,
+pairingRequestId: 'pairing-request-1',
+      executionOrigin: getConversationConnectionExecutionRouting(socketConnection.payload.transportOrigin, socketConnection.payload.providerPluginId),
       destinationLabel: 'Telegram bot',
       endpoint: pairingDestinationEndpoint,
       target: channelBinding().payload.target,
@@ -3688,8 +3741,8 @@ describe('Conversation provider observation ingress', () => {
     manager.createChallenge({
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
-      pairingRequestId: 'pairing-request-1',
-      materialization: socketConnection.payload.transportOrigin.materializationRef,
+pairingRequestId: 'pairing-request-1',
+      executionOrigin: getConversationConnectionExecutionRouting(socketConnection.payload.transportOrigin, socketConnection.payload.providerPluginId),
       destinationLabel: 'Telegram bot',
       endpoint: pairingDestinationEndpoint,
       target: channelBinding().payload.target,
@@ -3738,8 +3791,8 @@ describe('Conversation provider observation ingress', () => {
     const challenge = manager.createChallenge({
       connectionId: 'connection-1',
       expectedConnectionRevision: 1,
-      pairingRequestId: 'pairing-request-1',
-      materialization: socketConnection.payload.transportOrigin.materializationRef,
+pairingRequestId: 'pairing-request-1',
+      executionOrigin: getConversationConnectionExecutionRouting(socketConnection.payload.transportOrigin, socketConnection.payload.providerPluginId),
       destinationLabel: 'Telegram bot',
       endpoint: pairingDestinationEndpoint,
       target: channelBinding().payload.target,
@@ -3802,7 +3855,7 @@ describe('Conversation provider observation ingress', () => {
       .toEqual(['binding', 'connection']);
   });
 
-  it('admits a provider observation only from the exact current transport materialization', async () => {
+  it('admits current provider replacements at the retained route and rejects another Home, Machine or plugin before effects', async () => {
     const socketConnection = socketChannelConnection();
     const harness = createIngressHarness({ connection: socketConnection });
     const manager = createConversationPairingManager({
@@ -3812,13 +3865,14 @@ describe('Conversation provider observation ingress', () => {
       createId: (kind) => `${kind}-1`,
     });
     const ingest = createConversationProviderObservationIngestHandler(manager);
-    const current = socketConnection.payload.transportOrigin.materializationRef;
-    const withCaller = (materialization: Record<string, string>, pluginId?: string) => ({
+    const current = telegramExecutionOrigin.materializationRef;
+    const withCaller = (materialization: typeof current | Record<string, string>, pluginId?: string, serverIdentityId = 'srv_account_one') => ({
       ...harness.context,
       caller: {
         ...(harness.context.caller as Record<string, unknown>),
         ...(pluginId === undefined ? {} : { pluginId }),
         materialization,
+        executionOrigin: { serverIdentityId, materializationRef: materialization },
       },
     } as unknown as typeof harness.context);
 
@@ -3828,10 +3882,15 @@ describe('Conversation provider observation ingress', () => {
       withCaller({ ...current, pluginId: 'happier.channel.other' }, 'happier.channel.other'),
     )).rejects.toMatchObject({ code: 'channels_ingress_stale_authority' });
 
-    // The same plugin from a replaced materialization of the same machine.
+    // A different Machine cannot act for this retained connection.
     await expect(ingest(
       observation({ messageRevision: 'authority:2', occurrenceId: 'telegram:update:auth-2', transport: 'socket' }),
-      withCaller({ ...current, materializationId: 'provider-replaced' }),
+      withCaller({ ...current, machineId: 'machine-other' }),
+    )).rejects.toMatchObject({ code: 'channels_ingress_stale_authority' });
+
+    await expect(ingest(
+      observation({ messageRevision: 'authority:home', occurrenceId: 'telegram:update:auth-home', transport: 'socket' }),
+      withCaller(current, undefined, 'srv_other'),
     )).rejects.toMatchObject({ code: 'channels_ingress_stale_authority' });
 
     // A caller whose stamped materialization does not name the calling plugin.
@@ -3843,10 +3902,11 @@ describe('Conversation provider observation ingress', () => {
     expect([...harness.rows.values()].map((row) => row.value['record-kind']).sort())
       .toEqual(['binding', 'connection']);
 
-    // The exact current materialization still admits the same observation.
+    expect(harness.send).not.toHaveBeenCalled();
+    // The current admitted installation may change while the route stays put.
     await expect(ingest(
       observation({ messageRevision: 'authority:4', occurrenceId: 'telegram:update:auth-4', transport: 'socket' }),
-      harness.context,
+      withCaller({ ...current, materializationId: 'provider-replaced' }),
     )).resolves.toBeUndefined();
   });
 
@@ -4863,6 +4923,67 @@ describe('Conversation provider observation ingress', () => {
       .toMatchObject({ label: 'Ada' });
   });
 
+  it.each(['full', 'compacted', 'legacy-compacted'] as const)('rejoins endpoint display label enrichment from a %s census without rewriting its retained evidence', async phase => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    try {
+      const harness = createIngressHarness();
+      const first = observation({ messageRevision: 'endpoint-display', occurredAt: 1_000 });
+      await ingestConversationProviderObservationForInvocation(first, harness.context);
+      const census = markIngressCensusCheckpointCovered(harness.rows, 1_000);
+      if (phase !== 'full') {
+        await runConversationIngressRetentionForInvocation({ now: 2_000, limit: 1 }, harness.context);
+        if (phase === 'legacy-compacted') {
+          // The previous shell producer retained these existing optional fields.
+          const retained = harness.rows.get(census.rowId);
+          if (!retained) throw new Error('Missing compacted census');
+          const payload = record(retained.value.payload);
+          const compacted = record(payload.compacted);
+          const shell = record(compacted.shell);
+          harness.rows.set(retained.rowId, stateRow({ ...retained.value, payload: { ...payload,
+            compacted: { ...compacted, shell: { ...shell,
+              endpoint: { ...record(shell.endpoint), label: 'Legacy display', parentLabel: 'Legacy parent display' },
+            } },
+          } }, retained.revision));
+        }
+      }
+      const retainedValue = structuredClone(harness.rows.get(census.rowId)?.value);
+      const replay = structuredClone(first);
+      Object.assign(fullTextIngress(replay).endpoint, { label: 'Current display', parentLabel: 'Current parent display' });
+      await expect(ingestConversationProviderObservationForInvocation(replay, harness.context)).resolves.toBeUndefined();
+      expect(harness.send).toHaveBeenCalledOnce();
+      expect(harness.rows.get(census.rowId)?.value).toEqual(retainedValue);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('still conflicts changed endpoint facts beside endpoint display labels', async () => {
+    const harness = createIngressHarness();
+    const input = observation({ messageRevision: 'endpoint-facts' });
+    const endpoint = { kind: 'githubPullRequest', audience: 'shared', id: 'acme/repo:7',
+      pullRequest: { repository: 'acme/repo', number: 7 }, pullRequestState: { state: 'open', observedAt: 1 } } as const;
+    Object.assign(fullTextIngress(input), { endpoint });
+    const binding = channelBinding();
+    harness.rows.set(binding.id, stateRow({ ...binding, payload: { ...binding.payload, endpoint, inputMode: 'allAllowedMessages' } }));
+    await ingestConversationProviderObservationForInvocation(input, harness.context);
+    const replay = structuredClone(input);
+    Object.assign(fullTextIngress(replay).endpoint, { label: 'New display', pullRequestState: { state: 'closed', observedAt: 2 } });
+    await expect(ingestConversationProviderObservationForInvocation(replay, harness.context))
+      .rejects.toMatchObject({ code: 'channels_ingress_occurrence_conflict' });
+    expect(harness.send).toHaveBeenCalledOnce();
+  });
+
+  it('excludes endpoint display labels from a provider-supplied rejected bodyless shell', async () => {
+    const harness = createIngressHarness();
+    const input = routableNonAdmission({ messageRevision: 'private-subject', reason: 'unsupportedContent' });
+    if (input.entry.observation.kind !== 'routableNonAdmission') throw new Error('Expected a non-admission shell');
+    Object.assign(input.entry.observation.shell.endpoint, { label: 'Rejected private subject', parentLabel: 'Rejected private mailbox' });
+    await ingestConversationProviderObservationForInvocation(input, harness.context);
+    const census = [...harness.rows.values()].find(row => row.value['record-kind'] === 'ingress-census');
+    expect(census).toBeDefined();
+    expect(JSON.stringify(census?.value)).not.toContain('Rejected private');
+    expect(harness.send).not.toHaveBeenCalled();
+  });
+
   it('rejoins a terminal occurrence after a compatible E→E+1 transport transfer without a second Session admission', async () => {
     const harness = createIngressHarness();
     const first = observation({ messageRevision: 'edit:1' });
@@ -4872,7 +4993,7 @@ describe('Conversation provider observation ingress', () => {
     const transferred = replaceConnectionTransportOrigin(harness.rows, 'telegram-install-2');
     const payload = record(record(transferred.value).payload);
     const transportOrigin = record(payload.transportOrigin);
-    const materialization = record(transportOrigin.materializationRef);
+    const materialization = { ...telegramExecutionOrigin.materializationRef, machineId: String(transportOrigin.machineId) };
     const transferredContext: PluginInvocationContext = {
       ...harness.context,
       caller: {
@@ -4889,6 +5010,7 @@ describe('Conversation provider observation ingress', () => {
           machineId: String(materialization.machineId),
           materializationId: String(materialization.materializationId),
         },
+        executionOrigin: { serverIdentityId: String(transportOrigin.serverIdentityId), materializationRef: materialization },
       },
     };
 
@@ -4907,7 +5029,7 @@ describe('Conversation provider observation ingress', () => {
     const transferred = replaceConnectionPayload(harness.rows, { enabled: true });
     const payload = record(record(transferred.value).payload);
     const transportOrigin = record(payload.transportOrigin);
-    const materialization = record(transportOrigin.materializationRef);
+    const materialization = { ...telegramExecutionOrigin.materializationRef, machineId: String(transportOrigin.machineId) };
     const transferredContext: PluginInvocationContext = {
       ...harness.context,
       caller: {
@@ -4924,6 +5046,7 @@ describe('Conversation provider observation ingress', () => {
           machineId: String(materialization.machineId),
           materializationId: String(materialization.materializationId),
         },
+        executionOrigin: { serverIdentityId: String(transportOrigin.serverIdentityId), materializationRef: materialization },
       },
     };
 
@@ -5657,7 +5780,7 @@ describe('Conversation provider observation ingress', () => {
       const gap = setConnectionHistoryGap(harness.rows);
       await expect(acceptConversationStreamBaselineForInvocation({
         connectionId: 'connection-1',
-        expectedRevision: gap.revision,
+        expectedRevision: payloadNumber(record(record(gap.value).payload), 'configurationRevision'),
       }, harness.context)).resolves.toMatchObject({ kind: 'updated' });
       await expect(runConversationCheckpointedPollForInvocation({
         connectionId: 'connection-1',
@@ -5702,6 +5825,7 @@ describe('Conversation provider observation ingress', () => {
         messageText: 'Compaction secret body',
         occurredAt: 1_000,
       }));
+      Object.assign(fullTextIngress(admitted).endpoint, { label: 'Compaction private subject', parentLabel: 'Compaction private mailbox' });
       await ingestConversationProviderObservationForInvocation(admitted, harness.context);
       const census = markIngressCensusCheckpointCovered(harness.rows, 1_000);
       expect(harness.send).toHaveBeenCalledOnce();
@@ -5713,6 +5837,7 @@ describe('Conversation provider observation ingress', () => {
 
       const compacted = harness.rows.get(census.rowId);
       expect(JSON.stringify(compacted?.value)).not.toContain('Compaction secret body');
+      expect(JSON.stringify(compacted?.value)).not.toContain('Compaction private');
       const compactedPayload = record(record(compacted?.value ?? {}).payload);
       expect(compactedPayload.normalizedIngress).toBeNull();
       expect(record(compactedPayload.compacted)).toMatchObject({
@@ -6231,7 +6356,17 @@ describe('Conversation provider observation ingress', () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     try {
-      const harness = createIngressHarness({ connection: socketChannelConnection() });
+      const validateChannelState = compilePluginJsonSchema(CHANNEL_STATE_COLLECTION.schema);
+      const harness = createIngressHarness({
+        connection: socketChannelConnection(),
+        beforeBatch: ({ operations }) => {
+          for (const operation of operations) {
+            if (operation.kind === 'put') {
+              expect(isValidPluginJsonSchemaValue(validateChannelState, operation.value)).toBe(true);
+            }
+          }
+        },
+      });
       setSharedMentionGatedBinding(harness.rows);
       await ingestConversationProviderObservationForInvocation(
         sharedGroupObservation({
@@ -6547,7 +6682,7 @@ describe('Conversation provider observation ingress', () => {
       if (connection === undefined) throw new Error('Expected the current Channel connection.');
       await expect(updateConversationConnectionForInvocation({
         connectionId: 'connection-1',
-        expectedRevision: connection.revision,
+        expectedRevision: payloadNumber(record(record(connection.value).payload), 'configurationRevision'),
         enabled: true,
         maximumObservationAgeMs: 120_000,
       }, harness.context)).resolves.toMatchObject({ kind: 'updated' });
@@ -6628,7 +6763,7 @@ describe('Conversation provider observation ingress', () => {
       if (connection === undefined) throw new Error('Expected the current Channel connection.');
       await expect(updateConversationConnectionForInvocation({
         connectionId: 'connection-1',
-        expectedRevision: connection.revision,
+        expectedRevision: payloadNumber(record(record(connection.value).payload), 'configurationRevision'),
         enabled: true,
         maximumObservationAgeMs: 120_000,
       }, harness.context)).resolves.toMatchObject({ kind: 'updated' });
@@ -6686,8 +6821,8 @@ describe('Conversation provider observation ingress', () => {
       firstManager.createChallenge({
         connectionId: 'connection-1',
         expectedConnectionRevision: 1,
-        pairingRequestId: 'pairing-request-1',
-        materialization: channelConnection().payload.transportOrigin.materializationRef,
+pairingRequestId: 'pairing-request-1',
+        executionOrigin: getPluginMachineExecutionRouting(telegramExecutionOrigin),
         destinationLabel: 'Telegram bot',
         endpoint: pairingDestinationEndpoint,
         target: channelBinding().payload.target,
@@ -6717,7 +6852,7 @@ describe('Conversation provider observation ingress', () => {
       if (connection === undefined) throw new Error('Expected the current Channel connection.');
       await expect(updateConversationConnectionForInvocation({
         connectionId: 'connection-1',
-        expectedRevision: connection.revision,
+        expectedRevision: payloadNumber(record(record(connection.value).payload), 'configurationRevision'),
         enabled: true,
         maximumObservationAgeMs: 120_000,
       }, harness.context)).resolves.toMatchObject({ kind: 'updated' });
@@ -6733,9 +6868,9 @@ describe('Conversation provider observation ingress', () => {
       });
       const restartedChallenge = restartedManager.createChallenge({
         connectionId: 'connection-1',
-        expectedConnectionRevision: updatedConnection.revision,
-        pairingRequestId: 'pairing-request-1',
-        materialization: channelConnection().payload.transportOrigin.materializationRef,
+        expectedConnectionRevision: payloadNumber(record(record(updatedConnection.value).payload), 'configurationRevision'),
+pairingRequestId: 'pairing-request-1',
+        executionOrigin: getPluginMachineExecutionRouting(telegramExecutionOrigin),
         destinationLabel: 'Telegram bot',
         endpoint: pairingDestinationEndpoint,
         target: channelBinding().payload.target,
@@ -7124,7 +7259,46 @@ describe('Conversation provider observation ingress', () => {
 });
 
 describe('Conversation checkpointed-poll ingress', () => {
-  it('refuses source custody before interpreting a replacement-baseline provider result', async () => {
+  it('follows updated source custody for a replacement baseline, normal poll and frozen Event retry without an authority change', async () => {
+    const sourceOrigin: PluginMachineExecutionOriginV1 = {
+      serverIdentityId: telegramExecutionOrigin.serverIdentityId,
+      sourceRef: { pluginId: telegramProviderPluginId, machineId: 'machine-1', sourceCustody: {
+        kind: 'development', registeredRootId: 'telegram-replacement-root',
+      } },
+    };
+    let runtimeOrigin = sourceOrigin;
+    let poll = 0;
+    const event = withTelegramAutomationEventCandidate(observation({ messageRevision: 'updated-provider:event' }));
+    const harness = createIngressHarness({
+      getPollExecutionOrigin: () => runtimeOrigin,
+      pollExecution: (): JsonValue => ++poll === 1
+        ? { kind: 'checkpointOnly', checkpointAfterBatch: { cursor: 'updated-baseline' } }
+        : { kind: 'batch', observations: [event.entry], checkpointAfterBatch: { cursor: 'updated-event' } },
+      automationEventAdmitResults: [{ kind: 'unsettled' }, { kind: 'checkpointSafe' }],
+    });
+    const gap = setConnectionHistoryGap(harness.rows);
+    await expect(acceptConversationStreamBaselineForInvocation({
+      connectionId: 'connection-1',
+      expectedRevision: payloadNumber(record(record(gap.value).payload), 'configurationRevision'),
+    }, harness.context))
+      .resolves.toMatchObject({ kind: 'updated', authorityEpoch: telegramConnectionAuthority.authorityEpoch });
+    await expect(runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1' }, harness.context))
+      .resolves.toMatchObject({ kind: 'retry' });
+    const eventObligation = [...harness.rows.values()].find(row => row.value['record-kind'] === 'ingress-obligation'
+      && record(record(row.value.payload).target).kind === 'event');
+    expect(record(record(eventObligation?.value.payload).target).executionOrigin).toEqual(telegramConnectionAuthority.transportOrigin);
+    runtimeOrigin = { ...sourceOrigin, sourceRef: { pluginId: telegramProviderPluginId, machineId: 'machine-1',
+      sourceCustody: { kind: 'development', registeredRootId: 'telegram-next-root' } } };
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(payloadNumber(record(record(eventObligation?.value.payload).lifecycle), 'dueAt'));
+    try {
+      await expect(runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1' }, harness.context))
+        .resolves.toMatchObject({ kind: 'committed' });
+    } finally { clock.mockRestore(); }
+    expect(record(harness.rows.get('connection-1')?.value.payload).authorityEpoch).toBe(telegramConnectionAuthority.authorityEpoch);
+    expect(record(currentCheckpoint(harness.rows)?.value.payload).opaqueToken).toEqual({ cursor: 'updated-event' });
+  });
+
+  it('preserves a replacement-baseline history gap returned by the current provider source', async () => {
     const harness = createIngressHarness({
       pollExecutionOrigin: {
         serverIdentityId: telegramConnectionAuthority.transportOrigin.serverIdentityId,
@@ -7141,9 +7315,9 @@ describe('Conversation checkpointed-poll ingress', () => {
 
     await expect(acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: gapConnection.revision,
+      expectedRevision: payloadNumber(record(record(gapConnection.value).payload), 'configurationRevision'),
     }, harness.context)).rejects.toMatchObject({
-      code: 'channels_stream_baseline_conflict',
+      code: 'channels_stream_baseline_provider_history_gap',
       retryable: true,
     });
     expect([...harness.rows.values()]).toEqual(before);
@@ -7292,7 +7466,7 @@ describe('Conversation checkpointed-poll ingress', () => {
     harness.executeAdmittedTargetedOperationWithExecutionOrigin.mockImplementationOnce(async () => ({
       result: { kind: 'checkpointOnly', checkpointAfterBatch: { cursor: 'replay' },
         pullRequestEndpoints: [{ ...endpoint, pullRequestState: { state, observedAt: 40 } }] },
-      executionOrigin: channelConnection().payload.transportOrigin,
+      executionOrigin: telegramExecutionOrigin,
     }));
     await expect(runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, harness.context)).resolves.toMatchObject({ kind: 'committed' });
     expect(harness.execute).not.toHaveBeenCalled();
@@ -7685,7 +7859,7 @@ describe('Conversation checkpointed-poll ingress', () => {
             },
             occurrenceId: 'channels-ingress-supervisor-fixture-occurrence',
             sourceCustody: { kind: 'development', registeredRootId: 'channels-ingress-supervisor-root' },
-            materialization: channelConnection().payload.transportOrigin.materializationRef,
+            materialization: telegramExecutionOrigin.materializationRef,
           },
           signal,
           services: {
@@ -7703,7 +7877,8 @@ describe('Conversation checkpointed-poll ingress', () => {
       getPollExecutionOrigin: () => {
         const current = rows.get('connection-1');
         if (current === undefined) throw new Error('Expected the replacement Channel connection.');
-        return payloadTransportOrigin(record(record(current.value).payload));
+        const placement = payloadTransportOrigin(record(record(current.value).payload));
+        return { ...telegramExecutionOrigin, materializationRef: { ...telegramExecutionOrigin.materializationRef, machineId: placement.machineId } };
       },
     });
     rows = harness.rows;
@@ -7969,7 +8144,7 @@ describe('Conversation checkpointed-poll ingress', () => {
 
     await expect(acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: gapConnection.revision,
+      expectedRevision: payloadNumber(record(record(gapConnection.value).payload), 'configurationRevision'),
     }, harness.context)).resolves.toMatchObject({ kind: 'updated' });
     await expect(runConversationCheckpointedPollForInvocation({
       connectionId: 'connection-1',
@@ -8194,10 +8369,10 @@ describe('Conversation checkpointed-poll ingress', () => {
     const current = channelConnection();
     const harness = createIngressHarness({
       pollExecutionOrigin: {
-        ...current.payload.transportOrigin,
+        ...telegramExecutionOrigin,
         materializationRef: {
-          ...current.payload.transportOrigin.materializationRef,
-          materializationId: 'other-telegram-install',
+          ...telegramExecutionOrigin.materializationRef,
+          machineId: 'machine-other',
         },
       },
     });
@@ -8412,12 +8587,9 @@ describe('Conversation checkpointed-poll ingress', () => {
 
   it('settles persisted provider-exclusive transfer custody when a later replacement checkpointed poll succeeds', async () => {
     const incumbent = channelConnection();
-    const replacementOrigin = {
-      ...incumbent.payload.transportOrigin,
-      materializationRef: {
-        ...incumbent.payload.transportOrigin.materializationRef,
-        materializationId: 'telegram-install-replacement',
-      },
+    const replacementOrigin: PluginMachineExecutionOriginV1 = {
+      ...telegramExecutionOrigin,
+      materializationRef: { ...telegramExecutionOrigin.materializationRef, machineId: 'machine-replacement' },
     };
     const harness = createIngressHarness({ pollExecutionOrigin: replacementOrigin });
     // This invocation begins only after the transfer CAS is durable: there is
@@ -8465,7 +8637,7 @@ describe('Conversation checkpointed-poll ingress', () => {
         connectionId: 'connection-1',
         authority: {
           ...telegramConnectionAuthority,
-          transportOrigin: replacementOrigin,
+          transportOrigin: getConversationConnectionTransportOrigin(replacementOrigin),
           authorityEpoch: settledConnection.lifecycle.authorityEpoch,
         },
         predecessorCheckpointedPollInvocation: {
@@ -8494,15 +8666,11 @@ describe('Conversation checkpointed-poll ingress', () => {
 
   it('settles persisted provider-exclusive transfer custody from a strict replacement batch', async () => {
     const incumbent = channelConnection();
-    const replacementOrigin = {
-      ...incumbent.payload.transportOrigin,
-      materializationRef: {
-        ...incumbent.payload.transportOrigin.materializationRef,
-        materializationId: 'telegram-install-replacement',
-      },
+    const replacementOrigin: PluginMachineExecutionOriginV1 = {
+      ...telegramExecutionOrigin,
+      materializationRef: { ...telegramExecutionOrigin.materializationRef, machineId: 'machine-replacement' },
     };
-    let pollExecutionOrigin: ReturnType<typeof channelConnection>['payload']['transportOrigin']
-      = incumbent.payload.transportOrigin;
+    let pollExecutionOrigin: PluginMachineExecutionOriginV1 = telegramExecutionOrigin;
     let pollResult: JsonValue = { kind: 'checkpointOnly', checkpointAfterBatch: { cursor: 'baseline' } };
     const harness = createIngressHarness({
       getPollResult: () => pollResult,
@@ -8551,12 +8719,9 @@ describe('Conversation checkpointed-poll ingress', () => {
 
   it('retains provider-exclusive transfer custody when the replacement poll reports a provider conflict', async () => {
     const incumbent = channelConnection();
-    const replacementOrigin = {
-      ...incumbent.payload.transportOrigin,
-      materializationRef: {
-        ...incumbent.payload.transportOrigin.materializationRef,
-        materializationId: 'telegram-install-replacement',
-      },
+    const replacementOrigin: PluginMachineExecutionOriginV1 = {
+      ...telegramExecutionOrigin,
+      materializationRef: { ...telegramExecutionOrigin.materializationRef, machineId: 'machine-replacement' },
     };
     const harness = createIngressHarness({
       pollExecutionOrigin: replacementOrigin,
@@ -8598,12 +8763,9 @@ describe('Conversation checkpointed-poll ingress', () => {
 
   it('does not infer provider-exclusive transfer settlement from a replacement history-gap result', async () => {
     const incumbent = channelConnection();
-    const replacementOrigin = {
-      ...incumbent.payload.transportOrigin,
-      materializationRef: {
-        ...incumbent.payload.transportOrigin.materializationRef,
-        materializationId: 'telegram-install-replacement',
-      },
+    const replacementOrigin: PluginMachineExecutionOriginV1 = {
+      ...telegramExecutionOrigin,
+      materializationRef: { ...telegramExecutionOrigin.materializationRef, machineId: 'machine-replacement' },
     };
     const harness = createIngressHarness({
       pollExecutionOrigin: replacementOrigin,
@@ -8635,12 +8797,9 @@ describe('Conversation checkpointed-poll ingress', () => {
 
   it('does not settle a safe old transport from a successful replacement checkpointed poll', async () => {
     const incumbent = channelConnection();
-    const replacementOrigin = {
-      ...incumbent.payload.transportOrigin,
-      materializationRef: {
-        ...incumbent.payload.transportOrigin.materializationRef,
-        materializationId: 'telegram-install-replacement',
-      },
+    const replacementOrigin: PluginMachineExecutionOriginV1 = {
+      ...telegramExecutionOrigin,
+      materializationRef: { ...telegramExecutionOrigin.materializationRef, machineId: 'machine-replacement' },
     };
     const harness = createIngressHarness({ pollExecutionOrigin: replacementOrigin });
     replaceConnectionDuringCapturedPoll({
@@ -8673,12 +8832,9 @@ describe('Conversation checkpointed-poll ingress', () => {
 
   it('does not write provider-exclusive transfer settlement when the replacement current row changes before it can CAS', async () => {
     const incumbent = channelConnection();
-    const replacementOrigin = {
-      ...incumbent.payload.transportOrigin,
-      materializationRef: {
-        ...incumbent.payload.transportOrigin.materializationRef,
-        materializationId: 'telegram-install-replacement',
-      },
+    const replacementOrigin: PluginMachineExecutionOriginV1 = {
+      ...telegramExecutionOrigin,
+      materializationRef: { ...telegramExecutionOrigin.materializationRef, machineId: 'machine-replacement' },
     };
     let batchCalls = 0;
     const harness = createIngressHarness({
@@ -8831,10 +8987,7 @@ describe('Conversation checkpointed-poll ingress', () => {
           ...capturedInvocation,
           transportOrigin: {
             ...capturedInvocation.transportOrigin,
-            materializationRef: {
-              ...capturedInvocation.transportOrigin.materializationRef,
-              materializationId: 'telegram-install-not-the-incumbent',
-            },
+            machineId: 'machine-not-the-incumbent',
           },
         },
         frozenStopRequest,
@@ -8955,7 +9108,7 @@ describe('Conversation checkpointed-poll ingress', () => {
 
     await expect(acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: gapConnection.revision,
+      expectedRevision: payloadNumber(record(record(gapConnection.value).payload), 'configurationRevision'),
     }, harness.context)).resolves.toMatchObject({ kind: 'updated' });
 
     const currentConnection = harness.rows.get('connection-1');
@@ -8968,9 +9121,9 @@ describe('Conversation checkpointed-poll ingress', () => {
     });
     const challenge = manager.createChallenge({
       connectionId: 'connection-1',
-      expectedConnectionRevision: currentConnection.revision,
-      pairingRequestId: 'pairing-request-1',
-      materialization: channelConnection().payload.transportOrigin.materializationRef,
+      expectedConnectionRevision: payloadNumber(record(record(currentConnection.value).payload), 'configurationRevision'),
+pairingRequestId: 'pairing-request-1',
+      executionOrigin: getPluginMachineExecutionRouting(telegramExecutionOrigin),
       destinationLabel: 'Telegram bot',
       endpoint: pairingDestinationEndpoint,
       target: channelBinding().payload.target,
@@ -9086,9 +9239,9 @@ describe('Conversation checkpointed-poll ingress', () => {
     });
     manager.createChallenge({
       connectionId: 'connection-1',
-      expectedConnectionRevision: currentConnection.revision,
-      pairingRequestId: 'pairing-request-1',
-      materialization: channelConnection().payload.transportOrigin.materializationRef,
+      expectedConnectionRevision: payloadNumber(record(record(currentConnection.value).payload), 'configurationRevision'),
+pairingRequestId: 'pairing-request-1',
+      executionOrigin: getPluginMachineExecutionRouting(telegramExecutionOrigin),
       destinationLabel: 'Telegram bot',
       endpoint: pairingDestinationEndpoint,
       target: channelBinding().payload.target,
@@ -9169,9 +9322,9 @@ describe('Conversation checkpointed-poll ingress', () => {
     });
     const created = racedManager.createChallenge({
       connectionId: 'connection-1',
-      expectedConnectionRevision: currentConnection.revision,
-      pairingRequestId: 'pairing-request-1',
-      materialization: channelConnection().payload.transportOrigin.materializationRef,
+      expectedConnectionRevision: payloadNumber(record(record(currentConnection.value).payload), 'configurationRevision'),
+pairingRequestId: 'pairing-request-1',
+      executionOrigin: getPluginMachineExecutionRouting(telegramExecutionOrigin),
       destinationLabel: 'Telegram bot',
       endpoint: pairingDestinationEndpoint,
       target: channelBinding().payload.target,
@@ -9236,9 +9389,9 @@ describe('Conversation checkpointed-poll ingress', () => {
     });
     firstManager.createChallenge({
       connectionId: 'connection-1',
-      expectedConnectionRevision: connection.revision,
-      pairingRequestId: 'pairing-request-1',
-      materialization: channelConnection().payload.transportOrigin.materializationRef,
+      expectedConnectionRevision: payloadNumber(record(record(connection.value).payload), 'configurationRevision'),
+pairingRequestId: 'pairing-request-1',
+      executionOrigin: getPluginMachineExecutionRouting(telegramExecutionOrigin),
       destinationLabel: 'Telegram bot',
       endpoint: pairingDestinationEndpoint,
       target: channelBinding().payload.target,
@@ -9319,9 +9472,9 @@ describe('Conversation checkpointed-poll ingress', () => {
       });
       const challenge = manager.createChallenge({
         connectionId: 'connection-1',
-        expectedConnectionRevision: currentConnection.revision,
-        pairingRequestId: 'pairing-request-1',
-        materialization: channelConnection().payload.transportOrigin.materializationRef,
+        expectedConnectionRevision: payloadNumber(record(record(currentConnection.value).payload), 'configurationRevision'),
+pairingRequestId: 'pairing-request-1',
+        executionOrigin: getPluginMachineExecutionRouting(telegramExecutionOrigin),
         destinationLabel: 'Telegram bot',
         endpoint: pairingDestinationEndpoint,
         target: channelBinding().payload.target,
@@ -9397,7 +9550,7 @@ describe('Conversation checkpointed-poll ingress', () => {
 
     await expect(acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: gapConnection.revision,
+      expectedRevision: payloadNumber(record(record(gapConnection.value).payload), 'configurationRevision'),
     }, harness.context)).resolves.toMatchObject({ kind: 'updated' });
     const poll = runConversationCheckpointedPollForInvocation({
       connectionId: 'connection-1',
@@ -9472,7 +9625,7 @@ describe('Conversation checkpointed-poll ingress', () => {
 
     await expect(acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: gapConnection.revision,
+      expectedRevision: payloadNumber(record(record(gapConnection.value).payload), 'configurationRevision'),
     }, harness.context)).resolves.toMatchObject({ kind: 'updated' });
 
     await expect(runConversationCheckpointedPollForInvocation({
@@ -9580,7 +9733,7 @@ describe('Conversation checkpointed-poll ingress', () => {
       const gapConnection = setConnectionHistoryGap(harness.rows);
       await expect(acceptConversationStreamBaselineForInvocation({
         connectionId: 'connection-1',
-        expectedRevision: gapConnection.revision,
+        expectedRevision: payloadNumber(record(record(gapConnection.value).payload), 'configurationRevision'),
       }, harness.context)).resolves.toMatchObject({ kind: 'updated' });
 
       await expect(runConversationCheckpointedPollForInvocation({
@@ -9732,7 +9885,7 @@ describe('Conversation checkpointed-poll ingress', () => {
       const gapConnection = setConnectionHistoryGap(harness.rows);
       await expect(acceptConversationStreamBaselineForInvocation({
         connectionId: 'connection-1',
-        expectedRevision: gapConnection.revision,
+        expectedRevision: payloadNumber(record(record(gapConnection.value).payload), 'configurationRevision'),
       }, harness.context)).resolves.toMatchObject({ kind: 'updated' });
 
       await expect(runConversationCheckpointedPollForInvocation({
@@ -9811,7 +9964,7 @@ describe('Conversation checkpointed-poll ingress', () => {
       raceAttemptingClaim = true;
       await expect(acceptConversationStreamBaselineForInvocation({
         connectionId: 'connection-1',
-        expectedRevision: gapConnection.revision,
+        expectedRevision: payloadNumber(record(record(gapConnection.value).payload), 'configurationRevision'),
       }, harness.context)).resolves.toMatchObject({ kind: 'updated' });
 
       expect(currentCheckpoint(harness.rows)).toMatchObject({
@@ -9868,7 +10021,7 @@ describe('Conversation checkpointed-poll ingress', () => {
 
     await expect(acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: gapConnection.revision,
+      expectedRevision: payloadNumber(record(record(gapConnection.value).payload), 'configurationRevision'),
     }, harness.context)).resolves.toMatchObject({ kind: 'updated' });
 
     await expect(runConversationCheckpointedPollForInvocation({
@@ -9916,7 +10069,7 @@ describe('Conversation checkpointed-poll ingress', () => {
 
     await expect(acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: gapConnection.revision,
+      expectedRevision: payloadNumber(record(record(gapConnection.value).payload), 'configurationRevision'),
     }, harness.context)).resolves.toMatchObject({ kind: 'updated' });
 
     await expect(runConversationCheckpointedPollForInvocation({
@@ -10054,7 +10207,7 @@ describe('Conversation checkpointed-poll ingress', () => {
 
     await expect(acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: gapConnection.revision,
+      expectedRevision: payloadNumber(record(record(gapConnection.value).payload), 'configurationRevision'),
     }, harness.context)).resolves.toMatchObject({ kind: 'updated' });
 
     releaseScheduledPoll({ kind: 'checkpointOnly', checkpointAfterBatch: { cursor: 'stale-scheduled-poll' } });
@@ -10108,7 +10261,7 @@ describe('Conversation history baseline acceptance', () => {
 
     await expect(acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: current.revision,
+      expectedRevision: payloadNumber(record(record(current.value).payload), 'configurationRevision'),
     }, harness.context)).rejects.toMatchObject({
       code: 'channels_stream_baseline_connection_unavailable',
     });
@@ -10129,7 +10282,7 @@ describe('Conversation history baseline acceptance', () => {
 
     await expect(acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: gapConnection.revision,
+      expectedRevision: payloadNumber(record(record(gapConnection.value).payload), 'configurationRevision'),
     }, harness.context)).rejects.toMatchObject({ code: 'channels_stream_baseline_conflict' });
 
     expect(record(record(harness.rows.get('connection-1')?.value).payload).pendingOldTransportStop).toBeNull();
@@ -10137,12 +10290,9 @@ describe('Conversation history baseline acceptance', () => {
 
   it('settles persisted provider-exclusive transfer custody from a successful replacement baseline poll', async () => {
     const incumbent = channelConnection();
-    const replacementOrigin = {
-      ...incumbent.payload.transportOrigin,
-      materializationRef: {
-        ...incumbent.payload.transportOrigin.materializationRef,
-        materializationId: 'telegram-install-replacement',
-      },
+    const replacementOrigin: PluginMachineExecutionOriginV1 = {
+      ...telegramExecutionOrigin,
+      materializationRef: { ...telegramExecutionOrigin.materializationRef, machineId: 'machine-replacement' },
     };
     const harness = createIngressHarness({ pollExecutionOrigin: replacementOrigin });
     setConnectionHistoryGap(harness.rows);
@@ -10155,7 +10305,7 @@ describe('Conversation history baseline acceptance', () => {
 
     await expect(acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: replacement.revision,
+      expectedRevision: payloadNumber(record(record(replacement.value).payload), 'configurationRevision'),
     }, harness.context)).resolves.toEqual({
       kind: 'updated',
       connectionId: 'connection-1',
@@ -10185,7 +10335,7 @@ describe('Conversation history baseline acceptance', () => {
 
     await expect(acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: gapConnection.revision,
+      expectedRevision: payloadNumber(record(record(gapConnection.value).payload), 'configurationRevision'),
     }, harness.context)).resolves.toMatchObject({ kind: 'updated' });
 
     expect(harness.send).not.toHaveBeenCalled();
@@ -10222,7 +10372,7 @@ describe('Conversation history baseline acceptance', () => {
 
     await expect(acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: gapConnection.revision,
+      expectedRevision: payloadNumber(record(record(gapConnection.value).payload), 'configurationRevision'),
     }, harness.context)).rejects.toMatchObject({ code: 'channels_stream_baseline_result_invalid' });
 
     expect(harness.send).not.toHaveBeenCalled();
@@ -10242,7 +10392,7 @@ describe('Conversation history baseline acceptance', () => {
 
     await expect(acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: gapConnection.revision,
+      expectedRevision: payloadNumber(record(record(gapConnection.value).payload), 'configurationRevision'),
     }, harness.context)).rejects.toMatchObject({
       code: 'channels_stream_baseline_requires_checkpoint_only',
       retryable: true,
@@ -10268,13 +10418,13 @@ describe('Conversation history baseline acceptance', () => {
     const firstGap = setConnectionHistoryGap(harness.rows);
     await acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: firstGap.revision,
+      expectedRevision: payloadNumber(record(record(firstGap.value).payload), 'configurationRevision'),
     }, harness.context);
     const secondGap = setConnectionHistoryGap(harness.rows);
 
     await acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: secondGap.revision,
+      expectedRevision: payloadNumber(record(record(secondGap.value).payload), 'configurationRevision'),
     }, harness.context);
 
     expect(harness.executeAdmittedTargetedOperationWithExecutionOrigin).toHaveBeenCalledTimes(2);
@@ -10304,7 +10454,7 @@ describe('Conversation history baseline acceptance', () => {
     const firstGap = setConnectionHistoryGap(harness.rows);
     await acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: firstGap.revision,
+      expectedRevision: payloadNumber(record(record(firstGap.value).payload), 'configurationRevision'),
     }, harness.context);
     const retainedCheckpoint = currentCheckpoint(harness.rows);
     if (retainedCheckpoint === undefined) throw new Error('Expected the retained checkpoint.');
@@ -10312,7 +10462,7 @@ describe('Conversation history baseline acceptance', () => {
 
     await expect(acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: secondGap.revision,
+      expectedRevision: payloadNumber(record(record(secondGap.value).payload), 'configurationRevision'),
     }, harness.context)).rejects.toMatchObject({ code, retryable: true });
 
     expect(harness.rows.get(retainedCheckpoint.rowId)).toEqual(retainedCheckpoint);
@@ -10328,7 +10478,7 @@ describe('Conversation history baseline acceptance', () => {
 
       await expect(acceptConversationStreamBaselineForInvocation({
         connectionId: 'connection-1',
-        expectedRevision: currentConnection.revision,
+        expectedRevision: payloadNumber(record(record(currentConnection.value).payload), 'configurationRevision'),
       }, harness.context)).resolves.toMatchObject({ kind: 'updated' });
 
       expect(harness.executeAdmittedTargetedOperationWithExecutionOrigin).not.toHaveBeenCalled();
@@ -10389,7 +10539,7 @@ describe('Conversation history baseline acceptance', () => {
       if (current === undefined) throw new Error('Expected the Channel connection state row.');
       await expect(acceptConversationStreamBaselineForInvocation({
         connectionId: 'connection-1',
-        expectedRevision: current.revision,
+        expectedRevision: payloadNumber(record(record(current.value).payload), 'configurationRevision'),
       }, harness.context)).resolves.toMatchObject({ kind: 'updated' });
 
       const abandoned = harness.rows.get(obligation.rowId);
@@ -10510,7 +10660,7 @@ describe('Conversation history baseline acceptance', () => {
       const gapConnection = setConnectionHistoryGap(harness.rows);
       await expect(acceptConversationStreamBaselineForInvocation({
         connectionId: 'connection-1',
-        expectedRevision: gapConnection.revision,
+        expectedRevision: payloadNumber(record(record(gapConnection.value).payload), 'configurationRevision'),
       }, harness.context)).resolves.toMatchObject({ kind: 'updated' });
 
       const censuses = [...harness.rows.values()].filter((row) => (
@@ -10591,7 +10741,7 @@ describe('Conversation history baseline acceptance', () => {
       const coveredGap = setConnectionHistoryGap(covered.rows);
       await expect(acceptConversationStreamBaselineForInvocation({
         connectionId: 'connection-1',
-        expectedRevision: coveredGap.revision,
+        expectedRevision: payloadNumber(record(record(coveredGap.value).payload), 'configurationRevision'),
       }, covered.context)).resolves.toMatchObject({ kind: 'updated' });
       expect(record(record(covered.rows.get('connection-1')?.value ?? {}).payload).historyGap).toBeNull();
       expect(currentCheckpoint(covered.rows)).toMatchObject({
@@ -10623,7 +10773,7 @@ describe('Conversation history baseline acceptance', () => {
       const uncoveredGap = setConnectionHistoryGap(uncovered.rows);
       await expect(acceptConversationStreamBaselineForInvocation({
         connectionId: 'connection-1',
-        expectedRevision: uncoveredGap.revision,
+        expectedRevision: payloadNumber(record(record(uncoveredGap.value).payload), 'configurationRevision'),
       }, uncovered.context)).resolves.toMatchObject({ kind: 'updated' });
       expect(coverageBatches.length).toBeGreaterThan(1);
       expect(coverageBatches.every((operations) => operations.length <= 4)).toBe(true);
@@ -10644,7 +10794,7 @@ describe('Conversation history baseline acceptance', () => {
       const crashedGap = setConnectionHistoryGap(crashed.rows);
       await expect(acceptConversationStreamBaselineForInvocation({
         connectionId: 'connection-1',
-        expectedRevision: crashedGap.revision,
+        expectedRevision: payloadNumber(record(record(crashedGap.value).payload), 'configurationRevision'),
       }, crashed.context)).rejects.toThrow('Simulated Account Collection response loss.');
       expect(currentCheckpoint(crashed.rows)).toMatchObject({
         value: { payload: { opaqueToken: { cursor: 'crash-rejoin' } } },
@@ -10658,7 +10808,7 @@ describe('Conversation history baseline acceptance', () => {
 
       await expect(acceptConversationStreamBaselineForInvocation({
         connectionId: 'connection-1',
-        expectedRevision: crashedGap.revision,
+        expectedRevision: payloadNumber(record(record(crashedGap.value).payload), 'configurationRevision'),
       }, crashed.context)).resolves.toMatchObject({ kind: 'updated' });
       expect(record(record(crashed.rows.get('connection-1')?.value ?? {}).payload).historyGap).toBeNull();
 
@@ -10676,7 +10826,7 @@ describe('Conversation history baseline acceptance', () => {
       const resetGap = setConnectionHistoryGap(reset.rows);
       await expect(acceptConversationStreamBaselineForInvocation({
         connectionId: 'connection-1',
-        expectedRevision: resetGap.revision,
+        expectedRevision: payloadNumber(record(record(resetGap.value).payload), 'configurationRevision'),
       }, reset.context)).rejects.toMatchObject({
         code: 'channels_stream_baseline_conflict',
         retryable: true,
@@ -10745,7 +10895,7 @@ describe('Conversation history baseline acceptance', () => {
       const gap = setConnectionHistoryGap(source.rows);
       await expect(acceptConversationStreamBaselineForInvocation({
         connectionId: 'connection-1',
-        expectedRevision: gap.revision,
+        expectedRevision: payloadNumber(record(record(gap.value).payload), 'configurationRevision'),
       }, source.context)).resolves.toMatchObject({ kind: 'updated' });
 
       const terminalizationBatches = baselineBatches.filter((operations) => operations.some((operation) => (
@@ -10791,7 +10941,7 @@ describe('Conversation history baseline acceptance', () => {
       const concurrentGap = setConnectionHistoryGap(concurrent.rows);
       await expect(acceptConversationStreamBaselineForInvocation({
         connectionId: 'connection-1',
-        expectedRevision: concurrentGap.revision,
+        expectedRevision: payloadNumber(record(record(concurrentGap.value).payload), 'configurationRevision'),
       }, concurrent.context)).rejects.toMatchObject({
         code: 'channels_stream_baseline_conflict',
         retryable: true,
@@ -10828,7 +10978,7 @@ describe('Conversation history baseline acceptance', () => {
       const blockedGap = setConnectionHistoryGap(blocked.rows);
       await expect(acceptConversationStreamBaselineForInvocation({
         connectionId: 'connection-1',
-        expectedRevision: blockedGap.revision,
+        expectedRevision: payloadNumber(record(record(blockedGap.value).payload), 'configurationRevision'),
       }, blocked.context)).resolves.toMatchObject({ kind: 'updated' });
       const retainedBlocked = [...blocked.rows.values()].filter((row) => (
         row.deleted !== true
@@ -10848,13 +10998,13 @@ describe('Conversation history baseline acceptance', () => {
   });
 
   it('rejects a provider result the retained settlement owner cannot correlate without clearing the gap', async () => {
-    const expectedOrigin = channelConnection().payload.transportOrigin;
+    const expectedOrigin = telegramExecutionOrigin;
     const harness = createIngressHarness({
       pollExecutionOrigin: {
         ...expectedOrigin,
         materializationRef: {
           ...expectedOrigin.materializationRef,
-          materializationId: 'telegram-install-replaced',
+          machineId: 'machine-other',
         },
       },
     });
@@ -10862,10 +11012,9 @@ describe('Conversation history baseline acceptance', () => {
 
     await expect(acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: gapConnection.revision,
+      expectedRevision: payloadNumber(record(record(gapConnection.value).payload), 'configurationRevision'),
     }, harness.context)).rejects.toMatchObject({
-      code: 'channels_stream_baseline_conflict',
-      retryable: true,
+      code: 'plugin_action_execution_origin_mismatch',
     });
 
     expect(harness.executeAdmittedTargetedOperationWithExecutionOrigin).toHaveBeenCalledTimes(1);
@@ -10882,7 +11031,7 @@ describe('Conversation history baseline acceptance', () => {
 
     await expect(acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: gapConnection.revision,
+      expectedRevision: payloadNumber(record(record(gapConnection.value).payload), 'configurationRevision'),
     }, { ...harness.context, signal: controller.signal })).rejects.toMatchObject({
       code: 'channels_ingress_cancelled',
       retryable: true,
@@ -10924,7 +11073,7 @@ describe('Conversation history baseline acceptance', () => {
 
     await expect(acceptConversationStreamBaselineForInvocation({
       connectionId: 'connection-1',
-      expectedRevision: gapConnection.revision,
+      expectedRevision: payloadNumber(record(record(gapConnection.value).payload), 'configurationRevision'),
     }, harness.context)).rejects.toMatchObject({
       code: 'channels_stream_baseline_conflict',
       retryable: true,

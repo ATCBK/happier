@@ -69,7 +69,6 @@ export type NewSessionDraftSeedV1 = Readonly<{
     initialSessionFacts?: NewSessionDraft['initialSessionFacts'];
     promptStack?: NewSessionDraft['promptStack'];
     origin?: PluginUiNewSessionSeedOriginV1;
-    zenTaskSource?: NewSessionDraft['zenTaskSource'];
     prompt?: NewSessionDraftPromptSeedV1;
     profileId?: string;
     /**
@@ -118,8 +117,7 @@ export function newSessionDraftSeedDeclaresChangeV1(seed: NewSessionDraftSeedV1)
         // Attaching a selection and nothing else is a whole intent: "open New
         // Session with these entries on it" carries no prompt of its own, and
         // reading it as an empty seed would refuse the destination outright.
-        || (seed.attachments?.length ?? 0) > 0
-        || seed.zenTaskSource !== undefined;
+        || (seed.attachments?.length ?? 0) > 0;
 }
 
 /**
@@ -162,7 +160,6 @@ export function applyNewSessionDraftSeedV1(input: Readonly<{
         ...(input.seed.sessionName === undefined ? {} : { sessionName: input.seed.sessionName }),
         ...(input.seed.initialSessionFacts === undefined ? {} : { initialSessionFacts: input.seed.initialSessionFacts }),
         ...(input.seed.promptStack === undefined ? {} : { promptStack: input.seed.promptStack }),
-        ...(input.seed.zenTaskSource === undefined ? {} : { zenTaskSource: input.seed.zenTaskSource }),
         ...(input.seed.origin === undefined ? {} : { authoringOrigin: input.seed.origin }),
         ...(promptText === null
             ? {}

@@ -107,7 +107,8 @@ describe('Artifact composed view reads', () => {
         const definition = { v: 1, id: 'saved-widget', name: 'Tokens per day', sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' } };
         const row: DecryptedArtifact = { id: 'saved-widget', title: 'Tokens per day', isDecrypted: true,
             header: { kind: 'widget-definition.v1', v: 1, title: 'Tokens per day' },
-            body: JSON.stringify(definition), headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+            body: JSON.stringify(definition), ownerAccountId: 'owner', access: 'owner', storageMode: 'plain',
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
         const screen = await renderScreen(<ArtifactView artifactId={row.id} artifact={row} presentation="page" />);
         expect(screen.findByTestId('artifact:widget')).not.toBeNull();
         expect(screen.findByTestId('artifact:body') === null).toBe(true);
@@ -127,11 +128,13 @@ describe('Artifact composed view reads', () => {
             blobs: served.requests.filter(request => request.path.includes('/blobs/')).length,
             shells: served.requests.filter(request => request.path.endsWith('/html-preview')).length });
         expect(heads).toHaveLength(1);
-        expect(served.requests.every(request => request.accountId === 'owner')).toBe(true);
+        // Public feature discovery may be anonymous; every private Artifact operation must authenticate.
+        const privateRequests = served.requests.filter(request => request.path === '/v1/artifacts' || request.path.startsWith('/v1/artifacts/'));
+        expect(privateRequests.every(request => request.accountId === 'owner')).toBe(true);
         await screen.unmount();
     });
 
-    it('leaves a generic file download deferred and suppresses a preview after Account retirement', async () => {
+    it('leaves a generic file download deferred and suppresses the retired preview while renewed authority reads again', async () => {
         const { served } = await setup('file');
         const file = await renderScreen(<OpenView id="document" />);
         await flushHookEffects();
@@ -140,14 +143,27 @@ describe('Artifact composed view reads', () => {
         await file.unmount();
         await disposeHome?.();
         const pending = createDeferred<Response>();
-        const next = await setup('image', pending.promise);
+        const renewed = createDeferred<Response>();
+        let blobReads = 0;
+        const next = await setup('image', undefined, false, request => request.path.includes('/blobs/')
+            ? ++blobReads === 1 ? pending.promise : renewed.promise : undefined);
         const image = await renderScreen(<OpenView id="document" />);
-        await vi.waitFor(() => expect(next.served.requests.some(request => request.path.includes('/blobs/'))).toBe(true));
-        retireActiveServerAccountScopeLifetime();
-        pending.resolve(Response.json({ blobId: 'e704b26f-9c31-4728-9590-858378e34ed9', content: { t: 'plain', v: encodeBase64(new TextEncoder().encode('Private bytes')) } }));
-        await flushHookEffects();
-        expect(image.findByTestId('file:imagePreview') === null).toBe(true);
-        await image.unmount();
+        const response = () => Response.json({ blobId: next.reference.blobId, content: { t: 'plain', v: encodeBase64(next.bytes) } });
+        try {
+            await vi.waitFor(() => expect(blobReads).toBe(1));
+            await act(async () => { retireActiveServerAccountScopeLifetime(); });
+            await vi.waitFor(() => expect(blobReads).toBe(2));
+            await act(async () => { pending.resolve(response()); });
+            await flushHookEffects();
+            expect(image.findByTestId('file:imagePreview') === null).toBe(true);
+            expect(URL.createObjectURL).not.toHaveBeenCalled();
+            await act(async () => { renewed.resolve(response()); });
+            await vi.waitFor(() => expect(image.findByTestId('file:imagePreview')).not.toBeNull());
+        } finally {
+            pending.resolve(response());
+            renewed.resolve(response());
+            await image.unmount();
+        }
     });
 
     it('reopens an HTML frame retry through fresh Account authority without repeating a head within either operation', async () => {

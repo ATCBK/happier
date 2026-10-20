@@ -1,4 +1,5 @@
 import type { PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
+import { selectMemoryTargetV1 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -47,22 +48,14 @@ export function selectSessionMemory(layers: SessionContextLayers, serverId: stri
         const row = rows.find((candidate) => candidate.kind === 'memory' && candidate.entry.ref.kind === 'doc');
         return row ? { kind: 'doc' as const, artifactId: row.entry.ref.artifactId, serverId: row.entry.ref.serverId ?? serverId } : null;
     };
-    if (layers.isBot) {
-        const own = layers.session.find((row) => row.entry.id === 'session.memory' && row.entry.ref.kind === 'doc');
-        return {
-            resolving: false,
-            scope: 'session',
-            ref: own ? { kind: 'doc', artifactId: own.entry.ref.artifactId, serverId: own.entry.ref.serverId ?? serverId } : null,
-        };
-    }
-    if (layers.project.status === 'pending' || layers.project.status === 'unavailable'
-        || layers.project.rows.some(row => row.kind === 'unknown')) return { resolving: true, ref: null, scope: 'project' };
-    const project = refOf(layers.project.rows);
-    if (project) return { resolving: false, ref: project, scope: 'project' };
-    if (layers.accountStatus !== 'ready' || layers.account.some(row => row.kind === 'unknown')) {
-        return { resolving: true, ref: null, scope: 'account' };
-    }
-    return { resolving: false, ref: refOf(layers.account), scope: 'account' };
+    const own = layers.session.find(row => row.entry.id === 'session.memory' && row.entry.ref.kind === 'doc');
+    return selectMemoryTargetV1({ isBot: layers.isBot,
+        botRef: own ? { kind: 'doc', artifactId: own.entry.ref.artifactId, serverId: own.entry.ref.serverId ?? serverId } : null,
+        project: { status: layers.project.rows.some(row => row.kind === 'unknown') ? 'unavailable' : layers.project.status,
+            ref: refOf(layers.project.rows) },
+        account: { status: layers.account.some(row => row.kind === 'unknown') ? 'unavailable' : layers.accountStatus,
+            ref: refOf(layers.account) },
+    });
 }
 
 /**
@@ -79,7 +72,8 @@ export const SessionMemorySection = React.memo(function SessionMemorySection(pro
     const access = resolveSessionInstructionsAccess(session);
     const ownerMetadata = React.useMemo(() => readSessionOwnerMetadataView(session), [session]);
     if (access !== 'readable' || !ownerMetadata) return null;
-    return <SessionMemoryBody session={session} serverId={serverId} ownerMetadata={ownerMetadata} />;
+    // A pending choice belongs to this Session, including while another Session opens in Info.
+    return <SessionMemoryBody key={JSON.stringify([serverId, session.id])} session={session} serverId={serverId} ownerMetadata={ownerMetadata} />;
 });
 
 const SessionMemoryBody = React.memo(function SessionMemoryBody(props: Readonly<{
@@ -105,10 +99,11 @@ const SessionMemoryBody = React.memo(function SessionMemoryBody(props: Readonly<
     const displayedSource = React.useMemo(() => resolving
         ? { ...source, status: 'loading' as const, view: null, target: null, stale: false } : source, [resolving, source]);
     const navigateToSession = useNavigateToSession();
-    const openSession = React.useCallback((ref: Readonly<{ serverId: string; sessionId: string }>) => {
-        fireAndForget(navigateToSession(ref.sessionId, { serverId: ref.serverId }), { tag: 'SessionMemorySection.source' });
+    const openSession = React.useCallback((ref: Readonly<{ serverId: string; sessionId: string; messageId?: string }>) => {
+        fireAndForget(navigateToSession(ref.sessionId, { serverId: ref.serverId, messageId: ref.messageId }), { tag: 'SessionMemorySection.source' });
     }, [navigateToSession]);
-    const [saving, setSaving] = React.useState(false);
+    // The choice being saved: the switch shows it at once, so a slow Home never leaves it looking stuck.
+    const [pendingChoice, setPendingChoice] = React.useState<boolean | null>(null);
     const [searching, setSearching] = React.useState(false);
     const [composing, setComposing] = React.useState(false);
     const sessionTarget = React.useMemo<MemorySessionTarget>(
@@ -119,7 +114,8 @@ const SessionMemoryBody = React.memo(function SessionMemoryBody(props: Readonly<
     // A refused switch says so in the section, beside the switch it did not move, until the next attempt.
     const [refused, setRefused] = React.useState(false);
     const setEnabled = React.useCallback((next: boolean) => {
-        setSaving(true);
+        if (pendingChoice !== null) return;
+        setPendingChoice(next);
         setRefused(false);
         fireAndForget((async () => {
             try {
@@ -128,16 +124,17 @@ const SessionMemoryBody = React.memo(function SessionMemoryBody(props: Readonly<
             } catch {
                 setRefused(true);
             } finally {
-                setSaving(false);
+                setPendingChoice(null);
             }
         })(), { tag: 'SessionMemorySection.setEnabled' });
-    }, [sessionTarget]);
+    }, [pendingChoice, sessionTarget]);
 
+    const shownEnabled = pendingChoice ?? enabled;
     const documentAccess = displayedSource.view?.access ?? null;
-    const shared = documentAccess !== null && documentAccess !== 'owner';
+    const shared = displayedSource.stale ? null : displayedSource.view?.shared ?? null;
     const readOnly = ref !== null && (documentAccess === null || documentAccess === 'view');
     const canRemember = !readOnly && Boolean(displayedSource.target || (!ref && !resolving && displayedSource.status === 'none'));
-    const footer = resolving || (ref && documentAccess === null) ? undefined : shared
+    const footer = resolving || (ref && (documentAccess === null || shared === null)) ? undefined : shared
         ? joinHappierFacts(t('memoryContext.memory.accessShared'), t('memoryContext.memory.writesAskFirst'))
         : joinHappierFacts(selection.scope === 'project' ? t('memoryContext.session.projectMemory')
             : selection.scope === 'account' ? t('memoryContext.session.yourMemory') : t('memoryContext.memory.accessPrivate'),
@@ -183,15 +180,14 @@ const SessionMemoryBody = React.memo(function SessionMemoryBody(props: Readonly<
             {searching && enabled && !resolving ? null : <Item
                 testID="session-work-memory.enabled"
                 title={t('memoryContext.session.useMemory')}
-                subtitle={!enabled ? t('memoryContext.session.offDescription')
+                subtitle={!shownEnabled ? t('memoryContext.session.offDescription')
                     : layers.isBot ? t('memoryContext.session.onForBots') : t('memoryContext.session.onDescription')}
                 showChevron={false}
                 showDivider={false}
                 rightElement={(
                     <Switch
                         testID="session-work-memory.enabled.switch"
-                        value={enabled}
-                        disabled={saving}
+                        value={shownEnabled}
                         onValueChange={setEnabled}
                         accessibilityLabel={t('memoryContext.session.useMemory')}
                     />

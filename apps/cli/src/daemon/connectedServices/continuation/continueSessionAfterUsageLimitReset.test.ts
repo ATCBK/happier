@@ -31,12 +31,13 @@ const recovery: SessionUsageLimitRecoveryV1 = {
 };
 
 function fixture(overrides: Partial<RawSessionRecord> = {}) {
+  const selectedAuth = { ...recovery.selectedAuth, retiredSelectionField: true };
+  const fixtureRecovery: SessionUsageLimitRecoveryV1 = { ...recovery, selectedAuth };
   const metadata = {
     connectedServices: { v: 2, retiredBindingsField: true, bindingsByServiceId: {
       [serviceId]: { source: 'connected', selection: 'profile', profileId: 'account-1', retiredBindingField: true },
     } },
-    sessionUsageLimitRecoveryV1: { ...recovery, retiredRecoveryField: true,
-      selectedAuth: { ...recovery.selectedAuth, retiredSelectionField: true } },
+    sessionUsageLimitRecoveryV1: { ...fixtureRecovery, retiredRecoveryField: true },
   };
   const rawSession = createSessionRecordFixture({
     id: sessionId, active: true, encryptionMode: 'plain', metadata: JSON.stringify(metadata),
@@ -181,7 +182,7 @@ describe('continueSessionAfterUsageLimitReset', () => {
   it('keeps the owner prompt mode when its fresh projection has not caught up', async () => {
     const input = fixture();
     const currentRecovery = { ...recovery, resumePromptMode: 'custom' as const };
-    input.metadata.sessionUsageLimitRecoveryV1 = { ...recovery, resumePromptMode: 'off' };
+    input.metadata.sessionUsageLimitRecoveryV1 = { ...input.metadata.sessionUsageLimitRecoveryV1, ...recovery, resumePromptMode: 'off' };
     const read = http.get.getMockImplementation()!;
     const freshMetadata = { ...input.metadata, sessionUsageLimitRecoveryV1: { ...recovery, resumePromptMode: 'off' } };
     http.get.mockImplementation(async (url: string) => url.includes(`/v2/sessions/${sessionId}`)
@@ -210,7 +211,7 @@ describe('continueSessionAfterUsageLimitReset', () => {
   it('freezes custom continuation text before Pending custody', async () => {
     const input = fixture();
     const customRecovery = { ...recovery, resumePromptMode: 'custom' as const };
-    input.metadata.sessionUsageLimitRecoveryV1 = customRecovery;
+    input.metadata.sessionUsageLimitRecoveryV1 = { ...input.metadata.sessionUsageLimitRecoveryV1, ...customRecovery };
     await continueSessionAfterUsageLimitReset({ ...input, recovery: customRecovery,
       customResumePrompt: 'Resume the interrupted work' });
     expect(http.post.mock.calls[0]?.[1]).toMatchObject({ content: { t: 'plain', v: { content: {
@@ -254,7 +255,7 @@ describe('continueSessionAfterUsageLimitReset', () => {
     expect(await continueSessionAfterUsageLimitReset({ ...input, recovery: { ...recovery, resumePromptMode: 'off' } }))
       .toEqual({ status: 'disabled' });
     const unownedRecovery = { ...recovery, runtimeAuthRecoveryAttemptId: undefined };
-    input.metadata.sessionUsageLimitRecoveryV1 = { ...unownedRecovery, resumePromptMode: 'off' };
+    input.metadata.sessionUsageLimitRecoveryV1 = { ...input.metadata.sessionUsageLimitRecoveryV1, ...unownedRecovery, resumePromptMode: 'off' };
     expect(await continueSessionAfterUsageLimitReset({ ...input, recovery: unownedRecovery }))
       .toEqual({ status: 'disabled' });
     expect(http.post).not.toHaveBeenCalled();

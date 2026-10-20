@@ -97,10 +97,6 @@ vi.mock('./PermissionModePicker', () => ({
     PermissionModePicker: () => null,
 }));
 
-vi.mock('@/sync/domains/permissions/permissionModeOptions', () => ({
-    getPermissionModeTitleForAgentType: () => 'Permissions',
-}));
-
 function buildChipWithListPresentation(rootStep: SelectionListStep): AgentInputExtraActionChip {
     return {
         key: 'feature-x',

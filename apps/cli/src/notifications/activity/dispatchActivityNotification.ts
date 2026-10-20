@@ -1,12 +1,15 @@
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { guardStopWarningNotificationIdV1 } from '@happier-dev/protocol/activity/webhookPayload';
 import { isUsageQuotaNotificationEnabled } from '@happier-dev/protocol/account/settings/usagePacingPreferencesV1';
-import { UsageNoticeArtifactHeaderV1Schema, UsageNoticeArtifactBodyV1Schema, USAGE_NOTICE_ARTIFACT_KIND_V1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
+import { AccountNoticeArtifactHeaderV1Schema, AccountNoticeArtifactBodyV1Schema, ACCOUNT_NOTICE_ARTIFACT_KIND_V1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 import type { createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import type { AttentionDeliveryDecision, AttentionDeliveryEventId, PluginNotificationChannelKindV1, AccountSettings } from '@happier-dev/protocol';
 import type { NotificationChannelCatalogSnapshotV1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { isPushNotificationBundledSoundId, resolveExpoNotificationSoundName } from '@happier-dev/protocol/push/pushNotificationActions';
 import { resolveAttentionDeliveryPolicyDecision } from '@happier-dev/protocol/account/settings/attentionDeliveryPolicyDecision';
+import { isFollowDeliveryMutedV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
+import { readAccountSessionDeliveryMutedScopes } from '@/api/sessionDeliveryMuteTransport';
+import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 
 import type { PushNotificationClient, PushNotificationDeliveryOptions } from '@/api/pushNotifications';
 import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLog';
@@ -20,7 +23,8 @@ import { buildActivityNotificationContent } from './buildActivityNotificationCon
 import { createHostPluginNotificationChannels } from './pluginNotificationChannels';
 import { hydrateNotificationChannelCatalogForOperation } from '@/settings/notifications/hydrateNotificationChannelCatalog';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
-import { isSessionActivityNotificationEligible, type SessionNotificationContextReader } from './sessionActivityNotificationEligibility';
+import { resolveSessionActivityNotificationAdmission, type SessionNotificationContextReader } from './sessionActivityNotificationEligibility';
+import type { FollowEventV1, FollowPolicyV1, ResolveFollowDeliveryV1Params } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 import { buildLiveActivityRemoteUpdateRequest } from './liveActivity/buildLiveActivityRemoteUpdateRequest';
 import {
   sendLiveActivityRemoteUpdate,
@@ -48,8 +52,12 @@ function isTopicEnabled(channel: {
     connectedServiceUsage?: boolean;
     machines?: boolean;
   };
-}, topic: ActivityNotificationEvent['topic']): boolean {
+}, event: ActivityNotificationEvent): boolean {
+  const topic = event.topic;
   if (channel.enabled !== true) return false;
+  if (topic === 'follow_update') return event.follow.event.kind === 'needs_you'
+    ? event.follow.event.type === 'approval' ? channel.topics.permissionRequest === true : channel.topics.userActionRequest === true
+    : channel.topics.ready === true;
   if (topic === 'workflow_run_update' || topic === 'notify_me') return true;
   if (topic === 'ready') return channel.topics.ready === true;
   if (topic === 'permission_request') return channel.topics.permissionRequest === true;
@@ -164,12 +172,14 @@ function resolveChannelDecision(params: Readonly<{
   channel: PluginNotificationChannelKindV1;
   event: ActivityNotificationEvent;
   now: Date;
+  follow?: ResolveFollowDeliveryV1Params;
 }>): AttentionDeliveryDecision {
   return resolveAttentionDeliveryPolicyDecision({
     policy: params.settings.attentionDeliveryPolicyV1,
     event: resolveActivityNotificationPolicyEvent(params.event),
     channel: params.channel,
     now: params.now,
+    follow: params.follow,
   });
 }
 
@@ -234,9 +244,9 @@ async function readRuntimeNotificationCatalog(params: Readonly<{
     catalog.status === 'unavailable' ? catalog.reason : catalog.status === 'partial' ? 'catalog-incomplete' : 'loading');
   const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
   const incumbent = !params.notificationChannelCatalog && captured?.scopeKey ? { scopeKey: captured.scopeKey, lifetimeToken } : null;
-  const isCurrent = params.isCurrent ?? (incumbent ? () => isActiveAccountSettingsSnapshotLifetimeCurrent(incumbent) : undefined);
   return { settings: params.settings, channels: catalog.channels, assertCurrent: async () => {
-    if (isCurrent && !await isCurrent()) throw new NotificationChannelCatalogUnavailableError('scope-retired');
+    if (params.isCurrent && !await params.isCurrent()
+      || incumbent && !isActiveAccountSettingsSnapshotLifetimeCurrent(incumbent)) throw new NotificationChannelCatalogUnavailableError('scope-retired');
   },
     savedSecretMaterializer: params.savedSecretMaterializer ?? (!params.notificationChannelCatalog && captured
       ? createSavedSecretMaterializerFromSnapshotV1(captured) : undefined) };
@@ -295,12 +305,40 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
   dedupeWindowMs?: number;
   webhookNetwork?: WebhookActivityNotificationNetworkDependencies;
   fetchSessionNotificationContext?: SessionNotificationContextReader['fetchSessionNotificationContext'];
+  readAccountSessionDeliveryMutedScopes?: SessionNotificationContextReader['readAccountSessionDeliveryMutedScopes'];
+  follow?: ResolveFollowDeliveryV1Params;
+  followEvent?: FollowEventV1;
+  /** Only the admitted private evaluator supplies these; arbitrary Action policies are not an access grant. */
+  admittedRulePolicies?: readonly FollowPolicyV1[];
   channels?: readonly string[];
   pluginNotifications?: Pick<StablePluginNotificationsOwner, 'availableHostChannels' | 'sendHostNotification'> | null;
   usageNoticeArtifactStore?: Readonly<{ accountId: string; store: Pick<ReturnType<typeof createAccountArtifactStore>, 'create'> }>;
-}>): Promise<Readonly<{ attemptedChannels: number; deliveredChannels: number }>> {
-  if (!await isSessionActivityNotificationEligible(params)) {
+  /** Existing personal Follow CAS before outward delivery; Runs first retain their Inbox notice. */
+  acceptSourceFollowDelivery?: () => Promise<boolean>;
+}>): Promise<Readonly<{ attemptedChannels: number; deliveredChannels: number; inboxRepresented?: true }>> {
+  const admission = await resolveSessionActivityNotificationAdmission(params);
+  if (!admission.eligible) {
     return { attemptedChannels: 0, deliveredChannels: 0 };
+  }
+  const sourceSessionId = params.event.topic === 'ready' || params.event.topic === 'permission_request'
+    || params.event.topic === 'user_action_request' || params.event.topic === 'follow_update' && 'sessionId' in params.event ? params.event.sessionId : null;
+  const sourceFollow = params.event.topic === 'follow_update' && 'original' in params.event.follow ? params.event.follow : null;
+  const discussionFollow = sourceFollow !== null && 'kind' in sourceFollow.original;
+  if (sourceSessionId || sourceFollow) {
+    const operation = params.operationContext;
+    const scopes = params.readAccountSessionDeliveryMutedScopes
+      ? await params.readAccountSessionDeliveryMutedScopes()
+      : operation && await operation.isCurrent() ? await readAccountSessionDeliveryMutedScopes({
+          serverHttpBaseUrl: operation.serverHttpBaseUrl, token: operation.credentials.token,
+          accountId: readAccountIdFromToken(operation.credentials.token) ?? '',
+        }) : null;
+    const original = sourceFollow?.original;
+    const source = original ? 'kind' in original ? { kind: 'discussion' as const, discussionId: original.discussion.discussionId }
+      : original.source : null;
+    if (scopes === null || isFollowDeliveryMutedV1(scopes, source ? { source,
+      ...(source.kind === 'execution_run' ? { senderSessionId: source.sessionId } : {}) }
+      : { senderSessionId: sourceSessionId!, source: { kind: 'session', sessionId: sourceSessionId! } }))
+      return { attemptedChannels: 0, deliveredChannels: 0 };
   }
   if (params.event.topic === 'connected_service_usage'
     && !isUsageQuotaNotificationEnabled(accountSettingsParse(params.operationContext?.readSnapshot()?.settings
@@ -318,8 +356,13 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
     return { attemptedChannels: 0, deliveredChannels: 0 };
   }
   const policyNow = new Date(nowMs);
+  const channelDecision = (channel: PluginNotificationChannelKindV1) => resolveChannelDecision({
+    settings, channel, event: params.event, now: policyNow,
+    follow: params.event.topic === 'follow_update' ? admission.follow : params.follow ?? admission.follow,
+  });
   let attemptedChannels = 0;
   let deliveredChannels = 0;
+  let inboxRepresented: true | undefined;
   const selectedChannelIds = params.channels ? new Set(params.channels) : null;
   const selects = (id: string) => !selectedChannelIds || selectedChannelIds.has(id);
   const pluginNotifications = params.pluginNotifications === undefined
@@ -329,19 +372,20 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
   // Admit the entire selected signing set before any outward delivery. A
   // missing credential must not produce a partially delivered occurrence.
   for (const channel of channels) {
-    if (channel.kind !== 'webhook' || !selects(channel.id) || !isTopicEnabled(channel, params.event.topic)) continue;
-    const decision = resolveChannelDecision({ settings, channel: 'webhook', event: params.event, now: policyNow });
+    if (channel.kind !== 'webhook' || !selects(channel.id) || !isTopicEnabled(channel, params.event)) continue;
+    const decision = channelDecision('webhook');
     if (decision.delivery !== 'suppress') {
       await resolveWebhookNotificationSigningSecret({ channel, savedSecretMaterializer });
     }
   }
   await assertCurrent();
 
-  // Inbox is an existing private Account Artifact projection. Its badge policy is
-  // noninterruptive; push/webhook preview policy remains independent below.
-  if ((params.event.topic === 'connected_service_usage' || params.event.topic === 'resource_limit') && params.usageNoticeArtifactStore && !selectedChannelIds) {
-    const decision = resolveChannelDecision({ settings, channel: 'badge', event: params.event, now: policyNow });
-    if (decision.delivery !== 'suppress') {
+  // Runs use the existing private Account notice. Discussion Inbox reads its
+  // original C3 messages and private read cursor; never copy that lifecycle here.
+  if ((params.event.topic === 'connected_service_usage' || params.event.topic === 'resource_limit'
+    || params.event.topic === 'follow_update' && 'original' in params.event.follow && !discussionFollow) && params.usageNoticeArtifactStore && !selectedChannelIds) {
+    const decision = channelDecision('badge');
+    if (sourceFollow || decision.delivery !== 'suppress') {
       const notice = params.event;
       const content = buildActivityNotificationContent(notice, {
         readyIncludeMessageText: true, requestIncludeMessageText: true, previewBehavior: 'include_preview',
@@ -350,32 +394,34 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
       attemptedChannels += 1;
       try {
         await params.usageNoticeArtifactStore.store.create({
-          usageNoticeAccountId: params.usageNoticeArtifactStore.accountId,
+          noticeAccountId: params.usageNoticeArtifactStore.accountId,
           beforeWrite: assertCurrent,
-          header: UsageNoticeArtifactHeaderV1Schema.parse({ v: 1, kind: USAGE_NOTICE_ARTIFACT_KIND_V1, title: content.body, status: 'open', notice }),
-          body: JSON.stringify(UsageNoticeArtifactBodyV1Schema.parse({ v: 1, notice })),
+          header: AccountNoticeArtifactHeaderV1Schema.parse({ v: 1, kind: ACCOUNT_NOTICE_ARTIFACT_KIND_V1,
+            title: content.body || content.title, status: 'open', resolved: false, type: 'update', source: { kind: 'host', topic: notice.topic }, notice }),
+          body: JSON.stringify(AccountNoticeArtifactBodyV1Schema.parse({ v: 1, resolved: false, type: 'update', source: { kind: 'host', topic: notice.topic }, notice })),
         });
         deliveredChannels += 1;
+        if (sourceFollow) inboxRepresented = true;
       } catch (error) {
         // The Artifact id is this Account's witnessed occurrence. Never overwrite
         // its read/dismiss state or deliver the same occurrence again.
         if (error !== null && typeof error === 'object' && 'code' in error && error.code === 'conflict') {
-          return { attemptedChannels, deliveredChannels };
+          if (!sourceFollow) return { attemptedChannels, deliveredChannels };
+          inboxRepresented = true;
+        } else {
+          throw error;
         }
-        throw error;
       }
     }
   }
+  if (sourceFollow && ((!discussionFollow && !inboxRepresented) || !await params.acceptSourceFollowDelivery?.())) {
+    return { attemptedChannels, deliveredChannels, ...(inboxRepresented ? { inboxRepresented } : {}) };
+  }
 
-  const expoDecision = resolveChannelDecision({
-    settings,
-    channel: 'expo_push',
-    event: params.event,
-    now: policyNow,
-  });
+  const expoDecision = channelDecision('expo_push');
   for (const channel of channels) {
-    if (channel.kind !== 'expo_push' || !selects(channel.id) || !isTopicEnabled(channel, params.event.topic)
-      || expoDecision.delivery === 'suppress') continue;
+    if (channel.kind !== 'expo_push' || !selects(channel.id) || !isTopicEnabled(channel, params.event)
+      || expoDecision.delivery === 'suppress' || admission.homeOwnsPush) continue;
     attemptedChannels += 1;
     if (params.expoPushSender) {
       await assertCurrent();
@@ -400,12 +446,7 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
     }
   }
 
-  const liveActivityDecision = resolveChannelDecision({
-    settings,
-    channel: 'live_activity',
-    event: params.event,
-    now: policyNow,
-  });
+  const liveActivityDecision = channelDecision('live_activity');
   const liveActivityRequest = !selectedChannelIds && params.liveActivityRemoteSender
     ? buildLiveActivityRemoteUpdateRequest({
         event: params.event,
@@ -431,13 +472,8 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
   for (const channel of channels) {
     if (channel.kind !== 'webhook') continue;
     if (!selects(channel.id)) continue;
-    if (!isTopicEnabled(channel, params.event.topic)) continue;
-    const decision = resolveChannelDecision({
-      settings,
-      channel: 'webhook',
-      event: params.event,
-      now: policyNow,
-    });
+    if (!isTopicEnabled(channel, params.event)) continue;
+    const decision = channelDecision('webhook');
     if (decision.delivery === 'suppress') {
       continue;
     }
@@ -464,9 +500,7 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
     for (const channel of await pluginNotifications.availableHostChannels()) {
       await assertCurrent();
       if (!selects(channel.value)) continue;
-      const decision = resolveChannelDecision({ settings,
-        channel: channel.kind,
-        event: params.event, now: policyNow });
+      const decision = channelDecision(channel.kind);
       if (decision.delivery !== 'suppress') {
         attemptedChannels += 1;
         try {
@@ -495,5 +529,6 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
   return {
     attemptedChannels,
     deliveredChannels,
+    ...(inboxRepresented ? { inboxRepresented } : {}),
   };
 }

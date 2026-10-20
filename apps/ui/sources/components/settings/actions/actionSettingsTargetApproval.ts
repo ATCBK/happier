@@ -1,7 +1,7 @@
-import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { pluginActionRequiresPresentUserIntent } from '@happier-dev/protocol/plugins/actions/invocation';
 import { setActionApprovalOverride, type ActionSettingsActionId, type ActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 
+import { isActionApprovalRequiredByAccountSettings } from '@/sync/domains/settings/actionsSettings';
 import { normalizeActionsSettings } from './normalizeActionsSettings';
 import {
     resolveActionSettingsTargetDefinition,
@@ -66,13 +66,19 @@ export function getActionTargetApprovalRequired(params: Readonly<{
     return getActionTargetApprovalPolicy(params).approvalRequiredByPolicy;
 }
 
-/** Projects effective confirmation and whether a waiver can change it from the shared policy. */
+/**
+ * Projects effective confirmation and whether a waiver can change it from the shared policy. The Source
+ * Control preference (`scmRemoteConfirmPolicy`) is the UI default of remote pull and push, so it is part of
+ * the answer; `approvalAskedBySourceControl` names the case where it, and nothing in the Actions policy,
+ * makes the inherited default ask.
+ */
 export function getActionTargetApprovalPolicy(params: Readonly<{
     settings: ActionsSettingsV1;
     actionId: ActionSettingsActionId;
     targetId: ActionSettingsTargetId;
     target?: ActionSettingsTargetDefinition;
-}>): Readonly<{ approvalRequiredByPolicy: boolean; approvalWaivable: boolean }> {
+    scmRemoteConfirmPolicy?: unknown;
+}>): Readonly<{ approvalRequiredByPolicy: boolean; approvalWaivable: boolean; approvalAskedBySourceControl: boolean }> {
     const normalizedSettings = normalizeActionsSettings(params.settings);
     const surface = resolveActionSettingsExecutionSurface(params.actionId, params.targetId, params.target);
     const context = {
@@ -81,7 +87,7 @@ export function getActionTargetApprovalPolicy(params: Readonly<{
     };
     // The same manifest default used by the daemon's contributed Action gate.
     const contributedApprovalDefault = params.target?.contributedAction
-        ? pluginActionRequiresPresentUserIntent(params.target.contributedAction, surface)
+        ? pluginActionRequiresPresentUserIntent(params.target.contributedAction, surface, undefined, context.authority)
         : undefined;
     const waivedSettings = setActionApprovalOverride({
         settings: normalizedSettings,
@@ -89,9 +95,13 @@ export function getActionTargetApprovalPolicy(params: Readonly<{
         surface,
         approvalRequired: false,
     });
+    const requiredBy = (actionsSettingsV1: ActionsSettingsV1, scmRemoteConfirmPolicy: unknown) => isActionApprovalRequiredByAccountSettings(
+        params.actionId, { actionsSettingsV1, scmRemoteConfirmPolicy }, context, { contributedApprovalDefault });
+    const approvalRequiredByPolicy = requiredBy(normalizedSettings, params.scmRemoteConfirmPolicy);
     return {
-        approvalRequiredByPolicy: isApprovalRequiredByActionsSettings(params.actionId, normalizedSettings, context, undefined, contributedApprovalDefault),
-        approvalWaivable: !isApprovalRequiredByActionsSettings(params.actionId, waivedSettings, context, undefined, contributedApprovalDefault),
+        approvalRequiredByPolicy,
+        approvalWaivable: !requiredBy(waivedSettings, params.scmRemoteConfirmPolicy),
+        approvalAskedBySourceControl: approvalRequiredByPolicy && !requiredBy(normalizedSettings, 'never'),
     };
 }
 

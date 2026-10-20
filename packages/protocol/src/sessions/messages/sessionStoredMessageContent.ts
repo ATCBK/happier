@@ -23,7 +23,7 @@ export const StrictSessionStoredMessageContentEnvelopeSchema = lazyZodSchema(() 
   }),
 ]));
 
-export const SessionStoredMessageContentSchema = lazyZodSchema(() => z.pipe(z.transform((value) => {
+export const SessionStoredMessageContentSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
   // Backwards compatibility: older clients/servers stored message content as a bare ciphertext string.
   if (typeof value === 'string') {
     const ciphertext = value.trim();

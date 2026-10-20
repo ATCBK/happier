@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 import {
     computePluginUiArtifactFileSetSha256DigestV1,
@@ -13,10 +16,13 @@ import {
 import type { PluginReactNativeBundleCacheIdentity } from '@/sync/domains/plugins/ui/reactNativeRuntime';
 import type { ActivePluginAccountHostedArtifactReader } from '@/sync/api/plugins/availability/activePluginAccountHostedArtifactRead';
 
-import {
+installHomeGovernanceBoundaries(createHomeGovernanceHarness());
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+const {
     createCandidatePluginCollectionMigrationArtifactLoader,
     resolveCandidatePluginCollectionMigrationArtifactAccountHostedTarget,
-} from './candidateCollectionMigrationArtifact';
+} = await import('./candidateCollectionMigrationArtifact');
 
 vi.mock('./generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: Object.freeze([]),
@@ -222,7 +228,7 @@ describe('candidate Collection migration Artifact loader', () => {
     it('loads the signed migration export from exact target bytes without activating the plugin', async () => {
         const cache = createPluginReactNativeBundleCache();
         const activate = vi.fn();
-        const migration = vi.fn((row: Readonly<Record<string, unknown>>) => ({ ...row, migrated: true }));
+        const migration = (row: Readonly<Record<string, unknown>>, context: Readonly<{ currentRevision: number }>) => ({ ...row, migrated: context.currentRevision === 14 });
         const loadInstalledBundle = vi.fn(async () => (() => ({
             manifest,
             collectionMigrations: {
@@ -276,7 +282,7 @@ describe('candidate Collection migration Artifact loader', () => {
         }));
         expect(activate).not.toHaveBeenCalled();
         if (result.kind !== 'available') throw new Error('Expected the target candidate Artifact to load.');
-        expect(result.candidate.collectionMigrations.tasks?.[0]?.migrate({ id: 'task-1' })).toEqual({
+        expect(result.candidate.collectionMigrations.tasks?.[0]?.migrate({ id: 'task-1' }, { currentRevision: 14 })).toEqual({
             id: 'task-1',
             migrated: true,
         });

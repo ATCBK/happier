@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 import {
     type LocalServicePreviewSnapshotClientInput,
@@ -39,7 +40,8 @@ function normalizeId(value: unknown): string | null {
 export function useLocalServicePreviewState(
     input: UseLocalServicePreviewStateInput,
 ): LocalServicePreviewState {
-    const enabled = input.enabled ?? true;
+    const presented = useLayoutPresentationActive();
+    const enabled = (input.enabled ?? true) && presented;
     const machineId = normalizeId(input.machineId);
     const serverId = normalizeId(input.serverId);
     const active = enabled && Boolean(machineId);

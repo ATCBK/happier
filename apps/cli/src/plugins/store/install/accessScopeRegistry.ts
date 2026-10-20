@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
 
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { PLUGIN_HOST_ACCESS_CAPABILITY_CATALOG_V2 } from '@happier-dev/protocol/plugins/manifest/v2';
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
 import type { PluginHostAccessRequestV2 } from '@happier-dev/protocol';
@@ -50,7 +50,7 @@ export type PluginAccessScopeFieldDirection =
 
 export type PluginAccessScopeRegistration = Readonly<{
   capability: string;
-  scopeSchema: z.ZodType<unknown>;
+  scopeSchema: z.ZodMiniType<unknown>;
   canonicalize: (scope: unknown) => unknown;
   /** Ranked canonical scope fields; unlisted fields are compared for equality. */
   fieldDirections?: Readonly<Record<string, PluginAccessScopeFieldDirection>>;
@@ -65,27 +65,27 @@ export type PluginAccessSelection = Readonly<{
   selectedAtMs: number;
 }>;
 
-const CanonicalPluginIdSchema = z.string().superRefine((value, context) => {
+const CanonicalPluginIdSchema = z.string().check(z.superRefine((value, context) => {
   const parsed = PluginIdSchema.safeParse(value);
   if (!parsed.success || parsed.data !== value) {
     context.addIssue({ code: 'custom', message: 'Expected a canonical plugin id' });
   }
-});
+}));
 
-const CanonicalPluginAccessIdSchema = z.string().min(1).superRefine((value, context) => {
+const CanonicalPluginAccessIdSchema = z.string().check(z.minLength(1), z.superRefine((value, context) => {
   if (value !== value.trim()) {
     context.addIssue({ code: 'custom', message: 'Expected a canonical plugin access id' });
   }
-});
+}));
 
-export const PluginAccessSelectionSchema = z.object({
+export const PluginAccessSelectionSchema = z.strictObject({
   pluginId: CanonicalPluginIdSchema,
   accessId: CanonicalPluginAccessIdSchema,
-  capability: z.string().min(1).refine((value) => value === value.trim(), 'Expected a canonical capability id'),
+  capability: z.string().check(z.minLength(1), z.refine((value) => value === value.trim(), 'Expected a canonical capability id')),
   normalizedScope: z.record(z.string(), z.unknown()),
-  scopeDigest: z.string().regex(/^sha256-[A-Za-z0-9+/_=-]+$/),
-  selectedAtMs: z.number().int().nonnegative(),
-}).strict();
+  scopeDigest: z.string().check(z.regex(/^sha256-[A-Za-z0-9+/_=-]+$/)),
+  selectedAtMs: z.number().check(z.int(), z.nonnegative()),
+});
 
 export type PluginAccessScopeRegistry = Readonly<{
   compare: (capability: string, candidateScope: unknown, previousScope: unknown) => PluginAccessScopeComparison;
@@ -586,10 +586,7 @@ const BUILT_IN_SCOPE_FIELD_DIRECTIONS: Readonly<Record<
 export function createDefaultPluginAccessScopeRegistry(): PluginAccessScopeRegistry {
   return createPluginAccessScopeRegistry(PLUGIN_HOST_ACCESS_CAPABILITY_CATALOG_V2.map((entry) => ({
     capability: entry.capability,
-    scopeSchema: z.preprocess(
-      (scope) => canonicalizeBuiltInScopeInput(entry.capability, scope),
-      entry.schema.shape.scope,
-    ),
+    scopeSchema: (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((scope) => canonicalizeBuiltInScopeInput(entry.capability, scope)), entry.schema.shape.scope),
     canonicalize: (scope: unknown) => canonicalizeBuiltInScope(entry.capability, scope),
     ...(BUILT_IN_SCOPE_FIELD_DIRECTIONS[entry.capability]
       ? { fieldDirections: BUILT_IN_SCOPE_FIELD_DIRECTIONS[entry.capability] }

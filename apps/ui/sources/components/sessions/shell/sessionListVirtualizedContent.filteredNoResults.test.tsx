@@ -5,30 +5,17 @@ import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { buildSessionListIndexNodeId } from '@/sync/domains/sessionList/sessionListIndex';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
+vi.mock('@legendapp/list/react-native', async () => {
+    const legendListModule = await import('@/dev/testkit/mocks/legendList');
+    return { LegendList: legendListModule.createCapturingLegendListMock({ renderItems: true }).module.LegendList };
+});
+
 installSessionShellCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        const runtime = await createReactNativeWebMock({
+        return createReactNativeWebMock({
             Platform: { OS: 'web' },
         });
-        return {
-            ...runtime,
-            FlatList: (props: any) => {
-                const renderSlot = (slot: any) => {
-                    if (!slot) return null;
-                    return React.isValidElement(slot) ? slot : React.createElement(slot);
-                };
-                return React.createElement(
-                    'FlatList',
-                    props,
-                    renderSlot(props.ListHeaderComponent),
-                    ...(props.data ?? []).map((item: any, index: number) => (
-                        React.createElement(React.Fragment, { key: props.keyExtractor?.(item) ?? String(index) }, props.renderItem({ item, index }))
-                    )),
-                    renderSlot(props.ListFooterComponent),
-                );
-            },
-        };
     },
     text: async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');

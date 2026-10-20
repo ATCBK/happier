@@ -461,7 +461,6 @@ const VoiceHistoryScreenBody = React.memo(function VoiceHistoryScreenBody(
       <VirtualizedList
         testID="voice-history-list"
         data={snapshot.rows}
-        backendPreference="auto"
         estimatedItemSize={132}
         recycleItems
         maintainVisibleContentPosition={{ minIndexForVisible: 0 }}

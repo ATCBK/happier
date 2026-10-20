@@ -1,7 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
-import { z } from 'zod';
-import * as zMini from 'zod/mini';
+import { z } from 'zod/mini';
 
 import {
   ConnectedServiceAuthGroupIdSchema,
@@ -20,94 +19,78 @@ import { createSessionMessageMetaSchema } from './sessionMessageMeta.js';
 import { SESSION_CAPABILITY_NOTICE_SIDECAR_KEY } from './sessionCapabilityNoticeV1.js';
 import type { SessionMessageMeta } from './sessionMessageMeta.js';
 import { AgentIdV1Schema } from '../../agents/agentIdV1.js';
-import { WorkerUpdateV1Schema, SessionWorkerPublishInputV1Schema, refineWorkerDeliverableResultV1 } from '../relations/workerUpdateV1.js';
+import { WorkerUpdateV1Schema, SessionUpdatePostInputV1Schema, refineWorkerDeliverableResultV1 } from '../relations/workerUpdateV1.js';
 import { UsagePromptCompositionSchema } from '../../usage/coach/usagePromptComposition.js';
 import { UsageMcpBindingUsageSchema } from '../../usage/coach/usageMcpBindingUsage.js';
+import { isSessionFollowWakeEventLocalId } from '../follow/sessionFollowTransportV1.js';
+import { PendingLocalIdSchema } from '../pending/pendingLocalId.js';
 
-const UsageDataSchema = lazyZodSchema(() => z
-  .object({
+const UsageDataSchema = lazyZodSchema(() => z.looseObject({
     input_tokens: z.number(),
-    cache_creation_input_tokens: z.number().optional(),
-    cache_read_input_tokens: z.number().optional(),
+    cache_creation_input_tokens: z.optional(z.number()),
+    cache_read_input_tokens: z.optional(z.number()),
     output_tokens: z.number(),
     // Some upstream providers emit `service_tier: null` in error payloads.
     // Treat null as “unknown” so we don't drop the whole message.
-    service_tier: z.string().nullish(),
-  })
-  .passthrough());
+    service_tier: z.nullish(z.string()),
+  }));
 
-const UsageDataBestEffortSchema = lazyZodSchema(() => z
-  .unknown()
-  .optional()
-  .transform((value) => {
+const UsageDataBestEffortSchema = lazyZodSchema(() => z.pipe(z.optional(z
+  .unknown()), z.transform((value) => {
     if (value === undefined) return undefined;
     const parsed = UsageDataSchema.safeParse(value);
     return parsed.success ? parsed.data : undefined;
-  }));
+  })));
 
-const RawTextContentSchema = lazyZodSchema(() => z
-  .object({
+const RawTextContentSchema = lazyZodSchema(() => z.looseObject({
     type: z.literal('text'),
     text: z.string(),
-  })
-  .passthrough());
+  }));
 
-const RawToolUseContentSchema = lazyZodSchema(() => z
-  .object({
+const RawToolUseContentSchema = lazyZodSchema(() => z.looseObject({
     type: z.literal('tool_use'),
     id: z.string(),
     name: z.string(),
     input: z.unknown(),
-  })
-  .passthrough());
+  }));
 
-const RawToolResultContentSchema = lazyZodSchema(() => z
-  .object({
+const RawToolResultContentSchema = lazyZodSchema(() => z.looseObject({
     type: z.literal('tool_result'),
     tool_use_id: z.string(),
     content: z.unknown(),
-    is_error: z.boolean().optional(),
+    is_error: z.optional(z.boolean()),
     // Provider-specific; keep permissive for forward compatibility.
-    permissions: z.unknown().optional(),
-  })
-  .passthrough());
+    permissions: z.optional(z.unknown()),
+  }));
 
-const RawThinkingContentSchema = lazyZodSchema(() => z
-  .object({
+const RawThinkingContentSchema = lazyZodSchema(() => z.looseObject({
     type: z.literal('thinking'),
     thinking: z.string(),
-  })
-  .passthrough());
+  }));
 
 // Forward compatibility: keep unknown content blocks instead of dropping the entire message.
 // Callers can render these as a placeholder if needed.
-const RawUnknownContentSchema = lazyZodSchema(() => z
-  .object({
+const RawUnknownContentSchema = lazyZodSchema(() => z.looseObject({
     type: z.string(),
-  })
-  .passthrough());
+  }));
 
 // Hyphenated tool-call formats seen in some providers (Codex/Gemini variants).
-const RawHyphenatedToolCallSchema = lazyZodSchema(() => z
-  .object({
+const RawHyphenatedToolCallSchema = lazyZodSchema(() => z.looseObject({
     type: z.literal('tool-call'),
     callId: z.string(),
-    id: z.string().optional(),
+    id: z.optional(z.string()),
     name: z.string(),
     input: z.unknown(),
-  })
-  .passthrough());
+  }));
 
-const RawHyphenatedToolResultSchema = lazyZodSchema(() => z
-  .object({
+const RawHyphenatedToolResultSchema = lazyZodSchema(() => z.looseObject({
     type: z.literal('tool-call-result'),
     callId: z.string(),
-    tool_use_id: z.string().optional(),
+    tool_use_id: z.optional(z.string()),
     output: z.unknown(),
-    content: z.unknown().optional(),
-    is_error: z.boolean().optional(),
-  })
-  .passthrough());
+    content: z.optional(z.unknown()),
+    is_error: z.optional(z.boolean()),
+  }));
 
 const RawAgentContentSchema = lazyZodSchema(() => z.union([
   RawTextContentSchema,
@@ -146,7 +129,7 @@ function normalizeToToolResult(input: z.infer<typeof RawHyphenatedToolResultSche
  * still read back by every current reader, so this schema states the accepted legacy shape
  * explicitly rather than relaxing the canonical envelope.
  *
- * `agentId: z.undefined()` keeps the canonical key authoritative: a record that already carries
+ * `agentId: z.optional(z.undefined())` keeps the canonical key authoritative: a record that already carries
  * `agentId` is not a legacy record and is never rewritten from `provider`. Anything that does not
  * match this exact shape stays unaccepted and still falls through to the caller's unsupported /
  * unparsed handling.
@@ -154,13 +137,11 @@ function normalizeToToolResult(input: z.infer<typeof RawHyphenatedToolResultSche
  * Removal condition: drop this branch once no supported release can still hold ACP transcript rows
  * written before 2026-07-10.
  */
-const LegacyAcpAgentEnvelopeV1Schema = lazyZodSchema(() => z
-  .object({
+const LegacyAcpAgentEnvelopeV1Schema = lazyZodSchema(() => z.looseObject({
     type: z.literal('acp'),
-    agentId: z.undefined(),
-    provider: z.string().trim().min(1),
-  })
-  .passthrough());
+    agentId: z.optional(z.undefined()),
+    provider: z.string().check(z.trim(), z.minLength(1)),
+  }));
 
 function preprocessMessageContent(data: unknown): unknown {
   if (!data || typeof data !== 'object') return data;
@@ -220,15 +201,15 @@ function preprocessMessageContent(data: unknown): unknown {
 type OpaqueOutputDataType = string & { readonly __happierOpaqueOutputDataType: unique symbol };
 
 const OutputExtrasShape = {
-  isSidechain: z.boolean().nullish(),
-  isCompactSummary: z.boolean().nullish(),
-  isMeta: z.boolean().nullish(),
-  uuid: z.string().nullish(),
-  parentUuid: z.string().nullish(),
+  isSidechain: z.nullish(z.boolean()),
+  isCompactSummary: z.nullish(z.boolean()),
+  isMeta: z.nullish(z.boolean()),
+  uuid: z.nullish(z.string()),
+  parentUuid: z.nullish(z.string()),
 } as const;
 
-const withOutputExtras = <T extends z.ZodRawShape>(schema: z.ZodObject<T>) =>
-  schema.extend(OutputExtrasShape).passthrough();
+const withOutputExtras = <T extends z.core.$ZodShape>(schema: z.ZodMiniObject<T>) =>
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(schema, OutputExtrasShape));
 
 const RawAgentOutputDataKnownSchema = lazyZodSchema(() => z.discriminatedUnion('type', [
   withOutputExtras(z.object({ type: z.literal('system') })),
@@ -238,40 +219,31 @@ const RawAgentOutputDataKnownSchema = lazyZodSchema(() => z.discriminatedUnion('
   withOutputExtras(
     z.object({
       type: z.literal('assistant'),
-      message: z
-        .object({
+      message: z.looseObject({
           role: z.literal('assistant'),
-          model: z.string().optional(),
+          model: z.optional(z.string()),
           content: z.union([z.array(RawAgentContentSchema), z.string()]),
           // Usage is best-effort: do not reject the whole message if upstream changes the usage shape.
           usage: UsageDataBestEffortSchema,
-        })
-        .passthrough(),
-      parent_tool_use_id: z.string().nullable().optional(),
+        }),
+      parent_tool_use_id: z.optional(z.nullable(z.string())),
     }),
   ),
   withOutputExtras(
     z.object({
       type: z.literal('user'),
-      message: z
-        .object({
+      message: z.looseObject({
           role: z.literal('user'),
           content: z.union([z.string(), z.array(RawAgentContentSchema)]),
-        })
-        .passthrough(),
-      parent_tool_use_id: z.string().nullable().optional(),
-      toolUseResult: z.unknown().nullable().optional(),
+        }),
+      parent_tool_use_id: z.optional(z.nullable(z.string())),
+      toolUseResult: z.optional(z.nullable(z.unknown())),
     }),
   ),
 ]));
 
-const RawAgentOutputDataOpaqueSchema = lazyZodSchema(() => z
-  .object({ type: z.string() })
-  .extend(OutputExtrasShape)
-  .passthrough()
-  // The strict branch is tried first. Malformed known rows and future output types
-  // remain available as opaque data while the shared output envelope stays validated.
-  .transform((value) => ({ ...value, type: value.type as OpaqueOutputDataType })));
+const RawAgentOutputDataOpaqueSchema = lazyZodSchema(() => z.pipe((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(z
+  .object({ type: z.string() }), OutputExtrasShape)), z.transform((value) => ({ ...value, type: value.type as OpaqueOutputDataType }))));
 
 const RawAgentOutputDataSchema = lazyZodSchema(() => z.union([RawAgentOutputDataKnownSchema, RawAgentOutputDataOpaqueSchema]));
 
@@ -283,10 +255,7 @@ const TurnLifecycleEventV1Schema = lazyZodSchema(() => z.enum([
   'turn_aborted',
 ]));
 
-const ContextCompactionPhaseSchema = lazyZodSchema(() => z.preprocess(
-  (value) => value === 'detected' ? 'completed' : value,
-  z.enum(['started', 'progress', 'completed', 'failed', 'cancelled']),
-));
+const ContextCompactionPhaseSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => value === 'detected' ? 'completed' : value), z.enum(['started', 'progress', 'completed', 'failed', 'cancelled'])));
 
 const ContextCompactionSourceSchema = lazyZodSchema(() => z.enum([
   'agent-event',
@@ -299,22 +268,22 @@ const ContextCompactionSourceSchema = lazyZodSchema(() => z.enum([
 
 const ContextCompactionShape = {
   phase: ContextCompactionPhaseSchema,
-  lifecycleId: z.string().trim().min(1).optional(),
-  backendId: z.string().trim().min(1).optional(),
-  agentId: z.string().trim().min(1).optional(),
-  trigger: z.enum(['manual', 'auto', 'threshold', 'overflow', 'unknown']).optional(),
-  source: ContextCompactionSourceSchema.optional(),
-  agentEventId: z.string().optional(),
-  agentSessionId: z.string().optional(),
-  turnId: z.string().optional(),
-  tokenCountBefore: z.number().optional(),
-  tokenCountAfter: z.number().optional(),
-  tokenCountSource: z.string().optional(),
-  retryAttempt: z.number().int().nonnegative().optional(),
-  errorCode: z.string().optional(),
-  sanitizedErrorPreview: z.string().optional(),
-  continuation: z.literal('paused').optional(),
-  pauseReason: z.literal('agent-idle-after-compaction').optional(),
+  lifecycleId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  backendId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  agentId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  trigger: z.optional(z.enum(['manual', 'auto', 'threshold', 'overflow', 'unknown'])),
+  source: z.optional(ContextCompactionSourceSchema),
+  agentEventId: z.optional(z.string()),
+  agentSessionId: z.optional(z.string()),
+  turnId: z.optional(z.string()),
+  tokenCountBefore: z.optional(z.number()),
+  tokenCountAfter: z.optional(z.number()),
+  tokenCountSource: z.optional(z.string()),
+  retryAttempt: z.optional(z.number().check(z.int(), z.nonnegative())),
+  errorCode: z.optional(z.string()),
+  sanitizedErrorPreview: z.optional(z.string()),
+  continuation: z.optional(z.literal('paused')),
+  pauseReason: z.optional(z.literal('agent-idle-after-compaction')),
 } as const;
 
 function readContextCompactionEventDataFromRawRecord(value: unknown): Record<string, unknown> | null {
@@ -333,12 +302,12 @@ function readContextCompactionEventDataFromRawRecord(value: unknown): Record<str
 
 function addContextCompactionEventContinuationIssues(
   event: Record<string, unknown>,
-  ctx: z.RefinementCtx,
+  ctx: z.core.$RefinementCtx,
   pathPrefix: readonly (string | number)[],
 ): void {
   if (event.continuation === 'paused' && event.phase !== 'completed') {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: [...pathPrefix, 'continuation'],
       message: 'Context compaction paused continuation is only valid for completed phases',
     });
@@ -346,14 +315,14 @@ function addContextCompactionEventContinuationIssues(
 
   if (event.pauseReason !== undefined && event.continuation !== 'paused') {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: [...pathPrefix, 'pauseReason'],
       message: 'Context compaction pause reason requires paused continuation',
     });
   }
 }
 
-function addRawRecordContextCompactionContinuationIssues(value: unknown, ctx: z.RefinementCtx): void {
+function addRawRecordContextCompactionContinuationIssues(value: unknown, ctx: z.core.$RefinementCtx): void {
   const event = readContextCompactionEventDataFromRawRecord(value);
   if (!event) return;
 
@@ -404,30 +373,28 @@ export type ConnectedServiceSwitchAttemptSessionAdoptionV1 =
 
 const ConnectedServiceSwitchAttemptVerificationV1Schema = lazyZodSchema(() => z.object({
   status: z.enum(['verified', 'weakly_verified']),
-  reason: z.string().trim().min(1).optional(),
+  reason: z.optional(z.string().check(z.trim(), z.minLength(1))),
 }));
 
 // Keys are Connected Account service keys. Released bundled scalar keys
 // normalize through the sole legacy normalizer; malformed or unknown keys are
 // rejected instead of acquiring verification meaning.
-const ConnectedServiceSwitchAttemptVerificationByServiceIdV1Schema = lazyZodSchema(() => z
-  .record(z.string(), ConnectedServiceSwitchAttemptVerificationV1Schema)
-  .transform((value, context) => {
+const ConnectedServiceSwitchAttemptVerificationByServiceIdV1Schema = lazyZodSchema(() => z.pipe(z
+  .record(z.string(), ConnectedServiceSwitchAttemptVerificationV1Schema), z.transform((value, context) => {
     const canonical: Record<string, z.infer<typeof ConnectedServiceSwitchAttemptVerificationV1Schema>> = {};
     for (const [serviceId, verification] of Object.entries(value)) {
       const canonicalKey = readBuiltInLegacyConnectedAccountServiceKeyIngress(serviceId);
       if (!canonicalKey) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
+        context.issues.push({
+          code: "custom",
           message: 'Invalid Connected Account service key',
-          path: [serviceId],
-        });
+          path: [serviceId], input: context.value });
         continue;
       }
       canonical[canonicalKey] = verification;
     }
     return canonical;
-  }));
+  })));
 
 export const ConnectedServiceRuntimeAuthRecoveryTranscriptStatusV1Schema = lazyZodSchema(() => z.enum([
   'retry_scheduled',
@@ -456,14 +423,14 @@ const CONNECTED_SERVICE_SWITCH_ATTEMPT_V2_FIELDS = [
 
 function addConnectedServiceAccountSwitchAttemptEventIssues(
   event: Record<string, unknown>,
-  ctx: z.RefinementCtx,
+  ctx: z.core.$RefinementCtx,
 ): void {
   if (event.type !== 'connected-service-account-switch-attempt') return;
 
   const hasV2SemanticField = CONNECTED_SERVICE_SWITCH_ATTEMPT_V2_FIELDS.some((field) => event[field] !== undefined);
   if (hasV2SemanticField && event.outcome === undefined) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['outcome'],
       message: 'new connected-service switch attempt semantics require an explicit outcome',
     });
@@ -471,7 +438,7 @@ function addConnectedServiceAccountSwitchAttemptEventIssues(
 
   if (event.ok === false && event.outcome === 'succeeded') {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['outcome'],
       message: 'failed switch attempts must not use a succeeded outcome',
     });
@@ -479,7 +446,7 @@ function addConnectedServiceAccountSwitchAttemptEventIssues(
 
   if (event.ok === true && (event.outcome === 'failed' || event.outcome === 'terminal')) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['outcome'],
       message: 'successful switch attempts must not use a failed or terminal outcome',
     });
@@ -491,7 +458,7 @@ function addConnectedServiceAccountSwitchAttemptEventIssues(
     && event.outcomeAction !== 'none'
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['outcomeAction'],
       message: 'failed or terminal switch attempt outcomes must not claim a successful outcome action',
     });
@@ -499,7 +466,7 @@ function addConnectedServiceAccountSwitchAttemptEventIssues(
 
   if (event.outcomeAction !== undefined && event.outcome === undefined) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['outcome'],
       message: 'switch attempt outcomeAction requires an explicit outcome',
     });
@@ -507,7 +474,7 @@ function addConnectedServiceAccountSwitchAttemptEventIssues(
 
   if (event.sessionAdoption !== undefined && event.groupGeneration === undefined) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['groupGeneration'],
       message: 'session adoption projection requires the observed group generation',
     });
@@ -515,7 +482,7 @@ function addConnectedServiceAccountSwitchAttemptEventIssues(
 
   if (event.sessionAdoptedGeneration !== undefined && event.groupGeneration === undefined) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['groupGeneration'],
       message: 'session adopted generation requires the observed group generation',
     });
@@ -526,7 +493,7 @@ function addConnectedServiceAccountSwitchAttemptEventIssues(
     && event.sessionAdoption === 'applied'
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['sessionAdoption'],
       message: 'failed or terminal switch attempts must not claim per-session adoption',
     });
@@ -535,7 +502,7 @@ function addConnectedServiceAccountSwitchAttemptEventIssues(
   if (event.sessionAdoption === 'applied') {
     if (event.sessionAdoptedGeneration === undefined) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['sessionAdoptedGeneration'],
         message: 'applied session adoption requires a per-session adopted generation',
       });
@@ -547,14 +514,14 @@ function addConnectedServiceAccountSwitchAttemptEventIssues(
       && event.groupGeneration !== event.sessionAdoptedGeneration
     ) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['sessionAdoptedGeneration'],
         message: 'applied session adoption must target the observed group generation',
       });
     }
   } else if (event.sessionAdoptedGeneration !== undefined) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['sessionAdoptedGeneration'],
       message: 'session adopted generation is valid only when session adoption is applied',
     });
@@ -563,14 +530,14 @@ function addConnectedServiceAccountSwitchAttemptEventIssues(
 
 function addConnectedServiceRuntimeAuthRecoveryEventIssues(
   event: Record<string, unknown>,
-  ctx: z.RefinementCtx,
+  ctx: z.core.$RefinementCtx,
 ): void {
   if (event.type !== 'connected-service-runtime-auth-recovery') return;
 
   const diagnostic = event.diagnostic;
   if ((event.status === 'retry_scheduled' || event.status === 'dead_lettered') && diagnostic === undefined) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['diagnostic'],
       message: 'scheduled and dead-lettered runtime-auth recovery events require a diagnostic',
     });
@@ -581,7 +548,7 @@ function addConnectedServiceRuntimeAuthRecoveryEventIssues(
   const diagnosticRecord = diagnostic as Record<string, unknown>;
   if (diagnosticRecord.source !== 'runtime_auth_recovery') {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['diagnostic', 'source'],
       message: 'runtime-auth recovery event diagnostics must use runtime_auth_recovery source',
     });
@@ -589,7 +556,7 @@ function addConnectedServiceRuntimeAuthRecoveryEventIssues(
 
   if (diagnosticRecord.failurePhase !== 'runtime_auth_recovery') {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['diagnostic', 'failurePhase'],
       message: 'runtime-auth recovery event diagnostics must use runtime_auth_recovery failure phase',
     });
@@ -636,21 +603,19 @@ export const RuntimeConfigOutcomeChangeKeyV1Schema = lazyZodSchema(() => z.enum(
 export type RuntimeConfigOutcomeChangeKeyV1 = z.infer<typeof RuntimeConfigOutcomeChangeKeyV1Schema>;
 
 const RuntimeConfigOutcomeScalarV1Schema = lazyZodSchema(() => z.union([
-  z.string().trim().min(1).max(512),
-  z.number().finite(),
+  z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+  z.number(),
   z.boolean(),
   z.null(),
 ]));
 
-const RuntimeConfigOutcomeChangeV1Schema = lazyZodSchema(() => z
-  .object({
+const RuntimeConfigOutcomeChangeV1Schema = lazyZodSchema(() => z.strictObject({
     key: RuntimeConfigOutcomeChangeKeyV1Schema,
-    requested: RuntimeConfigOutcomeScalarV1Schema.optional(),
-    previous: RuntimeConfigOutcomeScalarV1Schema.optional(),
-    effective: RuntimeConfigOutcomeScalarV1Schema.optional(),
-    reason: z.string().trim().min(1).max(512).optional(),
-  })
-  .strict());
+    requested: z.optional(RuntimeConfigOutcomeScalarV1Schema),
+    previous: z.optional(RuntimeConfigOutcomeScalarV1Schema),
+    effective: z.optional(RuntimeConfigOutcomeScalarV1Schema),
+    reason: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(512))),
+  }));
 
 export const TerminalComposerDraftBlockedReasonV1Schema = lazyZodSchema(() => z.enum([
   'idle_draft_guard',
@@ -660,32 +625,35 @@ export const TerminalComposerDraftBlockedReasonV1Schema = lazyZodSchema(() => z.
 export type TerminalComposerDraftBlockedReasonV1 =
   z.infer<typeof TerminalComposerDraftBlockedReasonV1Schema>;
 
-const AgentEventSchema = lazyZodSchema(() => z.discriminatedUnion('type', [
-  z.object({ type: z.literal('mcp-binding-usage'), usage: UsageMcpBindingUsageSchema }).strict(),
-  z.object({ type: z.literal('prompt-composition'), composition: UsagePromptCompositionSchema }).strict(),
-  z.object({ type: z.literal('switch'), mode: z.enum(['local', 'remote']) }).passthrough(),
-  z
-    .object({
+/** Presentation evidence supplied only by admitted Follow routes. */
+export const WorkerUpdateFollowMatchV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('relation'), relation: z.enum(['follower', 'manager']) }),
+  // Rule identity is private admission custody, never part of a shared Session transcript.
+  z.strictObject({ kind: z.literal('rule') }),
+]));
+export type WorkerUpdateFollowMatchV1 = z.infer<typeof WorkerUpdateFollowMatchV1Schema>;
+
+const AgentEventSchema = lazyZodSchema(() => z.pipe(z.discriminatedUnion('type', [
+  z.strictObject({ type: z.literal('mcp-binding-usage'), usage: UsageMcpBindingUsageSchema }),
+  z.strictObject({ type: z.literal('prompt-composition'), composition: UsagePromptCompositionSchema }),
+  z.looseObject({ type: z.literal('switch'), mode: z.enum(['local', 'remote']) }),
+  z.looseObject({
       type: z.literal('runtime-config-outcome'),
-      agentId: zMini.optional(AgentIdV1Schema),
-      runtime: z.string().trim().min(1).max(128),
+      agentId: z.optional(AgentIdV1Schema),
+      runtime: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
       status: RuntimeConfigOutcomeStatusV1Schema,
-      timing: RuntimeConfigOutcomeTimingV1Schema.optional(),
-      reason: z.string().trim().min(1).max(256).optional(),
-      message: z.string().trim().min(1).max(2_000),
-      changes: z.array(RuntimeConfigOutcomeChangeV1Schema).max(20).optional(),
-    })
-    .passthrough(),
-  z
-    .object({
+      timing: z.optional(RuntimeConfigOutcomeTimingV1Schema),
+      reason: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+      message: z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000)),
+      changes: z.optional(z.array(RuntimeConfigOutcomeChangeV1Schema).check(z.maxLength(20))),
+    }),
+  z.looseObject({
       type: z.literal('terminal-composer-draft-blocked'),
       reason: TerminalComposerDraftBlockedReasonV1Schema,
-      stateAtMs: z.number().int().nonnegative().optional(),
-      message: z.string().trim().min(1).max(2_000).optional(),
-    })
-    .passthrough(),
-  z
-    .object({
+      stateAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+      message: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000))),
+    }),
+  z.looseObject({
       type: z.literal('message'),
       message: z.string(),
       /**
@@ -708,133 +676,119 @@ const AgentEventSchema = lazyZodSchema(() => z.discriminatedUnion('type', [
        * `null` for anything else — so a malformed sidecar is never treated as a
        * divider, never silenced, and never a departure boundary.
        */
-      [SESSION_AGENT_TRANSITION_DIVIDER_SIDECAR_KEY]: z.unknown().optional(),
+      [SESSION_AGENT_TRANSITION_DIVIDER_SIDECAR_KEY]: z.optional(z.unknown()),
       // Retain the presentation sidecar even when malformed or from a future writer.
       // Its canonical reader validates it without erasing the fallback message.
-      [SESSION_CAPABILITY_NOTICE_SIDECAR_KEY]: z.unknown().optional(),
-    })
-    .passthrough(),
-  z
-    .object({
+      [SESSION_CAPABILITY_NOTICE_SIDECAR_KEY]: z.optional(z.unknown()),
+    }),
+  z.looseObject({
       type: z.literal('context-compaction'),
       ...ContextCompactionShape,
-    })
-    .passthrough(),
-  z.object({ type: z.literal('limit-reached'), endsAt: z.number() }).passthrough(),
-  z
-    .object({
+    }),
+  z.looseObject({ type: z.literal('limit-reached'), endsAt: z.number() }),
+  z.looseObject({
       type: z.literal('connected-service-account-switch'),
       serviceId: ConnectedAccountServiceKeyIngressSchema,
-      groupId: zMini.nullable(ConnectedServiceAuthGroupIdSchema),
-      groupLabel: z.string().trim().min(1).nullable().optional(),
-      fromProfileId: zMini.nullable(ConnectedServiceProfileIdSchema),
-      toProfileId: zMini.nullable(ConnectedServiceProfileIdSchema),
+      groupId: z.nullable(ConnectedServiceAuthGroupIdSchema),
+      groupLabel: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+      fromProfileId: z.nullable(ConnectedServiceProfileIdSchema),
+      toProfileId: z.nullable(ConnectedServiceProfileIdSchema),
       // Optional human-readable profile labels resolved at emission time, so the UI can render
       // identity display even before profile-label settings hydrate on the consuming client.
-      fromProfileLabel: z.string().trim().min(1).nullable().optional(),
-      toProfileLabel: z.string().trim().min(1).nullable().optional(),
+      fromProfileLabel: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+      toProfileLabel: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
       reason: z.string(),
-      mode: z.enum(['hot_apply', 'restart_resume', 'manual']).optional(),
-      effectiveRemainingPct: z.number().nullable().optional(),
-    })
-    .passthrough(),
-  z
-    .object({
+      mode: z.optional(z.enum(['hot_apply', 'restart_resume', 'manual'])),
+      effectiveRemainingPct: z.optional(z.nullable(z.number())),
+    }),
+  z.looseObject({
       type: z.literal('agent-quota-wait'),
       serviceId: ConnectedAccountServiceKeyIngressSchema,
       resetAtMs: z.number(),
       reason: z.string(),
-      profileId: zMini.optional(zMini.nullable(ConnectedServiceProfileIdSchema)),
-      groupId: zMini.optional(zMini.nullable(ConnectedServiceAuthGroupIdSchema)),
-    })
-    .passthrough(),
-  z
-    .object({
+      profileId: z.optional(z.nullable(ConnectedServiceProfileIdSchema)),
+      groupId: z.optional(z.nullable(ConnectedServiceAuthGroupIdSchema)),
+    }),
+  z.looseObject({
       type: z.literal('agent-quota-recovered'),
       serviceId: ConnectedAccountServiceKeyIngressSchema,
       reason: z.string(),
-      profileId: zMini.optional(zMini.nullable(ConnectedServiceProfileIdSchema)),
-      groupId: zMini.optional(zMini.nullable(ConnectedServiceAuthGroupIdSchema)),
-    })
-    .passthrough(),
+      profileId: z.optional(z.nullable(ConnectedServiceProfileIdSchema)),
+      groupId: z.optional(z.nullable(ConnectedServiceAuthGroupIdSchema)),
+    }),
   // O1: connected-service switch lifecycle events (committed by the daemon switch FSM)
-  z
-    .object({
+  z.looseObject({
       type: z.literal('connected-service-account-switch-attempt'),
       ok: z.boolean(),
       action: z.enum(['restart_requested', 'hot_applied', 'metadata_updated']),
-      attemptedContinuityMode: ConnectedServiceSwitchAttemptedContinuityModeV1Schema.optional(),
-      outcome: ConnectedServiceSwitchAttemptOutcomeV1Schema.optional(),
-      outcomeAction: ConnectedServiceSwitchAttemptOutcomeActionV1Schema.optional(),
-      errorCode: z.string().nullable().optional(),
-      diagnostic: zMini.optional(ConnectedServiceUxDiagnosticV1Schema),
-      groupGeneration: z.number().int().nonnegative().optional(),
-      sessionAdoption: ConnectedServiceSwitchAttemptSessionAdoptionV1Schema.optional(),
-      sessionAdoptedGeneration: z.number().int().nonnegative().optional(),
-      partialState: z
-        .enum(['metadata_may_reference_new_binding', 'runtime_auth_applied', 'runtime_auth_partially_applied'])
-        .nullable()
-        .optional(),
-      verificationByServiceId: ConnectedServiceSwitchAttemptVerificationByServiceIdV1Schema.optional(),
-    })
-    .passthrough(),
-  z
-    .object({
+      attemptedContinuityMode: z.optional(ConnectedServiceSwitchAttemptedContinuityModeV1Schema),
+      outcome: z.optional(ConnectedServiceSwitchAttemptOutcomeV1Schema),
+      outcomeAction: z.optional(ConnectedServiceSwitchAttemptOutcomeActionV1Schema),
+      errorCode: z.optional(z.nullable(z.string())),
+      diagnostic: z.optional(ConnectedServiceUxDiagnosticV1Schema),
+      groupGeneration: z.optional(z.number().check(z.int(), z.nonnegative())),
+      sessionAdoption: z.optional(ConnectedServiceSwitchAttemptSessionAdoptionV1Schema),
+      sessionAdoptedGeneration: z.optional(z.number().check(z.int(), z.nonnegative())),
+      partialState: z.optional(z.nullable(z
+        .enum(['metadata_may_reference_new_binding', 'runtime_auth_applied', 'runtime_auth_partially_applied']))),
+      verificationByServiceId: z.optional(ConnectedServiceSwitchAttemptVerificationByServiceIdV1Schema),
+    }),
+  z.looseObject({
       type: z.literal('connected-service-runtime-auth-recovery'),
       status: ConnectedServiceRuntimeAuthRecoveryTranscriptStatusV1Schema,
       serviceId: ConnectedAccountServiceKeyIngressSchema,
-      profileId: zMini.optional(ConnectedServiceProfileIdSchema),
-      groupId: zMini.optional(ConnectedServiceAuthGroupIdSchema),
-      attempt: z.number().int().positive().optional(),
-      nextRetryAtMs: z.number().int().nonnegative().nullable().optional(),
-      terminal: z.boolean().optional(),
-      diagnostic: zMini.optional(ConnectedServiceUxDiagnosticV1Schema),
-      reason: z.string().trim().min(1).optional(),
-    })
-    .passthrough(),
-  z
-    .object({
+      profileId: z.optional(ConnectedServiceProfileIdSchema),
+      groupId: z.optional(ConnectedServiceAuthGroupIdSchema),
+      attempt: z.optional(z.number().check(z.int(), z.positive())),
+      nextRetryAtMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+      terminal: z.optional(z.boolean()),
+      diagnostic: z.optional(ConnectedServiceUxDiagnosticV1Schema),
+      reason: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    }),
+  z.looseObject({
       type: z.literal('connected-service-account-switch-deferral'),
       policy: z.string(),
-      awaitingBoundary: z.boolean().optional(),
-      timeoutMs: z.number().optional(),
-    })
-    .passthrough(),
-  z
-    .object({
+      awaitingBoundary: z.optional(z.boolean()),
+      timeoutMs: z.optional(z.number()),
+    }),
+  z.looseObject({
       type: z.literal('connected-service-account-switch-deferral-completed'),
-      policy: z.string().optional(),
+      policy: z.optional(z.string()),
       reason: z.string(),
-    })
-    .passthrough(),
-  z
-    .object({
+    }),
+  z.looseObject({
       type: z.literal('connected-service-account-switch-deferral-superseded'),
-      policy: z.string().optional(),
-    })
-    .passthrough(),
-  z
-    .object({
+      policy: z.optional(z.string()),
+    }),
+  z.looseObject({
       type: z.literal('agent-state-sharing-degraded'),
       serviceId: z.string(),
       code: z.string(),
-      requestedStateMode: z.string().optional(),
-      effectiveStateMode: z.string().optional(),
-      reason: z.string().optional(),
-    })
-    .passthrough(),
-  z
-    .object({
+      requestedStateMode: z.optional(z.string()),
+      effectiveStateMode: z.optional(z.string()),
+      reason: z.optional(z.string()),
+    }),
+  z.looseObject({
       type: z.literal('task-lifecycle'),
       event: TurnLifecycleEventV1Schema,
-      id: z.string().nullable().optional(),
-    })
-    .passthrough(),
-  z.object({ type: z.literal('ready') }).passthrough(),
-  z.object({ type: z.literal('worker-update'), update: WorkerUpdateV1Schema }).strict(),
-  z.object({ type: z.literal('worker-report'), ...SessionWorkerPublishInputV1Schema.shape }).strict(),
-])
-  .superRefine((event, ctx) => {
+      id: z.optional(z.nullable(z.string())),
+    }),
+  z.looseObject({ type: z.literal('ready'),
+    /** Present only for a host-observed completed turn, never an idle/command ready event. */
+    completedTurnId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  }),
+  z.strictObject({ type: z.literal('worker-update'), update: WorkerUpdateV1Schema,
+    /** Admitted Follow routes for this card; ordinary run cards have none. */
+    followMatches: z.optional(z.array(WorkerUpdateFollowMatchV1Schema).check(z.minLength(1))),
+    /** Existing accepted Follow original identity; presentation joins only this input's delivery. */
+    followInputLocalId: z.optional(PendingLocalIdSchema),
+    followWakeEventLocalId: z.optional(z.string().check(z.refine(isSessionFollowWakeEventLocalId, {
+      message: 'Expected a canonical Session Follow wake event id',
+    }))),
+  }),
+  z.strictObject({ type: z.literal('worker-report'), ...SessionUpdatePostInputV1Schema.shape }),
+  z.strictObject({ type: z.literal('goal-changed') }),
+]).check(z.superRefine((event, ctx) => {
     if (event.type === 'worker-report') refineWorkerDeliverableResultV1(event.summary, event.deliverables, ctx, 'summary');
     if (event.type === 'context-compaction') {
       addContextCompactionEventContinuationIssues(event as Record<string, unknown>, ctx, []);
@@ -842,12 +796,11 @@ const AgentEventSchema = lazyZodSchema(() => z.discriminatedUnion('type', [
     const eventRecord = event as Record<string, unknown>;
     addConnectedServiceAccountSwitchAttemptEventIssues(eventRecord, ctx);
     addConnectedServiceRuntimeAuthRecoveryEventIssues(eventRecord, ctx);
-  })
-  .transform((event) => {
+  })), z.transform((event) => {
     if (event.type !== 'agent-state-sharing-degraded') return event;
     const { entryName: _legacyEntryName, ...safeEvent } = event as typeof event & { entryName?: unknown };
     return safeEvent;
-  }));
+  })));
 
 const RawAgentRecordSchema = lazyZodSchema(() => z
   .discriminatedUnion('type', [
@@ -855,56 +808,47 @@ const RawAgentRecordSchema = lazyZodSchema(() => z
       type: z.literal('output'),
       data: RawAgentOutputDataSchema,
     }),
-    z.object({ type: z.literal('event'), id: z.string(), data: createStoredReadSchema(AgentEventSchema) }).passthrough(),
-    z
-      .object({
+    z.looseObject({ type: z.literal('event'), id: z.string(), data: createStoredReadSchema(AgentEventSchema) }),
+    z.looseObject({
         type: z.literal('codex'),
         data: z
           .discriminatedUnion('type', [
-            z.object({ type: z.literal('reasoning'), message: z.string(), sidechainId: z.string().optional() }),
-            z.object({ type: z.literal('message'), message: z.string(), sidechainId: z.string().optional() }),
-            z.object({ type: z.literal('token_count'), sidechainId: z.string().optional() }).passthrough(),
-            z.object({ type: z.literal('task_started'), id: z.string().optional(), sidechainId: z.string().optional() }).passthrough(),
-            z.object({ type: z.literal('task_complete'), id: z.string().optional(), sidechainId: z.string().optional() }).passthrough(),
-            z.object({ type: z.literal('turn_failed'), id: z.string().optional(), sidechainId: z.string().optional() }).passthrough(),
-            z.object({ type: z.literal('turn_cancelled'), id: z.string().optional(), sidechainId: z.string().optional() }).passthrough(),
-            z.object({ type: z.literal('turn_aborted'), id: z.string().optional(), sidechainId: z.string().optional() }).passthrough(),
-            z
-              .object({
+            z.object({ type: z.literal('reasoning'), message: z.string(), sidechainId: z.optional(z.string()) }),
+            z.object({ type: z.literal('message'), message: z.string(), sidechainId: z.optional(z.string()) }),
+            z.looseObject({ type: z.literal('token_count'), sidechainId: z.optional(z.string()) }),
+            z.looseObject({ type: z.literal('task_started'), id: z.optional(z.string()), sidechainId: z.optional(z.string()) }),
+            z.looseObject({ type: z.literal('task_complete'), id: z.optional(z.string()), sidechainId: z.optional(z.string()) }),
+            z.looseObject({ type: z.literal('turn_failed'), id: z.optional(z.string()), sidechainId: z.optional(z.string()) }),
+            z.looseObject({ type: z.literal('turn_cancelled'), id: z.optional(z.string()), sidechainId: z.optional(z.string()) }),
+            z.looseObject({ type: z.literal('turn_aborted'), id: z.optional(z.string()), sidechainId: z.optional(z.string()) }),
+            z.looseObject({
                 type: z.literal('tool-call'),
                 callId: z.string(),
                 input: z.unknown(),
                 name: z.string(),
-                id: z.string().optional(),
-                sidechainId: z.string().optional(),
-              })
-              .passthrough(),
-            z
-              .object({
+                id: z.optional(z.string()),
+                sidechainId: z.optional(z.string()),
+              }),
+            z.looseObject({
                 type: z.literal('tool-call-result'),
                 callId: z.string(),
                 output: z.unknown(),
-                id: z.string().optional(),
-                sidechainId: z.string().optional(),
-              })
-              .passthrough(),
-            z
-              .object({
+                id: z.optional(z.string()),
+                sidechainId: z.optional(z.string()),
+              }),
+            z.looseObject({
                 type: z.literal('tool-result'),
                 callId: z.string(),
                 output: z.unknown(),
-                id: z.string().optional(),
-                sidechainId: z.string().optional(),
-              })
-              .passthrough(),
+                id: z.optional(z.string()),
+                sidechainId: z.optional(z.string()),
+              }),
           ])
           ,
-      })
-      .passthrough(),
-    z
-      .object({
+      }),
+    z.looseObject({
         type: z.literal('acp'),
-        agentId: z.string().trim().min(1),
+        agentId: z.string().check(z.trim(), z.minLength(1)),
         data: z.lazy(() => {
           const knownTypes = new Set([
             'reasoning',
@@ -926,94 +870,76 @@ const RawAgentRecordSchema = lazyZodSchema(() => z
           ] as const);
 
           const known = z.discriminatedUnion('type', [
-            z.object({ type: z.literal('reasoning'), message: z.string(), sidechainId: z.string().optional() }).passthrough(),
-            z.object({ type: z.literal('message'), message: z.string(), sidechainId: z.string().optional() }).passthrough(),
-            z.object({ type: z.literal('thinking'), text: z.string(), sidechainId: z.string().optional() }).passthrough(),
-            z
-              .object({
+            z.looseObject({ type: z.literal('reasoning'), message: z.string(), sidechainId: z.optional(z.string()) }),
+            z.looseObject({ type: z.literal('message'), message: z.string(), sidechainId: z.optional(z.string()) }),
+            z.looseObject({ type: z.literal('thinking'), text: z.string(), sidechainId: z.optional(z.string()) }),
+            z.looseObject({
                 type: z.literal('tool-call'),
                 callId: z.string(),
                 input: z.unknown(),
                 name: z.string(),
                 id: z.string(),
-                sidechainId: z.string().optional(),
-              })
-              .passthrough(),
-            z
-              .object({
+                sidechainId: z.optional(z.string()),
+              }),
+            z.looseObject({
                 type: z.literal('tool-result'),
                 callId: z.string(),
                 output: z.unknown(),
                 id: z.string(),
-                isError: z.boolean().optional(),
-                sidechainId: z.string().optional(),
-              })
-              .passthrough(),
-            z
-              .object({
+                isError: z.optional(z.boolean()),
+                sidechainId: z.optional(z.string()),
+              }),
+            z.looseObject({
                 type: z.literal('tool-call-result'),
                 callId: z.string(),
                 output: z.unknown(),
                 id: z.string(),
-                sidechainId: z.string().optional(),
-              })
-              .passthrough(),
-            z
-              .object({
+                sidechainId: z.optional(z.string()),
+              }),
+            z.looseObject({
                 type: z.literal('file-edit'),
                 description: z.string(),
                 filePath: z.string(),
-                diff: z.string().optional(),
-                oldContent: z.string().optional(),
-                newContent: z.string().optional(),
+                diff: z.optional(z.string()),
+                oldContent: z.optional(z.string()),
+                newContent: z.optional(z.string()),
                 id: z.string(),
-                sidechainId: z.string().optional(),
-              })
-              .passthrough(),
-            z
-              .object({
+                sidechainId: z.optional(z.string()),
+              }),
+            z.looseObject({
                 type: z.literal('terminal-output'),
                 data: z.string(),
                 callId: z.string(),
-                sidechainId: z.string().optional(),
-              })
-              .passthrough(),
-            z.object({ type: z.literal('task_started'), id: z.string(), sidechainId: z.string().optional() }).passthrough(),
-            z.object({ type: z.literal('task_complete'), id: z.string(), sidechainId: z.string().optional() }).passthrough(),
-            z.object({ type: z.literal('turn_failed'), id: z.string(), sidechainId: z.string().optional() }).passthrough(),
-            z.object({ type: z.literal('turn_cancelled'), id: z.string(), sidechainId: z.string().optional() }).passthrough(),
-            z.object({ type: z.literal('turn_aborted'), id: z.string(), sidechainId: z.string().optional() }).passthrough(),
-            z
-              .object({
+                sidechainId: z.optional(z.string()),
+              }),
+            z.looseObject({ type: z.literal('task_started'), id: z.string(), sidechainId: z.optional(z.string()) }),
+            z.looseObject({ type: z.literal('task_complete'), id: z.string(), sidechainId: z.optional(z.string()) }),
+            z.looseObject({ type: z.literal('turn_failed'), id: z.string(), sidechainId: z.optional(z.string()) }),
+            z.looseObject({ type: z.literal('turn_cancelled'), id: z.string(), sidechainId: z.optional(z.string()) }),
+            z.looseObject({ type: z.literal('turn_aborted'), id: z.string(), sidechainId: z.optional(z.string()) }),
+            z.looseObject({
                 type: z.literal('permission-request'),
                 permissionId: z.string(),
                 toolName: z.string(),
                 description: z.string(),
-                options: z.unknown().optional(),
-                sidechainId: z.string().optional(),
-              })
-              .passthrough(),
-            z.object({ type: z.literal('token_count'), sidechainId: z.string().optional() }).passthrough(),
-            z
-              .object({
+                options: z.optional(z.unknown()),
+                sidechainId: z.optional(z.string()),
+              }),
+            z.looseObject({ type: z.literal('token_count'), sidechainId: z.optional(z.string()) }),
+            z.looseObject({
                 type: z.literal('context-compaction'),
                 ...ContextCompactionShape,
-                sidechainId: z.string().optional(),
-              })
-              .passthrough(),
+                sidechainId: z.optional(z.string()),
+              }),
           ]);
 
-          const unknown = z
-            .object({ type: z.string() })
-            .passthrough()
-            .refine((value) => !knownTypes.has(value.type as any), {
+          const unknown = z.looseObject({ type: z.string() }).check(z.refine((value) => !knownTypes.has(value.type as any), {
               message: 'Unknown ACP data type must not collide with known types',
-            });
+            }));
 
           return z.union([known, unknown]);
         }),
-      })
-      .passthrough(),
+      }),
   ]))
   ;
 
@@ -1040,14 +966,14 @@ export type TranscriptRawRecordV1WithMeta<Meta> =
 
 export function createTranscriptRawRecordV1Schema(
   zod: typeof z,
-): z.ZodType<TranscriptRawRecordV1WithMeta<SessionMessageMeta>>;
-export function createTranscriptRawRecordV1Schema<MetaSchema extends z.ZodTypeAny>(
+): z.ZodMiniType<TranscriptRawRecordV1WithMeta<SessionMessageMeta>>;
+export function createTranscriptRawRecordV1Schema<MetaSchema extends z.ZodMiniType>(
   zod: typeof z,
   options: Readonly<{
     metaSchema: MetaSchema;
   }>,
-) : z.ZodType<TranscriptRawRecordV1WithMeta<z.infer<MetaSchema>>>;
-export function createTranscriptRawRecordV1Schema<MetaSchema extends z.ZodTypeAny>(
+) : z.ZodMiniType<TranscriptRawRecordV1WithMeta<z.infer<MetaSchema>>>;
+export function createTranscriptRawRecordV1Schema<MetaSchema extends z.ZodMiniType>(
   zod: typeof z,
   options?: Readonly<{
     metaSchema?: MetaSchema;
@@ -1055,30 +981,21 @@ export function createTranscriptRawRecordV1Schema<MetaSchema extends z.ZodTypeAn
 ) {
   const metaSchema = options?.metaSchema ?? createStoredReadSchema(createSessionMessageMetaSchema(zod));
 
-  return zod.preprocess(
-    preprocessMessageContent,
-    zod.discriminatedUnion('role', [
-      zod
-        .object({
+  return zod.pipe(zod.transform(preprocessMessageContent), zod.discriminatedUnion('role', [
+      zod.looseObject({
           role: zod.literal('agent'),
           content: RawAgentRecordSchema,
           meta: zod.optional(metaSchema),
-        })
-        .passthrough(),
-      zod
-        .object({
+        }),
+      zod.looseObject({
           role: zod.literal('user'),
-          content: zod
-            .object({
+          content: zod.looseObject({
               type: zod.literal('text'),
               text: zod.string(),
-            })
-            .passthrough(),
+            }),
           meta: zod.optional(metaSchema),
-        })
-        .passthrough(),
-    ]),
-  ).superRefine(addRawRecordContextCompactionContinuationIssues);
+        }),
+    ])).check(zod.superRefine(addRawRecordContextCompactionContinuationIssues));
 }
 
 export const TranscriptRawRecordV1Schema = lazyZodSchema(() => createTranscriptRawRecordV1Schema(z));
@@ -1090,10 +1007,10 @@ export type TranscriptRawUsageDataV1 = z.infer<typeof TranscriptRawUsageDataV1Sc
 export const TranscriptRawAgentEventV1Schema = AgentEventSchema;
 export type TranscriptRawAgentEventV1 = z.infer<typeof TranscriptRawAgentEventV1Schema>;
 
-export const SessionMessageAttentionImpactSchema = lazyZodSchema(() => z.object({
+export const SessionMessageAttentionImpactSchema = lazyZodSchema(() => z.strictObject({
   affectsUnread: z.boolean(),
   affectsMeaningfulActivity: z.boolean(),
-}).strict());
+}));
 export type SessionMessageAttentionImpact = z.infer<typeof SessionMessageAttentionImpactSchema>;
 
 export const SESSION_MESSAGE_USER_ATTENTION_IMPACT: SessionMessageAttentionImpact = Object.freeze({

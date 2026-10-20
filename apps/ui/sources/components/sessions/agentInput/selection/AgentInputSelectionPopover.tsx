@@ -19,6 +19,8 @@ export type AgentInputSelectionPopoverProps = Readonly<{
     /** The sheet's header: the shared title band (default) or `none` when the content draws its own. */
     sheetHeader?: 'band' | 'none';
     sheetSubtitle?: string;
+    /** The sheet band's trailing action (a form's Done), see `Popover.sheetHeaderAction`. */
+    sheetHeaderAction?: React.ReactNode;
     accessibilityLabel?: string;
     children: (args: Readonly<{ maxHeight: number; presentation: 'popover' | 'sheet' }>) => React.ReactNode;
 }>;
@@ -53,9 +55,12 @@ function OpenAgentInputSelectionPopover(props: AgentInputSelectionPopoverProps) 
             maxHeightCap={popoverLayout.maxHeightCap}
             maxWidthCap={props.maxWidthCap}
             placementMinSpace={popoverLayout.placementMinSpace}
+            flip={popoverLayout.flip}
+            horizontalBoundaryRef={popoverLayout.horizontalBoundaryRef}
             phonePresentation={props.phonePresentation}
             sheetHeader={props.sheetHeader}
             sheetSubtitle={props.sheetSubtitle}
+            sheetHeaderAction={props.sheetHeaderAction}
             accessibilityLabel={props.accessibilityLabel}
             edgePadding={popoverLayout.edgePadding}
             closeOnAnchorPress={false}

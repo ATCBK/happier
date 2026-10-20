@@ -2,6 +2,8 @@ import type { Asset } from 'expo-asset';
 import type { PluginUiArtifactDigestV1 } from '@happier-dev/protocol/plugins/ui';
 import type { PluginUiArtifactsManifestEntryV2 } from '@happier-dev/protocol/plugins/ui';
 import type { PluginDeclaredUiEntriesV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import type { PluginCollectionContractRefV1 } from '@happier-dev/protocol/plugins/data/collectionContractRefV1';
+import type { PluginUiDeclaredExecution } from '../ui/projection';
 
 export type PluginHostBundledUiDeclaration = Readonly<{
     pluginId: string;
@@ -10,6 +12,10 @@ export type PluginHostBundledUiDeclaration = Readonly<{
     packageName: string;
     displayName: string;
     entriesById: PluginDeclaredUiEntriesV1;
+    /** Static requirements remain known before a Machine publishes its runtime catalog. */
+    declaredExecution?: PluginUiDeclaredExecution;
+    /** Reader identities compiled from this app's bundled manifest, never daemon writer refs. */
+    collectionContracts?: readonly PluginCollectionContractRefV1[];
 }>;
 
 /**

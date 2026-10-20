@@ -1,7 +1,7 @@
 import * as React from 'react';
 import type { HomeAccountDetailV1 } from '@happier-dev/protocol/home/governance';
 
-import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
+import type { HomeActionFailure as HomeDomainFailure } from '@/sync/ops/home/homeActionOutcome';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { getHomeAccount } from '@/sync/ops/home/homeGovernanceOperations';
 import {

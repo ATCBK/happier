@@ -35,7 +35,7 @@ import {
     serverAccountScopeKeySuffix,
     type ServerAccountScope,
 } from '@/sync/domains/scope/serverAccountScope';
-import type { Settings } from '@/sync/domains/settings/settings';
+import { useSettings } from '@/sync/store/hooks';
 import { useConnectedAccountCatalog } from '@/sync/store/settings/useConnectedAccountCatalog';
 import { getConnectedAccountCatalogValue } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
 
@@ -171,12 +171,33 @@ const ACCOUNT_SCOPE_ALWAYS_CURRENT = () => true;
 export type SessionAgentContinuationFeatureDecision = Readonly<Pick<FeatureDecision, 'state'>> | null;
 
 export type SessionAgentPickerTargetDetailContext = Readonly<{
-    settings: Settings;
     capabilityServerId: string;
     /** The Session's machine; null falls back to the Agent catalog's static models. */
     machineId: string | null;
     cwd: string | null;
 }>;
+
+function InSessionAgentPickerDetailContent(props: Omit<
+    Parameters<typeof buildSessionAgentPickerDetailContent>[0],
+    'settings' | 'connectedServices'
+> & Readonly<{ accountScope: ServerAccountScope | null }>) {
+    const settings = useSettings();
+    const { accountScope, ...detail } = props;
+    const current = getConnectedAccountCatalogValue(accountScope, 'purposes');
+    const identity = detail.agentCatalogEntry.identity;
+    const connectedServices = identity && current.value
+        ? projectAgentConnectedAccountPurposeDefaultsToSessionBindings(
+            resolveAgentConnectedAccountPurposeDefaults({
+                settings,
+                purposeBindings: current.value,
+                agentId: detail.runtimeCarrierAgentId ?? detail.agentCatalogEntry.agentId,
+                consumer: identity,
+                declarations: detail.agentCatalogEntry.connectedAccounts,
+            }),
+        )
+        : null;
+    return buildSessionAgentPickerDetailContent({ ...detail, settings, connectedServices });
+}
 
 /** A target Agent starts at its own defaults, exactly as New Session starts it. */
 const DEFAULT_TARGET_SELECTION: SessionAgentPickerSelection = {
@@ -951,34 +972,22 @@ export function useInSessionAgentPickerControls(
                     deferredDetailContentCacheKey: `session-continuation-engine:${entry.backendTargetKey}:${purposeCatalog.status}:${purposeCatalog.revision}`,
                     renderDetailContent: () => {
                         if (!purposeDefaultsReady(entry)) return null;
-                        const current = getConnectedAccountCatalogValue(accountScope, 'purposes');
-                        return buildSessionAgentPickerDetailContent({
-                        backendTarget: entry.backendTarget,
-                        agentCatalogEntry: entry.agentCatalogEntry,
-                        runtimeCarrierAgentId: entry.agentId,
-                        selectedMachineId: params.detail.machineId,
-                        capabilityServerId: params.detail.capabilityServerId,
-                        cwd: params.detail.cwd,
-                        settings: params.detail.settings,
-                        connectedServices: entry.agentCatalogEntry.identity && current.value
-                            ? projectAgentConnectedAccountPurposeDefaultsToSessionBindings(
-                                resolveAgentConnectedAccountPurposeDefaults({
-                                    settings: params.detail.settings,
-                                    purposeBindings: current.value,
-                                    agentId: entry.agentId,
-                                    consumer: entry.agentCatalogEntry.identity,
-                                    declarations: entry.agentCatalogEntry.connectedAccounts,
-                                }),
-                            )
-                            : null,
+                        return <InSessionAgentPickerDetailContent
+                        accountScope={accountScope}
+                        backendTarget={entry.backendTarget}
+                        agentCatalogEntry={entry.agentCatalogEntry}
+                        runtimeCarrierAgentId={entry.agentId}
+                        selectedMachineId={params.detail.machineId}
+                        capabilityServerId={params.detail.capabilityServerId}
+                        cwd={params.detail.cwd}
                         // The same disclosure, told truthfully for this Session:
                         // an empty transcript has no conversation to carry, so the
                         // line keeps only the half that still holds.
-                        modelSummary: params.source.hasConversationToCarry
+                        modelSummary={params.source.hasConversationToCarry
                             ? t('session.agentContinuation.detailDescription')
-                            : t('session.agentContinuation.detailDescriptionEmpty'),
-                        selection: readTargetSelection(entry.backendTargetKey),
-                        onSelectionChange: (next) => {
+                            : t('session.agentContinuation.detailDescriptionEmpty')}
+                        selection={readTargetSelection(entry.backendTargetKey)}
+                        onSelectionChange={(next) => {
                             setSelectionByTargetKey((current) => {
                                 const nextMap = new Map(current);
                                 nextMap.set(entry.backendTargetKey, next);
@@ -990,8 +999,8 @@ export function useInSessionAgentPickerControls(
                             // submission identity is derived from the intent, so it
                             // re-mints itself for what is genuinely a different switch.
                             armExactSelection(entry, sourceAgentId, next);
-                        },
-                    });
+                        }}
+                    />;
                     },
                     // Fired on deliberate activation of the row — tap, click, Enter or
                     // Space — never on hover or pointer travel.

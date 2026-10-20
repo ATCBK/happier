@@ -1,11 +1,16 @@
 import * as React from 'react';
+import tweetnacl from 'tweetnacl';
+import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { flushHookEffects, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture, createPlainMachineRowFixture, flushHookEffects, standardCleanup } from '@/dev/testkit';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { ScmComparisonCaptureOutputSchema } from '@happier-dev/protocol/scm';
 import { ExecutionRunStartResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { bindExternalActionExecutionAuthorizationHttpPathV1, ExternalActionExecutionAuthorizationV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createSessionFilesViewFixture, fileViewSnapshot, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
 
 installSessionFilesViewBoundaries();
@@ -49,7 +54,7 @@ async function mountWithRows(kind: 'exact' | 'missing' | 'ambiguous') {
 describe('WorkspaceScmReviewDetailsView', () => {
     it('offers Start review at the actual workspace comparison without opening a Session', async () => {
         fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request =>
-            request.method === 'scm.status.snapshot' ? { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo' }) } : undefined });
+            request.method === 'scm.status.snapshot' ? { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo', entries: CHANGED_ENTRIES }) } : undefined });
         fixture.storage.setState({ sessions: {} });
         const screen = await fixture.render(<WorkspaceScmReviewDetailsView scopeId="project:wr"
             machineId="m1" serverId={fixture.home.id} rootPath="/repo" />);
@@ -60,6 +65,17 @@ describe('WorkspaceScmReviewDetailsView', () => {
         expect(opened?.props).toMatchObject({ machineId: 'm1', cwd: '/repo', serverId: fixture.home.id, comparison: { kind: 'workingTree' } });
         expect(opened?.props).not.toHaveProperty('sessionId');
         expect(fixture.requests.some(request => request.targetId === 's1')).toBe(false);
+    });
+    it('offers no review or commit proposal for a checkout with no changes', async () => {
+        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request =>
+            request.method === 'scm.status.snapshot' ? { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo' }) } : undefined });
+        fixture.storage.setState({ sessions: {} });
+        const screen = await fixture.render(<WorkspaceScmReviewDetailsView scopeId="project:wr-empty"
+            machineId="m1" serverId={fixture.home.id} rootPath="/repo" />);
+        await flushHookEffects({ cycles: 20 });
+        expect(screen.findByTestId('scm-comparison-bar')).toBeTruthy();
+        expect(screen.findByTestId('scm-comparison-start-review')).toBeNull();
+        expect(screen.findByTestId('scm-comparison-propose-commits')).toBeNull();
     });
     it('captures separately authorized Session evidence with Session qualification on its admitted Machine', async () => {
         const captured = { id: 'session-evidence', source: { kind: 'session' as const, sessionId: 's1' },
@@ -79,22 +95,46 @@ describe('WorkspaceScmReviewDetailsView', () => {
         ]);
     });
     it('starts a no-Session review using captured Machine evidence and the canonical detached Action', async () => {
+        const inventoryRequests: unknown[] = [];
+        const startRequests: unknown[] = [];
         const captured = { id: 'detached-evidence', source: { kind: 'workingTree' as const }, repository: { rootPath: '/repo' },
             endpoints: {}, inventory: { state: 'complete' as const, files: [], reasons: [] } };
-        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request => {
+        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', serverUrl: 'https://workspace-review-details.test',
+            credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }) }, serverIdentityId: 'srv_workspace_review_details',
+            machine: createMachineFixture({ id: 'm1', kind: 'persistent', storageMode: 'plain', revokedAt: null, replacedByMachineId: null,
+                installationPublicKey: Buffer.from(tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(5)).publicKey).toString('base64'),
+                installationId: 'test-installation', access: createPlainMachineRowFixture({ id: 'm1', accountId: 'alice' }).access }), rpc: request => {
             if (request.method === 'scm.diffSummary.capture') return ScmComparisonCaptureOutputSchema.parse({
                 success: true, comparison: captured, metadata: { source: captured.source, sourceKey: captured.id } });
-            if (request.method === 'execution.run.start') return ExecutionRunStartResponseSchema.parse({
-                runId: 'review-1', callId: 'call-1', sidechainId: 'sidechain-1',
-            });
             if (request.method === 'capabilities.detect') return { protocolVersion: 1, results: { 'tool.executionRuns': {
                 ok: true, checkedAt: 1, data: { protocolVersion: 2, backends: { claude: { available: true, intents: ['review'] } },
                     features: { detachedScope: true, startAndWait: true, runScopedAgentBindings: true, secretReferenceOverlay: true } } } } };
             return undefined;
-        }, request: async url => new URL(String(url)).pathname === ACP_CATALOG_ROWS_ROUTE_V1
-            ? Response.json(AcpCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
-                content: { t: 'plain', v: { v: 1, definitions: [] } } }))
-            : Response.json({}, { status: 404 }),
+        }, request: async (url, init) => {
+            const path = new URL(String(url)).pathname;
+            if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json(AcpCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
+                content: { t: 'plain', v: { v: 1, definitions: [] } } }));
+            if (path === bindExternalActionExecutionAuthorizationHttpPathV1('execution.run.start') || path === '/v1/actions/execution.run.start') {
+                const body: unknown = JSON.parse(String(init?.body));
+                const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body && typeof body === 'object' && 'envelope' in body ? body.envelope : body);
+                if (path === bindExternalActionExecutionAuthorizationHttpPathV1('execution.run.start')) return Response.json(ExternalActionExecutionAuthorizationV1Schema.parse({
+                    v: 1, token: 'home-start-authorization', binding: { accountId: 'alice', authentication: { kind: 'account', tokenEpoch: 0 },
+                        serverIdentityId: 'srv_workspace_review_details', machineId: 'm1', installationId: 'test-installation', custodianAccountId: 'alice',
+                        accountEncryptionMode: 'plain', actionId: 'execution.run.start', requestId: envelope.requestId, target: envelope.target,
+                        requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope) },
+                }));
+                expect(body).toHaveProperty('executionAuthorization.requesterAccountContext');
+                startRequests.push(envelope);
+                return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'execution.run.start', requestId: envelope.requestId,
+                    execution: { ok: true, result: ExecutionRunStartResponseSchema.parse({ runId: 'review-1', callId: 'call-1', sidechainId: 'sidechain-1' }) } }));
+            }
+            if (path !== '/v1/actions/review.engines.list') return Response.json({}, { status: 404 });
+            const envelope = ExternalActionRequestEnvelopeV1Schema.parse(JSON.parse(String(init?.body)));
+            inventoryRequests.push(envelope);
+            return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'review.engines.list', requestId: envelope.requestId,
+                execution: { ok: true, result: { sessionId: null, items: [{ engineId: 'claude', value: 'claude', label: 'Claude', enabled: true,
+                    backendId: 'claude', capabilities: { structuredNarration: true }, launchModelId: 'account-review-model' }] } } }));
+        },
         });
         fixture.storage.setState({ sessions: {} });
         const { startReviewOfComparison, listReviewWalkthroughEngines } = await import('@/sync/ops/reviews/reviewWalkthrough');
@@ -103,7 +143,9 @@ describe('WorkspaceScmReviewDetailsView', () => {
         const executor = createDefaultActionExecutor();
         const inventory = await listReviewWalkthroughEngines({ sessionId: null, machineId: 'm1', serverId: fixture.home.id });
         expect(inventory, JSON.stringify({ inventory, methods: fixture.requests.map(request => request.method) }))
-            .toMatchObject({ ok: true, engines: expect.arrayContaining([expect.objectContaining({ engineId: 'claude', enabled: true })]) });
+            .toMatchObject({ ok: true, engines: expect.arrayContaining([expect.objectContaining({ engineId: 'claude', enabled: true, launchModelId: 'account-review-model' })]) });
+        expect(inventoryRequests).toEqual([expect.objectContaining({ target: { kind: 'machine', machineId: 'm1' },
+            input: expect.objectContaining({ sessionId: null, machineId: 'm1' }) })]);
         const outcome = await startReviewOfComparison({ sessionId: null, machineId: 'm1', serverId: fixture.home.id, cwd: '/repo',
             comparison: { kind: 'workingTree' }, instructions: 'Review the pending changes',
             plan: resolveReviewWalkthroughPlan({ engines: inventory.ok ? inventory.engines : [],
@@ -116,8 +158,8 @@ describe('WorkspaceScmReviewDetailsView', () => {
         expect(fixture.requests.filter(request => request.method === 'scm.diffSummary.capture')).toEqual([
             expect.objectContaining({ targetId: 'm1', payload: expect.objectContaining({ cwd: '/repo', source: captured.source }) }),
         ]);
-        expect(fixture.requests.filter(request => request.method === 'execution.run.start')).toEqual([
-            expect.objectContaining({ targetId: 'm1', payload: expect.objectContaining({ cwd: '/repo', intent: 'review',
+        expect(startRequests).toEqual([
+            expect.objectContaining({ target: { kind: 'machine', machineId: 'm1' }, input: expect.objectContaining({ cwd: '/repo', intent: 'review', childSelection: 'agentDefault',
                 intentInput: expect.objectContaining({ comparisonId: captured.id }) }) }),
         ]);
     });
@@ -128,7 +170,8 @@ describe('WorkspaceScmReviewDetailsView', () => {
             machineId="m1" serverId={fixture.home.id} rootPath="/other" evidenceSessionId="s1" comparison={{ kind: 'session' }} />);
         await flushHookEffects({ cycles: 10 });
         expect(fixture.requests.filter(request => request.method === 'scm.diffSummary.capture')).toEqual([]);
-        expect(screen.findByTestId('scm-comparison-start-review')?.props.disabled).toBe(true);
+        expect(screen.findHostByTestId('source-control-unavailable')).toBeTruthy();
+        expect(screen.findHostByTestId('scm-comparison-start-review')).toBeNull();
     });
     it('does not borrow a same-id Session carrier from another Home', async () => {
         fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request =>
@@ -138,7 +181,8 @@ describe('WorkspaceScmReviewDetailsView', () => {
             machineId="m1" serverId={fixture.home.id} rootPath="/repo" evidenceSessionId="s1" comparison={{ kind: 'session' }} />);
         await flushHookEffects({ cycles: 10 });
         expect(fixture.requests.filter(request => request.method === 'scm.diffSummary.capture')).toEqual([]);
-        expect(screen.findByTestId('scm-comparison-start-review')?.props.disabled).toBe(true);
+        expect(screen.findHostByTestId('source-control-unavailable')).toBeTruthy();
+        expect(screen.findHostByTestId('scm-comparison-start-review')).toBeNull();
     });
     it('keeps the shared comparison toolbar while the first checkout snapshot is loading', async () => {
         const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
@@ -199,19 +243,38 @@ describe('WorkspaceScmReviewDetailsView', () => {
         await vi.waitFor(() => expect(screen.findHostByTestId('changed-files-review-empty')).toBeTruthy());
         expect(screen.findHostByTestId('scm-comparison-explain-with-agent')).toBeNull();
         expect(screen.getTextContent()).not.toContain(t('scmComparison.fileCount', { count: 0 }));
+        // The empty state says what the page is for, not only that it is empty.
+        expect(screen.getTextContent()).toContain(t('files.noChangesPurpose'));
     });
-    it('opens review comments from the comparison bar instead of a row above it', async () => {
+    it('opens review comments from the Files menu instead of a row above the bar', async () => {
         fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request =>
             request.method === 'scm.status.snapshot' ? { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo', entries: CHANGED_ENTRIES }) } : undefined });
         fixture.storage.setState({ sessions: {} });
         fixture.storage.getState().applySettingsLocal({ featureToggles: { 'files.reviewComments': true } });
         const screen = await fixture.render(<WorkspaceScmReviewDetailsView scopeId="project:wr"
             machineId="m1" serverId={fixture.home.id} rootPath="/repo" />);
-        await vi.waitFor(() => expect(screen.findHostByTestId('workspace-review-comments-trigger')).toBeTruthy());
-        // No disclosure row of its own until opened; the panel opens under the bar.
+        const { ChangedFilesReview } = await import('@/components/workspaces/scm/review/ChangedFilesReview');
+        const commentsRow = () => (screen.tree.root.findByType(ChangedFilesReview).props as React.ComponentProps<typeof ChangedFilesReview>)
+            .comparisonChrome?.menuSections?.find((section) => section.id === 'review-comments');
+        await vi.waitFor(() => expect(commentsRow()?.items.map((item) => item.testID)).toEqual(['workspace-review-comments-menu']));
+        // Nothing unresolved: no disclosure row of its own and no bar action until opened.
         expect(screen.findHostByTestId('workspace-review-comments')).toBeNull();
-        await screen.pressByTestIdAsync('workspace-review-comments-trigger');
+        expect(screen.findHostByTestId('workspace-review-comments-trigger')).toBeNull();
+        await act(async () => { commentsRow()?.onSelect('toggle'); });
         await vi.waitFor(() => expect(screen.findHostByTestId('workspace-review-comments')).toBeTruthy());
+        // Open, the bar carries the disclosure so the panel closes where it is.
+        expect(screen.findHostByTestId('workspace-review-comments-trigger')).toBeTruthy();
         expect(screen.findHostByTestId('workspace-review-comments-header')).toBeNull();
+        for (const view of ['walkthrough', 'commits'] as const) {
+            await screen.update(fixture.wrap(<WorkspaceScmReviewDetailsView scopeId="project:wr"
+                machineId="m1" serverId={fixture.home.id} rootPath="/repo" view={view} />));
+            expect(screen.findHostByTestId('workspace-review-comments')).toBeNull();
+            expect(screen.findHostByTestId('workspace-review-comments-trigger')).toBeNull();
+        }
+        await screen.update(fixture.wrap(<WorkspaceScmReviewDetailsView scopeId="project:wr"
+            machineId="m1" serverId={fixture.home.id} rootPath="/repo" view="files" />));
+        expect(screen.findHostByTestId('workspace-review-comments')).toBeTruthy();
+        await screen.pressByTestIdAsync('workspace-review-comments-trigger');
+        expect(screen.findHostByTestId('workspace-review-comments')).toBeNull();
     });
 });

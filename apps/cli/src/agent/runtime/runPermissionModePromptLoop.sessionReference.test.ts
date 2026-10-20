@@ -541,10 +541,10 @@ describe('runPermissionModePromptLoop Session reference dispatch', () => {
     });
   });
 
-  it('settles an ordinary generic pre-turn failure as a terminal Pending rejection', async () => {
+  it.each([{}, { status: 'preparation_pending', retryable: false }])('settles a permanent pre-turn failure as a terminal Pending rejection (%j)', async failureFacts => {
     const runtime = createRuntime() as StructuredInputRuntime;
     runtime.updateSessionRuntimeConfig.mockRejectedValueOnce(
-      new Error('Runtime configuration rejected the requested mode.'),
+      Object.assign(new Error('Runtime configuration rejected the requested mode.'), failureFacts),
     );
 
     const result = await runOneStructuredInputPrompt({

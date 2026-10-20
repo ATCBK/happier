@@ -34,6 +34,7 @@ type UsageLimitRecoveryPayload = Readonly<{
 type UsageLimitRecoveryResumePromptMode = 'standard' | 'off' | 'custom';
 
 type UsageLimitRecoveryOperationOptions = Readonly<{
+    signal?: AbortSignal;
     machineOnly?: boolean;
     serverId?: string | null;
     refreshMachineTargets?: () => Promise<void>;
@@ -149,6 +150,7 @@ async function runUsageLimitRecoveryMachineRpc(
             serverId: opts?.serverId ?? resolvePreferredServerIdForSessionId(sessionId),
             method,
             payload,
+            ...(opts?.signal ? { signal: opts.signal } : {}),
         });
         return readOperationResult(response, sessionId);
     } catch (error) {
@@ -173,6 +175,7 @@ async function runUsageLimitRecoveryRpc(
             serverId: opts?.serverId ?? resolvePreferredServerIdForSessionId(sessionId),
             method,
             payload,
+            ...(opts?.signal ? { signal: opts.signal } : {}),
         });
         return readOperationResult(response, sessionId);
     } catch (error) {
@@ -240,16 +243,16 @@ export async function sessionUsageLimitWaitResumeEnable(
 export async function sessionUsageLimitWaitResumeCancel(
     sessionId: string,
     params: Readonly<{
-        issueFingerprint: string;
-        armedAtMs: number;
+        issueFingerprint?: string | null;
+        armedAtMs?: number;
         runtimeAuthRecoveryAttemptId?: string;
     }>,
     opts?: UsageLimitRecoveryOperationOptions,
 ): Promise<SessionUsageLimitRecoveryOperationResult> {
     const payload = {
         sessionId,
-        issueFingerprint: params.issueFingerprint,
-        armedAtMs: params.armedAtMs,
+        ...(params.issueFingerprint !== undefined ? { issueFingerprint: params.issueFingerprint } : {}),
+        ...(params.armedAtMs !== undefined ? { armedAtMs: params.armedAtMs } : {}),
         ...(params.runtimeAuthRecoveryAttemptId
             ? { runtimeAuthRecoveryAttemptId: params.runtimeAuthRecoveryAttemptId }
             : {}),

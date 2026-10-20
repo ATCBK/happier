@@ -165,6 +165,9 @@ export function createServerScopedSessionSendMessage(deps?: Partial<ServerScoped
 
       const context = await d.resolveContext({
         serverId: args.serverId,
+        // A cold exact target uses the incumbent scoped read/enqueue owner even
+        // on the active Home; it must not depend on a mounted Session projection.
+        ...(!d.getSession(sessionId) ? { preferScoped: true } : {}),
         timeoutMs: typeof args.timeoutMs === 'number' && args.timeoutMs > 0 ? args.timeoutMs : DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS,
       });
       try {
@@ -223,20 +226,19 @@ export function createServerScopedSessionSendMessage(deps?: Partial<ServerScoped
           },
           log: { log: () => {} },
           timeoutMs: context.timeoutMs,
+          isCurrent: () => args.signal?.aborted !== true,
         });
         const acquiredSession = acquired.find((session) => session.id === sessionId && session.serverId === context.targetServerId);
+        // Discovery is read-only. Cancellation must stop before this invocation
+        // transfers custody to the Pending owner, never after its receipt.
+        if (args.signal?.aborted) {
+          return { ok: false, errorCode: 'tool_cancelled', error: 'tool_cancelled' };
+        }
         if (!fetched.ok) {
           const errorCode = fetched.errorCode ?? 'session_fetch_failed';
           return { ok: false, errorCode, error: errorCode };
         }
         if (!acquiredSession) return { ok: false, errorCode: 'session_not_found', error: 'session_not_found' };
-        // Fetching exact-Home Session facts is read-only and can complete after
-        // the invoking Voice/Action was cancelled. Stop before creating local
-        // outbox custody or issuing the Pending mutation; cancellation must not
-        // become a delayed send merely because discovery already started.
-        if (args.signal?.aborted) {
-          return { ok: false, errorCode: 'tool_cancelled', error: 'tool_cancelled' };
-        }
         const session: Session = {
           ...acquiredSession,
           ...resolveSessionInputModes({
@@ -257,6 +259,9 @@ export function createServerScopedSessionSendMessage(deps?: Partial<ServerScoped
           providerDeliveryIntent: args.providerDeliveryIntent,
           serverWireMode,
         });
+        if (args.signal?.aborted) {
+          return { ok: false, errorCode: 'tool_cancelled', error: 'tool_cancelled' };
+        }
         if (areServerAccountScopesEqual(getActiveServerAccountScope(), outboxScope)) d.markSessionLiveTailIntent(sessionId);
         result = await enqueuePendingMessageV2({
           sessionId,

@@ -64,13 +64,18 @@ import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveExternalSessionSourceSurface } from '@/session/actions/externalSessions/providerOpsResolution';
 import { loadLinkedExternalSessionFromRaw } from '@/api/session/external/takeover/loadLinkedExternalSession';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import { createCliRuntimeSessionStateBridge } from '@/agent/runtime/state/bridge';
+import { subscribeSessionRuntimePublicationToMetadata } from '@/agent/runtime/identity/metadata/subscription';
 import { createExternalSessionSourceKeyOwnerFromAgentProjection } from '@/plugins/projection/registry/externalSessionSources';
+import { readCurrentCatalogHook } from '@/agent/catalog/runtimeEntry';
+import type { AgentCatalogEntry } from '@/agent/catalog/types';
 
 import {
   createConfiguredPluginExternalSessionsAdapter as createConfiguredPluginExternalSessionsAdapterOwner,
   createLiveConfiguredPluginExternalSessionsAdapter as createLiveConfiguredPluginExternalSessionsAdapterOwner,
   materializeConfiguredExternalSessionSourceCandidates,
-  resolveConfiguredExternalSessionFollowTarget,
+  resolveConfiguredExternalSessionFollowTarget as resolveConfiguredExternalSessionFollowTargetOwner,
   type ConfiguredExternalSessionSourceAccountProjection,
 } from './configuredSourceMaterializer';
 
@@ -79,17 +84,28 @@ const testAgentOccurrence = (agentId: string) => Object.freeze({
   isCurrent: () => true,
 });
 
+let testCatalogEntry: AgentCatalogEntry | null = null;
+const resolveTestCatalogEntry = async (agentId: string) =>
+  await readCurrentCatalogHook(agentId, entry => entry);
+
+function resolveConfiguredExternalSessionFollowTarget(
+  params: Omit<Parameters<typeof resolveConfiguredExternalSessionFollowTargetOwner>[0], 'resolveCatalogEntry'>,
+) {
+  return resolveConfiguredExternalSessionFollowTargetOwner({ ...params, resolveCatalogEntry: resolveTestCatalogEntry });
+}
+
 function createConfiguredPluginExternalSessionsAdapter(
   params: Omit<
     Parameters<typeof createConfiguredPluginExternalSessionsAdapterOwner>[0],
-    'resolveAgentOccurrence' | 'resolveAgentSourceCustody'
+    'resolveAgentOccurrence' | 'resolveAgentSourceCustody' | 'resolveCatalogEntry'
   > & Partial<Pick<
     Parameters<typeof createConfiguredPluginExternalSessionsAdapterOwner>[0],
-    'resolveAgentOccurrence' | 'resolveAgentSourceCustody'
+    'resolveAgentOccurrence' | 'resolveAgentSourceCustody' | 'resolveCatalogEntry'
   >>,
 ) {
   return createConfiguredPluginExternalSessionsAdapterOwner({
     ...params,
+    resolveCatalogEntry: params.resolveCatalogEntry ?? resolveTestCatalogEntry,
     resolveAgentOccurrence: params.resolveAgentOccurrence ?? testAgentOccurrence,
     resolveAgentSourceCustody: params.resolveAgentSourceCustody ?? ((agentId) => ({
       kind: 'development',
@@ -101,14 +117,15 @@ function createConfiguredPluginExternalSessionsAdapter(
 function createLiveConfiguredPluginExternalSessionsAdapter(
   params: Omit<
     Parameters<typeof createLiveConfiguredPluginExternalSessionsAdapterOwner>[0],
-    'resolveAgentOccurrence' | 'resolveAgentSourceCustody'
+    'resolveAgentOccurrence' | 'resolveAgentSourceCustody' | 'resolveCatalogEntry'
   > & Partial<Pick<
     Parameters<typeof createLiveConfiguredPluginExternalSessionsAdapterOwner>[0],
-    'resolveAgentOccurrence' | 'resolveAgentSourceCustody'
+    'resolveAgentOccurrence' | 'resolveAgentSourceCustody' | 'resolveCatalogEntry'
   >>,
 ) {
   return createLiveConfiguredPluginExternalSessionsAdapterOwner({
     ...params,
+    resolveCatalogEntry: params.resolveCatalogEntry ?? resolveTestCatalogEntry,
     resolveAgentOccurrence: params.resolveAgentOccurrence ?? testAgentOccurrence,
     resolveAgentSourceCustody: params.resolveAgentSourceCustody ?? ((agentId) => ({
       kind: 'development',
@@ -201,7 +218,7 @@ function connectedCodexSource(activeServerDir: string, profileId: string) {
     activeServerDir,
     serviceId: 'openai-codex',
     profileId,
-  });
+  }, testCatalogEntry);
   if (!homePath) {
     throw new Error('Codex connected-service materialized home is unavailable in the test catalog');
   }
@@ -345,6 +362,7 @@ describe('configured external-session source materializer', () => {
       controller: pluginReloadController,
       runtimeOptions: { pluginIds: [CODEX_PLUGIN_MANIFEST.id] },
     });
+    testCatalogEntry = await admittedRuntime.registry.acquireAgentCatalogEntry!('codex');
   });
   afterAll(async () => { await admittedRuntime?.dispose(); });
 
@@ -354,7 +372,7 @@ describe('configured external-session source materializer', () => {
     const expectedSource = connectedCodexSource(activeServerDir, 'work').source;
     expect(resolveConnectedServiceMaterializedHomeRoot('codex', {
       activeServerDir, serviceId: 'openai-codex', profileId: 'work',
-    })).toBe(expectedSource.homePath);
+    }, testCatalogEntry)).toBe(expectedSource.homePath);
     const source = ExternalSessionsSourceSchema.parse({
       kind: 'codexHome', home: 'connectedService',
       connectedServiceId: 'openai-codex', connectedServiceProfileId: 'work',
@@ -1342,6 +1360,20 @@ describe('configured external-session source materializer', () => {
     const baseCtx = fixtures.createPluginContextFixture(terminal.service, fixtures.createEventsFixture().service);
     const signal = new AbortController().signal;
     let runtime: AgentSessionRuntime;
+    // Fresh Sessions do not have a native id until the real runtime publishes
+    // its proven identity. The Home metadata transport is the only substitute.
+    let hostedMetadata = createTestMetadata({ machineId: 'machine-1', path: cwd, flavor: 'claude' });
+    const metadataSession = { sessionId: 'claude-activity', updateMetadata: async (updater: (metadata: typeof hostedMetadata) => typeof hostedMetadata) => {
+      hostedMetadata = updater(hostedMetadata);
+    } };
+    const sessionState = createCliRuntimeSessionStateBridge({ session: metadataSession,
+      credentials: { token: 'hosted-test-account', encryption: null }, metadataPort: {
+      update: async (_sessionId, updater) => {
+        await delay(0);
+        hostedMetadata = createTestMetadata(updater(hostedMetadata));
+        return { ok: true, version: 1 };
+      },
+    } }).engine;
     // The durable Home write is the system boundary. Real publication and live-work owners consume its committed result.
     let tail: RuntimeActivitySnapshotTail = { sequence: 0, custody: null, settlement: null };
     const activity = createHostRuntimeActivityProjection({ sessionId: 'claude-activity', agentRuntimeApplicability: 'supported',
@@ -1368,8 +1400,7 @@ describe('configured external-session source materializer', () => {
         const hosted = await loadLinkedExternalSessionFromRaw({
           credentials: { token: 'hosted-test-account', encryption: null }, accountEncryptionMode: 'plain',
           rawSession: createSessionRecordFixture({ id: 'claude-activity', encryptionMode: 'plain',
-            currentStorageState: 'hosted', metadata: JSON.stringify({ machineId: 'machine-1', path: cwd,
-              flavor: 'claude', claudeSessionId: remoteSessionId }) }),
+            currentStorageState: 'hosted', metadata: JSON.stringify(hostedMetadata) }),
           expectedIdentity: { agentId: 'claude', machineId: 'machine-1', remoteSessionId, source: target.source },
         }, {
           resolveExternalSessionProviderOps: async () => ops,
@@ -1403,6 +1434,7 @@ describe('configured external-session source materializer', () => {
           const handle = await fileFollow.follow(request); fileHandles.push(handle); return handle;
         } },
         followSource: async (request: Parameters<NonNullable<AgentSessionHostServices['transcripts']['followSource']>>[0]) => {
+        await unsubscribeIdentity.waitForProviderSessionIdPublication(request.providerSessionId, signal);
         const result = await follow.bindProviderSession({ agentId: 'claude', ...request });
         if (result.status === 'unavailable') throw new Error(result.code);
         return result.binding;
@@ -1422,6 +1454,8 @@ describe('configured external-session source materializer', () => {
     const unsubscribe = hostOperations.subscribeRuntimeEvents(event => {
       if ('kind' in event) void binding.observeEvent(event);
     });
+    const unsubscribeIdentity = subscribeSessionRuntimePublicationToMetadata({ session: metadataSession, sessionState,
+      runtime: hostOperations, providerSessionMetadataKey: 'claudeSessionId' });
     const queue = new MessageQueue2<string>(() => 'mode');
     const consumer = createSessionProviderInputConsumer({ messageQueue: queue, session: {
       waitForMetadataUpdate: () => new Promise<boolean>(() => {}), getMetadataSnapshot: () => ({}), getAgentStateSnapshot: () => ({}),
@@ -1485,7 +1519,7 @@ describe('configured external-session source materializer', () => {
       await operations.waitForProviderTurnCompletion();
       await vi.waitFor(async () => expect(await consumer.readLiveWork()).toMatchObject({ session: 'settled', input: 'settled' }));
     } finally {
-      unsubscribe(); await hostOperations.resetOrDisposeRuntime(); await follow.releaseActiveBindings(); activity.dispose();
+      unsubscribeIdentity(); unsubscribe(); await hostOperations.resetOrDisposeRuntime(); await follow.releaseActiveBindings(); activity.dispose();
       for (const handle of fileHandles) await handle.close();
       await rm(root, { recursive: true, force: true });
     }
@@ -4263,6 +4297,77 @@ describe('configured external-session source materializer', () => {
     lifecycle.dispose();
     lifecycle.dispose();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('awaits the admitted source-reconfiguration event before starting follow once', async () => {
+    let revision = 'settings:1';
+    let notifyRevision: ((next: string) => void) | null = null;
+    let releaseRebuild!: () => void;
+    const rebuildBlocked = new Promise<void>((resolve) => {
+      releaseRebuild = resolve;
+    });
+    const readAccount = vi.fn(async () => {
+      if (readAccount.mock.calls.length === 2) await rebuildBlocked;
+      return { connectedServicesV2: [] };
+    });
+    const followTranscript = vi.fn(async () => ({
+      status: 'following' as const,
+      startingCursor: revision,
+      subscription: { dispose: async () => undefined },
+    }));
+    const ops: ExternalSessionProviderOps = {
+      validateSource: async ({ source }) => ({ ok: true, source }),
+      listCandidates: async () => ({
+        candidates: [{ remoteSessionId: 'remote-1', updatedAtMs: 1 }],
+        nextCursor: null,
+      }),
+      resolveLinkIdentity: resolveExactLinkIdentity,
+      pageTranscript: async () => ({
+        items: [], nextCursor: null, tailCursor: null, hasMore: false, truncated: false,
+      }),
+      readAfterTranscript: async () => ({ outcome: 'already_current' }),
+    };
+    const lifecycle = await createLiveConfiguredPluginExternalSessionsAdapter({
+      agents: [agent()],
+      readAccount,
+      readAccountRevision: () => revision,
+      subscribeAccountRevision: (listener) => {
+        notifyRevision = listener;
+        return () => { notifyRevision = null; };
+      },
+      isCurrent: () => true,
+      resolveProviderOps: async () => ops,
+      followTranscript,
+    });
+    const listed = await lifecycle.authorService.list();
+    const followedRef = listed.items[0]!.ref;
+
+    revision = 'settings:2';
+    (notifyRevision as ((next: string) => void) | null)?.(revision);
+    await vi.waitFor(() => expect(readAccount).toHaveBeenCalledTimes(2));
+    let settled = false;
+    const followed = lifecycle.authorService.followTranscript(
+      followedRef,
+      {},
+      vi.fn(),
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(followTranscript).not.toHaveBeenCalled();
+    expect((await lifecycle.authorService.capabilities()).follow).toEqual({
+      status: 'unavailable',
+      code: 'plugin_external_sources_reconfiguring',
+    });
+
+    releaseRebuild();
+    const result = await followed;
+    expect(result.status).toBe('following');
+    expect(followTranscript).toHaveBeenCalledOnce();
+    if (result.status === 'following') await result.subscription.dispose();
+    lifecycle.dispose();
   });
 
   it('recreates the live adapter from the current account revision after disposal', async () => {

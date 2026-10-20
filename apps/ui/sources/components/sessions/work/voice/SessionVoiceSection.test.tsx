@@ -71,7 +71,7 @@ describe('Work voice source display', () => {
       await vi.waitFor(() => expect(screen.findAllByType(DropdownMenu)).toHaveLength(1));
       const picker = screen.findByType(DropdownMenu);
       expect(picker.props.open).toBe(false);
-      expect(picker.props.itemTrigger.detailFormatter()).toBe(`Marin · ${t('settingsVoice.mode.openaiRealtime')}`);
+      expect(picker.props.itemTrigger.detailFormatter()).toBe(`${t('sessionVoice.followAccount')} · Marin`);
     } finally { await account.dispose(); }
   });
 
@@ -97,7 +97,7 @@ describe('Work voice source display', () => {
     try {
       const machineRow = createPlainMachineRowFixture({ id: 'catalog-machine', accountId: account.scope.accountId });
       storage.getState().applyMachines([createMachineFixture({ id: 'catalog-machine',
-        serverId: account.scope.serverId, activeAt: Date.now(), access: machineRow.access })]);
+        activeAt: Date.now(), access: machineRow.access })]);
       const homeRequest = account.request.getMockImplementation();
       if (!homeRequest) throw new Error('Home HTTP boundary missing');
       account.request.mockImplementation(async (input, init) => new URL(String(input)).pathname === '/v1/machines/catalog-machine'
@@ -109,7 +109,7 @@ describe('Work voice source display', () => {
       if (!choice) throw new Error('Session voice choice missing');
       // Actual catalog client crosses the daemon RPC transport, then the shared owner retains its row.
       const previousPicker = await renderHook(() => useRealtimeVoiceCatalog({
-        client: choice.client, credentialUsable: true, targetKey: choice.targetKey,
+        providerId: choice.providerId, catalogAvailable: choice.catalogAvailable, credentialUsable: true, targetKey: choice.targetKey,
       }));
       await act(async () => previousPicker.getCurrent().requestCatalog());
       await vi.waitFor(() => expect(previousPicker.getCurrent().catalog.phase).toBe('ready'));
@@ -118,10 +118,31 @@ describe('Work voice source display', () => {
       await vi.waitFor(() => expect(screen.findAllByType(DropdownMenu)).toHaveLength(1));
       const picker = screen.findByType(DropdownMenu);
       expect(picker.props.open).toBe(false);
-      expect(picker.props.itemTrigger.detailFormatter()).toBe(`Neural C · ${tLoose('settingsVoice.local.googleCloudTts.provider.title')}`);
+      expect(picker.props.itemTrigger.detailFormatter()).toBe(`${t('sessionVoice.followAccount')} · Neural C`);
       expect(catalogRequests).toEqual([expect.objectContaining({ params: {
         target: { pluginId: 'happier.voice.google', localId: 'google-cloud-tts' }, catalog: 'voices',
       } })]);
+    } finally { await account.dispose(); }
+  });
+
+  it('says the voice as the section\'s description line, never as a row title, and names the search for the provider\'s voices', async () => {
+    const voice = voiceSettingsParse({ providerId: 'happier.voice.openai/realtime-openai' });
+    const account = await createVoiceSettingsAccountTestHarness(settingsParse({
+      experiments: true, featureToggles: { voice: true }, voiceSettingsV1: voice,
+    }));
+    try {
+      await updateEffectiveHomeViewState(() => ({ version: 1, groups: [], activeTargetKind: 'server', activeTargetId: account.scope.serverId }), { scope: 'device' });
+      expect(await getServerFeaturesSnapshot({ serverId: account.scope.serverId, force: true })).toMatchObject({ status: 'ready' });
+      const screen = await renderScreen(<SessionVoiceSection session={createSessionFixture({ serverId: account.scope.serverId })} serverId={account.scope.serverId} />);
+      await vi.waitFor(() => expect(screen.findAllByType(DropdownMenu)).toHaveLength(1));
+      const picker = screen.findByType(DropdownMenu);
+      // The field alone is the trigger; the line sits right under the section heading as its description.
+      expect(picker.props.itemTrigger.title).toBe('');
+      expect(picker.props.itemTrigger.subtitle).toBeUndefined();
+      expect(screen.getTextContent()).toContain(t('sessionVoice.idleVoice', { voice: 'Marin' }));
+      expect(typeof picker.props.searchPlaceholder).toBe('string');
+      expect(picker.props.searchPlaceholder).not.toBe('');
+      expect(picker.props.items[0].id).toBe('__follow__');
     } finally { await account.dispose(); }
   });
 
@@ -155,7 +176,8 @@ describe('Work voice source display', () => {
       await vi.waitFor(() => expect(screen.findAllByType(DropdownMenu)).toHaveLength(1));
       const picker = screen.findByType(DropdownMenu);
       const provider = tLoose('settingsVoice.local.googleCloudTts.provider.title');
-      expect(picker.props.itemTrigger.detailFormatter()).toBe(`${expectedName} · ${provider}`);
+      expect(picker.props.itemTrigger.detailFormatter()).toBe(displayName
+        ? `${expectedName} · ${provider}` : `${t('sessionVoice.followAccount')} · ${expectedName}`);
       expect(picker.props.items.find((item: { id: string }) => item.id === '__follow__').subtitle)
         .toBe(t('sessionVoice.accountVoice', { voice: expectedName, provider }));
     } finally { await account.dispose(); }

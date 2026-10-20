@@ -102,7 +102,8 @@ function answerFork() {
 }
 function rpcRequests(method: string) { return outgoing.filter((request) => request.method.endsWith(`:${method}`)); }
 function executor(options: Parameters<typeof createDefaultActionExecutor>[0] = {}) {
-  return createDefaultActionExecutor({ openSession: vi.fn(), ...options });
+  // The user accepts the native confirmation; Action admission and replay remain real.
+  return createDefaultActionExecutor({ openSession: vi.fn(), presentUserActionConfirmation: async () => true, ...options });
 }
 async function mountForkFlow(navigate = vi.fn()) {
   const onNavigated = vi.fn();
@@ -170,13 +171,18 @@ describe('default Action executor Session lifecycle contracts', () => {
   it('hydrates the expected child and opens it in the parent Home after a successful fork', async () => {
     installSession();
     answerFork();
+    // The daemon has published the child, but this device has not hydrated it yet.
+    storage.setState({ sessions: { sess_parent: storage.getState().sessions.sess_parent! },
+      sessionListRowsByServerId: { [serverId]: { sess_parent: storage.getState().sessions.sess_parent! } } });
     const openSession = vi.fn();
     const result = await executor({ openSession, resolveServerIdForSessionId: () => serverId }).execute(
       'session.fork', { sessionId: 'sess_parent' }, context());
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'forked', childSessionId: 'sess_child' } });
     expect(rpcRequests(RPC_METHODS.SESSION_FORK)).toContainEqual(expect.objectContaining({ method: `machine_1:${RPC_METHODS.SESSION_FORK}`,
       params: expect.objectContaining({ v: 1, parentSessionId: 'sess_parent', forkPoint: { type: 'latest' } }) }));
-    expect(homes.requestsFor('/v2/sessions/sess_child?accessProjectionVersion=1').length).toBeGreaterThan(0);
+    expect(homes.requests.filter(({ path }) => path.split('?')[0] === '/v2/sessions/sess_child'))
+      .toContainEqual(expect.objectContaining({ serverId }));
+    expect(storage.getState().sessions.sess_child?.metadata?.forkV1).toMatchObject({ parentSessionId: 'sess_parent' });
     expect(openSession).toHaveBeenCalledWith('sess_child', { serverId });
   });
 
@@ -490,7 +496,7 @@ describe('default Action executor Session lifecycle contracts', () => {
       { sessionId: 'sess_parent', targetMachineId: 'machine_2' }, { ...context(), serverId: parentServerId });
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
     expect(rpcRequests(RPC_METHODS.DAEMON_SESSION_HANDOFF_START_V3)[0]?.params).toHaveProperty('accountServerId', parentServerId);
-    expect(homes.requestsFor('/v1/machines')).toContainEqual(expect.objectContaining({ serverId: parentServerId }));
+    expect(homes.requestsFor('/v1/machines?includeRevoked=true')).toContainEqual(expect.objectContaining({ serverId: parentServerId }));
     expect(homes.requestsFor('/v1/machines/machine_1')).toContainEqual(expect.objectContaining({ serverId: parentServerId }));
   });
 

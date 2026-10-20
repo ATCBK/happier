@@ -1,22 +1,27 @@
 import * as React from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { Item } from '@/components/ui/lists/Item';
+import { storage } from '@/sync/domains/state/storageStore';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderSettingsView, standardCleanup } from '@/dev/testkit';
 import {
-    installSessionSettingsEntryModuleMocks,
     resetSessionSettingsEntryState,
     sessionSettingsEntryState,
 } from './sessionSettingsEntryTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-installSessionSettingsEntryModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            useWindowDimensions: () => ({ width: 1280, height: 800 }),
-        });
-    },
+await vi.hoisted(async () => {
+    const { installSessionSettingsEntryModuleMocks } = await import('./sessionSettingsEntryTestHelpers');
+    installSessionSettingsEntryModuleMocks({
+        reactNative: async () => {
+            const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+            return createReactNativeWebMock({
+                useWindowDimensions: () => ({ width: 1280, height: 800 }),
+            });
+        },
+    });
 });
 
 sessionSettingsEntryState.settingsState = {
@@ -35,19 +40,22 @@ sessionSettingsEntryState.settingsState = {
     sessionsRightPaneDefaultOpen: false,
     uiMultiPanePanelsEnabled: true,
 };
+const initialStorage = storage.getState();
 
 afterEach(() => {
     standardCleanup();
+    storage.setState(initialStorage, true);
     resetSessionSettingsEntryState();
 });
 
 describe('Session composer settings (web features moved)', () => {
     it('shows Enter-to-send and Message history inside Session composer settings (web)', async () => {
+        storage.setState({ settings: settingsParse(sessionSettingsEntryState.settingsState) });
         const mod = await import('@/app/(app)/settings/session/composer');
         const SessionComposerSettingsScreen = mod.default;
         const screen = await renderSettingsView(React.createElement(SessionComposerSettingsScreen));
 
-        const items = screen.findAllByType('Item' as any);
+        const items = screen.findAllByType(Item);
         const titles = items.map((item) => item.props.title);
 
         expect(titles).toContain('settingsSessionPages.composer.enterToSendTitle');

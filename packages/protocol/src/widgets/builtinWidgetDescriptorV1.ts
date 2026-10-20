@@ -4,6 +4,7 @@ import type { WidgetDefinitionRefV1, WidgetInstanceV1 } from './widgetInstanceV1
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import type { WidgetSizeDeclarationV1 } from './widgetPresentationV1.js';
 import { z } from 'zod/mini';
+import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js';
 import { lazyDefinition } from '../lazyZodSchema.js';
 import { PluginJsonSchemaV2Schema } from '../plugins/contributions/jsonSchema.js';
 import { WorkspaceRefV1WriteSchema } from '../workspaces/workspaceRefV1.js';
@@ -18,7 +19,7 @@ export const SESSION_COMPANION_BUILTIN_ITEM_IDS = ['session_summary', 'agent_pla
 export const PROJECT_BUILTIN_WIDGET_IDS_V1 = ['project_about', 'project_code', 'project_readme', 'project_checkouts', 'project_scripts', 'project_sessions', 'project_changes'] as const;
 export const USAGE_BUILTIN_WIDGET_IDS_V1 = ['usage_daily', 'usage_period_summary', 'usage_cost_facts', 'usage_flow', 'usage_efficiency', 'usage_breakdowns',
     'usage_capacity', 'usage_projections', 'usage_resets', 'usage_plan_fit', 'usage_project_ledger', 'usage_session_value', 'usage_outcomes', 'usage_coach',
-    'usage_rhythm', 'usage_parallel', 'usage_human_loop', 'usage_night_shift', 'usage_recap', 'usage_footprint', 'usage_sources'] as const;
+    'usage_rhythm', 'usage_parallel', 'usage_human_loop', 'usage_night_shift', 'usage_recap', 'usage_footprint', 'usage_sources', 'usage_source_coverage', 'usage_unpriced'] as const;
 export type SessionBuiltinWidgetIdV1 = (typeof SESSION_COMPANION_BUILTIN_ITEM_IDS)[number];
 export type ProjectBuiltinWidgetIdV1 = (typeof PROJECT_BUILTIN_WIDGET_IDS_V1)[number];
 export type UsageBuiltinWidgetIdV1 = (typeof USAGE_BUILTIN_WIDGET_IDS_V1)[number];
@@ -33,12 +34,15 @@ export type BuiltinWidgetIdV1 = SessionBuiltinWidgetIdV1 | ProjectBuiltinWidgetI
 export const BuiltinWidgetIdV1Schema = z.enum([...SESSION_COMPANION_BUILTIN_ITEM_IDS, ...PROJECT_BUILTIN_WIDGET_IDS_V1,
     ...USAGE_BUILTIN_WIDGET_IDS_V1, ...MACHINE_BUILTIN_WIDGET_IDS_V1, ...HOME_BUILTIN_WIDGET_IDS_V1]);
 
-/** Missing default Overview only: render without writing, then retain the whole layout on its first edit. */
+/**
+ * Missing default Overview only: render without writing, then retain the whole layout on its first edit.
+ * The preset makes no frame choice, so each widget follows its area's default until the person picks one.
+ */
 export function projectOverviewDefaultPlacementsV1(): WidgetLayoutWidgetV1[] {
     return [
         ...(['code', 'readme'] as const).map(id => ({ id, area: 'main' as const })),
         ...(['about', 'changes', 'checkouts', 'scripts', 'sessions'] as const).map(id => ({ id, area: 'aside' as const })),
-    ].map(({ id, area }) => ({ kind: 'widget', area, frameStyle: 'plain', instance: {
+    ].map(({ id, area }) => ({ kind: 'widget' as const, area, instance: {
         v: 1, id, definition: { kind: 'builtin', id: `project_${id}` }, bindings: { checkout: { kind: 'context', slot: 'checkout' } },
     } }));
 }
@@ -76,6 +80,8 @@ const nativeMetadata = {
     usage_recap: { title: 'Recap', titleKey: 'usage.widgets.usage_recap', descriptionKey: 'usage.board.page.purposeRecap', icon: 'sparkle' },
     usage_footprint: { title: 'Footprint', titleKey: 'usage.widgets.usage_footprint', descriptionKey: 'usage.board.page.purposeFootprint', icon: 'leaf' },
     usage_sources: { title: 'Sources', titleKey: 'usage.widgets.usage_sources', descriptionKey: 'usage.board.page.purposeSources', icon: 'stack' },
+    usage_source_coverage: { title: 'Coverage', titleKey: 'usage.widgets.usage_source_coverage', descriptionKey: 'usage.board.sources.coveragePurpose', icon: 'stack' },
+    usage_unpriced: { title: 'Unpriced', titleKey: 'usage.widgets.usage_unpriced', descriptionKey: 'usage.board.sources.unpricedPurpose', icon: 'currency-dollar' },
     machine_vitals: { title: 'Vitals', titleKey: 'machines.widgets.machine_vitals', descriptionKey: 'machines.widgets.body.purpose.machine_vitals', icon: 'pulse' },
     machine_fleet: { title: 'Machines', titleKey: 'machines.widgets.machine_fleet', descriptionKey: 'machines.widgets.body.purpose.machine_fleet', icon: 'desktop' },
     machine_metric: { title: 'Metric', titleKey: 'machines.widgets.machine_metric', descriptionKey: 'machines.widgets.body.purpose.machine_metric', icon: 'chart-line' },
@@ -97,11 +103,11 @@ const sessionInputs: WidgetInputDescriptorV1 = {
     }, required: ['serverId', 'sessionId'], additionalProperties: false } }, required: ['session'], additionalProperties: false },
 };
 const nativeSizeDeclaration = { sizes: ['small', 'medium', 'wide', 'full', 'tall', 'large'], defaultSize: 'medium' } satisfies WidgetSizeDeclarationV1;
-const workspaceInputSchema = lazyDefinition(() => PluginJsonSchemaV2Schema.parse(z.toJSONSchema(z.strictObject({
+const workspaceInputSchema = lazyDefinition(() => PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaObject(z.strictObject({
     checkout: WorkspaceRefV1WriteSchema,
-}), { io: 'input', target: 'draft-7' })));
+}), { target: 'draft-7' })));
 const workspaceInputs: WidgetInputDescriptorV1 = {
-    inputs: { fields: [{ path: 'checkout', title: 'Checkout', prompt: 'Which workspace?', widget: 'json', inputType: { hostType: 'workspace' }, required: true }] },
+    inputs: { fields: [{ path: 'checkout', title: 'Checkout', prompt: 'Which checkout?', widget: 'select', inputType: { hostType: 'workspace' }, required: true }] },
     inputSchema: workspaceInputSchema,
 };
 /** Presentation inputs belong only to bodies that actually consume them. Query scope stays shared. */
@@ -110,7 +116,7 @@ const usagePresentationInputs: Readonly<Partial<Record<UsageBuiltinWidgetIdV1, r
     usage_breakdowns: ['metric', 'breakdown'], usage_project_ledger: ['metric'], usage_session_value: ['metric'],
     usage_outcomes: ['metric'], usage_recap: ['metric'],
 };
-const usageInputSchema = lazyDefinition(() => PluginJsonSchemaV2Schema.parse(z.toJSONSchema(UsageQuerySchema, { io: 'input', target: 'draft-7' })));
+const usageInputSchema = lazyDefinition(() => PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaObject(UsageQuerySchema, { target: 'draft-7' })));
 const usageInputs = (id: UsageBuiltinWidgetIdV1): WidgetInputDescriptorV1 => ({
     inputs: { fields: USAGE_QUERY_INPUT_FIELDS.filter(field => field.contextMode === 'follow'
         || usagePresentationInputs[id]?.some(path => path === field.path))
@@ -123,7 +129,7 @@ const usageInputs = (id: UsageBuiltinWidgetIdV1): WidgetInputDescriptorV1 => ({
 const sourceInventoryInputs: WidgetInputDescriptorV1 = {
     inputs: { fields: USAGE_QUERY_INPUT_FIELDS.filter(field => ['agents', 'machines', 'sources'].includes(field.path))
         .map(field => ({ ...field, required: field.required ?? true })) },
-    inputSchema: lazyDefinition(() => PluginJsonSchemaV2Schema.parse(z.toJSONSchema(UsageSourceInventoryScopeSchema, { io: 'input', target: 'draft-7' }))),
+    inputSchema: lazyDefinition(() => PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaObject(UsageSourceInventoryScopeSchema, { target: 'draft-7' }))),
 };
 
 const machineField: InputFieldHint = { path: 'machine', title: 'Machine', prompt: 'Which machine?', widget: 'select',
@@ -166,7 +172,7 @@ function machineWidgetContract(id: MachineBuiltinWidgetIdV1): WidgetInputDescrip
     }
     const fourSizes = id === 'machine_left_behind' || id === 'machine_worktrees' || id === 'machine_cleanup_suggestion';
     const defaultSize = id === 'machine_fleet' ? 'wide' : id === 'machine_vitals' || id === 'machine_left_behind' || id === 'machine_worktrees' ? 'small' : 'medium';
-    return { inputs: { fields }, inputSchema: lazyDefinition(() => PluginJsonSchemaV2Schema.parse(z.toJSONSchema(schema, { io: 'input', target: 'draft-7' }))),
+    return { inputs: { fields }, inputSchema: lazyDefinition(() => PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaObject(schema, { target: 'draft-7' }))),
         sizeDeclaration: { sizes: fourSizes ? ['small', 'medium', 'wide', 'full'] : nativeSizeDeclaration.sizes, defaultSize } };
 }
 

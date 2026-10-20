@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Platform, ScrollView, View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { HAPPIER_STATE_LINE_METRICS } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_MENU_ROW_TEXT, HAPPIER_STATE_LINE_METRICS } from '@happier-dev/plugin-ui/presentation';
 
 import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
 import { presentCapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
@@ -14,9 +14,11 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { CollectionListGroupLabel } from '@/components/ui/lists/collection/CollectionList';
 import { Item } from '@/components/ui/lists/Item';
 import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
+import { SkeletonRows } from '@/components/ui/lists/SkeletonRows';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
+import { useDeviceType } from '@/utils/platform/responsive';
 
 import type {
   SessionCapabilitiesModel,
@@ -32,9 +34,18 @@ export type SessionCapabilitiesChange = (
   }>,
 ) => Promise<unknown>;
 
+/** The person's last add or removal, held by the controller for an in-place Undo ("pdf added · Undo"). */
+export type SessionCapabilitiesUndo = Readonly<{
+  title: string;
+  change: 'added' | 'removed';
+  onUndo: () => void;
+}>;
+
 export type SessionCapabilitiesContentProps = Readonly<{
   model: SessionCapabilitiesModel;
   onChange: SessionCapabilitiesChange;
+  /** Present while the last change can still be taken back; drawn by the shared line state above the footer. */
+  undo?: SessionCapabilitiesUndo | null;
   testID: string;
   /** The popover's remaining height budget; the body scrolls under the fixed add field and footer. */
   maxHeight?: number;
@@ -46,10 +57,37 @@ export type SessionCapabilitiesContentProps = Readonly<{
   onOpen?: (destination: 'skills' | 'mcp') => void;
   /** Display name of the session's machine, for the offline line. */
   machineName?: string;
+  /** The rows each group held when last seen: the first-load placeholders reserve that many (else the preview size). */
+  knownRows?: Readonly<{ skills: number; mcp: number }>;
 }>;
 
 /** A group shows this many rows before "n more" (layout density, not a data cap; L3 §12). */
 const GROUP_PREVIEW_ROWS = 6;
+
+/**
+ * The placeholder rows a group holds while the first preview loads, so the loaded rows land in the box that was
+ * reserved (layout reservation, not a data cap): what the group held when last seen, else a full preview. A group
+ * that held more than a preview also reserves the "n more" line.
+ */
+function skeletonRowsFor(known: number | undefined): Readonly<{ rows: number; reservesMore: boolean }> {
+  if (known === undefined) return { rows: GROUP_PREVIEW_ROWS, reservesMore: false };
+  return { rows: Math.min(Math.max(known, 1), GROUP_PREVIEW_ROWS), reservesMore: known > GROUP_PREVIEW_ROWS };
+}
+/** A placeholder row stands in a loaded menu row's box: two lines, so the real rows land without a jump. */
+const SKELETON_ROW_BOX = {
+  minHeight: MENU_ROW_METRICS.minHeightPx,
+  paddingVertical: MENU_ROW_METRICS.paddingVerticalPx,
+} as const;
+const SKELETON_ROW_LINES = [
+  HAPPIER_MENU_ROW_TEXT.label.lineHeight,
+  HAPPIER_MENU_ROW_TEXT.subtitle.lineHeight + MENU_ROW_METRICS.subtitleGapPx,
+] as const;
+const SKELETON_ROW_GEOMETRY = {
+  insetStart: MENU_ROW_METRICS.paddingHorizontalPx,
+  insetEnd: MENU_ROW_METRICS.paddingHorizontalPx,
+  glyphColumn: 0,
+  gap: 0,
+} as const;
 
 /**
  * "This session gets": the one body for the composer chip's popover and its phone sheet (the shared
@@ -60,6 +98,9 @@ export function SessionCapabilitiesContent(
   props: SessionCapabilitiesContentProps,
 ): React.ReactElement {
   const { model } = props;
+  // The phone sheet's title band sits on the 16 px gutter; menu rows start 12 px in, so the sheet's own
+  // content takes the difference and the rows' text meets the title's edge.
+  const onPhone = useDeviceType() === 'phone';
   const [adding, setAdding] = React.useState(false);
   const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(
     () => new Set(),
@@ -74,7 +115,8 @@ export function SessionCapabilitiesContent(
   const resolvingWithoutRows = model.state === 'resolving' && !hasRows;
   // Without a preview there is nothing to list: an offline machine or a failed check says so once, and
   // never as "No skills yet" groups, which would claim the session gets nothing.
-  const groupsUnknown = !hasRows && model.state !== 'ready';
+  const groupsUnknown =
+    !hasRows && model.state !== 'ready' && model.state !== 'resolving';
 
   const body = (
     <View testID={`${props.testID}:lists`}>
@@ -114,15 +156,6 @@ export function SessionCapabilitiesContent(
               : {})}
           />
         </View>
-      ) : resolvingWithoutRows ? (
-        <View style={styles.stateLine}>
-          <SurfaceStateCard
-            testID={`${props.testID}:resolving`}
-            kind="loading"
-            size="line"
-            title={t('capabilities.session.sheet.checking')}
-          />
-        </View>
       ) : null}
       {groupsUnknown
         ? null
@@ -132,8 +165,13 @@ export function SessionCapabilitiesContent(
               ? group.rows
               : group.rows.slice(0, GROUP_PREVIEW_ROWS);
             const hidden = group.rows.length - visible.length;
-            const count =
-              group.kind === 'skills' ? model.counts.skills : model.counts.mcp;
+            const skeleton = skeletonRowsFor(props.knownRows?.[group.kind]);
+            // Unknown is never zero: the heading of a group still loading carries no count.
+            const count = resolvingWithoutRows
+              ? undefined
+              : group.kind === 'skills'
+                ? model.counts.skills
+                : model.counts.mcp;
             return (
               <View
                 key={group.kind}
@@ -155,6 +193,24 @@ export function SessionCapabilitiesContent(
                     </Text>
                   }
                 />
+                {resolvingWithoutRows ? (
+                  <SkeletonRows
+                    testID={`${props.testID}:resolving${index === 0 ? '' : `:${group.kind}`}`}
+                    rows={skeleton.rows}
+                    rowBox={SKELETON_ROW_BOX}
+                    lineHeights={SKELETON_ROW_LINES}
+                    geometry={SKELETON_ROW_GEOMETRY}
+                    {...(index === 0
+                      ? { accessibilityLabel: t('capabilities.session.sheet.checking') }
+                      : {})}
+                  />
+                ) : null}
+                {resolvingWithoutRows && skeleton.reservesMore ? (
+                  // The "n more" line this group will have, reserved at its height and not drawn.
+                  <View style={[styles.more, styles.reserved]} aria-hidden testID={`${props.testID}:resolving-more:${group.kind}`}>
+                    <TextLinkButton label={t('capabilities.where.more', { count: 0 })} expanded={false} onPress={() => {}} />
+                  </View>
+                ) : null}
                 <View role="list" accessibilityLabel={group.title}>
                   {visible.map((row) => (
                     <SessionCapabilityRow
@@ -176,7 +232,9 @@ export function SessionCapabilitiesContent(
                     />
                   </View>
                 ) : null}
-                {group.rows.length === 0 && group.nativeRow === null ? (
+                {group.rows.length === 0 &&
+                group.nativeRow === null &&
+                !resolvingWithoutRows ? (
                   <View style={styles.stateLine}>
                     <SurfaceStateCard
                       testID={`${props.testID}:empty:${group.kind}`}
@@ -268,6 +326,7 @@ export function SessionCapabilitiesContent(
       testID={props.testID}
       style={[
         styles.root,
+        onPhone ? styles.rootPhone : null,
         props.maxHeight !== undefined ? { maxHeight: props.maxHeight } : null,
       ]}
     >
@@ -278,6 +337,25 @@ export function SessionCapabilitiesContent(
       >
         {body}
       </ScrollView>
+      {props.undo ? (
+        <View style={styles.undoLine}>
+          <SurfaceStateCard
+            testID={`${props.testID}:undo`}
+            kind="success"
+            size="line"
+            accessibilitySemantics="status"
+            title={
+              props.undo.change === 'added'
+                ? t('capabilities.session.sheet.itemAdded', { item: props.undo.title })
+                : t('capabilities.session.sheet.itemRemoved', { item: props.undo.title })
+            }
+            action={{
+              label: t('capabilities.session.ask.undo'),
+              onPress: props.undo.onUndo,
+            }}
+          />
+        </View>
+      ) : null}
       {footer}
     </View>
   );
@@ -490,9 +568,12 @@ function SessionCapabilityAddField(
               key={`${item.kind}:${item.id}`}
               title={item.title}
               subtitle={
-                item.kind === 'skill'
-                  ? t('capabilities.skills.title')
-                  : t('capabilities.session.mcpServers')
+                // A pick that can't apply to this running session says why instead of its kind (PD12).
+                item.readOnlyReason === 'new_sessions_only'
+                  ? t('capabilities.session.apply.newSessionsOnly', { item: '', machine: '' })
+                  : item.kind === 'skill'
+                    ? t('capabilities.skills.title')
+                    : t('capabilities.session.mcpServers')
               }
               disabled={item.readOnlyReason !== null}
               showChevron={false}
@@ -533,6 +614,10 @@ const styles = StyleSheet.create((theme) => ({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border.subtle,
   },
+  rootPhone: {
+    paddingHorizontal:
+      theme.space.s16 - MENU_ROW_METRICS.paddingHorizontalPx,
+  },
   scroll: { flexShrink: 1 },
   scrollContent: { paddingBottom: theme.space.s4 },
   // A state line draws its own column inset; here its glyph starts on the menu rows' text edge.
@@ -542,12 +627,19 @@ const styles = StyleSheet.create((theme) => ({
       HAPPIER_STATE_LINE_METRICS.paddingHorizontalPx,
     paddingVertical: theme.space.s8,
   },
+  undoLine: {
+    marginHorizontal:
+      MENU_ROW_METRICS.paddingHorizontalPx -
+      HAPPIER_STATE_LINE_METRICS.paddingHorizontalPx,
+    paddingVertical: theme.space.s4,
+  },
   groupDivider: {
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border.subtle,
     marginTop: theme.space.s8,
   },
   trailing: { color: theme.colors.text.tertiary },
+  reserved: { opacity: 0 },
   more: {
     paddingHorizontal: theme.space.s12,
     paddingVertical: theme.space.s6,

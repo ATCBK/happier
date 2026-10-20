@@ -80,6 +80,7 @@ describe('SessionBoardContinuityProvider', () => {
             actions,
         };
         const pluginRuntime = {
+            accountLifetime: null,
             pluginUiProjection: null,
             pluginBrowserProjection: null,
             phase: 'unavailable' as const,
@@ -121,9 +122,7 @@ describe('SessionBoardContinuityProvider', () => {
         });
         expect(requireEditor().body).toBe('the final unsaved character');
 
-        await act(async () => {
-            screen.tree.update(owner(<BoardHost hostKey="mobileCockpit" />));
-        });
+        await screen.update(owner(<BoardHost hostKey="mobileCockpit" />));
 
         expect(requireController('mobileCockpit').noteDraft?.itemId).toBe(draftItemId);
         expect(requireEditor().body).toBe('the final unsaved character');
@@ -154,6 +153,7 @@ describe('SessionBoardContinuityProvider', () => {
             actions,
         };
         const pluginRuntime = {
+            accountLifetime: null,
             pluginUiProjection: null,
             pluginBrowserProjection: null,
             phase: 'unavailable' as const,

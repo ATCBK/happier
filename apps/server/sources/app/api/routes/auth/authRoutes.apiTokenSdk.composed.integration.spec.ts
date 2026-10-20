@@ -8,6 +8,8 @@ import {
     normalizeActionsSettingsV1,
     parseAccountApiTokenCredentialV1,
     signAccountContentKeyBindingV1,
+    type ExternalActionExecutionAuthorizationV1,
+    type ExternalActionTargetV1,
 } from '@happier-dev/protocol';
 
 import { auth } from '@/app/auth/auth';
@@ -28,6 +30,13 @@ type TestRpcHandler = (
     input: unknown,
     context?: Readonly<{ signal: AbortSignal; authorization?: unknown }>,
 ) => unknown | Promise<unknown>;
+
+type TestExecutionAuthorization = Readonly<{
+    authorization: ExternalActionExecutionAuthorizationV1;
+    effectActionId: string;
+    target: ExternalActionTargetV1;
+    signal?: AbortSignal;
+}>;
 
 type TestSdkClient = Readonly<{
     actions: Readonly<{
@@ -67,12 +76,15 @@ describe('trusted CLI issuance and protected SDK invocation over HTTP', () => {
         const account = await db.account.create({ data: {
             publicKey: Buffer.from(signing.publicKey).toString('hex'),
             encryptionMode: 'e2ee',
+            terminalPresentUserPolicy: 'allowed',
             contentPublicKey: new Uint8Array(content.publicKey),
             contentPublicKeySig: new Uint8Array(signAccountContentKeyBindingV1({
                 accountSigningSecretKey: signing.secretKey, contentPublicKey: content.publicKey,
             })),
         } });
-        const interactive = await auth.createToken(account.id, undefined, { kind: 'account', authority: 'present_user' });
+        // Current CLI sign-in persists a terminal root; the credential reader
+        // retires obsolete Account bearers before any request can use them.
+        const interactive = await auth.createToken(account.id, undefined, { kind: 'terminal', authority: 'account_automation' });
         const serverIdentityId = await getOrCreateServerIdentityId();
         await initializeServerIdentityCache();
         const home = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
@@ -85,6 +97,7 @@ describe('trusted CLI issuance and protected SDK invocation over HTTP', () => {
         registerAccountEncryptionRoutes(app);
         registerAccountApiTokenManagementRoutes(app);
         registerApiTokenIntrospectionRoute(app);
+        registerExternalActionRoutes(app);
         featuresRoutes(app);
         const serverUrl = await home.listen({ host: '127.0.0.1', port: 0 });
         harness.resetEnv({
@@ -121,9 +134,18 @@ describe('trusted CLI issuance and protected SDK invocation over HTTP', () => {
         const { createAccountServerPatEncryptionAccessReader } = await importTestModule<{
             createAccountServerPatEncryptionAccessReader: (options: unknown) => unknown;
         }>('../../../../../../cli/src/daemon/auth/accountServerPatEncryptionAccess');
+        const { verifyExternalActionExecutionAuthorizationCurrent } = await importTestModule<{
+            verifyExternalActionExecutionAuthorizationCurrent: (input: TestExecutionAuthorization & Readonly<{
+                privateKey: Uint8Array; installationId: string; serverHttpBaseUrl: string;
+            }>) => Promise<boolean>;
+        }>('../../../../../../cli/src/api/externalActionExecutionAuthorization');
         const { connect } = await importTestModule<{
             connect: (options: Readonly<{ endpoint: string; token: string }>) => TestSdkClient;
         }>('../../../../../../../packages/sdk/src/connect');
+        const { configuration } = await importTestModule<{ configuration: Readonly<{ apiServerUrl: string; happyHomeDir: string }> }>(
+            '../../../../../../cli/src/configuration');
+        expect(configuration.apiServerUrl).toBe(serverUrl);
+        expect(configuration.happyHomeDir).toBe(join(harness.baseDir, 'cli'));
         await writeCredentialsDataKey({ token: interactive, machineKey: content.secretKey, publicKey: content.publicKey });
         const output = captureStdout();
         let encodedCredential = '';
@@ -146,16 +168,21 @@ describe('trusted CLI issuance and protected SDK invocation over HTTP', () => {
         openedServers.push(daemon);
         const requests: string[] = [];
         const responses: string[] = [];
-        daemon.addHook('preHandler', async (request) => { requests.push(JSON.stringify(request.body)); });
+        daemon.addHook('preHandler', async (request) => {
+            const body = JSON.stringify(request.body);
+            if (typeof body === 'string') requests.push(body);
+        });
         daemon.addHook('onSend', async (_request, _reply, payload) => {
             if (typeof payload === 'string') responses.push(payload);
             return payload;
         });
         const target = { kind: 'machine' as const, machineId: 'sdk-machine' };
         const installationIdentity = tweetnacl.sign.keyPair();
+        const installationId = crypto.randomUUID();
         let monotonicNow = 0;
         const ingress = {
             currentServerId: serverIdentityId,
+            currentServerHttpBaseUrl: serverUrl,
             resolveTarget: async () => target,
             resolveEncryption: async () => ({ serverIdentityId, material: { type: 'dataKey' as const, machineKey: content.secretKey } }),
             executor: createCliActionExecutorHarness({ token: interactive, sessionId: '', mode: 'plain', ctx: null,
@@ -177,13 +204,17 @@ describe('trusted CLI issuance and protected SDK invocation over HTTP', () => {
             ...ingress,
             machineId: target.machineId,
             resolveAccountId: async () => account.id,
+            resolveInstallationId: () => installationId,
+            verifyExecutionAuthorization: (input: TestExecutionAuthorization) => verifyExternalActionExecutionAuthorizationCurrent({
+                ...input, privateKey: installationIdentity.secretKey, installationId, serverHttpBaseUrl: serverUrl,
+            }),
             externalActionMachineRequestPrivateKey: installationIdentity.secretKey,
         });
         await db.machine.create({ data: {
             id: target.machineId,
             accountId: account.id,
             metadata: 'encrypted-test-metadata',
-            installationId: crypto.randomUUID(),
+            installationId,
             installationPublicKey: new Uint8Array(installationIdentity.publicKey),
             operationProtocolCapabilities: {
                 externalActionExecutionAuthorization: { protocolVersions: [1] },

@@ -9,7 +9,6 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { PathSelectionList, type PathSelectionListProps } from '@/components/ui/pathPicker/PathSelectionList';
-import { Text } from '@/components/ui/text/Text';
 import { WorkspaceSyncIgnoredIncludePatternsField } from '@/components/workspaces/sync/WorkspaceSyncIgnoredIncludePatternsField';
 import {
     SESSION_HANDOFF_CONTENT_SELECTION_OPTIONS,
@@ -36,12 +35,13 @@ export function WorkspaceActivationDestinationFields(props: Readonly<{
     return (
         <View pointerEvents={props.disabled ? 'none' : 'auto'} importantForAccessibility={props.disabled ? 'no-hide-descendants' : 'auto'}>
             <MachineSelector {...props.machine} />
-            <ItemGroup title={props.pathTitle} clipContent>
+            {/* What the destination still needs is the group's own note, on its text edge (the submit control
+                carries the same reason as its hint). */}
+            <ItemGroup title={props.pathTitle} description={props.blockedReason ?? undefined} clipContent>
                 {props.fixedFolderLabel
                     ? <Item testID="workspace-activation-fixed-folder" title={props.fixedFolderLabel} showChevron={false} />
                     : <PathSelectionList {...props.path} />}
             </ItemGroup>
-            {props.blockedReason ? <Text accessibilityLiveRegion="polite">{props.blockedReason}</Text> : null}
         </View>
     );
 }
@@ -52,7 +52,7 @@ export function WorkspaceActivationModeField(props: Readonly<{
     selectedId: string;
     title: string;
     subtitle: string;
-    items: ReadonlyArray<{ id: string; title: string; subtitle: string }>;
+    items: ReadonlyArray<{ id: string; title: string; subtitle: string; disabled?: boolean }>;
     onSelect: (id: string) => void;
     testID?: string;
     disabled?: boolean;

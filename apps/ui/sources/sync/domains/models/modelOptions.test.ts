@@ -9,6 +9,7 @@ import {
     supportsFreeformModelSelectionForSession,
     isModelSelectableForSession,
     resolveCanonicalNativeModelSelectionRef,
+    resolveSessionModelLabel,
 } from './modelOptions';
 import { findModelOptionForEffectiveModelId } from './modelOptions';
 import type { Metadata } from '@happier-dev/session-core/state';
@@ -24,6 +25,15 @@ function withMetadata(overrides: Partial<Metadata>): Metadata {
 }
 
 describe('modelOptions', () => {
+    it('retains the stored model intent resolved through a backend routing reference in the Work autopsy', () => {
+        const metadata = withMetadata({ modelSelectionIntentV1: {
+            v: 1, updatedAt: 5, selection: {
+                agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId: 'retained-model',
+            },
+        } });
+        expect(getModelOptionsForSession('claude', metadata).map(option => option.value)).toContain('retained-model');
+    });
+
     it('reads an unresolved configured Agent container without assigning its retained model intent', () => {
         const metadata = withMetadata({
             modelSelectionIntentV1: { v: 1, updatedAt: 5, selection: {
@@ -611,5 +621,13 @@ describe('resolveCanonicalNativeModelSelectionRef', () => {
             providerConnectionId: 'pc_openai',
         };
         expect(resolveCanonicalNativeModelSelectionRef(options, providerBound)).toBe(providerBound);
+    });
+});
+
+describe('resolveSessionModelLabel', () => {
+    it('names an Agent model by its catalog title and says nothing for an id the catalog does not know', () => {
+        const metadata = withMetadata({});
+        expect(resolveSessionModelLabel('claude', metadata, 'claude-haiku-4-5')).toBe('Haiku 4.5');
+        expect(resolveSessionModelLabel('claude', metadata, 'not-a-catalog-model')).toBeNull();
     });
 });

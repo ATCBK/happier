@@ -491,6 +491,14 @@ describe('ActionsService source contract', () => {
         expectTypeOf<ActionsService['execute']>().toBeFunction();
 
         const compileContract = (service: ActionsService) => {
+            void service.execute('agents.acp.backends.upsert', {
+                backend: {
+                    id: 'configured-review', name: 'configured-review', title: 'Configured review',
+                    launch: { kind: 'command', command: 'review-agent', args: ['acp'] },
+                    runtime: { permissionModeMapping: { 'read-only': 'ask', plan: 'plan' } },
+                },
+                expectedRevision: 1,
+            });
             void service.execute('memory.get_window', {
                 machineId: 'machine-1',
                 sessionId: 'session-1',

@@ -257,7 +257,7 @@ export function mergeThinkingText(prevText: string, nextChunk: string): string {
   // Insert a single space when the join would otherwise concatenate tokens.
   const prevLast = prev.slice(-1);
   const prevTrimmedEnd = prev.replace(/\s+$/g, '');
-  const prevLastSignificant = prevTrimmedEnd.replace(/[)\]"'’”]+$/g, '').slice(-1) || prevTrimmedEnd.slice(-1) || prevLast;
+  const prevLastSignificant = prevTrimmedEnd.replace(/[)\]"'\u2019\u201d]+$/g, '').slice(-1) || prevTrimmedEnd.slice(-1) || prevLast;
   const nextFirst = next.slice(0, 1);
   const boundaryHasNoWhitespace =
     prevLast.length > 0 &&

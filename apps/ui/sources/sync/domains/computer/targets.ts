@@ -1,4 +1,4 @@
-import { computerTargetKeyV1, type ComputerAccessV1, type ComputerGrantStatusV1, type ComputerTargetsListResponseV1 } from '@happier-dev/protocol/computer/v1';
+import { computerTargetKeyV1, resolveComputerAccess, type ComputerAccessV1, type ComputerGrantStatusV1, type ComputerTargetsListResponseV1 } from '@happier-dev/protocol/computer/v1';
 
 export type ComputerTargetEntry = ComputerTargetsListResponseV1['targets'][number];
 export type ComputerTargetPickerState =
@@ -21,8 +21,8 @@ export function groupComputerTargets(targets: readonly ComputerTargetEntry[]) {
     };
 }
 
-export function needsComputerPermission(grants: ComputerGrantStatusV1, access: ComputerAccessV1 = 'use'): boolean {
-    return grants.capture !== 'granted' || (access === 'use' && grants.input !== 'granted');
+export function needsComputerPermission(grants: ComputerGrantStatusV1, access?: ComputerAccessV1): boolean {
+    return grants.capture !== 'granted' || (resolveComputerAccess(access) === 'use' && grants.input !== 'granted');
 }
 
 export type ComputerRecovery = Readonly<{

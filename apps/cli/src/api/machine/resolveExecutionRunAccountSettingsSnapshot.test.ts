@@ -59,6 +59,19 @@ function captureHomeReads(onCatalogRead?: () => void, sharedSecret = false) {
 }
 
 describe('Machine Execution Run owner account snapshot', () => {
+    it('refuses a Run read after its owner retires even while the original credentials remain available', async () => {
+        captureHomeReads();
+        const resolver = createExecutionRunAccountSettingsSnapshotResolver({ machineId: 'run-machine',
+            serverHttpBaseUrl: 'https://run-owner.test', readCredentials: async () => credentials,
+            isOwnerCurrent: () => true, onSettings() {} });
+        await resolver();
+        const operation = resolver.readOperationContext();
+        expect(operation?.readSnapshot()).not.toBeNull();
+        await resolver.dispose();
+        await expect(resolver()).rejects.toMatchObject({ code: 'provider_authorization_changed' });
+        expect(operation?.readSnapshot()).toBeNull();
+    });
+
     it.each(['', '   ', 'run-machine'])('preserves the typed Account refusal with diagnostic Machine %j', async machineId => {
         const resolver = createExecutionRunAccountSettingsSnapshotResolver({ machineId, serverHttpBaseUrl: 'https://run-owner.test',
             readCredentials: async () => null, isOwnerCurrent: () => true, onSettings() {} });

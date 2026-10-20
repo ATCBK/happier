@@ -55,6 +55,8 @@ async function connect(socket: ReturnType<typeof createSocketIoBoundaryStub>['so
     await vi.waitFor(() => expect(socket.connected).toBe(true));
 }
 
+await import('./apiSocket');
+
 describe('apiSocket reconnect semantics', () => {
     afterEach(() => {
         activeSocket?.disconnect(); activeSocket = undefined;

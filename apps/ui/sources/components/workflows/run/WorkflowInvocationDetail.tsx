@@ -17,7 +17,6 @@ import type {
 } from '@/components/tools/shell/permissions/executionRunPromptResponseTarget';
 import { UserActionPromptCard } from '@/components/tools/shell/userActions/UserActionPromptCard';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { ToolbarButton } from '@/components/ui/buttons/ToolbarButton';
 import { Switch } from '@/components/ui/forms/Switch';
 import { Item } from '@/components/ui/lists/Item';
@@ -28,12 +27,15 @@ import { t } from '@/text';
 import { MultiTextInput } from '@/components/ui/forms/MultiTextInput';
 
 import { describeWorkflowInvocationAttempt } from '@/components/workflows/presentation/workflowLifecyclePresentation';
+import { isTerminalWorkflowInvocationLifecycle } from '@/components/work/status/resolveWorkStatusTone';
 import { formatWorkflowUsageLabel } from '@/components/workflows/presentation/workflowUsagePresentation';
 import { WorkflowResultContractSchema } from '@happier-dev/protocol/workflows/workflowV1';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
+import { TechnicalDetailsDisclosure, type TechnicalDetailsLine } from '@/components/ui/lists/TechnicalDetailsDisclosure';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 import { WorkflowReviewValue } from './WorkflowReviewCard';
+import { useAnsweredByLabel } from './workflowAnsweredBy';
 
 import { workflowRunStyles as styles } from './workflowRunStyles';
 import type {
@@ -195,6 +197,7 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
     const { theme } = useUnistyles();
     const { recovery, testIDPrefix } = props;
     const execution = props.progress?.execution;
+    const answeredBy = useAnsweredByLabel(props.progress?.review?.resultSource);
     const workspace = recovery.workspace;
     const prepared = recovery.preparedRecovery;
     const continuation = useReviewedContinuation(prepared, {
@@ -270,11 +273,14 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
     // (UX-26), never zero and never silently absent. A container frame runs no
     // agent of its own, so it has no usage row; an unopened row has nothing to
     // say yet.
+    // A step still working has not reported yet, so it shows no usage row at all; once settled, missing
+    // usage says so in words rather than a bare dash.
+    const usageSettled = props.lifecycle != null && isTerminalWorkflowInvocationLifecycle(props.lifecycle);
     const usageUnavailable = props.progress?.blockKind === 'step' && props.progress.usage === undefined;
     const usageLabel = props.progress === null || props.progress.blockKind !== 'step'
         ? null
         : props.progress.usage === undefined
-            ? '\u2014'
+            ? usageSettled ? t('workflows.run.usageNotReported') : null
             : formatWorkflowUsageLabel(props.progress.usage, {
                 tokens: t('usage.tokens'),
                 input: t('usage.tokenMix.input'),
@@ -301,23 +307,15 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
     ] as const).filter(([, offered]) => offered).map(([choice]) => choice);
     const choiceDisplay = (choice: (typeof offeredChoices)[number]) => offeredChoices[0] === choice ? 'default' as const : 'secondary' as const;
     const choiceOffered = offeredChoices.length > 0 || replacementOffered;
-    // What happened comes from the recovery owner's typed cause (FF-D17FUNC): a reported failure in the
-    // provider's words, or lost contact with its Machine and when.
+    // Only this attempt's recorded failure explains what happened. Connectivity only affects recovery.
     const failureCause = recovery.failureCause ?? null;
-    const unavailableMachine = recovery.unavailableMachine
-        ?? (props.machine?.reachable === false ? { name: props.machine.name, lastSeenAt: null } : null);
+    const unavailableMachine = recovery.unavailableMachine ?? null;
     const showRecoveryCard = choiceOffered || recovery.workspaceUnavailable || failureCause !== null
         || props.lifecycle === 'failed' || props.lifecycle === 'outcome_uncertain';
-    const lostContactHeadline = (machine: string, lastSeenAt: number | null) => lastSeenAt === null
-        ? t('workflows.recovery.lostContact', { machine })
-        : t('workflows.recovery.lostContactAt', { machine, time: formatAsOfTime(lastSeenAt) });
-    // A failure reported in words leads with them. Without words, an unreachable Machine is the cause the
-    // person can act on ("Lost contact with … at 14:58"), never a bare reason code.
-    const reportedMessage = failureCause?.kind === 'reported_failure' ? failureCause.message : null;
+    const reportedMessage = failureCause?.kind === 'reported_failure' ? failureCause.headline : null;
     const causeHeadline = reportedMessage
-        ?? (failureCause?.kind === 'lost_contact' ? lostContactHeadline(failureCause.machine, failureCause.lastSeenAt) : null)
-        ?? props.cause ?? props.progress?.reason?.message
-        ?? (unavailableMachine !== null ? lostContactHeadline(unavailableMachine.name, unavailableMachine.lastSeenAt) : null)
+        ?? props.cause
+        ?? (failureCause?.kind === 'cause_not_recorded' ? t('workflows.recovery.causeNotRecorded') : null)
         ?? t('workflows.recovery.didNotFinish');
     // With choices, the description says what they keep; without, the one sentence saying when they
     // appear is the sheet's content, so the card never draws an empty tinted sheet under its title.
@@ -330,8 +328,24 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
     // An interruption needs you; only a reported failure reads as failed (lab run-A_failed / _interrupted).
     // With nothing to choose yet nothing needs you, so the card stays quiet (DESIGN-18 R1b).
     const recoveryTone = !choiceOffered ? 'neutral' as const
-        : reportedMessage === null && (failureCause?.kind === 'lost_contact' || unavailableMachine !== null)
+        : reportedMessage === null && unavailableMachine !== null
             || props.lifecycle !== 'failed' ? 'attention' as const : 'danger' as const;
+    // The acknowledgement row explains itself unless the card's head already says it (an uncertain step).
+    const headSaysEffects = props.lifecycle === 'outcome_uncertain' && props.cause != null && causeHeadline === props.cause;
+    // A reported failure's typed code (and its raw cause, when the head says something else) waits under
+    // Technical details, one tap away from the readable head (lab run-R1 failed inspector). The recovery
+    // owner decides which attempts carry one; a finished step never does.
+    const reportedFailure = failureCause?.kind === 'reported_failure' ? failureCause : null;
+    const technicalLines = React.useMemo((): TechnicalDetailsLine[] => {
+        if (reportedFailure === null) return [];
+        const lines: TechnicalDetailsLine[] = [
+            { key: 'failure-code', label: t('workflows.run.technical.failureCode'), value: reportedFailure.code },
+        ];
+        if (reportedFailure.message !== null && reportedFailure.message.length > 0 && reportedFailure.message !== causeHeadline) {
+            lines.push({ key: 'failure-cause', label: t('workflows.run.technical.failureCause'), value: reportedFailure.message });
+        }
+        return lines;
+    }, [causeHeadline, reportedFailure]);
     const sessionLink = (execution?.kind === 'session' || execution?.kind === 'session_ready')
         && recovery.canInspectExecution && props.onOpenSession !== undefined ? execution.sessionId : null;
     const executionLink = execution?.kind === 'detached_run'
@@ -375,7 +389,8 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
                     {props.cause}
                 </Text>
             )}
-            {showRecoveryCard || props.progress?.reason?.message === undefined ? null : (
+            {/* A finished step's retained reason belongs to an earlier attempt; it never reads beside success. */}
+            {showRecoveryCard || props.lifecycle === 'completed' || props.progress?.reason?.message === undefined ? null : (
                 <Text style={styles.provenance}>{props.progress.reason.message}</Text>
             )}
             {executionRunTarget === null || pendingRequests.length === 0 ? null : (
@@ -420,7 +435,8 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
               */}
             {!showRecoveryCard ? null : (
                 <View testID={`${testIDPrefix}-recovery-card`}><ListPresentationProvider value="page">
-                    <ItemGroup containerStyle={workStatusSurfaceStyle(recoveryTone) ?? undefined}>
+                    {/* The card leads the pane under its own header; no section spacer above it. */}
+                    <ItemGroup header="none" containerStyle={workStatusSurfaceStyle(recoveryTone) ?? undefined}>
                         {/* The card's head, inside its sheet as the hold card's is: what happened, then what it means now. */}
                         <Item
                             testID={`${testIDPrefix}-recovery-cause`}
@@ -430,6 +446,13 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
                             subtitleLines={0}
                             showChevron={false}
                         />
+                        {failureCause?.kind === 'reported_failure' && failureCause.reset ? (
+                            <SectionContentRow>
+                                <Text testID={`${testIDPrefix}-runtime-issue-reset`} style={styles.provenance}>
+                                    {failureCause.reset}
+                                </Text>
+                            </SectionContentRow>
+                        ) : null}
                         {recovery.remainingNotStartedSiblingCount === null
                             || recovery.remainingNotStartedSiblingCount === 0 ? null : (
                                 <SectionContentRow>
@@ -449,7 +472,7 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
                                 <Item
                                     testID={`${testIDPrefix}-uncertain-effects`}
                                     title={t('workflows.recovery.acknowledgeEffects')}
-                                    subtitle={t('workflows.recovery.uncertainEffects', {
+                                    subtitle={headSaysEffects ? undefined : t('workflows.recovery.uncertainEffects', {
                                         block: props.workspaceSourceLabel ?? t('workflows.run.untitled'),
                                     })}
                                     showChevron={false}
@@ -763,18 +786,30 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
                     </ItemGroup>
                 </ListPresentationProvider></View>
             )}
-            {props.progress?.result !== undefined || (props.waitPrompt != null && stopped) ? (
+            {props.progress?.result !== undefined || (props.waitPrompt != null && (stopped || props.lifecycle === 'completed')) ? (
                 // The answer reads as the card it was typed in: the Wait's question heads it and the value
                 // sits in the review card's own rows (DESIGN-16 D4, D5). Any other step's own result heads
                 // "Result"; "Final output" is the Run's, and only one step carries it.
                 <View testID={`${testIDPrefix}-invocation-result`}><ListPresentationProvider value="page">
                     <ItemGroup title={props.waitPrompt ?? t('workflows.input.result')}>
                         {props.progress?.result !== undefined ? (
-                            <WorkflowReviewValue value={props.progress.result} contract={resultContract}
-                                testIDPrefix={`${testIDPrefix}-invocation-result`} />
-                        ) : (
+                            <>
+                                <WorkflowReviewValue value={props.progress.result} contract={resultContract}
+                                    testIDPrefix={`${testIDPrefix}-invocation-result`} />
+                                {answeredBy === null ? null : (
+                                    <SectionContentRow testID={`${testIDPrefix}-invocation-answered-by`}>
+                                        <Text style={styles.provenance}>{answeredBy}</Text>
+                                    </SectionContentRow>
+                                )}
+                            </>
+                        ) : stopped ? (
                             <SectionContentRow testID={`${testIDPrefix}-invocation-unanswered`}>
                                 <Text style={styles.provenance}>{t('workflows.run.notAnswered')}</Text>
+                            </SectionContentRow>
+                        ) : (
+                            // A completed Wait with nothing to fill in was continued, not left unanswered.
+                            <SectionContentRow testID={`${testIDPrefix}-invocation-continued`}>
+                                <Text style={styles.provenance}>{answeredBy ?? t('workflows.run.waitContinued')}</Text>
                             </SectionContentRow>
                         )}
                     </ItemGroup>
@@ -782,9 +817,10 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
             ) : null}
             {/*
               * The quiet facts in one meta block (DESIGN-17 R1): usage, where the step worked, and where
-              * to inspect it. Unknown usage is an em dash with its meaning spoken, never a mono word.
+              * to inspect it. A settled step's missing usage reads "Not reported" in quiet meta, never a bare dash.
               */}
-            {usageLabel === null && workspace === null && sessionLink === null && executionLink === null ? null : (
+            {usageLabel === null && workspace === null && sessionLink === null && executionLink === null
+                && technicalLines.length === 0 ? null : (
                 <View testID={`${testIDPrefix}-invocation-meta`}><ListPresentationProvider value="page">
                     <ItemGroup header="none">
                         {usageLabel === null ? null : (
@@ -872,6 +908,13 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
                                 title={t('workflows.run.openExecution')}
                                 accessibilityRole="link"
                                 onPress={() => props.onOpenExecutionRun?.(executionLink)}
+                            />
+                        )}
+                        {technicalLines.length === 0 ? null : (
+                            <TechnicalDetailsDisclosure
+                                testID={`${testIDPrefix}-invocation-technical`}
+                                title={t('workflows.run.technicalDetails')}
+                                lines={technicalLines}
                             />
                         )}
                     </ItemGroup>

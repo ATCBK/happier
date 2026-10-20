@@ -16,11 +16,28 @@ const response = UsageAnalyticsQueryResponseSchema.parse({ v: 1, totals: { event
 // Authenticated read/client renderer ports are the boundaries under test;
 // unrelated executor families are unreachable in these checked partial fixtures.
 describe('usage recap Action composition', () => {
+  it('demands selected mix populations on an ordinary query without dropping existing breakdowns', async () => {
+    const result = await executeUsageAction('usage.recap.compose', {
+      query: { ...query, breakdown: ['source'] }, selectedFields: ['agentMix', 'modelMix'],
+    }, {
+      query: async request => {
+        const demanded = request.queries[0]!;
+        expect(demanded.breakdown).toEqual(['agent', 'model', 'source']);
+        return resolveUsagePageAggregation({ queries: request.queries,
+          accounting: [{ query: demanded, status: 'available', value: { ...response, breakdowns: {
+            agent: [{ key: 'agent', tokens: response.totals.tokens, cost: response.totals.cost, eventCount: 1 }],
+            model: [{ key: 'model', tokens: response.totals.tokens, cost: response.totals.cost, eventCount: 1 }],
+          } } }] });
+      },
+    }, {});
+    expect(result).toMatchObject({ ok: true, result: { kind: 'composed', unavailableFields: [],
+      facts: { agentMix: [{ tokens: 12 }], modelMix: [{ tokens: 12 }] } } });
+  });
   it('returns the same selected compose data and explicit image unavailability to a headless caller', async () => {
     const result = await executeUsageAction('usage.recap.export',
       { query, style: 'sigil', format: 'story', selectedFields: ['tokens'] }, {
         query: async request => resolveUsagePageAggregation({ queries: request.queries,
-          accounting: [{ query, value: response, status: 'available', asOfMs: 900 }] }),
+          accounting: [{ query: request.queries[0]!, value: response, status: 'available', asOfMs: 900 }] }),
       }, {});
     expect(result).toMatchObject({ ok: true, result: { kind: 'unavailable', reason: 'render_target_unavailable',
       compose: { kind: 'composed', style: 'sigil', format: 'story', selectedFields: ['tokens'], asOfMs: 900,
@@ -35,7 +52,7 @@ describe('usage recap Action composition', () => {
     const result = await executeUsageAction('usage.recap.export',
       { query, style: 'terminal', format: 'link-preview', selectedFields: ['tokens', 'modelMix'] }, {
         query: async request => resolveUsagePageAggregation({ queries: request.queries,
-          accounting: [{ query, value: response, status: 'available', asOfMs: 900 }] }),
+          accounting: [{ query: request.queries[0]!, value: response, status: 'available', asOfMs: 900 }] }),
         // Text/font rasterization is the genuine client renderer boundary.
         renderRecap: async composed => { pixelsInput = composed; return { kind: 'rendered', base64: 'iVBORw==' }; },
       }, {});
@@ -97,7 +114,8 @@ describe('usage recap Action composition', () => {
       result: { kind: 'unavailable', reason: 'render_target_unavailable', compose: { kind: 'composed', facts: { tokens: { total: 12 } } } } });
     expect(await executor.execute('usage.recap.export', { query, selectedFields: ['tokens'] },
       { surface: 'cli', authority: 'account_automation', actionCaller: { kind: 'host' } }))
-      .toMatchObject({ ok: false, errorCode: 'action_disabled' });
+      .toMatchObject({ ok: true, result: { kind: 'unavailable', reason: 'render_target_unavailable',
+        compose: { kind: 'composed', facts: { tokens: { total: 12 } } } } });
   });
   it('retains denied and uncertain client dispatch outcomes instead of falling back to another read', async () => {
     for (const errorCode of ['denied', 'outcome_uncertain']) {

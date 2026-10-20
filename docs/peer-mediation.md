@@ -71,6 +71,15 @@ remains available where independently trusted; identity, authentication, integri
 and stale-target failures remain fail-closed.
 
 The native carrier is active in the current 0.3 development source for Home and Machine traffic.
+Its shared native runtime starts on the first endpoint operation, rather than addon loading or
+availability inspection. The multi-thread Tokio scheduler keeps incoming acceptors and tunnels
+running between host calls. Its async worker pool uses the available CPU count capped at 32,
+based on direct/relay addon throughput and sustained-transfer measurements; Tokio's separate
+blocking pool retains its normal lifecycle. Node/Bun, Tauri and mobile bindings consume this same
+native owner. Daemon startup prepares a live endpoint for Home and incoming Machine traffic;
+zero active Sessions therefore does not imply that Iroh is unused. Existing processes need a
+reload with the rebuilt native library to consume the worker cap.
+
 Its single applied policy is `automatic` or `disabled`: `automatic` uses only the explicitly
 configured relay set while allowing Iroh to select direct or relayed reachability, and `disabled`
 contacts no relay. The dialer always authenticates the remote peer as the exact EndpointId selected
@@ -204,6 +213,28 @@ Workspace openers read this same current capability authority both before grant
 minting and before dialing, not the diagnostic daemon-state endpoint. A withdrawn
 or replaced target is refused; current hints may be refreshed without changing
 the EndpointId already bound into the signed grant.
+
+Workspace Sync's native Mutagen stream uses a V2 `iroh_peer` grant with the
+`workspace_sync` operation binding and the existing single-operation
+`machine_rpc` scope. Its sole `workspace.sync` method label identifies that
+carrier; it is not a dispatchable Machine RPC. In 0.3 development,
+`mintDirectRouteGrantV1.ts#validateDirectRouteGrantV2MintInput` admits only that
+exact carrier scope (Machine initiator, one call, no Session binding, and the
+matching single-use method). Ordinary RPC grants retain the canonical RPC
+classification checks. The signed scope id must match the handshake operation
+id, and the server still checks both Machines and their current endpoint
+authority before issuance. CLI grant refusals retain the existing
+`peer_unavailable` error with the server's structured `reasonCode`; raw HTTP
+responses and credential-bearing request configuration are not projected.
+
+In 0.3 development, the native Home and Machine carriers retain the pinned
+Iroh transport's keepalives and 30-second connection idle timeout. Keepalives
+preserve healthy connections without application traffic; a peer that disappears
+without sending a QUIC close is detected by the transport. Workspace Sync then
+uses its existing carrier-close and engine-reconnection path. This is transport
+liveness, not a deadline on a Script, Move, copy, or otherwise healthy idle stream.
+Existing native consumers require an addon rebuild and process restart to load
+the correction.
 
 ### Workspace inspection and reviewed resolution
 
@@ -389,6 +420,12 @@ in `apps/cli/src/daemon/peer/mediation/stream/relay.ts`, not the capture produce
 Server relay admission rechecks signed expiry after reading Account mode, before retaining stream
 state. An authorization that expires during that read cannot open a stream.
 
+The server owns relay credit and clamps viewer acknowledgements to its admitted network window.
+After admitting an acknowledgement, `machineLiveStreamRelayHandler` forwards it to the source's
+verified installation. The daemon passes it to the existing capture session so demand-driven
+Computer capture can produce its next frame. Rejected acknowledgements never wake capture;
+forwarding an acknowledgement does not move relay credit ownership into the daemon.
+
 Daemon browser views register `sourceKind: 'browser'` and stream family `browser.streamed` in the
 same live-stream capture registry. Their exact source id is the protocol `browserViewKey` for the
 Happier session and view. `daemon.browser.view.list` projects that session's current views from the
@@ -396,6 +433,9 @@ control broker, including navigation events and capture metadata only when the s
 registered; CDP handles stay daemon-local. Browser starts require that exact source id, and the
 signed relay authorization binds it. A family-only registry lookup refuses ambiguous matches.
 The shared viewer ingestion hook carries that source id through both initial admission and renewal.
+The registry-backed capture adapter returns the exact admitted source's capabilities with its
+session. The relay consumes those facts for input policy; it has no independent registry lookup
+that can disagree with capture admission. Adapters without source facts retain lease enforcement.
 
 `apps/cli/src/daemon/browser/capture/cdpScreencast.ts` owns one CDP screencast and one frame ACK per
 view. Recording and live viewers subscribe to that producer independently: closing either consumer
@@ -403,6 +443,14 @@ does not stop the other, while closing the view retires both. Viewer tap, keyboa
 uses the existing stream control path and daemon automation/controller owner for human takeover;
 it does not acquire a simulator lease. Capture acknowledgement and viewer network credit remain
 separate authorities.
+
+In 0.3 development, controller and navigation metadata uses that same scoped frame carrier
+without requiring a new CDP picture. The server uses the Protocol stream meter for both image
+and metadata delivery. Metadata consumes byte credit and the signed byte budgets, but not image
+FPS, image-count credit or the image queue's frame-count budget. Its ordered delivery does not
+wait for a keyframe; only dependent image deltas do. Byte-pressure coalescing retains newer
+metadata and does not request image recovery when no image was lost. Viewer ingestion
+acknowledges metadata without decoding pixels or replacing its held picture.
 
 Receipts distinguish terminal outcomes explicitly with `terminal: true` and a `stopped` or `error`
 outcome. Temporary backpressure is nonterminal. The relay owns network acknowledgement credit;
@@ -586,6 +634,13 @@ admission on Open. Preview snapshot reads only project the current rows and neve
 A registration failure stays on its own row as a typed diagnostic, so healthy previews remain
 visible and usable.
 
+In 0.3 development, the Machine Action `localServices.actions.openPreview` delegates to
+that same lifecycle as `localServices.preview.openOrCreate`. Both return the Protocol-owned
+`DaemonLocalServicePreviewOpenOrCreateResponseV1` (registration status, preview row and
+snapshot). Detected targets retain their requested Session; source-qualified managed Services
+retain their Service binding without adopting the invoking Session. The older audited-control
+aggregate does not admit Preview Open; UI callers use the canonical Machine Action transport.
+
 In current 0.3 development, a scoped registration without an isolated private origin is retained
 with null `accessUrl`/`expiresAt` and `accessUnavailableReasonCode: preview_private_route_unavailable`.
 The web Browser uses that explicit reason for its runs-elsewhere state; native viewers try the
@@ -625,7 +680,15 @@ preview access route, strips collector configuration before forwarding upstream,
 only opted-in HTML responses. It decodes supported upstream compression using the preview's
 existing response-body budget, preserves CSP, and leaves non-HTML transport bytes streaming.
 Same-preview redirects retain the navigation identity; external redirects never receive it.
+The injected loader tag is root-relative: it is requested from the document it is injected into, so it carries no scheme
+that a TLS terminator could get wrong, and the CSP admission compares against that document's own https preview origin.
 The loader and UI/native/desktop injection share one collector generator rather than copies.
+The pane's own document also sets a relay-owned binding cookie (never forwarded to or settable by
+the application). Later in-frame HTML documents of that preview carry only the navigation
+reporter, selected by that cookie on iframe document requests: it reports history position, loading
+and its page URL to the embedding host and obeys back, forward and stop from that host only, while
+page automation and diagnostics stay with the pane's own document. A web iframe offers
+Back, Forward and Stop for relay previews through that reporter; every other framed page keeps Reload.
 
 #### Sessionless managed-Service admission (0.3 development)
 

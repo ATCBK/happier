@@ -23,6 +23,7 @@ import type { WorkflowDefinitionV1, WorkflowIngressContextV1 } from '../../workf
 import type { WorkflowActionExecuteArgs } from './types.js';
 import type { z } from 'zod/mini';
 import type { ArtifactCallerAccessV1 } from '../../artifacts/artifactAccessV1.js';
+import type { ArtifactListSelectionOptionsV1 } from '../../artifacts/artifactListSelectionV1.js';
 import { artifactSavedByFromActionContextV1, type ArtifactBodyV1, type ArtifactRevisionProvenanceV1, type ArtifactSavedByV1 } from '../../artifacts/artifactBinaryV1.js';
 import { workflowDefinitionArtifactSharingAdapterV1 } from '../../artifacts/artifactSharingV1.js';
 import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
@@ -30,6 +31,7 @@ import { WorkflowDefinitionIdV1Schema } from '../../workflows/workflowIdsV1.js';
 import type { WorkflowPluginSourceReaderV1, WorkflowPluginSourceV1 } from '../../workflows/workflowPluginSourceV1.js';
 import { resolveWorkflowDestinationsV1 } from '../../workflows/workflowDestinationsV1.js';
 import { resolveWorkflowDefinitionRefV1 } from '../../workflows/workflowDefinitionResolverV1.js';
+import type { CoordinationMessageRefV1 } from '../../discussions/messageRefs.js';
 
 export type WorkflowDefinitionArtifactHeaderRow = Readonly<{
   artifactId: string; header: Readonly<Record<string, unknown>>; headerVersion: number; updatedAt: number;
@@ -44,14 +46,14 @@ export type WorkflowDefinitionArtifactOperations = Readonly<{
     shared?: boolean;
     provenance?: ArtifactRevisionProvenanceV1;
   }> | null>;
-  list: (options: Readonly<{ limit?: number; cursor?: string; includeBody?: boolean; signal?: AbortSignal }>) => Promise<Readonly<{
+  list: (options: ArtifactListSelectionOptionsV1) => Promise<Readonly<{
     items: readonly WorkflowDefinitionArtifactHeaderRow[]; nextCursor?: string;
     coverage?: 'complete' | 'partial';
   }>>;
-  create: (input: Readonly<{ artifactId: string; header: Readonly<Record<string, unknown>>; body: string; savedBy?: ArtifactSavedByV1; signal?: AbortSignal }>) => Promise<unknown>;
-  update: (input: Readonly<{ artifactId: string; expectedRevision: WorkflowArtifactRevisionV1; header: Readonly<Record<string, unknown>>; body: string; savedBy?: ArtifactSavedByV1; signal?: AbortSignal }>) => Promise<
+  create: (input: Readonly<{ artifactId: string; header: Readonly<Record<string, unknown>>; body: string; savedBy?: ArtifactSavedByV1; memoryDecisionSource?: CoordinationMessageRefV1; signal?: AbortSignal }>) => Promise<unknown>;
+  update: (input: Readonly<{ artifactId: string; expectedRevision: WorkflowArtifactRevisionV1; header: Readonly<Record<string, unknown>>; body: string; savedBy?: ArtifactSavedByV1; memoryDecisionSource?: CoordinationMessageRefV1; signal?: AbortSignal }>) => Promise<
     Readonly<{ ok: true; revision: WorkflowArtifactRevisionV1 }> | Readonly<{ ok: false; errorCode: string; error: string }>>;
-  delete: (artifactId: string, options?: Readonly<{ expectedRevision?: WorkflowArtifactRevisionV1; signal?: AbortSignal }>) => Promise<Readonly<{ ok: true }> | Readonly<{ ok: false; errorCode: string; error: string }>>;
+  delete: (artifactId: string, options?: Readonly<{ expectedRevision?: WorkflowArtifactRevisionV1; signal?: AbortSignal; onTransportIssued?: () => void }>) => Promise<Readonly<{ ok: true }> | Readonly<{ ok: false; errorCode: string; error: string }>>;
 }>;
 type Store = WorkflowDefinitionArtifactOperations;
 type CreateInput = z.infer<typeof WorkflowDefinitionCreateRequestV1Schema>;
@@ -346,7 +348,7 @@ export function createWorkflowDefinitionActions(params: Readonly<{
         metadata: { ...existing.metadata, title: name } }, definition, existing.access, caller);
       return { definition: saved.definition, revision: saved.revision, metadata: saved.metadata, changedBlockIds: [...edited.changedBlockIds] };
     },
-    delete: async ({ definitionId }: Readonly<{ definitionId: string }>) => {
+    delete: async ({ definitionId }: Readonly<{ definitionId: string }>, caller?: DefinitionCaller) => {
       const artifact = await params.artifactStore.read(definitionId);
       const parsedHeader = artifact ? WorkflowDefinitionArtifactHeaderV1ReadSchema.safeParse(artifact.header) : null;
       if (!artifact || !parsedHeader?.success) {
@@ -367,7 +369,10 @@ export function createWorkflowDefinitionActions(params: Readonly<{
         throw Object.assign(new Error('workflow_definition_content_unavailable'), { code: 'content_unavailable' });
       }
       await params.removeWorkflowTriggers?.(definitionId);
-      const result = await params.artifactStore.delete(definitionId);
+      const result = await params.artifactStore.delete(definitionId, {
+        ...(caller?.signal ? { signal: caller.signal } : {}),
+        ...(caller?.onTransportIssued ? { onTransportIssued: caller.onTransportIssued } : {}),
+      });
       if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode });
       return { deleted: true as const, definitionId };
     },

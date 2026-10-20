@@ -145,6 +145,8 @@ type PluginReactNativeSurfaceProps = Readonly<{
     watchdog?: PluginReactNativeWatchdog;
     /** Existing route-owned recovery callback for settings/update/enable actions. */
     recoveryAction?: SurfaceStateAction;
+    /** The plugin's display name for whole-page failure cards. */
+    subjectName?: string;
 }>;
 
 type LoadedPluginReactNativeModuleState = Readonly<{
@@ -249,6 +251,29 @@ function installPluginUiPrivateHostBindings(
         element as React.ReactElement<Record<string, unknown>>,
         privateProviderProps,
     );
+}
+
+const PRESENTATION_FACT_KEYS = [
+    'colorScheme',
+    'contrast',
+    'theme',
+    'textScale',
+    'reducedMotion',
+    'screenReaderEnabled',
+    'direction',
+    'locale',
+    'translations',
+    'safeAreaInsets',
+] as const satisfies ReadonlyArray<keyof RenderContext['surface']>;
+
+/** The retained context with the current presentation facts; the same object when none changed. */
+function withCurrentPresentation(
+    retained: RenderContext,
+    current: RenderContext['surface'],
+): RenderContext {
+    if (PRESENTATION_FACT_KEYS.every((key) => retained.surface[key] === current[key])) return retained;
+    const facts = Object.fromEntries(PRESENTATION_FACT_KEYS.map((key) => [key, current[key]]));
+    return { ...retained, surface: { ...retained.surface, ...facts } };
 }
 
 function PluginReactNativeSurfaceRenderer({
@@ -601,7 +626,26 @@ export function PluginReactNativeSurface(props: PluginReactNativeSurfaceProps): 
     const renderState = interactionEnabled
         ? { renderContext: currentRenderContext, privateHostBindings: props.privateHostBindings }
         : lastInteractiveRenderStateRef.current;
-    const renderContext = renderState.renderContext;
+    const retainedRenderContext = renderState.renderContext;
+    // How the retained tree is painted is a current host fact (theme, scale,
+    // motion, language), so an offline snapshot follows it like every live page.
+    const currentSurface = currentRenderContext.surface;
+    const renderContext = React.useMemo<RenderContext>(
+        () => withCurrentPresentation(retainedRenderContext, currentSurface),
+        [
+            retainedRenderContext,
+            currentSurface.colorScheme,
+            currentSurface.contrast,
+            currentSurface.direction,
+            currentSurface.locale,
+            currentSurface.reducedMotion,
+            currentSurface.safeAreaInsets,
+            currentSurface.screenReaderEnabled,
+            currentSurface.textScale,
+            currentSurface.theme,
+            currentSurface.translations,
+        ],
+    );
     const retainedPrivateHostBindings = renderState.privateHostBindings;
     const presentationActive = props.privateHostBindings?.presentationActive;
     const privateHostBindings = React.useMemo(() => (
@@ -688,7 +732,13 @@ export function PluginReactNativeSurface(props: PluginReactNativeSurfaceProps): 
     ) : null;
 
     if (canonicalRenderContextDiagnostic) {
-        return <PluginReactNativeUnavailable diagnostics={unavailableDiagnostics} recoveryAction={props.recoveryAction} />;
+        return (
+            <PluginReactNativeUnavailable
+                diagnostics={unavailableDiagnostics}
+                recoveryAction={props.recoveryAction}
+                subjectName={props.subjectName}
+            />
+        );
     }
     if (hasCurrentTargetedFallback) {
         return <>{props.targetedFallback}</>;
@@ -707,6 +757,8 @@ export function PluginReactNativeSurface(props: PluginReactNativeSurfaceProps): 
                 retrying={retrying}
                 animationEnabled={animationEnabled}
                 recoveryAction={props.recoveryAction}
+                    subjectName={props.subjectName}
+                    offline={props.interactionEnabled === false}
             />
             {candidateProbe}
             </>
@@ -731,6 +783,8 @@ export function PluginReactNativeSurface(props: PluginReactNativeSurfaceProps): 
                     retrying={retrying}
                     animationEnabled={animationEnabled}
                     recoveryAction={props.recoveryAction}
+                    subjectName={props.subjectName}
+                    offline={props.interactionEnabled === false}
                 />
             )}
             {candidateProbe}
@@ -751,12 +805,14 @@ export function PluginReactNativeSurface(props: PluginReactNativeSurfaceProps): 
                     retrying={retrying}
                     animationEnabled={animationEnabled}
                     recoveryAction={props.recoveryAction}
+                    subjectName={props.subjectName}
                 />
             ) : props.targetedFallback}
             onCrash={handleCrash}
         >
             <PluginSurfaceInteractionBoundary
                 surfaceId={props.surfaceId}
+                hasContent
                 snapshotTitle={props.snapshotTitle ?? props.surfaceId}
                 enabled={interactionEnabled}
                 focusEligible={props.focusEligible}

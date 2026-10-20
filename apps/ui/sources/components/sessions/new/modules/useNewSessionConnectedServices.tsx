@@ -583,6 +583,12 @@ export function useNewSessionConnectedServices(params: Readonly<{
     teamCredentialResources: params.teamCredentialResources,
   }), [params.machineAgent, connectedServicesBindingsPayload, selectedProviderRoute, connectedServiceAccountGroupOptionsByServiceId, params.teamCredentialResources]);
   const connectedServicesRecoveryAction = React.useMemo<SessionInstrumentStripLineAction | null>(() => {
+    const failure = selectedCredentialMachineAgent?.signIn.connectedAccountFailure;
+    if (connectedAccountDefaultsStatus === 'ready' && failure) return {
+      label: t('connectedServices.detail.actions.reconnect'),
+      testID: 'new-session-agent-blocker.reconnect',
+      onPress: () => router.push(resolveConnectedServiceProfileActionRoute(failure, connectedServicesRegistry.entries)),
+    };
     if (connectedAccountDefaultsStatus !== 'ready' || selectedCredentialMachineAgent?.state !== 'needsSignIn'
         || selectedCredentialMachineAgent.signIn.native?.status !== 'signedOut'
         || Object.values(connectedServicesBindingsPayload?.bindingsByServiceId ?? {}).some((binding) => binding.source !== 'native')) return null;
@@ -590,7 +596,8 @@ export function useNewSessionConnectedServices(params: Readonly<{
       const service = params.machineAgent?.signIn.connectedServices.find((service) => service.serviceId === serviceId && service.healthy);
       const option = connectedServiceProfileOptionsByServiceId[serviceId]?.find((option) => service?.profiles?.some((profile) => profile.profileId === option.profileId && profile.healthy));
       if (option) return {
-        label: option.label ?? option.providerEmail ?? resolveServiceTitle(serviceId),
+        // The line says this route needs sign-in; the account is one tap away, so the action says so.
+        label: t('machineAgents.useConnectedAccount', { account: option.label ?? option.providerEmail ?? resolveServiceTitle(serviceId) }),
         testID: 'new-session-agent-blocker.connected',
         truncates: true,
         onPress: () => { void setBindingForService(serviceId, { source: 'connected', selection: 'profile', profileId: option.profileId }); },
@@ -598,7 +605,7 @@ export function useNewSessionConnectedServices(params: Readonly<{
     }
     return null;
   }, [connectedAccountDefaultsStatus, selectedCredentialMachineAgent, connectedServicesBindingsPayload, supportedConnectedServiceIds,
-    params.machineAgent, connectedServiceProfileOptionsByServiceId, resolveServiceTitle, setBindingForService]);
+    params.machineAgent, connectedServiceProfileOptionsByServiceId, resolveServiceTitle, setBindingForService, router, connectedServicesRegistry.entries]);
 
   const nativeSourceLabel = supportedConnectedServiceIds.length > 0
     ? presentNativeRouteSourceLabel({ label: authLabel.label, authSource: nativeAuthSource }) : null;

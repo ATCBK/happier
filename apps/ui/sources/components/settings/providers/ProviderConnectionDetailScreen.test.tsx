@@ -662,7 +662,9 @@ describe('ProviderConnectionDetailScreen', () => {
         await account.selectMachine(account.serverId, availability === 'offline' ? 'machine-a' : null);
         const target = await renderHook(() => useProviderSettingsTarget());
         expect(target.getCurrent().machineId).toBeNull();
-        expect(target.getCurrent().serverId).toBe(account.serverId);
+        const targetServerId = target.getCurrent().serverId;
+        if (!targetServerId) throw new Error('Expected the Provider Account Home');
+        expect(resolveServerProfileScopeIdForIdentifier(targetServerId)).toBe(resolveServerProfileScopeIdForIdentifier(account.serverId));
         expect(target.getCurrent().machineRows).toHaveLength(availability === 'offline' ? 1 : 0);
         await target.unmount();
         state.connection = createProviderConnectionViewFixture({ connectionId: saved.id,
@@ -1379,6 +1381,8 @@ describe('ProviderConnectionDetailScreen', () => {
         expect(providerHarness.state.requests.filter(
             (request) => request.method === RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE,
         )).toHaveLength(readsBeforeReview + 1);
+        // The fresh read settled the question, so the "needs review" notice leaves with it.
+        expect(findProviderRecoveryAction(screen, 'settingsProviders.errors.actions.reviewCurrentState')).toBeUndefined();
     });
 
     it('shows account access and machine grants together for a mixed connection', async () => {
@@ -1445,6 +1449,7 @@ describe('ProviderConnectionDetailScreen', () => {
 
     it('stops duplicate loading while its real in-place approval awaits a decision and preserves the draft after rejection', async () => {
         await account.restore({ accountId: 'duplicate-approval-account', serverIdentityId: 'srv_provider_detail', machines: [] });
+        await account.home.requireUiApproval(account.serverId, 'providers.connections.duplicate');
         const stored = installDetailCatalog();
         await account.home.selectHomes([account.serverId]);
         await account.selectMachine(account.serverId, null);
@@ -1471,8 +1476,9 @@ describe('ProviderConnectionDetailScreen', () => {
         expect(stored.writes).toBe(0);
     });
 
-    it('keeps default Ask-first approval in place and navigates only after its real terminal result', async () => {
+    it('keeps explicit Ask-first approval in place and navigates only after its real terminal result', async () => {
         await account.restore({ accountId: 'default-approval-account', serverIdentityId: 'srv_provider_detail', machines });
+        await account.home.requireUiApproval(account.serverId, 'providers.connections.delete');
         const stored = installDetailCatalog();
         await account.home.selectHomes([account.serverId]);
         await account.selectMachine(account.serverId, 'machine-a');
@@ -1507,6 +1513,7 @@ describe('ProviderConnectionDetailScreen', () => {
 
     it('keeps a durable Account approval on its captured catalog when machine selection moves', async () => {
         await account.restore({ accountId: 'captured-machine-approval-account', serverIdentityId: 'srv_provider_detail', machines });
+        await account.home.requireUiApproval(account.serverId, 'providers.connections.delete');
         const stored = installDetailCatalog();
         await account.home.selectHomes([account.serverId]);
         await account.selectMachine(account.serverId, 'machine-a');
@@ -1526,6 +1533,7 @@ describe('ProviderConnectionDetailScreen', () => {
 
     it('admits one approval request and re-enables deletion after cancellation without writing', async () => {
         await account.restore({ accountId: 'cancelled-approval-account', serverIdentityId: 'srv_provider_detail', machines });
+        await account.home.requireUiApproval(account.serverId, 'providers.connections.delete');
         const stored = installDetailCatalog();
         await account.home.selectHomes([account.serverId]);
         await account.selectMachine(account.serverId, 'machine-a');

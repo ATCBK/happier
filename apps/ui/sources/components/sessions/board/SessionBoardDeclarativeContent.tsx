@@ -11,7 +11,7 @@ import {
     readDeclarativeText,
     renderDeclarativeNode,
 } from '@/components/plugins/shared/declarativeNodes';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { WidgetSnapshotNote } from '@/components/widgets/definitions/WidgetSnapshotNote';
 
@@ -60,7 +60,7 @@ export function SessionBoardDeclarativeContent(props: Readonly<{
 }>): React.ReactElement {
     const { theme } = useUnistyles();
     const widgetPresentation = useWidgetPresentation();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const minimumTouchTarget = resolveMinimumInteractiveTargetSize(Platform.OS);
     const actionBinding = props.actionBinding ?? null;
 

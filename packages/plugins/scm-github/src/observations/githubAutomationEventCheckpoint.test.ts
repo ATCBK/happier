@@ -98,7 +98,7 @@ describe('GitHub Automation Event checkpoint identity', () => {
       expect(GITHUB_AUTOMATION_EVENT_CHECKPOINT_COLLECTION.readableSchemaVersions).toEqual([1]);
       const migration = collectionMigrations[GITHUB_AUTOMATION_EVENT_CHECKPOINT_COLLECTION.id]?.[0];
       expect(migration).toMatchObject({ fromSchemaVersion: 1, toSchemaVersion: 2 });
-      expect(migration?.migrate(row)).toEqual(row);
+      expect(migration?.migrate(row, { currentRevision: 1 })).toEqual(row);
     }
     const genericRow = {
       ...createGithubAutomationEventCheckpointRowV1({

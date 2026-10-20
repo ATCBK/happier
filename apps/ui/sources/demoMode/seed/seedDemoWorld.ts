@@ -1,5 +1,5 @@
 import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { getActiveServerSnapshot, setActiveServer, upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
+import { getActiveServerSnapshot, setActiveServer, upsertServerProfileOnly } from '@/sync/domains/server/serverRuntime';
 import {
     listServerProfiles,
     loadHomeViewState,
@@ -10,7 +10,8 @@ import {
 } from '@/sync/domains/server/serverProfiles';
 import { listServerProfileScopeIds } from '@/sync/domains/server/selection/serverSelectionProfileScopeIds';
 import { storage } from '@/sync/domains/state/storage';
-import { deleteServerFeaturesSnapshot, primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
+import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { deleteServerFeaturesSnapshot, getCachedServerFeaturesSnapshot, primeServerFeaturesSnapshot, type ServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { setDemoConnectedMetadataCatalogProjection } from '@/sync/store/settings/connectedMetadataCatalogSnapshot';
 
 import { enterDemoMode, exitDemoMode, isDemoModeActive } from '../runtime/enterExitDemoMode';
@@ -33,7 +34,10 @@ type ActiveDemoSnapshot = Readonly<{
     homeViewState: HomeViewStateV1 | null;
     demoServerProfileId: string;
     demoServerProfileExisted: boolean;
-    primedServerFeatureIds: readonly string[];
+    serverFeatureSnapshots: ReadonlyArray<Readonly<{
+        serverId: string;
+        snapshot: ServerFeaturesSnapshot | null;
+    }>>;
     residuePolicy: DemoWorldResiduePolicy;
 }>;
 
@@ -114,11 +118,10 @@ export async function seedDemoWorld(options: SeedDemoWorldOptions = {}): Promise
     const activeServerSnapshot = getActiveServerSnapshot();
     const homeViewState = loadHomeViewState();
     const demoServerProfileExisted = listServerProfiles().some((profile) => profile.serverUrl === DEMO_SERVER_BASE_URL);
-    const demoServerProfile = await upsertAndActivateServer({
+    const demoServerProfile = await upsertServerProfileOnly({
         serverUrl: DEMO_SERVER_BASE_URL,
         name: 'Demo Relay',
         source: 'preconfigured',
-        scope: 'device',
     });
     const primedServerFeatureIds = Array.from(new Set([
         demoServerProfile.id,
@@ -132,22 +135,28 @@ export async function seedDemoWorld(options: SeedDemoWorldOptions = {}): Promise
         homeViewState,
         demoServerProfileId: demoServerProfile.id,
         demoServerProfileExisted,
-        primedServerFeatureIds,
+        serverFeatureSnapshots: primedServerFeatureIds.map(serverId => ({
+            serverId,
+            snapshot: getCachedServerFeaturesSnapshot({ serverId }),
+        })),
         residuePolicy,
     };
 
     enterDemoMode();
+    // Focus publication reaches mounted Home observers synchronously. Make the
+    // seeded capabilities readable before activating the temporary Home.
+    for (const serverId of primedServerFeatureIds) {
+        primeServerFeaturesSnapshot({
+            serverId,
+            snapshot: { status: 'ready', features: world.serverFeatures },
+        });
+    }
+    await setActiveServer({ serverId: demoServerProfile.id, scope: 'device' });
     if (homeViewState) {
         await saveHomeViewState({
             ...homeViewState,
             activeTargetKind: 'server',
             activeTargetId: getActiveServerSnapshot().serverId,
-        });
-    }
-    for (const serverId of primedServerFeatureIds) {
-        primeServerFeaturesSnapshot({
-            serverId,
-            snapshot: { status: 'ready', features: world.serverFeatures },
         });
     }
 
@@ -179,7 +188,15 @@ export async function seedDemoWorld(options: SeedDemoWorldOptions = {}): Promise
     setDemoConnectedMetadataCatalogProjection(world.connectedMetadata);
     const state = storage.getState();
     state.applyMachines(world.machines);
-    state.applySessions(world.sessions);
+    // Session readers admit an exact Home identity, never ambient focus. These
+    // temporary entities belong only to the Home activated by this seeder.
+    state.applySessions(world.sessions.map(session => ({
+        ...session,
+        serverId: demoServerProfile.id,
+    })));
+    state.applyServerScopedSessionListRows(getActiveServerSnapshot().serverId,
+        world.sessions.map(session => buildSessionListRenderableFromSession(session)),
+        { source: 'ordinary', mode: 'append' });
 
     for (const [sessionId, messages] of Object.entries(world.messages)) {
         state.applyMessages(sessionId, messages);
@@ -231,8 +248,9 @@ export async function clearDemoWorld(options: ClearDemoWorldOptions = {}): Promi
     }));
     await setActiveServer({ serverId: active.activeServerSnapshot.serverId, scope: 'device' });
     if (active.homeViewState) await saveHomeViewState(active.homeViewState);
-    for (const serverId of active.primedServerFeatureIds) {
-        deleteServerFeaturesSnapshot({ serverId });
+    for (const { serverId, snapshot } of active.serverFeatureSnapshots) {
+        if (snapshot) primeServerFeaturesSnapshot({ serverId, snapshot });
+        else deleteServerFeaturesSnapshot({ serverId });
     }
     if (
         !active.demoServerProfileExisted

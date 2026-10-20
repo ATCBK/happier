@@ -1,3 +1,5 @@
+import { $ZodError } from 'zod/v4/core';
+import { isRetryableAccountEncryptionCurrentnessError } from '@/api/client/accountEncryptionCurrentness';
 import { readPromptLibraryCatalogRecordV1, readRetainedPromptLibraryRecordV1, type PromptLibraryCatalogSnapshotV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { isPromptExternalLinkForMachine } from '@happier-dev/protocol/prompts/library/promptExternalLinksV1';
 import type { MachineAdministrationTargetV1 } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
@@ -9,6 +11,7 @@ import { beginActivePromptLibraryCatalogRefresh, commitActivePromptLibraryCatalo
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import type { PromptLibraryCatalogKeyV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { createCliPromptLibraryStore } from './promptLibraryStore';
+import { runWithoutRequesterSessionCurrentnessCheckpoint } from '@/daemon/sessionEncryption/requesterCurrentness';
 export { readActivePromptLibraryCatalog } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 const pending = new Map<string, {
@@ -16,7 +19,9 @@ const pending = new Map<string, {
   rowsObserved: boolean;
 }>();
 const refreshAfterInFlight = new Set<string>();
-type RefreshInput = Readonly<{ credentials: StoredCredentials; signal?: AbortSignal }>;
+type OperationRead = { completion: Promise<void>; rowsObserved: boolean; readers: Set<() => void> };
+const operationReads = new WeakMap<SavedSecretOperationContextV1, Map<AbortSignal | undefined, OperationRead>>();
+type RefreshInput = Readonly<{ credentials: StoredCredentials; signal?: AbortSignal; maintainSource?: false }>;
 type CapturedPromptAccount = Readonly<{ scopeKey: string; lifetimeToken: number }>;
 
 export type ActivePromptLibraryDemand = Readonly<{
@@ -33,9 +38,11 @@ function catalogReadFailure(error: unknown, aborted: boolean, current: boolean):
   const code = error instanceof Error && 'code' in error ? error.code : undefined;
   return { status: 'unavailable', reason: aborted ? 'cancelled'
     : !current || code === 'scope-retired' ? 'scope-retired'
-    : code === 'unauthorized' || code === 'forbidden' || code === 'unsupported' || code === 'account-mode-mismatch' ? code
+    : code === 'unauthorized' || code === 'forbidden' || code === 'unsupported' || code === 'account-mode-mismatch'
+      || code === 'database_transaction_conflict_exhausted' ? code
+    : isRetryableAccountEncryptionCurrentnessError(error) ? 'unreachable'
     : code === 'account_storage_currentness_unavailable' || code === 'account_encryption_currentness_unavailable' ? 'encryption-material-unavailable'
-    : error instanceof Error && error.name === 'ZodError' ? 'invalid-stored-content' : 'unreachable' };
+    : error instanceof $ZodError ? 'invalid-stored-content' : 'unreachable' };
 }
 
 /** One existing-loader demand for a real key in the caller's captured Account lifetime. */
@@ -50,32 +57,52 @@ export async function prepareActivePromptLibraryRecord(input: ActivePromptLibrar
     const currentRead = current?.promptLibraryCatalog ? readPromptLibraryCatalogRecordV1({ catalog: current.promptLibraryCatalog,
       key: input.key, rawSettings: current.source === 'none' ? undefined : current.rawSettings }) : undefined;
     if (currentRead?.status === 'ready' && !input.refresh) return currentRead;
-    const store = createCliPromptLibraryStore(input);
-    let resolveReadable!: () => void;
-    const readable = new Promise<void>(resolve => { resolveReadable = resolve; });
-    const publish = async (catalog: PromptLibraryCatalogSnapshotV1) => {
-      const snapshot = operation.readSnapshot();
-      if (!snapshot || !await operation.commitPromptLibraryCatalog({ expectedSettingsVersion: snapshot.settingsVersion, catalog })) {
-        throw Object.assign(new Error('Captured Prompt library Account retired'), { code: 'scope-retired' });
-      }
-      if (readPromptLibraryCatalogRecordV1({ catalog, key: input.key,
-        rawSettings: snapshot.source === 'none' ? undefined : snapshot.rawSettings }).status === 'ready') resolveReadable();
-    };
+    const reads = operationReads.get(operation) ?? new Map<AbortSignal | undefined, OperationRead>();
+    operationReads.set(operation, reads);
+    let entry = reads.get(input.signal);
     // Destination authority is readable before optional source/history cleanup,
     // just as for the incumbent Account refresh below. The same loader retains
     // cleanup and its publication fences; it cannot hold admission open.
-    const completion = (async () => {
-      let catalog: PromptLibraryCatalogSnapshotV1;
-      try { catalog = await store.readPromptLibraryCatalog(publish); }
-      catch (error) {
-        input.signal?.throwIfAborted();
-        const current = await operation.isCurrent() && operation.readSnapshot()?.scopeKey === input.scopeKey;
-        if (!current) return;
-        catalog = catalogReadFailure(error, false, current);
-      }
-      await publish(catalog);
-    })();
-    await Promise.race([completion, readable]);
+    // All keys consume one destination inventory in this retained operation.
+    // An explicit post-write refresh must issue a new read; older maintenance
+    // cannot publish over it. Distinct cancellation custody stays independent.
+    if (!entry || entry.rowsObserved || input.refresh) {
+      const owned: OperationRead = { completion: Promise.resolve(), rowsObserved: false, readers: new Set() };
+      entry = owned;
+      reads.set(input.signal, owned);
+      const publish = async (catalog: PromptLibraryCatalogSnapshotV1) => runWithoutRequesterSessionCurrentnessCheckpoint(async () => {
+        if (reads.get(input.signal) !== owned) return;
+        const snapshot = operation.readSnapshot();
+        if (!snapshot || !await operation.commitPromptLibraryCatalog({ expectedSettingsVersion: snapshot.settingsVersion, catalog })) {
+          throw Object.assign(new Error('Captured Prompt library Account retired'), { code: 'scope-retired' });
+        }
+        owned.rowsObserved = true;
+        for (const reader of owned.readers) reader();
+      });
+      owned.completion = (async () => {
+        let catalog: PromptLibraryCatalogSnapshotV1;
+        try { catalog = await createCliPromptLibraryStore(input).readPromptLibraryCatalog(publish,
+          input.refresh ? { maintainSource: false } : undefined); }
+        catch (error) {
+          input.signal?.throwIfAborted();
+          const current = await operation.isCurrent() && operation.readSnapshot()?.scopeKey === input.scopeKey;
+          if (!current) return;
+          catalog = catalogReadFailure(error, false, current);
+        }
+        await publish(catalog);
+      })().finally(() => { if (reads.get(input.signal) === owned) reads.delete(input.signal); });
+    }
+    let resolveReadable!: () => void;
+    const readable = new Promise<void>(resolve => { resolveReadable = resolve; });
+    const observe = () => {
+      if (!entry?.rowsObserved) return;
+      const snapshot = operation.readSnapshot();
+      if (!snapshot || snapshot.promptLibraryCatalog && readPromptLibraryCatalogRecordV1({ catalog: snapshot.promptLibraryCatalog,
+        key: input.key, rawSettings: snapshot.source === 'none' ? undefined : snapshot.rawSettings }).status === 'ready') resolveReadable();
+    };
+    entry.readers.add(observe);
+    try { observe(); await Promise.race([entry.completion, readable]); }
+    finally { entry.readers.delete(observe); }
     input.signal?.throwIfAborted();
     const snapshot = operation.readSnapshot();
     if (!snapshot || !await operation.isCurrent()) return { status: 'unavailable', reason: 'scope-retired' };
@@ -89,7 +116,10 @@ export async function prepareActivePromptLibraryRecord(input: ActivePromptLibrar
   const currentRead = current.promptLibraryCatalog ? readPromptLibraryCatalogRecordV1({ catalog: current.promptLibraryCatalog,
     key: input.key, rawSettings: current.source === 'none' ? undefined : current.rawSettings }) : undefined;
   if (input.refresh || currentRead?.status !== 'ready') {
-    const completion = refresh(input, { scopeKey: input.scopeKey, lifetimeToken: input.lifetimeToken });
+    // A fresh destination read is a consumption demand. The explicit refresh /
+    // Account-change owner retains source and exact-history maintenance.
+    const completion = refresh({ ...input, ...(input.refresh ? { maintainSource: false } : {}) },
+      { scopeKey: input.scopeKey, lifetimeToken: input.lifetimeToken });
     const readers = pending.get(`${input.scopeKey}:${input.lifetimeToken}`)?.readers;
     let resolveReadable!: () => void;
     const readable = new Promise<void>(resolve => { resolveReadable = resolve; });
@@ -139,14 +169,18 @@ function refresh(input: RefreshInput, captured?: CapturedPromptAccount, afterCha
     return Promise.resolve({ status: 'unavailable', reason: 'scope-retired' });
   }
   const existing = pending.get(key);
-  if (existing) {
-    // A withdrawn catalog cannot be re-admitted by an earlier readable phase
-    // whose source/history maintenance is still completing.
-    if (afterChange || (existing.rowsObserved && getActiveAccountSettingsSnapshot()?.promptLibraryCatalog?.status === 'loading')) {
+  if (existing && !existing.rowsObserved) {
+    // A durable write needs rows issued after that write, even if an earlier
+    // destination read has not returned yet.
+    if (afterChange) {
       beginActivePromptLibraryCatalogRefresh({ scopeKey, lifetimeToken }); refreshAfterInFlight.add(key);
     }
     return existing.completion;
   }
+  // Once destination rows have been observed, only optional maintenance is
+  // pending. A later demand owns a new row read immediately; the older loader
+  // may finish its cleanup but must no longer publish catalog authority.
+  if (existing) { pending.delete(key); refreshAfterInFlight.delete(key); }
   beginActivePromptLibraryCatalogRefresh({ scopeKey, lifetimeToken });
   let work!: Promise<PromptLibraryCatalogSnapshotV1>;
   work = (async (): Promise<PromptLibraryCatalogSnapshotV1> => {
@@ -157,16 +191,17 @@ function refresh(input: RefreshInput, captured?: CapturedPromptAccount, afterCha
       if (request) request.rowsObserved = false;
       let catalog: PromptLibraryCatalogSnapshotV1;
       try { catalog = await createCliPromptLibraryStore(requestInput).readPromptLibraryCatalog(readable => {
-        if (!current() || refreshAfterInFlight.has(key)) return;
+        if (!current() || pending.get(key)?.completion !== work || refreshAfterInFlight.has(key)) return;
         const request = pending.get(key);
         if (request) request.rowsObserved = true;
         commitActivePromptLibraryCatalog({ scopeKey, lifetimeToken, catalog: readable });
-        for (const reader of pending.get(key)?.readers ?? []) reader();
-      }); }
+        for (const reader of request?.readers ?? []) reader();
+      }, requestInput.maintainSource === false ? { maintainSource: false } : undefined); }
       catch (error) {
         catalog = catalogReadFailure(error, requestInput.signal?.aborted === true, current());
       }
       if (!current()) return { status: 'unavailable', reason: 'scope-retired' };
+      if (pending.get(key)?.completion !== work) return catalog;
       if (refreshAfterInFlight.delete(key)) { requestInput = { credentials: input.credentials }; continue; }
       // A synchronous wake cannot join a request which already chose to finish.
       if (pending.get(key)?.completion === work) pending.delete(key);
@@ -198,7 +233,8 @@ export function readActiveMachineSkillInstallArtifactIds(input: Readonly<{
   const read = active.promptLibraryCatalog
     ? readPromptLibraryCatalogRecordV1({ catalog: active.promptLibraryCatalog, key: 'external-links',
       rawSettings: active.source === 'none' ? undefined : active.rawSettings })
-    : active.source === 'none' ? null : readRetainedPromptLibraryRecordV1(active.rawSettings, 'external-links');
+    : active.source === 'none' || active.rawSettings === undefined
+      ? null : readRetainedPromptLibraryRecordV1(active.rawSettings, 'external-links');
   if (read?.status !== 'ready' || read.record.key !== 'external-links') return [];
   return [...new Set(read.record.value.links.filter(link => isPromptExternalLinkForMachine(link, input.machineInstallDemand))
     .map(link => link.artifactId))];

@@ -1,15 +1,35 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { setTimeout } from 'node:timers';
 
 import { SPAWN_SESSION_ERROR_CODES } from '@/rpc/handlers/registerSessionHandlers';
 import type { TrackedSession } from '../types';
 import type { SpawnSessionResult } from '@/session/shared/spawnSessionContract';
 import { createPersistedTakeoverAdmissionWaiter } from './persistedTakeoverAdmission';
 
-import { hasSessionWebhookPidTimedOut, waitForSessionWebhook } from './waitForSessionWebhook';
+import { armSessionWebhookStartupCustody, hasSessionWebhookPidTimedOut, waitForSessionWebhook } from './waitForSessionWebhook';
 
 describe('waitForSessionWebhook', () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('preserves the observed child exit cause when startup custody settles before the webhook', async () => {
+    const tracked: TrackedSession = { pid: 745525, startedBy: 'daemon', happySessionId: 'PID-745525' };
+    const completion = waitForSessionWebhook({
+      pid: tracked.pid, pidToAwaiter: new Map(), pidToSpawnResultResolver: new Map(),
+      pidToSpawnWebhookTimeout: new Map(), pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+      timeoutErrorMessage: 'startup timed out',
+    });
+    armSessionWebhookStartupCustody(tracked, completion, Promise.resolve());
+    tracked.startupCustody!.observeExit({ reason: 'process-exited-before-webhook', code: 1, signal: null,
+      stderrTail: 'Provider-bound model selection requires a validated provider binding handoff' });
+    const result = await completion;
+    expect(result).toMatchObject({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.CHILD_EXITED_BEFORE_WEBHOOK });
+    if (result.type !== 'error') throw new Error('Expected child exit refusal');
+    expect(result.errorMessage).toContain('code=1');
+    expect(result.errorMessage).toContain('signal=null');
+    expect(result.errorMessage).toContain('Provider-bound model selection requires a validated provider binding handoff');
+    await completion.waitForFinalization();
   });
 
   it('resolves success when webhook arrives before timeout', async () => {

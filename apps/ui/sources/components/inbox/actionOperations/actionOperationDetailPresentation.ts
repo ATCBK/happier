@@ -1,7 +1,14 @@
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import type { ProjectCommandAttachmentV1 } from '@happier-dev/protocol/actions/operations/v1';
+import type { WorkspaceAddressV1, WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import { isWorkspacePathWithinRootV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
+import { resolveWorkspaceRefById } from '@/sync/domains/workspaces/workspaceRefs';
 import type { ActionOperationObservation } from '@/sync/domains/actionOperations/actionOperationStore';
 import { canRequestActionOperationStop } from './actionOperationPresentation';
+import { resolveSystemTaskFailureMessage } from '@/components/systemTasks/resolveSystemTaskFailureMessage';
+import { presentApprovalFailure } from '@/components/tools/shell/approvals/useApprovalDecisionHandler';
+import type { TechnicalDetailsLine } from '@/components/ui/lists/TechnicalDetailsDisclosure';
+import { t } from '@/text';
 
 type ActionOperationSnapshot = ActionOperationProjection['snapshot'];
 export type MachineEnvironmentOutputAttachment = Extract<NonNullable<ActionOperationSnapshot['domainRef']>, { kind: 'machineEnvironment' }>;
@@ -16,6 +23,12 @@ export type ActionOperationDetailSummaryRow = Readonly<{
     value: string;
 }>;
 
+/** A failed operation as a person reads it: the reason, and the typed code kept for Technical details. */
+export type ActionOperationDetailFailure = Readonly<{
+    reason: string;
+    technicalLines: readonly TechnicalDetailsLine[];
+}>;
+
 export type ActionOperationDetailRecovery =
     | Readonly<{ kind: 'fork_lineage'; referenceId: string; sessionId: string }>
     | Readonly<{ kind: 'spawn_custody'; referenceId: string }>
@@ -27,7 +40,7 @@ export type ActionOperationDetailProjection = Readonly<{
     machineEnvironment: MachineEnvironmentOutputAttachment | null;
     fields: readonly ActionOperationDetailField[];
     resultSummary: readonly ActionOperationDetailSummaryRow[];
-    errorSummary: readonly ActionOperationDetailSummaryRow[];
+    failure: ActionOperationDetailFailure | null;
     warning: Readonly<{ code: string; message: string }> | null;
     recovery: ActionOperationDetailRecovery | null;
     nextAction:
@@ -48,7 +61,7 @@ const EMPTY_DETAIL = Object.freeze({
     machineEnvironment: null,
     fields: Object.freeze([]),
     resultSummary: Object.freeze([]),
-    errorSummary: Object.freeze([]),
+    failure: null,
     warning: null,
     recovery: null,
     nextAction: null,
@@ -109,13 +122,16 @@ function summarizeResult(value: unknown): readonly ActionOperationDetailSummaryR
     });
 }
 
-function summarizeError(snapshot: ActionOperationSnapshot): readonly ActionOperationDetailSummaryRow[] {
-    if (!snapshot.error) return [];
-    const rows: ActionOperationDetailSummaryRow[] = [
-        { label: 'code', value: snapshot.error.errorCode },
-        { label: 'message', value: snapshot.error.error },
-    ];
-    return rows;
+/** The shared failure presenter reads the operation's failure: readable words first, the code only as a detail. */
+function presentFailure(snapshot: ActionOperationSnapshot): ActionOperationDetailFailure | null {
+    if (!snapshot.error) return null;
+    const { errorCode, error } = snapshot.error;
+    const sentence = resolveSystemTaskFailureMessage({ code: errorCode, message: error }) ?? error;
+    const presented = presentApprovalFailure({ errorCode, error }, sentence, t('inbox.actionOperations.failureGeneric'));
+    return {
+        reason: presented.reason,
+        technicalLines: presented.code ? [{ key: 'failure-code', label: t('common.error'), value: presented.code }] : [],
+    };
 }
 
 function readStringArray(value: unknown): readonly string[] {
@@ -223,7 +239,7 @@ function projectPlugin(snapshot: ActionOperationSnapshot): Omit<ActionOperationD
         ...EMPTY_DETAIL,
         kind: 'plugin',
         resultSummary: snapshot.state === 'succeeded' ? summarizeResult(snapshot.result) : [],
-        errorSummary: summarizeError(snapshot),
+        failure: presentFailure(snapshot),
     };
 }
 
@@ -251,7 +267,7 @@ function projectProjectCommand(snapshot: ActionOperationSnapshot): Omit<ActionOp
         ...EMPTY_DETAIL,
         kind: 'projectCommand',
         projectCommand: attachment,
-        errorSummary: summarizeError(snapshot),
+        failure: presentFailure(snapshot),
         resultSummary: snapshot.state === 'succeeded' ? summarizeResult(snapshot.result) : [],
         nextAction: attachment.terminalId ? {
             kind: 'open_output', serverId: attachment.serverId, machineId: attachment.machineId,
@@ -266,6 +282,16 @@ export function readActionOperationOutputAttachment(snapshot: ActionOperationSna
     return attachment?.kind === 'projectCommand' || attachment?.kind === 'machineEnvironment' ? attachment : null;
 }
 
+/** Output belongs to the actual accepted checkout; the process cwd may be below its root. */
+export function readProjectCommandOutputWorkspace(attachment: ProjectCommandAttachmentV1,
+    workspaceRefs: readonly WorkspaceRefV1[]): WorkspaceAddressV1 | null {
+    const selected = resolveWorkspaceRefById(workspaceRefs, attachment.workspaceRefId, attachment.serverId);
+    if (selected.kind !== 'resolved' || selected.ref.machineId !== attachment.machineId
+        || !isWorkspacePathWithinRootV1(attachment.cwd, selected.ref.rootPath)) return null;
+    return { serverId: selected.ref.serverId, workspaceId: selected.ref.id,
+        machineId: selected.ref.machineId, rootPath: selected.ref.rootPath };
+}
+
 function projectMachineEnvironment(snapshot: ActionOperationSnapshot): Omit<ActionOperationDetailProjection, 'canCancel'> {
     const attachment = snapshot.domainRef;
     if (attachment?.kind !== 'machineEnvironment') return projectPlugin(snapshot);
@@ -273,7 +299,7 @@ function projectMachineEnvironment(snapshot: ActionOperationSnapshot): Omit<Acti
         ...EMPTY_DETAIL,
         kind: 'machineEnvironment',
         machineEnvironment: attachment,
-        errorSummary: summarizeError(snapshot),
+        failure: presentFailure(snapshot),
         resultSummary: snapshot.state === 'succeeded' ? summarizeResult(snapshot.result) : [],
         nextAction: attachment.terminalId ? {
             kind: 'open_output', serverId: attachment.serverId, machineId: attachment.machineId, terminalId: attachment.terminalId,
@@ -291,7 +317,7 @@ export function projectActionOperationDetail(
     const detail = projector(snapshot, observation);
     return {
         ...detail,
-        errorSummary: detail.errorSummary.length > 0 ? detail.errorSummary : summarizeError(snapshot),
+        failure: detail.failure ?? presentFailure(snapshot),
         canCancel: canRequestActionOperationStop(snapshot, observation),
     };
 }

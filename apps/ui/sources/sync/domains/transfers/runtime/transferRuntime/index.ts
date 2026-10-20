@@ -9,4 +9,12 @@ export * from './availability/transferAvailability';
 export type { TransferRouteKind } from './routing/transferRouteKinds';
 export { prepareBulkJsonPayloadForUpload } from './plumbing/prepareBulkJsonPayloadForUpload';
 export { uploadBulkPayloadFromFileViaMachineCarrier } from './plumbing/uploadBulkPayloadFromFileViaMachineCarrier';
-export { isTransferFinalizeRecoveryFailure, type TransferFinalizeRecoveryFailure } from './plumbing/directTransferFinalizeRecovery';
+export { isTransferFinalizeRecoveryFailure, type TransferFinalizeRecoveryFailure,
+    type TransferFinalizeRecoveryAction, type TransferFinalizeRecoveryActionResult,
+    type TransferFinalizeRecoveryContinuation } from './plumbing/directTransferFinalizeRecovery';
+export type { BulkTransferFileDestination } from './plumbing/bulkTransferFileDestination';
+export { observeTransferOperation } from './plumbing/observeTransferOperation';
+export { callAdmittedFilesystemTransferActionRpc } from './plumbing/filesystemTransferActionClient';
+export { createTransferManifestHasher } from './plumbing/transferManifestHasher';
+export type { AcquireBrowserMachineCarrierEndpointLease, MachineCarrierStreamDuplex,
+    OpenMachineCarrierStream } from './plumbing/machineCarrierBrowserStream';

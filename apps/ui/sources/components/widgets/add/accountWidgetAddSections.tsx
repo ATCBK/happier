@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { MACHINE_BUILTIN_WIDGET_IDS_V1, USAGE_BUILTIN_WIDGET_IDS_V1, normalizeWidgetSizeForSurfaceV1, supportsWidgetGroupsV1, type WidgetLayoutFragmentSummaryV1, type WidgetProjectAreaV1, type WidgetInputBindingsV1, type WidgetInstanceV1, type WidgetSurfaceRefV1, type WidgetSizeV1 } from '@happier-dev/protocol/widgets';
+import { MACHINE_BUILTIN_WIDGET_IDS_V1, PROJECT_BUILTIN_WIDGET_IDS_V1, SESSION_COMPANION_BUILTIN_ITEM_IDS, USAGE_BUILTIN_WIDGET_IDS_V1, normalizeWidgetSizeForSurfaceV1, supportsWidgetGroupsV1, type WidgetLayoutFragmentSummaryV1, type WidgetProjectAreaV1, type WidgetInputBindingsV1, type WidgetInstanceV1, type WidgetSurfaceRefV1, type WidgetSizeV1 } from '@happier-dev/protocol/widgets';
 
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { useHomeWidgetCandidates } from '@/components/hub/layout/useHomeWidgetCandidates';
@@ -16,6 +16,7 @@ import {
     isConfigurableWidgetCandidate,
     partitionWidgetCandidatesBySource,
     selectHostableWidgetCandidates,
+    runAcknowledgedWidgetSetupCommand,
     runWidgetSetupCommand,
     widgetDefinitionOfCandidate,
     widgetProvidedContext,
@@ -71,12 +72,15 @@ export type AccountWidgetAddInput = Readonly<{
  */
 /**
  * Happier's built-in families that read as one group of their own (plan 60 AGW-14, lab `rw` AD; usage
- * lab `d2edit-G`): Machines and Usage. On a family's own page its group leads, so Add on Usage opens
+ * lab `d2edit-G`): Machines, Usage, the Project widgets and the Session details widgets (Session summary,
+ * Plan, Changes, Local services: each needs a chosen Session). On a family's own page its group leads, so Add on Usage opens
  * on the Usage widgets; elsewhere the families keep this order.
  */
 const BUILTIN_WIDGET_FAMILIES = [
     { id: 'machines', ids: new Set<string>(MACHINE_BUILTIN_WIDGET_IDS_V1), pageId: null, title: () => t('machines.widgets.machine_fleet') },
     { id: 'usage', ids: new Set<string>(USAGE_BUILTIN_WIDGET_IDS_V1), pageId: 'usage', title: () => t('usage.board.page.title') },
+    { id: 'projects', ids: new Set<string>(PROJECT_BUILTIN_WIDGET_IDS_V1), pageId: null, title: () => t('tabs.projects') },
+    { id: 'session', ids: new Set<string>(SESSION_COMPANION_BUILTIN_ITEM_IDS), pageId: null, title: () => t('widgetAdd.sessionDetails') },
 ] as const;
 type BuiltinWidgetFamily = (typeof BUILTIN_WIDGET_FAMILIES)[number];
 function builtinWidgetFamilyOf(candidate: WidgetCandidate): BuiltinWidgetFamily | null {
@@ -90,8 +94,22 @@ export function buildAccountWidgetAddSections(input: AccountWidgetAddInput): rea
         const definition = widgetDefinitionOfCandidate(candidate);
         const copies = countWidgetInstances(input.instances, definition);
         const configurable = isConfigurableWidgetCandidate(candidate);
-        const add = (bindings: WidgetInputBindingsV1, size?: WidgetSizeV1) => input.addInstance({ v: 1, id: randomUUID(), definition, bindings },
-            input.scope ? normalizeWidgetSizeForSurfaceV1(input.scope.owner.kind, size, candidate.sizeDeclaration) : undefined);
+        let instanceId: string | null = null;
+        let pending: Promise<WidgetSetupCommandResult> | null = null;
+        const add = (bindings: WidgetInputBindingsV1, size?: WidgetSizeV1) => {
+            if (pending) return pending;
+            instanceId ??= randomUUID();
+            const instance: WidgetInstanceV1 = { v: 1, id: instanceId, definition, bindings };
+            pending = Promise.resolve().then(() => input.addInstance(instance,
+                input.scope ? normalizeWidgetSizeForSurfaceV1(input.scope.owner.kind, size, candidate.sizeDeclaration) : undefined))
+                .then(result => {
+                    // Approval has custody too. Only a resolved successful invocation
+                    // permits an intentional Add another to allocate a different copy.
+                    if (!result || result.ok) instanceId = null;
+                    return result;
+                }).finally(() => { pending = null; });
+            return pending;
+        };
         const renderSetupPreview = input.renderSetupPreview;
         const setup = buildWidgetCandidateSetup({
             candidate, context, audience: 'personal', mode: { kind: 'add', submitLabel: input.labels.submit },
@@ -130,7 +148,7 @@ export function buildAccountWidgetAddSections(input: AccountWidgetAddInput): rea
     const otherBuiltIns = widgets.builtIn.filter(candidate => builtinWidgetFamilyOf(candidate) === null);
     return [
         ...families.map(({ family, candidates }) => ({ id: `builtins:${family.id}`, title: family.title(),
-            hint: t('widgetAdd.builtIn').toLocaleLowerCase(), entries: candidates.map(entry) })),
+            hint: t('widgetAdd.builtIn').toLocaleLowerCase(), family: true as const, entries: candidates.map(entry) })),
         { id: 'builtins', title: t('widgetAdd.builtIn'), entries: otherBuiltIns.map(entry) },
         ...groupWidgetCandidatesByPlugin(widgets.fromPlugins).map((group) => ({
             id: `plugin:${group.id}`, title: group.title, hint: t('widgetAdd.pluginTag'), pluginId: group.id, entries: group.candidates.map(entry),
@@ -157,8 +175,10 @@ export function useAccountWidgetAddSections(input: Readonly<{
     testID: string;
 }>): Readonly<{
     sections: readonly WidgetAddSection[];
-    /** True while the Account's own widgets or saved groups are still being read: a search that finds nothing waits. */
+    /** Aggregate saved-inventory state retained for callers migrating to pendingSections. */
     loading: boolean;
+    /** Local sections are ready independently; only these remote sections are still unresolved. */
+    pendingSections: readonly Pick<WidgetAddSection, 'id' | 'title'>[];
 }> {
     const installed = useHomeWidgetCandidates();
     const appRuntime = useAppShellPluginUiProjection();
@@ -172,10 +192,8 @@ export function useAccountWidgetAddSections(input: Readonly<{
     const area = input.area;
     const addGroup = React.useCallback(async (fragment: WidgetLayoutFragmentSummaryV1) => {
         if (!scope) throw new Error('widget_area_unavailable');
-        const outcome = await runAddWidgetLayoutFragmentCommandV1(fragment.group, scope,
-            { name: fragment.name, ...(area ? { area } : {}) });
-        if (outcome.kind === 'refused') throw new Error(outcome.errorCode);
-        return outcome.kind === 'approvalPending' ? { ok: true as const, approvalPending: true as const } : { ok: true as const };
+        return runAcknowledgedWidgetSetupCommand(() => runAddWidgetLayoutFragmentCommandV1(fragment.group, scope,
+            { name: fragment.name, ...(area ? { area } : {}) }), t('widgetAdd.addFailed'));
     }, [area, scope]);
     const sections = React.useMemo(() => buildAccountWidgetAddSections({
         candidates,
@@ -200,5 +218,9 @@ export function useAccountWidgetAddSections(input: Readonly<{
             ),
         } : {}),
     }), [addGroup, addInstance, appRuntime, candidates, context, fragmentActions, fragments, groupCapable, instances, labels, phone, scope, testID]);
-    return { sections, loading: !yoursLoaded || (groupCapable && !fragmentsLoaded) };
+    const loading = !yoursLoaded || (groupCapable && !fragmentsLoaded);
+    const pendingSections = React.useMemo(() => loading
+        ? [{ id: 'yours', title: t('widgetDefinition.yourWidgets') }]
+        : [], [loading, sections]);
+    return { sections, loading, pendingSections };
 }

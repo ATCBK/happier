@@ -17,7 +17,6 @@ import {
 import { VitalsHistoryChart } from '@/components/machines/vitals/VitalsHistoryChart';
 import {
   formatVitalsPercent,
-  formatVitalsPointTime,
   vitalsAreaWash,
   vitalsPercentScale,
 } from '@/components/machines/vitals/vitalsFormat';
@@ -329,7 +328,6 @@ function ProcessHistory(
           id: String(sample.capturedAtMs),
           x: sample.capturedAtMs,
           y: sample.memoryBytes,
-          label: formatVitalsPointTime(sample.capturedAtMs),
         })),
       },
     ],
@@ -345,7 +343,6 @@ function ProcessHistory(
           id: String(sample.capturedAtMs),
           x: sample.capturedAtMs,
           y: sample.cpuPercent ?? null,
-          label: formatVitalsPointTime(sample.capturedAtMs),
         })),
       },
     ],

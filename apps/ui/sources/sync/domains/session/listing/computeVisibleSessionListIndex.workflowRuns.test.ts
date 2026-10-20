@@ -1,12 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeSessionListFilterV1 } from '@happier-dev/protocol';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
-import { computeVisibleSessionListIndex } from './computeVisibleSessionListIndex';
+import { computeVisibleSessionListIndex as computeSessionListIndex } from './computeVisibleSessionListIndex';
 import type { SessionListRenderableSession } from './sessionListRenderable';
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 import { buildSessionListProjectHeaderViewModels } from '@/components/sessions/shell/sessionListProjectHeaderViewModels';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { parseDecryptedSessionMetadata } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
+import { buildSessionListRowFilterFacts, buildWorkflowRunFilterFacts, matchSessionListRowLocalFilter, resolveWorkflowRunUnavailableHomes } from './sessionListWorkFilter';
+import { matchSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+
+const fixtureViewers = new Map([['home', 'account-1']]);
+function computeVisibleSessionListIndex(input: Parameters<typeof computeSessionListIndex>[0]) {
+    // The real collection runs under captured viewer custody; standalone projections supply that same fixture fact.
+    return computeSessionListIndex({ viewerAccountIdByServerId: fixtureViewers, ...input });
+}
 
 const workspace = { t: 'workspaceScope', serverId: 'home', machineId: 'machine-1', rootPath: '/repo' } as const;
 const source: SessionListIndexItem[] = [
@@ -23,7 +33,7 @@ const resolveSessionRow = (_serverId: string | null | undefined, sessionId: stri
 });
 
 function summary(id: string, startedBy: 'user' | 'trigger' | 'agent', attentionRequired = false) {
-    return { ...createWorkflowRunSummaryFixture({ id, attentionRequired }), startedBy,
+    return { ...createWorkflowRunSummaryFixture({ id, attentionRequired, ownerAccountId: 'account-1' }), startedBy,
         where: { machineId: 'machine-1', directory: '/repo' },
         stepProgress: { completed: 1, total: 3 },
     };
@@ -40,6 +50,105 @@ function compute(show: 'sessions' | 'runs' | 'both' = 'both', startedBy: ('you' 
 }
 
 describe('computeVisibleSessionListIndex workflow Runs', () => {
+    it('does not turn another Account\'s readable Team Run into your start or participation', () => {
+        const run = { ...summary('shared', 'user'), ownerAccountId: 'other', visibleTeamId: 'team' };
+        const own = buildWorkflowRunFilterFacts({ ...run, ownerAccountId: 'me' }, 'home', 'me');
+        const foreign = buildWorkflowRunFilterFacts(run, 'home', 'me');
+        const unknownViewer = buildWorkflowRunFilterFacts(run, 'home');
+        expect(foreign.startedBy).toBe('other_account');
+        expect(own).toMatchObject({ startedBy: 'you', scopeMatches: { my_work: true, involving_me: true } });
+        expect(unknownViewer.startedBy).toBeUndefined();
+        expect(foreign.scopeMatches?.my_work).toBeUndefined();
+        expect(foreign.scopeMatches?.involving_me).toBeUndefined();
+        const filter = normalizeSessionListFilterV1({ homeServerIds: ['home'], scope: 'all_accessible' });
+        expect(matchSessionListFilterV1(filter, foreign)).toBe('miss');
+        expect(matchSessionListFilterV1(filter, unknownViewer)).toBe('unavailable');
+        expect(matchSessionListFilterV1({ ...filter, scope: 'involving_me', startedBy: ['you', 'agents', 'triggers'] }, foreign)).toBe('unavailable');
+        const visible = computeVisibleSessionListIndex({ source: [], resolveSessionRow: () => null,
+            hideInactiveSessions: false, pinnedSessionKeysV1: [], sessionListGroupOrderV1: {},
+            presentation: { enabled: false, presentation: 'grouped' }, workFilter: { ...filter, show: 'runs' },
+            viewerAccountIdByServerId: new Map([['home', 'me']]),
+            workflowRuns: [{ serverId: 'home', summary: run },
+                { serverId: 'home', summary: { ...run, id: 'own', ownerAccountId: 'me' } }],
+        });
+        expect(visible?.filter(item => item.type === 'workflow_run').map(item => item.runId)).toEqual(['own']);
+    });
+    it('keeps unavailable Run filter facts distinct from a complete empty Run result', () => {
+        const filter = normalizeSessionListFilterV1({ homeServerIds: ['home'], show: 'runs', underSessionId: 'manager' });
+        const input = { selectedHomeServerIds: ['home'], mountedHomeServerIds: ['home'], servedHomeServerId: 'home',
+            filter, viewerAccountId: 'account-1', runs: [summary('manual', 'user')] };
+        expect(resolveWorkflowRunUnavailableHomes(input)).toEqual([{ serverId: 'home', reason: 'unsupported' }]);
+        expect(resolveWorkflowRunUnavailableHomes({ ...input, runs: [] })).toEqual([]);
+        expect(resolveWorkflowRunUnavailableHomes({ ...input, runs: [null] })).toEqual([{ serverId: 'home', reason: 'unsupported' }]);
+        expect(resolveWorkflowRunUnavailableHomes({ ...input, filter: { ...filter, underSessionId: undefined } })).toEqual([]);
+        // A known nonmatching kind does not require unavailable subtree evidence.
+        expect(resolveWorkflowRunUnavailableHomes({ ...input, filter: { ...filter, show: 'sessions' } })).toEqual([]);
+        expect(resolveWorkflowRunUnavailableHomes({ ...input, runUnderSessionId: 'manager' })).toEqual([]);
+    });
+    it('uses an Under-filtered Run page as server-proved membership in the list projection', () => {
+        const run = summary('descendant-origin', 'user');
+        const filter = normalizeSessionListFilterV1({ homeServerIds: ['home'], show: 'runs', underSessionId: 'manager' });
+        const base = { source: [], resolveSessionRow: () => null, hideInactiveSessions: false,
+            pinnedSessionKeysV1: [], sessionListGroupOrderV1: {}, presentation: { enabled: false, presentation: 'grouped' as const },
+            workFilter: filter, workflowRuns: [{ serverId: 'home', summary: run }] };
+        expect(computeVisibleSessionListIndex(base)?.filter(item => item.type === 'workflow_run')).toEqual([]);
+        expect(computeVisibleSessionListIndex({ ...base, workflowRunUnderSessionId: 'manager' })
+            ?.filter(item => item.type === 'workflow_run').map(item => item.runId)).toEqual([run.id]);
+    });
+    it('uses protected starter identity for current rows without treating legacy list admission as rule proof', () => {
+        const filter = normalizeSessionListFilterV1({ homeServerIds: ['home'], scope: 'all_accessible' });
+        const options = { nowMs: 1000, viewerAccountId: 'me' };
+        const row = { ...resolveSessionRow('home', 'lead'), origin: { kind: 'none' as const }, ownerAccountId: 'me',
+            metadata: { path: '/repo', bot: { kind: 'bot' as const } } };
+        expect(matchSessionListRowLocalFilter(row, 'home', filter, options)).toBe('match');
+        expect(matchSessionListRowLocalFilter({ ...row, ownerAccountId: 'other' }, 'home', filter, options)).toBe('miss');
+        const legacy = { ...row, ownerAccountId: undefined };
+        expect(matchSessionListRowLocalFilter(legacy, 'home', filter, options)).toBe('match');
+        expect(matchSessionListFilterV1(filter, buildSessionListRowFilterFacts(legacy, 'home', options))).toBe('unavailable');
+        expect(matchSessionListFilterV1(filter, buildSessionListRowFilterFacts(null, 'home', options))).toBe('unavailable');
+    });
+    it('uses the opened owner view for hydrated rule facts as well as compact list rows', () => {
+        const session = createSessionFixture({ metadataLayoutVersion: 1, metadata: parseDecryptedSessionMetadata({ v: 1 }, 1),
+            ownerMetadataView: { path: '/private', host: 'host', projectId: 'payments', bot: { kind: 'bot' } } });
+        const facts = buildSessionListRowFilterFacts(session, 'home', { nowMs: 1000 });
+        expect(facts.projectMetadata).toMatchObject({ projectId: 'payments' });
+        expect(facts.metadata).toEqual({ bot: { kind: 'bot' } });
+    });
+    it('keeps cold loading placeholders unless a selected local facet requires their unavailable facts', () => {
+        const params = {
+            source: [{ type: 'session' as const, sessionId: 'loading', serverId: 'home', groupKind: 'loading' as const }],
+            resolveSessionRow: () => null, sessionListLayoutChoice: 'recent_activity' as const,
+            hideInactiveSessions: false, pinnedSessionKeysV1: [], sessionListGroupOrderV1: {},
+            presentation: { enabled: false, presentation: 'grouped' as const },
+        };
+        const filter = normalizeSessionListFilterV1({ homeServerIds: ['home'] });
+        expect(computeVisibleSessionListIndex({ ...params, workFilter: filter })?.some(item => item.type === 'session' && item.sessionId === 'loading')).toBe(true);
+        expect(computeVisibleSessionListIndex({ ...params, workFilter: { ...filter,
+            projects: { include: [{ serverId: 'home', projectKey: 'payments' }], exclude: [] },
+        } })?.some(item => item.type === 'session')).toBe(false);
+    });
+    it('retains producer-proved direct storage when a compact row has no opened source material', () => {
+        const result = computeVisibleSessionListIndex({
+            source: [{ ...source[1]!, type: 'session', sessionId: 'lead', storageKind: 'direct' }],
+            resolveSessionRow: () => ({ ...resolveSessionRow('home', 'lead'), metadata: null }),
+            hideInactiveSessions: false, pinnedSessionKeysV1: [], sessionListGroupOrderV1: {},
+            presentation: { enabled: false, presentation: 'grouped' },
+            workFilter: normalizeSessionListFilterV1({ source: 'direct', homeServerIds: ['home'] }),
+        })!;
+        expect(result.filter(item => item.type === 'session').map(item => item.sessionId)).toEqual(['lead']);
+    });
+    it('applies the canonical project exclusion and status to list rows without admitting locked facts', () => {
+        const row = { ...resolveSessionRow('home', 'lead'), encryptionMode: 'plain' as const, encryptedContentAvailability: 'ready' as const,
+            presence: 'online' as const, latestTurnStatus: 'failed' as const, latestTurnStatusObservedAt: 1000, origin: { kind: 'none' as const } };
+        const rows = { lead: { ...row, metadata: { path: '/repo', projectId: 'payments' } }, step: { ...row, id: 'step', metadata: { path: '/repo', workspaceId: 'checkout-other' } } };
+        const result = computeVisibleSessionListIndex({ source, resolveSessionRow: (_server, id) => rows[id as keyof typeof rows] ?? null,
+            hideInactiveSessions: false, pinnedSessionKeysV1: [], sessionListGroupOrderV1: {}, nowMs: 1000,
+            presentation: { enabled: false, presentation: 'grouped' },
+            workFilter: normalizeSessionListFilterV1({ homeServerIds: ['home'], statuses: ['failed'], projects: { include: [], exclude: [{ serverId: 'home', projectKey: 'payments' }] } }),
+            workspaceRefs: [{ id: 'checkout-other', serverId: 'home', projectKey: 'other', machineId: 'machine-1', rootPath: '/repo', createdAtMs: 1 }],
+        })!;
+        expect(result.filter(item => item.type === 'session').map(item => item.sessionId)).toEqual(['step']);
+    });
     it('distinguishes the same Run project on two machines without any Sessions, and refreshes cached identity', () => {
         const machines = ['machine-1111', 'machine-2222'].map(id => createMachineFixture({
             id, metadata: { ...createMachineFixture().metadata!, displayName: 'Dev box', host: 'dev.local', homeDir: '/home' },

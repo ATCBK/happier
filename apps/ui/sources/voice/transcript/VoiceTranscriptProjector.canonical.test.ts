@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { storage } from '@/sync/domains/state/storage';
 import { log } from '@/log';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { RawRecordSchema } from '@happier-dev/session-core/raw';
 import { SessionMessageRoleSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
 import { persistSessionTranscriptMessage, readStoredSessionMessages } from '@happier-dev/session-core/messages';
@@ -23,10 +23,10 @@ const wireRequests: TranscriptRequest[] = [];
 // Retained state belongs to the substituted Home HTTP service, not the projector/store.
 const durableRows = new Map<string, TranscriptRequest>();
 const acknowledgements = new Map<string, { id: string; seq: number; localId: string; createdAt: number }>();
-const wireSchema = z.object({
-  content: z.object({ t: z.literal('plain'), v: RawRecordSchema }).strict(),
-  localId: z.string().min(1), messageRole: SessionMessageRoleSchema,
-}).strict();
+const wireSchema = z.strictObject({
+  content: z.strictObject({ t: z.literal('plain'), v: RawRecordSchema }),
+  localId: z.string().check(z.minLength(1)), messageRole: SessionMessageRoleSchema,
+});
 let beforeAcknowledgement: (request: TranscriptRequest) => void | Promise<void>;
 const pendingWriterOperations: Promise<unknown>[] = [];
 
@@ -1240,7 +1240,7 @@ describe('canonical voice transcript projector', () => {
   });
 
   it('settles a rejected admitted write without retrying or blocking attempt release', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const consoleInfo = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     let rejectWrite!: (error: Error) => void;
     beforeAcknowledgement = async () => {
       await new Promise<never>((_resolve, reject) => { rejectWrite = reject; });
@@ -1281,17 +1281,17 @@ describe('canonical voice transcript projector', () => {
       expect(wireRequests).toHaveLength(1);
       expect(durableRows.size).toBe(0);
       expect(storedCarrierRows()).toEqual([]);
-      expect(consoleError).toHaveBeenCalledWith(
+      expect(consoleInfo).toHaveBeenCalledWith(
         '[fireAndForget] VoiceTranscriptProjector.persistFinal',
         expect.objectContaining({ message: 'offline' }),
       );
     } finally {
-      consoleError.mockRestore();
+      consoleInfo.mockRestore();
     }
   });
 
   it('lets a same-row correction proceed after the preceding persistence attempt fails', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const consoleInfo = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     let writeCount = 0;
     beforeAcknowledgement = async () => {
       writeCount += 1;
@@ -1338,17 +1338,17 @@ describe('canonical voice transcript projector', () => {
       ]));
       await settleWrites();
       expect(storedCarrierRows()).toEqual([expect.objectContaining({ text: 'corrected question' })]);
-      expect(consoleError).toHaveBeenCalledWith(
+      expect(consoleInfo).toHaveBeenCalledWith(
         '[fireAndForget] VoiceTranscriptProjector.persistFinal',
         expect.objectContaining({ message: 'offline' }),
       );
     } finally {
-      consoleError.mockRestore();
+      consoleInfo.mockRestore();
     }
   });
 
   it('keeps an identical authoritative final replay inert after its host write fails without creating a ghost', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const consoleInfo = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     let writeCount = 0;
     let rejectFirstWrite!: (error: Error) => void;
     beforeAcknowledgement = async () => {
@@ -1386,7 +1386,7 @@ describe('canonical voice transcript projector', () => {
       expect(wireRequests).toHaveLength(1);
 
       rejectFirstWrite(new Error('offline'));
-      await vi.waitFor(() => expect(consoleError).toHaveBeenCalledWith(
+      await vi.waitFor(() => expect(consoleInfo).toHaveBeenCalledWith(
         '[fireAndForget] VoiceTranscriptProjector.persistFinal',
         expect.objectContaining({ message: 'offline' }),
       ));
@@ -1407,7 +1407,7 @@ describe('canonical voice transcript projector', () => {
       expect(storedCarrierRows()).toEqual([]);
       expect(durableRows).toHaveLength(0);
     } finally {
-      consoleError.mockRestore();
+      consoleInfo.mockRestore();
     }
   });
 

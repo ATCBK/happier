@@ -1,9 +1,6 @@
 import type { SessionSurfaceItemV1 } from '@happier-dev/protocol/sessions/board';
 
-import { resolvePluginSurfaceDestinationLabel } from '@/components/plugins/surfaces/pluginSurfaceDestinations';
-import { createPluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
 import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
-import { selectWidgetPlacementsBySurface } from '@/sync/domains/plugins/ui/widgetContract';
 import { t } from '@/text';
 import { resolveSessionScmReviewComparisonLabel } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 
@@ -16,6 +13,9 @@ import { resolveSessionScmReviewComparisonLabel } from '@/components/sessions/pa
  * is the failure this owner exists to prevent: with two review widgets on one
  * Board, that label makes the disabled one indistinguishable from the working
  * one and makes "Manage plugin" a guess.
+ *
+ * The line says whose a widget is, never which: the item's own title already says that, so the
+ * contribution name is not repeated here ("Directory count · Directory count · Widget areas").
  *
  * Provenance is presentation only. It never becomes an authority, currentness or
  * availability input, and it never replaces the item's own user-owned title.
@@ -45,7 +45,19 @@ function provenance(label: string, accessibilityLabel?: string): BoardWidgetProv
 export function resolveBoardWidgetProvenance(
     source: SessionSurfaceItemV1['source'],
     projection: PluginUiProjectionModel | null | undefined,
+    options?: Readonly<{
+        snapshot?: boolean | SessionSurfaceItemV1['snapshot'];
+        viewerAccountId?: string | null;
+        posterDisplayName?: string | null;
+    }>,
 ): BoardWidgetProvenance {
+    // A posted snapshot is frozen declarative content; it reads as what it is, not as a note.
+    if (options?.snapshot) {
+        const poster = typeof options.snapshot === 'object' ? options.snapshot.postedByAccountId : undefined;
+        if (poster && poster === options.viewerAccountId) return provenance(t('sessionBoard.item.provenance.snapshotByYou'));
+        if (poster && options.posterDisplayName) return provenance(t('sessionBoard.item.provenance.snapshotBy', { name: options.posterDisplayName }));
+        return provenance(t('sessionBoard.item.provenance.snapshot'));
+    }
     if (source.kind === 'declarative') {
         // An agent visual says what it is: a chart or a table, never "Note" for every document.
         const root = (source.document as { root?: { kind?: unknown } } | undefined)?.root?.kind;
@@ -70,28 +82,15 @@ export function resolveBoardWidgetProvenance(
         }));
     }
 
-    const placements = projection
-        ? selectWidgetPlacementsBySurface(projection, surface)
-        : [];
-    const localize = createPluginLocalizedTextResolver({ projection });
-    // Exactly one admitted placement is the same rule the mount resolver uses;
-    // an ambiguous or absent surface contributes no contribution title.
-    const contributionTitle = placements.length === 1
-        ? resolvePluginSurfaceDestinationLabel(placements[0]!, localize)
-        : null;
-
-    const label = contributionTitle
-        ? t('sessionBoard.item.provenance.pluginSurface', { plugin: pluginName, surface: contributionTitle })
-        : pluginName;
     // Two installed plugins may legitimately share a display name. Assistive
     // technology keeps the qualified plugin id so they stay distinguishable.
     const duplicateDisplayName = Object.entries(projection?.installedPackagesById ?? {}).some((
         [pluginId, entry],
     ) => pluginId !== surface.pluginId && entry.displayName.trim() === pluginName);
     return provenance(
-        label,
+        pluginName,
         duplicateDisplayName
-            ? t('sessionBoard.item.provenance.pluginQualified', { label, pluginId: surface.pluginId })
-            : label,
+            ? t('sessionBoard.item.provenance.pluginQualified', { label: pluginName, pluginId: surface.pluginId })
+            : pluginName,
     );
 }

@@ -71,6 +71,17 @@ describe('HappierSkeletonRows (the one loading-rows owner)', () => {
     expect(rows[0]!.style.height).toBe(`${expected}px`);
     mount.unmount();
   });
+
+  it('draws in the theme text ink at the quiet skeleton strength when no host ink is given (hosted-web frames)', () => {
+    const text = theme.colors.text;
+    const mount = mountThroughReactNativeWeb(
+      <HappierSkeletonRows testID="rows" rows={1} theme={theme} lines={1} />,
+    );
+    const [bar] = barsOf(rowsOf(mount.container)[0]!);
+    const channels = [1, 3, 5].map((index) => parseInt(text.slice(index, index + 2), 16));
+    expect(bar!.style.backgroundColor).toBe(cssColor(`rgba(${channels.join(', ')}, 0.16)`));
+    mount.unmount();
+  });
   it('holds a row shape given by the host: line boxes, a padded row box, hairlines between rows, a glyph size and the row index', () => {
     const mount = mountThroughReactNativeWeb(
       <HappierSkeletonRows

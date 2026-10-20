@@ -25,6 +25,7 @@ import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lig
 import { createSignedPluginInstallationPublisherHeader } from "@/testkit/pluginInstallationPublisherTestkit";
 import { withAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
 import { registerSessionArchiveRoutes } from "@/app/api/routes/session/registerSessionArchiveRoutes";
+import { registerAutomationV3Routes } from "@/app/api/routes/automations/registerAutomationV3Routes";
 import { deleteOwnedSession } from "@/app/session/delete/deleteOwnedSession";
 import { deleteWorkflowRun } from "@/app/workflows/workflowRunService";
 
@@ -305,6 +306,39 @@ describe("Session lifecycle Automation admission on SQLite", () => {
             mutation: { v: 1, sessionId: current.sessionId, mutationId: `replay-${current.suffix}`, action: "complete", turnId: current.turnId, observedAt: completedAt + 1 },
         })).resolves.toMatchObject({ ok: true, didApply: false });
         await expect(db.automationRun.count({ where: { triggerId: { in: [first.id, second.id] } } })).resolves.toBe(2);
+    });
+
+    it("keeps a completed source's review-parked Workflow Run active in lifecycle trigger HTTP status", async () => {
+        const current = await source();
+        const attached = await trigger({ ...current, workflow: true });
+        const noRun = await trigger({ ...current, workflow: true, triggerEnabled: false });
+        await expect(applySessionTurnMutation({ actorUserId: current.accountId, mutation: {
+            v: 1, sessionId: current.sessionId, turnId: current.turnId, action: "complete",
+            mutationId: `complete-${current.suffix}`, observedAt: Date.now(),
+        } })).resolves.toMatchObject({ ok: true, didApply: true });
+        const run = await db.automationRun.findFirstOrThrow({ where: { triggerId: attached.id } });
+        expect(run).toMatchObject({ workflowCustodyState: "pending", causeSourceTurnId: current.turnId });
+        expect(await db.automationRun.count({ where: { triggerId: noRun.id } })).toBe(0);
+        await db.automationRun.update({ where: { id: run.id }, data: { state: "waiting_for_review" } });
+
+        await withAuthenticatedTestApp(registerAutomationV3Routes, async app => {
+            const headers = { "x-test-user-id": current.accountId };
+            const readStatus = async (automationId: string, triggerId: string) => {
+                const detail = await app.inject({ method: "GET", url: `/v3/automations/${automationId}`, headers });
+                expect(detail.statusCode, detail.body).toBe(200);
+                const list = await app.inject({ method: "GET", url: "/v3/automations", headers });
+                expect(list.statusCode, list.body).toBe(200);
+                const definition = list.json().automations.find((item: { id: string }) => item.id === automationId);
+                const status = detail.json().triggers.find((item: { id: string }) => item.id === triggerId).status;
+                expect(definition.triggers.find((item: { id: string }) => item.id === triggerId).status).toEqual(status);
+                return status;
+            };
+            expect(await readStatus(attached.automationId, attached.id)).toEqual({ state: "running", runId: run.id });
+            expect(await readStatus(noRun.automationId, noRun.id)).toEqual({ state: "finished", runId: null });
+            expect((await db.automationRun.findUniqueOrThrow({ where: { id: run.id } })).state).toBe("waiting_for_review");
+            await db.automationRun.update({ where: { id: run.id }, data: { state: "succeeded", workflowCustodyState: "settled" } });
+            expect(await readStatus(attached.automationId, attached.id)).toEqual({ state: "finished", runId: run.id });
+        });
     });
 
     it.each([false, true, "deleteRun"] as const)("suppresses an ancestor trigger's own needs-you event before consuming its budget, while unrelated and later user events still fire (clear history: %s)", async (clearHistory) => {

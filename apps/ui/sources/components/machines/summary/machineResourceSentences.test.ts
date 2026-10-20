@@ -33,7 +33,7 @@ describe('machine sentences (MPG-28)', () => {
     it('titles the fleet by how many need a look, one machine by its reason, and a calm fleet as calm', () => {
         expect(describeFleetTitle({ subjects: fleet, reportingCount: 3 })).toBe('2 machines need a look');
         expect(describeFleetTitle({ subjects: [fleet[1]!], reportingCount: 1 })).toBe('edge-1 is short on memory');
-        expect(describeFleetTitle({ subjects: [fleet[2]!], reportingCount: 1 })).toBe('Calm');
+        expect(describeFleetTitle({ subjects: [fleet[2]!], reportingCount: 1 })).toBe('All calm');
         expect(describeFleetTitle({ subjects: [fleet[2]!, fleet[2]!], reportingCount: 2 })).toBe('All calm');
         // Nothing reports resources yet: the surface keeps its plain title.
         expect(describeFleetTitle({ subjects: [], reportingCount: 0 })).toBeNull();
@@ -51,8 +51,10 @@ describe('machine sentences (MPG-28)', () => {
             .toBe('The other 5 online are calm.');
         // The Needs-you list carries the detail ("Swapping for 6 min."); with nothing else to say the page keeps its own line.
         expect(describeFleetDescription({ subjects: one, reportingCount: 1, onlineCount: 1, nowMs: NOW })).toBeNull();
-        expect(describeFleetTitle({ subjects: [fleet[2]!], reportingCount: 1 })).toBe('Calm');
+        expect(describeFleetTitle({ subjects: [fleet[2]!], reportingCount: 1 })).toBe('All calm');
         expect(describeFleetDescription({ subjects: [fleet[2]!], reportingCount: 1, onlineCount: 3, nowMs: NOW })).toBe('Every machine online is calm.');
+        // One machine online: "every machine" would be a crowd.
+        expect(describeFleetDescription({ subjects: [fleet[2]!], reportingCount: 1, onlineCount: 1, nowMs: NOW })).toBe('The one online is calm.');
         expect(describeFleetTitle({ subjects: fleet, reportingCount: 3 })).toBe('2 machines need a look');
     });
 

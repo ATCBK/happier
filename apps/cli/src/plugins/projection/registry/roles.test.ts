@@ -1,7 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { PluginProjectionV2Schema, resolveRoleSelectionV1 } from '@happier-dev/protocol';
 import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 import type { LoadedPlugin } from '@/plugins/discovery/load/installed';
@@ -11,7 +8,7 @@ import { projectLoadedPluginContributes } from './resolvePluginContributions';
 import { createResolvedContributionRegistry, createMergedContributionRegistry } from './createResolvedContributionRegistry';
 import { buildPluginProjectionV2 } from './projection/v2';
 import { readPluginRoleSources } from './roles';
-import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 
 const role = {
     id: 'reviewer', name: 'Security reviewer', instructions: 'Review security boundaries.',
@@ -35,14 +32,11 @@ function loaded(pluginId: string): LoadedPlugin {
 
 describe('plugin roles through the canonical projection', () => {
     it('admits a roles-only plugin without a daemon entrypoint through the runtime occurrence owner', async () => {
-        const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-plugin-roles-'));
-        const contributes = createResolvedContributionRegistry(projectLoadedPluginContributes({
-            loadResult: { loadedPlugins: [loaded('com.acme.security')], diagnosticsByPluginId: {} }, provenance: 'first_party',
-        }));
-        const registry = await resolveExecutablePluginRuntimeRegistry({
-            happyHomeDir, contributes, generation: 1,
-            generationAuthority: { commit: null, generations: new Map(), rejectedGenerations: new Map(), isCurrent: async () => true },
+        const fixture = await createAuthoredAdmittedPluginRuntimeFixture({
+            plugins: [{ manifest: loaded('com.acme.security').manifest, files: {} }],
+            runtimeOptions: { pluginIds: ['com.acme.security'] },
         });
+        const registry = fixture.registry;
         try {
             expect(readPluginRoleSources(registry.contributes).map((entry) => entry.localId)).toEqual(['disabled', 'reviewer']);
             expect(buildPluginProjectionV2({ registry: registry.contributes, generation: 1 }).familiesById.roles?.entriesById)
@@ -52,8 +46,7 @@ describe('plugin roles through the canonical projection', () => {
             expect(buildPluginProjectionV2({ registry: registry.contributes, generation: 1 }).familiesById.roles?.entriesById)
                 .toEqual({});
         } finally {
-            await registry.dispose();
-            await rm(happyHomeDir, { recursive: true, force: true });
+            await fixture.dispose();
         }
     });
 
@@ -73,7 +66,7 @@ describe('plugin roles through the canonical projection', () => {
             pluginId: 'com.acme.security', definition: role,
         });
         const sources = await createRoleSourceReader({ readPluginRoles: () => readPluginRoleSources(registry) })();
-        const pluginEntries = sources.filter((entry) => entry.roleId.startsWith('plugin:'));
+        const pluginEntries = sources.entries.filter((entry) => entry.roleId.startsWith('plugin:'));
         expect(pluginEntries.map((entry) => entry.roleId)).toEqual([
             'plugin:com.acme.other/disabled', 'plugin:com.acme.other/reviewer',
             'plugin:com.acme.security/disabled', 'plugin:com.acme.security/reviewer',

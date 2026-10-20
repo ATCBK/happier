@@ -208,7 +208,7 @@ describe('Settings > Plugins information architecture', () => {
     it('projects an unselected administration target as noTarget while the installed snapshot is unread', async () => {
         mocks.installedPluginsRead = false;
         const screen = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
-        const installedSection = screen.root.findAll((node) => node.type === 'InstalledPluginsSection')[0];
+        const installedSection = screen.root.findAll((node) => String(node.type) === 'InstalledPluginsSection')[0];
         expect(installedSection?.props.collectionState).toBe('noTarget');
     });
 

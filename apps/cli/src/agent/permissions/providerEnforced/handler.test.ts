@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { accountSettingsParse, buildSessionPermissionRespondRpcParamsV1 } from '@happier-dev/protocol';
+import { SessionInputCausalPermissionAuthorityV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -7,9 +9,13 @@ import { join } from 'node:path';
 import { CLAUDE_UNIFIED_TERMINAL_DIALOG_CHOICE_REQUEST_SOURCE } from '@happier-dev/protocol/agents/claude';
 
 import { ProviderEnforcedPermissionHandler } from './handler';
+import { DeferredApiSessionClient } from '@/agent/runtime/startup/DeferredApiSessionClient';
+import { createRunScopedExecutionPermissionHandler } from '@/agent/executionRuns/policy/runScopedExecutionPermissionHandler';
 import { __resetToolTraceForTests } from '@/agent/tools/trace/toolTrace';
 import { ServerBoundPermissionRpcHandlerManager } from '../testkit/serverBoundPermissionRpcHandlerManager';
+import type { AgentState } from '@/api/types';
 import { createNativeAgentSessionServices } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions';
+import { createNativeAgentSessionHostServiceOwners } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionHostServiceOwners';
 import { readSessionWorkspaceWritesV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { createClaudeAgentSdkTurnOperations } from '../../../../../../packages/plugins/claude/src/agent/runtime/remote/sdk/session';
@@ -37,6 +43,10 @@ class FakeSession {
   updateAgentState(updater: any) {
     this.agentState = updater(this.agentState);
     return this.agentState;
+  }
+
+  async updateAgentStateRequestSettlement(updater: (state: AgentState) => AgentState): Promise<void> {
+    await this.updateAgentState(updater);
   }
 
   getMetadataSnapshot() {
@@ -79,6 +89,105 @@ async function settledState<T>(promise: Promise<T>): Promise<'pending' | 'fulfil
   ]);
   return result === pending ? 'pending' : result;
 }
+
+it.each(['Edit', 'mcp__docs__create'] as const)('preserves the coordinator occurrence and native metadata when an offline permission reconnects without a snapshot (%s)', async (toolName) => {
+  const now = vi.spyOn(Date, 'now').mockReturnValue(1000);
+  const deferred = new DeferredApiSessionClient({ placeholderSessionId: 'offline', limits: { maxEntries: 10, maxBytes: 10_000 } });
+  const catalog = McpServerCatalogV1Schema.parse({ v: 1, servers: [{ id: 'docs-id', name: 'docs', title: 'Docs', transport: 'stdio',
+    stdio: { command: 'fixture-mcp', args: [] }, env: {}, createdAt: 1, updatedAt: 1,
+    tools: { default: 'allow_read_only', overrides: {} }, toolsSnapshot: { checkedAt: 1, machineId: 'fixture-machine',
+      tools: [{ name: 'create', tokens: 10, annotations: { destructiveHint: true } }] } }], bindings: [] });
+  const handler = new ProviderEnforcedPermissionHandler(deferred as never, { logPrefix: '[offline rebind]',
+    getMcpToolContext: () => ({ catalog: { status: 'ready', authority: 'active', revision: 1, diagnostics: [], catalog },
+      mcpServerIdentities: { docs: { serverId: 'docs-id', serverTitle: 'Docs' } } }) });
+  const pending = handler.handleToolCall('offline-request', toolName, { file_path: 'a', old_string: 'a', new_string: 'b' }, {
+    turnId: 'offline-turn', source: 'offline-source',
+    owner: { kind: 'plugin', pluginId: 'fixture.plugin' },
+    causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' },
+  });
+  const rejected = expect(pending).rejects.toThrow();
+  try {
+    expect(deferred.getAgentStateSnapshot()).toBeNull();
+    expect(deferred.getBufferStats().entryCount).toBeGreaterThan(0);
+    now.mockReturnValue(2000);
+    const connected = new FakeSession();
+    handler.updateSession(connected as never);
+    expect(connected.agentState.requests['offline-request']).toMatchObject({
+      createdAt: 1000, source: 'offline-source', turnId: 'offline-turn',
+      owner: { kind: 'plugin', pluginId: 'fixture.plugin' },
+      ...(toolName.startsWith('mcp__') ? { mcpTool: { server: 'docs', tool: 'create', item: { serverId: 'docs-id' } } } : {}),
+    });
+  } finally {
+    await handler.abortPendingRequestsAndFlush('test cleanup');
+    await rejected;
+    deferred.cancel();
+    now.mockRestore();
+  }
+});
+
+it('does not publish MCP preparation during a session rebind before the catalog admits it', async () => {
+  let release!: () => void;
+  const preparation = new Promise<void>(resolve => { release = resolve; });
+  const session = new FakeSession();
+  const handler = new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[catalog rebind]',
+    getMcpToolContext: () => ({ catalog: null,
+      mcpServerIdentities: { docs: { serverId: 'docs-id', serverTitle: 'Docs' } }, prepareCatalog: () => preparation }) });
+  const pending = handler.handleToolCall('preparing-rebind', 'mcp__docs__create', {});
+  const rejected = expect(pending).rejects.toThrow();
+  const connected = new FakeSession();
+  try {
+    handler.updateSession(connected as never);
+    expect(connected.agentState.requests).toEqual({});
+  } finally {
+    await handler.abortPendingRequestsAndFlush('test cleanup');
+    await rejected;
+    release();
+    await preparation;
+  }
+});
+
+it.each(['run', 'all', 'signal', 'reset', 'plugin', 'pluginTurn', 'mediatedTurn'] as const)('settles %s cancellation while MCP catalog preparation is held and never publishes the cancelled request', async cancellation => {
+  const pluginId = 'fixture.plugin';
+  let release!: () => void;
+  const preparation = new Promise<void>(resolve => { release = resolve; });
+  const session = new FakeSession();
+  const handler = new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[catalog cancellation]',
+    getMcpToolContext: () => ({ catalog: null,
+      mcpServerIdentities: { docs: { serverId: 'docs-id', serverTitle: 'Docs' } }, prepareCatalog: () => preparation }) });
+  const run = createRunScopedExecutionPermissionHandler({ runId: 'run', controllerOccurrenceId: 'occurrence', handler });
+  const abort = new AbortController();
+  const pending = cancellation === 'run'
+    ? run.handler.handleToolCall('pending', 'mcp__docs__create', {})
+    : handler.handleToolCall('pending', 'mcp__docs__create', {}, {
+        signal: abort.signal, turnId: 'turn',
+        ...(cancellation === 'mediatedTurn' ? {
+          causalPermissionAuthority: SessionInputCausalPermissionAuthorityV1Schema.parse({
+            kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default', sourceAuthority: {
+              kind: 'mediatedExternal', mediatorPluginId: pluginId, sourceRef: 'binding:ops', sourceRevisionOrEpoch: '1',
+              admittedPermissionCeiling: 'default', remoteApprovalMaxScope: 'session',
+            },
+          }),
+        } : { owner: { kind: 'plugin' as const, pluginId, runtimeId: 'runtime' } }),
+      });
+  const settlement = pending.then(() => 'fulfilled', () => 'rejected');
+  let settled = false;
+  void settlement.then(() => { settled = true; });
+  try {
+    if (cancellation === 'run') await run.dispose('Run stopped');
+    else if (cancellation === 'all') await handler.abortPendingRequestsAndFlush('Session stopped');
+    else if (cancellation === 'reset') await handler.reset();
+    else if (cancellation === 'plugin') await handler.cancelByPlugin(pluginId, 'Plugin stopped');
+    else if (cancellation === 'pluginTurn' || cancellation === 'mediatedTurn') await handler.cancelByPluginTurn(pluginId, 'turn', 'Turn stopped');
+    else abort.abort();
+    await vi.waitFor(() => expect(settled).toBe(true));
+    expect(await settlement).toBe('rejected');
+  } finally {
+    release();
+    await preparation;
+  }
+  expect(session.agentState.requests).toEqual({});
+  await handler.abortPendingRequestsAndFlush('test cleanup');
+});
 
 describe('QA Edit button payloads at the native permission owner', () => {
   const buttons = [
@@ -170,8 +279,25 @@ describe('native Agent tool approval policy', () => {
         signal: new AbortController().signal, isCurrent: () => true });
       const exec = createSdkExecFixture();
       const hooks = createSessionHooksFixture();
+      const hostOwners = createNativeAgentSessionHostServiceOwners({
+        runtimeRegistry: null,
+        identity: { pluginId: 'happier.agent.claude', agentId: 'claude', occurrenceId: 'projection-occurrence' },
+        backend: {
+          id: 'claude', agentId: 'claude', provenance: 'first_party', source: { kind: 'bundled' },
+          definition: { kindVersion: 1, id: 'claude', agentId: 'claude' },
+          runtimeKind: 'custom', pluginId: 'happier.agent.claude',
+        },
+        agent: {
+          id: 'claude', provenance: 'first_party', source: { kind: 'bundled' },
+          definition: { kindVersion: 1, id: 'claude', ownedBackendIds: ['claude'] },
+          pluginId: 'happier.agent.claude',
+        },
+        hostSession: { session, machineId: 'machine-1', permissionHandler: handler },
+        sessionId: session.sessionId, directory, happyHomeDir: directory,
+        signal: new AbortController().signal,
+      });
       const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service,
-        { exec: exec.service, sessionHooks: hooks.service });
+        { exec: exec.service, sessionHooks: hooks.service, toolExecution: hostOwners.toolExecution });
       const permissionEngine = createClaudeNativePermissionEngine({ services } as unknown as Parameters<typeof createClaudeNativePermissionEngine>[0]);
       const operations = createClaudeAgentSdkTurnOperations({ ctx, permissionEngine, directory,
         happierSessionId: session.sessionId, launchEnv: {}, permissionMode: 'yolo', allowedTools, unlistedTools: 'deny' });
@@ -194,6 +320,7 @@ describe('native Agent tool approval policy', () => {
         expect(session.agentState.requests).toEqual({});
       } finally {
         await operations.disposeProviderSession();
+        await hostOwners.dispose();
         await handler.reset();
         rmSync(directory, { recursive: true, force: true });
       }
@@ -374,7 +501,7 @@ describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () =>
     );
 
     expect(baseHandlerSource.includes(
-      "import { CLAUDE_UNIFIED_TERMINAL_DIALOG_CHOICE_REQUEST_SOURCE } from '@happier-dev/protocol/agents/claude';",
+      "import { CLAUDE_UNIFIED_TERMINAL_DIALOG_CHOICE_REQUEST_SOURCE } from '@happier-dev/protocol/agents/claude/permissionRequestSource';",
     )).toBe(true);
     expect(baseHandlerSource.includes(
       "import { CLAUDE_UNIFIED_TERMINAL_DIALOG_CHOICE_REQUEST_SOURCE } from '@happier-dev/plugin-sdk/agents';",
@@ -839,7 +966,7 @@ describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () =>
     const rpc = Promise.resolve(session.rpcHandlerManager.handlers.get('session.user_action.answer')?.({
       id: 'dialog-ack-1',
       approved: true,
-      answers: { choice: 'Yes' },
+      answers: { choice: ['Yes'] },
     })).then((result) => {
       rpcSettled = true;
       return result;
@@ -868,7 +995,7 @@ describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () =>
     await expect(session.rpcHandlerManager.handlers.get('session.user_action.answer')?.({
       id: 'dialog-ack-failed',
       approved: true,
-      answers: { choice: 'Yes' },
+      answers: { choice: ['Yes'] },
     })).rejects.toThrow('terminal answer failed');
     expect(await settledState(pending)).toBe('pending');
     expect(session.agentState.requests['dialog-ack-failed']).toBeTruthy();
@@ -941,7 +1068,7 @@ describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () =>
       id: 'plugin-caller-aborted',
       approved: true,
       decision: 'approved',
-      answers: { language: 'TypeScript' },
+      answers: { language: ['TypeScript'] },
     });
 
     await expect(first).rejects.toThrow('Permission request aborted');

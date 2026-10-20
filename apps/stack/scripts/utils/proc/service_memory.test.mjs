@@ -10,7 +10,7 @@ import test from 'node:test';
 import { readProcessInstanceFingerprintSync } from '@happier-dev/cli-common/processInstance';
 
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
-import { installNativeAdmissionFixture } from '../../testkit/core/native_admission_fixture.mjs';
+import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '../../testkit/core/native_admission_fixture.mjs';
 import { recordStackRuntimeStart, recordStackRuntimeUpdate } from '../stack/runtime_state.mjs';
 import { writePidState } from '../expo/expo.mjs';
 import { readLinuxWorkerProcesses, readWorkerMemoryReservations, renderWorkerMemoryReservationRows, writeRuntimeAdmissionPhase } from './service_memory.mjs';
@@ -169,13 +169,10 @@ esac
   await chmod(awkPath, 0o755);
   // This remapped admission root is a worker, not the primary controller's
   // browser-protection floor. Preserve the class envelopes exercised below.
-  const env = { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`, TMPDIR: fixture.root, HAPPIER_DEV_TARGET_EXECUTION: '1' };
+  const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`, TMPDIR: fixture.root, HAPPIER_DEV_TARGET_EXECUTION: '1' };
   // These memory-only physical-worker fixtures have no install/build closure.
   // An execution host's cache configuration must not enable disk admission.
   delete env.HAPPIER_STACK_PM_CACHE_BASE_DIR;
-  for (const key of Object.keys(env)) {
-    if (key.startsWith('HAPPIER_HEAVYWEIGHT_ADMISSION_')) delete env[key];
-  }
   return env;
 }
 
@@ -187,7 +184,7 @@ function classFloor(className) {
 
 async function admittedOwner(t, fixture, {
   root = fixture.path('old-cli-home', 'heavyweight-admission-v1'), resident = false,
-  env = process.env, nestedLauncher = null,
+  env = buildNativeAdmissionFixtureEnv(), nestedLauncher = null,
 } = {}) {
   const descendantScript = 'globalThis.resident = Buffer.alloc(64 * 1024 * 1024, 1); process.stdout.write("ready\\n"); setInterval(() => {}, 1000);';
   const script = `

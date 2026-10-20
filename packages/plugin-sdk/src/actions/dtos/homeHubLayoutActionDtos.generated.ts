@@ -98,13 +98,14 @@ export type HomeHubLayoutActionInputById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: unknown;
                                 visibleWhen?: unknown;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: unknown;
@@ -118,6 +119,7 @@ export type HomeHubLayoutActionInputById = {
                                 options?: readonly {
                                     value: unknown;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -225,13 +227,14 @@ export type HomeHubLayoutActionInputById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: unknown;
                                 visibleWhen?: unknown;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: unknown;
@@ -245,6 +248,7 @@ export type HomeHubLayoutActionInputById = {
                                 options?: readonly {
                                     value: unknown;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -396,13 +400,14 @@ export type HomeHubLayoutActionInputById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: unknown;
                                         visibleWhen?: unknown;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: unknown;
@@ -416,6 +421,7 @@ export type HomeHubLayoutActionInputById = {
                                         options?: readonly {
                                             value: unknown;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -556,13 +562,14 @@ export type HomeHubLayoutActionInputById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: unknown;
                                 visibleWhen?: unknown;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: unknown;
@@ -576,6 +583,7 @@ export type HomeHubLayoutActionInputById = {
                                 options?: readonly {
                                     value: unknown;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -738,13 +746,14 @@ export type HomeHubLayoutActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -758,6 +767,7 @@ export type HomeHubLayoutActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -861,13 +871,14 @@ export type HomeHubLayoutActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -881,6 +892,7 @@ export type HomeHubLayoutActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -959,7 +971,7 @@ export type HomeHubLayoutActionResultById = {
         } | {
             id: string;
             kind: 'widget';
-            hidden: false;
+            hidden: boolean;
             hideable: true;
             instance: {
                 v: 1;
@@ -1012,13 +1024,14 @@ export type HomeHubLayoutActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -1032,6 +1045,7 @@ export type HomeHubLayoutActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -1081,7 +1095,7 @@ export type HomeHubLayoutActionResultById = {
         } | {
             id: string;
             kind: 'group';
-            hidden: false;
+            hidden: boolean;
             hideable: true;
             frameStyle: 'card' | 'plain';
             group: {
@@ -1140,13 +1154,14 @@ export type HomeHubLayoutActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -1160,6 +1175,7 @@ export type HomeHubLayoutActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -1228,7 +1244,7 @@ export type HomeHubLayoutActionResultById = {
             children: {
                 id: string;
                 kind: 'widget';
-                hidden: false;
+                hidden: boolean;
                 hideable: true;
                 instance: {
                     v: 1;
@@ -1281,13 +1297,14 @@ export type HomeHubLayoutActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -1301,6 +1318,7 @@ export type HomeHubLayoutActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -1410,13 +1428,14 @@ export type HomeHubLayoutActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -1430,6 +1449,7 @@ export type HomeHubLayoutActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;
@@ -1533,13 +1553,14 @@ export type HomeHubLayoutActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -1553,6 +1574,7 @@ export type HomeHubLayoutActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -1631,7 +1653,7 @@ export type HomeHubLayoutActionResultById = {
         } | {
             id: string;
             kind: 'widget';
-            hidden: false;
+            hidden: boolean;
             hideable: true;
             instance: {
                 v: 1;
@@ -1684,13 +1706,14 @@ export type HomeHubLayoutActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                                 contextMode?: 'follow' | 'own' | undefined;
                                 required?: boolean | undefined;
                                 requireExplicitSelection?: boolean | undefined;
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
+                                defaultValue?: JsonValue | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -1704,6 +1727,7 @@ export type HomeHubLayoutActionResultById = {
                                 options?: readonly {
                                     value: JsonValue;
                                     label: string;
+                                    labelKey?: string | undefined;
                                     description?: string | undefined;
                                     disabled?: boolean | undefined;
                                 }[] | undefined;
@@ -1753,7 +1777,7 @@ export type HomeHubLayoutActionResultById = {
         } | {
             id: string;
             kind: 'group';
-            hidden: false;
+            hidden: boolean;
             hideable: true;
             frameStyle: 'card' | 'plain';
             group: {
@@ -1812,13 +1836,14 @@ export type HomeHubLayoutActionResultById = {
                                             hostType: 'usageQuery';
                                             field?: 'period' | 'session' | undefined;
                                         } | {
-                                            hostType: 'session' | 'workspace' | 'machine';
+                                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                         } | undefined;
                                         contextMode?: 'follow' | 'own' | undefined;
                                         required?: boolean | undefined;
                                         requireExplicitSelection?: boolean | undefined;
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
+                                        defaultValue?: JsonValue | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -1832,6 +1857,7 @@ export type HomeHubLayoutActionResultById = {
                                         options?: readonly {
                                             value: JsonValue;
                                             label: string;
+                                            labelKey?: string | undefined;
                                             description?: string | undefined;
                                             disabled?: boolean | undefined;
                                         }[] | undefined;
@@ -1900,7 +1926,7 @@ export type HomeHubLayoutActionResultById = {
             children: {
                 id: string;
                 kind: 'widget';
-                hidden: false;
+                hidden: boolean;
                 hideable: true;
                 instance: {
                     v: 1;
@@ -1953,13 +1979,14 @@ export type HomeHubLayoutActionResultById = {
                                         hostType: 'usageQuery';
                                         field?: 'period' | 'session' | undefined;
                                     } | {
-                                        hostType: 'session' | 'workspace' | 'machine';
+                                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                     } | undefined;
                                     contextMode?: 'follow' | 'own' | undefined;
                                     required?: boolean | undefined;
                                     requireExplicitSelection?: boolean | undefined;
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
+                                    defaultValue?: JsonValue | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -1973,6 +2000,7 @@ export type HomeHubLayoutActionResultById = {
                                     options?: readonly {
                                         value: JsonValue;
                                         label: string;
+                                        labelKey?: string | undefined;
                                         description?: string | undefined;
                                         disabled?: boolean | undefined;
                                     }[] | undefined;

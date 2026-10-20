@@ -1,6 +1,8 @@
 import { TeamCredentialDeliveryModeV1Schema, TeamCredentialDisclosureCeilingV1Schema, type TeamCredentialBrokerPlacementV1, type TeamCredentialDeliveryModeV1, type TeamCredentialDisclosureCeilingV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
-import type { Tx } from "@/storage/inTx";
+import { z } from 'zod/mini';
+import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
+import { acquireTeamMembershipAccountAdmissionInTx } from "../memberships/membershipService";
 import { AccountStatus } from "@/storage/enums.generated";
 import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
 import { resolveTeamCredentialCapabilities } from "../capabilities";
@@ -161,8 +163,21 @@ export async function setTeamCredentialAudienceInTx(
     params: Readonly<{ actorAccountId: string; input: TeamCredentialAudienceInput; authentication: TeamOperationAuthenticationContext }>,
 ): Promise<TeamCredentialAudienceResult> {
     const { input } = params;
+    const resourceIdentity = await tx.teamCredentialResource.findUnique({ where: { id: input.resourceId }, select: { custodianAccountId: true, teamId: true } });
+    if (!resourceIdentity) return { ok: false, error: "resource_not_found" };
+    const materializedRecipients = await tx.teamCredentialRecipientMaterial.findMany({
+        where: { resourceId: input.resourceId }, select: { recipientAccountId: true }, distinct: ["recipientAccountId"],
+    });
+    await acquireTeamMembershipAccountAdmissionInTx(tx, {
+        teamId: resourceIdentity.teamId,
+        accountIds: [params.actorAccountId, resourceIdentity.custodianAccountId, ...materializedRecipients.map(row => row.recipientAccountId)],
+        membershipIds: input.memberGrants.map(grant => grant.teamMembershipId),
+    });
     const resource = await tx.teamCredentialResource.findUnique({ where: { id: input.resourceId } });
     if (!resource) return { ok: false, error: "resource_not_found" };
+    if (resource.custodianAccountId !== resourceIdentity.custodianAccountId) {
+        throw new TransactionReplayRequiredError("transaction-account-audience-changed");
+    }
     const actor = await resolveTeamActorContextInTx(tx, { teamId: resource.teamId, actorAccountId: params.actorAccountId });
     const canManageStructurally = actor !== null
         && resolveTeamCredentialCapabilities({ ...actor, teamArchivedAt: actor.team.archivedAt }).manageCredentials;
@@ -227,7 +242,7 @@ export async function setTeamCredentialAudienceInTx(
         if (currentGroups.size !== currentGroupGrants.length || currentMembers.size !== currentMemberGrants.length) {
             return { ok: false, error: "resource_corrupt" };
         }
-        const currentAllMembers = TeamCredentialDeliveryModeV1Schema.nullable().safeParse(resource.allMembersDeliveryMode);
+        const currentAllMembers = z.nullable(TeamCredentialDeliveryModeV1Schema).safeParse(resource.allMembersDeliveryMode);
         if (!currentAllMembers.success) return { ok: false, error: "resource_corrupt" };
         const narrowsAudience = isDeliveryNarrowing(
             currentAllMembers.data,

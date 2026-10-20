@@ -4,6 +4,7 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('@react-navigation/native', async () => (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock());
@@ -11,16 +12,29 @@ vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
 const { useWidgetAreaLayouts } = await import('./useProjectDashboards');
 const { readPresentationNotice, retirePresentationNotice } = await import('@/components/sessions/presentation/presentationNotices');
 const { t } = await import('@/text');
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+let activeAccount: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+
+async function addHome(options: Parameters<typeof homes.addHome>[0]) {
+    const serverId = await homes.addHome(options);
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = await TokenStorage.getCredentialsForServerUrl(options.serverUrl);
+    if (!credentials) throw new Error('Expected the saved layout Account');
+    activeAccount = await restoreServerAccountForTest({ serverUrl: options.serverUrl,
+        accountId: 'account-a', credentials, request: homes.request });
+    return serverId;
+}
 
 beforeEach(async () => { standardCleanup(); await homes.reset(); retirePresentationNotice(); });
-afterEach(standardCleanup);
+afterEach(async () => { standardCleanup(); await activeAccount?.dispose(); activeAccount = undefined; });
 
 it('settles a dashboard refresh cancelled by scope retirement without rejecting', async () => {
-    const serverId = await homes.addHome({ name: 'Layouts', serverUrl: 'https://layout-cancel.test', accountId: 'account-a' });
+    const serverId = await addHome({ name: 'Layouts', serverUrl: 'https://layout-cancel.test', accountId: 'account-a', currentAccount: true });
     const surface = { serverId, accountId: 'account-a', owner: { kind: 'project' as const, projectId: 'project-a' } };
     const hook = await renderHook(() => useWidgetAreaLayouts({ surface }));
     await vi.waitFor(() => expect(hook.getCurrent().state.status).toBe('ready'));
@@ -45,7 +59,7 @@ it('settles a dashboard refresh cancelled by scope retirement without rejecting'
 });
 
 it('keeps an unexpected network failure observable while the dashboard scope is current', async () => {
-    const serverId = await homes.addHome({ name: 'Layouts', serverUrl: 'https://layout-offline.test', accountId: 'account-a' });
+    const serverId = await addHome({ name: 'Layouts', serverUrl: 'https://layout-offline.test', accountId: 'account-a', currentAccount: true });
     const surface = { serverId, accountId: 'account-a', owner: { kind: 'project' as const, projectId: 'project-a' } };
     const hook = await renderHook(() => useWidgetAreaLayouts({ surface }));
     await vi.waitFor(() => expect(hook.getCurrent().state.status).toBe('ready'));
@@ -58,7 +72,7 @@ it('keeps an unexpected network failure observable while the dashboard scope is 
 });
 
 it.each(['approve', 'reject'] as const)('keeps named-layout creation pending until the exact approval is %s', async decision => {
-    const serverId = await homes.addHome({ name: 'Layouts', serverUrl: 'https://layout-approval.test', accountId: 'account-a' });
+    const serverId = await addHome({ name: 'Layouts', serverUrl: 'https://layout-approval.test', accountId: 'account-a', currentAccount: true });
     await homes.requireUiApproval(serverId, 'widgets.area.layout.create');
     const surface = { serverId, accountId: 'account-a', owner: { kind: 'project' as const, projectId: 'project-a' } };
     const hook = await renderHook(() => useWidgetAreaLayouts({ surface }));
@@ -89,7 +103,7 @@ it.each(['approve', 'reject'] as const)('keeps named-layout creation pending unt
 });
 
 it('keeps a plugin-stamped layout write bound to its own rejection receipt', async () => {
-    const serverId = await homes.addHome({ name: 'Plugin layouts', serverUrl: 'https://plugin-layout-approval.test', accountId: 'account-a' });
+    const serverId = await addHome({ name: 'Plugin layouts', serverUrl: 'https://plugin-layout-approval.test', accountId: 'account-a', currentAccount: true });
     await homes.requireActionApproval(serverId, 'widgets.area.layout.create', 'plugin');
     const surface = { serverId, accountId: 'account-a', owner: { kind: 'pluginArea' as const,
         pluginId: 'example.checks', pageId: 'overview', area: 'pinned' } };

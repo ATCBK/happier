@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
+import { definePlugin } from '@happier-dev/plugin-sdk';
+import { QualifiedConnectedAccountRefSchema } from '@happier-dev/plugin-sdk/connected-accounts';
+import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import {
     defineProtocolJsonValue,
     defineProtocolLiteral,
     defineProtocolObject,
+    defineProtocolString,
 } from '@happier-dev/plugin-sdk/protocol';
 
 import {
@@ -12,6 +16,8 @@ import {
 } from './actions';
 import { createPluginActionCallerMaterializationFixture } from './actionCaller.testkit';
 import { createManagedPluginSourceCustody } from '@/plugins/runtime/lifecycle/contributions/runtimeIdentity.testkit';
+import { logger } from '@/ui/logger';
+import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
 
 function permissiveTargetProtocol(role: string) {
     return Object.freeze({
@@ -22,6 +28,116 @@ function permissiveTargetProtocol(role: string) {
 }
 
 describe('admitted targeted-operation execution', () => {
+    it.each(['ordinary', 'withOrigin'] as const)('restores a retained selected Account through the real provider parser for %s calls', async (mode) => {
+        const account = {
+            service: { pluginId: 'acme.accounts', localId: 'mailbox' },
+            accountId: 'account-a',
+        } as const;
+        let providerEffects = 0;
+        const providerInputSchema = defineProtocolObject({
+            repository: defineProtocolString(),
+            auth: defineProtocolObject({ account: QualifiedConnectedAccountRefSchema }, { policy: 'closed' }),
+        }, { policy: 'closed' });
+        const provider = definePlugin({
+            id: 'acme.provider', version: '1.0.0', displayName: 'Provider',
+            runtime: { apiVersion: 1 }, entrypoints: { daemon: './daemon.js' },
+            actions: {
+                setup: {
+                    title: 'Set up', surfaces: ['plugin'],
+                    inputSchema: providerInputSchema,
+                    resultSchema: defineProtocolObject({ accountId: defineProtocolString() }, { policy: 'closed' }),
+                    run: async (input) => {
+                        providerEffects += 1;
+                        return { accountId: providerInputSchema.parse(input).auth.account.accountId };
+                    },
+                },
+            },
+        });
+        const providerHost = await createPluginTestkit({ manifest: provider.manifest, module: provider });
+        const callerMaterialization = createPluginActionCallerMaterializationFixture('acme.target');
+        const executionOrigin = {
+            serverIdentityId: 'srv-target',
+            materializationRef: {
+                pluginId: 'acme.provider', machineId: 'machine-target', materializationId: 'provider-a',
+            },
+        } as const;
+        const service = createPluginInvocationActionsService({
+            seed: {
+                plugin: { id: 'acme.target', version: '1.0.0' },
+                contribution: { id: 'retest', qualifiedId: 'acme.target/actions/retest' },
+                occurrenceId: 'target-a', surface: 'plugin',
+                sourceCustody: createManagedPluginSourceCustody('target-a'),
+                resolveCurrentPluginMaterializationRef: callerMaterialization.resolveCurrentPluginMaterializationRef,
+                signal: new AbortController().signal, isOccurrenceCurrent: () => true,
+            },
+            actionExecutor: { execute: vi.fn() },
+            // The public SDK host executes the actual registration and strict
+            // schema; only the cross-host transport is supplied by this fixture.
+            invokeContributedAction: async (request) => {
+                if (request.input === undefined) throw new Error('Admitted setup input is required');
+                return {
+                    status: 'executed', executionOrigin,
+                    value: await providerHost.invokeAction('setup', request.input, { surface: 'plugin' }),
+                };
+            },
+        });
+        const identity = {
+            target: { pluginId: 'acme.target' },
+            point: { pointId: 'providers', protocol: { id: 'acme.providers/provider', version: 1 } },
+            contributor: {
+                pluginId: 'acme.provider', contributionId: 'primary', occurrenceId: 'provider-a',
+                sourceCustody: createManagedPluginSourceCustody('provider-a'),
+            },
+            role: 'setup',
+        } as const;
+        const handle = (selectedActionInput: Parameters<typeof createAdmittedTargetedOperationExecutionHandle>[0]['selectedActionInput']) => createAdmittedTargetedOperationExecutionHandle({
+            action: { pluginId: 'acme.provider', localId: 'setup' }, targetOccurrenceId: 'target-a',
+            identity, selectedActionInput, targetProtocol: permissiveTargetProtocol('setup'),
+        });
+        const admitted = handle({ kind: 'connectedAccount', fieldPath: 'auth.account' });
+        const invoke = async (
+            input: Parameters<typeof service.executeAdmittedTargetedOperation>[1],
+            operation = admitted,
+            expectedRef: typeof account | null = account,
+        ) => {
+            const options = { expectedSelectedConnectedAccountRef: expectedRef };
+            return mode === 'ordinary'
+                ? await service.executeAdmittedTargetedOperation(operation, input, options)
+                : (await service.executeAdmittedTargetedOperationWithExecutionOrigin(operation, input, options)).result;
+        };
+        vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
+        const sink = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => undefined);
+        try {
+            const retainedInput = { repository: 'acme/project' };
+            const requestId = '70cc64d3-0386-4914-b7d8-713b7879e99f';
+            await expect(runTracedExternalActionStage('action.invoke', `rpc_${requestId}`, 'contributed.target_invoke', () =>
+                invoke(retainedInput))).resolves.toEqual({ accountId: 'account-a' });
+            expect(sink.mock.calls).toContainEqual(['[external-action-stage]', expect.objectContaining({
+                stage: 'contributed.targeted_operation.end', rootRequestId: requestId, elapsedMs: expect.any(Number),
+            })]);
+            expect(JSON.stringify(sink.mock.calls)).not.toContain('acme/project');
+            await expect(invoke({ ...retainedInput, auth: { account } })).resolves.toEqual({ accountId: 'account-a' });
+            await expect(invoke(retainedInput)).resolves.toEqual({ accountId: 'account-a' });
+            expect(retainedInput).toEqual({ repository: 'acme/project' });
+            const effectsBeforeRefusals = providerEffects;
+            for (const conflicting of [
+                { ...retainedInput, auth: { account: { ...account, accountId: 'account-b' } } },
+                { ...retainedInput, auth: null },
+            ]) {
+                await expect(invoke(conflicting)).rejects.toMatchObject({ code: 'plugin_selected_action_input_invalid', actionHandlerInvocation: 'notStarted' });
+            }
+            await expect(invoke(retainedInput, handle({ kind: 'unavailable' }))).rejects.toMatchObject({ code: 'plugin_selected_action_input_unavailable' });
+            await expect(invoke(retainedInput, handle({ kind: 'connectedAccount', fieldPath: 'auth.__proto__.account' }))).rejects.toMatchObject({ code: 'plugin_selected_action_input_invalid' });
+            await expect(invoke(retainedInput, handle({ kind: 'none' }))).rejects.toMatchObject({ code: 'plugin_selected_action_input_invalid' });
+            await expect(invoke(retainedInput, admitted, null)).rejects.toMatchObject({ code: 'plugin_selected_action_input_invalid' });
+            expect(providerEffects).toBe(effectsBeforeRefusals);
+        } finally {
+            sink.mockRestore();
+            vi.unstubAllEnvs();
+            await providerHost.dispose();
+        }
+    });
+
     it('forwards the opaque target protocol binding and raw input to the canonical dispatcher for normal and execution-origin calls', async () => {
         const targetInputSchema = defineProtocolObject({
             kind: defineProtocolLiteral('expected'),
@@ -111,7 +227,10 @@ describe('admitted targeted-operation execution', () => {
         expect(invokeContributedAction).toHaveBeenCalledTimes(2);
     });
 
-    it('reconstructs only an exact current selected settlement before invoking its admitted provider Action', async () => {
+    it.each([
+        ['setup', 'connection/prepare-v1'],
+        ['setupRemediation', 'connection/setup-remediate-v1'],
+    ] as const)('reconstructs only the exact selected %s settlement through its Channels management Action', async (role, parentActionId) => {
         const account = {
             service: { pluginId: 'acme.github', localId: 'github' },
             accountId: 'account-a',
@@ -124,8 +243,8 @@ describe('admitted targeted-operation execution', () => {
                 occurrenceId: 'provider-occurrence-a',
                 sourceCustody: { kind: 'managed', immutableGenerationId: 'provider-occurrenceId-a', installSource: 'archive' },
             },
-            role: 'setup',
-            action: { pluginId: 'acme.provider', localId: 'connection/setup' },
+            role,
+            action: { pluginId: 'acme.provider', localId: role === 'setup' ? 'connection/setup' : 'connection/remediate' },
         } as const;
         const selectedActionInputCarrier = {
             operation,
@@ -164,7 +283,7 @@ describe('admitted targeted-operation execution', () => {
         const service = createPluginInvocationActionsService({
             seed: {
                 plugin: { id: 'happier.channels', version: '1.0.0' },
-                contribution: { id: 'connection-create', qualifiedId: 'happier.channels/actions/connection-create' },
+                contribution: { id: parentActionId, qualifiedId: `happier.channels/actions/${parentActionId}` },
                 occurrenceId: 'channels-occurrence-a',
                 sourceCustody: { kind: 'managed', immutableGenerationId: 'channels-occurrenceId-a', installSource: 'archive' },
                 surface: 'plugin',
@@ -200,6 +319,11 @@ describe('admitted targeted-operation execution', () => {
         )).resolves.toEqual({ accepted: true });
         expect(invokeContributedAction).toHaveBeenLastCalledWith(expect.objectContaining({
             action: operation.action,
+            caller: expect.objectContaining({
+                kind: 'plugin',
+                pluginId: 'happier.channels',
+                contribution: { id: parentActionId, qualifiedId: `happier.channels/actions/${parentActionId}` },
+            }),
             input: {
                 repository: 'happier-dev/happier',
                 credentialRef: account,

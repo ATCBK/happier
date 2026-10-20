@@ -30,6 +30,18 @@ const MINIMAL = Object.freeze({
 });
 
 describe('the V1 source descriptor', () => {
+    it('declares task edits and native transitions while retaining read-only source admission', () => {
+        const taskCapabilities = {
+            createFields: ['title', 'body', 'scopeId'], editFields: ['title', 'body', 'assigneeIds'],
+            transitions: [{ id: 'begin', label: 'In progress', state: { presentation: 'active', stage: 'started' } }],
+        };
+        const admitted = admitTriageSourceDescriptorV1({
+            ...MINIMAL, kinds: [{ ...MINIMAL.kinds[0], task: true, taskCapabilities }],
+        });
+        expect(admitted.ok).toBe(true);
+        expect(admitted.ok && admitted.descriptor.kinds[0]).toMatchObject({ task: true, taskCapabilities });
+        expect(admitTriageSourceDescriptorV1(MINIMAL).ok).toBe(true);
+    });
     it('carries the source own Settings page so the target can offer a way to configure it', () => {
         const parsed = TriageSourceDescriptorV1Schema.safeParse({
             ...MINIMAL,

@@ -1,11 +1,14 @@
 import { MachineLiveStreamDecodedEnvelopeV1Schema, MachineLiveStreamRelayEnvelopeV1Schema, type MachineLiveStreamRelayEnvelopeV1, type MachineLiveStreamWireEnvelopeV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
 import { MachineLiveStreamPayloadErrorV1, hasMachineLiveStreamSensitiveContentV1, openMachineLiveStreamEnvelopeV1, sealMachineLiveStreamEnvelopeV1, type MachineLiveStreamContentV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/payloadV1';
 
+/** Material currentness belongs to the exact Machine read, not the socket lifetime. */
+export type ResolvedMachineLiveStreamContent = MachineLiveStreamContentV1 & Readonly<{ isCurrent?: () => boolean }>;
+
 /** One framing owner for active and explicitly scoped viewer sockets. No keys live here. */
 export function createMachineLiveStreamSocketTransport(input: Readonly<{
     emit: (wire: MachineLiveStreamWireEnvelopeV1) => void;
     deliver: (decoded: MachineLiveStreamRelayEnvelopeV1) => void;
-    resolveContent: (sourceMachineId: string) => Promise<MachineLiveStreamContentV1>;
+    resolveContent: (sourceMachineId: string) => Promise<ResolvedMachineLiveStreamContent>;
     isCurrent: () => boolean;
     onError: (error: MachineLiveStreamPayloadErrorV1) => void;
 }>) {
@@ -34,11 +37,12 @@ export function createMachineLiveStreamSocketTransport(input: Readonly<{
         }
         const task = (sending ?? Promise.resolve()).then(async () => {
             if (!input.isCurrent()) return;
-            const content = hasMachineLiveStreamSensitiveContentV1(parsed.data)
+            const content: ResolvedMachineLiveStreamContent = hasMachineLiveStreamSensitiveContentV1(parsed.data)
                 ? await input.resolveContent(parsed.data.sourceMachineId) : { mode: 'plain' as const };
+            if (content.isCurrent?.() === false) return;
             const sealed = await sealMachineLiveStreamEnvelopeV1(parsed.data, content);
             if (!sealed.ok) throw new MachineLiveStreamPayloadErrorV1(sealed.code);
-            if (input.isCurrent()) input.emit(sealed.value);
+            if (input.isCurrent() && content.isCurrent?.() !== false) input.emit(sealed.value);
         }).catch((error: unknown) => reject(error, parsed.data));
         sending = task;
         void task.then(() => { if (sending === task) sending = null; });
@@ -52,11 +56,12 @@ export function createMachineLiveStreamSocketTransport(input: Readonly<{
         }
         const task = (receiving ?? Promise.resolve()).then(async () => {
             if (!input.isCurrent()) return;
-            const content = hasMachineLiveStreamSensitiveContentV1(parsed.data)
+            const content: ResolvedMachineLiveStreamContent = hasMachineLiveStreamSensitiveContentV1(parsed.data)
                 ? await input.resolveContent(parsed.data.sourceMachineId) : { mode: 'plain' as const };
+            if (content.isCurrent?.() === false) return;
             const opened = await openMachineLiveStreamEnvelopeV1(parsed.data, content);
             if (!opened.ok) throw new MachineLiveStreamPayloadErrorV1(opened.code);
-            if (input.isCurrent()) input.deliver(opened.value);
+            if (input.isCurrent() && content.isCurrent?.() !== false) input.deliver(opened.value);
         }).catch((error: unknown) => reject(error, parsed.data));
         receiving = task;
         void task.then(() => { if (receiving === task) receiving = null; });

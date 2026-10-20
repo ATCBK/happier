@@ -29,7 +29,7 @@ function scopeOrLegacy(scope: ServerAccountScope | null | undefined): ServerAcco
 
 function readField(scope: ServerAccountScope, sessionId: string, fieldId: SessionDraftValueFieldId): StrictJsonValue | undefined {
     const document = getSessionDraftSnapshot(scope, { kind: 'session', sessionId })?.document;
-    if (!document || document.target.kind !== 'session') return undefined;
+    if (!document || document.target.kind !== 'session' || !('composer' in document)) return undefined;
     if (fieldId === 'structuredInput.mentions') return document.composer.mentions.value;
     if (fieldId === 'structuredInput.composerAttachments') return document.composer.attachments.value;
     if (fieldId === 'routing.recipient') {

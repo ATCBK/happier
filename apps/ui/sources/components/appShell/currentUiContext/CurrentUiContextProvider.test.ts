@@ -126,8 +126,8 @@ vi.mock('@/components/appShell/plugins/pluginAppPages', () => ({
     selectPluginAppPagePlacements: () => [],
 }));
 
-vi.mock('@/components/settings/catalog/runtime/useResolvedSettingsPageCatalog', () => ({
-    useResolvedSettingsPageCatalog: () => providerState.settingsTitle === null
+vi.mock('@/components/settings/catalog/runtime/useResolvedSettingsPageIdentity', () => ({
+    useResolvedSettingsPageIdentity: () => providerState.settingsTitle === null
         ? { activePageId: null, tree: [] }
         : {
             activePageId: 'voice',
@@ -143,19 +143,24 @@ vi.mock('@/sync/domains/session/sessionSurfaceVisibility', () => ({
     useFocusedSessionId: () => providerState.focusedSessionId,
 }));
 
-vi.mock('@/sync/store/hooks', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/store/hooks')>()),
-    useMachine: () => providerState.machine as never,
-    useSession: () => providerState.session as never,
-    useSessionDisplayNameSource: () => (providerState.sessionDisplaySource ?? providerState.session) as never,
-    useSetting: (key: string) => key === 'secrets' ? [] : providerState.voiceSettings as never,
-}));
+vi.mock('@/sync/store/hooks', async () => {
+    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+    return createStorageModuleStub({
+        useMachine: () => providerState.machine as never,
+        useSession: () => providerState.session as never,
+        useSessionDisplayNameSource: () => (providerState.sessionDisplaySource ?? providerState.session) as never,
+        useSetting: (key: string) => key === 'secrets' ? [] : providerState.voiceSettings as never,
+    });
+});
 
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-    return createPartialStorageModuleMock(importOriginal, {
+vi.mock('@/sync/domains/state/storage', async () => {
+    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+    // These provider fixtures supply every consumed storage value. Importing
+    // the real hook graph here cycles through dictation back to this provider.
+    return createStorageModuleStub({
         useActiveServerAccountScope: () => null,
         useProfile: () => null,
+        useSetting: (key: string) => key === 'secrets' ? [] : providerState.voiceSettings as never,
     });
 });
 
@@ -266,6 +271,42 @@ afterEach(() => {
 });
 
 describe('CurrentUiContextProvider', () => {
+    it('retains unchanged author commands across refresh, reorder and sibling changes, retiring only changed meanings', async () => {
+        const hook = await renderHook(() => ({ publisher: useCurrentUiContextMountPublisher(), reader: useOptionalCurrentUiContextReader() }),
+            { wrapper: CurrentUiContextTestProvider });
+        const reader = requireCurrentUiContextReader(hook.getCurrent().reader);
+        const publication = hook.getCurrent().publisher!.createMount();
+        const publish = async (issue: number, sibling = true) => {
+            await act(async () => { publication.publish({
+                entity: { kind: 'issue', label: 'Issue A' },
+                detail: { refresh: issue },
+                commands: [
+                    ...(sibling ? [{ title: 'Open related', command: { kind: 'openSurface' as const,
+                        destination: { pluginId: 'triage', localId: 'issues' }, input: { issueNumber: issue } } }] : []),
+                    { title: 'File update', command: { kind: 'executeAction',
+                        action: { pluginId: 'triage', localId: 'file-remote-update' }, input: { issueNumber: 1 } } },
+                ],
+            }); });
+        };
+        await publish(2);
+        const original = reader.readCurrentUiContext()!.commands;
+        const related = reader.resolveCurrentUiCommand(original[0]!.id)!;
+        const update = reader.resolveCurrentUiCommand(original[1]!.id)!;
+        await publish(2);
+        expect(reader.readCurrentUiContext()!.commands).toEqual(original);
+        expect(related.retirementSignal.aborted).toBe(false);
+        expect(update.retirementSignal.aborted).toBe(false);
+        await publish(3);
+        expect(related.retirementSignal.aborted).toBe(true);
+        expect(reader.resolveCurrentUiCommand(related.id)).toBeNull();
+        expect(reader.resolveCurrentUiCommand(update.id)?.command).toEqual(update.command);
+        expect(update.retirementSignal.aborted).toBe(false);
+        await publish(3, false);
+        expect(reader.readCurrentUiContext()!.commands.map(command => command.id)).toEqual([update.id]);
+        await hook.unmount();
+        expect(update.retirementSignal.aborted).toBe(true);
+    });
+
     it('executes a private mounted host command and refuses its retired descriptor', async () => {
         const hook = await renderHook(() => ({
             publisher: useCurrentUiContextMountPublisher(),

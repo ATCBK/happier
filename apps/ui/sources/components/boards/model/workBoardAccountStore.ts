@@ -3,6 +3,7 @@ import { DEFAULT_WORK_BOARDS_V1, type WorkBoardIntentV1, type WorkBoardV1 } from
 import { createWorkBoardSaveQueue, projectDisplayedWorkBoards } from './workBoardSaveQueue';
 
 export type WorkBoardReadState = Readonly<{ status: 'loading' | 'ready' | 'error'; hasSnapshot: boolean; errorCode?: string }>;
+const UNREAD_BOARD: WorkBoardReadState = Object.freeze({ status: 'loading', hasSnapshot: false });
 
 /** Scoped Artifact projection. Headers serve chrome; bodies load only for mounted Board consumers. */
 export function createWorkBoardAccountStore(transport: WorkBoardArtifactTransportV1, shouldContinue: () => boolean) {
@@ -18,9 +19,16 @@ export function createWorkBoardAccountStore(transport: WorkBoardArtifactTranspor
     const readBodies = new Set<string>();
     const headerVersions = new Map<string, number>();
     const inFlightBodies = new Map<string, Promise<void>>();
+    const bodyReadStates = new Map<string, WorkBoardReadState>();
     let detach: (() => void) | null = null;
     const listeners = new Set<() => void>();
     const notify = () => { for (const listener of listeners) listener(); };
+    const setBodyReadState = (id: string, next: WorkBoardReadState) => {
+        const old = bodyReadStates.get(id);
+        if (old?.status === next.status && old.hasSnapshot === next.hasSnapshot && old.errorCode === next.errorCode) return;
+        bodyReadStates.set(id, next);
+        notify();
+    };
     const acceptBoard = (id: string, board: WorkBoardV1 | null, revision?: WorkBoardArtifactRevisionV1) => {
         const current = revisions.get(id);
         if (revision && current && (revision.bodyVersion < current.bodyVersion || revision.headerVersion < current.headerVersion)) return;
@@ -54,12 +62,13 @@ export function createWorkBoardAccountStore(transport: WorkBoardArtifactTranspor
         return page;
     } };
     const port = createWorkBoardArtifactPortV1(inventoryTransport, { shouldContinue, onBoard: acceptBoard });
-    const queue = createWorkBoardSaveQueue({ port: { read: port.read, apply: async (intent, signal) => {
+    const queue = createWorkBoardSaveQueue({ port: { readBoard: port.readBoard, apply: async (intent, signal) => {
         const result = await port.apply(intent, signal);
         writes++;
         const id = intent.kind === 'create' ? intent.board.id : intent.boardId;
         const board = result.boards[0];
         dirtyBodies.delete(id);
+        setBodyReadState(id, { status: 'ready', hasSnapshot: true });
         if (board) {
             readBodies.add(id);
             const revision = revisions.get(id);
@@ -93,6 +102,8 @@ export function createWorkBoardAccountStore(transport: WorkBoardArtifactTranspor
         getBoards: () => boards,
         getSummaries: () => summaries,
         getReadState: () => readState,
+        getBoardReadState: (id: string): WorkBoardReadState => readState.status !== 'ready' ? readState
+            : bodyReadStates.get(id) ?? (!summaries.some(board => board.id === id) ? readState : UNREAD_BOARD),
         subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
         /** Artifact body-only changes also arrive through the canonical head invalidation. */
         invalidateBodies(ids: readonly string[] = summaries.map(item => item.id)) {
@@ -111,9 +122,16 @@ export function createWorkBoardAccountStore(transport: WorkBoardArtifactTranspor
                     const ids = new Set(next.map(item => item.id));
                     for (const id of [...readBodies]) if (!ids.has(id)) {
                         readBodies.delete(id); headerVersions.delete(id); dirtyBodies.delete(id);
+                        bodyReadStates.delete(id);
                         acceptBoard(id, null);
                     }
                     for (const old of boards.boards) if (!ids.has(old.id)) acceptBoard(old.id, null);
+                }
+                // The index is readable once its headers settle. Each demanded body's own
+                // lifecycle below governs its page; it cannot delay or fail the collection.
+                if (readState.status !== 'ready') {
+                    readState = { status: 'ready', hasSnapshot: true };
+                    notify();
                 }
                 const wanted = demand.has('all') || demand.size === 0
                     ? summaries.map(item => item.id) : [...demand.keys()].filter(id => id.startsWith('board:')).map(id => id.slice(6));
@@ -127,6 +145,7 @@ export function createWorkBoardAccountStore(transport: WorkBoardArtifactTranspor
                     }
                     if (demand.size > 0 && readBodies.has(id) && !dirtyBodies.has(id)) return;
                     dirtyBodies.delete(id);
+                    setBodyReadState(id, { status: 'loading', hasSnapshot: readBodies.has(id) });
                     const beforeRevision = revisions.get(id);
                     const beforeSummary = summaries.find(item => item.id === id);
                     const reader = createWorkBoardArtifactPortV1(transport, { shouldContinue, onBoard: (boardId, board, revision) => {
@@ -138,8 +157,13 @@ export function createWorkBoardAccountStore(transport: WorkBoardArtifactTranspor
                             readBodies.add(boardId);
                         }
                     } });
-                    const pending = reader.readBoard(id).then(() => {}, error => {
+                    const pending = reader.readBoard(id).then(() => {
+                        if (shouldContinue()) setBodyReadState(id, { status: 'ready', hasSnapshot: true });
+                    }, error => {
                         dirtyBodies.add(id);
+                        if (shouldContinue()) setBodyReadState(id, { status: 'error', hasSnapshot: readBodies.has(id),
+                            errorCode: typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+                                ? error.code : 'board_record_unavailable' });
                         throw error;
                     }).finally(() => { inFlightBodies.delete(id); });
                     inFlightBodies.set(id, pending);
@@ -148,13 +172,7 @@ export function createWorkBoardAccountStore(transport: WorkBoardArtifactTranspor
                     // duplicate concurrent request or a wake silently consumed by the old body.
                     if (dirtyBodies.has(id) && shouldContinue()) await readBody(id);
                 };
-                await Promise.all(wanted.map(readBody));
-                if (!shouldContinue()) return;
-                const wasReady = readState.status === 'ready';
-                if (!wasReady) {
-                    readState = { status: 'ready', hasSnapshot: true };
-                    notify();
-                }
+                await Promise.all(wanted.map(id => readBody(id).catch(() => {})));
             } catch (error) {
                 if (!shouldContinue()) return;
                 const errorCode = typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
@@ -176,6 +194,6 @@ export function createWorkBoardAccountStore(transport: WorkBoardArtifactTranspor
                 if (references === 0) { detach?.(); detach = null; }
             };
         },
-        retire() { detach?.(); detach = null; references = 0; demand.clear(); displayedBoards.clear(); queue.reset(); },
+        retire() { detach?.(); detach = null; references = 0; demand.clear(); displayedBoards.clear(); bodyReadStates.clear(); queue.reset(); },
     };
 }

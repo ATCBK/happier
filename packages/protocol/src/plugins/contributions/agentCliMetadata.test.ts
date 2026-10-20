@@ -257,6 +257,7 @@ describe('native Agent CLI/auth metadata', () => {
     const managed = {
       kind: 'github_release_binary' as const,
       githubRepo: 'openai/codex',
+      releaseTag: 'rust-v0.162.1',
       binaryName: 'codex',
       assetNameByPlatform: {
         darwin: { arm64: 'codex-package-aarch64-apple-darwin.tar.gz', x64: 'codex-package-x86_64-apple-darwin.tar.gz' },

@@ -10,6 +10,7 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { ActionOperationSnapshotV1Schema, ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { createPlainSessionOwnerMetadataEnvelopeV1, SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 
 vi.mock('socket.io-client', async importOriginal => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -3190,8 +3191,9 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         } as Session]);
 
         const ownerToken = buildTokenWithSub('owner-account');
-        getCredentialsForServerUrlMock.mockResolvedValue({ token: ownerToken, secret: 'owner-secret' });
-        createEncryptionFromAuthCredentialsMock.mockResolvedValue({});
+        // This remote Session stores plain content. Token-only Account
+        // credentials exercise routing without inventing Account key material.
+        getCredentialsForServerUrlMock.mockResolvedValue({ token: ownerToken });
         runtimeFetchMock.mockImplementation(async (input) => {
             if (String(input).endsWith('/v1/features')) {
                 return currentPendingInputFeaturesResponse();
@@ -3500,8 +3502,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         storage.getState().upsertPendingMessage(sessionId, pending('home-b-second', mountedScope));
 
         const mountedToken = buildTokenWithSub('account-b');
-        getCredentialsForServerUrlMock.mockResolvedValue({ token: mountedToken, secret: 'home-b-secret' });
-        createEncryptionFromAuthCredentialsMock.mockResolvedValue({});
+        getCredentialsForServerUrlMock.mockResolvedValue({ token: mountedToken });
         runtimeFetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
             const url = String(input);
             if (url.endsWith('/v1/features')) return currentPendingInputFeaturesResponse();
@@ -4064,13 +4065,15 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             const ownerToken = buildTokenWithSub('owner-account');
             const crossedToken = buildTokenWithSub('crossed-account');
             const replacementLocalId = 'server-owned-replacement';
-            getCredentialsForServerUrlMock.mockResolvedValue({ token: ownerToken, secret: 'owner-secret' });
-            createEncryptionFromAuthCredentialsMock.mockResolvedValue({});
+            // This case refreshes plain content: match the real keyless Account
+            // boundary instead of manufacturing an empty E2EE owner.
+            getCredentialsForServerUrlMock.mockResolvedValue({ token: ownerToken });
+            createEncryptionFromAuthCredentialsMock.mockResolvedValue(null);
             runtimeFetchMock.mockImplementation(async (input: RequestInfo | URL) => {
                 const url = String(input);
                 if (url.endsWith(`/pending/${pendingId}/delivery/send-as-new`)) {
                     if (crossed) {
-                        getCredentialsForServerUrlMock.mockResolvedValue({ token: crossedToken, secret: 'crossed-secret' });
+                        getCredentialsForServerUrlMock.mockResolvedValue({ token: crossedToken });
                     }
                     return Response.json({ newLocalId: replacementLocalId });
                 }
@@ -4546,6 +4549,65 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         expect(
             storage.getState().sessions[sessionId],
         ).not.toHaveProperty('ownerMetadata');
+    });
+
+    it('keeps repeated owner mutations available when a socket advances Agent state during tuple hydration', async () => {
+        const sessionId = 'reviewer_toggle_with_agent_state_update';
+        const sharedMetadata = projectSessionSharedMetadataV1({ metadata: { path: '/repo', host: 'owner' } });
+        let row = {
+            id: sessionId, seq: 1, createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
+            encryptionMode: 'plain' as const, dataEncryptionKey: null,
+            metadataLayoutVersion: 1 as const, metadataVersion: 2,
+            metadata: JSON.stringify(sharedMetadata),
+            ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(SessionOwnerMetadataV1Schema.parse({
+                v: 1, workspace: { path: '/repo', host: 'owner' },
+            })),
+            agentStateVersion: 4, agentState: JSON.stringify({ controlledByUser: false }), share: null,
+        };
+        let advanceAgentState = false;
+        requestMock.mockImplementation(async (path: string) => {
+            if (path === '/v1/account/encryption/currentness') {
+                if (advanceAgentState) {
+                    advanceAgentState = false;
+                    row = { ...row, agentStateVersion: 6, agentState: JSON.stringify({ controlledByUser: true }) };
+                    const current = storage.getState().sessions[sessionId]!;
+                    storage.getState().applySessions([{
+                        ...current, agentStateVersion: 6, agentState: { controlledByUser: true },
+                    }]);
+                }
+                return currentPlainAccountEncryptionCurrentnessResponse();
+            }
+            expect(path).toBe(`/v2/sessions/${sessionId}`);
+            return Response.json({ session: row });
+        });
+        const admittedVersions: number[] = [];
+        emitSessionMetadataUpdateWithServerScopeMock.mockImplementation(async (input: { patch: unknown }) => {
+            // The real mutation producer must satisfy the strict transport consumer.
+            const patch = SessionMetadataTuplePatchV1Schema.parse(input.patch);
+            if (patch.mode !== 'owner') throw new Error('Expected an owner tuple patch');
+            admittedVersions.push(patch.agentState.expectedVersion);
+            if (patch.agentState.expectedVersion !== row.agentStateVersion) return { result: 'version-mismatch' };
+            row = {
+                ...row, metadataVersion: row.metadataVersion + 1, agentStateVersion: row.agentStateVersion + 1,
+                metadata: patch.sharedMetadata.ciphertext, ownerMetadata: patch.ownerMetadata,
+                agentState: patch.agentState.ciphertext!,
+            };
+            return { result: 'success', metadataLayoutVersion: 1, version: row.metadataVersion, agentStateVersion: row.agentStateVersion };
+        });
+        const { sync } = await import('./sync');
+        Reflect.set(sync, 'credentials', { token: 'active-token' });
+
+        await sync.patchSessionMetadataWithRetry(sessionId, metadata => ({ ...metadata, approvalReviewerEnabled: true }));
+        expect(storage.getState().sessions[sessionId]?.ownerMetadataView?.approvalReviewerEnabled).toBe(true);
+        advanceAgentState = true;
+        await expect(sync.patchSessionMetadataWithRetry(sessionId, metadata => ({ ...metadata, approvalReviewerEnabled: false })))
+            .resolves.toBeUndefined();
+
+        expect(admittedVersions).toEqual([4, 5, 6]);
+        expect(storage.getState().sessions[sessionId]).toMatchObject({
+            metadataVersion: 4, agentStateVersion: 7, agentState: { controlledByUser: true },
+            ownerMetadataView: { approvalReviewerEnabled: false },
+        });
     });
 
     it('supports overriding the server scope used by patchSessionMetadataWithRetry', async () => {

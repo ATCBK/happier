@@ -1,4 +1,7 @@
+import { maxCodeUnits } from '../strings/maxCodeUnits.js';
+import { AccountEncryptionMigrateDiscussionsDirectiveV1Schema } from '../discussions/accountEncryptionMigration.js';
 import * as zMini from 'zod/mini';
+import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js';
 import { lazyDefinition, lazyZodSchema } from '../lazyZodSchema.js';
 import { AccountEncryptionMigrateConnectedConfigurationsDirectiveV1Schema, AccountEncryptionMigrateConnectedPurposesDirectiveV1Schema,
   AccountEncryptionMigrateConnectedConfigurationsResultV1Schema, AccountEncryptionMigrateConnectedPurposesResultV1Schema,
@@ -9,6 +12,8 @@ import { ArtifactBlobAccountEncryptionStageV1Schema } from '../artifacts/artifac
 import { classifyAccountJsonKvKey } from './accountJsonKv.js';
 import { AuthoringMemoryContentV1Schema, AuthoringMemoryKeyV1Schema, AuthoringMemoryRowV1Schema, assertAuthoringMemoryValueForKeyV1 } from './authoringMemory.js';
 import { AccountEncryptionMigratePromptLibraryDirectiveV1Schema, AccountEncryptionMigratePromptLibraryResultV1Schema, type AccountEncryptionMigratePromptLibraryDirectiveV1 } from '../prompts/library/promptLibraryRowsV1.js';
+import { AccountEncryptionMigrateSessionFollowRulesDirectiveV1Schema, AccountEncryptionMigrateSessionFollowRulesResultV1Schema,
+  type AccountEncryptionMigrateSessionFollowRulesDirectiveV1 } from '../sessions/follow/sessionFollowRuleV1.js';
 import { AccountEncryptionMigrateRemoteHostsDirectiveV1Schema, AccountEncryptionMigrateRemoteHostsResultV1Schema,
   type AccountEncryptionMigrateRemoteHostsDirectiveV1 } from '../remoteHosts/remoteHostSchemasV1.js';
 import { AccountEncryptionMigrateNotificationChannelsDirectiveV1Schema, AccountEncryptionMigrateNotificationChannelsResultV1Schema,
@@ -127,7 +132,7 @@ function accountEncryptionCatalogProtocolSchema<TSchema extends z.core.$ZodType>
   schema: TSchema & { safeParse(value: unknown): z.core.util.SafeParseResult<z.output<TSchema>> },
 ) {
   return lazyDefinition(() => createProtocolComposableSchema<z.input<TSchema>, z.output<TSchema>>(
-    { ...z.toJSONSchema(schema, { io: 'input', target: 'draft-7' }) },
+    zodSchemaToJsonSchemaObject(schema, { target: 'draft-7' }),
     input => {
       const parsed = schema.safeParse(input);
       return parsed.success ? { success: true, data: parsed.data } : {
@@ -300,13 +305,13 @@ export type AccountEncryptionMigrateConnectedServicesDirective = z.infer<
  */
 export const ACCOUNT_ENCRYPTION_MIGRATE_AUTOMATION_CONTENT_FIELDS = {
   templateCiphertext: z.string().check(z.minLength(1), z.maxLength(AUTOMATION_TEMPLATE_CIPHERTEXT_MAX_CHARS)),
-  triggerDefinitionEnvelope: z.string().check(z.minLength(1), z.maxLength(MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES)),
+  triggerDefinitionEnvelope: z.string().check(z.minLength(1), maxCodeUnits(MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES)),
   triggerEvidenceEnvelope: z.string().check(z.minLength(1), z.maxLength(220_000)),
   occurrenceEvidenceEqualityTag: AutomationOccurrenceEvidenceEqualityTagV1Schema,
   executionInputEnvelope: z.string().check(z.minLength(1), z.maxLength(220_512)),
-  resultEnvelope: z.string().check(z.minLength(1), z.maxLength(MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES)),
-  replyContextEnvelope: z.string().check(z.minLength(1), z.maxLength(MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES)),
-  failureDetailEnvelope: z.string().check(z.minLength(1), z.maxLength(MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES)),
+  resultEnvelope: z.string().check(z.minLength(1), maxCodeUnits(MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES)),
+  replyContextEnvelope: z.string().check(z.minLength(1), maxCodeUnits(MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES)),
+  failureDetailEnvelope: z.string().check(z.minLength(1), maxCodeUnits(MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES)),
   summaryCiphertext: z.string().check(z.minLength(1), z.maxLength(220_000)),
 } as const;
 
@@ -426,6 +431,7 @@ export const AccountEncryptionMigrateAutomationsInventoryResponseSchema = lazyZo
 export type AccountEncryptionMigrateAutomationsInventoryResponse = z.infer<typeof AccountEncryptionMigrateAutomationsInventoryResponseSchema>;
 
 const AccountEncryptionMigrateMachineItemSchema = lazyZodSchema(() => z.strictObject({
+    expectedDataEncryptionKey: z.nullable(z.string().check(z.minLength(1), z.maxLength(16_384))),
     machineId: z.string().check(z.minLength(1), z.maxLength(256)),
     expectedMetadataVersion: NonNegativeSafeIntegerSchema,
     expectedDaemonStateVersion: NonNegativeSafeIntegerSchema,
@@ -666,6 +672,7 @@ function refineAccountEncryptionMigrateRequest(
       items?: Array<{ blobs: Array<{ content: { t: string } }> }>;
     };
     promptLibrary?: AccountEncryptionMigratePromptLibraryDirectiveV1;
+    sessionFollowRules?: AccountEncryptionMigrateSessionFollowRulesDirectiveV1;
     remoteHosts?: AccountEncryptionMigrateRemoteHostsDirectiveV1;
     notificationChannels?: AccountEncryptionMigrateNotificationChannelsDirectiveV1;
     connectedPresentation?: AccountEncryptionMigrateConnectedPresentationDirectiveV1;
@@ -737,6 +744,10 @@ function refineAccountEncryptionMigrateRequest(
     }
     const targetEnvelopeKind =
       request.toMode === 'plain' ? 'plain' : 'encrypted';
+    request.sessionFollowRules?.items.forEach((item, index) => {
+      if (item.content.t !== targetEnvelopeKind) context.addIssue({ code: 'custom', path: ['sessionFollowRules', 'items', index, 'content'],
+        message: 'Follow rule replacement must match the target Account mode' });
+    });
     for (const key of ['remoteHosts', 'notificationChannels', 'connectedPresentation', 'connectedAcknowledgements'] as const) {
       const content = request[key]?.content;
       if (content && content.t !== targetEnvelopeKind) context.addIssue({ code: 'custom',
@@ -1562,6 +1573,7 @@ const AccountEncryptionMigrateCurrentRequestShape = {
   todos: AccountEncryptionMigrateTodosDirectiveSchema,
   workspace: z.optional(AccountEncryptionMigrateWorkspaceDirectiveSchema),
   artifacts: AccountEncryptionMigrateArtifactsDirectiveSchema,
+  discussions: z.optional(AccountEncryptionMigrateDiscussionsDirectiveV1Schema),
   sessions: AccountEncryptionMigrateSessionsDirectiveSchema,
   reviewComments: AccountEncryptionMigrateReviewCommentsDirectiveSchema,
   sessionOrganization:
@@ -1570,6 +1582,7 @@ const AccountEncryptionMigrateCurrentRequestShape = {
   sessionDrafts: z.optional(AccountEncryptionMigrateSessionDraftsDirectiveSchema),
   authoringMemory: z.optional(AccountEncryptionMigrateAuthoringMemoryDirectiveSchema),
   promptLibrary: zMini.optional(AccountEncryptionMigratePromptLibraryDirectiveV1Schema),
+  sessionFollowRules: zMini.optional(AccountEncryptionMigrateSessionFollowRulesDirectiveV1Schema),
   remoteHosts: z.optional(asProtocolZod(accountEncryptionCatalogProtocolSchema(AccountEncryptionMigrateRemoteHostsDirectiveV1Schema))),
   notificationChannels: z.optional(asProtocolZod(accountEncryptionCatalogProtocolSchema(AccountEncryptionMigrateNotificationChannelsDirectiveV1Schema))),
   connectedPresentation: z.optional(asProtocolZod(accountEncryptionCatalogProtocolSchema(AccountEncryptionMigrateConnectedPresentationDirectiveV1Schema))),
@@ -1953,6 +1966,7 @@ export const AccountEncryptionMigrateSuccessResponseSchema = lazyZodSchema(() =>
     settingsVersion: NonNegativeSafeIntegerSchema,
     authoringMemory: z.optional(z.strictObject({ rows: z.array(AuthoringMemoryRowV1Schema) })),
     promptLibrary: zMini.optional(AccountEncryptionMigratePromptLibraryResultV1Schema),
+    sessionFollowRules: zMini.optional(AccountEncryptionMigrateSessionFollowRulesResultV1Schema),
     remoteHosts: z.optional(asProtocolZod(accountEncryptionCatalogProtocolSchema(AccountEncryptionMigrateRemoteHostsResultV1Schema))),
     notificationChannels: z.optional(asProtocolZod(accountEncryptionCatalogProtocolSchema(AccountEncryptionMigrateNotificationChannelsResultV1Schema))),
     connectedPresentation: z.optional(asProtocolZod(accountEncryptionCatalogProtocolSchema(AccountEncryptionMigrateConnectedPresentationResultV1Schema))),

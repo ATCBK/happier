@@ -1,12 +1,16 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppState, Platform } from 'react-native';
-import { SESSION_HUMAN_PRESENCE_SNAPSHOT_EVENT } from '@happier-dev/protocol/sessions';
+import { SESSION_HUMAN_PRESENCE_SNAPSHOT_EVENT, SessionHumanPresenceVisibleReplaceV1Schema, SessionHumanPresenceTypingSetV1Schema } from '@happier-dev/protocol/sessions';
 import { attachManagedSessionHumanPresenceSocket } from './attachManagedSessionHumanPresenceSocket';
 // Loaded eagerly so a runtime module-graph failure fails this test loudly instead of
 // being swallowed by the adapter's deliberate additive-presence catch.
 import './sessionHumanPresenceRuntime';
 import { sessionHumanPresenceStore } from './sessionHumanPresenceStore';
 import { markSessionSurfaceHidden, markSessionSurfaceVisible } from '../sessionSurfaceVisibility';
+import { registerDiscussionHumanPresence, reportDiscussionTypingEdit } from './sessionHumanPresenceRuntime';
+import { storage } from '@/sync/domains/state/storage';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 
 /** Real JWT-shaped authenticated subject; the adapter must read the Account from it. */
 function token(accountId: string): string {
@@ -19,8 +23,9 @@ function managedSocket() {
     const connectedListeners = new Set<() => void>();
     const emitWithAck = async (event: string, payload: unknown) => {
         emitted.push([event, payload]);
-        const { sessionIds } = payload as { sessionIds: string[] };
-        return { v: 1, ok: true, admittedSessionIds: sessionIds };
+        const declaration = SessionHumanPresenceVisibleReplaceV1Schema.parse(payload);
+        return { v: 1, ok: true, admittedSessionIds: declaration.sessionIds,
+            ...(declaration.locations ? { admittedLocations: declaration.locations } : {}) };
     };
     const socket = {
         connected: true,
@@ -52,6 +57,47 @@ afterEach(() => { cleanup.splice(0).reverse().forEach((dispose) => dispose()); }
 async function settle() { for (let index = 0; index < 12; index += 1) await new Promise((resolve) => setTimeout(resolve, 0)); }
 
 describe('managed Home socket presence attachment', () => {
+    it('merges Session and independent Discussion visibility through the actual authenticated socket adapter', async () => {
+        const previousState = storage.getState();
+        const previousHome = getAppliedActiveServerSnapshot();
+        const previousAvailability = isAppliedActiveServerRuntimeAvailable();
+        cleanup.push(() => {
+            storage.setState(previousState, true);
+            publishAppliedActiveServerSnapshot(previousHome, previousAvailability);
+        });
+        const target = { serverId: 'discussion-carrier-home', discussionId: 'same-id' };
+        storage.getState().activateProfileScope({ serverId: target.serverId, accountId: 'self' });
+        publishAppliedActiveServerSnapshot({ serverId: target.serverId, serverUrl: 'https://discussion-carrier.test', generation: 5 });
+        const lifetime = captureActiveServerAccountScopeLifetime()!;
+        const unregister = registerDiscussionHumanPresence(target, lifetime);
+        cleanup.push(unregister);
+        markSessionSurfaceVisible('same-id', target.serverId);
+        cleanup.push(() => markSessionSurfaceHidden('same-id', target.serverId));
+        const boundary = managedSocket();
+        cleanup.push(attachManagedSessionHumanPresenceSocket({
+            serverId: target.serverId, token: token('self'), socket: boundary.socket as never, transport: boundary.transport as never,
+        }));
+        await settle();
+        expect(boundary.emitted).toEqual([['session-human-presence:visible-replace', {
+            v: 1, sessionIds: ['same-id'], locations: [{ discussionId: 'same-id' }],
+        }]]);
+        boundary.snapshot({ v: 1, discussionId: 'same-id', observedAt: 7, viewers: [
+            { account: { kind: 'account', accountId: 'self', firstName: 'Me', lastName: null, username: null, avatarUrl: null }, typing: false },
+            { account: { kind: 'account', accountId: 'peer', firstName: 'Peer', lastName: null, username: null, avatarUrl: null }, typing: true },
+        ] });
+        expect(sessionHumanPresenceStore.read(target)).toMatchObject({ status: 'live', viewers: [{ account: { accountId: 'peer' }, typing: true }] });
+        expect(sessionHumanPresenceStore.read({ serverId: target.serverId, sessionId: 'same-id' }).status).toBe('connecting');
+        reportDiscussionTypingEdit(target, true, lifetime);
+        expect(SessionHumanPresenceTypingSetV1Schema.parse(boundary.emitted.at(-1)?.[1]))
+            .toEqual({ v: 1, discussionId: 'same-id', typing: true });
+        unregister();
+        await settle();
+        expect(boundary.emitted.slice(-2)).toEqual([
+            ['session-human-presence:typing-set', { v: 1, discussionId: 'same-id', typing: false }],
+            ['session-human-presence:visible-replace', { v: 1, sessionIds: ['same-id'] }],
+        ]);
+        expect(sessionHumanPresenceStore.read(target)).toMatchObject({ status: 'unavailable', viewers: [] });
+    });
     it('accepts a delayed visibility declaration beyond the generic ACK deadline', async () => {
         const serverId = 'slow-home';
         const sessionId = 'slow-session';

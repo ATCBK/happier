@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useDestinationParams } from '@/components/appShell/workspace/DestinationInstanceHost';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { resolveFeatureToggleHref } from '@/components/settings/features/featuresSettings';
@@ -19,9 +20,11 @@ import { useWorkflowsDestinationAccess } from './workflowsDestinationAccess';
  */
 export function WorkflowsGate(props: Readonly<{
     children: React.ReactNode;
-    surface?: 'destination' | 'workflow';
+    surface?: 'destination' | 'workflow' | 'occurrence';
 }>): React.ReactElement {
-    const access = useWorkflowsDestinationAccess();
+    const params = useDestinationParams<{ serverId?: string | string[] }>();
+    const serverId = Array.isArray(params.serverId) ? params.serverId[0] : params.serverId;
+    const access = useWorkflowsDestinationAccess(serverId);
     const router = useRouter();
     const experimentsEnabled = useSetting('experiments') === true;
 
@@ -56,7 +59,7 @@ export function WorkflowsGate(props: Readonly<{
         );
     }
 
-    if (access.kind !== 'workflows') {
+    if (access.kind !== 'workflows' && !(props.surface === 'occurrence' && access.kind === 'triggersOnly')) {
         // An unavailable capability is not a failed read: the canonical Workflow problem mapping
         // owns this state, its copy and the fact that there is no repair to offer here.
         const unavailable = resolveWorkflowsUnavailablePresentation();

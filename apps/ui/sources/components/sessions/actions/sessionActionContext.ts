@@ -2,12 +2,13 @@ import { resolveSessionReadStateAction } from '@/sync/domains/session/readState/
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { isSessionTerminalPermanentlyAbsent } from '@happier-dev/protocol/sessions/metadata/terminalMetadata';
-import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { readSessionOwnerMetadataView, readSessionOwnerMetadataViewPreferences } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import {
     canContinueSessionWithFreshSpawn,
     canResumeSessionWithOptions,
     type ResumeCapabilityOptions,
 } from '@/agents/runtime/resumeCapabilities';
+import { readBlockedSessionContentAvailability, readSessionContentAvailability } from '@/sync/domains/session/encryptedContentAvailability';
 
 import type { SessionActionSession, SessionActionTarget, SessionAttentionStandingAction } from './sessionActionTypes';
 
@@ -56,6 +57,7 @@ export function createSessionActionTarget(params: Readonly<{
     const isArchived = session.archivedAt != null;
     const ownerSession = params.ownerSession ?? ('agentState' in session ? session : null);
     const ownerMetadata = ownerSession ? readSessionOwnerMetadataView(ownerSession) : null;
+    const viewPreferences = readSessionOwnerMetadataViewPreferences(ownerMetadata);
     const terminalControlServiceability = ownerSession
         ? ownerMetadata?.terminal?.controlServiceabilityV1
         : (session.metadata as SessionListRenderableSession['metadata'])?.terminalControlServiceabilityV1;
@@ -66,6 +68,8 @@ export function createSessionActionTarget(params: Readonly<{
     const hasReadableOwnerMetadataWithoutTerminalLifecycle = ownerSession !== null
         && ownerMetadata !== null
         && ownerMetadata.terminal?.controlServiceabilityV1 === undefined;
+    const hasSettledUnavailableEncryptedContent =
+        readBlockedSessionContentAvailability(readSessionContentAvailability(session)) !== null;
     const canStop = session.access?.capabilities.stopSession === true;
     const canArchive = session.access?.capabilities.archiveSession === true && !isArchived && (!isActive || canStop);
     const hasWriteAccess = session.access?.capabilities.submitAgentInput === true;
@@ -96,9 +100,7 @@ export function createSessionActionTarget(params: Readonly<{
         canRename: session.access?.capabilities.renameSession === true,
         canWriteOwnerMetadata: isOwnedByCurrentUser && serverId !== null && ownerMetadata !== null
             && session.access?.capabilities.renameSession === true,
-        toolCallsOverride: typeof ownerMetadata?.work?.viewPreferences?.showToolCalls === 'boolean'
-            ? ownerMetadata.work.viewPreferences.showToolCalls
-            : null,
+        toolCallsOverride: viewPreferences?.showToolCalls ?? null,
         canResume,
         canDelete:
             session.access?.capabilities.deleteSession === true
@@ -107,7 +109,7 @@ export function createSessionActionTarget(params: Readonly<{
             // An archived pre-launch failure has no terminal lifecycle to
             // retire. The Home-owned Delete Action remains authoritative for
             // that row; explicit non-retired terminal evidence still fails closed.
-            && ((isArchived && hasReadableOwnerMetadataWithoutTerminalLifecycle)
+            && ((isArchived && (hasReadableOwnerMetadataWithoutTerminalLifecycle || hasSettledUnavailableEncryptedContent))
                 || isSessionTerminalPermanentlyAbsent(terminalControlServiceability)),
         readStateAction: isArchived
             ? { kind: 'none', visible: false }

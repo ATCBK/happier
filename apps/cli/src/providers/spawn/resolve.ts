@@ -7,7 +7,7 @@ import { normalizeProviderEndpointUrlSyntax } from '@happier-dev/protocol/provid
 import { readOwnRecordValue } from '@happier-dev/protocol/providers/ownRecordValue';
 import type { ProviderSettingsReadResultV1 } from '@happier-dev/protocol';
 import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
-import { ProviderModelDescriptorV1Schema } from '@happier-dev/protocol/models/descriptor';
+import { ProviderModelDescriptorV1Schema, resolveModelDisplayName } from '@happier-dev/protocol/models/descriptor';
 import { createProviderManagedRuntimeBindingEqualityKeyV1, resolveProviderManagedRuntimeDeclarationV1 } from '@happier-dev/protocol/providers/contributions';
 import { selectProviderRuntimeCredentialTransportV1 } from '@happier-dev/protocol/providers/binding-compatibility';
 import type { AgentProviderRequirementsV1, ProviderBindingAuthorizationTicketV1, ProviderCredentialTransportV1, ProviderErrorV1, ProviderModelLoadDescriptorV1, ProviderModelDescriptorV1, ProviderSettingsV1, ProviderObservationAuthorizationFingerprintV1, ProviderProbeRequestFingerprintV1, ResolvedProviderManagedRuntimeDeclarationV1, QualifiedConnectedAccountPurposeBindingsV1, SessionModelSelectionV1, SessionProviderBindingMetadataV1 } from '@happier-dev/protocol';
@@ -49,6 +49,7 @@ import type {
   ResolvedProviderContribution,
 } from '@/plugins/projection/registry/types';
 import { projectProviderRuntimeBindingBasis } from './runtimeBindingBasis';
+import { readProviderModelNameCatalog } from '../registry/contributions';
 
 export function selectProviderSpawnClaudeHelperModels(input: Readonly<{
   adapter?: Pick<AgentProviderBindingAdapter, 'supportsClaudeHelperModels'>;
@@ -692,6 +693,7 @@ export function providerConnectionResolutionError(
  * rejects only a model the static/manual catalog already proves invalid.
  */
 function resolveProviderCatalogModel(input: Readonly<{
+  modelNameCatalog?: readonly ProviderModelDescriptorV1[];
   modelId: string;
   connectionId: string;
   catalog: ResolvedProviderSourceFacts['catalog'];
@@ -711,6 +713,7 @@ function resolveProviderCatalogModel(input: Readonly<{
     input.connectionId,
   ) ?? [];
   const merged = mergeProviderCatalogV1({
+    modelNameCatalog: input.modelNameCatalog,
     staticModels: 'staticModels' in input.catalog
       ? input.catalog.staticModels
       : [],
@@ -743,12 +746,16 @@ function resolveProviderCatalogModel(input: Readonly<{
   });
   if (resolution.status === 'listed') return resolution.row.descriptor;
   if (resolution.status === 'not_currently_listed') {
-    return ProviderModelDescriptorV1Schema.parse(resolution.descriptor);
+    return ProviderModelDescriptorV1Schema.parse({
+      ...resolution.descriptor,
+      name: resolveModelDisplayName(resolution.descriptor, input.modelNameCatalog ?? []),
+    });
   }
   return null;
 }
 
 function selectedModel(input: Readonly<{
+  modelNameCatalog?: readonly ProviderModelDescriptorV1[];
   modelId: string;
   record: ResolvedProviderConnectionRecord;
   facts: ResolvedProviderSourceFacts;
@@ -758,6 +765,7 @@ function selectedModel(input: Readonly<{
   runtimeCatalogSnapshotExists: boolean;
 }>): ProviderModelDescriptorV1 | null {
   return resolveProviderCatalogModel({
+    modelNameCatalog: input.modelNameCatalog,
     modelId: input.modelId,
     connectionId: input.record.connectionId,
     catalog: input.facts.catalog,
@@ -912,7 +920,9 @@ export function resolveProviderSpawnAuthorization(
   }
   if (!adapter) return { ok: false, error: createProviderErrorV1('provider_incompatible_with_agent', errorContext) };
   const facts = resolveProviderSourceFacts(record);
+  const modelNameCatalog = readProviderModelNameCatalog(input.registry);
   const model = selectedModel({
+    modelNameCatalog,
     modelId: input.selection.ref.modelId,
     record,
     facts,
@@ -1006,6 +1016,7 @@ export function resolveProviderSpawnAuthorization(
         ? input.runtimeModelDescriptor
         : input.runtimeAdditionalModelDescriptors?.find((candidate) => candidate.id === modelId);
       const helperModel = selectedModel({
+        modelNameCatalog,
         modelId,
         record,
         facts,

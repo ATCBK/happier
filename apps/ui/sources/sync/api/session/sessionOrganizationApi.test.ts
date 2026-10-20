@@ -44,6 +44,25 @@ describe('sessionOrganizationApi', () => {
         mocks.runtimeFetchWithServerReachability.mockReset();
     });
 
+    it('preserves only strict scope refusals before decoding organization mutation results', async () => {
+        const { setSessionPin, setSessionAttentionStanding, setSessionFolderAssignment, setSessionTagAssignments } = await import('./sessionOrganizationApi');
+        const requestAtEndpoint = async () => jsonResponse({ error: 'credential_scope_denied' }, 403);
+        for (const operation of [
+            () => setSessionPin({ credentials, sessionId: 'same', request: { pinned: false }, requestAtEndpoint }),
+            () => setSessionFolderAssignment({ credentials, sessionId: 'same', request: { folderId: null }, requestAtEndpoint }),
+        ]) {
+            await expect(operation()).rejects.toMatchObject({ code: 'credential_scope_denied', status: 403 });
+        }
+        mocks.serverFetch.mockImplementation(async () => jsonResponse({ error: 'credential_scope_denied' }, 403));
+        await expect(setSessionTagAssignments({ credentials, sessionId: 'same', request: { tagIds: [] } }))
+            .rejects.toMatchObject({ code: 'credential_scope_denied', status: 403 });
+        await expect(setSessionAttentionStanding({ credentials, sessionId: 'same', request: { standing: null } }))
+            .rejects.toMatchObject({ code: 'credential_scope_denied', status: 403 });
+        mocks.serverFetch.mockResolvedValue(jsonResponse({ error: 'credential_scope_denied', details: {} }, 403));
+        await expect(setSessionPin({ credentials, sessionId: 'same', request: { pinned: false } }))
+            .rejects.not.toMatchObject({ code: 'credential_scope_denied' });
+    });
+
     it('requires current pin memberships in an HTTP snapshot rather than adapting a predecessor server response', async () => {
         const { fetchSessionOrganizationSnapshot } = await import('./sessionOrganizationApi');
         mocks.serverFetch.mockResolvedValueOnce(jsonResponse({ snapshot: {
@@ -75,7 +94,9 @@ describe('sessionOrganizationApi', () => {
         const { setSessionPin } = await import('./sessionOrganizationApi');
         mocks.serverFetch.mockResolvedValueOnce(jsonResponse({ pin: null }));
         const request = { pinned: true, surface: 'rail' as const, wholeMetadata: { bot: { kind: 'bot' } } };
-        await expect(setSessionPin({ credentials, sessionId: 'pinned', request })).rejects.toMatchObject({ name: 'ZodError' });
+        await expect(setSessionPin({ credentials, sessionId: 'pinned', request })).rejects.toMatchObject({
+            issues: [expect.objectContaining({ code: 'unrecognized_keys', keys: ['wholeMetadata'] })],
+        });
         expect(mocks.serverFetch).not.toHaveBeenCalled();
         expect(mocks.runtimeFetchWithServerReachability).not.toHaveBeenCalled();
     });

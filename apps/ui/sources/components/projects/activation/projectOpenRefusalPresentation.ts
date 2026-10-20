@@ -5,7 +5,7 @@ export function projectOpenRefusalPresentation(code: string, gitRef: string | nu
     if (code === 'target_mismatch') return {
         title: t('projects.open.targetMismatch'), description: t('projects.open.targetMismatchHint'),
     };
-    if (code.includes('offline') || code.includes('unreachable')) return { title: t('projects.open.accessLost') };
+    if (code.includes('unreachable') || code.includes('offline')) return { title: t('workspaceSync.start.blocked.targetMachineOffline') };
     if (gitRef && code.includes('ref')) return { title: t('projects.open.refMissing', { ref: gitRef }) };
     if (code.includes('folder') || code.includes('path')) return { title: t('projects.open.invalidFolder') };
     if (code.includes('source') && code.includes('changed')) return { title: t('projects.open.sourceChanged') };

@@ -4,7 +4,7 @@ import { sameStrictJsonValue, type JsonValue } from '@happier-dev/protocol/json/
 import { freezePluginDeclarativeDataNodeV1, type PluginDeclarativeDataNodeV1 } from '@happier-dev/protocol/plugins/contributions/ui/declarativeDataV1';
 import type { PluginUiResourceSnapshot } from '@happier-dev/plugin-ui/hostApi';
 import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
-import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
+import { PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY, readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import type { PluginContextualResourceBinding } from './PluginContextualResourceStoreProvider';
 
@@ -34,6 +34,9 @@ export function resolveDeclarativeDataResourceBinding(input: DeclarativeDataReso
         || typeof plugin.occurrenceId !== 'string' || !plugin.occurrenceId
         || declaration.occurrenceId !== undefined && declaration.occurrenceId !== plugin.occurrenceId) return null;
     const origin = readPluginUiContributionOrigin(declaration);
+    // A union declaration without a selected producer is descriptive only.
+    // Direct scoped projections have no hostOrigin field and use their host's facts.
+    if (Object.hasOwn(declaration, PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY) && !origin) return null;
     if (input.requireReadAuthority && origin && (origin.phase !== 'current' || !origin.interactionEnabled)) return null;
     const packageOrigin = readPluginUiContributionOrigin(plugin);
     const machineId = input.machineId ?? origin?.machineId;

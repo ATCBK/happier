@@ -1,8 +1,14 @@
 import * as React from 'react';
 import { AccessibilityInfo, StyleSheet, TextInput, View } from 'react-native';
 
-import { t } from '@/text';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import {
+    PluginSurfaceCompanionContext,
+    PluginSurfaceInteractionAvailabilityContext,
+    PluginSurfacePageHeaderContext,
+    useOfflineSurfaceNotice,
+} from './pluginSurfaceInteractionAvailability';
 
 type PluginSurfaceInteractionBoundaryProps = Readonly<{
     children: React.ReactNode;
@@ -12,6 +18,8 @@ type PluginSurfaceInteractionBoundaryProps = Readonly<{
      */
     focusEligible?: boolean;
     enabled: boolean;
+    /** The renderer already holds readable content, independently of effect availability. */
+    hasContent?: boolean;
     snapshotTitle: string;
     surfaceId: string;
     loadedRuntimeIdentity?: Readonly<{
@@ -34,6 +42,9 @@ export function PluginSurfaceInteractionBoundary(
         ReturnType<typeof TextInput.State.currentlyFocusedInput> | null
     >(null);
     const focusReturnAccessibilityTargetRef = React.useRef<number | null>(null);
+    const offlineNotice = useOfflineSurfaceNotice(props.enabled, props.snapshotTitle, props.hasContent);
+    const companion = React.useContext(PluginSurfaceCompanionContext);
+    const pageIdentity = React.useContext(PluginSurfacePageHeaderContext);
     const interactionEnabled = props.enabled && props.focusEligible !== false;
     const wasEnabledRef = React.useRef(props.enabled);
     const wasInteractionEnabledRef = React.useRef(interactionEnabled);
@@ -108,11 +119,29 @@ export function PluginSurfaceInteractionBoundary(
                 pointerEvents={interactionEnabled ? 'auto' : 'none'}
                 accessibilityElementsHidden={!interactionEnabled}
                 importantForAccessibility={interactionEnabled ? 'auto' : 'no-hide-descendants'}
-                style={styles.snapshot}
+                style={offlineNotice.nothingLoaded ? undefined : styles.snapshot}
                 {...focusCaptureProps}
             >
-                {props.children}
+                {offlineNotice.nothingLoaded ? null : (
+                    <PluginSurfaceInteractionAvailabilityContext.Provider value={props.enabled}>
+                        <PluginSurfacePageHeaderContext.Provider value={null}>
+                            {props.children}
+                        </PluginSurfacePageHeaderContext.Provider>
+                    </PluginSurfaceInteractionAvailabilityContext.Provider>
+                )}
             </View>
+            {offlineNotice.nothingLoaded && !companion ? (
+                <>
+                    {pageIdentity?.header}
+                    <SurfaceStateCard
+                        testID={`plugin-surface-offline-state:${props.surfaceId}`}
+                        kind={offlineNotice.kind}
+                        replacesContent
+                        title={offlineNotice.title}
+                        reason={offlineNotice.reason}
+                    />
+                </>
+            ) : null}
             {loadedRuntimeMarkerId ? (
                 <View
                     testID={loadedRuntimeMarkerId}
@@ -123,19 +152,17 @@ export function PluginSurfaceInteractionBoundary(
                     style={styles.loadedRuntimeMarker}
                 />
             ) : null}
-            {!props.enabled ? (
+            {!props.enabled && !offlineNotice.nothingLoaded ? (
                 <View
                     testID={`plugin-surface-offline-summary:${props.surfaceId}`}
                     accessible
                     accessibilityRole="summary"
                     accessibilityLiveRegion="polite"
-                    accessibilityLabel={t('pluginSurfaces.offlineSnapshot.accessibilityLabel', {
-                        title: props.snapshotTitle,
-                    })}
+                    accessibilityLabel={offlineNotice.accessibilityLabel}
                 >
                     <SurfaceFreshnessLine
                         testID={`plugin-surface-offline-summary:${props.surfaceId}-freshness`}
-                        reason={t('pluginSurfaces.state.offline.reason')}
+                        reason={offlineNotice.reason}
                     />
                 </View>
             ) : null}

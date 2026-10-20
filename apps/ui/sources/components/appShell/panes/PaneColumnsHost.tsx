@@ -204,12 +204,19 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
     const baseLayout = resolvePaneLayout(paneLayoutInput);
     const destinationDetailOnly = baseLayout.kind === 'single' && baseLayout.details === 'overlay';
     const paneFocusModeActive = requestedPaneFocusMode && !destinationDetailOnly;
-    const resolvedLayout = applyPaneFocusModeLayoutOverride({
+    const { kind, right: rightPresentation, details: detailsPresentation } = applyPaneFocusModeLayoutOverride({
         paneFocusModeActive,
         rightOpen,
         detailsOpen,
         baseLayout,
     });
+    // Page content changes independently of pane geometry. Publish the same
+    // resolved layout to the pane hosts and context until its three facts change.
+    const resolvedLayout = React.useMemo(() => ({
+        kind,
+        right: rightPresentation,
+        details: detailsPresentation,
+    }), [detailsPresentation, kind, rightPresentation]);
     const showActionRail = props.actionRail != null && !destinationDetailOnly;
     // A floating companion (the Voice Orb) keeps clear of the rail: its window rectangle is published.
     const railColumnRef = React.useRef<View | null>(null);

@@ -2,7 +2,7 @@ import { readFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
@@ -18,10 +18,8 @@ function isPortableSegment(segment: string): boolean {
   return readPortablePathSegmentViolation(segment) === null;
 }
 
-export const PortableStorageIdSchema = z.string().min(1).max(160)
-  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u)
-  .refine(isPortableSegment, 'Expected a portable storage id');
-export const PortableRelativePathSchema = z.string().min(1).max(512).superRefine((value, context) => {
+export const PortableStorageIdSchema = z.string().check(z.minLength(1), z.maxLength(160), z.regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u), z.refine(isPortableSegment, 'Expected a portable storage id'));
+export const PortableRelativePathSchema = z.string().check(z.minLength(1), z.maxLength(512), z.superRefine((value, context) => {
   if (value.includes('\\') || value.startsWith('/') || /^[A-Za-z]:/u.test(value)) {
     context.addIssue({ code: 'custom', message: 'Expected a portable relative path' });
     return;
@@ -30,39 +28,38 @@ export const PortableRelativePathSchema = z.string().min(1).max(512).superRefine
   if (Buffer.byteLength(value, 'utf8') > 512 || segments.length > 64 || segments.some((segment) => !isPortableSegment(segment))) {
     context.addIssue({ code: 'custom', message: 'Expected a normalized portable relative path' });
   }
-});
+}));
 
-export const PluginRegistryGenerationReferenceSchema = z.object({
+export const PluginRegistryGenerationReferenceSchema = z.strictObject({
   immutableGenerationId: PortableStorageIdSchema,
-}).strict();
+});
 export type PluginRegistryGenerationReference = z.infer<typeof PluginRegistryGenerationReferenceSchema>;
 
-const CanonicalPluginGenerationMapSchema = z.record(asHostProtocolZod(PluginIdSchema), PluginRegistryGenerationReferenceSchema)
-  .superRefine((value, context) => {
+const CanonicalPluginGenerationMapSchema = z.record(asHostProtocolZod(PluginIdSchema), PluginRegistryGenerationReferenceSchema).check(z.superRefine((value, context) => {
     for (const pluginId of Object.keys(value)) {
       const parsedPluginId = PluginIdSchema.safeParse(pluginId);
       if (!parsedPluginId.success || parsedPluginId.data !== pluginId) {
         context.addIssue({ code: 'custom', path: [pluginId], message: 'Expected a canonical plugin id' });
       }
     }
-  });
+  }));
 
-export const PluginRegistryCommitRecordSchema = z.object({
+export const PluginRegistryCommitRecordSchema = z.strictObject({
   t: z.literal('happier_plugin_registry_commit_v1'),
   schemaVersion: z.literal(1),
-  revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  revision: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
   transactionId: PortableStorageIdSchema,
-  baseRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
-  installationState: z.object({
+  baseRevision: z.nullable(z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER))),
+  installationState: z.strictObject({
     revisionId: PortableStorageIdSchema,
-  }).strict(),
+  }),
   pluginOccurrenceIds: CanonicalPluginGenerationMapSchema,
-  createdAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  creator: z.object({
-    pid: z.number().int().positive().max(0x7fffffff),
+  createdAtMs: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+  creator: z.strictObject({
+    pid: z.number().check(z.int(), z.positive(), z.maximum(0x7fffffff)),
     instanceId: PortableStorageIdSchema,
-  }).strict(),
-}).strict().superRefine((record, context) => {
+  }),
+}).check(z.superRefine((record, context) => {
   const expectedBase = record.revision === 0 ? null : record.revision - 1;
   if (record.baseRevision !== expectedBase) {
     context.addIssue({
@@ -71,7 +68,7 @@ export const PluginRegistryCommitRecordSchema = z.object({
       message: `Revision ${record.revision} must name base revision ${String(expectedBase)}`,
     });
   }
-});
+}));
 export type PluginRegistryCommitRecord = z.infer<typeof PluginRegistryCommitRecordSchema>;
 const PluginRegistryCommitRecordStoredReadSchema = createStoredReadSchema(PluginRegistryCommitRecordSchema);
 
@@ -84,7 +81,7 @@ function parsePluginRegistryCommitRecordFromDisk(
   throw invalidCommitRecord(filePath, projectCommitRecordIssues(parsed.error), parsed.error);
 }
 
-function projectCommitRecordIssues(error: z.ZodError): readonly string[] {
+function projectCommitRecordIssues(error: z.core.$ZodError): readonly string[] {
   return Object.freeze(error.issues.map((issue) => {
     const path = issue.path.map((segment) => String(segment)).join('.');
     return path ? `${path}: ${issue.message}` : issue.message;

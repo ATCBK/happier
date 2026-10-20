@@ -1,5 +1,6 @@
 import * as React from 'react';
 import type { PluginProjectionV2 } from '@happier-dev/protocol';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -8,6 +9,10 @@ import type { PluginAccountAvailabilityReader } from '@/sync/domains/plugins/ava
 import { observePluginAccountPackageAssetPublication } from '@/sync/domains/plugins/availability/accountPackageAssetPublication';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { t } from '@/text';
+import { HappyError } from '@/utils/errors/errors';
+import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
+import { useActiveServerAccountScope } from '@/sync/store/hooks';
+import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
 
 import {
     createPluginAccountReleaseSelectionController,
@@ -76,10 +81,24 @@ export function PluginAccountReleaseSelectionSection(props: Readonly<{
     const [hasUiArtifactSlots, setHasUiArtifactSlots] = React.useState(false);
     const [hostedStatus, setHostedStatus] = React.useState<ReturnType<PluginAccountReleaseSelectionController['readHostedArtifactStatus']>>('unavailable');
     const controllerLifetimeRef = React.useRef<ControllerLifetime | null>(null);
+    const accountScope = useActiveServerAccountScope();
+    const { requestApproval } = useActionApprovalContinuation({
+        scopeKey: accountScope ? serverAccountScopeKeySuffix(accountScope) : '',
+        serverId: accountScope?.serverId ?? '',
+        onExecuted: () => {},
+        openOnRequest: true,
+    });
 
     React.useEffect(() => {
         const lifetime: ControllerLifetime = {
-            controller: createPluginAccountReleaseSelectionController(),
+            controller: createPluginAccountReleaseSelectionController({
+                onBlockingApprovalPending: ({ artifactId, scope, signal }) => requestApproval({
+                    artifactId, scope, signal, refreshAfterExecution: false,
+                    // The blocking executor retains the result and the original
+                    // controller lifetime; presentation must not replay it.
+                    onExecuted: async () => 'ignored',
+                }),
+            }),
             current: true,
         };
         controllerLifetimeRef.current = lifetime;
@@ -89,7 +108,7 @@ export function PluginAccountReleaseSelectionSection(props: Readonly<{
             if (controllerLifetimeRef.current === lifetime) controllerLifetimeRef.current = null;
             lifetime.controller.retire();
         };
-    }, [props.pluginId, props.reader]);
+    }, [props.pluginId, props.reader, requestApproval]);
 
     React.useEffect(() => {
         const update = () => {
@@ -147,7 +166,8 @@ export function PluginAccountReleaseSelectionSection(props: Readonly<{
                     t('settingsPlugins.accountReleaseSelection.unavailableBody'),
                 );
             }
-        }).catch(() => {
+        }).catch((error: unknown) => {
+            if (error instanceof HappyError && isActionApprovalDeclinedErrorCode(error.code)) return;
             if (lifetime.current && controllerLifetimeRef.current === lifetime) {
                 Modal.alert(t('common.error'), t('common.requestFailed'));
             }
@@ -174,7 +194,8 @@ export function PluginAccountReleaseSelectionSection(props: Readonly<{
                 if (lifetime.current && controllerLifetimeRef.current === lifetime) {
                     showResult(result);
                 }
-            } catch {
+            } catch (error) {
+                if (error instanceof HappyError && isActionApprovalDeclinedErrorCode(error.code)) return;
                 if (lifetime.current && controllerLifetimeRef.current === lifetime) {
                     showResult(Object.freeze({ kind: 'unavailable' as const, code: 'target_release_unavailable' as const }));
                 }
@@ -219,11 +240,6 @@ export function PluginAccountReleaseSelectionSection(props: Readonly<{
                             : t('settingsPlugins.accountReleaseSelection.hostedStatusDisabled')}
                     onPress={() => runHostedAction(async (controller) => {
                         const enabled = hostedStatus === 'notOptedIn' || hostedStatus === 'disabledHosted';
-                        if (enabled && !await Modal.confirm(
-                            t('settingsPlugins.accountReleaseSelection.hostedEnableTitle'),
-                            t('settingsPlugins.accountReleaseSelection.hostedEnableBody'),
-                            { confirmText: t('common.enable') },
-                        )) return { kind: 'cancelled' as const };
                         return await controller.setHostedArtifactsEnabled({
                             pluginId: props.pluginId,
                             reader: props.reader,
@@ -241,17 +257,10 @@ export function PluginAccountReleaseSelectionSection(props: Readonly<{
                     title={t('settingsPlugins.accountReleaseSelection.hostedRemoveTitle')}
                     subtitle={t('settingsPlugins.accountReleaseSelection.hostedRemoveBody')}
                     destructive
-                    onPress={() => {
-                        void Modal.confirm(t('settingsPlugins.accountReleaseSelection.hostedRemoveTitle'), t('settingsPlugins.accountReleaseSelection.hostedRemoveBody'), {
-                            confirmText: t('common.remove'),
-                            destructive: true,
-                        }).then((confirmed) => {
-                            if (confirmed) runHostedAction((controller) => controller.disableAndRemoveHostedArtifacts({
-                                pluginId: props.pluginId,
-                                reader: props.reader,
-                            }));
-                        });
-                    }}
+                    onPress={() => runHostedAction((controller) => controller.disableAndRemoveHostedArtifacts({
+                        pluginId: props.pluginId,
+                        reader: props.reader,
+                    }))}
                     disabled={pending}
                     showChevron={false}
                 />

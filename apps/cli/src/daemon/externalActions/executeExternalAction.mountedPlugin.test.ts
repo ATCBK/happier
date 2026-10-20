@@ -18,6 +18,10 @@ import { createAdmittedPluginRuntimeFixture, createAuthoredAdmittedPluginRuntime
 import { createAutomationConversationActionExecutor } from '@/plugins/runtime/automations/automationConversationActionExecutor';
 import { createDaemonApprovalExecutionOriginCurrentness } from './daemonExternalActionTargetResolver';
 import { readAuthoritativePluginSlotOccurrence } from '@/plugins/runtime/reload/runtimeLease';
+import { registerExternalActionRpcHandler } from '@/rpc/handlers/externalAction';
+import { EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1, parseExternalActionDaemonDispatchResultV1 } from '@happier-dev/protocol';
+import { ACTION_API_SERVER_ORIGIN } from '@happier-dev/protocol/rpc';
+import type { RpcHandler } from '@/api/rpc/types';
 
 // Network and on-disk machine credentials are the only replaced boundaries.
 vi.mock('axios', () => ({ default: { post: vi.fn(), get: vi.fn() } }));
@@ -66,6 +70,56 @@ async function mountedFixture(pluginId = 'acme.mounted', contributionLocalId = '
 }
 
 describe('external Action mounted plugin admission', () => {
+  it('admits the real Inspector source binding through the Account relay RPC into normal approval, retaining retirement checks', async () => {
+    const { fixture, invocation } = await bundledMountedFixture('happier.inspector', 'inspector-page');
+    // FIX-LIVE3 captured a source-only binding for inspector-page, not the
+    // materialized synthetic binding used by the prior direct-ingress tests.
+    const { materializationRef: _materialization, ...mountedBinding } = invocation.mountedBinding;
+    const target = { kind: 'machine' as const, machineId: 'machine-1' };
+    const authentication = { kind: 'account' as const, tokenEpoch: 0 };
+    const envelope = { v: 1 as const, requestId: 'inspector-relay', target,
+      input: {}, pluginInvocation: { kind: 'mountedPluginSurface' as const, mountedBinding } };
+    const handlers = new Map<string, RpcHandler>();
+    const options = {
+      machineId: 'machine-1', currentServerId: 'server-1',
+      resolveAccountId: async () => 'account-1', resolveInstallationId: () => 'installation-1',
+      verifyExecutionAuthorization: async () => true, resolveTarget: async () => target,
+      externalActionMachineRequestPrivateKey: tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(45)).secretKey,
+      executor: createActionExecutor({ ...createUnavailableActionTransportDeps(),
+        // Account approval policy and Artifact persistence are external boundaries.
+        isActionApprovalRequired: () => true,
+        approvalsCreate: async () => ({ artifactId: 'inspector-list-review' }),
+        approvalsWaitForDecision: async ({ request }) => ({ decision: 'reject' as const, request }),
+        approvalsUpdate: async () => ({ ok: true }),
+      }),
+      acquirePluginRuntimeRegistryLease: async () => {
+        const lease = fixture.controller.tryAcquireRuntimeRegistry();
+        if (!lease) throw new Error('Runtime unavailable');
+        return lease;
+      },
+      resolvePluginExecutionOriginContext: () => ({ serverIdentityId: 'srv_home-1', machineId: 'machine-1' }),
+    };
+    registerExternalActionRpcHandler({ registerHandler: (method, handler) => { handlers.set(method, handler); } }, options);
+    const run = async () => {
+      const result = await handlers.get(EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1)!({
+        actionId: 'plugins.list', envelope,
+        principal: { accountId: 'account-1', authentication, authority: 'present_user' },
+        placement: { machineId: 'machine-1', target },
+        executionAuthorization: { v: 1, token: 'account-root', binding: {
+          serverIdentityId: 'srv_home-1', accountId: 'account-1', custodianAccountId: 'account-1', authentication,
+          machineId: 'machine-1', installationId: 'installation-1', actionId: 'plugins.list', target,
+          requestId: envelope.requestId, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
+        } },
+      }, { authorization: ACTION_API_SERVER_ORIGIN, signal: new AbortController().signal });
+      const parsed = parseExternalActionDaemonDispatchResultV1(result);
+      if (parsed?.kind !== 'response' || parsed.prepared.response.v !== 1) throw new Error(`Expected Account relay response: ${JSON.stringify(result)}`);
+      return parsed.prepared.response.execution;
+    };
+    expect(await run()).toEqual({ ok: false, errorCode: 'approval_rejected', error: 'approval_rejected' });
+    fixture.registry.fencePluginConsumers?.(['happier.inspector']);
+    expect(await run()).toMatchObject({ ok: false, errorCode: 'plugin_mounted_caller_unavailable' });
+  });
+
   it('does not admit a plugin-only root Action without a mounted claim', async () => {
     const executor = createActionExecutor(createUnavailableActionTransportDeps());
     expect(await executeExternalAction({ actionId: 'automation.conversation.targets.list',
@@ -111,7 +165,7 @@ describe('external Action mounted plugin admission', () => {
       principal: { accountId: 'account-1', authentication, authority: 'present_user' }, currentMachineId: 'machine-1',
       currentServerId: 'server-1', currentInstallationId: 'installation-1',
       executionAuthorization: { v: 1, token: 'account-root', binding: {
-        serverIdentityId: 'home-1', accountId: 'account-1', custodianAccountId: 'account-1', authentication,
+        serverIdentityId: 'srv_home-1', accountId: 'account-1', custodianAccountId: 'account-1', authentication,
         machineId: 'machine-1', installationId: 'installation-1', actionId: 'automation.conversation.targets.list', target,
         requestId: 'channels-targets', requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
       } }, externalActionMachineRequestPrivateKey: key.secretKey, verifyExecutionAuthorization: async () => true,
@@ -121,7 +175,7 @@ describe('external Action mounted plugin admission', () => {
         if (!lease) throw new Error('Runtime unavailable');
         return lease;
       },
-      resolvePluginExecutionOriginContext: () => ({ serverIdentityId: 'home-1', machineId: 'machine-1' }),
+      resolvePluginExecutionOriginContext: () => ({ serverIdentityId: 'srv_home-1', machineId: 'machine-1' }),
     }); };
     const listed = await run();
     expect(listed.kind === 'response' && listed.response.v === 1 ? listed.response.execution : listed).toEqual({ ok: true, result: list });
@@ -168,7 +222,7 @@ describe('external Action mounted plugin admission', () => {
         kind: 'mountedPluginSurface' as const, mountedBinding: sourceOnlyBinding,
       } };
     const authorization = { v: 1 as const, token: 'home-issued-root', binding: {
-      serverIdentityId: 'home-1', accountId: 'account-1', custodianAccountId: 'account-1',
+      serverIdentityId: 'srv_home-1', accountId: 'account-1', custodianAccountId: 'account-1',
       authentication, machineId: 'machine-1', installationId: 'installation-1', actionId: 'plugins.reload',
       target, requestId: 'inspector-reload', requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
     } };
@@ -189,7 +243,7 @@ describe('external Action mounted plugin admission', () => {
         if (!lease) throw new Error('Runtime unavailable');
         return lease;
       },
-      resolvePluginExecutionOriginContext: () => ({ serverIdentityId: 'home-1', machineId: 'machine-1' }),
+      resolvePluginExecutionOriginContext: () => ({ serverIdentityId: 'srv_home-1', machineId: 'machine-1' }),
     });
     expect(result.kind === 'response' && result.response.v === 1 ? result.response.execution : result).toEqual({
       ok: true, result: { kind: 'approval_request_created', artifactId: 'reload-review', actionId: 'plugins.reload' },
@@ -203,8 +257,8 @@ describe('external Action mounted plugin admission', () => {
     expect(fixture.controller.getState().generation).toBe(1);
     const isCurrent = createDaemonApprovalExecutionOriginCurrentness({
       accountId: 'account-1', machineId: 'machine-1', serverId: 'server-1',
-      resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'home-1', machineId: 'machine-1' }),
-      resolveTarget: async () => target, listAccountApiTokens: async () => ({ tokens: [] }),
+      resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'srv_home-1', machineId: 'machine-1' }),
+      resolveTarget: async () => target, isAccountCurrent: async () => true, listAccountApiTokens: async () => ({ tokens: [] }),
       externalActionMachinePublicKey: key.publicKey, verifyExternalExecutionAuthorization: async () => true,
       resolveCurrentPluginSourceCustody: async (pluginId) => readAuthoritativePluginSlotOccurrence(pluginId,
         { controller: fixture.controller })?.sourceCustody ?? null,
@@ -246,7 +300,7 @@ describe('external Action mounted plugin admission', () => {
       principal: { accountId: 'account-1', authentication, authority: 'account_automation' },
       currentMachineId: 'machine-1', currentServerId: 'server-1', currentInstallationId: 'installation-1',
       executionAuthorization: { v: 1, token: 'terminal-root', binding: {
-        serverIdentityId: 'home-1', accountId: 'account-1', custodianAccountId: 'account-1', authentication,
+        serverIdentityId: 'srv_home-1', accountId: 'account-1', custodianAccountId: 'account-1', authentication,
         machineId: 'machine-1', installationId: 'installation-1', actionId: 'plugins.reload', target,
         requestId: 'terminal-claim', requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
       } }, externalActionMachineRequestPrivateKey: key.secretKey, verifyExecutionAuthorization: async () => true,
@@ -256,7 +310,7 @@ describe('external Action mounted plugin admission', () => {
         if (!lease) throw new Error('Runtime unavailable');
         return lease;
       },
-      resolvePluginExecutionOriginContext: () => ({ serverIdentityId: 'home-1', machineId: 'machine-1' }),
+      resolvePluginExecutionOriginContext: () => ({ serverIdentityId: 'srv_home-1', machineId: 'machine-1' }),
     })).toMatchObject({ kind: 'response', response: { execution: {
       ok: false, errorCode: 'plugin_mounted_caller_unavailable',
     } } });
@@ -279,7 +333,7 @@ describe('external Action mounted plugin admission', () => {
         if (!lease) throw new Error('Runtime unavailable');
         return lease;
       },
-      resolvePluginExecutionOriginContext: () => ({ serverIdentityId: 'home-1', machineId: 'machine-1' }),
+      resolvePluginExecutionOriginContext: () => ({ serverIdentityId: 'srv_home-1', machineId: 'machine-1' }),
     });
     expect(await run()).toMatchObject({ kind: 'response', response: { execution: {
       ok: false, errorCode: 'action_disabled',

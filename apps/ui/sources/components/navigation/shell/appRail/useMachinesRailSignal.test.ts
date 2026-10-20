@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildMachinesRailSeen, resolveMachinesRailSignal } from './useMachinesRailSignal';
+import { buildMachinesRailSeen, forgetRecoveredMachinesRailReasons, resolveMachinesRailSignal } from './useMachinesRailSignal';
 
-const calm = { needsYou: [], look: [], lastAutomaticActionAt: null, headline: null } as const;
+const calm = { accountScope: null, needsYou: [], look: [], reportingMachineKeys: [], lastAutomaticActionAt: null, headline: null } as const;
 const NO_SEEN = { look: {}, guardSeenAt: 0 };
 
 describe('the Machines rail badge (R4)', () => {
@@ -24,9 +24,20 @@ describe('the Machines rail badge (R4)', () => {
 
     it('forgets a reason that recovered, so a recurrence badges again', () => {
         const before = { ...calm, look: [{ machineKey: '["a","m3"]', reasonKey: 'disk:/data' }] };
-        const afterRecovery = buildMachinesRailSeen(calm, 20);
+        const seen = buildMachinesRailSeen(before, 10);
+        const afterRecovery = forgetRecoveredMachinesRailReasons({ ...calm, reportingMachineKeys: ['["a","m3"]'] }, seen);
         expect(afterRecovery.look).toEqual({});
+        expect(afterRecovery.guardSeenAt).toBe(10);
         expect(resolveMachinesRailSignal({ fleet: before, seen: afterRecovery }).signal).toEqual({ kind: 'dot', tone: 'attention' });
+    });
+
+    it('keeps unknown observations and other machines, and never acknowledges a newly appearing reason', () => {
+        const seen = { look: { '["a","m3"]': ['disk:data'], '["b","m3"]': ['memory'] }, guardSeenAt: 10 };
+        expect(forgetRecoveredMachinesRailReasons(calm, seen)).toBe(seen);
+        const fleet = { ...calm, reportingMachineKeys: ['["a","m3"]'], look: [{ machineKey: '["a","m3"]', reasonKey: 'memory' }] };
+        const recovered = forgetRecoveredMachinesRailReasons(fleet, seen);
+        expect(recovered).toEqual({ look: { '["b","m3"]': ['memory'] }, guardSeenAt: 10 });
+        expect(resolveMachinesRailSignal({ fleet, seen: recovered }).signal).toEqual({ kind: 'dot', tone: 'attention' });
     });
 
     it('shows a muted dot when the guard acted since the popover was last opened, and nothing when calm', () => {

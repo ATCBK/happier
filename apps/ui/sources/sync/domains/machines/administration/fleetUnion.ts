@@ -34,15 +34,32 @@ export function resolveFleetMachineRejection(params: Readonly<{
     serverIdentityId: string;
     machineId: string;
     machineSnapshots: readonly ServerMachineInventorySnapshotV1[];
-}>): 'unknown' | 'missing' | 'stale' | 'offline' | 'revoked' | 'replaced' | null {
+}>): 'unknown' | 'missing' | 'stale' | 'offline' | 'home_unreachable' | 'revoked' | 'replaced' | null {
     const snapshot = params.machineSnapshots.find((candidate) => candidate.kind === 'resolved'
         && candidate.serverIdentityId === params.serverIdentityId);
-    if (!snapshot || snapshot.kind !== 'resolved') return 'unknown';
-    const machine = snapshot.machines.find((candidate) => candidate.id === params.machineId);
+    return resolveFleetSnapshotMachineRejection({
+        snapshot: snapshot?.kind === 'resolved' ? snapshot : undefined,
+        machine: snapshot?.machines.find((candidate) => candidate.id === params.machineId),
+    });
+}
+
+/** The same Fleet policy for inventory producers that already looked up the exact row. */
+export function resolveFleetSnapshotMachineRejection(params: Readonly<{
+    snapshot: Extract<ServerMachineInventorySnapshotV1, { kind: 'resolved' }> | undefined;
+    machine: FleetMachine | undefined;
+    executionEligible?: boolean;
+}>): ReturnType<typeof resolveFleetMachineRejection> {
+    const { snapshot, machine } = params;
+    if (!snapshot) return 'unknown';
     if (!machine) return snapshot.settled === true ? 'missing' : 'unknown';
     if (snapshot.observation === 'stale') return 'stale';
-    const availability = resolveFleetMachineAvailability(createServerAccountScope(snapshot.serverIdentityId, snapshot.accountId), machine);
-    return availability === 'locked' ? 'unknown' : availability === 'online' ? null : availability;
+    if (machine.availability?.kind === 'locked') return 'unknown';
+    const presence = resolveMachinePickerPresence(machine, undefined, createServerAccountScope(snapshot.serverIdentityId, snapshot.accountId));
+    // Presence shells can look online before their scoped content is opened.
+    // Consume the inventory owner's qualification rather than re-deriving it.
+    if (presence.status === 'online' && snapshot.executionEligibleMachineIds
+        && !(params.executionEligible ?? snapshot.executionEligibleMachineIds.includes(machine.id))) return 'unknown';
+    return presence.status === 'online' ? null : presence.status === 'offline' ? presence.reason : presence.status;
 }
 
 export type FleetReadState = 'current' | 'resolving' | 'transportFailure' | 'failed';
@@ -55,26 +72,4 @@ export function resolveFleetReadState(states: readonly FleetReadState[]): 'curre
     return states.includes('transportFailure') ? 'failed' : 'current';
 }
 
-/** Domain owners supply identity/content; only admitted current supplies can disagree. */
-export function resolveFleetSupplyAgreement<T>(params: Readonly<{
-    supplies: readonly Readonly<{ value: T; selectable: boolean }>[];
-    identity: (value: T) => string;
-    content: (value: T) => string;
-}>): Readonly<{
-    variantsByIdentity: ReadonlyMap<string, ReadonlyMap<string, T>>;
-    conflictingIdentities: readonly string[];
-}> {
-    const variantsByIdentity = new Map<string, Map<string, T>>();
-    for (const supply of params.supplies) {
-        if (!supply.selectable) continue;
-        const identity = params.identity(supply.value);
-        const variants = variantsByIdentity.get(identity) ?? new Map<string, T>();
-        const content = params.content(supply.value);
-        if (!variants.has(content)) variants.set(content, supply.value);
-        variantsByIdentity.set(identity, variants);
-    }
-    return {
-        variantsByIdentity,
-        conflictingIdentities: [...variantsByIdentity].filter(([, variants]) => variants.size > 1).map(([identity]) => identity),
-    };
-}
+export { resolveFleetSupplyAgreement } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';

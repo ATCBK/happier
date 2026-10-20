@@ -7,6 +7,7 @@ import type { SessionAttentionOptions } from '@/sync/domains/session/attention/s
 import type { SessionListAttentionState } from '@/sync/domains/session/listing/deriveSessionListActivity';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import type { SessionContextPresentation } from '@/sync/domains/session/presentation/sessionContextPresentation';
+import type { FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 
 export type SessionActivityAttention = Readonly<{
     session: Session;
@@ -36,6 +37,8 @@ export type SessionActivityAttention = Readonly<{
     attentionState: SessionListAttentionState;
     /** Canonical viewer-facing reasons; downstream surfaces classify, never re-derive them. */
     personalAttention: SessionPersonalAttentionProjectionV1;
+    /** Private rule matches admitted by the existing source evaluator, never viewer mutations. */
+    followRulePolicies?: readonly FollowPolicyV1[];
     hasAttention: boolean;
     priority: number;
     lastTurnCompletedAt: number | null;

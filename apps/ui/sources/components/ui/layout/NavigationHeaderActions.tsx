@@ -1,7 +1,7 @@
 import type { IconName } from '@/components/ui/icons/Icon';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
-import { useNavigation } from '@/components/appShell/workspace/destinationRoute';
+import { useDestinationRouteNavigation as useNavigation } from '@/components/appShell/workspace/destinationInstanceContext';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -266,7 +266,7 @@ const NavigationHeaderActionsPublisher = React.memo(function NavigationHeaderAct
 
 const stylesheet = StyleSheet.create((theme) => ({
     foldedControls: { flexWrap: 'wrap', minWidth: 0, maxWidth: '100%' },
-    actions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
+    actions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, minWidth: 0, maxWidth: '100%' },
     cancel: {
         paddingHorizontal: theme.space.s8,
         paddingVertical: theme.space.s6,

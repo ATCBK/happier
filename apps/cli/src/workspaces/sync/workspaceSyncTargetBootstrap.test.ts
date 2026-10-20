@@ -22,6 +22,7 @@ const rootOwnershipManager = createWorkspaceRootOwnershipManager({
   lockDirectory: join(tmpdir(), `workspace-sync-bootstrap-locks-${process.pid}`),
 });
 const crashChildPath = join(dirname(fileURLToPath(import.meta.url)), 'workspaceSyncTargetBootstrap.child.ts');
+const sourceRuntimePreloadPath = fileURLToPath(new URL('../../../../../packages/cli-common/registerSourceRuntime.mjs', import.meta.url));
 const fakeMaterializationReceipt = {
   v: 1 as const,
   previousTargetName: null,
@@ -43,9 +44,11 @@ async function replacementApproval(rootPath: string): Promise<HandoffTargetRepla
   };
 }
 
-async function waitForFile(path: string): Promise<void> {
+async function waitForFile(path: string, childFailure: () => string | undefined): Promise<void> {
   const deadline = Date.now() + 45_000;
   while (!(await access(path).then(() => true, () => false))) {
+    const failure = childFailure();
+    if (failure) throw new Error(failure);
     if (Date.now() >= deadline) throw new Error(`timed out waiting for ${path}`);
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -57,24 +60,38 @@ async function killBootstrapChildAtBoundary(input: Readonly<{
   staging: string;
   ready: string;
 }>): Promise<void> {
-  const child = spawn(process.execPath, ['--import', 'tsx', crashChildPath, input.mode, input.target, input.staging, input.ready], {
+  const child = spawn(process.execPath, ['--import', sourceRuntimePreloadPath, crashChildPath, input.mode, input.target, input.staging, input.ready], {
     cwd: join(dirname(crashChildPath), '../../..'),
     env: process.env,
     stdio: ['ignore', 'ignore', 'pipe'],
   });
   let stderr = '';
+  let terminalState: string | undefined;
+  const completed = new Promise<Readonly<{ code: number | null; signal: NodeJS.Signals | null }> | Error>((resolve) => {
+    child.once('error', (error) => {
+      terminalState = `spawn failed: ${error.message}`;
+      resolve(error);
+    });
+    child.once('exit', (code, signal) => {
+      terminalState = `exited with code ${code}, signal ${signal}`;
+      resolve({ code, signal });
+    });
+  });
   child.stderr?.setEncoding('utf8');
   child.stderr?.on('data', (chunk: string) => { stderr += chunk; });
+  let phase = 'waiting for the materialization boundary';
   try {
-    await waitForFile(input.ready);
-    child.kill('SIGKILL');
-    await new Promise<void>((resolve, reject) => {
-      child.once('error', reject);
-      child.once('exit', () => resolve());
-    });
+    await waitForFile(input.ready, () => terminalState);
+    phase = 'killing the child at the materialization boundary';
+    if (!child.kill('SIGKILL')) throw new Error('bootstrap child ended before its forced crash');
+    const outcome = await completed;
+    if (outcome instanceof Error) throw outcome;
+    if (outcome.signal !== 'SIGKILL') throw new Error(`unexpected bootstrap child termination: ${terminalState}`);
   } catch (error) {
-    child.kill('SIGKILL');
-    throw new Error(`bootstrap child failed: ${stderr}`, { cause: error });
+    throw new Error(`bootstrap child failed during ${phase} (${terminalState ?? 'still running'}): ${stderr}`, { cause: error });
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await completed;
   }
 }
 
@@ -486,6 +503,33 @@ describe('workspaceSyncTargetBootstrap', () => {
     await expect(readFile(target)).rejects.toMatchObject({ code: 'ENOENT' });
     await result.release();
     await rm(fixture, { recursive: true, force: true });
+  });
+
+  it('reports the SCM refusal and leaves a missing Git target absent when materialization fails before binding', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'workspace-sync-bootstrap-git-refused-'));
+    const source = join(fixture, 'source');
+    const target = join(fixture, 'target');
+    await mkdir(source);
+    try {
+      await expect(workspaceSyncTargetBootstrap(input({
+        rootPath: target,
+        sourceRootPath: source,
+        materializationDirectory: join(fixture, 'staging'),
+        contentSelection: 'git_worktree',
+        createIfMissing: true,
+        targetBootstrap: 'materialize_from_source_workspace',
+        prepareGitTarget: async (request) => await prepareWorkspaceSyncGitTarget(request, {
+          realizeWorkspaceCheckout: async () => {
+            throw new Error("'target' is a missing but already registered worktree");
+          },
+          inspectWorkspaceLocation: async () => null,
+        }),
+      }))).rejects.toThrow('missing but already registered worktree');
+      await expect(access(target)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readdir(join(fixture, 'staging'))).resolves.toEqual([]);
+    } finally {
+      await rm(fixture, { recursive: true, force: true });
+    }
   });
 
   it('fails closed before creating an empty Git target when no SCM bootstrap owner is supplied', async () => {

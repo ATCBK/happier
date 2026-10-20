@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { captureConsoleJsonOutput } from '@/testkit/logger/captureOutput';
 import type { ResolvedCommandContribution, ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
 import { CliApiTokenChildContinuationError } from '@/auth/cliApiToken';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 
 const startHappyHeadlessInTmux = vi.fn(async () => {});
 const contributionRegistry = vi.hoisted(() => ({ resolve: vi.fn() }));
@@ -11,7 +12,8 @@ const contributionRegistry = vi.hoisted(() => ({ resolve: vi.fn() }));
 vi.mock('@/integrations/tmux/startHeadlessSession', () => ({
   startHappyHeadlessInTmux,
 }));
-vi.mock('@/plugins/projection/registry/createResolvedContributionRegistry', () => ({
+vi.mock('@/plugins/projection/registry/createResolvedContributionRegistry', async importOriginal => ({
+  ...await importOriginal<typeof import('@/plugins/projection/registry/createResolvedContributionRegistry')>(),
   resolveMergedContributionRegistry: contributionRegistry.resolve,
 }));
 vi.mock('@/persistence', () => ({ readCredentials: vi.fn(async () => null) }));
@@ -27,6 +29,7 @@ function pluginCommands(tmux: 'inherit' | 'required' | 'forbidden'): ResolvedCon
     definition: { kindVersion: 1, id: 'watch', title: 'Watch', path: ['notes', 'watch'], action: 'run', actionId: 'acme.notes/run', tmux },
   };
   return {
+    ...createResolvedContributionRegistry({}),
     uiViewsV2: [], uiRenderersV2: [], uiTranslationsV2: [], agents: [],     actions: [], tools: [], commands: [command], resources: [], activationTargets: [],
     actionsById: new Map(), toolsById: new Map(), commandsById: new Map([['acme.notes/watch', command]]), resourcesById: new Map(),
     catalogEntriesById: {}, agentDefinitionsById: new Map(),     pluginDiagnosticsByPluginId: {},

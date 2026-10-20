@@ -2,7 +2,7 @@ import { copyFile, lstat, mkdir, readdir, rm, writeFile } from 'node:fs/promises
 import { createHash } from 'node:crypto';
 import { join, posix, relative, resolve, sep, win32 } from 'node:path';
 
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { TransferEndpointCandidateSchema } from '@happier-dev/protocol/machines/transfer/transferStream';
 import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
@@ -21,33 +21,33 @@ import { readSessionHandoffStorageStates } from '../prepare/sessionHandoffPrepar
 
 const SOURCE_EXPORT_SCHEMA_VERSION = 1 as const;
 
-const AgentBundleFileSchema = z.object({
-  transferId: z.string().min(1),
-  filePath: z.string().min(1),
-  sizeBytes: z.number().int().nonnegative(),
-  manifestHash: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
-  endpointCandidates: z.array(TransferEndpointCandidateSchema).readonly().optional(),
-}).strict();
+const AgentBundleFileSchema = z.strictObject({
+  transferId: z.string().check(z.minLength(1)),
+  filePath: z.string().check(z.minLength(1)),
+  sizeBytes: z.number().check(z.int(), z.nonnegative()),
+  manifestHash: z.string().check(z.regex(/^sha256:[a-f0-9]{64}$/u)),
+  endpointCandidates: z.optional(z.readonly(z.array(TransferEndpointCandidateSchema))),
+});
 
-const SourceExportRecordSchemaV1 = z.object({
+const SourceExportRecordSchemaV1 = z.strictObject({
   t: z.literal('session_handoff_source_export_v1'),
   schemaVersion: z.literal(SOURCE_EXPORT_SCHEMA_VERSION),
-  handoffId: z.string().min(1),
-  sessionId: z.string().min(1).optional(),
-  sourceMachineId: z.string().min(1).optional(),
-  targetMachineId: z.string().min(1).optional(),
-  stateTransfer: z.enum(['transfer', 'existing']).optional(),
-  exportedAtMs: z.number().int().nonnegative(),
-  acceptedHandoffAuthorization: ExternalActionExecutionAuthorizationV1Schema.optional(),
-  requesterSessionCredentialBinding: z.object({ sessionId: z.string().min(1),
-    attribution: RequesterWorkAttributionV1Schema }).strict().optional(),
-  agentBundle: AgentBundleFileSchema.optional(),
-  workspaceSeed: z.object({
-    transferId: z.string().min(1),
+  handoffId: z.string().check(z.minLength(1)),
+  sessionId: z.optional(z.string().check(z.minLength(1))),
+  sourceMachineId: z.optional(z.string().check(z.minLength(1))),
+  targetMachineId: z.optional(z.string().check(z.minLength(1))),
+  stateTransfer: z.optional(z.enum(['transfer', 'existing'])),
+  exportedAtMs: z.number().check(z.int(), z.nonnegative()),
+  acceptedHandoffAuthorization: z.optional(ExternalActionExecutionAuthorizationV1Schema),
+  requesterSessionCredentialBinding: z.optional(z.strictObject({ sessionId: z.string().check(z.minLength(1)),
+    attribution: RequesterWorkAttributionV1Schema })),
+  agentBundle: z.optional(AgentBundleFileSchema),
+  workspaceSeed: z.optional(z.strictObject({
+    transferId: z.string().check(z.minLength(1)),
     files: z.record(z.string(), AgentBundleFileSchema),
-    endpointCandidates: z.array(TransferEndpointCandidateSchema).readonly().optional(),
-  }).strict().optional(),
-}).strict();
+    endpointCandidates: z.optional(z.readonly(z.array(TransferEndpointCandidateSchema))),
+  })),
+});
 const SourceExportStoredReadSchemaV1 = createStoredReadSchema(SourceExportRecordSchemaV1);
 
 export type SessionHandoffSourceExportRecord = z.infer<typeof SourceExportRecordSchemaV1>;

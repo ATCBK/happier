@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
+import axios from 'axios';
+import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 
 vi.mock('@/api/session/sockets', () => ({
   createSessionScopedSocketConnection: () => {
@@ -11,42 +13,16 @@ vi.mock('@/api/session/sockets', () => ({
   },
 }));
 
-// The boundaries are mocked once, hoisted, and each test rebinds their
-// behaviour through these stable spies. The predecessor shape — `vi.doMock`
-// plus `vi.resetModules()` plus a dynamic `import('./sendSessionMessage')` in
-// every test — instantiated this module's (very large) graph once per test and
-// exhausted an 8 GiB heap before the file could report a single result.
-const boundary = vi.hoisted(() => ({
-  enqueuePendingQueueV2MessageViaHttp: vi.fn<(...args: readonly unknown[]) => Promise<unknown>>(),
-  readPendingQueueV2DeliveryFailureByLocalIdFromServer:
-    vi.fn<(...args: readonly unknown[]) => Promise<unknown>>(),
-  fetchEncryptedTranscriptPageAfterSeq: vi.fn<(...args: readonly unknown[]) => Promise<unknown>>(),
-  waitForTranscriptEncryptedMessageByLocalId: vi.fn<(...args: readonly unknown[]) => Promise<unknown>>(),
-  resolveSessionTransportContext: vi.fn<(...args: readonly unknown[]) => Promise<unknown>>(),
-}));
-
-vi.mock('@/api/session/pendingQueueV2Transport', () => ({
-  enqueuePendingQueueV2MessageViaHttp: boundary.enqueuePendingQueueV2MessageViaHttp,
-  readPendingQueueV2DeliveryFailureByLocalIdFromServer:
-    boundary.readPendingQueueV2DeliveryFailureByLocalIdFromServer,
-}));
-vi.mock('@/api/session/fetchEncryptedTranscriptWindow', () => ({
-  fetchEncryptedTranscriptPageAfterSeq: boundary.fetchEncryptedTranscriptPageAfterSeq,
-}));
-vi.mock('@/api/session/transcriptMessageLookup', () => ({
-  // Both adapters use the same HTTP lookup boundary; the direct form does not poll.
-  findTranscriptEncryptedMessageByLocalId: boundary.waitForTranscriptEncryptedMessageByLocalId,
-  waitForTranscriptEncryptedMessageByLocalId: boundary.waitForTranscriptEncryptedMessageByLocalId,
-}));
-vi.mock('./resolveSessionTransportContext', () => ({
-  resolveSessionTransportContext: boundary.resolveSessionTransportContext,
-}));
-
 import { waitForSessionInputResult } from './sendSessionMessage';
+
+const sessionId = 'c' + 'a'.repeat(24);
+const session = { serverId: 'result-home', sessionId };
+const inputMessageRef = { kind: 'session', session, messageId: 'input-row' } as const;
+const resultMessageRef = (row: number) => ({ kind: 'session', session, messageId: `row-${row}` } as const);
 
 describe('waitForSessionInputResult', () => {
   afterEach(() => {
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
   function rawLifecycle(type: string) {
@@ -134,17 +110,7 @@ describe('waitForSessionInputResult', () => {
         v: { role: 'user', content: { type: 'text', text: 'Please respond' } },
       },
     };
-    const {
-      enqueuePendingQueueV2MessageViaHttp,
-      readPendingQueueV2DeliveryFailureByLocalIdFromServer,
-      fetchEncryptedTranscriptPageAfterSeq,
-      waitForTranscriptEncryptedMessageByLocalId,
-      resolveSessionTransportContext,
-    } = boundary;
-
-    enqueuePendingQueueV2MessageViaHttp.mockImplementation(async () => undefined);
-    readPendingQueueV2DeliveryFailureByLocalIdFromServer.mockImplementation(async () => null);
-    fetchEncryptedTranscriptPageAfterSeq.mockImplementation(async () => [
+    const rows = () => [
       inputRow,
       ...params.rowsAfterInput().map((value, index) => ({
         id: `row-${index + 1}`,
@@ -154,28 +120,33 @@ describe('waitForSessionInputResult', () => {
         updatedAt: 101 + index,
         content: { t: 'plain' as const, v: value },
       })),
-    ]);
-    waitForTranscriptEncryptedMessageByLocalId.mockImplementation(async () => inputRow);
-    resolveSessionTransportContext.mockImplementation(async () => ({
-      ok: true,
-      sessionId: 'sess-1',
-      mode: 'plain',
-      ctx: null,
-      accountEncryptionCurrentness: { mode: 'plain' },
-      rawSession: {
-        id: 'sess-1',
-        active: true,
-        metadata: '{}',
-      },
-    }));
+    ];
+    // Only HTTP and Socket.IO are substituted; resolution, crypto admission,
+    // transcript parsing, exact result selection and references stay real.
+    const httpGet = vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+        recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' },
+      } };
+      if (url.endsWith(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session:
+        createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', active: true, metadata: '{}' }) } };
+      if (url.includes('/messages/by-local-id/')) return { status: 200, data: { message: inputRow } };
+      // These retained inputs predate the Turn ledger. A current empty ledger
+      // would authoritatively mean that this input has not begun a turn yet.
+      if (url.endsWith('/turns')) return { status: 404, data: { error: 'Not found' } };
+      if (url.includes('/messages?')) return { status: 200, data: { messages: rows() } };
+      throw new Error(`Unexpected result HTTP read: ${url}`);
+    });
+    const httpPost = vi.spyOn(axios, 'post').mockRejectedValue(new Error('Result observation cannot dispatch input'));
 
     const wait = (timeoutMs = 1_000) =>
       waitForSessionInputResult({
         credentials: {
           token: 'token',
-          encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+          encryption: null,
         },
-        idOrPrefix: 'sess-1',
+        serverId: session.serverId,
+        idOrPrefix: sessionId,
         localId: inputRow.localId,
         timeoutMs,
       });
@@ -187,9 +158,10 @@ describe('waitForSessionInputResult', () => {
     ) => waitForSessionInputResult({
       credentials: {
         token: 'token',
-        encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+        encryption: null,
       },
-      idOrPrefix: 'sess-1',
+      serverId: session.serverId,
+      idOrPrefix: sessionId,
       localId: inputRow.localId,
       observation,
       ...(signal ? { signal } : {}),
@@ -198,32 +170,31 @@ describe('waitForSessionInputResult', () => {
     return {
       wait,
       waitWithObservation,
-      enqueuePendingQueueV2MessageViaHttp,
-      fetchEncryptedTranscriptPageAfterSeq,
-      waitForTranscriptEncryptedMessageByLocalId,
+      httpGet,
+      httpPost,
     };
   }
 
   it('observes without an authored deadline instead of normalizing omission to one millisecond', async () => {
-    const { waitWithObservation, waitForTranscriptEncryptedMessageByLocalId } = await arrange({
+    const { waitWithObservation, httpGet } = await arrange({
       rowsAfterInput: () => [rawAssistantText('completed without a workflow deadline'), rawLifecycle('task_complete')],
     });
 
     await expect(waitWithObservation({ kind: 'no_deadline' })).resolves.toEqual({
       ok: true,
-      sessionId: 'sess-1',
+      sessionId,
       localId: 'automation:run:run-1',
-      result: { kind: 'final_text', text: 'completed without a workflow deadline' },
+      inputMessageRef,
+      result: { kind: 'final_text', text: 'completed without a workflow deadline', messageRef: resultMessageRef(1) },
     });
-    expect(waitForTranscriptEncryptedMessageByLocalId).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: 'sess-1', localId: 'automation:run:run-1', timeoutMs: expect.any(Number),
-    }));
+    expect(httpGet).toHaveBeenCalledWith(expect.stringContaining('/messages/by-local-id/automation%3Arun%3Arun-1'),
+      expect.objectContaining({ timeout: expect.any(Number) }));
   });
 
   it('reports cancelled observation through the incumbent cancellation signal without claiming pending input evidence', async () => {
     const cancellation = new AbortController();
     cancellation.abort();
-    const { waitWithObservation, waitForTranscriptEncryptedMessageByLocalId } = await arrange({
+    const { waitWithObservation, httpGet } = await arrange({
       rowsAfterInput: () => [],
     });
 
@@ -231,25 +202,24 @@ describe('waitForSessionInputResult', () => {
       ok: false,
       code: 'cancelled',
     });
-    expect(waitForTranscriptEncryptedMessageByLocalId).not.toHaveBeenCalled();
+    expect(httpGet.mock.calls.some(([url]) => url.includes('/messages/by-local-id/'))).toBe(false);
   });
 
   it('uses the authored absolute deadline without restarting it at observation time', async () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(10_000);
     try {
-      const { waitWithObservation, waitForTranscriptEncryptedMessageByLocalId } = await arrange({
+      const { waitWithObservation, httpGet } = await arrange({
         rowsAfterInput: () => [rawAssistantText('completed under the original deadline'), rawLifecycle('task_complete')],
       });
 
       await expect(waitWithObservation({ kind: 'absolute_deadline', deadlineMs: 10_125 })).resolves.toEqual(
         expect.objectContaining({
           ok: true,
-          result: { kind: 'final_text', text: 'completed under the original deadline' },
+          result: { kind: 'final_text', text: 'completed under the original deadline', messageRef: resultMessageRef(1) },
         }),
       );
-      expect(waitForTranscriptEncryptedMessageByLocalId).toHaveBeenCalledWith(expect.objectContaining({
-        sessionId: 'sess-1', localId: 'automation:run:run-1', timeoutMs: 125,
-      }));
+      expect(httpGet).toHaveBeenCalledWith(expect.stringContaining('/messages/by-local-id/automation%3Arun%3Arun-1'),
+        expect.objectContaining({ timeout: 125 }));
     } finally {
       now.mockRestore();
     }
@@ -268,10 +238,27 @@ describe('waitForSessionInputResult', () => {
 
     await expect(wait()).resolves.toEqual({
       ok: true,
-      sessionId: 'sess-1',
+      sessionId,
       localId: 'automation:run:run-1',
-      result: { kind: 'final_text', text: 'exact final answer' },
+      inputMessageRef,
+      result: { kind: 'final_text', text: 'exact final answer', messageRef: resultMessageRef(2) },
     });
+  });
+
+  it.each(['none', 'unavailable', 'unfulfilled', 'answer'] as const)('rejoins original reply custody %s without upgrading old inputs or inventing answers', async status => {
+    const { httpGet } = await arrange({ rowsAfterInput: () => [rawAssistantText('exact answer'), rawLifecycle('task_complete')] });
+    const previousGet = httpGet.getMockImplementation()!;
+    const outcome = { kind: 'answer' as const, result: { sessionId, messageId: 'row-1' } };
+    httpGet.mockImplementation(async (url, config) => url.endsWith('/reply') ? { status: 200, data:
+      status === 'none' || status === 'unavailable' ? { v: 1, status } : { v: 1, status: 'available',
+        progress: { v: 1, mode: 'wait', disposition: 'observing', acceptedTurnId: 'turn-1', ...(status === 'answer' ? { outcome } : {}) } },
+    } : previousGet(url, config));
+    const observed = await waitForSessionInputResult({ credentials: { token: 'token', encryption: null }, serverId: session.serverId,
+      idOrPrefix: sessionId, localId: 'automation:run:run-1', observeReply: true,
+      observation: { kind: 'absolute_deadline', deadlineMs: Date.now() } });
+    expect(observed).toMatchObject({ ok: true, result: status === 'none' || status === 'answer'
+      ? { kind: 'final_text', text: 'exact answer', messageRef: resultMessageRef(1) } : { kind: 'pending' } });
+    if (status === 'answer') expect(observed).toMatchObject({ replyOutcome: outcome });
   });
 
   it('returns owner-reported turn usage with the exact completed input', async () => {
@@ -287,11 +274,13 @@ describe('waitForSessionInputResult', () => {
 
     await expect(wait()).resolves.toEqual({
       ok: true,
-      sessionId: 'sess-1',
+      sessionId,
       localId: 'automation:run:run-1',
+      inputMessageRef,
       result: {
         kind: 'final_text',
         text: 'usage-bearing answer',
+        messageRef: resultMessageRef(4),
         usage: { inputTokens: 125, outputTokens: 37, costUsd: 0.05 },
       },
     });
@@ -310,9 +299,10 @@ describe('waitForSessionInputResult', () => {
 
     await expect(wait()).resolves.toEqual({
       ok: true,
-      sessionId: 'sess-1',
+      sessionId,
       localId: 'automation:run:run-1',
-      result: { kind: 'final_text', text: 'answer for this input' },
+      inputMessageRef,
+      result: { kind: 'final_text', text: 'answer for this input', messageRef: resultMessageRef(1) },
     });
   });
 
@@ -342,14 +332,15 @@ describe('waitForSessionInputResult', () => {
 
     await expect(wait()).resolves.toEqual({
       ok: true,
-      sessionId: 'sess-1',
+      sessionId,
       localId: 'automation:run:run-1',
-      result: { kind: 'final_text', text: 'exact coding result' },
+      inputMessageRef,
+      result: { kind: 'final_text', text: 'exact coding result', messageRef: resultMessageRef(3) },
     });
   });
 
   it('rejoins an already materialized input without dispatching a second prompt', async () => {
-    const { wait, enqueuePendingQueueV2MessageViaHttp, waitForTranscriptEncryptedMessageByLocalId } = await arrange({
+    const { wait, httpPost } = await arrange({
       rowsAfterInput: () => [
         rawAssistantText('durable final answer'),
         rawLifecycle('task_complete'),
@@ -358,15 +349,16 @@ describe('waitForSessionInputResult', () => {
 
     await expect(wait()).resolves.toEqual(expect.objectContaining({
       ok: true,
-      result: { kind: 'final_text', text: 'durable final answer' },
+      inputMessageRef,
+      result: { kind: 'final_text', text: 'durable final answer', messageRef: resultMessageRef(1) },
     }));
     await expect(wait()).resolves.toEqual(expect.objectContaining({
       ok: true,
-      result: { kind: 'final_text', text: 'durable final answer' },
+      inputMessageRef,
+      result: { kind: 'final_text', text: 'durable final answer', messageRef: resultMessageRef(1) },
     }));
 
-    expect(enqueuePendingQueueV2MessageViaHttp).not.toHaveBeenCalled();
-    expect(waitForTranscriptEncryptedMessageByLocalId).toHaveBeenCalledTimes(2);
+    expect(httpPost).not.toHaveBeenCalled();
   });
 
   it('reports pending at its wait budget, then returns the same input’s later completion', async () => {
@@ -379,8 +371,9 @@ describe('waitForSessionInputResult', () => {
 
     await expect(wait(1)).resolves.toEqual({
       ok: true,
-      sessionId: 'sess-1',
+      sessionId,
       localId: 'automation:run:run-1',
+      inputMessageRef,
       result: { kind: 'pending' },
     });
 
@@ -388,9 +381,10 @@ describe('waitForSessionInputResult', () => {
 
     await expect(wait()).resolves.toEqual({
       ok: true,
-      sessionId: 'sess-1',
+      sessionId,
       localId: 'automation:run:run-1',
-      result: { kind: 'final_text', text: 'completed after rejoin' },
+      inputMessageRef,
+      result: { kind: 'final_text', text: 'completed after rejoin', messageRef: resultMessageRef(1) },
     });
   });
 
@@ -402,8 +396,9 @@ describe('waitForSessionInputResult', () => {
 
     await expect(wait()).resolves.toEqual({
       ok: true,
-      sessionId: 'sess-1',
+      sessionId,
       localId: 'automation:run:run-1',
+      inputMessageRef,
       result,
     });
   });
@@ -421,8 +416,9 @@ describe('waitForSessionInputResult', () => {
 
     await expect(wait()).resolves.toEqual({
       ok: true,
-      sessionId: 'sess-1',
+      sessionId,
       localId: 'automation:run:run-1',
+      inputMessageRef,
       result: {
         ...expected,
         usage: { inputTokens: 8, outputTokens: 3, costUsd: 0.02 },
@@ -435,8 +431,9 @@ describe('waitForSessionInputResult', () => {
 
     await expect(wait()).resolves.toEqual({
       ok: true,
-      sessionId: 'sess-1',
+      sessionId,
       localId: 'automation:run:run-1',
+      inputMessageRef,
       result: { kind: 'terminal_no_result', reason: 'missing_final_assistant_text' },
     });
   });
@@ -454,9 +451,10 @@ describe('waitForSessionInputResult', () => {
 
     await expect(wait()).resolves.toEqual({
       ok: true,
-      sessionId: 'sess-1',
+      sessionId,
       localId: 'automation:run:run-1',
-      result: { kind: 'final_text', text },
+      inputMessageRef,
+      result: { kind: 'final_text', text, messageRef: resultMessageRef(1) },
     });
   });
 });

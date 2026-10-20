@@ -23,6 +23,9 @@ vi.mock('@expo/vector-icons', async () => {
     return createExpoVectorIconsMock();
 });
 
+// Transform the shared real toolbar graph before a case opens an act() scope.
+await import('./FileActionToolbar');
+
 describe('file Details controls', () => {
     it('identifies the only available change area and starts editing from the overflow', async () => {
         const { FileActionToolbar } = await import('./FileActionToolbar');

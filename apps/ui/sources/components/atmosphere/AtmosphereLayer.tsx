@@ -2,7 +2,11 @@ import * as React from 'react';
 import { StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { WallpaperHaze } from './WallpaperHaze';
-import { useSetGlassAtmosphereBehind } from '@/components/ui/glass/glassRuntimeEnvironment';
+import { resolveWallpaperHaze, WALLPAPER_HAZE_LAYERS, type WallpaperHaze as WallpaperHazeComposition } from './wallpaperHaze';
+import { useSetGlassAtmosphereBehind, useSetGlassAtmosphereTone } from '@/components/ui/glass/glassRuntimeEnvironment';
+import type { AtmospherePixels } from '@happier-dev/brand/atmosphere';
+import { measurePictureColor, measurePictureTone, samePictureTone, type PictureToneRegion } from './pictureTone';
+import type { GlassAtmosphereTone } from '@/components/ui/glass/glassMaterial';
 import { useGlassSurfaceColor } from '@/components/ui/glass/useGlassSurfaceColor';
 import { AtmosphereDissolve } from './AtmosphereDissolve';
 import { BackdropCanvas } from './BackdropCanvas';
@@ -14,7 +18,7 @@ import {
   type AtmosphereRect,
   type AtmosphereStage,
 } from './atmosphereStage';
-import { effectivePictureLook } from './look/atmosphereEdits';
+import { changedPictureLookControls, effectivePictureLook } from './look/atmosphereEdits';
 import { pictureBackdropProps } from './pictureBackdrop';
 import { useAtmosphere } from './useAtmosphere';
 import { useAtmospherePictureCatalog } from './useAtmospherePictureCatalog';
@@ -26,8 +30,9 @@ import { atmospherePaneSpan, atmospherePictureFrame, atmosphereSceneRect } from 
  * The atmosphere's page backing, mounted once at the bottom of the shell, under every plane (plan §4.4).
  * It draws the picture for the surface on screen: Horizon as a band in that surface's pane (scrolling
  * with it, the page colour below), Wallpaper behind the whole window. While it covers an area it tells
- * the glass owner (`atmosphereBehind`), so the content coat clears there and nothing else changes.
- * The planet is not drawn here: it is an object on Home's page. Decorative, never a target.
+ * the glass owner (`atmosphereBehind`), so the content coat clears there and nothing else changes,
+ * and the measured tone of the picture where content sits (`atmosphereTone`), from which default glass
+ * and ink stay legible. The planet is not drawn here: it is an object on Home's page. Decorative, never a target.
  */
 export const AtmosphereLayer = React.memo(function AtmosphereLayer(
   props: Readonly<{ sheetRadius: number; chrome: boolean }>,
@@ -117,6 +122,7 @@ const AtmospherePicture = React.memo(function AtmospherePicture(
   const resettlePaused = useAtmosphereResettlePaused();
   const pictures = useAtmospherePictureCatalog();
   const setBehind = useSetGlassAtmosphereBehind();
+  const setTone = useSetGlassAtmosphereTone();
   const pageFill = useGlassSurfaceColor(
     theme.colors.surface.base,
     'content',
@@ -156,6 +162,76 @@ const AtmospherePicture = React.memo(function AtmospherePicture(
     return () => atmosphereStageStore.setPictureShown(false);
   }, [ready]);
   const onReady = React.useCallback(() => setReady(true), []);
+  // Wallpaper: content sits in its pane's column of the window-sized picture, at every scroll position, and
+  // head lines stand around the column's centre, inside the haze. Horizon: the band scrolls with the page,
+  // so the whole band is where content meets it.
+  const toneRegions = React.useRef<WallpaperToneRegions>(WHOLE_REGIONS);
+  toneRegions.current = layout === 'wallpaper' && frame.width > 0 && frame.height > 0
+    ? wallpaperToneRegions(frame, geometry)
+    : WHOLE_REGIONS;
+  const page = atmospherePageRgb(theme.colors.surface.base);
+  const pageRef = React.useRef(page); pageRef.current = page;
+  const published = React.useRef<ReturnType<typeof measurePictureTone>>(undefined);
+  // Content stands on the picture and, around the column's centre, on the Wallpaper haze drawn over it
+  // (a softer render of the same picture). Both renders are kept and measured where content sits now, so
+  // the tone follows the content as its layout settles, not only when the picture renders again; the tone
+  // spans both, and head lines read the haze, which covers them.
+  const rendered = React.useRef<{ picture?: AtmospherePixels; haze?: AtmospherePixels }>({});
+  // The Wallpaper haze and the plane's ink are decided together from the head-line bands (the column across the
+  // haze core's height, on the picture itself, before the haze softens and veils it). With the default look (a
+  // built-in picture as released) the haze keeps the head lines legible; a person's own picture or look applies
+  // exactly as set.
+  const hazeInput = React.useRef({ adaptive: false, page: '', primary: '' });
+  hazeInput.current = {
+    adaptive: atmosphere.builtinPicture !== null && changedPictureLookControls(atmosphere).length === 0,
+    page: theme.colors.surface.base,
+    primary: theme.colors.text.primary,
+  };
+  const [haze, setHaze] = React.useState<WallpaperHazeComposition>(AS_COMPOSED_HAZE);
+  const publish = React.useCallback(() => {
+    const regions = toneRegions.current;
+    const { picture: pictureRender, haze: hazeRender } = rendered.current;
+    const base = pictureRender && measurePictureTone(pictureRender, pageRef.current, regions.column, regions.focus);
+    const soft = hazeRender && measurePictureTone(hazeRender, pageRef.current, regions.column, regions.focus);
+    // This surface's head lines and the window's middle, where Home stands them: one veil for every surface.
+    const heads = pictureRender && mergeTones(measurePictureTone(pictureRender, pageRef.current, regions.heads),
+      measurePictureTone(pictureRender, pageRef.current, regions.look));
+    const measuredTone = base && soft
+      ? { dark: Math.min(base.dark, soft.dark), light: Math.max(base.light, soft.light), focus: soft.focus }
+      : base;
+    const next = soft && heads && measuredTone
+      ? resolveWallpaperHaze({ heads: { ...heads, focus: measuredTone.focus }, ...hazeInput.current, column: regions.reach, at: regions.at,
+        bandColor: measurePictureColor(pictureRender!, pageRef.current, regions.look) })
+      : AS_COMPOSED_HAZE;
+    setHaze(previous => sameHaze(previous, next) ? previous : next);
+    const tone = measuredTone && soft ? { ...measuredTone, ink: next.ink } : measuredTone;
+    if (samePictureTone(tone, published.current)) return;
+    published.current = tone;
+    setTone(tone);
+  }, [setTone]);
+  // A changed look or theme decides again from the same renders, and so does content settling elsewhere.
+  const { adaptive, page: pageInk, primary } = hazeInput.current;
+  const regionsKey = JSON.stringify(toneRegions.current);
+  React.useEffect(() => { publish(); }, [adaptive, pageInk, primary, regionsKey, publish]);
+  const onRendered = React.useCallback((pixels: AtmospherePixels) => {
+    rendered.current.picture = pixels;
+    publish();
+  }, [publish]);
+  const onHazeRendered = React.useCallback((pixels: AtmospherePixels) => {
+    rendered.current.haze = pixels;
+    publish();
+  }, [publish]);
+  // No picture (the planet, or none) has no tone; a new picture publishes its own once rendered.
+  React.useEffect(() => {
+    if (record) return;
+    rendered.current = {};
+    published.current = undefined;
+    setTone(undefined);
+    setHaze(AS_COMPOSED_HAZE);
+  }, [record, setTone]);
+  React.useEffect(() => () => { rendered.current = {}; published.current = undefined; setTone(undefined); }, [setTone]);
+  // Only Wallpaper has a haze; Horizon publishes the band alone.
+  React.useEffect(() => { if (layout !== 'wallpaper') rendered.current.haze = undefined; }, [layout]);
   const { leaving, onLeft } = props;
   // Nothing on screen yet, nothing to dissolve: a send leaves at once.
   React.useEffect(() => {
@@ -181,7 +257,7 @@ const AtmospherePicture = React.memo(function AtmospherePicture(
     picture,
     look,
     theme: theme.dark ? 'dark' : 'light',
-    page: atmospherePageRgb(theme.colors.surface.base),
+    page,
     layout,
     horizonAt: geometry.horizonAt,
   });
@@ -211,9 +287,10 @@ const AtmospherePicture = React.memo(function AtmospherePicture(
           span={span}
           {...job}
           onReady={onReady}
+          onRendered={onRendered}
           testID="atmosphere-wallpaper"
         />
-        <WallpaperHaze source={record} size={size} job={job} focus={focus} />
+        <WallpaperHaze source={record} size={size} job={job} focus={focus} haze={haze} onRendered={onHazeRendered} />
       </AtmosphereDissolve>
     );
   }
@@ -242,6 +319,7 @@ const AtmospherePicture = React.memo(function AtmospherePicture(
                   renderGroup={renderGroup}
                   {...job}
                   onReady={onReady}
+                  onRendered={onRendered}
                   testID="atmosphere-band"
                 />
               </View>
@@ -252,6 +330,50 @@ const AtmospherePicture = React.memo(function AtmospherePicture(
     </View>
   );
 });
+
+const WHOLE: PictureToneRegion = { x0: 0, x1: 1, y0: 0, y1: 1 };
+type WallpaperToneRegions = Readonly<{
+  column: PictureToneRegion; focus: PictureToneRegion; heads: PictureToneRegion; look: PictureToneRegion;
+  /** The veil's centre, and the half-extents of both head-line bands around it (fractions of the picture). */
+  at: Readonly<{ x: number; y: number }>; reach: Readonly<{ x: number; y: number }>;
+}>;
+const WHOLE_REGIONS: WallpaperToneRegions = { column: WHOLE, focus: WHOLE, heads: WHOLE, look: WHOLE, at: { x: 0.5, y: 0.5 }, reach: { x: 0.5, y: 0.5 } };
+/** Both bands' extremes: the veil answers to whichever runs harder against the ink. */
+function mergeTones(a: GlassAtmosphereTone | undefined, b: GlassAtmosphereTone | undefined): GlassAtmosphereTone | undefined {
+  return a && b ? { dark: Math.min(a.dark, b.dark), light: Math.max(a.light, b.light), focus: a.focus } : a ?? b;
+}
+const AS_COMPOSED_HAZE: WallpaperHazeComposition = { layers: WALLPAPER_HAZE_LAYERS, veil: null, ink: 'theme' };
+const sameHaze = (a: WallpaperHazeComposition, b: WallpaperHazeComposition) =>
+  a === b || (a.ink === b.ink && a.layers === b.layers && a.veil?.color === b.veil?.color && a.veil?.alpha === b.veil?.alpha
+    && a.veil?.rx === b.veil?.rx && a.veil?.ry === b.veil?.ry && a.veil?.at.x === b.veil?.at.x && a.veil?.at.y === b.veil?.at.y);
+
+/**
+ * The pane's column of the Wallpaper, the haze's solid core around the column's centre, the head-line band across
+ * the column, the same band at the window's middle, where Home stands its head lines, and the veil's reach: both
+ * bands and the whole column, where cards come to rest as the page scrolls over the stationary picture.
+ */
+export function wallpaperToneRegions(frame: AtmosphereRect, geometry: NonNullable<AtmosphereStage['geometry']>): WallpaperToneRegions {
+  const x = geometry.rect.x - frame.x;
+  const focusX = (x + geometry.focus.x) / frame.width;
+  const focusY = (geometry.rect.y - frame.y + geometry.focus.y) / frame.height;
+  const core = WALLPAPER_HAZE_LAYERS[0]!;
+  const half = core.ry * core.solid;
+  const column = { x0: x / frame.width, x1: (x + geometry.rect.width) / frame.width };
+  const band = { y0: focusY - half, y1: focusY + half };
+  // The Wallpaper stays put while the page scrolls, so cards come to rest anywhere in the pane's column.
+  const pane = { y0: (geometry.rect.y - frame.y) / frame.height, y1: (geometry.rect.y + geometry.rect.height - frame.y) / frame.height };
+  const middle = 0.5;
+  return {
+    column: { ...column, y0: 0, y1: 1 },
+    focus: { x0: focusX - core.rx * core.solid, x1: focusX + core.rx * core.solid, ...band },
+    // Head lines stand across the whole column, edges included, at the haze core's height.
+    heads: { ...column, ...band },
+    look: { ...column, y0: middle - half, y1: middle + half },
+    at: { x: (column.x0 + column.x1) / 2, y: middle },
+    // The veil holds the head lines and the whole column the cards rest over, not only the band around the head lines.
+    reach: { x: (column.x1 - column.x0) / 2, y: Math.max(Math.abs(focusY - middle) + half, middle - pane.y0, pane.y1 - middle) },
+  };
+}
 
 /** The band belongs to the page: it scrolls with it. Only this leaf follows the scroll. */
 function BandScroll(props: Readonly<{ stageId: number; children: React.ReactNode }>) {

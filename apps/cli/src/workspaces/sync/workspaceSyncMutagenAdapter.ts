@@ -18,8 +18,13 @@ import type {
 } from './workspaceSyncTypes';
 import { computeWorkspaceSyncPolicyDigest } from './workspaceSyncTypes';
 import { isWorkspaceSyncStatusClean } from './workspaceSyncPreparation';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 
-export type WorkspaceSyncMutagenCommandTransport = (command: MutagenControlCommandV1, signal?: AbortSignal) => Promise<unknown>;
+export type WorkspaceSyncMutagenCommandTransport = (
+  command: MutagenControlCommandV1, signal?: AbortSignal,
+  /** Local broker correlation only; never serialized to the native command. */
+  operationId?: string,
+) => Promise<unknown>;
 export type WorkspaceSyncMutagenAdapterOptions = Readonly<{
   send: WorkspaceSyncMutagenCommandTransport;
   resolveWorkspaceRef(id: string, copyOperationId?: string): WorkspaceSyncResolvedRef | null | Promise<WorkspaceSyncResolvedRef | null>;
@@ -56,6 +61,10 @@ const statuses = new Set([
   'connecting-alpha', 'connecting-beta', 'watching', 'scanning', 'waiting-for-rescan', 'reconciling',
   'staging-alpha', 'staging-beta', 'transitioning', 'saving',
 ]);
+function isSessionReconnecting(generic: GenericSession): boolean {
+  return !generic.paused && (generic.status === 'disconnected'
+    || generic.status === 'connecting-alpha' || generic.status === 'connecting-beta');
+}
 const expectedLabels = (definition: WorkspaceSyncRelationshipV1 | WorkspaceSyncCopyOnceV1) => {
   const id = 'relationshipId' in definition ? definition.relationshipId : definition.operationId;
   return {
@@ -129,6 +138,15 @@ function endpointState(value: unknown, name: string): GenericEndpointState | nul
 }
 function endpoint(value: unknown, name: string): GenericEndpoint {
   const input = record(value, name);
+  // mutagen-v0.18.1-happier.9 (f02d01e8) reports only flat connectivity
+  // booleans. It cannot prove absence of scan/transition problems; do not
+  // fabricate zero counts to make a worker copy appear clean.
+  if (Object.hasOwn(input, 'connected') && Object.hasOwn(input, 'scanned')
+    && !Object.hasOwn(input, 'state')) {
+    throw Object.assign(new Error(
+      'The installed workspace sync engine lacks endpoint problem reporting. Update the controller sync engine before retrying workspace linking.',
+    ), { code: 'workspace_sync_update_required' });
+  }
   strictFields(input, ['protocol', 'host', 'path', 'state'], name);
   if (input.protocol !== 'external' || input.path !== '') {
     throw new Error(`Invalid generic Mutagen ${name}`);
@@ -431,7 +449,7 @@ export class WorkspaceSyncMutagenAdapterClient implements WorkspaceSyncMutagenAd
       t: relationship.enabled ? 'resume' : 'pause',
       requestId: this.requestId(),
       sessionIdentifier: generic.identifier,
-    }, signal), relationship, relationship.enabled ? 'first_cycle' : 'none');
+    }, signal, relationship.relationshipId), relationship, relationship.enabled ? 'first_cycle' : 'none');
   }
   private async projectMissingPausedRelationship(
     relationship: WorkspaceSyncRelationshipV1,
@@ -603,7 +621,7 @@ export class WorkspaceSyncMutagenAdapterClient implements WorkspaceSyncMutagenAd
       const sessionIdentifier = this.requireSessionIdentifier(operation.operationId);
       await this.project(await this.options.send({
         t: 'resume', requestId: this.requestId(), sessionIdentifier,
-      }, signal), operation, 'none');
+      }, signal, operation.operationId), operation, 'none');
       return await this.project(await this.options.send({
         t: 'flush', requestId: this.requestId(), sessionIdentifier,
       }, signal), operation, 'operation', signal, true);
@@ -696,11 +714,27 @@ export class WorkspaceSyncMutagenAdapterClient implements WorkspaceSyncMutagenAd
   private async selected(relationshipId: string, command: 'get' | 'flush' | 'pause' | 'resume', signal?: AbortSignal): Promise<WorkspaceSyncStatusV1> {
     const definition = this.definitions.get(relationshipId);
     if (!definition || !('relationshipId' in definition)) throw Object.assign(new Error('Workspace sync relationship is not ready'), { code: 'relationship_not_ready' });
+    const sessionIdentifier = this.requireSessionIdentifier(relationshipId);
+    if (command === 'flush' && definition.enabled) {
+      const current = await this.options.send({
+        t: 'get', requestId: this.requestId(), sessionIdentifier,
+      }, signal, relationshipId);
+      // Mutagen flush only accepts an already synchronizing session. Resume
+      // reconnects through its existing lifecycle, without recreating the
+      // relationship or clearing paused/safety-halted state.
+      if (current !== null && isSessionReconnecting(this.acceptSession(current, definition))) {
+        this.acceptSession(await this.options.send({
+          t: 'resume', requestId: this.requestId(), sessionIdentifier,
+        }, signal, relationshipId), definition);
+      }
+    }
     return await this.project(await this.options.send({
-      t: command, requestId: this.requestId(), sessionIdentifier: this.requireSessionIdentifier(relationshipId),
-    }, signal), definition, command === 'flush' ? 'operation' : 'none', signal, command === 'flush');
+      t: command, requestId: this.requestId(), sessionIdentifier,
+    }, signal, relationshipId), definition, command === 'flush' ? 'operation' : 'none', signal, command === 'flush');
   }
-  async flush(id: string, signal?: AbortSignal): Promise<WorkspaceSyncStatusV1> { return await this.selected(id, 'flush', signal); }
+  async flush(id: string, signal?: AbortSignal): Promise<WorkspaceSyncStatusV1> {
+    return await timeWebLatencyPhase('workspaceSync.adapter.flush', () => this.selected(id, 'flush', signal));
+  }
   async pause(id: string, signal?: AbortSignal): Promise<WorkspaceSyncStatusV1> { return await this.selected(id, 'pause', signal); }
   async resume(id: string, signal?: AbortSignal): Promise<WorkspaceSyncStatusV1> { return await this.selected(id, 'resume', signal); }
   private async terminateRuntimeSession(relationshipId: string, sessionIdentifier: string, signal?: AbortSignal): Promise<void> {

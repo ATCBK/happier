@@ -277,7 +277,7 @@ function decodeTailBuffer(buffer: Buffer, maxBytes: number): { contents: string;
     // Node's Buffer doesn't support UTF-16 BE directly; we manually swap
     // the byte order so we can decode the BE form using its native LE codec.
     const decoded = utf16BomBE ? swapBytes16(sliced).toString('utf16le') : sliced.toString('utf16le');
-    const cleaned = decoded.replace(/^﻿/, '');
+    const cleaned = decoded.replace(/^\ufeff/, '');
     return { contents: cleaned, slicedFromMiddle: sliceStartAligned > bodyStart };
   }
 
@@ -287,7 +287,7 @@ function decodeTailBuffer(buffer: Buffer, maxBytes: number): { contents: string;
     const sliceStart = sliceStartRaw % 2 === 0 ? sliceStartRaw : sliceStartRaw + 1;
     const sliced = buffer.subarray(sliceStart);
     return {
-      contents: sliced.toString('utf16le').replace(/^﻿/, ''),
+      contents: sliced.toString('utf16le').replace(/^\ufeff/, ''),
       slicedFromMiddle: sliceStart > 0,
     };
   }

@@ -1,9 +1,9 @@
 import * as React from 'react';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 
 import type { ServerScopedMachine } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
-import { renderScreen } from '@/dev/testkit';
+import { createMachineFixture, renderScreen } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { installNewSessionComponentsCommonModuleMocks } from './newSessionComponentsTestHelpers';
 
@@ -54,7 +54,7 @@ vi.mock('@/components/ui/text/Text', () => ({
 }));
 
 const network = await installSessionOpsNetworkBoundary();
-beforeAll(async () => { await network.addHome('https://server-b', 'account-b'); });
+beforeEach(async () => { await network.addHome('https://server-b', 'account-b'); });
 afterAll(() => network.dispose());
 
 describe('ServerScopedMachineSelector', () => {
@@ -133,6 +133,7 @@ describe('ServerScopedMachineSelector', () => {
         const { ServerScopedMachineSelector } = await import('./ServerScopedMachineSelector');
         const onSelect = vi.fn();
         const machine = {
+            ...createMachineFixture({ activeAt: Date.now() }),
             id: 'machine-unknown',
             serverId: 'server-b',
             serverName: 'Server B',
@@ -156,7 +157,7 @@ describe('ServerScopedMachineSelector', () => {
             testIdPrefix: 'new-session-machine',
         }));
 
-        const item = capturedItemProps.find((props) => props.testID === 'new-session-machine-option:machine-unknown');
+        const item = [...capturedItemProps].reverse().find((props) => props.testID === 'new-session-machine-option:machine-unknown');
         expect(item).toEqual(expect.objectContaining({
             detail: 'status.online',
             disabled: false,

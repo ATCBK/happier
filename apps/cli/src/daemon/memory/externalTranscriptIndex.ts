@@ -85,9 +85,8 @@ export async function syncExternalMemoryTranscriptOnce(input: Readonly<{
   if (input.db.hasSessionArtifactsOutsidePolicy({ sessionId, policyKey })) input.db.deleteSessionIndexData({ sessionId });
   const state = input.db.getExternalSourceState({ sessionId });
   const frontier: Frontier = state?.cursor ? JSON.parse(state.cursor) : { type: 'page' };
-  const cutoff = resolveMemoryCoverageCreatedAtCutoffMs({ policy: policy.coveragePolicy, nowMs: input.nowMs, enabledAtMs: policy.enabledAtMs });
-  const historyCutoff = external.historyDays === null ? null : Math.max(0, input.nowMs - external.historyDays * 86_400_000);
-  const effectiveCutoff = cutoff === null ? historyCutoff : historyCutoff === null ? cutoff : Math.max(cutoff, historyCutoff);
+  const effectiveCutoff = resolveMemoryCoverageCreatedAtCutoffMs({ policy: policy.coveragePolicy,
+    nowMs: input.nowMs, enabledAtMs: policy.enabledAtMs, historyDays: external.historyDays });
   input.db.pruneSessionArtifacts({ sessionId, policyKey, ...(effectiveCutoff === null ? {} : { createdAtCutoffMs: effectiveCutoff }) });
   const operation = { source: input.native.source, remoteSessionId: input.source.nativeSessionId,
     maxItems: EXTERNAL_SESSIONS_INVOCATION_POLICY.pageTranscript.maxItems,

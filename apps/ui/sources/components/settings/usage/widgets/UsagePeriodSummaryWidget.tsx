@@ -31,10 +31,18 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
   const view = useUsageAnalyticsView(props.slice, props.query);
   useWidgetFrameBodyCaption(usagePeriodPhrase(props.query));
   if (!view)
-    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} readingShape={{ kind: 'summary' }} />;
+    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} readingShape={{ kind: 'summary' }} onRetry={props.model.refresh} />;
   const cost = props.query.metric === 'cost';
   const selectedCost = view.pageCost;
   const currency = selectedCost.selection?.currency ?? view.costPresentation.currency;
+  // `amountUsd` is authoritative: a candidate basis with an unavailable amount means some usage has
+  // neither a reported cost nor a model price, never "estimated where not reported" under a dash.
+  const costCaption =
+    selectedCost.amountUsd !== null && selectedCost.selection
+      ? usageCostKindPhrase(selectedCost.selection.kind)
+      : selectedCost.selection
+        ? t('usage.board.page.costUnpricedCaption')
+        : t('common.unavailable');
   const current = cost ? selectedCost.amountUsd : view.hero.totalTokens;
   const previousAccounting = props.slice.comparison?.accounting;
   const previous = previousAccounting
@@ -89,11 +97,7 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
         // An unknown is a quiet dash with its reason beneath, never a headline word (lab d2top "You paid").
         value={selectedCost.amountUsd ?? UNKNOWN_VALUE}
         valueFormatter={(value) => formatUsageCost(value, currency)}
-        caption={
-          selectedCost.selection
-            ? usageCostKindPhrase(selectedCost.selection.kind)
-            : t('common.unavailable')
-        }
+        caption={costCaption}
       />,
     );
   if (props.query.includeWorkEvidence)
@@ -155,8 +159,7 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
           size="hero"
           label={cost ? t('usage.cost') : t('usage.tokens')}
           value={current ?? UNKNOWN_VALUE}
-          caption={current === null ? t('common.unavailable')
-            : cost && selectedCost.selection ? usageCostKindPhrase(selectedCost.selection.kind) : undefined}
+          caption={cost ? costCaption : current === null ? t('common.unavailable') : undefined}
           unit={cost ? undefined : t('usage.board.page.tokensUnit')}
           valueFormatter={
             cost

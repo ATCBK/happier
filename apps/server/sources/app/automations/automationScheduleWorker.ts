@@ -121,7 +121,7 @@ export async function runAutomationScheduleWorkerPass(params: Readonly<{
                 await acquireWorkflowPublicationLocksInTx(tx, { accountId: candidate.automation.accountId, triggerIds: [candidate.id] });
                 const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
                     tx,
-                    candidate.automation.accountId,
+                    candidate.automation.accountId, "content",
                 );
                 if (accountFence.status !== "ready") return null;
                 return await admitDueAutomationScheduleTriggerTx({
@@ -131,7 +131,7 @@ export async function runAutomationScheduleWorkerPass(params: Readonly<{
                     expectedNextRunAt,
                     now: params.now,
                 });
-            }));
+            }, { transactionClass: "automation-schedule-admit" }));
             // A rejoined open occurrence intentionally leaves the cursor parked.
             // It is durable progress only after its canonical terminal transition.
             progressed ||= admitted?.kind === "admitted";

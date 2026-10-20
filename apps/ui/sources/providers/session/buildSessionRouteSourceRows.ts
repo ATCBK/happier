@@ -22,7 +22,8 @@ export type SessionRouteSourceRow = Readonly<{
 /**
  * Joins three existing facts for one Agent and decides nothing itself: the picker projection's shown
  * and hidden sources (what can be browsed) and the connection's own "Works with" summaries (why a
- * source that offers this Agent nothing is still listed). A source in neither set is not a route.
+ * source that offers this Agent nothing is still listed). Compatibility keeps
+ * sources browseable when discovery has not produced rows yet.
  */
 export function buildSessionRouteSourceRows(input: Readonly<{
     agentTargetKey: string;
@@ -36,12 +37,13 @@ export function buildSessionRouteSourceRows(input: Readonly<{
     for (const view of input.views) {
         const shown = input.shownSources.find(source => source.connectionId === view.connectionId);
         const hidden = input.hiddenSources.find(source => source.connectionId === view.connectionId);
+        const compatible = view.compatibility.some(summary => summary.agentTargetKey === input.agentTargetKey && summary.status !== 'incompatible');
         const incompatible = !shown && !hidden
             && view.compatibility.some(summary => summary.agentTargetKey === input.agentTargetKey && summary.status === 'incompatible');
         const worksWith = incompatible
             ? view.compatibility.filter(summary => summary.status !== 'incompatible').map(summary => summary.agentName)
             : [];
-        if (!shown && !hidden && worksWith.length === 0) continue;
+        if (!shown && !hidden && !compatible && worksWith.length === 0) continue;
         (input.isGateway(view) ? gateways : providers).push({
             connectionId: view.connectionId,
             contributionKey: view.contributionKey,

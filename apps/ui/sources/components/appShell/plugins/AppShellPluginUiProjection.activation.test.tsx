@@ -2,7 +2,10 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
 import { PluginContributesV2Schema, PluginProjectionV2Schema, type PluginProjectionV2 } from '@happier-dev/protocol';
+import { PluginSearchQueryV1Schema, PluginSearchResultV1Schema } from '@happier-dev/protocol/plugins/contributions/search-providers';
+import type { PluginActionPresentUserAuthorizationFacts } from '@happier-dev/protocol/plugins/actions/invocation';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { projectPluginPortableUiDeclarationsV1 } from '@happier-dev/protocol/plugins/contributions/ui';
 import { DaemonPluginUiArtifactBytesReadResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import {
     PluginUiArtifactsManifestEntryV2Schema,
@@ -18,12 +21,15 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { resolvePluginUiClientExecutablePlatform } from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
 import { clearPluginAccountAvailabilityProjection, readPluginAccountAvailability, replacePluginAccountAvailabilityProjection, useActivePluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/projection';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import type { PluginAccountAvailabilitySnapshot } from '@/sync/domains/plugins/availability/reader';
 import { dispatchPluginSurfaceAction } from '@/components/plugins/surfaces/pluginSurfaceActionDispatch';
-import { createPluginUiProjectedActionResolver } from '@/sync/domains/plugins/ui/projection';
+import { createPluginUiProjectedActionResolver, normalizePluginInstalledUiDeclarations } from '@/sync/domains/plugins/ui/projection';
+import { mergeInstalledPluginUiProjections } from '@/sync/domains/plugins/ui/projectionUnion';
 import { getInstalledPluginUiClientExecutableComposition } from '@/components/plugins/reactNative/clientExecutableContributions';
 import { derivePluginReactNativeBundleCacheKey } from '@/components/plugins/reactNative/bundleCache';
 import { resolveProjectedPluginUiClientExecutables } from '@/components/plugins/reactNative/clientExecutableProjection';
+import { buildPluginSearchProviderSections } from '@/components/appShell/search/pluginSearchProviderSections';
 import { unloadAppShellProjectedClientExecutables } from './appShellClientExecutableActivation';
 import { AppShellPluginUiProjectionProvider, useAppShellPluginUiProjection } from './AppShellPluginUiProjection';
 
@@ -69,9 +75,9 @@ const origin = { serverIdentityId, materializationRef: { machineId: 'machine-liv
 // This is a foreign plugin executable fixture, loaded and evaluated by the
 // production CommonJS owner. Its pending work crosses no mocked internal owner.
 const pluginBoundary: { pending: ReturnType<typeof createDeferred<string>>; cleanups: number; signal: AbortSignal | null;
-    activationGate: ReturnType<typeof createDeferred<void>> | null; enteredActivation: boolean;
+    activationGate: ReturnType<typeof createDeferred<void>> | null; enteredActivation: boolean; evaluations: number;
     peerCleanupGate: ReturnType<typeof createDeferred<void>> | null; peerCleanupEntered: boolean; peerCleanupFinished: boolean } = {
-    pending: createDeferred<string>(), cleanups: 0, signal: null, activationGate: null, enteredActivation: false,
+    pending: createDeferred<string>(), cleanups: 0, signal: null, activationGate: null, enteredActivation: false, evaluations: 0,
     peerCleanupGate: null, peerCleanupEntered: false, peerCleanupFinished: false,
 };
 const fixtureGlobal = globalThis as typeof globalThis & { executableContinuityFixture?: typeof pluginBoundary };
@@ -92,11 +98,13 @@ afterEach(async () => {
     vi.restoreAllMocks();
 });
 
-async function mountClientExecutableFixture(options: { waitForAdmission?: boolean; admitPeer?: boolean } = {}) {
+async function mountClientExecutableFixture(options: { waitForAdmission?: boolean; admitPeer?: boolean; searchProvider?: boolean; coldDaemon?: boolean;
+    scopedGrants?: PluginActionPresentUserAuthorizationFacts['scopedGrants'] } = {}) {
     pluginBoundary.pending = createDeferred<string>();
     pluginBoundary.cleanups = 0;
     pluginBoundary.signal = null;
     pluginBoundary.enteredActivation = false;
+    pluginBoundary.evaluations = 0;
     pluginBoundary.peerCleanupEntered = false;
     pluginBoundary.peerCleanupFinished = false;
     connection = await restoreServerAccountForTest({ serverUrl: 'https://executable-continuity.test', serverIdentityId, accountId: 'account-continuity',
@@ -105,6 +113,10 @@ async function mountClientExecutableFixture(options: { waitForAdmission?: boolea
             if (path === '/health') return Response.json({ status: 'ok' });
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ version: 1, updatedAt: 1 }));
+            // Real Sync owns census admission after restoration. An unserved
+            // list would turn these hydrated fixture rows into stale supplies.
+            if (path === '/v1/machines') return Response.json(['machine-live', 'machine-peer'].map(id =>
+                createPlainMachineRowFixture({ id, accountId: 'account-continuity' })));
             return Response.json({ error: 'not_found' }, { status: 404 });
         } });
     const lifetime = captureActiveServerAccountScopeLifetime();
@@ -115,13 +127,16 @@ async function mountClientExecutableFixture(options: { waitForAdmission?: boolea
     storage.setState({ profileScope: lifetime.scope, settingsScope: lifetime.scope, endpointStatus: 'online', isDataReady: true,
         machines: { [machine.id]: machine, [peerMachine.id]: peerMachine }, machineListByServerId: { [serverId]: [machine, peerMachine] },
         machineListStatusByServerId: { [serverId]: 'idle' }, settings: { ...storage.getState().settings,
-            machineAdministrationSelectionsV1: { v: 1, pluginExecutionOriginsByPluginId: { [pluginId]: origin } } } });
+            machineAdministrationTargetsLocalV1: { [`plugin.runOn:${pluginId}`]: { serverIdentityId, machineId: machine.id } } } });
 
     fixtureGlobal.executableContinuityFixture = pluginBoundary;
-    daemon.bytes = new TextEncoder().encode(`exports.activate = async function(api) {
+    daemon.bytes = new TextEncoder().encode(`globalThis.executableContinuityFixture.evaluations += 1;
+    exports.activate = async function(api) {
         globalThis.executableContinuityFixture.enteredActivation = true;
         api.actions.register('hold', async function(input, context) {
             globalThis.executableContinuityFixture.signal = context.signal;
+            if (${options.searchProvider === true}) return { items: [{ id: 'match', title: input.query,
+                command: { kind: 'openSurface', destination: 'details' } }], truncated: false };
             return await globalThis.executableContinuityFixture.pending.promise;
         });
         if (globalThis.executableContinuityFixture.activationGate) await globalThis.executableContinuityFixture.activationGate.promise;
@@ -146,19 +161,34 @@ async function mountClientExecutableFixture(options: { waitForAdmission?: boolea
     daemon.successorDigest = successorDigest;
     const nextGraph = PluginUiArtifactsManifestEntryV2Schema.parse({ ...artifactGraph, artifactId: 'next', entry: nextPath, digest: successorDigest,
         files: [{ relativePath: nextPath, digest: computePluginUiArtifactSha256DigestV1(daemon.successorBytes), byteSize: daemon.successorBytes.byteLength }] });
-    const action = { id: actionId, title: 'Hold', scopes: ['session'], surfaces: ['ui'], placementBindings: ['detailsPanel'], dangerLevel: 'safe',
+    const action = { id: actionId, title: 'Hold', scopes: [options.searchProvider ? 'global' : 'session'], surfaces: ['ui'],
+        placementBindings: options.searchProvider ? [] : ['detailsPanel'], dangerLevel: 'safe',
+        ...(options.searchProvider ? { inputSchema: PluginSearchQueryV1Schema.jsonSchema, resultSchema: PluginSearchResultV1Schema.jsonSchema } : {}),
         execution: { target: 'client', client: { artifactId, exportName: 'activate' }, platforms: [platform] } };
-    const contributes = PluginContributesV2Schema.parse({ actions: [action] });
+    const contributes = PluginContributesV2Schema.parse({ actions: [action],
+        ...(options.searchProvider ? { searchProviders: [{ id: 'entries', action: actionId }] } : {}) });
     const peerContributes = PluginContributesV2Schema.parse({ actions: [{ ...action, id: 'next', execution: { ...action.execution, client: { artifactId: 'next', exportName: 'activate' } } }] });
+    // The describe producer withholds schemas from the public Action projection;
+    // execution reads them through DAEMON_PLUGIN_ACTION_SCHEMAS_READ instead.
+    const { inputSchema: _inputSchema, resultSchema: _resultSchema, ...projectedAction } = contributes.actions[0]!;
+    const { inputSchema: _peerInputSchema, resultSchema: _peerResultSchema, ...projectedPeerAction } = peerContributes.actions[0]!;
+    // Match buildInstalledPackagesById in CLI projection/registry/projection/v2.ts:
+    // describe stamps the package's serving occurrence and install-registry origin.
+    // Closed search-provider descriptors resolve authority through that package row.
     daemon.projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1,
-        installedPackagesById: { [pluginId]: { id: pluginId, displayName: pluginId, version: '1.0.0', enabled: true, source: { kind: 'registryPackage', locator: pluginId } } },
+        installedPackagesById: { [pluginId]: { id: pluginId, displayName: pluginId, version: '1.0.0', enabled: true,
+            occurrenceId: origin.materializationRef.materializationId, executionOrigin: origin,
+            source: { kind: 'registryPackage', locator: pluginId } } },
         agentsById: {}, toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [],
-        actionsById: { [`${pluginId}/${actionId}`]: { ...contributes.actions[0], pluginId, available: true,
-            occurrenceId: origin.materializationRef.materializationId, serverIdentityId, materializationRef: origin.materializationRef,
-            authorization: { generation: { targetGeneration: '1', desiredGeneration: '1', appliedGeneration: '1' }, resourceSelections: [], scopedGrants: [], serviceAvailability: [], operatingSystemAuthorization: [] } } },
+        actionsById: { [`${pluginId}/${actionId}`]: { ...projectedAction, pluginId, available: true,
+            occurrenceId: origin.materializationRef.materializationId, executionOrigin: origin,
+            authorization: { generation: { targetGeneration: origin.materializationRef.materializationId,
+                desiredGeneration: origin.materializationRef.materializationId,
+                appliedGeneration: options.coldDaemon ? null : origin.materializationRef.materializationId },
+                resourceSelections: [], scopedGrants: options.scopedGrants ?? [], serviceAvailability: [], operatingSystemAuthorization: [] } } },
         familiesById: { pluginUi: { family: 'pluginUi', entriesById: { [`reactNativeBundle:${pluginId}:${actionId}`]: {
             id: `reactNativeBundle:${pluginId}:${actionId}`, pluginId, contributionKind: 'reactNativeBundle', contributionId: actionId,
-            occurrenceId: origin.materializationRef.materializationId, serverIdentityId, materializationRef: origin.materializationRef,
+            occurrenceId: origin.materializationRef.materializationId, executionOrigin: origin,
             generatedOwnerKind: 'clientContribution', artifactGraph, runtime: { decision: { state: 'load' }, loadPolicy: { source: 'installedArtifact' }, cacheIdentity: { artifactDigest },
                 cacheKey: derivePluginReactNativeBundleCacheKey({ pluginId, contributionId: actionId, artifactId, artifactDigest, platform }) },
         } } } } });
@@ -168,12 +198,13 @@ async function mountClientExecutableFixture(options: { waitForAdmission?: boolea
     const firstBundle = ownPluginUi.entriesById[`reactNativeBundle:${pluginId}:${actionId}`];
     daemon.projection = PluginProjectionV2Schema.parse({ ...daemon.projection,
         installedPackagesById: { ...daemon.projection.installedPackagesById, [peerPluginId]: { ...daemon.projection.installedPackagesById[pluginId], id: peerPluginId,
+            occurrenceId: 'peer-install', executionOrigin: { serverIdentityId, materializationRef: { machineId: peerMachine.id, pluginId: peerPluginId, materializationId: 'peer-install' } },
             displayName: peerPluginId, source: { kind: 'registryPackage', locator: peerPluginId } } },
-        actionsById: { ...daemon.projection.actionsById, [`${peerPluginId}/next`]: { ...firstAction, ...peerContributes.actions[0], pluginId: peerPluginId,
-            occurrenceId: 'peer-install', materializationRef: { machineId: peerMachine.id, pluginId: peerPluginId, materializationId: 'peer-install' }, available: options.admitPeer === true } },
+        actionsById: { ...daemon.projection.actionsById, [`${peerPluginId}/next`]: { ...firstAction, ...projectedPeerAction, pluginId: peerPluginId,
+            occurrenceId: 'peer-install', executionOrigin: { serverIdentityId, materializationRef: { machineId: peerMachine.id, pluginId: peerPluginId, materializationId: 'peer-install' } }, available: options.admitPeer === true } },
         familiesById: { pluginUi: { family: 'pluginUi', entriesById: { ...ownPluginUi.entriesById,
             [`reactNativeBundle:${peerPluginId}:next`]: { ...firstBundle, id: `reactNativeBundle:${peerPluginId}:next`, pluginId: peerPluginId, contributionId: 'next',
-                occurrenceId: 'peer-install', materializationRef: { machineId: peerMachine.id, pluginId: peerPluginId, materializationId: 'peer-install' }, artifactGraph: nextGraph,
+                occurrenceId: 'peer-install', executionOrigin: { serverIdentityId, materializationRef: { machineId: peerMachine.id, pluginId: peerPluginId, materializationId: 'peer-install' } }, artifactGraph: nextGraph,
                 runtime: { decision: { state: 'load' }, loadPolicy: { source: 'installedArtifact' }, cacheIdentity: { artifactDigest: successorDigest },
                     cacheKey: derivePluginReactNativeBundleCacheKey({ pluginId: peerPluginId, contributionId: 'next', artifactId: 'next', artifactDigest: successorDigest, platform }) } } } } } });
     const combined = daemon.projection;
@@ -185,7 +216,14 @@ async function mountClientExecutableFixture(options: { waitForAdmission?: boolea
         familiesById: { pluginUi: { family: 'pluginUi', entriesById: { [`reactNativeBundle:${peerPluginId}:next`]: combinedPluginUi.entriesById[`reactNativeBundle:${peerPluginId}:next`] } } } });
     daemon.projection = PluginProjectionV2Schema.parse({ ...combined,
         installedPackagesById: { [pluginId]: combined.installedPackagesById[pluginId] }, actionsById: { [`${pluginId}/${actionId}`]: firstAction },
-        familiesById: { pluginUi: { family: 'pluginUi', entriesById: { [`reactNativeBundle:${pluginId}:${actionId}`]: firstBundle } } } });
+        familiesById: { pluginUi: { family: 'pluginUi', entriesById: { [`reactNativeBundle:${pluginId}:${actionId}`]: firstBundle,
+            ...(options.searchProvider ? { [`searchProvider:${pluginId}:entries`]: {
+                id: `searchProvider:${pluginId}:entries`, pluginId, occurrenceId: origin.materializationRef.materializationId,
+                contributionKind: 'searchProvider', descriptorId: 'entries',
+                // Match projectSearchProviders' closed descriptor arm; execution origin belongs to the referenced Action.
+                identity: { pluginId, localId: 'entries' }, action: { pluginId, localId: actionId },
+            } } : {}),
+        } } } });
     const slot = { contributionId: actionId, artifactId, tier: 'reactNative' as const, platform, artifactDigest, hostUiApiRange: '^1.0.0' };
     const slots = [slot];
     const peerSlot = { ...slot, contributionId: 'next', artifactId: 'next', artifactDigest: successorDigest };
@@ -254,6 +292,129 @@ async function mountClientExecutableFixture(options: { waitForAdmission?: boolea
     return { ...fixture, registration };
 }
 
+it('waits for the exact client search registration and applies it independently of cold daemon activation', async () => {
+    pluginBoundary.activationGate = createDeferred<void>();
+    const fixture = await mountClientExecutableFixture({ searchProvider: true, waitForAdmission: false, coldDaemon: true });
+    await vi.waitFor(() => expect(pluginBoundary.enteredActivation).toBe(true));
+    const sections = () => buildPluginSearchProviderSections({
+        projection: fixture.readObserved()?.pluginUiProjection, accountLifetime: fixture.lifetime,
+        scopedLaunchFacts: { machineId: null, serverId: fixture.lifetime.scope.serverId, interactionEnabled: true },
+        onCommitActivation: () => { throw new Error('Search must not activate a result'); },
+    });
+    expect(Object.keys(fixture.readObserved()?.pluginUiProjection?.searchProvidersById ?? {})).toHaveLength(1);
+    expect(sections()).toHaveLength(0);
+    pluginBoundary.activationGate.resolve();
+    await vi.waitFor(async () => {
+        await flushHookEffects();
+        expect(fixture.readObserved()?.clientExecutableActivation.status).toBe('ready');
+        expect(sections()).toHaveLength(1);
+    });
+    expect(await sections()[0]!.resolve('needle', new AbortController().signal))
+        .toMatchObject({ options: [{ label: 'needle' }] });
+});
+
+it('dispatches the same palette query from Session and Home beside portable Account UI without mounting a plugin page', async () => {
+    const { lifetime, readObserved, machine, composition, snapshot } = await mountClientExecutableFixture({ searchProvider: true, coldDaemon: true });
+    const current = readObserved();
+    expect(current?.pluginUiProjection?.actionsById[`${pluginId}/${actionId}`]?.authorization?.generation)
+        .toMatchObject({ targetGeneration: origin.materializationRef.materializationId, appliedGeneration: null });
+    const sections = buildPluginSearchProviderSections({
+        projection: current?.pluginUiProjection, accountLifetime: lifetime,
+        scopedLaunchFacts: { machineId: machine.id, serverId: lifetime.scope.serverId, interactionEnabled: true },
+        onCommitActivation: () => { throw new Error('Search must not activate a result'); },
+    });
+    expect(sections).toHaveLength(1);
+    const result = await sections[0]!.resolve('needle', new AbortController().signal);
+    expect(result).toMatchObject({ options: [{ label: 'needle' }] });
+    expect(pluginBoundary.signal?.aborted).toBe(false);
+
+    // The Account's portable renderer catalog intentionally has no runtime
+    // search descriptors. Compose it through the same final merge as AppShell.
+    const release = snapshot.intentReads[0]?.response.release;
+    if (!release) throw new Error('Missing producer release');
+    const manifest = { ...release.normalizedManifest, contributes: PluginContributesV2Schema.parse({
+        ...release.normalizedManifest.contributes,
+        ui: { renderers: [{ id: 'main', kind: 'reactNative', artifact: 'main', requiredHostMethods: [] }],
+            views: [{ id: 'page', container: 'appPage', target: { kind: 'app' }, title: 'Entries', renderer: 'main' }] },
+    }) };
+    const portable = normalizePluginInstalledUiDeclarations(projectPluginPortableUiDeclarationsV1(manifest), undefined, {
+        id: pluginId, displayName: 'Entries', version: '1.0.0', enabled: true, source: { kind: 'bundled', locator: pluginId },
+    });
+    const homeProjection = mergeInstalledPluginUiProjections([portable], current?.pluginUiProjection ?? null);
+    if (!homeProjection) throw new Error('Missing merged Home projection');
+    const homeSections = buildPluginSearchProviderSections({
+        projection: homeProjection, accountLifetime: lifetime,
+        scopedLaunchFacts: { machineId: null, serverId: lifetime.scope.serverId, interactionEnabled: true },
+        onCommitActivation: () => { throw new Error('Search must not activate a result'); },
+    });
+    expect(homeSections).toHaveLength(1);
+    expect(await homeSections[0]!.resolve('needle', new AbortController().signal))
+        .toMatchObject({ options: [{ label: 'needle' }] });
+    expect(pluginBoundary.signal?.aborted).toBe(false);
+    const admittedAction = homeProjection.actionsById[`${pluginId}/${actionId}`];
+    if (!admittedAction?.authorization) throw new Error('Missing exact producer authorization');
+    for (const [generation, refusal] of [
+        [{ ...admittedAction.authorization.generation, desiredGeneration: 'successor' }, 'plugin_action_generation_retired'],
+        [{ targetGeneration: 'predecessor', desiredGeneration: 'predecessor', appliedGeneration: 'predecessor', targetGenerationMode: 'retained' as const }, 'plugin_action_generation_not_applied'],
+    ] as const) {
+        const staleSections = buildPluginSearchProviderSections({
+            projection: { ...homeProjection, actionsById: { ...homeProjection.actionsById,
+                [`${pluginId}/${actionId}`]: { ...admittedAction, authorization: { ...admittedAction.authorization, generation } } } },
+            accountLifetime: lifetime,
+            scopedLaunchFacts: { machineId: null, serverId: lifetime.scope.serverId, interactionEnabled: true },
+            onCommitActivation: () => { throw new Error('Search must not activate a result'); },
+        });
+        await expect(staleSections[0]!.resolve('needle', new AbortController().signal)).rejects.toThrow(refusal);
+    }
+    await composition.invalidatePlugin(pluginId);
+    await expect(homeSections[0]!.resolve('needle', new AbortController().signal))
+        .rejects.toThrow('plugin_surface_client_action_unavailable');
+    // No plugin surface or page was mounted; the real Artifact, activation,
+    // registration, semantic router and dispatcher supplied the handler.
+});
+
+it('refuses revoked and foreign scoped grants for a committed cold-client Action', async () => {
+    const requiredScope = { accountId: 'account-continuity', projectId: 'project-continuity' };
+    const revokedGrant = { id: 'continuity-access', required: true, status: 'revoked' as const,
+        requiredScope, grantedScope: requiredScope };
+    const { readObserved, composition, address, registration } = await mountClientExecutableFixture({
+        searchProvider: true, coldDaemon: true, scopedGrants: [revokedGrant],
+    });
+    expect(registration).not.toBeNull();
+    expect(composition.read(address)).toBe(registration);
+    const projectedAction = readObserved()?.pluginUiProjection?.actionsById[`${pluginId}/${actionId}`];
+    if (!projectedAction?.authorization) throw new Error('Missing producer authorization');
+    const authorization = projectedAction.authorization;
+    expect(authorization.generation).toMatchObject({
+        targetGeneration: origin.materializationRef.materializationId,
+        desiredGeneration: origin.materializationRef.materializationId, appliedGeneration: null,
+    });
+    const producerGrant = authorization.scopedGrants[0];
+    if (!producerGrant) throw new Error('Missing producer scoped grant');
+    const dispatchWithGrant = (grant: typeof producerGrant) => {
+        const resolveContributedAction = createPluginUiProjectedActionResolver({ [`${pluginId}/${actionId}`]: {
+            ...projectedAction, authorization: { ...authorization, scopedGrants: [grant] },
+        } });
+        return dispatchPluginSurfaceAction({ action: { pluginId, localId: actionId }, input: { query: 'needle' },
+            clientAction: {}, resolveContributedAction });
+    };
+    for (const [grant, reason] of [
+        [producerGrant, 'plugin_action_grant_revoked'],
+        [{ ...producerGrant, status: 'active', grantedScope: { ...requiredScope, accountId: 'another-account' } },
+            'plugin_action_grant_scope_mismatch'],
+        [{ ...producerGrant, status: 'active', grantedScope: { ...requiredScope, projectId: 'another-project' } },
+            'plugin_action_grant_scope_mismatch'],
+    ] as const) {
+        expect.soft(await dispatchWithGrant(grant), `${grant.status}: ${JSON.stringify(grant.grantedScope)}`)
+            .toMatchObject({ ok: false, reason });
+    }
+    expect.soft(pluginBoundary.signal, 'Refused grants must not enter the client handler').toBeNull();
+    // The same registration and cold generation execute with matching access,
+    // so a missing handler or generation refusal cannot satisfy the denials.
+    await expect(dispatchWithGrant({ ...producerGrant, status: 'active', grantedScope: requiredScope }))
+        .resolves.toMatchObject({ ok: true, result: { items: [{ id: 'match', title: 'needle' }] } });
+});
+
 it('retains a pending client Action and its exact admission across equivalent Availability publication while observing fresh inventory', async () => {
     const { lifetime, materialization, snapshot, address, registration, composition, dispatch, readObserved, readObservedAt } = await mountClientExecutableFixture();
     if (!registration) throw new Error('Missing committed Action');
@@ -276,17 +437,40 @@ it('retains a pending client Action and its exact admission across equivalent Av
     await expect(pendingAction).resolves.toEqual({ ok: true, result: 'finished' });
 });
 
-it('cancels an unfinished real executable activation before it can publish after exact Machine withdrawal', async () => {
+it('keeps one preparing client artifact evaluation across equivalent Availability publications', async () => {
+    pluginBoundary.activationGate = createDeferred<void>();
+    const { lifetime, materialization, snapshot, composition, address } = await mountClientExecutableFixture({ waitForAdmission: false });
+    await vi.waitFor(async () => {
+        await flushHookEffects();
+        expect(pluginBoundary.enteredActivation).toBe(true);
+    });
+    expect(pluginBoundary.evaluations).toBe(1);
+    const refreshedMaterialization = { ...materialization, observedAt: 2 };
+    const refreshed: PluginAccountAvailabilitySnapshot = { ...snapshot, availabilityCursor: 2, materializations: [refreshedMaterialization],
+        snapshots: [{ serverIdentityId, machineId: materialization.machineId, materializations: [refreshedMaterialization] }] };
+    await act(async () => { replacePluginAccountAvailabilityProjection({ scope: lifetime.scope, snapshot: refreshed }); });
+    await flushHookEffects({ cycles: 12 });
+    pluginBoundary.activationGate.resolve();
+    await vi.waitFor(async () => {
+        await flushHookEffects();
+        expect(composition.read(address)).not.toBeNull();
+    });
+    expect(pluginBoundary.evaluations).toBe(1);
+});
+
+it.each(['Machine', 'Account'] as const)('cancels an unfinished real executable activation before it can publish after exact %s withdrawal', async (withdrawal) => {
     pluginBoundary.activationGate = createDeferred<void>();
     const { lifetime, machine, composition, address } = await mountClientExecutableFixture({ waitForAdmission: false });
     await vi.waitFor(() => expect(pluginBoundary.enteredActivation).toBe(true));
     expect(composition.read(address)).toBeNull();
-    await act(async () => storage.setState({ machines: { [machine.id]: { ...machine, active: false, activeAt: 0 } },
-        machineListByServerId: { [lifetime.scope.serverId]: [{ ...machine, active: false, activeAt: 0 }] } }));
+    await act(async () => storage.setState(withdrawal === 'Machine'
+        ? { machines: { [machine.id]: { ...machine, active: false, activeAt: 0 } },
+            machineListByServerId: { [lifetime.scope.serverId]: [{ ...machine, active: false, activeAt: 0 }] } }
+        : { profileScope: null }));
     await flushHookEffects();
     pluginBoundary.activationGate.resolve();
     await flushHookEffects({ cycles: 12 });
-    expect(lifetime.isCurrent()).toBe(true);
+    expect(lifetime.isCurrent()).toBe(withdrawal === 'Machine');
     expect(composition.read(address)).toBeNull();
 });
 

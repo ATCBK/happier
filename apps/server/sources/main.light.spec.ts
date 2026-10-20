@@ -5,7 +5,8 @@ const mocks = vi.hoisted(() => ({
   applyPackagedLightRuntimeSqliteDefaults: vi.fn(),
   resolveLightDataDir: vi.fn(() => '/tmp/happier-light-main-test'),
   applySqliteMigrationsFromEnvironment: vi.fn(async () => ({ applied: [] })),
-  initializeServerSentry: vi.fn(),
+  sentryPreload: vi.fn(),
+  sentryInit: vi.fn(),
   registerProcessHandlers: vi.fn(),
   startServer: vi.fn(async () => {}),
   initDbSqlite: vi.fn(async () => {}),
@@ -42,8 +43,11 @@ vi.mock('@/flavors/light/env', () => ({
 vi.mock('@/flavors/light/sqliteMigrations', () => ({
   applySqliteMigrationsFromEnvironment: mocks.applySqliteMigrationsFromEnvironment,
 }));
-vi.mock('@/app/monitoring/sentry', () => ({
-  initializeServerSentry: mocks.initializeServerSentry,
+// Keep the real instrumentation/configuration owner; isolate the telemetry SDK boundary.
+vi.mock('@sentry/node', () => ({
+  preloadOpenTelemetry: mocks.sentryPreload,
+  init: mocks.sentryInit,
+  getClient: () => undefined,
 }));
 vi.mock('@/utils/process/processHandlers', () => ({
   registerProcessHandlers: mocks.registerProcessHandlers,
@@ -111,7 +115,8 @@ describe('runLightServerMain', () => {
     expect(mocks.authInit).not.toHaveBeenCalled();
     expect(mocks.materializeHomeIrohEndpointDescriptor).not.toHaveBeenCalled();
     expect(mocks.reserveRelocatedHomeConnectionDescriptor).not.toHaveBeenCalled();
-    expect(mocks.initializeServerSentry).not.toHaveBeenCalled();
+    expect(mocks.sentryPreload).not.toHaveBeenCalled();
+    expect(mocks.sentryInit).not.toHaveBeenCalled();
     expect(mocks.registerProcessHandlers).not.toHaveBeenCalled();
     expect(mocks.startServer).not.toHaveBeenCalled();
   });
@@ -125,7 +130,8 @@ describe('runLightServerMain', () => {
       env: process.env,
       dataDir: '/tmp/happier-light-main-test',
     });
-    expect(mocks.initializeServerSentry).not.toHaveBeenCalled();
+    expect(mocks.sentryPreload).not.toHaveBeenCalled();
+    expect(mocks.sentryInit).not.toHaveBeenCalled();
     expect(mocks.registerProcessHandlers).not.toHaveBeenCalled();
     expect(mocks.startServer).not.toHaveBeenCalled();
   });
@@ -156,7 +162,8 @@ describe('runLightServerMain', () => {
       status: 'ready',
       connectionDescriptor: await mocks.reserveRelocatedHomeConnectionDescriptor.mock.results[0].value,
     })}\n`);
-    expect(mocks.initializeServerSentry).not.toHaveBeenCalled();
+    expect(mocks.sentryPreload).not.toHaveBeenCalled();
+    expect(mocks.sentryInit).not.toHaveBeenCalled();
     expect(mocks.registerProcessHandlers).not.toHaveBeenCalled();
     expect(mocks.startServer).not.toHaveBeenCalled();
   });
@@ -179,7 +186,8 @@ describe('runLightServerMain', () => {
       accountCount: 1,
       sessionCount: 2,
     })}\n`);
-    expect(mocks.initializeServerSentry).not.toHaveBeenCalled();
+    expect(mocks.sentryPreload).not.toHaveBeenCalled();
+    expect(mocks.sentryInit).not.toHaveBeenCalled();
     expect(mocks.registerProcessHandlers).not.toHaveBeenCalled();
     expect(mocks.startServer).not.toHaveBeenCalled();
   });
@@ -188,7 +196,8 @@ describe('runLightServerMain', () => {
     await runLightServerMain([]);
 
     expect(mocks.applySqliteMigrationsFromEnvironment).not.toHaveBeenCalled();
-    expect(mocks.initializeServerSentry).toHaveBeenCalledWith(process.env);
+    expect(mocks.sentryPreload).toHaveBeenCalledOnce();
+    expect(mocks.sentryInit).not.toHaveBeenCalled();
     expect(mocks.registerProcessHandlers).toHaveBeenCalledOnce();
     expect(mocks.startServer).toHaveBeenCalledWith('light');
   });

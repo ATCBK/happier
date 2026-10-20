@@ -26,10 +26,13 @@ import { assertExecutionRunStructuredOutputModelAllowed } from './structuredOutp
 import { readExecutionRunErrorCode } from './errors';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { resolve } from 'node:path';
+import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
 
 type Host = Readonly<{
   runId: string; input: unknown; cwd: string;
   acpCatalogSnapshot?: AcpCatalogSnapshotV1;
+  readNativeOfferedModel?: ExecutionRunManagerStartParams['readNativeOfferedModel'];
+  nativeModelRegistry?: ResolvedContributionRegistry;
   runs: Map<string, ExecutionRunState>; controllers: ReadonlyMap<string, ExecutionRunController>;
   startRun: (params: ExecutionRunManagerStartParams) => Promise<ExecutionRunStartResult>;
   ensureRun: (runId: string) => Promise<ExecutionRunEnsureResult>;
@@ -182,7 +185,8 @@ export async function applyReviewWalkthroughAction(host: Host): Promise<Executio
     const scope = await scmDiffSummaryResultStore.readStoredScope({ cwd: host.cwd, resultId: input.resultId }).catch(() => null);
     if (!scope || !belongsToReview(scope, first)) return failure('review_context_unavailable', 'The saved result does not belong to this review target.');
   }
-  const inventory = await buildReviewEngineInventoryItems({ acpCatalogSnapshot: host.acpCatalogSnapshot, accountSettings: first.runtimeSettings?.accountSettings
+  const inventory = await buildReviewEngineInventoryItems({ acpCatalogSnapshot: host.acpCatalogSnapshot,
+    registrySnapshot: host.nativeModelRegistry, accountSettings: first.runtimeSettings?.accountSettings
     ? AccountSettingsSchema.parse(first.runtimeSettings.accountSettings) : null });
   const policy = resolveReviewNarratorPolicy({ selectedEngineIds: runs.map(run =>
     inventory.find(engine => engine.backendId === run.backendId)?.value ?? run.backendId), engines: inventory });
@@ -211,6 +215,9 @@ export async function applyReviewWalkthroughAction(host: Host): Promise<Executio
         cwd: first.launch?.cwd ?? host.cwd,
         accountSettings: first.runtimeSettings?.accountSettings,
         runtimeDescriptorV1: first.launch?.runtimeDescriptorV1,
+        connectedServices: first.launch?.connectedServicesSelection,
+        secretReferenceOverlay: first.launch?.secretReferenceOverlay,
+        readNativeOfferedModel: host.readNativeOfferedModel,
       });
     } catch (error) {
       return failure(readExecutionRunErrorCode(error) ?? 'model_structured_output_unsupported',
@@ -297,7 +304,8 @@ export async function applyReviewWalkthroughAction(host: Host): Promise<Executio
   };
   // The narrator's incumbent occurrence/lifetime owns collection and cancellation.
   void collect();
-  return { ok: true, result: { ...started, mode: 'seeded_narrator', state: 'collecting', comparisonId: request.comparisonId,
+  return { ok: true, result: { runId: started.runId, callId: started.callId, sidechainId: started.sidechainId,
+    mode: 'seeded_narrator', state: 'collecting', comparisonId: request.comparisonId,
     comparison: captured.comparison, reviewRunIds: request.reviewRunIds } };
 }
 

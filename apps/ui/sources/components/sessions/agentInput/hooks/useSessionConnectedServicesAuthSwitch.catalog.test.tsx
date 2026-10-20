@@ -79,7 +79,7 @@ it('previews destination-only armed defaults without inferring Native from unrea
     applyConnectedAccountCatalogSnapshot(scope, 'purposes', { status: 'ready', revision: 5, record: { key: 'purposes', value } }, true);
     const armed = { agentId: 'codex', agentIdentity: consumer, connectedAccounts: declarations };
     type ArmedTarget = NonNullable<Parameters<typeof useSessionConnectedServicesAuthSwitch>[0]['armedContinuationAgent']>;
-    const hook = await renderHook((target: ArmedTarget | null) => useSessionConnectedServicesAuthSwitch({
+    const hook = await renderHook<ReturnType<typeof useSessionConnectedServicesAuthSwitch>, ArmedTarget | null>((target) => useSessionConnectedServicesAuthSwitch({
         applyBinding: async () => ({ ok: true, action: 'unchanged' }),
         sessionId: 'armed-session', agentId: 'codex', agentIdentity: consumer, machineId: null, serverId: connection.home.id,
         connectedAccounts: declarations, armedContinuationAgent: target,

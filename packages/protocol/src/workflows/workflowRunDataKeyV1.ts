@@ -1,5 +1,5 @@
 import tweetnacl from 'tweetnacl';
-import { prepareArtifactRecipientKeyEnvelopesV1 } from '../artifacts/artifactRecipientKeyPreparationV1.js';
+import { prepareResourceRecipientKeyEnvelopesV1 } from '../teams/resourceRecipientKeyPreparationV1.js';
 import { isAvailableE2eeAutomationAccountEncryptionV1, type AvailableAutomationAccountEncryptionV1,
   type AutomationAccountCurrentnessWitnessV1 } from '../automations/automationAccountCurrentnessV1.js';
 import { deriveAccountMachineKeyFromRecoverySecret } from '../crypto/accountScopedCipher.js';
@@ -42,7 +42,7 @@ export function prepareWorkflowRunDataKeyV1(params: Readonly<{
       randomBytes: params.randomBytes })),
     recipientContentPublicKeyFingerprint: params.encryption.material.contentPublicKeyFingerprint,
   };
-  const recipients = prepareArtifactRecipientKeyEnvelopesV1({ dataKey: runDataKey,
+  const recipients = prepareResourceRecipientKeyEnvelopesV1({ dataKey: runDataKey,
     // A fresh Run/transition key requires fresh envelopes even for existing recipients.
     recipients: (params.census?.recipients ?? []).filter(item => item.recipientAccountId !== params.accountId)
       .map(item => ({ ...item, encryptedDataKey: null, recipientContentPublicKeyFingerprint: null })),
@@ -95,7 +95,7 @@ export async function runWorkflowRecipientKeyPreparationV1(params: Readonly<{
     || !census.callerDataEncryptionKey || census.callerDataEncryptionKey !== params.openedDataEncryptionKey) {
     throw Object.assign(new Error('workflow_run_key_changed'), { code: 'currentness_conflict' });
   }
-  const recipientKeyEnvelopes = prepareArtifactRecipientKeyEnvelopesV1({ dataKey: params.runCrypto.runDataKey,
+  const recipientKeyEnvelopes = prepareResourceRecipientKeyEnvelopesV1({ dataKey: params.runCrypto.runDataKey,
     recipients: census.recipients.filter(item => item.recipientAccountId !== census.ownerAccountId), randomBytes: params.randomBytes });
   if (!recipientKeyEnvelopes.length) return empty;
   params.signal?.throwIfAborted();

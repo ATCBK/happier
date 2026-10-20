@@ -150,7 +150,8 @@ describe('Channels core manifest', () => {
         expect(action?.dangerLevel, id).toBe('safe');
         expect(action?.confirmation, id).toBeUndefined();
       } else {
-        expect(action?.dangerLevel, id).toBe(id === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.conversationStart ? 'writesRemote' : 'writesLocal');
+        expect(action?.dangerLevel, id).toBe(id === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.conversationStart
+          || id === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionSetupRemediate ? 'writesRemote' : 'writesLocal');
         expect(action?.confirmation, id).toMatchObject({
           title: expect.any(String), body: expect.any(String), confirmLabel: expect.any(String),
         });
@@ -391,8 +392,8 @@ describe('Channels core manifest', () => {
     ]);
     expect(collections?.find(({ id }) => id === CHANNEL_STATE_COLLECTION_ID)).toMatchObject({
       id: CHANNEL_STATE_COLLECTION_ID,
-      schemaVersion: 5,
-      readableSchemaVersions: [1, 2, 3, 4],
+      schemaVersion: 9,
+      readableSchemaVersions: [1, 2, 3, 4, 5, 6, 7, 8],
       migrations: [{
         id: 'channel-state-v1-to-v2',
         fromSchemaVersion: 1,
@@ -409,6 +410,22 @@ describe('Channels core manifest', () => {
         id: 'channel-state-v4-to-v5',
         fromSchemaVersion: 4,
         toSchemaVersion: 5,
+      }, {
+        id: 'channel-state-v5-to-v6',
+        fromSchemaVersion: 5,
+        toSchemaVersion: 6,
+      }, {
+        id: 'channel-state-v6-to-v7',
+        fromSchemaVersion: 6,
+        toSchemaVersion: 7,
+      }, {
+        id: 'channel-state-v7-to-v8',
+        fromSchemaVersion: 7,
+        toSchemaVersion: 8,
+      }, {
+        id: 'channel-state-v8-to-v9',
+        fromSchemaVersion: 8,
+        toSchemaVersion: 9,
       }],
       rowIdField: CHANNEL_STATE_FIELD.id,
       serverReadable: [

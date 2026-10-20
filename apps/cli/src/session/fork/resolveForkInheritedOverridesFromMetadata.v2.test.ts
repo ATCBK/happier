@@ -3,17 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { resolveForkInheritedOverridesFromMetadata } from './resolveForkInheritedOverridesFromMetadata';
 
 describe('fork connected-services V2 inheritance', () => {
-  it('preserves exact team-resource identity in spawn and metadata', () => {
+  it('preserves the exact brokered team-resource selection in spawn and metadata', () => {
     const connectedServices = {
       v: 2 as const,
       bindingsByServiceId: {
         'plugin.acme/service': {
           source: 'team_resource' as const,
-          teamId: 'team-1',
           resourceId: 'resource-1',
-          expectedResourceRevision: 7,
-          sourceMemberKey: 'member-1',
-          sourceVersion: 'version-1',
+          deliveryMode: 'brokered' as const,
         },
       },
     };

@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { normalizeVerifiedEmail, type NormalizedVerifiedEmail } from '@happier-dev/protocol/auth/verifiedEmail';
 import { buildTeamJoinUrl, TeamInvitationAcceptInputV1Schema, TeamInvitationAcceptResultV1Schema, TeamInvitationAcceptApprovalPrepareInputV1Schema, TeamInvitationAcceptApprovalPrepareResultV1Schema, TeamInvitationCreateInputV1Schema, TeamInvitationCreateResultV1Schema, TeamInvitationListInputV1Schema, TeamInvitationPreviewInputV1Schema, TeamInvitationPreviewResultV1Schema, TeamInvitationReissueInputV1Schema, TeamInvitationRevokeInputV1Schema, TeamInvitationRowV1Schema, TeamInvitationReissueResultV1Schema, TeamInvitationsPageV1Schema, type TeamInvitationRowV1 } from '@happier-dev/protocol/teams/invitation';

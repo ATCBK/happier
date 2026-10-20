@@ -114,13 +114,15 @@ async function pressEntryCard(testID: string) {
 it.each(['current', 'another'] as const)('starts the selected %s Account Team flow without replacing the saved credential', async (accountSelection) => {
     const { home, credentials } = await mountTeamEntry();
     if (accountSelection === 'another') await pressEntryCard('team-auth-entry-use-another-account');
-    await pressEntryCard('team-auth-entry-action:oidc-team');
     const assign = vi.fn();
     const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
     Object.defineProperty(globalThis, 'window', { value: { location: { assign } }, configurable: true, writable: true });
     try {
-        await pressEntryCard('home-auth-oidc-team-connect-keyless');
-        expect(assign).toHaveBeenCalledWith('https://idp.example/authorize');
+        // Selecting the Team method is the decision. HomeAuthenticationFlow's
+        // openChosenAction runs this one-tap method on arrival; its remaining
+        // card is a retry, not a second required confirmation.
+        await pressEntryCard('team-auth-entry-action:oidc-team');
+        await vi.waitFor(() => expect(assign).toHaveBeenCalledWith('https://idp.example/authorize'));
         const starts = boundary.request.mock.calls.filter(([, path]) => String(path).includes('/external/oidc-team/params?'));
         expect(starts.map(([, path]) => String(path).split('?')[0])).toEqual([
             accountSelection === 'another' ? '/v1/auth/external/oidc-team/params' : '/v1/connect/external/oidc-team/params',

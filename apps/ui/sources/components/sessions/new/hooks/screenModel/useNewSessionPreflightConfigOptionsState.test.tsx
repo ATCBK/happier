@@ -1,31 +1,38 @@
+import { installNewSessionPreflightHarness } from '@/dev/testkit/harness/newSessionPreflightHarness';
+import { standardCleanup } from '@/dev/testkit';
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, afterAll, afterEach, beforeEach } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
 
-import { installCapabilitiesOpsModuleMock, renderScreen } from '@/dev/testkit';
+import { flushHookEffects, renderScreen } from '@/dev/testkit';
 import { NEW_SESSION_CAPABILITY_PROBE_TIMEOUT_MS } from '@/components/sessions/new/modules/newSessionCapabilityProbeTimeoutMs';
 import { DYNAMIC_CONFIG_OPTIONS_PROBE_ERROR_BACKOFF_MS } from '@/sync/domains/sessionControl/dynamicConfigOptionsProbeCache';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
+const capabilityRpc = vi.fn();
+const preflight = await installNewSessionPreflightHarness((...args) => capabilityRpc(...args));
+const { waitForHomeGovernance } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+const probeCache = await import('@/sync/domains/sessionControl/dynamicConfigOptionsProbeCache');
+beforeEach(async () => {
+    await preflight.reset();
+    probeCache.resetDynamicConfigOptionsProbeCacheForTests();
+});
+afterEach(standardCleanup);
+afterAll(() => preflight.dispose());
+
 describe('useNewSessionPreflightConfigOptionsState', () => {
     it('keeps previous config options visible while a new cwd probe is pending', async () => {
-        vi.resetModules();
 
-        const machineCapabilitiesInvokeMock = vi.fn()
+        const capabilityRpc = vi.fn()
             .mockImplementationOnce(async () => ({
-                supported: true as const,
-                response: {
                     ok: true as const,
                     result: {
                         configOptions: [{ id: 'opt1', name: 'Option 1', type: 'boolean', currentValue: true }],
                     },
-                },
-            }))
+                }))
             .mockImplementationOnce(async () => new Promise<never>(() => undefined));
-        vi.doMock('@/sync/ops/capabilities', installCapabilitiesOpsModuleMock({
-            machineCapabilitiesInvoke: machineCapabilitiesInvokeMock,
-        }));
+        preflight.setCapabilityResponder(capabilityRpc);
         const { resetDynamicConfigOptionsProbeCacheForTests } = await import('@/sync/domains/sessionControl/dynamicConfigOptionsProbeCache');
         resetDynamicConfigOptionsProbeCacheForTests();
 
@@ -40,53 +47,50 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
         };
         function Harness() {
             latest = useNewSessionPreflightConfigOptionsState({
-                backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+                backendTarget: { kind: 'backend', backendId: 'codex' },
                 selectedMachineId: 'machine-1',
-                capabilityServerId: 'server-1',
+                capabilityServerId: preflight.serverId,
                 cwd,
             } as any);
             return null;
         }
 
-        const root = (await renderScreen(React.createElement(Harness))).tree;
-        await act(async () => {
-            await Promise.resolve();
+        const screen = await renderScreen(React.createElement(Harness));
+        const root = screen.tree;
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(readLatest().configOptions).not.toBeNull();
         });
         expect((readLatest().configOptions ?? []).map((option) => option.id)).toEqual(['opt1']);
 
         cwd = '/repo-2';
-        await act(async () => {
-            root.update(React.createElement(Harness));
-            await Promise.resolve();
-        });
+        await screen.update(React.createElement(Harness));
 
         const refreshed = readLatest();
         expect(refreshed.probe.phase).toBe('refreshing');
         expect((refreshed.configOptions ?? []).map((option) => option.id)).toEqual(['opt1']);
 
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(capabilityRpc).toHaveBeenCalledTimes(2);
+        });
         await act(async () => {
             root.unmount();
         });
     });
 
     it('probes config options for non-Codex providers (provider-agnostic)', async () => {
-        vi.resetModules();
 
-        const machineCapabilitiesInvokeMock = vi.fn(async (_machineId: string, _request: unknown) => ({
-            supported: true as const,
-            response: { ok: true as const, result: { configOptions: [] } },
-        }));
-        vi.doMock('@/sync/ops/capabilities', installCapabilitiesOpsModuleMock({
-            machineCapabilitiesInvoke: machineCapabilitiesInvokeMock,
-        }));
+        const capabilityRpc = vi.fn(async (_machineId: string, _request: unknown) => ({ ok: true as const, result: { configOptions: [] } }));
+        preflight.setCapabilityResponder(capabilityRpc);
 
         const { useNewSessionPreflightConfigOptionsState } = await import('./useNewSessionPreflightConfigOptionsState');
 
         function Harness() {
             useNewSessionPreflightConfigOptionsState({
-                backendTarget: { kind: 'builtInAgent', agentId: 'opencode' },
+                backendTarget: { kind: 'backend', backendId: 'opencode' },
                 selectedMachineId: 'machine-1',
-                capabilityServerId: 'server-1',
+                capabilityServerId: preflight.serverId,
                 cwd: '/repo',
             } as any);
             return null;
@@ -94,13 +98,16 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
 
         let root!: renderer.ReactTestRenderer;
         root = (await renderScreen(React.createElement(Harness))).tree;
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(capabilityRpc).toHaveBeenCalledTimes(1);
+        });
         await act(async () => {
-            await new Promise((resolve) => setTimeout(resolve, 0));
             root.unmount();
         });
 
-        expect(machineCapabilitiesInvokeMock).toHaveBeenCalledTimes(1);
-        const firstCall = machineCapabilitiesInvokeMock.mock.calls[0] as unknown as [unknown, unknown] | undefined;
+        expect(capabilityRpc).toHaveBeenCalledTimes(1);
+        const firstCall = capabilityRpc.mock.calls[0] as unknown as [unknown, unknown] | undefined;
         expect(firstCall?.[1]).toMatchObject({
             id: 'cli.opencode',
             method: 'probeConfigOptions',
@@ -109,28 +116,22 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
     });
 
     it('forwards probeContext.capabilityParams to probeConfigOptions', async () => {
-        vi.resetModules();
 
-        const machineCapabilitiesInvokeMock = vi.fn(async (_machineId: string, _request: unknown) => ({
-            supported: true as const,
-            response: { ok: true as const, result: { configOptions: [] } },
-        }));
-        vi.doMock('@/sync/ops/capabilities', installCapabilitiesOpsModuleMock({
-            machineCapabilitiesInvoke: machineCapabilitiesInvokeMock,
-        }));
+        const capabilityRpc = vi.fn(async (_machineId: string, _request: unknown) => ({ ok: true as const, result: { configOptions: [] } }));
+        preflight.setCapabilityResponder(capabilityRpc);
 
         const { useNewSessionPreflightConfigOptionsState } = await import('./useNewSessionPreflightConfigOptionsState');
 
         const probeContext = {
             cacheKeySuffixParts: ['appServer'],
-            capabilityParams: { runtimeKindOverride: 'appServer' },
+            capabilityParams: { profileId: 'profile-a' },
         };
 
         function Harness() {
             useNewSessionPreflightConfigOptionsState({
-                backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+                backendTarget: { kind: 'backend', backendId: 'codex' },
                 selectedMachineId: 'machine-1',
-                capabilityServerId: 'server-1',
+                capabilityServerId: preflight.serverId,
                 cwd: '/repo',
                 probeContext,
             } as any);
@@ -139,30 +140,27 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
 
         let root!: renderer.ReactTestRenderer;
         root = (await renderScreen(React.createElement(Harness))).tree;
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(capabilityRpc).toHaveBeenCalledTimes(1);
+        });
         await act(async () => {
-            await new Promise((resolve) => setTimeout(resolve, 0));
             root.unmount();
         });
 
-        expect(machineCapabilitiesInvokeMock).toHaveBeenCalledTimes(1);
-        const firstCall = machineCapabilitiesInvokeMock.mock.calls[0] as unknown as [unknown, unknown] | undefined;
+        expect(capabilityRpc).toHaveBeenCalledTimes(1);
+        const firstCall = capabilityRpc.mock.calls[0] as unknown as [unknown, unknown] | undefined;
         expect(firstCall?.[1]).toMatchObject({
             id: 'cli.codex',
             method: 'probeConfigOptions',
-            params: expect.objectContaining({ runtimeKindOverride: 'appServer' }),
+            params: expect.objectContaining({ profileId: 'profile-a' }),
         });
     });
 
     it('treats empty dynamic config options as a successful empty probe result', async () => {
-        vi.resetModules();
 
-        const machineCapabilitiesInvokeMock = vi.fn(async (_machineId: string, _request: unknown) => ({
-            supported: true as const,
-            response: { ok: true as const, result: { configOptions: [], source: 'dynamic' } },
-        }));
-        vi.doMock('@/sync/ops/capabilities', installCapabilitiesOpsModuleMock({
-            machineCapabilitiesInvoke: machineCapabilitiesInvokeMock,
-        }));
+        const capabilityRpc = vi.fn(async (_machineId: string, _request: unknown) => ({ ok: true as const, result: { configOptions: [], source: 'dynamic' } }));
+        preflight.setCapabilityResponder(capabilityRpc);
 
         const { resetDynamicConfigOptionsProbeCacheForTests } = await import('@/sync/domains/sessionControl/dynamicConfigOptionsProbeCache');
         resetDynamicConfigOptionsProbeCacheForTests();
@@ -177,20 +175,21 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
         };
         function Harness() {
             latest = useNewSessionPreflightConfigOptionsState({
-                backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+                backendTarget: { kind: 'backend', backendId: 'codex' },
                 selectedMachineId: 'machine-1',
-                capabilityServerId: 'server-1',
+                capabilityServerId: preflight.serverId,
                 cwd: '/repo-dynamic-empty',
             } as any);
             return null;
         }
 
         const root = (await renderScreen(React.createElement(Harness))).tree;
-        await act(async () => {
-            await new Promise((resolve) => setTimeout(resolve, 0));
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(readLatest().probe.refreshedAt).toEqual(expect.any(Number));
         });
 
-        expect(machineCapabilitiesInvokeMock).toHaveBeenCalledTimes(1);
+        expect(capabilityRpc).toHaveBeenCalledTimes(1);
         expect(readLatest().configOptions).toEqual([]);
         expect(readLatest().unavailable).toBe(false);
         expect(readLatest().probe.refreshedAt).toEqual(expect.any(Number));
@@ -201,15 +200,9 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
     });
 
     it('carries typed unavailable state when config option discovery is unavailable', async () => {
-        vi.resetModules();
 
-        const machineCapabilitiesInvokeMock = vi.fn(async (_machineId: string, _request: unknown) => ({
-            supported: true as const,
-            response: { ok: true as const, result: { configOptions: [], source: 'unavailable' } },
-        }));
-        vi.doMock('@/sync/ops/capabilities', installCapabilitiesOpsModuleMock({
-            machineCapabilitiesInvoke: machineCapabilitiesInvokeMock,
-        }));
+        const capabilityRpc = vi.fn(async (_machineId: string, _request: unknown) => ({ ok: true as const, result: { configOptions: [], source: 'unavailable' } }));
+        preflight.setCapabilityResponder(capabilityRpc);
 
         const { useNewSessionPreflightConfigOptionsState } = await import('./useNewSessionPreflightConfigOptionsState');
 
@@ -221,9 +214,9 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
         };
         function Harness() {
             latest = useNewSessionPreflightConfigOptionsState({
-                backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+                backendTarget: { kind: 'backend', backendId: 'codex' },
                 selectedMachineId: 'machine-1',
-                capabilityServerId: 'server-1',
+                capabilityServerId: preflight.serverId,
                 cwd: '/repo',
             } as any);
             return null;
@@ -231,8 +224,11 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
 
         let root!: renderer.ReactTestRenderer;
         root = (await renderScreen(React.createElement(Harness))).tree;
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(readLatest().unavailable).toBe(true);
+        });
         await act(async () => {
-            await new Promise((resolve) => setTimeout(resolve, 0));
             root.unmount();
         });
 
@@ -241,15 +237,9 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
     });
 
     it('keeps config option discovery unavailable fail-closed across a same-scope remount during cooldown', async () => {
-        vi.resetModules();
 
-        const machineCapabilitiesInvokeMock = vi.fn(async (_machineId: string, _request: unknown) => ({
-            supported: true as const,
-            response: { ok: true as const, result: { configOptions: [], source: 'unavailable' } },
-        }));
-        vi.doMock('@/sync/ops/capabilities', installCapabilitiesOpsModuleMock({
-            machineCapabilitiesInvoke: machineCapabilitiesInvokeMock,
-        }));
+        const capabilityRpc = vi.fn(async (_machineId: string, _request: unknown) => ({ ok: true as const, result: { configOptions: [], source: 'unavailable' } }));
+        preflight.setCapabilityResponder(capabilityRpc);
 
         const { resetDynamicConfigOptionsProbeCacheForTests } = await import('@/sync/domains/sessionControl/dynamicConfigOptionsProbeCache');
         resetDynamicConfigOptionsProbeCacheForTests();
@@ -264,9 +254,9 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
         };
         function Harness() {
             latest = useNewSessionPreflightConfigOptionsState({
-                backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+                backendTarget: { kind: 'backend', backendId: 'codex' },
                 selectedMachineId: 'machine-1',
-                capabilityServerId: 'server-1',
+                capabilityServerId: preflight.serverId,
                 cwd: '/repo-unavailable-remount',
             } as any);
             return null;
@@ -274,19 +264,21 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
 
         let root!: renderer.ReactTestRenderer;
         root = (await renderScreen(React.createElement(Harness))).tree;
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(readLatest().unavailable).toBe(true);
+        });
         await act(async () => {
-            await new Promise((resolve) => setTimeout(resolve, 0));
             root.unmount();
         });
 
         latest = null;
         root = (await renderScreen(React.createElement(Harness))).tree;
         await act(async () => {
-            await new Promise((resolve) => setTimeout(resolve, 0));
             root.unmount();
         });
 
-        expect(machineCapabilitiesInvokeMock).toHaveBeenCalledTimes(1);
+        expect(capabilityRpc).toHaveBeenCalledTimes(1);
         expect(readLatest().configOptions).toEqual([]);
         expect(readLatest().unavailable).toBe(true);
     });
@@ -294,16 +286,10 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
     it('retries after an unavailable cooldown elapses so temporarily gated config options can recover', async () => {
         vi.useFakeTimers();
         vi.setSystemTime(1_000_000);
-        vi.resetModules();
 
-        const machineCapabilitiesInvokeMock = vi.fn()
+        const capabilityRpc = vi.fn()
+            .mockImplementationOnce(async () => ({ ok: true as const, result: { configOptions: [], source: 'unavailable' } }))
             .mockImplementationOnce(async () => ({
-                supported: true as const,
-                response: { ok: true as const, result: { configOptions: [], source: 'unavailable' } },
-            }))
-            .mockImplementationOnce(async () => ({
-                supported: true as const,
-                response: {
                     ok: true as const,
                     result: {
                         configOptions: [{
@@ -313,11 +299,8 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
                             currentValue: true,
                         }],
                     },
-                },
-            }));
-        vi.doMock('@/sync/ops/capabilities', installCapabilitiesOpsModuleMock({
-            machineCapabilitiesInvoke: machineCapabilitiesInvokeMock,
-        }));
+                }));
+        preflight.setCapabilityResponder(capabilityRpc);
 
         const { resetDynamicConfigOptionsProbeCacheForTests } = await import('@/sync/domains/sessionControl/dynamicConfigOptionsProbeCache');
         resetDynamicConfigOptionsProbeCacheForTests();
@@ -332,20 +315,21 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
         };
         function Harness() {
             latest = useNewSessionPreflightConfigOptionsState({
-                backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+                backendTarget: { kind: 'backend', backendId: 'codex' },
                 selectedMachineId: 'machine-1',
-                capabilityServerId: 'server-1',
+                capabilityServerId: preflight.serverId,
                 cwd: '/repo-unavailable-retry',
             } as any);
             return null;
         }
 
         const root = (await renderScreen(React.createElement(Harness))).tree;
-        await act(async () => {
-            await Promise.resolve();
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(readLatest().unavailable).toBe(true);
         });
 
-        expect(machineCapabilitiesInvokeMock).toHaveBeenCalledTimes(1);
+        expect(capabilityRpc).toHaveBeenCalledTimes(1);
         expect(readLatest().configOptions).toEqual([]);
         expect(readLatest().unavailable).toBe(true);
 
@@ -353,7 +337,11 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
             await vi.advanceTimersByTimeAsync(DYNAMIC_CONFIG_OPTIONS_PROBE_ERROR_BACKOFF_MS + 1);
         });
 
-        expect(machineCapabilitiesInvokeMock).toHaveBeenCalledTimes(2);
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(capabilityRpc).toHaveBeenCalledTimes(2);
+            expect(readLatest().unavailable).toBe(false);
+        });
         expect((readLatest().configOptions ?? []).map((option) => option.id)).toEqual(['sandbox']);
         expect(readLatest().unavailable).toBe(false);
 
@@ -364,12 +352,9 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
     });
 
     it('replaces previous successful config options when a forced refresh reports unavailable', async () => {
-        vi.resetModules();
 
-        const machineCapabilitiesInvokeMock = vi.fn()
+        const capabilityRpc = vi.fn()
             .mockImplementationOnce(async () => ({
-                supported: true as const,
-                response: {
                     ok: true as const,
                     result: {
                         configOptions: [{
@@ -379,15 +364,9 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
                             currentValue: true,
                         }],
                     },
-                },
-            }))
-            .mockImplementationOnce(async () => ({
-                supported: true as const,
-                response: { ok: true as const, result: { configOptions: [], source: 'unavailable' } },
-            }));
-        vi.doMock('@/sync/ops/capabilities', installCapabilitiesOpsModuleMock({
-            machineCapabilitiesInvoke: machineCapabilitiesInvokeMock,
-        }));
+                }))
+            .mockImplementationOnce(async () => ({ ok: true as const, result: { configOptions: [], source: 'unavailable' } }));
+        preflight.setCapabilityResponder(capabilityRpc);
 
         const { resetDynamicConfigOptionsProbeCacheForTests } = await import('@/sync/domains/sessionControl/dynamicConfigOptionsProbeCache');
         resetDynamicConfigOptionsProbeCacheForTests();
@@ -402,27 +381,31 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
         };
         function Harness() {
             latest = useNewSessionPreflightConfigOptionsState({
-                backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+                backendTarget: { kind: 'backend', backendId: 'codex' },
                 selectedMachineId: 'machine-1',
-                capabilityServerId: 'server-1',
+                capabilityServerId: preflight.serverId,
                 cwd: '/repo-success-to-unavailable',
             } as any);
             return null;
         }
 
         const root = (await renderScreen(React.createElement(Harness))).tree;
-        await act(async () => {
-            await new Promise((resolve) => setTimeout(resolve, 0));
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(readLatest().configOptions).not.toBeNull();
         });
         expect((readLatest().configOptions ?? []).map((option) => option.id)).toEqual(['sandbox']);
         expect(readLatest().unavailable).toBe(false);
 
         await act(async () => {
             readLatest().probe.onRefresh?.();
-            await new Promise((resolve) => setTimeout(resolve, 0));
         });
 
-        expect(machineCapabilitiesInvokeMock).toHaveBeenCalledTimes(2);
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(readLatest().unavailable).toBe(true);
+        });
+        expect(capabilityRpc).toHaveBeenCalledTimes(2);
         expect(readLatest().configOptions).toEqual([]);
         expect(readLatest().unavailable).toBe(true);
 
@@ -432,14 +415,11 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
     });
 
     it('does not re-probe when probeContext identity changes but content is stable', async () => {
-        vi.resetModules();
 
         // Intentionally never resolves to avoid setState loops influencing the test outcome.
         const pending = new Promise<never>(() => undefined);
-        const machineCapabilitiesInvokeMock = vi.fn(async (_machineId: string, _request: unknown) => pending as never);
-        vi.doMock('@/sync/ops/capabilities', installCapabilitiesOpsModuleMock({
-            machineCapabilitiesInvoke: machineCapabilitiesInvokeMock,
-        }));
+        const capabilityRpc = vi.fn(async (_machineId: string, _request: unknown) => pending as never);
+        preflight.setCapabilityResponder(capabilityRpc);
 
         const { useNewSessionPreflightConfigOptionsState } = await import('./useNewSessionPreflightConfigOptionsState');
 
@@ -450,14 +430,14 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
             }, []);
 
             useNewSessionPreflightConfigOptionsState({
-                backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+                backendTarget: { kind: 'backend', backendId: 'codex' },
                 selectedMachineId: 'machine-1',
-                capabilityServerId: 'server-1',
+                capabilityServerId: preflight.serverId,
                 cwd: '/repo',
                 // Inline object creation simulates callers that don't memoize probeContext.
                 probeContext: {
                     cacheKeySuffixParts: ['appServer'],
-                    capabilityParams: { runtimeKindOverride: 'appServer' },
+                    capabilityParams: { profileId: 'profile-a' },
                 },
             } as any);
             return null;
@@ -465,12 +445,15 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
 
         let root!: renderer.ReactTestRenderer;
         root = (await renderScreen(React.createElement(Harness))).tree;
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(capabilityRpc).toHaveBeenCalledTimes(1);
+        });
         await act(async () => {
-            await new Promise((resolve) => setTimeout(resolve, 0));
             root.unmount();
         });
 
-        expect(machineCapabilitiesInvokeMock).toHaveBeenCalledTimes(1);
+        expect(capabilityRpc).toHaveBeenCalledTimes(1);
     });
     it('probes config options for an installed Agent that carries no bundled catalog id', async () => {
         // An installed Session Agent is a first-class runtime carrier: its
@@ -478,15 +461,9 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
         // probe already treats it. Narrowing the probe identity to the closed
         // bundled set is what silently removes ACP configuration options from
         // every installed Agent.
-        vi.resetModules();
 
-        const machineCapabilitiesInvokeMock = vi.fn(async (_machineId: string, _request: unknown) => ({
-            supported: true as const,
-            response: { ok: true as const, result: { configOptions: [] } },
-        }));
-        vi.doMock('@/sync/ops/capabilities', installCapabilitiesOpsModuleMock({
-            machineCapabilitiesInvoke: machineCapabilitiesInvokeMock,
-        }));
+        const capabilityRpc = vi.fn(async (_machineId: string, _request: unknown) => ({ ok: true as const, result: { configOptions: [] } }));
+        preflight.setCapabilityResponder(capabilityRpc);
 
         const { useNewSessionPreflightConfigOptionsState } = await import('./useNewSessionPreflightConfigOptionsState');
 
@@ -495,7 +472,7 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
                 backendTarget: { kind: 'backend', backendId: 'acme.review' },
                 runtimeCarrierAgentId: 'acme.review',
                 selectedMachineId: 'machine-1',
-                capabilityServerId: 'server-1',
+                capabilityServerId: preflight.serverId,
                 cwd: '/repo',
             } as any);
             return null;
@@ -503,13 +480,16 @@ describe('useNewSessionPreflightConfigOptionsState', () => {
 
         let root!: renderer.ReactTestRenderer;
         root = (await renderScreen(React.createElement(Harness))).tree;
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(capabilityRpc).toHaveBeenCalledTimes(1);
+        });
         await act(async () => {
-            await new Promise((resolve) => setTimeout(resolve, 0));
             root.unmount();
         });
 
-        expect(machineCapabilitiesInvokeMock).toHaveBeenCalledTimes(1);
-        const firstCall = machineCapabilitiesInvokeMock.mock.calls[0] as unknown as [unknown, unknown] | undefined;
+        expect(capabilityRpc).toHaveBeenCalledTimes(1);
+        const firstCall = capabilityRpc.mock.calls[0] as unknown as [unknown, unknown] | undefined;
         expect(firstCall?.[1]).toMatchObject({
             id: 'cli.acme.review',
             method: 'probeConfigOptions',

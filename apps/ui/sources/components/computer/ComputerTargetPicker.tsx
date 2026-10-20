@@ -10,6 +10,7 @@ import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
+import { SelectionTiles } from '@/components/ui/forms/SelectionTiles';
 import { SafeExpoImage } from '@/components/ui/media/SafeExpoImage';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Eyebrow } from '@/components/ui/text/Eyebrow';
@@ -57,6 +58,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: theme.space.s16,
         paddingTop: theme.space.s12,
         paddingBottom: theme.space.s16,
+    },
+    // The picture fills the box its row or tile sizes.
+    thumbnailFill: {
+        width: '100%',
+        height: '100%',
     },
     grow: {
         flex: 1,
@@ -165,12 +171,14 @@ function TargetRows(props: Readonly<{
                             display ? t('computerUse.picker.displayShared') : null,
                             props.currentKey === key ? t('computerUse.picker.usingIt') : null,
                             props.suggestedKey === key ? props.suggestedLabel : null].filter(Boolean).join(' · ') || undefined}
-                        icon={entry.thumbnail ? <SafeExpoImage
+                        // The row shows the thing itself: its real thumbnail in the landscape media box.
+                        leadingMedia={entry.thumbnail ? <SafeExpoImage
                             source={{ uri: `data:${entry.thumbnail.mimeType};base64,${entry.thumbnail.base64}` }}
                             contentFit="contain"
-                            style={{ width: ICON_SIZE.md, height: ICON_SIZE.md }}
+                            style={stylesheet.thumbnailFill}
                             testID={`${props.testID.replace('-target', '-thumbnail')}:${entry.target.kind}`}
-                        /> : <Icon name={props.iconName} size={ICON_SIZE.md} color={theme.colors.text.secondary} />}
+                        /> : undefined}
+                        icon={entry.thumbnail ? undefined : <Icon name={props.iconName} size={ICON_SIZE.md} color={theme.colors.text.secondary} />}
                         accessibilityRole="radio"
                         webRole="radio"
                         selected={selected}
@@ -188,6 +196,59 @@ function TargetRows(props: Readonly<{
                     />
                 );
             })}
+        </ItemGroup>
+    );
+}
+
+/**
+ * The first consent on a wide screen (lab `computer` TP): every window and screen as its real
+ * thumbnail, so the person picks the thing itself, not its name. The shared visual picker owns the
+ * tiles, their selection mark and the grid; rows stay for the phone sheet and the anchored switcher.
+ */
+function TargetTiles(props: Readonly<{
+    title: string;
+    entries: readonly Readonly<{ entry: ComputerTargetEntry; label: string }>[];
+    iconName: 'browsers' | 'desktop';
+    selectedKey: string | null;
+    onSelect: (key: string) => void;
+    suggestedKey?: string | null;
+    suggestedLabel?: string;
+    currentKey?: string | null;
+    action?: React.ReactNode;
+    testID: string;
+}>): React.ReactElement | null {
+    if (props.entries.length === 0) return null;
+    return (
+        <ItemGroup title={props.title} action={props.action} surface="none">
+            <SelectionTiles
+                variant="visual"
+                labelLines={1}
+                accessibilityLabel={props.title}
+                testIdPrefix={props.testID}
+                value={props.entries.some(({ entry }) => computerTargetKey(entry.target) === props.selectedKey) ? props.selectedKey : null}
+                onChange={(key) => { if (key) props.onSelect(key); }}
+                options={props.entries.map(({ entry, label }) => {
+                    const key = computerTargetKey(entry.target);
+                    const display = entry.target.kind === 'display';
+                    return {
+                        id: key,
+                        title: label,
+                        subtitle: [display ? (entry.width && entry.height ? `${entry.width} × ${entry.height}` : null) : entry.appName,
+                            props.currentKey === key ? t('computerUse.picker.usingIt') : null,
+                            props.suggestedKey === key ? props.suggestedLabel : null].filter(Boolean).join(' · ') || undefined,
+                        icon: props.iconName,
+                        preview: entry.thumbnail ? (
+                            <SafeExpoImage
+                                source={{ uri: `data:${entry.thumbnail.mimeType};base64,${entry.thumbnail.base64}` }}
+                                contentFit="contain"
+                                style={stylesheet.thumbnailFill}
+                                testID={`${props.testID.replace('-target', '-thumbnail')}:${entry.target.kind}`}
+                            />
+                        ) : undefined,
+                        testID: `${props.testID}:${entry.target.kind}`,
+                    };
+                })}
+            />
         </ItemGroup>
     );
 }
@@ -365,8 +426,8 @@ export function ComputerTargetPicker(props: Readonly<{
             value={props.access}
             onChange={props.onAccessChange}
             options={[
-                { id: 'see', label: t('computerUse.picker.accessSee') },
-                { id: 'use', label: t('computerUse.picker.accessValue'),
+                { id: 'see', label: t('computerUse.picker.accessSee'), description: t('computerUse.picker.accessSeeHint', { agent: props.agentName }) },
+                { id: 'use', label: t('computerUse.picker.accessValue'), description: t('computerUse.picker.accessUseHint', { agent: props.agentName }),
                     ...(state.grants.input === 'denied' ? { unavailableReason: `${t('computerUse.permission.input')}: ${t('computerUse.permission.denied')}` } : {}) },
             ]}
             disabled={props.sharing}
@@ -494,11 +555,19 @@ export function ComputerTargetPicker(props: Readonly<{
         );
     }
 
+    // Tiles carry their own selection mark; the rows take the radio or the check.
+    const { mark: _mark, ...tileRows } = rows;
     return (
         <View style={stylesheet.root} testID={`${testID}-ready`}>
-            <TargetRows title={t('computerUse.picker.windows')} entries={windows} iconName="browsers" action={refresh} {...rows} />
-            {displayNotice}
-            <TargetRows title={t('computerUse.picker.screens')} entries={screens} iconName="desktop" action={windows.length === 0 ? refresh : undefined} {...rows} />
+            {props.compact ? <>
+                <TargetRows title={t('computerUse.picker.windows')} entries={windows} iconName="browsers" action={refresh} {...rows} />
+                {displayNotice}
+                <TargetRows title={t('computerUse.picker.screens')} entries={screens} iconName="desktop" action={windows.length === 0 ? refresh : undefined} {...rows} />
+            </> : <>
+                <TargetTiles title={t('computerUse.picker.windows')} entries={windows} iconName="browsers" action={refresh} {...tileRows} />
+                {displayNotice}
+                <TargetTiles title={t('computerUse.picker.screens')} entries={screens} iconName="desktop" action={windows.length === 0 ? refresh : undefined} {...tileRows} />
+            </>}
             {notice}
             {accessChoice}
             <View style={stylesheet.policy}>

@@ -21,6 +21,7 @@ import {
 import { t, tLoose } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { useVoiceExecutionMachinePresentation } from '@/voice/credentials/useExecutionMachinePresentation';
+import { useActiveServerAccountScopeLifetime } from '@/sync/store/hooks';
 
 import { createVoiceDiagnosticsClientForMachine } from './client';
 import { exportVoiceDiagnosticArtifact } from './exportDiagnosticArtifact';
@@ -85,13 +86,26 @@ export function VoiceDiagnosticsSettingsSection(props: Readonly<{
     [props.voice.diagnostics],
   );
   const { machineId } = useVoiceExecutionMachinePresentation();
+  const accountLifetime = useActiveServerAccountScopeLifetime();
   const runtimeStatus = useVoiceDiagnosticsRuntimeStatus();
   const client = React.useMemo(
     () => machineId ? createVoiceDiagnosticsClientForMachine(machineId) : null,
-    [machineId],
+    [machineId, accountLifetime],
   );
   const [status, setStatus] = React.useState<DiagnosticsStatus | null>(null);
   const [busy, setBusy] = React.useState(false);
+  const operationLifetimeRef = React.useRef<AbortController | null>(null);
+  React.useEffect(() => {
+    const controller = new AbortController();
+    const retirement = accountLifetime?.onRetire(() => controller.abort());
+    operationLifetimeRef.current = controller;
+    setBusy(false);
+    return () => {
+      if (operationLifetimeRef.current === controller) operationLifetimeRef.current = null;
+      controller.abort();
+      retirement?.dispose();
+    };
+  }, [client, accountLifetime]);
   const healthPresentation = status
     ? resolveVoiceSpeechDiagnosticsHealthPresentation(status.health)
     : null;
@@ -116,15 +130,17 @@ export function VoiceDiagnosticsSettingsSection(props: Readonly<{
 
   React.useEffect(() => {
     let active = true;
+    const controller = new AbortController();
+    const retirement = accountLifetime?.onRetire(() => controller.abort());
     setStatus(null);
     const selectedMachineIsReconciling = runtimeStatus.machineId === machineId
       && runtimeStatus.phase === 'transitioning';
-    if (!client || selectedMachineIsReconciling) return () => { active = false; };
-    void client.status()
-      .then((next) => { if (active) setStatus(next); })
+    if (!client || selectedMachineIsReconciling) return () => { active = false; controller.abort(); retirement?.dispose(); };
+    void client.status(controller.signal)
+      .then((next) => { if (active && !controller.signal.aborted) setStatus(next); })
       .catch(() => { if (active) setStatus(null); });
-    return () => { active = false; };
-  }, [client, diagnostics, machineId, runtimeStatus.machineId, runtimeStatus.phase]);
+    return () => { active = false; controller.abort(); retirement?.dispose(); };
+  }, [client, diagnostics, machineId, runtimeStatus.machineId, runtimeStatus.phase, accountLifetime]);
 
   const toggleEnabled = (enabled: boolean) => {
     fireAndForget((async () => {
@@ -154,32 +170,39 @@ export function VoiceDiagnosticsSettingsSection(props: Readonly<{
 
   const exportArtifact = React.useCallback(async (artifact: NonNullable<DiagnosticsStatus>['artifacts'][number]) => {
     if (busy || !client) return;
+    const lifetime = operationLifetimeRef.current;
+    if (!lifetime || lifetime.signal.aborted) return;
+    const isCurrent = () => operationLifetimeRef.current === lifetime && !lifetime.signal.aborted;
     setBusy(true);
     try {
-      await exportVoiceDiagnosticArtifact({ client, artifact });
+      await exportVoiceDiagnosticArtifact({ client, artifact, signal: lifetime.signal, isCurrent });
     } catch {
-      await Modal.alert(tLoose('common.error'), tLoose('settingsVoice.diagnostics.exportFailed'));
+      if (isCurrent()) await Modal.alert(tLoose('common.error'), tLoose('settingsVoice.diagnostics.exportFailed'));
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }, [busy, client]);
 
   const retryCleanup = React.useCallback(async () => {
     if (busy || !client || !machineId) return;
+    const lifetime = operationLifetimeRef.current;
+    if (!lifetime || lifetime.signal.aborted) return;
+    const isCurrent = () => operationLifetimeRef.current === lifetime && !lifetime.signal.aborted;
     setBusy(true);
     try {
       const result = await applyVoiceDiagnosticsMachinePolicy({
         machineId,
         settings: diagnostics,
+        waitSignal: lifetime.signal,
       });
-      setStatus(result.applied && result.acknowledged ? result.status : null);
+      if (isCurrent()) setStatus(result.applied && result.acknowledged ? result.status : null);
     } catch {
-      await Modal.alert(
+      if (isCurrent()) await Modal.alert(
         tLoose('common.error'),
         tLoose('settingsVoice.diagnostics.cleanupRetryFailed'),
       );
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }, [busy, client, diagnostics, machineId]);
 
@@ -318,24 +341,28 @@ export function VoiceDiagnosticsSettingsSection(props: Readonly<{
             subtitle={tLoose('settingsVoice.diagnostics.deleteAllSubtitle')}
             onPress={() => {
               fireAndForget((async () => {
+                const lifetime = operationLifetimeRef.current;
+                if (!lifetime || lifetime.signal.aborted) return;
+                const isCurrent = () => operationLifetimeRef.current === lifetime && !lifetime.signal.aborted;
                 const confirmed = await Modal.confirm(
                   tLoose('settingsVoice.diagnostics.deleteConfirmTitle'),
                   tLoose('settingsVoice.diagnostics.deleteConfirmBody'),
                   { confirmText: tLoose('settingsVoice.diagnostics.deleteAction'), destructive: true },
                 );
-                if (!confirmed || busy) return;
+                if (!confirmed || busy || !isCurrent()) return;
                 setBusy(true);
                 try {
                   if (!client) return;
-                  await client.deleteAll();
-                  setStatus(await client.status());
+                  await client.deleteAll(lifetime.signal);
+                  const next = await client.status(lifetime.signal);
+                  if (isCurrent()) setStatus(next);
                 } catch {
-                  await Modal.alert(
+                  if (isCurrent()) await Modal.alert(
                     tLoose('common.error'),
                     tLoose('settingsVoice.diagnostics.deleteFailed'),
                   );
                 } finally {
-                  setBusy(false);
+                  if (isCurrent()) setBusy(false);
                 }
               })(), { tag: 'VoiceDiagnosticsSettingsSection.deleteAll' });
             }}

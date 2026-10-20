@@ -30,7 +30,7 @@ describe('finite Script row facts', () => {
             expect(preparing.tail).toBeNull();
             expect(preparing.text).not.toContain('projects.scripts.run.running');
         }
-        const uncertain = presentProjectRun(run({ state: 'accepted', domainRef: command, progress: { kind: 'phase', phase: 'queued', queueAhead: 0, label: 'Queued' }, observation: { kind: 'outcome_uncertain' } }), 'Builder', 'idle');
+        const uncertain = presentProjectRun(run({ state: 'accepted', domainRef: command, progress: { kind: 'phase', phase: 'queued', queueAhead: 0, label: 'Queued' }, observation: { kind: 'outcome_uncertain', code: 'transport_disconnected' } }), 'Builder', 'idle');
         expect(uncertain.text).toContain('projects.scripts.run.unknown');
     });
 

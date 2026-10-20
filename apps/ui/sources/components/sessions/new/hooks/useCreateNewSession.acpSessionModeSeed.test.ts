@@ -1,10 +1,10 @@
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import 'fake-indexeddb/auto';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createExistingSessionDirectoryPreflightResult, createPlainSessionCurrentProjectionRecordFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import React from 'react';
 import { createNewSessionPromptStore } from '@/components/sessions/new/hooks/screenModel/newSessionPromptStore';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, MACHINE_PLAIN_DATA_KEY_MARKER, RPC_ERROR_CODES, SessionSpawnNewInputV2Schema, type SessionSpawnNewInputV2, type SessionSpawnNewResultV1 } from '@happier-dev/protocol';
 import type { PermissionMode, ModelMode } from '@/sync/domains/permissions/permissionTypes';
@@ -17,6 +17,17 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { installNewSessionScreenModelCommonModuleMocks, selectNewSessionTestHome } from './newSessionScreenModelTestHelpers';
 import type { HandleCreateSessionOptions } from './useCreateNewSession';
+import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
+import { createPromptDocInLibrary } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
+import type { HomeCredentialWriteRollback } from '@/auth/storage/tokenStorage';
+import { ACTION_OPERATION_RPC_METHODS_V2, ActionOperationGetV2RequestSchema, ActionOperationGetV1ResponseSchema,
+  type ActionOperationGetV2Request, type ActionOperationGetV1Response } from '@happier-dev/protocol/actions/operations/v1';
+
+const localStorageBoundary = installLocalStorageMock();
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 installDisconnectedServerSocketBoundary(socket => { socket.connected = true; });
@@ -27,6 +38,7 @@ const scopedSocketEmitWithAckSpy = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/createEphemeralServerSocketClient', () => ({
   createEphemeralServerSocketClient: vi.fn(async () => ({
     timeout: () => ({ emitWithAck: scopedSocketEmitWithAckSpy }),
+    emitWithAck: scopedSocketEmitWithAckSpy,
     emit: vi.fn(),
     disconnect: vi.fn(),
   })),
@@ -50,11 +62,21 @@ installNewSessionScreenModelCommonModuleMocks({
 
 type HarnessOptions = Readonly<{
   storageState?: Record<string, unknown>;
+  promptTemplateBehavior?: 'insert' | 'insert_and_send';
+  /** The Home's prompt-library rows never answer (a saturated server); everything else responds. */
+  promptLibraryRowsNeverAnswer?: boolean;
 }>;
 let currentHarnessOptions: HarnessOptions | undefined;
 async function createHarness() {
   const options = currentHarnessOptions;
   const fixedServerNowMs = Date.parse('2026-02-05T00:00:00.000Z');
+  const createdSessions = new Map<string, ReturnType<typeof createPlainSessionCurrentProjectionRecordFixture>>();
+  const temporaryDestinationSessions = new Map<string, ReturnType<typeof createPlainSessionCurrentProjectionRecordFixture>>();
+  const temporaryDestinationCredentials: HomeCredentialWriteRollback[] = [];
+  const sessionReadRequests: string[] = [];
+  let temporaryDestinationToken: string | null = null;
+  const artifactBoundary = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
+  let promptLibraryBoundary = createPromptLibraryCatalogBoundary();
   const sessionSpawnNewRpcSpy = vi.fn(async (input: SessionSpawnNewInputV2): Promise<SessionSpawnNewResultV1> => ({
     type: 'success',
     disposition: 'created',
@@ -65,15 +87,26 @@ async function createHarness() {
       ? { status: 'accepted', localId: 'pending-1' }
       : { status: 'notRequested' },
   }));
+  const actionOperationGetRpcSpy = vi.fn(async (_input: ActionOperationGetV2Request): Promise<ActionOperationGetV1Response> => ({ kind: 'not_found' }));
   vi.doUnmock('@/sync/domains/state/storage');
   vi.doUnmock('@/sync/domains/state/persistence');
   const persistence = await import('@/sync/domains/state/persistence');
   const clearNewSessionDraftSpy = vi.spyOn(persistence, 'clearNewSessionDraft');
   await loadSyncSingletonForTests();
-  const account = await restoreServerAccountForTest({
+  const restoreAccount = () => restoreServerAccountForTest({
     serverUrl: 'https://server-a', accountId: 'account-a',
+    additionalRequestOrigins: ['https://server-b'],
     request: async (url, init) => {
-      const path = new URL(String(url)).pathname;
+      const target = new URL(String(url));
+      const path = target.pathname;
+      const sessionRows = target.origin === 'https://server-b' ? temporaryDestinationSessions : createdSessions;
+      const artifactResponse = artifactBoundary.handle(path, init);
+      if (artifactResponse) return await artifactResponse;
+      if (currentHarnessOptions?.promptLibraryRowsNeverAnswer && path.startsWith('/v1/account/entity-rows/prompt-library')) {
+        return await new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true }));
+      }
+      const promptLibraryResponse = await promptLibraryBoundary.handle(path, init);
+      if (promptLibraryResponse) return promptLibraryResponse;
       if (path === '/v1/features' || path === '/v1/features/authenticated') {
         const features = createRootLayoutFeaturesResponse();
         // This manually added Home has no portable identity. Its real profile
@@ -82,9 +115,22 @@ async function createHarness() {
       }
       if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
       if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
-      if (path === '/v1/account/profile') return Response.json({ id: 'account-a' });
+      if (path === '/v1/account/profile') return Response.json({ id: target.origin === 'https://server-b' ? 'account-b' : 'account-a' });
       if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
       if (path === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
+      if (path === '/v2/sessions' || path === '/v2/sessions/active') return Response.json(V2SessionListResponseSchema.parse({
+        sessions: [...sessionRows.values()], nextCursor: null, hasNext: false,
+      }));
+      const sessionRead = /^\/v2\/sessions\/([^/]+)$/.exec(path);
+      if (sessionRead) {
+        if (target.origin === 'https://server-b'
+          && new Headers(init?.headers).get('authorization') !== `Bearer ${temporaryDestinationToken}`) {
+          return Response.json({ error: 'unauthorized' }, { status: 401 });
+        }
+        sessionReadRequests.push(`${target.origin}${target.pathname}`);
+        const session = sessionRows.get(decodeURIComponent(sessionRead[1]));
+        return session ? Response.json({ session }) : Response.json({ error: 'not_found' }, { status: 404 });
+      }
       if (path === '/v1/machines/m1') return Response.json({ machine: { id: 'm1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
       if (path === '/v1/machines/m1/access') {
         const custodian = { accountId: 'account-a', displayName: 'Account A' };
@@ -96,6 +142,7 @@ async function createHarness() {
       return Response.json({ error: 'not_found' }, { status: 404 });
     },
   });
+  let account = await restoreAccount();
   const { storage } = await import('@/sync/domains/state/storageStore');
   storage.getState().activateProfileScope({ serverId: 'server-a', accountId: 'account-a' });
   storage.getState().activateSettingsScope({ serverId: 'server-a', accountId: 'account-a' });
@@ -120,11 +167,26 @@ async function createHarness() {
   }));
 
   // Exercise the real Action executor and custody owner through the daemon transport boundary.
+  const spawn = async (raw: unknown) => {
+    const result = await sessionSpawnNewRpcSpy(SessionSpawnNewInputV2Schema.parse(raw));
+    if (result.type === 'success') createdSessions.set(result.sessionId,
+      createPlainSessionCurrentProjectionRecordFixture({ id: result.sessionId,
+        metadata: { path: '/tmp', host: 'test-machine', machineId: result.executionTarget.machineId } }));
+    return result;
+  };
   const { apiSocket } = await import('@/sync/api/session/apiSocket');
-  vi.spyOn(apiSocket, 'machineRPC').mockImplementation(async (_machineId, _method, input) =>
-    await sessionSpawnNewRpcSpy(SessionSpawnNewInputV2Schema.parse(input)));
+  vi.spyOn(apiSocket, 'machineRPC').mockImplementation(async (_machineId, method, input, options) => {
+    // This transport accepts the request before awaiting the daemon result.
+    options?.onIssued?.();
+    if (method === ACTION_OPERATION_RPC_METHODS_V2.get) return await actionOperationGetRpcSpy(ActionOperationGetV2RequestSchema.parse(input));
+    return method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT
+      ? createExistingSessionDirectoryPreflightResult(input)
+      : await spawn(input);
+  });
   await import('@/sync/ops/actions/defaultActionExecutor');
   const { useCreateNewSession: useCreateNewSessionOwner } = await import('./useCreateNewSession');
+  const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+  let authProjection: Awaited<ReturnType<typeof renderScreen>> | null = null;
   const useCreateNewSession: typeof useCreateNewSessionOwner = (params) => useCreateNewSessionOwner({
     ...params,
     draftScope: params.draftScope ?? { serverId: 'server-a', accountId: 'account-a' },
@@ -132,17 +194,76 @@ async function createHarness() {
   const initialStore = storage.getState();
   const defaultSpawn = sessionSpawnNewRpcSpy.getMockImplementation()!;
   return {
-    dispose: account.dispose,
+    async disposeAuth() { await authProjection?.unmount(); authProjection = null; },
+    async dispose() {
+      await authProjection?.unmount(); authProjection = null;
+      for (const write of temporaryDestinationCredentials.splice(0).reverse()) await write.rollback();
+      await account.dispose();
+    },
+    async seedTemporaryDestination(sessionId: string) {
+      const { upsertServerProfileOnly } = await import('@/sync/domains/server/serverRuntime');
+      const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+      const home = await upsertServerProfileOnly({ serverUrl: 'https://server-b', name: 'Temporary destination' });
+      const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'account-b' })).toString('base64url')}.signature` };
+      const write = await TokenStorage.setCredentialsForServerUrlWithRollback(home.serverUrl, { serverId: home.id }, credentials);
+      if (!write) throw new Error('Temporary destination Account credentials could not be stored');
+      temporaryDestinationCredentials.push(write);
+      temporaryDestinationToken = credentials.token;
+      temporaryDestinationSessions.set(sessionId, createPlainSessionCurrentProjectionRecordFixture({ id: sessionId }));
+      return { serverId: home.id, accountId: 'account-b' };
+    },
     async reset(options?: HarnessOptions) {
+      await authProjection?.unmount();
+      authProjection = null;
+      // Each test's global cleanup retires its HTTP boundary. Re-enter the
+      // canonical Account fixture before exercising another real launch.
+      await account.dispose();
+      for (const write of temporaryDestinationCredentials.splice(0).reverse()) await write.rollback();
+      temporaryDestinationSessions.clear();
+      temporaryDestinationToken = null;
+      sessionReadRequests.length = 0;
+      artifactBoundary.clear();
+      promptLibraryBoundary = createPromptLibraryCatalogBoundary();
+      account = await restoreAccount();
       currentHarnessOptions = options;
+      createdSessions.clear();
       sessionSpawnNewRpcSpy.mockReset().mockImplementation(defaultSpawn);
+      actionOperationGetRpcSpy.mockReset().mockResolvedValue({ kind: 'not_found' });
+      scopedSocketEmitWithAckSpy.mockImplementation(async (event, input) => {
+        expect(event).toBe('rpc-call');
+        const request = input as Readonly<{ method: string; params: unknown }>;
+        if (request.method === `m1:${RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT}`) {
+          return { ok: true, result: createExistingSessionDirectoryPreflightResult(request.params) };
+        }
+        if (request.method === `m1:${ACTION_OPERATION_RPC_METHODS_V2.get}`) {
+          return { ok: true, result: await actionOperationGetRpcSpy(ActionOperationGetV2RequestSchema.parse(request.params)) };
+        }
+        expect(request.method).toBe(`m1:${RPC_METHODS.SESSION_SPAWN_NEW}`);
+        return { ok: true, result: await spawn(request.params) };
+      });
       publishModeSpy.mockClear();
       sendMessageSpy.mockClear();
-      storage.setState({ ...initialStore, sessions: {}, sessionPending: {}, artifacts: {} });
+      // Keep the Account lifetime just restored above; replaying the complete
+      // initial snapshot would resurrect its retired credential authority.
+      storage.setState({ sessions: {}, sessionPending: {}, artifacts: {} });
+      storage.getState().applyMachines([createMachineFixture({ id: 'm1' })], true, { sourceServerId: account.serverId });
       storage.getState().applySettings(
         { ...initialStore.settings, ...options?.storageState?.settings as Partial<Settings> },
         (storage.getState().settingsVersion ?? 0) + 1,
       );
+      if (options?.promptTemplateBehavior) {
+        const { withUiPromptLibraryArtifactStore } = await import('@/sync/ops/promptLibrary/promptLibraryArtifactStore');
+        // Store the document through its actual writer; only the Account's
+        // Artifact and catalog HTTP endpoints are supplied by this fixture.
+        const created = await withUiPromptLibraryArtifactStore(store => createPromptDocInLibrary({
+          store, request: { title: 'QA Template', markdown: 'Expanded QA Template' },
+        }), { serverId: account.serverId });
+        promptLibraryBoundary = createPromptLibraryCatalogBoundary({ records: [{ key: 'invocations', value: {
+          v: 1, entries: [{ id: 'tmpl_1', token: '/qa-check', title: 'QA Template',
+            target: { kind: 'doc', artifactId: created.artifactId }, behavior: options.promptTemplateBehavior,
+            allowArgs: true, availableIn: 'global' }],
+        } }] });
+      }
       for (const sessionId of Object.keys(options?.storageState?.sessions ?? {})) {
         storage.getState().applySessions([createSessionFixture({ id: sessionId })]);
       }
@@ -152,11 +273,18 @@ async function createHarness() {
       const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
       actionOperationStore.reset();
       await selectNewSessionTestHome();
+      // Sync transport restoration and the rendered UI's Action identity are
+      // separate owners. Publish the same genuine Account to both.
+      authProjection = await renderScreen(React.createElement(InjectedAuthProvider, {
+        credentials: account.credentials, children: null,
+      }));
     },
     useCreateNewSession,
     publishModeSpy,
     sendMessageSpy,
     sessionSpawnNewRpcSpy,
+    actionOperationGetRpcSpy,
+    sessionReadRequests,
     clearNewSessionDraftSpy,
   };
 }
@@ -185,7 +313,6 @@ function buildCreateSessionHookParams(overrides: Record<string, unknown> = {}): 
     selectedMachine: createMachineFixture({ id: 'm1' }),
     setIsCreating: vi.fn(),
     setIsResumeSupportChecking: vi.fn(),
-    settings: { experiments: false } as unknown as Settings,
     useProfiles: false,
     selectedProfileId: null,
     profileMap: new Map(),
@@ -208,16 +335,17 @@ function buildCreateSessionHookParams(overrides: Record<string, unknown> = {}): 
   };
 }
 
-beforeAll(async () => {
-  restoreActionExecutorModuleLoader = await installRealActionExecutorModuleLoader();
-  harness = await createHarness();
-  const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
-  await prepareSessionDraftPersistenceStorage();
-});
+// The cold Sync/Action module graph belongs to collection; the per-case reset
+// below restores real Account custody before exercising each launch.
+restoreActionExecutorModuleLoader = await installRealActionExecutorModuleLoader();
+harness = await createHarness();
+const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
+await prepareSessionDraftPersistenceStorage();
 afterAll(async () => {
   await harness?.dispose();
   restoreActionExecutorModuleLoader?.();
   vi.restoreAllMocks();
+  localStorageBoundary.restore();
 });
 
 describe('useCreateNewSession (ACP mode seeding)', () => {
@@ -226,16 +354,15 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
     scopedSocketEmitWithAckSpy.mockReset();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await harness?.disposeAuth();
     vi.useRealTimers();
     vi.clearAllMocks();
     vi.unstubAllGlobals();
   });
 
   it('keeps a Temporary computer Composer submission pending until its real first input is admitted', async () => {
-    const { useCreateNewSession, sessionSpawnNewRpcSpy } = await setupHarness({
-      storageState: { sessions: { 'runner-session-1': { id: 'runner-session-1' } } },
-    });
+    const { useCreateNewSession, sessionSpawnNewRpcSpy, seedTemporaryDestination, sessionReadRequests } = await setupHarness();
     const creatorSettlements: Array<Readonly<{
       attachmentMessageLocalId: string;
       firstTurnLocalId: string;
@@ -247,19 +374,21 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
       creatorSettlements.push(settlement);
     });
     const onAfterCreatedSettled = vi.fn();
-    const afterCreated = vi.fn(async () => undefined);
+    let followUpSignal: AbortSignal | undefined;
+    const afterCreated = vi.fn(async (created: Parameters<NonNullable<HandleCreateSessionOptions['afterCreated']>>[0]) => {
+      followUpSignal = created.signal;
+      // Accepted first-input work belongs to creation custody, not the route
+      // which presented the materialized Session.
+      await hook.unmount();
+    });
     const router = { push: vi.fn(), replace: vi.fn() };
     const draftScope = { serverId: 'server-a', accountId: 'account-a' } as const;
     // The active authoring Account and temporary destination are deliberately
     // different Homes and Accounts.
-    const targetScope = { serverId: 'server-b', accountId: 'account-b' } as const;
+    const targetScope = await seedTemporaryDestination('runner-session-1');
     const prepareTemporaryComputerLaunchDraft = vi.fn(async () => undefined);
     const draftId = 'temporary-computer-completion-draft';
-    const { getSessionDraftSnapshot, writeNewSessionDraft } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
-    const { sync } = await import('@/sync/syncEngine');
-    const ensureSessionVisibleForMessageRouteSpy = vi
-      .spyOn(sync, 'ensureSessionVisibleForMessageRoute')
-      .mockResolvedValue({ kind: 'available', sessionId: 'runner-session-1' });
+    const { getSessionComposerDraftSnapshot, writeNewSessionDraft } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
     writeNewSessionDraft({
       scope: draftScope,
       draftId,
@@ -320,13 +449,10 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
       await creatorSettlement.present('runner-session-1');
     });
     expect(router.replace).toHaveBeenCalledTimes(1);
-    expect(ensureSessionVisibleForMessageRouteSpy).toHaveBeenCalledWith('runner-session-1', {
-      forceRefresh: true,
-      serverId: targetScope.serverId,
-    });
+    expect(sessionReadRequests).toContain('https://server-b/v2/sessions/runner-session-1');
     expect(afterCreated).not.toHaveBeenCalled();
     expect(onAfterCreatedSettled).not.toHaveBeenCalled();
-    expect(getSessionDraftSnapshot(draftScope, { kind: 'newSession', draftId })?.document.composer.text.value)
+    expect(getSessionComposerDraftSnapshot(draftScope, { kind: 'newSession', draftId })?.composer.text.value)
       .toBe('reviewed prompt');
 
     await expect(creatorSettlement.complete('runner-session-2', []))
@@ -346,11 +472,30 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
       effectiveSpawnServerId: targetScope.serverId,
       preuploadedAttachments: [],
     }));
+    expect(followUpSignal).toBeInstanceOf(AbortSignal);
+    expect(followUpSignal?.aborted).toBe(false);
     expect(router.replace).toHaveBeenCalledTimes(1);
-    expect(getSessionDraftSnapshot(draftScope, { kind: 'newSession', draftId })?.document.composer.text.value)
+    expect(getSessionComposerDraftSnapshot(draftScope, { kind: 'newSession', draftId })?.composer.text.value)
       .toBe('reviewed prompt');
-    ensureSessionVisibleForMessageRouteSpy.mockRestore();
     await hook.unmount();
+  });
+
+  it('launches a prompt that cannot be an invocation without waiting for the prompt-library catalog', async () => {
+    const { useCreateNewSession, sessionSpawnNewRpcSpy } = await setupHarness({ promptLibraryRowsNeverAnswer: true });
+    let handleCreateSession: null | (() => Promise<void>) = null;
+    function Test() {
+      handleCreateSession = useCreateNewSession(buildCreateSessionHookParams({
+        promptStore: createNewSessionPromptStore('hello'),
+      }) as any).handleCreateSession as () => Promise<void>;
+      return React.createElement('View');
+    }
+    await renderScreen(React.createElement(Test));
+
+    await act(async () => { void handleCreateSession?.(); });
+
+    await vi.waitFor(() => expect(sessionSpawnNewRpcSpy, JSON.stringify(modalAlertSpy.mock.calls)).toHaveBeenCalledWith(
+      expect.objectContaining({ initialInput: { text: 'hello' } }),
+    ));
   });
 
   it('creates through the strict V2 Action with its existing attempt identity and initial input', async () => {
@@ -360,6 +505,7 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
       publishModeSpy,
       sendMessageSpy,
       } = await setupHarness();
+
 
     let handleCreateSession: null | (() => Promise<void>) = null;
     const settings = { experiments: false } as unknown as Settings;
@@ -380,7 +526,6 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
         selectedMachine: createMachineFixture({ id: 'm1' }),
         setIsCreating: vi.fn(),
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),
@@ -413,7 +558,7 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
     });
 
     expect(publishModeSpy).not.toHaveBeenCalled();
-    expect(sessionSpawnNewRpcSpy).toHaveBeenCalledWith(expect.objectContaining({
+    expect(sessionSpawnNewRpcSpy, JSON.stringify(modalAlertSpy.mock.calls)).toHaveBeenCalledWith(expect.objectContaining({
       creationKey: expect.any(String),
       executionTarget: { serverId: 'server-a', machineId: 'm1' },
       directory: { kind: 'path', path: '/tmp' },
@@ -433,8 +578,13 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
     const access = {
       grants: [{ subject: { kind: 'team' as const, teamId: 'team-acme' }, accessLevel: 'view' as const, canApprovePermissions: false }],
     };
+    const { getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+    expect(await getServerFeaturesSnapshot({ serverId: 'server-a', force: true })).toMatchObject({
+      status: 'ready', features: { features: { sharing: { session: { enabled: true } } } },
+    });
     const hook = await renderHook(() => useCreateNewSession(buildCreateSessionHookParams({
       authoringDraft: { access, primaryTeamId: 'team-acme' },
+      targetServerId: 'server-a',
     }) as never));
 
     await act(async () => { await hook.getCurrent().handleCreateSession(); });
@@ -467,7 +617,6 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
         selectedMachine: createMachineFixture({ id: 'm1' }),
         setIsCreating: vi.fn(),
         setIsResumeSupportChecking: vi.fn(),
-        settings: { experiments: false } as unknown as Settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),
@@ -749,7 +898,7 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
     const afterCreated = vi.fn(async () => {});
     const draftScope = { serverId: 'server-a', accountId: 'account-a' };
     const draftId = 'detached-post-create-draft';
-    const { getSessionDraftSnapshot, writeNewSessionDraft } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+    const { getSessionComposerDraftSnapshot, writeNewSessionDraft } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
     writeNewSessionDraft({
       scope: draftScope,
       draftId,
@@ -787,33 +936,37 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
       });
       await Promise.resolve();
       await Promise.resolve();
+      await createPromise;
     });
 
     expect(afterCreated).toHaveBeenCalledTimes(1);
-    await createPromise;
-    expect(getSessionDraftSnapshot(
+    expect(getSessionComposerDraftSnapshot(
       draftScope,
       { kind: 'newSession', draftId },
-    )?.document.composer.text?.value ?? '').toBe('');
+    )?.composer.text?.value ?? '').toBe('');
     expect(disableDraftPersistence).not.toHaveBeenCalled();
     expect(routerReplace).not.toHaveBeenCalled();
     await hook.unmount();
   });
 
 
-  it('does not turn observer socket loss into terminal failure after the canonical store has daemon custody', async () => {
+  it.each(['accepted', 'unavailable', 'missing', 'failed'] as const)(
+    'preserves canonical daemon custody across observer socket loss (%s)', async (operationState) => {
     const {
       useCreateNewSession,
       sessionSpawnNewRpcSpy,
     } = await setupHarness();
+    const { markRpcRequestDisposition } = await import('@happier-dev/sync-client');
     const observer = createDeferred<never>();
     sessionSpawnNewRpcSpy.mockReturnValueOnce(observer.promise);
+    const requestId = `request-owned-by-daemon-${operationState}`;
+    const operationId = `operation-owned-by-daemon-${operationState}`;
     const setIsCreating = vi.fn();
     const onAfterCreatedSettled = vi.fn();
     const hook = await renderHook(() => useCreateNewSession(buildCreateSessionHookParams({
       setIsCreating,
       draftScope: { serverId: 'server-a', accountId: 'account-a' },
-      launchUserAttemptId: 'request-owned-by-daemon',
+      launchUserAttemptId: requestId,
     }) as any));
 
     let createPromise: Promise<void> | null = null;
@@ -827,29 +980,108 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
     await vi.waitFor(() => expect(sessionSpawnNewRpcSpy).toHaveBeenCalledTimes(1));
 
     const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
-    act(() => actionOperationStore.mergeSnapshots({ serverId: 'server-a', snapshots: [{
-      version: 1,
-      operationId: 'operation-owned-by-daemon',
-      revision: 1,
-      actionId: 'session.spawn_new',
-      state: 'accepted',
-      scope: { accountId: 'account-a', machineId: 'm1' },
-      title: 'Create session',
-      requestId: 'request-owned-by-daemon',
-      createdAt: 1,
-      cancellation: 'supported',
-    }] }));
+    if (operationState !== 'missing') {
+      act(() => actionOperationStore.mergeSnapshots({ serverId: 'server-a', snapshots: [{
+        version: 1,
+        operationId,
+        revision: 1,
+        actionId: 'session.spawn_new',
+        state: operationState === 'failed' ? 'failed' : 'accepted',
+        scope: { accountId: 'account-a', machineId: 'm1' },
+        title: 'Create session',
+        requestId,
+        createdAt: 1,
+        cancellation: 'supported',
+        ...(operationState === 'failed' ? {
+          settledAt: 2, error: { errorCode: 'spawn_failed', error: 'spawn_failed' },
+        } : {}),
+      }] }));
+      if (operationState === 'unavailable') {
+        act(() => actionOperationStore.setMachineObservation({ serverId: 'server-a', machineId: 'm1' }, 'unavailable'));
+      }
+    }
+    expect(sessionSpawnNewRpcSpy.mock.calls[0]?.[0].creationKey).toBe(`manual:${requestId}`);
+    const { readManualSessionSpawnOperation } = await import('@/sync/domains/session/spawn/manualSessionSpawnOperation');
+    const readOperation = () => readManualSessionSpawnOperation(
+      { serverId: 'server-a', accountId: 'account-a' },
+      requestId,
+    );
+    if (operationState === 'missing') expect(readOperation()).toBeNull();
+    else expect(readOperation()).toMatchObject({ operationId, state: operationState === 'failed' ? 'failed' : 'accepted' });
     await hook.unmount();
     await act(async () => {
-      observer.reject(new Error('Socket not connected'));
+      // This is loss of an already-issued observation, not an unsent request
+      // that the real transport may safely retry through another route.
+      observer.reject(markRpcRequestDisposition(new Error('Socket not connected'), 'outcomeUnknown'));
       await createPromise;
     });
 
     expect(sessionSpawnNewRpcSpy).toHaveBeenCalledTimes(1);
     expect(modalAlertSpy).not.toHaveBeenCalled();
-    expect(onAfterCreatedSettled).not.toHaveBeenCalledWith({ status: 'rejected' });
+    if (operationState === 'accepted' || operationState === 'unavailable') {
+      expect(onAfterCreatedSettled).not.toHaveBeenCalledWith({ status: 'rejected' });
+      expect(readOperation()).toMatchObject({ operationId, state: 'accepted' });
+    } else {
+      expect(onAfterCreatedSettled).toHaveBeenCalledTimes(1);
+      expect(onAfterCreatedSettled).toHaveBeenCalledWith({ status: 'rejected' });
+      if (operationState === 'missing') expect(readOperation()).toBeNull();
+      else expect(readOperation()).toMatchObject({ operationId, state: 'failed' });
+    }
     actionOperationStore.reset();
     await hook.unmount();
+  });
+
+  it('retains canonical custody when unmounted while joining an accepted operation', async () => {
+    const { useCreateNewSession, sessionSpawnNewRpcSpy, actionOperationGetRpcSpy } = await setupHarness();
+    const requestId = 'request-owned-by-accepted-operation';
+    const operationId = 'accepted-operation-observer';
+    const operationReply = createDeferred<ActionOperationGetV1Response>();
+    actionOperationGetRpcSpy.mockReturnValueOnce(operationReply.promise);
+    sessionSpawnNewRpcSpy.mockResolvedValueOnce({ type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' });
+    const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
+    const operation = {
+      version: 1 as const, operationId, revision: 1, actionId: 'session.spawn_new', state: 'accepted' as const,
+      scope: { accountId: 'account-a', machineId: 'm1' }, title: 'Create session', requestId,
+      createdAt: 1, cancellation: 'supported' as const,
+    };
+    act(() => actionOperationStore.mergeSnapshots({ serverId: 'server-a', snapshots: [operation] }));
+    const afterCreated = vi.fn();
+    const onAfterCreatedSettled = vi.fn();
+    const router = { push: vi.fn(), replace: vi.fn() };
+    const hook = await renderHook(() => useCreateNewSession(buildCreateSessionHookParams({
+      router, launchUserAttemptId: requestId,
+    }) as any));
+    let createPromise: Promise<void> | undefined;
+    try {
+      await act(async () => {
+        createPromise = Promise.resolve(hook.getCurrent().handleCreateSession({ initialMessage: 'skip', afterCreated, onAfterCreatedSettled }));
+        await Promise.resolve();
+      });
+      await vi.waitFor(() => expect(actionOperationGetRpcSpy).toHaveBeenCalledWith({ operationId, waitForTerminal: true }));
+      expect(sessionSpawnNewRpcSpy.mock.calls[0]?.[0].creationKey).toBe(`manual:${requestId}`);
+      await hook.unmount();
+      await act(async () => {
+        operationReply.resolve(ActionOperationGetV1ResponseSchema.parse({ kind: 'found', operation: { ...operation, revision: 2, state: 'succeeded', startedAt: 1, settledAt: 2,
+          result: { type: 'success', disposition: 'created', sessionId: 'pending-created-session',
+            executionTarget: { serverId: 'server-a', machineId: 'm1' }, organizationPlacement: { folderId: null, tagIds: [] },
+            initialInput: { status: 'notRequested' } },
+        } }));
+        await createPromise;
+      });
+      expect(sessionSpawnNewRpcSpy).toHaveBeenCalledTimes(1);
+      expect(afterCreated).not.toHaveBeenCalled();
+      expect(router.replace).not.toHaveBeenCalled();
+      expect(modalAlertSpy).not.toHaveBeenCalled();
+      expect(onAfterCreatedSettled).not.toHaveBeenCalledWith({ status: 'rejected' });
+      const { readManualSessionSpawnOperation } = await import('@/sync/domains/session/spawn/manualSessionSpawnOperation');
+      expect(readManualSessionSpawnOperation({ serverId: 'server-a', accountId: 'account-a' }, requestId))
+        .toMatchObject({ operationId, state: 'accepted' });
+    } finally {
+      await hook.unmount();
+      operationReply.resolve({ kind: 'not_found' });
+      await createPromise;
+      actionOperationStore.reset();
+    }
   });
 
   it('shows typed update guidance when an older CLI does not implement session.spawn_new', async () => {
@@ -887,10 +1119,13 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
     sessionSpawnNewRpcSpy.mockRejectedValue(Object.assign(new Error('RPC method not available'), {
       rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
     }));
-    scopedSocketEmitWithAckSpy.mockResolvedValue({
-      ok: false,
-      error: 'RPC method not available',
-      errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+    scopedSocketEmitWithAckSpy.mockImplementation(async (_event, input) => {
+      const request = input as Readonly<{ method: string; params: unknown }>;
+      if (request.method === `m1:${RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT}`) {
+        return { ok: true, result: createExistingSessionDirectoryPreflightResult(request.params) };
+      }
+      await sessionSpawnNewRpcSpy(SessionSpawnNewInputV2Schema.parse(request.params)).catch(() => undefined);
+      return { ok: false, error: 'RPC method not available', errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE };
     });
 
     let handleCreateSession: null | (() => Promise<void>) = null;
@@ -911,7 +1146,6 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
         selectedMachine: createMachineFixture({ id: 'm1' }),
         setIsCreating: vi.fn(),
         setIsResumeSupportChecking: vi.fn(),
-        settings: { experiments: false } as unknown as Settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),
@@ -943,8 +1177,20 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
       await handleCreateSession?.();
     });
 
-    expect(sessionSpawnNewRpcSpy).toHaveBeenCalledTimes(2);
-    expect(scopedSocketEmitWithAckSpy).toHaveBeenCalledTimes(2);
+    // Both active and scoped transports reach this daemon boundary. An issued
+    // strict request is not replayed through an incidental alternative route.
+    expect(sessionSpawnNewRpcSpy).toHaveBeenCalledTimes(1);
+    for (const [event, input] of scopedSocketEmitWithAckSpy.mock.calls) {
+      expect(event).toBe('rpc-call');
+      // Socket.IO is the untyped transport boundary; payload schemas stay real.
+      const request = input as Readonly<{ method: string; params: unknown }>;
+      if (request.method === `m1:${RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT}`) {
+        createExistingSessionDirectoryPreflightResult(request.params);
+      } else {
+        expect(request.method).toBe(`m1:${RPC_METHODS.SESSION_SPAWN_NEW}`);
+        SessionSpawnNewInputV2Schema.parse(request.params);
+      }
+    }
     expect(modalAlertSpy).toHaveBeenCalledWith(
       'common.error',
       'newSession.actionMethodUnavailable',
@@ -977,7 +1223,6 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
         selectedMachine: createMachineFixture({ id: 'm1' }),
         setIsCreating: vi.fn(),
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),
@@ -1021,6 +1266,7 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
 
     let handleCreateSession: null | (() => Promise<void>) = null;
     const settings = { codexBackendMode: 'appServer' } as unknown as Settings;
+    (await import('@/sync/domains/state/storageStore')).storage.getState().applySettingsLocal(settings);
     const machineEnvPresence: UseMachineEnvPresenceResult = {
       isPreviewEnvSupported: false,
       isLoading: false,
@@ -1038,7 +1284,6 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
         selectedMachine: createMachineFixture({ id: 'm1' }),
         setIsCreating: vi.fn(),
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),
@@ -1082,6 +1327,7 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
 
     let handleCreateSession: null | (() => Promise<void>) = null;
     const settings = { codexBackendMode: 'appServer' } as unknown as Settings;
+    (await import('@/sync/domains/state/storageStore')).storage.getState().applySettingsLocal(settings);
     const machineEnvPresence: UseMachineEnvPresenceResult = {
       isPreviewEnvSupported: false,
       isLoading: false,
@@ -1099,7 +1345,6 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
         selectedMachine: createMachineFixture({ id: 'm1' }),
         setIsCreating: vi.fn(),
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),
@@ -1170,7 +1415,6 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
         selectedMachine: createMachineFixture({ id: 'm1' }),
         setIsCreating: vi.fn(),
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         pluginSettings: { account: { codexBackendMode: 'acp' } },
         useProfiles: false,
         selectedProfileId: null,
@@ -1217,35 +1461,7 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
 
   it('expands prompt templates before admitting the initial input in the strict V2 Action', async () => {
     const { useCreateNewSession, sessionSpawnNewRpcSpy, sendMessageSpy } = await setupHarness({
-      storageState: {
-        settings: {
-          promptInvocationsV1: {
-            v: 1,
-            entries: [
-              {
-                id: 'tmpl_1',
-                token: '/qa-check',
-                title: 'QA Template',
-                target: { kind: 'doc', artifactId: 'artifact_prompt_1' },
-                behavior: 'insert_and_send',
-                allowArgs: true,
-                availableIn: 'global',
-              },
-            ],
-          },
-        },
-        artifacts: {
-          artifact_prompt_1: {
-            id: 'artifact_prompt_1',
-            body: JSON.stringify({
-              v: 1,
-              markdown: 'Expanded QA Template',
-              createdAtMs: 1,
-              updatedAtMs: 1,
-            }),
-          },
-        },
-      },
+      promptTemplateBehavior: 'insert_and_send',
     });
 
     let handleCreateSession: null | (() => Promise<void>) = null;
@@ -1268,7 +1484,6 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
         selectedMachine: createMachineFixture({ id: 'm1' }),
         setIsCreating: vi.fn(),
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),
@@ -1310,35 +1525,7 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
 
   it('inserts prompt templates without creating a new session when behavior is insert', async () => {
     const { useCreateNewSession, sessionSpawnNewRpcSpy, sendMessageSpy } = await setupHarness({
-      storageState: {
-        settings: {
-          promptInvocationsV1: {
-            v: 1,
-            entries: [
-              {
-                id: 'tmpl_1',
-                token: '/qa-check',
-                title: 'QA Template',
-                target: { kind: 'doc', artifactId: 'artifact_prompt_1' },
-                behavior: 'insert',
-                allowArgs: true,
-                availableIn: 'global',
-              },
-            ],
-          },
-        },
-        artifacts: {
-          artifact_prompt_1: {
-            id: 'artifact_prompt_1',
-            body: JSON.stringify({
-              v: 1,
-              markdown: 'Expanded QA Template',
-              createdAtMs: 1,
-              updatedAtMs: 1,
-            }),
-          },
-        },
-      },
+      promptTemplateBehavior: 'insert',
     });
 
     let handleCreateSession: null | (() => Promise<void>) = null;
@@ -1362,7 +1549,6 @@ describe('useCreateNewSession (ACP mode seeding)', () => {
         selectedMachine: createMachineFixture({ id: 'm1' }),
         setIsCreating: vi.fn(),
         setIsResumeSupportChecking: vi.fn(),
-        settings,
         useProfiles: false,
         selectedProfileId: null,
         profileMap: new Map(),

@@ -1,0 +1,30 @@
+{
+  "name": "happier-plugin-qa-capabilities",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "QA capabilities Happier plugin.",
+  "happier": {
+    "manifest": ".happier-plugin/plugin.json"
+  },
+  "keywords": [
+    "happier-plugin"
+  ],
+  "files": [
+    ".agents/skills/happier-plugin-authoring",
+    "resources",
+    "dist"
+  ],
+  "scripts": {
+    "build": "happier plugins dev build .",
+    "typecheck": "happier plugins dev typecheck .",
+    "test": "happier plugins test .",
+    "pack:plugin": "happier plugins pack ."
+  },
+  "dependencies": {
+    "@happier-dev/plugin-sdk": "0.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "25.0.10",
+    "@typescript/native": "npm:typescript@7.0.2"
+  }
+}

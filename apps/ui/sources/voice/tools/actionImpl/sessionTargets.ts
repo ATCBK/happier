@@ -266,7 +266,7 @@ export async function setTrackedSessionIds(params: Readonly<{
         },
       };
     }
-    for (const sessionId of sessionIds) {
+    for (const sessionId of outcome.value.sessionIds) {
       const address = { serverId, sessionId };
       completed.set(sessionAddressKey(address), address);
     }
@@ -276,7 +276,7 @@ export async function setTrackedSessionIds(params: Readonly<{
   // durable owner; this attempt-local projection exists only for immediate
   // result presentation and explicit readback. It is not a disclosure,
   // catch-up, frontier, or transcript-consumption authority.
-  const projection = publishTrackedSessionProjection(desiredByKey, state);
+  const projection = publishTrackedSessionProjection(completed, state);
   return {
     ok: true,
     status: 'ok',

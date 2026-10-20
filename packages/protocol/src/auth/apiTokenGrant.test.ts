@@ -31,6 +31,11 @@ describe('API token grant admission', () => {
     });
     const request = { grant: g, actionId: 'workflow.trigger.run_now', target: machine };
     expect(evaluate({ ...request, automationId: 'brief' })).toEqual({ ok: true });
+    expect(evaluate({ ...request, automationAdmission: 'pre_open' })).toEqual({ ok: true });
+    expect(evaluate({ ...request, automationAdmission: 'pre_open', automationId: 'other' }))
+      .toEqual({ ok: false, reason: 'automation_not_granted' });
+    expect(evaluate({ ...request, automationAdmission: 'pre_open', target: { kind: 'machine', machineId: 'm2' } }))
+      .toEqual({ ok: false, reason: 'target_not_granted' });
     for (const automationId of [undefined, null, '', 'other', ' brief', { id: 'brief' }]) {
       expect(evaluate({ ...request, automationId })).toEqual({ ok: false, reason: 'automation_not_granted' });
     }

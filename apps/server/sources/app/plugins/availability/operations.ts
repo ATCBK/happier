@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { deriveArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { acceptsManagedResourceDispositions, readManagedResourceDependenciesInTx } from '@/app/machines/managed/managedRead';
 import { type ManagedResourceDependencyV1 } from '@happier-dev/protocol/machines/managed/managedDependencyV1';
 import { PluginAccountPluginIntentV1Schema, PluginAccountPluginPackageAssetLinkV1Schema, PluginAccountPluginUiArtifactLinkV1Schema, PLUGIN_ACCOUNT_AVAILABILITY_INTENT_PAGE_SIZE, isExactPluginMachineMaterializationReleaseCorrespondenceV1, isPluginUiReleaseSlotCompatibleWithArtifactLinkV1, PluginMachineMaterializationSnapshotV1Schema, PluginMachineMaterializationV1Schema, PluginUiArtifactHostingCapabilityV1Schema, PluginUiReleaseSlotV1Schema, normalizePluginMachineMaterializationSnapshotV1, projectPluginMachineMaterializationReportFactsV1, normalizePluginReleaseFactsV1, pluginReleaseFactsEqualV1, type PluginAccountPluginUiArtifactLinkV1, type PluginAccountPluginPackageAssetLinkV1, type PluginMachineMaterializationV1, type PluginMachineMaterializationSnapshotV1, type PluginReleaseFactsV1, type PluginUiArtifactHostingCapabilityV1, type PluginUiReleaseSlotV1 } from '@happier-dev/protocol/plugins/availability/v1';
@@ -10,11 +11,11 @@ import { isPluginCollectionSchemaWideningV1, type PluginCollectionQuotaDimension
 import { supportsMachineOperationProtocolCapabilityV1, type MachineOperationProtocolCapabilityNameV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 import { type PluginCollectionContractRefV1 } from '@happier-dev/protocol/plugins/data/collectionContractRefV1';
 import { type ArtifactAccountEncryptionMigrationOwnershipV1 } from '@happier-dev/protocol/artifacts/artifactAccountEncryptionMigrationV1';
-import { decodePackageAssetArchiveBodyV1, openPackageAssetArchiveV1 } from '@happier-dev/protocol/plugins/availability/packageAssetV1';
+import { decodePackageAssetArchiveBodyV1, openPackageAssetArchiveV1, PLUGIN_PACKAGE_ASSET_ARCHIVE_KIND_V1 } from '@happier-dev/protocol/plugins/availability/packageAssetV1';
 import * as privacyKit from "privacy-kit";
 import semver from "semver";
 
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from "@/app/encryption/accountEncryptionMode";
 import { resolvePluginUiArtifactHostingCapability } from "@/app/features/pluginsFeature";
@@ -27,7 +28,7 @@ import {
     isPlainArtifactDataKeyBytes,
     openArtifactStoredContentPair,
 } from "@/app/artifacts/artifactStoredContent";
-import { decodePluginUiArtifactArchiveBodyV1, openPluginUiArtifactArchiveV1, type PluginUiArtifactArchiveOpenedV1 } from '@happier-dev/protocol/plugins/ui';
+import { decodePluginUiArtifactArchiveBodyV1, openPluginUiArtifactArchiveV1, PLUGIN_UI_ARTIFACT_ARCHIVE_KIND_V1, type PluginUiArtifactArchiveOpenedV1 } from '@happier-dev/protocol/plugins/ui';
 import { deriveGeneratedHostedWebAssetPolicyV1, resolveHostedWebAssetPolicy, type GeneratedHostedWebAssetPolicyV1 } from '@happier-dev/protocol/plugins/ui/hostedWebAssetPolicy';
 import { type PluginUiArtifactDigestV1 } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 import {
@@ -206,7 +207,7 @@ async function markAvailabilityChangedTx(
     tx: Tx,
     accountId: string,
     pluginId: string,
-): Promise<number> {
+): ReturnType<typeof markAccountChanged> {
     const hint = availabilityChangeHint(pluginId);
     return await markAccountChanged(tx, {
         accountId,
@@ -1307,7 +1308,8 @@ function isClaimableMachineRowV1(
  * Classifies every current materialization for one authenticated machine
  * installation with a fixed number of database queries. Consumers that select
  * work across materializations use this projection instead of re-running the
- * exact currentness reader once per candidate.
+ * exact currentness reader once per candidate. A consumer of one plugin scopes
+ * the database read before loading or parsing other plugins' declarations.
  */
 export async function resolveCurrentClaimablePluginMachineMaterializationsTx(params: Readonly<{
     tx: Tx;
@@ -1315,6 +1317,7 @@ export async function resolveCurrentClaimablePluginMachineMaterializationsTx(par
     serverIdentityId: string;
     machineId: string;
     machineInstallationId: string;
+    pluginId?: string;
     requiredMachineOperationCapability?: MachineOperationProtocolCapabilityNameV1;
 }>): Promise<readonly PluginMachineMaterializationV1[]> {
     const machine = await params.tx.machine.findFirst({
@@ -1338,6 +1341,7 @@ export async function resolveCurrentClaimablePluginMachineMaterializationsTx(par
             accountId: params.accountId,
             serverIdentityId: params.serverIdentityId,
             machineId: params.machineId,
+            ...(params.pluginId === undefined ? {} : { pluginId: params.pluginId }),
             enabled: true,
             trustState: "trusted",
         },
@@ -2163,6 +2167,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
 
         try {
             const outcome = await inTx(async (tx) => {
+                await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true, intent: "exclusive" });
                 const release = input.desiredVersion === null
                     ? null
                     : await resolveReleaseTx(tx, params.accountId, {
@@ -2289,6 +2294,12 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                     }
                     throw error;
                 }
+                // Immutable contracts are global, not Account state. Prepare
+                // them before occupying this Account's publication fence, in
+                // the same Contract→Account order as release publication.
+                // Keep intent, quota and promotion admission inside the fence;
+                // failed admission still rolls materialization back atomically.
+                await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true, intent: "exclusive" });
                 const current = await tx.accountPluginIntent.findUnique({
                     where: {
                         accountId_pluginId: {
@@ -2392,7 +2403,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                         releaseLessDeclaration,
                     },
                 });
-            }, { /* Hosting intent admission reads Collection activation quota and readiness before promotion fencing. */ isolationLevel: "Serializable" });
+            }, { isolationLevel: "ReadCommitted", transactionClass: "plugin-availability.collection-writers-claim" });
         } catch (error) {
             throw intentTransitionError(error);
         }
@@ -2491,6 +2502,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
             const created = await createArtifactTx(tx, {
                 actorUserId: params.accountId,
                 artifactId: input.accountArtifactId,
+                kind: deriveArtifactCoarseKindV1({ kind: PLUGIN_UI_ARTIFACT_ARCHIVE_KIND_V1 }),
                 header: artifact.header,
                 body: artifact.body,
                 dataEncryptionKey: artifact.dataEncryptionKey,
@@ -2785,6 +2797,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
             const created = await createArtifactTx(tx, {
                 actorUserId: params.accountId,
                 artifactId: input.artifactId,
+                kind: deriveArtifactCoarseKindV1({ kind: PLUGIN_PACKAGE_ASSET_ARCHIVE_KIND_V1 }),
                 header: envelope.header,
                 body: envelope.body,
                 dataEncryptionKey: envelope.dataEncryptionKey,

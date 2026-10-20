@@ -17,6 +17,7 @@ import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import { SourceControlUpdateButton, SourceControlUpdateSection, type SourceControlUpdateTheme } from './SourceControlUpdateControls';
 import { resolveSourceControlPullRequestViewModel } from './resolveSourceControlPullRequestViewModel';
 import { validateScmFollowupOpenUrl } from './validateScmFollowupOpenUrl';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 
 export function SourceControlPullRequestSection(props: Readonly<{
     theme: SourceControlUpdateTheme;
@@ -74,6 +75,7 @@ export function SourceControlPullRequestSection(props: Readonly<{
             checkout: true,
             startPoint: remediation.currentBranch ?? action.headBranch,
         });
+        if (isScmActionNotRun(branchResponse)) return true;
         if (!branchResponse.success) {
             setError(readErrorMessage(branchResponse) ?? readErrorMessage(response));
             return true;
@@ -83,6 +85,7 @@ export function SourceControlPullRequestSection(props: Readonly<{
                 base: remediation.baseBranch ?? action.baseBranch,
                 head: featureBranchName,
             });
+            if (isScmActionNotRun(retry)) return true;
             if (!retry.success) {
                 setError(readErrorMessage(retry));
                 return true;
@@ -111,6 +114,7 @@ export function SourceControlPullRequestSection(props: Readonly<{
                         base: action.baseBranch,
                         head: action.headBranch,
                     });
+                    if (isScmActionNotRun(response)) return;
                     if (!response.success) {
                         if (await handleDefaultBranchRemediation(action, response)) {
                             return;

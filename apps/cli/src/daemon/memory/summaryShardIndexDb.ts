@@ -11,9 +11,8 @@ import {
 import type { MemoryIndexQueueDbHandle } from './queue/memoryIndexQueueTypes';
 import { createMemoryFtsIndex, type MemoryFtsSearchFilter } from './memoryFtsIndex';
 
-export type MemorySearchScope =
-  | Readonly<{ type: 'global' }>
-  | Readonly<{ type: 'session'; sessionId: string }>;
+export type { MemorySearchScope } from '@happier-dev/protocol/memory/memorySearch';
+import type { MemorySearchScope } from '@happier-dev/protocol/memory/memorySearch';
 
 export type SummaryShardSearchHit = Readonly<{
   matchedQuery?: string;
@@ -456,6 +455,7 @@ export function openSummaryShardIndexDb(args: Readonly<{ dbPath: string }>): Sum
       }
     },
     search: ({ query, scope, eligibleSessionIds, maxResults, offset = 0, createdAfterMs, createdBeforeMs }) => {
+      if (scope.type === 'project' && eligibleSessionIds === undefined) return [];
       const limit = Math.max(1, Math.floor(maxResults));
       const skip = Math.max(0, Math.trunc(offset));
       const eligibleIds = eligibleSessionIds === undefined ? undefined : [...new Set(eligibleSessionIds.map((id) => id.trim()).filter(Boolean))];

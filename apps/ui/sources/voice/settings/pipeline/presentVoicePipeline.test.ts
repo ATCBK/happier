@@ -50,6 +50,27 @@ describe('presentVoicePipeline', () => {
         expect(step?.readiness?.progress).toBeCloseTo(28 / 82);
     });
 
+    it('says a fact once when the service-level readiness is the same fact a step already shows', () => {
+        const fact = readiness('unavailable', 'runtime_unknown', 'switch_provider');
+        const pipeline = projectVoiceSettingsPipeline({ mode: 'conversations', providerId: 'p', steps: [
+            { ...hear, readiness: null },
+            { ...think, readiness: fact },
+        ] });
+        const presented = presentVoicePipeline(pipeline, translate, fact, 'Local voice');
+        expect(presented.steps[1]?.readiness).toMatchObject({ recoveryAction: 'switch_provider' });
+        expect(presented.card).toBeNull();
+        expect(presented.statusWord).toBe(t('settingsVoice.pages.pipeline.needsYou'));
+    });
+
+    it('keeps a service-level fact no step carries', () => {
+        const fact = readiness('unavailable', 'runtime_unknown', 'switch_provider');
+        const pipeline = projectVoiceSettingsPipeline({ mode: 'conversations', providerId: 'p', steps: [
+            { ...hear, readiness: null },
+            { ...think, readiness: readiness('needs_setup', 'model_missing', 'install_model') },
+        ] });
+        expect(presentVoicePipeline(pipeline, translate, fact, 'Local voice').card).toMatchObject({ recoveryAction: 'switch_provider' });
+    });
+
     it('never calls an unchecked pipeline ready', () => {
         const pipeline = projectVoiceSettingsPipeline({ mode: 'dictation', providerId: 'p', steps: [{ ...hear, readiness: null }] });
         const presented = presentVoicePipeline(pipeline, translate);

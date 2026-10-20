@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { View } from 'react-native';
 
 import type { HappierUiTheme } from '../../environment/types.js';
@@ -14,6 +14,7 @@ import {
 } from '../interaction/pressFeedback.js';
 import type { HappierFocusable, HappierStyleProp } from '../portableTypes.js';
 import { HappierText } from '../text/Text.js';
+import { resolveHappierTypeRoleStyle } from '../text/typeRole.js';
 import type { HappierTreeNode } from './treeInteraction.js';
 
 /**
@@ -26,6 +27,8 @@ export const HAPPIER_TREE_ROW_METRICS = Object.freeze({
   minHeightPx: Object.freeze({ precise: 28, touch: 36 }),
   /** A tree drawn as a table (Code folder pages): each row carries a column, so it takes a list row's rhythm. */
   tableMinHeightPx: Object.freeze({ precise: 36, touch: 52 }),
+  /** A phone-narrow tree (lab c-art Tp): every row at a finger's height, whatever the pointer. */
+  compactMinHeightPx: 48,
   basePaddingPx: 10,
   indentStepPx: 14,
   maxIndentDepth: 6,
@@ -146,6 +149,8 @@ export type HappierTreeRowProps = Readonly<{
   tabStop: boolean;
   presentation?: 'tree' | 'table';
   touch?: boolean;
+  /** Phone-narrow: the finger's row height and the reading type step, so a phone tree is not a squeezed sidebar. */
+  compact?: boolean;
   theme: HappierUiTheme;
   reducedMotion?: boolean;
   onActivate: () => void;
@@ -163,6 +168,16 @@ export type HappierTreeRowProps = Readonly<{
   testID?: string;
   style?: HappierStyleProp;
 }>;
+
+/**
+ * The height of the row an in-place editor replaces. The editor centres its first line (the field) on it, so the
+ * row's chevron and mark stay level with the field while a note under the field grows the row downward.
+ */
+const HappierTreeRowLineContext = createContext<number | null>(null);
+
+export function useHappierTreeRowLineHeight(): number | null {
+  return useContext(HappierTreeRowLineContext);
+}
 
 export type HappierTreeRowActionsControl = Readonly<{
   open: boolean;
@@ -216,6 +231,10 @@ export function HappierTreeRow(props: HappierTreeRowProps) {
     props.presentation === 'table'
       ? HAPPIER_TREE_ROW_METRICS.tableMinHeightPx
       : HAPPIER_TREE_ROW_METRICS.minHeightPx;
+  const lineHeight = Math.max(
+    props.touch ? heights.touch : heights.precise,
+    props.compact ? HAPPIER_TREE_ROW_METRICS.compactMinHeightPx : 0,
+  );
   return (
     <HappierPressable
       testID={props.testID}
@@ -242,10 +261,11 @@ export function HappierTreeRow(props: HappierTreeRowProps) {
       style={(state) => [
         {
           flexDirection: 'row',
-          alignItems: 'center',
+          // An editor may grow beneath its field; the row's glyphs stay on its first line.
+          alignItems: editing ? 'flex-start' : 'center',
           gap: HAPPIER_TREE_ROW_METRICS.glyphGapPx,
           minWidth: 0,
-          minHeight: props.touch ? heights.touch : heights.precise,
+          minHeight: lineHeight,
           paddingLeft: resolveHappierTreeRowIndentPx(node.depth),
           paddingRight: HAPPIER_TREE_ROW_METRICS.basePaddingPx,
           marginHorizontal:
@@ -280,7 +300,7 @@ export function HappierTreeRow(props: HappierTreeRowProps) {
         const actions = actionsVisible && props.renderActions
           ? props.renderActions({ open: actionsOpen, onOpenChange: setActionsOpen, triggerHidden: props.touch === true })
           : null;
-        return (
+        const glyphs = (
           <>
             <HappierTreeDisclosure
               kind={node.kind}
@@ -300,20 +320,33 @@ export function HappierTreeRow(props: HappierTreeRowProps) {
               </View>
             ) : null}
             {props.selectionMark ?? null}
+          </>
+        );
+        return (
+          <>
             {editing ? (
-              <View style={{ flex: 1, minWidth: 0 }}>{props.inlineEdit}</View>
+              <View style={{ height: lineHeight, flexDirection: 'row', alignItems: 'center', gap: HAPPIER_TREE_ROW_METRICS.glyphGapPx }}>
+                {glyphs}
+              </View>
+            ) : glyphs}
+            {editing ? (
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <HappierTreeRowLineContext.Provider value={lineHeight}>{props.inlineEdit}</HappierTreeRowLineContext.Provider>
+              </View>
             ) : (
               <>
                 <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: HAPPIER_TREE_ROW_METRICS.glyphGapPx }}>
-                  {/* One title size for every row (lab `.ca-row .t`); table branches keep the regular file-table weight. */}
+                  {/* One title size for every row (lab `.ca-row .t`), the reading step on a phone; a branch is the bolder line. */}
                   <HappierText
                     numberOfLines={1}
                     ellipsizeMode={branch ? 'middle' : 'tail'}
                     style={{
-                      ...resolveHappierTextStepStyle(
-                        HAPPIER_COLLECTION_LIST_TEXT[branch && props.presentation !== 'table' ? 'rowTitleSelected' : 'rowTitle'],
-                        typography,
-                      ),
+                      ...(props.compact
+                        ? resolveHappierTypeRoleStyle('reading', theme, typography, branch ? 'semiBold' : undefined)
+                        : resolveHappierTextStepStyle(
+                          HAPPIER_COLLECTION_LIST_TEXT[branch ? 'rowTitleSelected' : 'rowTitle'],
+                          typography,
+                        )),
                       flexShrink: 1,
                       minWidth: 0,
                       color: theme.colors.text,

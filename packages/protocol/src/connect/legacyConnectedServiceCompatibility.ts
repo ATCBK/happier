@@ -329,8 +329,8 @@ const BuiltInLegacyStoredCredentialRecordV1Schema = z.lazy(() => {
     ) as BuiltInLegacyConnectedServiceId[]);
     const [oauth, token] = ConnectedServiceCredentialRecordV1Schema._zod.def.options;
     return z.discriminatedUnion('kind', [
-        oauth.extend({ serviceId }),
-        token.extend({ serviceId }),
+        z.extend(oauth, { serviceId }),
+        z.extend(token, { serviceId }),
     ]);
 });
 

@@ -1,13 +1,17 @@
+import { maxCodeUnits } from '../../strings/maxCodeUnits.js';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
-import { SessionReportsToV1Schema, SessionReportsV1Schema } from '../relations/sessionReportsToV1.js';
+import { SessionManagerV1Schema, SessionManagedSessionsV1Schema } from '../follow/sessionManagerV1.js';
 import { SessionEffectiveAccessV1Schema, type SessionEffectiveAccessV1 } from '../access/sessionEffectiveAccessV1.js';
 import { SessionAccessAccountSummaryV1Schema } from '../access/sessionAccessPrincipalV1.js';
 import { SessionSummarySchema, SessionListResultSchema, SessionListMetadataUpgradeRequiredCountSchema } from './listResult.js';
-export { SessionSummarySchema, type SessionSummary, SessionListResultSchema, type SessionListResult } from './listResult.js';
+export { SessionSummarySchema, projectSessionSummaryV1, type SessionSummary, SessionListResultSchema, type SessionListResult } from './listResult.js';
 import { SessionAwarenessOriginV1Schema, SessionAwarenessProjectionV1Schema } from '../awareness/projectionV1.js';
 import { SessionWorkDepthV1Schema } from '../creation/sessionCreateOriginV1.js';
 import { SessionViewerProjectionV1Schema } from '../personal/viewer.js';
+import { SessionReadinessV1Schema } from './sessionReadinessV1.js';
+export { SessionReadinessV1Schema, composeSessionReadinessV1 } from './sessionReadinessV1.js';
+export type { SessionReadinessV1, SessionReadinessFactsV1, SessionCredentialReadinessV1, SessionReadinessRepairV1 } from './sessionReadinessV1.js';
 
 import { ExecutionRunPublicStateSchema } from '../../execution/runs/responseSchemas.js';
 import {
@@ -16,6 +20,7 @@ import {
 } from '../../execution/runs/streaming.js';
 import { ExecutionRunTerminalStatusSchema } from '../../execution/runs/waitForTerminal.js';
 import { TurnIdSchema } from '../idsV1.js';
+import { SessionPermissionRequestIdV1Schema } from '../permissions/v1.js';
 import { PendingLocalIdSchema } from '../pending/pendingLocalId.js';
 import { SessionOrganizationPlacementV1Schema } from '../creation/sessionSpawnNewResultV1.js';
 import { ExternalSessionStorageStateV1Schema } from '../external/operationV1.js';
@@ -46,6 +51,7 @@ import {
   SESSION_PENDING_QUEUE_HOLD_METADATA_KEY,
   SessionPendingQueueHoldV1Schema,
 } from '../metadata/sessionPendingQueueHoldV1.js';
+import { SESSION_EXPLICIT_STOP_METADATA_KEY, SessionExplicitStopV1Schema } from '../metadata/sessionExplicitStopV1.js';
 import {
   PROVIDER_ACCOUNT_USAGE_REFS_METADATA_KEY,
   ProviderAccountUsageRefsV1Schema,
@@ -261,6 +267,7 @@ export function createSessionMetadataSchema(zod: typeof z) {
       [SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]: z.optional(SessionUsageLimitRecoveryV1Schema),
       [SESSION_RUNNER_RUNTIME_METADATA_KEY]: z.optional(SessionRunnerRuntimeStateV1Schema),
       [SESSION_PENDING_QUEUE_HOLD_METADATA_KEY]: z.optional(SessionPendingQueueHoldV1Schema),
+      [SESSION_EXPLICIT_STOP_METADATA_KEY]: z.optional(SessionExplicitStopV1Schema),
       [PROVIDER_ACCOUNT_USAGE_REFS_METADATA_KEY]: z.optional(ProviderAccountUsageRefsV1Schema),
       [CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_METADATA_KEY]:
         z.optional(createConnectedServiceMaterializationIdentityV1Schema(zod)),
@@ -405,10 +412,14 @@ function refineV2SessionMetadataRecipientFields(
 
 export const V2SessionRecordSchema = lazyZodSchema(() => z.looseObject({
     id: z.string().check(z.minLength(1)),
+    /** Canonical immutable Session owner, absent on Homes predating this projection. */
+    ownerAccountId: z.optional(z.string().check(z.minLength(1))),
     origin: z.optional(SessionAwarenessOriginV1Schema),
     workDepth: z.optional(SessionWorkDepthV1Schema),
-    reportsTo: z.optional(SessionReportsToV1Schema),
-    reports: z.optional(SessionReportsV1Schema),
+    manager: z.optional(SessionManagerV1Schema),
+    managedSessions: z.optional(SessionManagedSessionsV1Schema),
+    /** Viewer-private derived rule membership. Omitted when its authority is unavailable. */
+    receivedRuleCount: z.optional(z.number().check(z.int(), z.nonnegative())),
     pendingReviewRuns: z.optional(z.number().check(z.int(), z.nonnegative())),
     seq: z.number().check(z.int(), z.nonnegative()),
     createdAt: z.number().check(z.int(), z.nonnegative()),
@@ -495,7 +506,7 @@ export const SESSION_LOOKUP_BY_TAGS_MAX_TAGS_V2 = 4;
 export const SESSION_LOOKUP_BY_TAGS_TAG_MAX_CODE_UNITS_V2 = 256;
 
 const SessionLookupTagV2Schema = lazyZodSchema(() => z
-  .string().check(z.minLength(1), z.maxLength(SESSION_LOOKUP_BY_TAGS_TAG_MAX_CODE_UNITS_V2)));
+  .string().check(z.minLength(1), maxCodeUnits(SESSION_LOOKUP_BY_TAGS_TAG_MAX_CODE_UNITS_V2)));
 
 export const SessionLookupByTagsRequestV2Schema = lazyZodSchema(() => z.strictObject({
     tags: z
@@ -562,13 +573,27 @@ export type V2SessionMessageResponse = z.infer<typeof V2SessionMessageResponseSc
 
 export const SessionStatusResultSchema = lazyZodSchema(() => z.looseObject({
   session: SessionSummarySchema,
+  readiness: z.optional(SessionReadinessV1Schema),
   awareness: z.optional(SessionAwarenessProjectionV1Schema),
+  // Omitted by older readers; null means request content could not be opened.
+  pendingRequests: z.nullish(z.array(z.strictObject({
+    requestId: SessionPermissionRequestIdV1Schema,
+    turnId: z.optional(TurnIdSchema),
+    kind: z.enum(['permission', 'user_action']),
+    tool: z.string(),
+  }))),
   agentState: z.nullish(z.looseObject({
     controlledByUser: z.optional(z.boolean()),
     pendingRequestsCount: z.number().check(z.int(), z.nonnegative()),
   })),
 }));
 export type SessionStatusResult = z.infer<typeof SessionStatusResultSchema>;
+
+/** The existing status envelope, now with a typed optional diagnostic projection. */
+export const SessionStatusActionResultV1Schema = lazyZodSchema(() => z.union([
+  z.looseObject({ ...SessionStatusResultSchema.shape, ok: z.optional(z.literal(true)) }),
+  z.strictObject({ ok: z.literal(false), code: z.string(), candidates: z.optional(z.array(z.string())) }),
+]));
 
 export const SessionCreateResultSchema = lazyZodSchema(() => z.looseObject({
   session: SessionSummarySchema,
@@ -683,6 +708,31 @@ export const SessionArchiveResultSchema = lazyZodSchema(() => z.looseObject({
   archivedAt: z.number().check(z.int(), z.nonnegative()),
 }));
 export type SessionArchiveResult = z.infer<typeof SessionArchiveResultSchema>;
+
+/** Action-owned direct-report scope; omission keeps the incumbent parent-only operation. */
+export const SessionArchiveActionInputV1Schema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.trim(), z.minLength(1)),
+  alsoArchiveReports: z.optional(z.boolean()),
+}));
+
+const SessionArchiveReportIdentityV1 = {
+  sessionId: z.string().check(z.minLength(1)),
+  title: z.optional(z.string()),
+};
+export const SessionArchiveReportOutcomeV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
+  z.strictObject({ ...SessionArchiveReportIdentityV1, status: z.literal('archived') }),
+  z.strictObject({ ...SessionArchiveReportIdentityV1, status: z.literal('failed'), errorCode: z.string(), error: z.string() }),
+  z.strictObject({ ...SessionArchiveReportIdentityV1, status: z.literal('approval_pending'), artifactId: z.string().check(z.minLength(1)) }),
+]));
+export type SessionArchiveReportOutcomeV1 = z.infer<typeof SessionArchiveReportOutcomeV1Schema>;
+export const SessionArchiveActionResultV1Schema = lazyZodSchema(() => z.strictObject({
+  success: z.literal(true),
+  sessionId: z.string().check(z.minLength(1)),
+  archivedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+  reports: z.optional(z.array(SessionArchiveReportOutcomeV1Schema)),
+  reportsError: z.optional(z.strictObject({ errorCode: z.string(), error: z.string() })),
+}));
+export type SessionArchiveActionResultV1 = z.infer<typeof SessionArchiveActionResultV1Schema>;
 
 export const SessionUnarchiveResultSchema = lazyZodSchema(() => z.looseObject({
   sessionId: z.string().check(z.minLength(1)),

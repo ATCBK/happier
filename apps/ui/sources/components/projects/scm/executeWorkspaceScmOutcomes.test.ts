@@ -45,7 +45,7 @@ const input = () => ({
 });
 const pushInput = () => ({
     ...input(), kind: 'push' as const, scmSnapshot: snapshot, scmWriteEnabled: true,
-    scmRemoteConfirmPolicy: 'never' as const, scmPushRejectPolicy: 'prompt_fetch' as const,
+    scmPushRejectPolicy: 'prompt_fetch' as const,
 });
 const outcomeLine = () => selectScmWriteOperation({
     inFlight: storage.getState().getWorkspaceScmInFlightOperation(scope),
@@ -76,7 +76,7 @@ describe('workspace SCM public write outcomes', () => {
     it('undoes exactly the displayed workspace commit through the canonical lock and leaves selection staged', async () => {
         const request = { scope, expectedHeadOid: 'a'.repeat(40), refreshScmData: vi.fn(async () => {}) };
         await executeWorkspaceScmCommitUndoLast(request);
-        expect(undo).toHaveBeenCalledWith('machine-1', { cwd: '/repo', expectedHeadOid: 'a'.repeat(40) }, { serverId: 'server-1' });
+        expect(undo).toHaveBeenCalledWith('machine-1', { cwd: '/repo', expectedHeadOid: 'a'.repeat(40) }, { serverId: 'server-1', onDispatched: expect.any(Function) });
         expect(outcomeLine()).toMatchObject({ phase: 'succeeded', action: 'commit_undo', outcome: { repositoryState: { headOid: 'b'.repeat(40) } } });
         expect(storage.getState().getWorkspaceScmCommitSelectionPaths(scope)).toEqual(['a.ts']);
         expect(request.refreshScmData).toHaveBeenCalled();
@@ -109,7 +109,10 @@ describe('workspace SCM public write outcomes', () => {
         await executeWorkspaceScmRemoteOperation(pushInput());
         expect(removeIndexLock).toHaveBeenCalledWith('machine-1', { cwd: '/repo', confirmed: true, confirmationToken: REMOVE_INDEX_LOCK_CONFIRMATION_TOKEN }, { serverId: 'server-1' });
         expect(push).toHaveBeenCalledTimes(2);
-        expect(push).toHaveBeenCalledWith('machine-1', { cwd: '/repo', remote: 'origin', branch: 'main' }, { serverId: 'server-1' });
+        // The replay is the same press: the Action's confirmation (if any) was answered on the first attempt.
+        const request = { cwd: '/repo', remote: 'origin', branch: 'main' };
+        expect(push).toHaveBeenNthCalledWith(1, 'machine-1', request, { serverId: 'server-1', confirmedByPerson: false, onDispatched: expect.any(Function) });
+        expect(push).toHaveBeenNthCalledWith(2, 'machine-1', request, { serverId: 'server-1', confirmedByPerson: true, onDispatched: expect.any(Function) });
         expect(outcomeLine()).toMatchObject({ phase: 'succeeded' });
     });
     it('keeps a commit warning authoritative over the legacy success bit and retires its landed selection', async () => {
@@ -169,7 +172,7 @@ describe('workspace SCM public write outcomes', () => {
         expect(push).toHaveBeenCalledWith('machine-1', {
             cwd: '/repo', remote: 'origin', branch: 'main',
             pushMode: 'force_with_lease', expectedRemoteOid: 'a'.repeat(40),
-        }, { serverId: 'server-1' });
+        }, { serverId: 'server-1', confirmedByPerson: false, onDispatched: expect.any(Function) });
         expect(outcomeLine()).toMatchObject({ phase: 'needs_input', outcome });
         expect(Modal.alert).not.toHaveBeenCalled();
     });

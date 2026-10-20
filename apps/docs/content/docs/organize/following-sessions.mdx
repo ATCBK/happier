@@ -22,30 +22,44 @@ sets `HAPPIER_FEATURE_SESSIONS_FOLLOWING__ENABLED` to a false value.
 ## Follow one session
 
 Open the session and choose **Follow**. The editor — **Follow this session** —
-carries one choice, how much you want to hear:
+carries one choice, how much you want to hear. The same levels apply when another
+session is the receiver:
 
-| Level | What reaches you |
-| --- | --- |
-| **No notifications** | The session is followed, but it does not notify you. |
-| **Important updates** | The activity Happier classifies as worth interrupting you for. |
-| **Every new message** | Each new message in the session. |
+| Level | Interrupts: push for you, wake for a session | Arrives quietly: Inbox for you, next turn for a session |
+| --- | --- | --- |
+| **Everything** | Needs you, finished, failed or stopped, stalled, update posted, person wrote and goal changed. | Every new message. |
+| **Important** | Needs you, failed or stopped, and stalled. | Finished, update posted, person wrote and goal changed. |
+| **Quiet** | Nothing. | The same events as Important. |
+| **Custom** | The events you select to interrupt. | The events you select for quiet delivery; other events are off. |
+
+Custom lets you choose decision, approval and blocked requests separately.
+A question whose agent keeps working with an assumption is quiet under Important;
+Everything can interrupt for it. A question a manager is handling stays quiet for
+you until it is passed up. You can still open it in Needs you and answer.
+
+Quiet keeps the follow active. **Unfollow** removes your ongoing subscription and
+suppresses automatic rules for that source. When several follows or rules apply,
+their selections combine: a quiet route does not cancel another route's push or
+wake selection. Quiet hours suppress pushes while retaining Inbox items, without
+a burst of delayed pushes afterward.
 
 **Include in Voice** is separate and optional: it lets Voice keep the session in
 context. An encrypted session has to be unlocked on this device before Voice can
 include it, and some Voice modes cannot include stored session updates at all —
 Happier says which case you are in rather than silently dropping the session.
 
-If you own the session, the editor tells you so: **You own this session, so its
-updates always reach you.**
+Owning a session supplies implicit tracking. Your notification policy and explicit
+opt-out still apply; ownership does not force every update to interrupt you.
 
 ## Sessions you follow without asking
 
 Some relationships imply attention, so Happier can follow on your behalf. In
-**Settings → Notifications**, **Automatically follow** has four switches:
+**Settings → Coordination**, **Automatically follow** lets you choose Important
+or Off for four default rules:
 
-| Switch | Default |
+| Default rule | Default |
 | --- | --- |
-| **Sessions assigned to me** | On |
+| **Sessions assigned to me** | Important |
 | **Sessions shared directly** | Off |
 | **Sessions shared through Teams** | Off |
 | **Sessions shared through Groups** | Off |
@@ -53,15 +67,19 @@ Some relationships imply attention, so Happier can follow on your behalf. In
 The defaults are deliberate. Being handed a session personally is a request for
 your attention; being inside the audience of a Team share usually is not — a Team
 of forty would otherwise generate forty subscriptions every time anybody shared
-anything. Turn the Team and Group switches on if your Team is small enough that
+anything. Choose Important for Team and Group shares if your Team is small enough that
 you do want all of it.
 
-These preferences apply to new assignments and newly accessible sessions.
-Existing choices stay unchanged, so turning a switch on does not retroactively
-follow everything you can already see. They are set per Home.
+In current 0.3 development, these preferences are default Follow rules for future
+matching activity. Assignment and sharing do not create an individual Follow
+subscription or read-state baseline. Your explicit Follow choices, opt-outs and
+existing read state stay unchanged when defaults change. These preferences are
+set per Home.
 
-When an assignment follows a session for you, the session says why: **Following
-because you were assigned.**
+Coordination also holds the defaults for new manager attachments, run reports,
+Discussion participants and coordinators. Changing a creation default does not
+rewrite an existing follow's chosen policy. Coordinators themselves are ordinary
+sessions; **Show coordinators** opens the filtered session list.
 
 ## Follow, read state, and assignment
 
@@ -71,11 +89,38 @@ Three related things, each answering something different:
 - **Read and unread state** decides whether the session currently wants a look.
   See [Read and unread state](/organize/session-read-state).
 - **Assignment** — the responsible member on a shared session — records who is
-  expected to act, and by default follows the session for them.
+  expected to act. Your default Follow rule can select its later activity without
+  creating an individual subscription.
 
 Receiving Team or Group access on its own creates none of these. It does not
 produce unread state, Inbox pressure, a badge, or a notification. Open the session
 and follow it when you want it in your flow.
+
+## Notify me once
+
+In the unreleased 0.3 checkout, **Notify me** uses your private Follow choice.
+Choose the current turn finishing, including a failed or stopped outcome, or
+the first new request that needs you. The current-turn option stays bound to
+that turn; it does not carry over to the next one.
+
+An accepted Inbox item uses up the one-shot even if push delivery is unavailable.
+Turning the option off clears only the one-shot. Your ongoing Follow choice,
+Include in Voice and read state stay separate.
+
+## Mute a source (0.3 development)
+
+Mute is separate from Unfollow: it stops future delivery from one exact sender
+session or Follow source to one receiver, without removing that receiver's Follow
+or access. Removing the mute lets future delivery resume; it does not undo work
+already accepted. The current unreleased 0.3 source has the private
+`session.delivery.mute.set`, `.remove` and `.list` Action/API contract. The
+user-facing Mute control and delivery integrations are still in development;
+this is not a claim that every route is available in a shipped app.
+
+Older notification shortcuts may still appear as ordinary Habits. Happier keeps
+them because they cannot reliably be distinguished from Habits you authored.
+Review or delete them individually if you no longer need them; authored
+notification workflows continue to work.
 
 ## When following pauses or stops
 
@@ -87,12 +132,26 @@ and follow it when you want it in your flow.
 
 ## Follow between sessions
 
-There is a second, unrelated feature with the same word in it: an agent session
-can follow *another session* and receive bounded context from it during a turn.
+An agent session can also follow *another session* and receive bounded context
+from it during a turn, using the same Follow event and delivery policy owners.
 That is **Session updates** in the same editor — **Follow in another Session…** —
 and it is about what the agent reads, not about what you are notified of. It is
 described under [Session-to-Session Follow
 context](/accounts/session-sharing#session-to-session-follow-context-03-development).
+
+In current 0.3 development, the Follow source model also covers Discussions,
+Execution Runs, Workflow Runs and filter rules. Source support and controls are
+still being completed; this does not mean every source has every event or a
+finished editor. Rules select qualifying activity without adding every matching
+session as an individual follow. A preview marked partial or unavailable is not
+a complete list of matches.
+
+Follows stay within one Home and require existing source access. Encrypted source
+material must be readable by the authorized device or machine doing the work.
+Following grants no access or keys. For a session receiver, quiet delivery waits
+for its next turn; a wake still respects busy work, an explicit Stop, archive,
+machine availability and the autonomous check-in. Updates can wait while its
+machine is offline. A follow never steers a running turn.
 
 ## Related
 

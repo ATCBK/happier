@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { HappyCliSubprocessInvocation } from '@/utils/spawnHappyCLI';
+import { waitForCondition } from '@/testkit/async/waitFor';
 
 import {
   prepareSourceDevSharedDepsForBundledPluginRuntimeLoad,
@@ -83,6 +84,44 @@ afterEach(async () => {
 });
 
 describe('prepareSourceDevSharedDepsForHappyCliSpawn', () => {
+  it('cancels a pending preparation process and settles before its startup budget expires', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'happier-source-dev-preflight-cancel-'));
+    tempDirs.push(tempDir);
+    const cliProjectPath = join(tempDir, 'apps', 'cli');
+    const scriptsDir = join(cliProjectPath, 'scripts');
+    await mkdir(scriptsDir, { recursive: true });
+    await writeFile(join(scriptsDir, 'syncSharedDepsForDev.mjs'), [
+      "import { writeSync } from 'node:fs';",
+      "writeSync(1, '[happier-source-dev-shared-deps-progress] ' + JSON.stringify({ stage: 'preparation-pending', detail: String(process.pid) }) + '\\n');",
+      'setInterval(() => {}, 1000);',
+    ].join('\n'));
+    const cancellation = new AbortController();
+    let preparationPid: number | undefined;
+    let result: Awaited<ReturnType<typeof prepareSourceDevSharedDepsForHappyCliSpawn>> | undefined;
+    const preparation = prepareSourceDevSharedDepsForHappyCliSpawn({
+      args: ['daemon', 'start-sync'],
+      cliProjectPath,
+      resolveInvocation: () => ({ runtime: 'node', argv: [join(cliProjectPath, 'src', 'index.ts')] }),
+      signal: cancellation.signal,
+      logDebug: (_message, payload) => {
+        if (payload && typeof payload === 'object' && 'stage' in payload
+          && payload.stage === 'preparation-pending' && 'detail' in payload) {
+          preparationPid = Number(payload.detail);
+        }
+      },
+    }).then(value => { result = value; return value; });
+    try {
+      await waitForCondition(() => preparationPid !== undefined, { timeoutMs: 5_000, label: 'preparation process admitted' });
+      cancellation.abort();
+      await waitForCondition(() => result !== undefined, { timeoutMs: 5_000, label: 'cancelled preparation settled' });
+      expect(result).toMatchObject({ type: 'error', errorMessage: expect.stringMatching(/abort|cancel/i) });
+      expect(() => process.kill(preparationPid!, 0)).toThrow();
+    } finally {
+      if (preparationPid) { try { process.kill(preparationPid, 'SIGKILL'); } catch {} }
+      await preparation;
+    }
+  });
+
   it('skips shared-deps sync for non-source child launches', async () => {
     const runSyncProcess = vi.fn();
 

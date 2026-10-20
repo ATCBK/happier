@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createDefaultWorkspaceWorkerPreferenceV1, resolveProjectExecutionChoiceV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
+import { createDefaultWorkspaceWorkerPreferenceV1, resolveProjectExecutionChoiceV1, type WorkspaceWorkerPreferenceV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 
 vi.mock('@/text', async () =>
   (await import('@/dev/testkit/mocks/text')).createTextModuleMock({
@@ -79,7 +79,7 @@ describe('describeProjectAgentGuidance', () => {
   it.each(['primaryFirst', 'portableFirst', 'allOverridden', 'noScripts'] as const)(
     'describes the workspace default independently of declaration order and overrides (%s)', order => {
       const base = guidance('refused');
-      const preference = { ...createDefaultWorkspaceWorkerPreferenceV1(), enabled: true as const,
+      const preference: WorkspaceWorkerPreferenceV1 = { ...createDefaultWorkspaceWorkerPreferenceV1(), enabled: true as const,
         destination: { kind: 'machine' as const, machineId: 'worker-b' },
         scriptOverrides: order === 'allOverridden' ? { test: 'primary' as const, typecheck: 'primary' as const, lint: 'primary' as const } : {} };
       const scripts = base.scripts!.map(script => ({ ...script, resolution: resolveProjectExecutionChoiceV1({

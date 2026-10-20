@@ -63,6 +63,11 @@ export function createUiUsageActionPorts(account: UsageQueryAccountContext & Pic
               if (snapshot.error) throw new HappyError(snapshot.error.message, false, { code: snapshot.error.code });
               if (!snapshot.value || snapshot.freshness !== 'fresh') return;
               const batch = decodeUsageQueryResource(snapshot.value);
+              // Coach must inspect the requested private evidence, rather than
+              // refuse advice from the earlier accounting-only revision.
+              if (context.usageQueryReadiness === 'coach_evidence' && batch.results.some(slice =>
+                slice.requestedQuery.includeSessionEvidence && slice.sources.some(source =>
+                  source.source === 'how_you_work' && ['pending', 'not_loaded'].includes(source.status)))) return;
               if (batch.results.every(slice => slice.sources.some(source => source.source === 'accounting'
                 && !['pending', 'not_loaded'].includes(source.status)))) resolve(batch);
             } catch (error) { reject(error); }

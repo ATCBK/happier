@@ -23,7 +23,7 @@ import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactive
 import { Text } from '@/components/ui/text/Text';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { t } from '@/text';
-import { renderThemeMaterialSurface } from '@/components/ui/glass/GlassSurface';
+import { renderPanelMaterialSurface } from '@/components/ui/glass/GlassSurface';
 import { resolveThemeSurfaceFinish } from '@/components/ui/surfaces/themeRaisedEdge';
 
 /**
@@ -102,7 +102,7 @@ export function EntityReleasePreviewCard(props: Readonly<{
             host={CORE_RELEASE_PREVIEW_HOST}
             reducedMotion={reducedMotion}
             gradient={resolveThemeSurfaceFinish(theme, 'floating')}
-            renderMaterialSurface={renderThemeMaterialSurface}
+            renderMaterialSurface={renderPanelMaterialSurface}
         />
     );
 }
@@ -111,7 +111,7 @@ export function EntityReleaseOutcomePill(props: Readonly<{ outcome: HappierRelea
     const colors = useEntityReleasePreviewColors();
     const reducedMotion = useReducedMotionPreference();
     const { theme } = useUnistyles();
-    return <HappierReleaseOutcomePill {...props} colors={colors} host={CORE_RELEASE_PREVIEW_HOST} reducedMotion={reducedMotion} gradient={resolveThemeSurfaceFinish(theme, 'floating')} renderMaterialSurface={renderThemeMaterialSurface} />;
+    return <HappierReleaseOutcomePill {...props} colors={colors} host={CORE_RELEASE_PREVIEW_HOST} reducedMotion={reducedMotion} gradient={resolveThemeSurfaceFinish(theme, 'floating')} renderMaterialSurface={renderPanelMaterialSurface} />;
 }
 
 /** Where a staged-move dock sits: over its list's foot, so the list never grows when a move starts. */
@@ -144,7 +144,7 @@ export function EntityStagedMoveDock(props: Readonly<{
     const colors = useEntityReleasePreviewColors();
     const reducedMotion = useReducedMotionPreference();
     const { theme } = useUnistyles();
-    return <HappierStagedMoveDock {...props} colors={colors} host={CORE_RELEASE_PREVIEW_HOST} reducedMotion={reducedMotion} gradient={resolveThemeSurfaceFinish(theme, 'floating')} renderMaterialSurface={renderThemeMaterialSurface} />;
+    return <HappierStagedMoveDock {...props} colors={colors} host={CORE_RELEASE_PREVIEW_HOST} reducedMotion={reducedMotion} gradient={resolveThemeSurfaceFinish(theme, 'floating')} renderMaterialSurface={renderPanelMaterialSurface} />;
 }
 
 function useEntityDragGripColors() {
@@ -202,6 +202,7 @@ export function EntityDragGripTrigger(props: Readonly<{
     accessibilityActions?: HappierDragGripTriggerProps['accessibilityActions'];
     onAccessibilityAction?: HappierDragGripTriggerProps['onAccessibilityAction'];
     controlRef?: HappierDragGripTriggerProps['controlRef'];
+    tabIndex?: HappierDragGripTriggerProps['tabIndex'];
     active?: boolean;
     revealed?: boolean;
     density?: 'pointer' | 'touch';
@@ -218,6 +219,7 @@ export function EntityDragGripTrigger(props: Readonly<{
             accessibilityActions={props.accessibilityActions}
             onAccessibilityAction={props.onAccessibilityAction}
             controlRef={props.controlRef}
+            tabIndex={props.tabIndex}
             expanded={props.expanded}
             onPress={props.onPress}
             onFocusChange={props.onFocusChange}

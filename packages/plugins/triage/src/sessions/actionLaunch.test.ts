@@ -79,6 +79,7 @@ describe('where a pressed action runs', () => {
             kind: 'pinned',
             target: { serverId: 'server-9', machineId: 'machine-9' },
             directory: '/work/pinned',
+            candidates: [expect.objectContaining({ rootPath: '/src/a' }), expect.objectContaining({ rootPath: '/src/b' })],
         });
         // The whole target travels, not only the path. A directory carried
         // without the machine it lives on is what lets a start combine a
@@ -115,7 +116,7 @@ describe('where a pressed action runs', () => {
         // One reachable checkout WOULD have launched. Nothing failed here, and
         // reporting `noMatch` would tell the reader something untrue about a
         // screen their own profile asked for.
-        expect(placement).toEqual({ kind: 'prefill', reason: 'profileAsk', candidates: [] });
+        expect(placement).toEqual({ kind: 'prefill', reason: 'profileAsk', candidates: [expect.objectContaining({ rootPath: '/src/only' })] });
         expect(readTriageActionExecutionPlacementV1(placement)).toBeNull();
     });
 

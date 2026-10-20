@@ -47,14 +47,14 @@ const MAX_OPENABLE_CONTENT_BASE64_CHARS_V1 = Math.ceil(HARD_OPENABLE_CONTENT_MAX
 
 function normalizeWithSchemaError(
   value: string,
-  context: z.core.$RefinementCtx,
+  context: z.core.ParsePayload,
   normalize: (value: string) => string,
   message: string,
 ): string | typeof z.NEVER {
   try {
     return normalize(value);
   } catch {
-    context.addIssue({ code: 'custom', message });
+    context.issues.push({ code: 'custom', message, input: context.value });
     return z.NEVER;
   }
 }

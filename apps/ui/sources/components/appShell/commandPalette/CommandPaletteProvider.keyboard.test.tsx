@@ -77,11 +77,6 @@ vi.mock('@/hooks/server/useFeatureDecision', () => ({
     useFeatureDecision: () => null,
 }));
 
-vi.mock('@/sync/store/settingsWriters', () => ({
-    useApplySettings: () => vi.fn(),
-    useApplyLocalSettings: () => vi.fn(),
-}));
-
 vi.mock('@/utils/platform/desktopHost', () => ({
     isDesktopHost: () => false,
     desktopHostKind: () => null,

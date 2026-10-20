@@ -7,7 +7,7 @@ import {
 import { useUnistyles } from 'react-native-unistyles';
 
 import { PoliteAccessibilityStatus } from '@/components/ui/accessibility/PoliteAccessibilityStatus';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
@@ -42,7 +42,7 @@ export const PluginTranscriptActivityCard = React.memo(
         onOpenAction: (action: Readonly<{ pluginId: string; localId: string }>) => void;
     }>) {
         const { theme } = useUnistyles();
-        const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+        const presentationTheme = usePluginUiTheme(theme);
         const canDismiss = resolvePluginTranscriptActivityCanDismiss(props.activity);
         const presentation = React.useMemo(
             () => resolvePluginTranscriptActivityPresentation(props.activity),

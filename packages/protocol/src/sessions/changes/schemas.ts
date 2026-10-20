@@ -93,7 +93,7 @@ function normalizePredecessorCorrelation(value: unknown): unknown {
   return { ...canonical, agentTurnId: providerTurnId };
 }
 
-export const FileChangeEvidenceSchema = lazyZodSchema(() => z.pipe(z.transform(normalizePredecessorCorrelation), CanonicalFileChangeEvidenceSchema));
+export const FileChangeEvidenceSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizePredecessorCorrelation), CanonicalFileChangeEvidenceSchema));
 
 export const RepositoryCheckpointReceiptIdSchema = lazyZodSchema(() => z.enum([
   'checkpoint.captured',
@@ -179,7 +179,7 @@ function normalizeLegacySessionChangeSetFile(value: unknown): unknown {
   };
 }
 
-export const SessionChangeSetFileSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeLegacySessionChangeSetFile), (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(CanonicalFileChangeEvidenceSchema, {
+export const SessionChangeSetFileSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeLegacySessionChangeSetFile), (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(CanonicalFileChangeEvidenceSchema, {
   turns: z.array(z.string().check(z.minLength(1))),
   attribution: SessionChangeAttributionSchema,
   checkpointOverlap: CheckpointOverlapObservationSchema,
@@ -248,7 +248,7 @@ function normalizeLegacySessionChangeSet(value: unknown): unknown {
   };
 }
 
-export const SessionChangeSetSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeLegacySessionChangeSet), CanonicalSessionChangeSetSchema));
+export const SessionChangeSetSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeLegacySessionChangeSet), CanonicalSessionChangeSetSchema));
 
 export const SessionWorkingTreeMatchedFileSchema = lazyZodSchema(() => z.strictObject({
   filePath: z.string().check(z.minLength(1)),

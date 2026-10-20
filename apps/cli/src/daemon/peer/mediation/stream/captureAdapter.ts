@@ -1,6 +1,7 @@
 import type {
   ActionExecutorContext,
   MachineLiveStreamCapsV1,
+  MachineLiveStreamCaptureSourceV1,
   MachineLiveStreamControlSidebandV1,
   MachineLiveStreamControlV1,
   MachineLiveStreamFrameV1,
@@ -88,7 +89,7 @@ export type MachineLiveStreamCaptureStartInput = Readonly<{
 }>;
 
 export type MachineLiveStreamCaptureStartResult = Readonly<
-  | { ok: true; session: MachineLiveStreamCaptureSession }
+  | { ok: true; session: MachineLiveStreamCaptureSession; sourceCapabilities?: MachineLiveStreamCaptureSourceV1 }
   | { ok: false; reasonCode: string }
 >;
 
@@ -142,7 +143,8 @@ export function createDaemonMachineLiveStreamCaptureAdapter(
           await session.stop();
           return { ok: false, reasonCode: 'capture_source_unavailable' };
         }
-        return { ok: true, session: { ...session, stop } };
+        // Facts and lifetime come from the exact admitted occurrence, never a second lookup.
+        return { ok: true, session: { ...session, stop }, sourceCapabilities: selected.capabilities };
       },
     };
   }

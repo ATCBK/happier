@@ -67,6 +67,21 @@ function harness(initialSetting: unknown = 'allowed', extraDeps: Partial<ActionE
 }
 
 describe('agent visuals through canonical Action admission', () => {
+  it('applies reversible present-user visual content directly but confirms outward network effects', async () => {
+    const ui = { ...context, surface: 'ui' as const, authority: 'present_user' as const, actionCaller: { kind: 'host' as const } };
+    const host = harness();
+    expect(await host.show(note, null, ui)).toMatchObject({ ok: true, result: { result: { outcome: 'created' } } });
+    expect(host.approval).toBeNull();
+    expect(await host.show({ ...note, title: 'Updated' }, revision, ui))
+      .toMatchObject({ ok: true, result: { result: { outcome: 'updated' } } });
+    expect(host.approval).toBeNull();
+    expect(await host.show(html({ network: 'open' }), revision, ui))
+      .toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    const ask = harness();
+    expect(await ask.show(note, null, { ...ui, actionsSettings: normalizeActionsSettingsV1({ v: 1,
+      actions: { 'session.board.item.upsert': { approvalRequiredSurfaces: ['ui'] } },
+    }) })).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+  });
   it.each(['hostedHtml', 'inlineHtmlWidget'] as const)('refuses unrenderable %s before asking for approval', async kind => {
     const host = harness('ask');
     const source = { v: 1, entrypoint: 'index.html', files: {

@@ -16,7 +16,9 @@ import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { QualifiedConnectedAccountUiGroup } from '@/sync/domains/connectedServices/qualifiedConnectedAccountUiSource';
 import type { UseQualifiedConnectedAccountGroupsResult } from './useQualifiedConnectedAccountGroups';
 
-installConnectedServicesCommonModuleMocks();
+installConnectedServicesCommonModuleMocks({
+    modal: async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module,
+});
 const authState = vi.hoisted(() => ({ credentials: null as AuthCredentials | null }));
 vi.mock('@/auth/context/AuthContext', () => ({ useAuth: () => authState }));
 // Pool hooks render no Markdown; this is an unavailable third-party export boundary.
@@ -62,6 +64,7 @@ async function poolHome() {
         connectedServices: { qualifiedAccounts: { protocolVersion: 4 }, credentialDelete: { revisionGuard: false } },
     } });
     home.answer(serverId, '/v1/features', { body: features });
+    home.answer(serverId, '/v1/features/authenticated', { body: features });
     const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
     primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
@@ -133,10 +136,12 @@ describe('useQualifiedConnectedAccountGroups', () => {
             connectedServices: { qualifiedAccounts: { protocolVersion: 4 }, credentialDelete: { revisionGuard: false } },
         } });
         fixture.home.answer(otherId, '/v1/features', { body: features });
+        fixture.home.answer(otherId, '/v1/features/authenticated', { body: features });
         const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
         primeServerFeaturesSnapshot({ serverId: otherId, snapshot: { status: 'ready', features } });
         authState.credentials = await fixture.TokenStorage.getCredentialsForServerUrl(serverUrl, { serverId: otherId });
-        fixture.home.answer(otherId, listPathFor(otherService), { status: 503, body: { error: 'qualified_peer_unavailable' } });
+        // Exercise a terminal read refusal, not the HTTP owner's transient-503 retry lifecycle.
+        fixture.home.answer(otherId, listPathFor(otherService), { status: 400, body: { error: 'qualified_peer_unavailable' } });
         const changed = await hook.rerender({ serverId: otherId, service: otherService });
         expect(changed.groups).toEqual([]);
         expect(changed.source).toEqual({ protocol: 'v4' });

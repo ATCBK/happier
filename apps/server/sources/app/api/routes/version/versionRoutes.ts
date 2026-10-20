@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { type Fastify } from "../../types";
 
 const LegacyClientVersionCheckRequestSchema = z.object({
@@ -9,7 +9,7 @@ const LegacyClientVersionCheckRequestSchema = z.object({
 
 const LegacyClientVersionCheckResponseSchema = z.object({
     update_required: z.boolean(),
-    update_url: z.string().nullable(),
+    update_url: z.nullable(z.string()),
 });
 
 /**
@@ -23,7 +23,7 @@ export function versionRoutes(app: Fastify) {
             response: {
                 200: z.object({
                     ok: z.literal(true),
-                    source_sha: z.string().regex(/^[a-f0-9]{40}$/).optional(),
+                    source_sha: z.optional(z.string().check(z.regex(/^[a-f0-9]{40}$/))),
                 }),
             },
         },

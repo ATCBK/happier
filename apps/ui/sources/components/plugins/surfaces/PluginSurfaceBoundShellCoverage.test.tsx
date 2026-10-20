@@ -1,27 +1,39 @@
 import * as React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
 
-import {
-    buildLocalServiceInventoryState,
-    renderScreen,
-} from '@/dev/testkit';
-import {
-    createLocalServiceLauncherState,
-} from '@/sync/domains/local/services/launch';
-import {
-    EMPTY_PLUGIN_UI_PROJECTION,
-    type PluginUiProjectionModel,
-    type PluginUiSurfacePlacementProjection,
+import type {
+    PluginUiProjectionModel,
+    PluginUiSurfacePlacementProjection,
 } from '@/sync/domains/plugins/ui/projection';
-import { LocalServicesSurfaceHost } from '@/components/sessions/localServices/LocalServicesSurfaceHost';
-import { PluginDetailsPaneOverlay } from '@/components/appShell/panes/details/surfaces/PluginDetailsPaneOverlay';
-import { createPluginDeclarativeModelFixture } from '@/dev/testkit/fixtures/pluginDeclarativeModelFixture';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
-// The application entry point loads this real owner before mounting surfaces.
-beforeEach(async () => { await loadSyncSingletonForTests(); });
+// Install network boundaries before importing the real mounted surface graph.
+installDisconnectedServerSocketBoundary();
+const { buildLocalServiceInventoryState, createRootLayoutFeaturesResponse, renderScreen, standardCleanup } = await import('@/dev/testkit');
+const { createLocalServiceLauncherState } = await import('@/sync/domains/local/services/launch');
+const { EMPTY_PLUGIN_UI_PROJECTION } = await import('@/sync/domains/plugins/ui/projection');
+const { createPluginDeclarativeModelFixture } = await import('@/dev/testkit/fixtures/pluginDeclarativeModelFixture');
+const { serveAccountHomes } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
+const { waitForHomeGovernance } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+const { LocalServicesSurfaceHost } = await import('@/components/sessions/localServices/LocalServicesSurfaceHost');
+const { PluginDetailsPaneOverlay } = await import('@/components/appShell/panes/details/surfaces/PluginDetailsPaneOverlay');
+let home: Awaited<ReturnType<typeof serveAccountHomes>> | null = null;
+beforeEach(async () => {
+    home = await serveAccountHomes({
+        homes: [{ key: 'bound', serverUrl: 'https://bound-shell.test', accountId: 'account-bound' }],
+        route: request => request.path === '/v1/features' || request.path === '/v1/features/authenticated'
+            ? Response.json(createRootLayoutFeaturesResponse()) : undefined,
+    });
+    const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    await waitForHomeGovernance(() => expect(captureActiveServerAccountScopeLifetime()?.isCurrent()).toBe(true));
+});
+afterEach(async () => {
+    await standardCleanup();
+    await home?.dispose();
+    home = null;
+});
 
 // React Native and responsive layout are platform boundaries. Keep their
 // observed environment deterministic while the real Services stack, Details
@@ -139,7 +151,7 @@ function BoundShellCoverage(props: Readonly<{
         <>
             <LocalServicesSurfaceHost
                 machineId="machine-bound"
-                serverId="server-bound"
+                serverId={home!.homes.bound!.id}
                 workspaceRoot="/workspace/bound"
                 inventoryState={buildLocalServiceInventoryState({ rows: [] })}
                 launcherState={createLocalServiceLauncherState()}
@@ -156,7 +168,7 @@ function BoundShellCoverage(props: Readonly<{
                 overlay={projectOverlay}
                 mount={{
                     machineId: 'machine-bound',
-                    serverId: 'server-bound',
+                    serverId: home!.homes.bound!.id,
                     projectId: 'project-bound',
                     platform: 'web',
                     formFactor: 'tablet',
@@ -176,8 +188,10 @@ describe('bound Services and Project details shell coverage', () => {
         expect(screen.findByTestId(
             `bound-shell-services-plugin-stack-placement-${servicesPlacement.id}`,
         )).toBeTruthy();
-        expect(screen.getTextContent()).toContain('Services bound host mounted');
-        expect(screen.getTextContent()).toContain('Project Details bound host mounted');
+        await waitForHomeGovernance(() => {
+            expect(screen.getTextContent()).toContain('Services bound host mounted');
+            expect(screen.getTextContent()).toContain('Project Details bound host mounted');
+        });
 
         await screen.update(
             <BoundShellCoverage projection={{

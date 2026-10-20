@@ -61,6 +61,7 @@ export const SETTINGS_ROUTES = {
     memory: '/settings/memory',
     search: '/settings/search',
     session: '/settings/session',
+    coordination: '/settings/coordination',
     externalSessions: '/settings/external-sessions',
     actions: '/settings/actions',
     embeds: '/settings/embeds',

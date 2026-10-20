@@ -1,5 +1,6 @@
 import React from 'react';
 import { View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 
 import type { ReviewCommentV1 } from '@happier-dev/protocol';
 
@@ -43,18 +44,25 @@ function snapshotKindLabel(props: ReviewCommentSnapshotViewProps): string {
 export function ReviewCommentSnapshotView(props: ReviewCommentSnapshotViewProps) {
     const snapshot = resolveReviewCommentSnapshot(props.comment.snapshot);
     if (snapshot?.kind === 'none') return null;
-    const badges: string[] = [snapshotKindLabel(props)];
+    // A plain text snapshot is the ordinary case and says nothing; only a different kind or a caveat is named.
+    const badges: string[] = snapshot?.kind === 'text' ? [] : [snapshotKindLabel(props)];
     if (snapshot?.kind === 'text') {
         if (snapshot.truncated) badges.push(props.labels.truncated);
         if (snapshot.hasBidiControls) badges.push(props.labels.bidiControls);
         if (snapshot.likelyMinified) badges.push(props.labels.minified);
     }
 
+    if (badges.length === 0) return null;
     return (
-        <View>
+        <View style={styles.badges}>
             {badges.map((badge) => (
-                <Text key={badge}>{badge}</Text>
+                <Text key={badge} variant="meta" style={styles.badge}>{badge}</Text>
             ))}
         </View>
     );
 }
+
+const styles = StyleSheet.create((theme) => ({
+    badges: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.space.s8 },
+    badge: { color: theme.colors.text.tertiary },
+}));

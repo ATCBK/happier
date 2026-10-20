@@ -20,9 +20,14 @@ import { removeServerProfile } from '@/sync/domains/server/serverProfiles';
 
 import { InboxSummaryProvider, useSharedInboxSummary, type InboxSummary } from './useInboxSummary';
 import { useWorkflowAttentionSource } from './useWorkflowAttentionSource';
-import { createUsageNoticeArtifactFixture } from '@/dev/testkit/fixtures/usageNoticeFixtures';
+import { createUsageNoticeArtifactFixture, createAccountNoticeArtifactFixture } from '@/dev/testkit/fixtures/usageNoticeFixtures';
 import { InboxModelProvider, useInboxModel, type InboxModel } from './useInboxModel';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent, decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { readAccountNoticeArtifactV1, readUsageNoticeArtifactV1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
+import { withArtifactExcerptV1 } from '@happier-dev/protocol/artifacts/artifactExcerptV1';
+import { DestinationInstanceHost, type DestinationNavigation } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { InboxContent, type InboxView } from '@/components/inbox/InboxContent';
+import { Text } from '@/components/ui/text/Text';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -39,12 +44,17 @@ let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null =
 const initialState = storage.getInitialState();
 let artifactRead = createUsageNoticeArtifactFixture();
 let artifactWrites: Array<Record<string, unknown>> = [];
+let refuseArtifactRead = false;
+const noticeAlert = vi.hoisted(() => vi.fn());
 let disposeActionLoader: (() => void) | undefined;
 
 installDisconnectedServerSocketBoundary();
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
-vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true, spies: { alert: noticeAlert } }).module);
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
+    useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
+}));
 vi.mock('@more-tech/react-native-libsodium', () => import('libsodium-wrappers'));
 vi.mock('@/platform/cryptoRandom', () => import('@/platform/cryptoRandom.node'));
 vi.mock('@/platform/digest', () => import('@/platform/digest.node'));
@@ -79,6 +89,18 @@ function Probe(): null {
     return null;
 }
 
+function DirectInboxRows(props: Readonly<{ view: InboxView; observe: (model: InboxModel) => void }>) {
+    const inbox = useInboxModel();
+    props.observe(inbox);
+    const [route, setRoute] = React.useState('/inbox');
+    const navigation = React.useMemo<DestinationNavigation>(() => ({
+        push: href => setRoute(String(href)), replace: href => setRoute(String(href)), back: () => setRoute('/inbox'),
+    }), []);
+    return <DestinationInstanceHost tabId="notice-open" ref={{ kind: 'inbox', params: {} }} pathname={route} focused visible navigation={navigation}>
+        {route === '/inbox' ? <InboxContent model={inbox} view={props.view} /> : <Text testID="notice-destination">{route}</Text>}
+    </DestinationInstanceHost>;
+}
+
 async function renderSummary() {
     const screen = await renderScreen(<InboxSummaryProvider><Probe /></InboxSummaryProvider>);
     await act(async () => {});
@@ -102,6 +124,8 @@ describe('useInboxSummary workflow source', () => {
         workflowsEnabled = true;
         artifactRead = createUsageNoticeArtifactFixture();
         artifactWrites = [];
+        refuseArtifactRead = false;
+        noticeAlert.mockClear();
         storage.setState(initialState, true);
         connection = await restoreServerAccountForTest({ serverUrl: 'https://inbox-summary.example.test', accountId: 'account-a', request: async (url, init) => {
             const path = new URL(String(url)).pathname;
@@ -118,6 +142,7 @@ describe('useInboxSummary workflow source', () => {
             if (path === '/v3/automations/runs') return Response.json(await listAutomationRuns());
             if (path === '/v3/automations/runs/workflow-storage') return Response.json(await listRuns(JSON.parse(String(init?.body))));
             if (path === `/v1/artifacts/${artifactRead.id}`) {
+                if (refuseArtifactRead) return Response.json({ error: 'artifact_access_forbidden' }, { status: 403 });
                 if (init?.method === 'POST') {
                     artifactWrites.push(JSON.parse(String(init.body)));
                     return Response.json({ success: true, headerVersion: 4, bodyVersion: 3 });
@@ -206,6 +231,106 @@ describe('useInboxSummary workflow source', () => {
         expect(latest).toEqual({ count: 0, hasContent: false });
     });
 
+    it('counts unread private plugin notices while leaving read, resolved and foreign notices quiet', async () => {
+        listRuns.mockResolvedValue(page([]));
+        const notice = createAccountNoticeArtifactFixture();
+        storage.setState({ artifacts: { [notice.id]: notice,
+            read: createAccountNoticeArtifactFixture({ id: 'read', header: { ...notice.header!, readAt: 2_000 } }),
+            resolved: createAccountNoticeArtifactFixture({ id: 'resolved', header: { ...notice.header!, resolved: true } }),
+            foreign: createAccountNoticeArtifactFixture({ id: 'foreign', ownerAccountId: 'account-b' }),
+        } });
+        await renderSummary();
+        expect(latest).toEqual({ count: 1, hasContent: true });
+        await act(async () => { storage.setState({ artifacts: {} }); });
+        expect(latest).toEqual({ count: 0, hasContent: false });
+    });
+
+    it('marks an opened informational plugin notice read through Artifact CAS once without dismissing it', async () => {
+        listRuns.mockResolvedValue(page([]));
+        artifactRead = createAccountNoticeArtifactFixture();
+        storage.setState({ artifacts: { [artifactRead.id]: artifactRead } });
+        let inbox: InboxModel | null = null;
+        function ModelProbe() { inbox = useInboxModel(); return null; }
+        await renderScreen(<InboxModelProvider><ModelProbe /></InboxModelProvider>);
+        await act(async () => {});
+        const readModel = () => inbox!;
+        const item = readModel().items.find(item => item.source.id === artifactRead.id)!;
+        expect(item).toMatchObject({ view: 'updates', read: false });
+        await act(async () => { await Promise.all([readModel().markItemOpened(item), readModel().markItemOpened(item)]); });
+        expect(artifactWrites).toHaveLength(1);
+        expect(artifactWrites[0]).toMatchObject({ expectedHeaderVersion: 3, expectedBodyVersion: 2 });
+        expect(decodePlainArtifactStoredContent(artifactWrites[0]!.header as string)).toMatchObject({
+            status: 'open', resolved: false, readAt: expect.any(Number),
+        });
+        const writtenBody = decodePlainArtifactStoredContent(artifactWrites[0]!.body as string);
+        expect(writtenBody).toEqual({ body: artifactRead.body });
+        expect(readAccountNoticeArtifactV1({ header: decodePlainArtifactStoredContent(artifactWrites[0]!.header as string),
+            body: artifactRead.body })).toMatchObject({ kind: 'account_notice.v1', readAt: expect.any(Number) });
+        expect(readModel().items.find(row => row.key === item.key)).toMatchObject({ read: true });
+        expect(readModel().openAccountNotices).toHaveLength(1);
+    });
+
+    it('opening a plugin Needs-you item leaves its source request open and unread', async () => {
+        listRuns.mockResolvedValue(page([]));
+        artifactRead = createAccountNoticeArtifactFixture({ header: { type: 'decision' } });
+        storage.setState({ artifacts: { [artifactRead.id]: artifactRead } });
+        let inbox: InboxModel | null = null;
+        function ModelProbe() { inbox = useInboxModel(); return null; }
+        await renderScreen(<InboxModelProvider><ModelProbe /></InboxModelProvider>);
+        await act(async () => {});
+        const readModel = () => inbox!;
+        const item = readModel().items.find(item => item.source.id === artifactRead.id)!;
+        await act(async () => { await readModel().markItemOpened(item); });
+        expect(artifactWrites).toHaveLength(0);
+        expect(readModel().items).toContain(item);
+    });
+
+    it.each(['update', 'mention', 'decision'] as const)('directly opens a generic %s on a phone through its notice read owner', async type => {
+        listRuns.mockResolvedValue(page([]));
+        artifactRead = createAccountNoticeArtifactFixture({ header: { type } });
+        storage.setState({ artifacts: { [artifactRead.id]: artifactRead } });
+        let inbox: InboxModel | null = null;
+        const observe = (model: InboxModel) => { inbox = model; };
+        const screen = await renderScreen(<InboxModelProvider><DirectInboxRows
+            view={type === 'update' ? 'updates' : type === 'mention' ? 'mentions' : 'needs_you'} observe={observe} /></InboxModelProvider>);
+        const readModel = () => inbox!;
+        const item = readModel().items[0]!;
+        await screen.pressByTestIdAsync(`inbox.item.${item.key}`);
+        expect(screen.findByTestId('notice-destination')?.props.children).toBe(item.pageRoute);
+        if (type === 'decision') {
+            expect(artifactWrites).toEqual([]);
+            expect(readModel().items[0]).toMatchObject({ view: 'needs_you', read: false });
+        } else {
+            expect(artifactWrites).toHaveLength(1);
+            expect(artifactWrites[0]).toMatchObject({ expectedHeaderVersion: 3, expectedBodyVersion: 2 });
+            expect(decodePlainArtifactStoredContent(artifactWrites[0]!.header as string)).toMatchObject({
+                status: 'open', resolved: false, readAt: expect.any(Number),
+            });
+            expect(decodePlainArtifactStoredContent(artifactWrites[0]!.body as string)).toEqual({ body: artifactRead.body });
+            expect(readModel().items[0]).toMatchObject({ read: true });
+        }
+        expect(readModel().openAccountNotices).toHaveLength(1);
+        expect(noticeAlert).not.toHaveBeenCalled();
+    });
+
+    it('keeps a generic notice unread and reports a failed read while still opening its page', async () => {
+        listRuns.mockResolvedValue(page([]));
+        artifactRead = createAccountNoticeArtifactFixture();
+        refuseArtifactRead = true;
+        storage.setState({ artifacts: { [artifactRead.id]: artifactRead } });
+        let inbox: InboxModel | null = null;
+        const screen = await renderScreen(<InboxModelProvider><DirectInboxRows view="updates"
+            observe={value => { inbox = value; }} /></InboxModelProvider>);
+        const readModel = () => inbox!;
+        const item = readModel().items[0]!;
+        await screen.pressByTestIdAsync(`inbox.item.${item.key}`);
+        expect(noticeAlert).toHaveBeenCalled();
+        expect(screen.findByTestId('notice-destination')?.props.children).toBe(item.pageRoute);
+        expect(artifactWrites).toEqual([]);
+        expect(readModel().items[0]).toMatchObject({ read: false });
+        expect(readModel().openAccountNotices).toHaveLength(1);
+    });
+
     it('counts private open usage notices and retires them when the Account changes', async () => {
         listRuns.mockResolvedValue(page([]));
         const notice = createUsageNoticeArtifactFixture();
@@ -230,11 +355,25 @@ describe('useInboxSummary workflow source', () => {
         await act(async () => {});
         const readModel = () => inbox!;
         const entry = readModel().openUsageNotices[0]!;
+        const originalBody = entry.artifact.body;
+        if (typeof originalBody !== 'string') throw new Error('Expected a readable usage notice body');
+        const item = readModel().items.find(item => item.source.id === artifactRead.id)!;
+        // The retained closed usage schema has no read field. Opening it must
+        // not invent one or migrate its stored kind/content.
+        await act(async () => { await readModel().markItemOpened(item); });
+        expect(artifactWrites).toHaveLength(0);
         await act(async () => { await readModel().dismissUsageNotice(entry); });
         expect(artifactWrites).toHaveLength(1);
         expect(artifactWrites[0]).toMatchObject({ expectedHeaderVersion: 3, expectedBodyVersion: 2 });
         expect(decodePlainArtifactStoredContent(artifactWrites[0]!.header as string)).toMatchObject({ status: 'dismissed', notice: entry.header.notice });
-        expect(decodePlainArtifactStoredContent(artifactWrites[0]!.body as string)).toEqual({ body: artifactRead.body });
+        const writtenHeader = decodePlainArtifactStoredContent(artifactWrites[0]!.header as string);
+        const writtenBody = decodePlainArtifactStoredContent(artifactWrites[0]!.body as string);
+        if (!writtenBody || typeof writtenBody !== 'object' || !('body' in writtenBody)) throw new Error('Expected paired Artifact body');
+        expect(writtenBody.body).toBe(originalBody);
+        const expectedHeader = withArtifactExcerptV1({ ...entry.artifact.rawHeader, status: 'dismissed' }, originalBody);
+        expect(writtenHeader).toEqual(expectedHeader);
+        expect(readUsageNoticeArtifactV1({ header: writtenHeader, body: writtenBody.body }))
+            .toEqual(expectedHeader);
         expect(readModel().openUsageNotices).toEqual([]);
         artifactRead = { ...artifactRead, headerVersion: 4 };
         await act(async () => { await expect(readModel().dismissUsageNotice(entry)).rejects.toThrow(); });

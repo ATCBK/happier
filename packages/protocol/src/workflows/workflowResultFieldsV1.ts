@@ -66,6 +66,19 @@ const ROOT_KEYS = new Set([
 ]);
 const FIELD_KEYS = new Set(['type', 'title', 'description', 'enum', 'items']);
 
+/** One authoring rule for the editor and definition edits; retained other keys stay advanced. */
+export function isWorkflowResultFieldNameValid(name: string): boolean {
+  return /^[A-Za-z][A-Za-z0-9_-]*$/u.test(name);
+}
+
+/** Inspect raw authoring input before the shared JSON Schema parser can drop an unsupported key. */
+export function findInvalidWorkflowResultFieldName(result: unknown): string | null {
+  if (typeof result !== 'object' || result === null || !('kind' in result) || result.kind !== 'json'
+    || !('schema' in result) || typeof result.schema !== 'object' || result.schema === null
+    || !('properties' in result.schema) || typeof result.schema.properties !== 'object' || result.schema.properties === null) return null;
+  return Object.keys(result.schema.properties).find((name) => !isWorkflowResultFieldNameValid(name)) ?? null;
+}
+
 const SCALAR_SCHEMA_TYPE = {
   text: 'string',
   number: 'number',
@@ -154,6 +167,7 @@ export function projectWorkflowResultFields(
   }
   const fields: WorkflowResultField[] = [];
   for (const [name, property] of Object.entries(properties)) {
+    if (!isWorkflowResultFieldNameValid(name)) return { kind: 'advanced' };
     const field = projectField(name, property, required.includes(name));
     if (field === null) return { kind: 'advanced' };
     fields.push(field);
@@ -174,15 +188,14 @@ export function buildWorkflowResultFieldsContract(
   fields: readonly WorkflowResultField[],
   options: Readonly<{ closed?: boolean }> = {},
 ): Extract<WorkflowResultContract, { kind: 'json' }> {
-  const properties: Record<string, PluginJsonSchemaV2> = {};
-  for (const field of fields) {
+  const properties = Object.fromEntries(fields.map((field): [string, PluginJsonSchemaV2] => {
     const described = {
       ...(field.title === undefined ? {} : { title: field.title }),
       ...(field.description === undefined || field.description === ''
         ? {}
         : { description: field.description }),
     };
-    properties[field.name] =
+    return [field.name,
       field.type === 'list'
         ? {
             type: 'array',
@@ -191,8 +204,8 @@ export function buildWorkflowResultFieldsContract(
           }
         : field.type === 'choice'
           ? { type: 'string', ...described, enum: [...(field.choices ?? [])] }
-          : { type: SCALAR_SCHEMA_TYPE[field.type], ...described };
-  }
+          : { type: SCALAR_SCHEMA_TYPE[field.type], ...described }];
+  }));
   const required = fields
     .filter((field) => field.required)
     .map((field) => field.name);

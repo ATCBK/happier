@@ -11,6 +11,8 @@ import {
     type SessionMetadataInactiveModelIntentOwnerPatchV1,
     type SessionMetadataTuplePatchV1,
 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { SessionTeamCredentialBindingMetadataPatchV1Schema, SessionTeamCredentialBindingMutationRejectionV1Schema,
+    type SessionTeamCredentialBindingMetadataPatchV1 } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
 import { apiSocket } from '@/sync/api/session/apiSocket';
 import { emitWithAckCancellable } from '@happier-dev/sync-client';
 import type { UpdateMetadataAck } from '@/sync/domains/session/metadata/updateSessionMetadataWithRetry';
@@ -25,6 +27,8 @@ import { resolvePreferredServerIdForSessionId } from './resolvePreferredServerId
 import { resolveServerAccountRequestContext } from './resolveServerAccountRequestContext';
 import { runWithHomeCredentialRequestSignal } from './serverAccountScopeRequestGuard';
 import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
+import { HappyError } from '@/utils/errors/errors';
 
 type SessionMetadataUpdateScope = Readonly<{
     sessionId: string;
@@ -39,7 +43,8 @@ type SessionMetadataUpdateParams =
         | Readonly<{
             patch:
                 | SessionMetadataTuplePatchV1
-                | SessionMetadataInactiveModelIntentOwnerPatchV1;
+                | SessionMetadataInactiveModelIntentOwnerPatchV1
+                | SessionTeamCredentialBindingMetadataPatchV1;
         }>
         | Readonly<{
             expectedVersion: number;
@@ -54,14 +59,29 @@ const INVALID_TUPLE_RESPONSE: UpdateMetadataAck = {
     message: 'Invalid Session metadata tuple response',
 };
 
+function assertSessionMetadataHttpAvailable(response: Response, body: unknown): void {
+    if (response.status !== 408 && response.status !== 429 && response.status < 500) return;
+    const rollback = readHomeDomainConfirmedRollbackV1(response.status, body);
+    throw new HappyError(`Session metadata request failed (${response.status})`, true, {
+        status: response.status,
+        kind: 'server',
+        code: rollback?.code ?? 'service_temporarily_unavailable',
+        ...(rollback ? { details: rollback.details } : {}),
+    });
+}
+
 function parseSessionMetadataTuplePatch(
     value:
         | SessionMetadataTuplePatchV1
-        | SessionMetadataInactiveModelIntentOwnerPatchV1,
+        | SessionMetadataInactiveModelIntentOwnerPatchV1
+        | SessionTeamCredentialBindingMetadataPatchV1,
 ):
     | SessionMetadataTuplePatchV1
     | SessionMetadataInactiveModelIntentOwnerPatchV1
+    | SessionTeamCredentialBindingMetadataPatchV1
     | null {
+    const team = SessionTeamCredentialBindingMetadataPatchV1Schema.safeParse(value);
+    if (team.success) return team.data;
     const conditioned =
         SessionMetadataInactiveModelIntentOwnerPatchV1Schema.safeParse(
             value,
@@ -94,7 +114,8 @@ async function emitSessionMetadataTuplePatch(params: Readonly<{
     sessionId: string;
     patch:
         | SessionMetadataTuplePatchV1
-        | SessionMetadataInactiveModelIntentOwnerPatchV1;
+        | SessionMetadataInactiveModelIntentOwnerPatchV1
+        | SessionTeamCredentialBindingMetadataPatchV1;
     context: Awaited<ReturnType<typeof resolveServerAccountRequestContext>>;
     request: (path: string, init?: RequestInit) => Promise<Response>;
     assertCurrent: () => void;
@@ -112,9 +133,34 @@ async function emitSessionMetadataTuplePatch(params: Readonly<{
             body: JSON.stringify(patch),
         },
     );
-    params.assertCurrent();
     const body: unknown = await response.json().catch(() => null);
+
+    // A delivered, issued-tuple-matched ACK is an external commit fact. A
+    // concurrent retirement may suppress projection, not erase that receipt.
+    if (response.status === 200) {
+        const parsed = SessionMetadataTuplePatchSuccessV1Schema.safeParse(body);
+        const expectedMetadataVersion = patch.mode === 'owner_migration'
+            ? patch.source.metadata.version + 1 : patch.sharedMetadata.expectedVersion + 1;
+        const expectedAgentStateVersion = patch.mode === 'shared_editor' ? undefined
+            : patch.mode === 'owner_migration' ? patch.source.agentState.version + 1
+                : patch.agentState.expectedVersion + 1;
+        if (parsed.success
+            && parsed.data.sharedMetadata.version === expectedMetadataVersion
+            && (expectedAgentStateVersion === undefined
+                ? parsed.data.agentState === undefined
+                : parsed.data.agentState?.version === expectedAgentStateVersion)) {
+            return {
+                result: 'success',
+                metadataLayoutVersion: parsed.data.metadataLayoutVersion,
+                version: parsed.data.sharedMetadata.version,
+                ...(parsed.data.agentState ? { agentStateVersion: parsed.data.agentState.version } : {}),
+            };
+        }
+        params.assertCurrent();
+        return INVALID_TUPLE_RESPONSE;
+    }
     params.assertCurrent();
+    assertSessionMetadataHttpAvailable(response, body);
 
     if (patch.mode === 'owner_migration') {
         if (
@@ -138,22 +184,13 @@ async function emitSessionMetadataTuplePatch(params: Readonly<{
         }
     }
 
-    if (response.status === 200) {
-        const parsed = SessionMetadataTuplePatchSuccessV1Schema.safeParse(body);
-        if (!parsed.success) {
-            return INVALID_TUPLE_RESPONSE;
-        }
-        return {
-            result: 'success',
-            metadataLayoutVersion: parsed.data.metadataLayoutVersion,
-            version: parsed.data.sharedMetadata.version,
-            ...(parsed.data.agentState
-                ? { agentStateVersion: parsed.data.agentState.version }
-                : {}),
-        };
-    }
-
     if (response.status === 409) {
+        const teamRejection = SessionTeamCredentialBindingMutationRejectionV1Schema.safeParse(body);
+        if (patch.mode === 'owner_team_credential_binding' && teamRejection.success) {
+            throw Object.assign(new Error('Team credential binding was rejected by current Session policy'), {
+                code: teamRejection.data.code, reason: teamRejection.data.reason, retryable: false as const,
+            });
+        }
         const activeConflict =
             SessionMetadataActiveConflictV1Schema.safeParse(body);
         if (activeConflict.success) {
@@ -225,21 +262,21 @@ async function emitInactiveModelIntentLegacyPatch(params: Readonly<{
             body: JSON.stringify(parsed.data),
         },
     );
-    params.assertCurrent();
     const body: unknown = await response.json().catch(() => null);
-    params.assertCurrent();
 
     if (response.status === 200) {
         const success =
             SessionMetadataInactiveModelIntentPatchSuccessV1Schema.safeParse(
                 body,
             );
-        if (success.success) {
+        if (success.success && (success.data.metadata.version === params.expectedVersion
+            || success.data.metadata.version === params.expectedVersion + 1)) {
             return {
                 result: 'success',
                 version: success.data.metadata.version,
             };
         }
+        params.assertCurrent();
         const conflict =
             SessionMetadataInactiveModelIntentVersionConflictV1Schema.safeParse(
                 body,
@@ -252,6 +289,8 @@ async function emitInactiveModelIntentLegacyPatch(params: Readonly<{
             }
             : INVALID_TUPLE_RESPONSE;
     }
+    params.assertCurrent();
+    assertSessionMetadataHttpAvailable(response, body);
     if (response.status === 409) {
         const activeConflict =
             SessionMetadataActiveConflictV1Schema.safeParse(body);

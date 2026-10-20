@@ -291,7 +291,7 @@ export function homeSignInPlatformForKeys(keys: readonly string[]): HomeSignInPl
 }
 
 /** Sign-in providers, at the Home's company sign-in collection. */
-export function homeCompanySignInHref(serverId: string): string {
+export function homeCompanySignInHref(serverId: string): ReturnType<typeof buildSettingHref<ReturnType<typeof homeAdministrationSignInProvidersPath>>> {
   return buildSettingHref(
     homeAdministrationSignInProvidersPath(serverId),
     HOME_SIGN_IN_PROVIDERS_SETTINGS.settings.homeConnections,
@@ -299,7 +299,7 @@ export function homeCompanySignInHref(serverId: string): string {
 }
 
 /** Sign-in providers, opened at the platform's row (its disclosure opens on arrival). */
-export function homeSignInPlatformHref(serverId: string, id: HomeSignInPlatformId): string {
+export function homeSignInPlatformHref(serverId: string, id: HomeSignInPlatformId): ReturnType<typeof buildSettingHref<ReturnType<typeof homeAdministrationSignInProvidersPath>>> {
   const setting = id === 'github'
     ? HOME_SIGN_IN_PROVIDERS_SETTINGS.settings.githubSignIn
     : HOME_SIGN_IN_PROVIDERS_SETTINGS.settings.workos;

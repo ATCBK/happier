@@ -96,6 +96,13 @@ function readCodexPreflightAuthMethod(
     : null;
 }
 
+async function readCodexAcpPreflightSessionControls(context: AgentPreflightSessionControlsProbeContextV1) {
+  const authenticationMethodId = context.nonblankEnvironment?.OPENAI_API_KEY === true
+    ? 'openai-api-key' : context.nonblankEnvironment?.CODEX_API_KEY === true ? 'codex-api-key' : undefined;
+  return await context.probeDeclaredAcpSessionControls?.({ ...CODEX_PREFLIGHT_ACP_COMMAND,
+    ...(authenticationMethodId ? { authenticationMethodId } : {}) }) ?? null;
+}
+
 async function readCodexPreflightSessionControls(
   context: AgentPreflightSessionControlsProbeContextV1,
 ): Promise<CodexAppServerSessionControlsSnapshot | null> {
@@ -183,11 +190,16 @@ export const CODEX_PREFLIGHT_SESSION_CONTROLS = Object.freeze({
     return `codex:${backendMode}`;
   },
   probeModels: async (context) => {
+    if (!usesCodexAppServer(context)) return (await readCodexAcpPreflightSessionControls(context))?.models ?? null;
     const controls = await readCodexPreflightSessionControls(context);
     return controls?.modelsObserved ? controls.availableModels : null;
   },
-  probeModes: async (context) => (await readCodexPreflightSessionControls(context))?.availableModes ?? null,
-  probeConfigOptions: async (context) => (await readCodexPreflightSessionControls(context))?.configOptions ?? null,
+  probeModes: async (context) => usesCodexAppServer(context)
+    ? (await readCodexPreflightSessionControls(context))?.availableModes ?? null
+    : (await readCodexAcpPreflightSessionControls(context))?.modes ?? null,
+  probeConfigOptions: async (context) => usesCodexAppServer(context)
+    ? (await readCodexPreflightSessionControls(context))?.configOptions ?? null
+    : (await readCodexAcpPreflightSessionControls(context))?.configOptions ?? null,
   probeCatalogs: async (context) => {
     if (!usesCodexAppServer(context)) {
       const authenticationMethodId = context.nonblankEnvironment?.OPENAI_API_KEY === true

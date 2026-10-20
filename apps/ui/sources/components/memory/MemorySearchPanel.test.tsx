@@ -1,18 +1,22 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { MemoryDocumentSearchCoverageV1, MemorySearchResultHitV1 } from '@happier-dev/protocol/memory/memorySearch';
 
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { createDeferred } from '@/dev/testkit';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { readMachineOnlineGraceMsFromEnv } from '@/utils/sessions/machineUtils';
+import { createRpcCallError } from '@/sync/runtime/rpcErrors';
 
 const machineRpc = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
@@ -37,7 +41,8 @@ const { createMachineAdministrationFixture } = await import('@/dev/testkit/fixtu
 await loadSyncSingletonForTests();
 const { sync } = await import('@/sync/sync');
 const { storage } = await import('@/sync/domains/state/storage');
-const { MemorySearchPanel } = await import('./MemorySearchPanel');
+const { MemorySearchPanel, useMemorySearchPanelModel } = await import('./MemorySearchPanel');
+const { ProjectContextBody } = await import('@/components/projects/context/ProjectContextBody');
 const { useMemoryDocument } = await import('./useMemoryDocument');
 const { useMemoryDocumentSummary } = await import('./useMemoryDocumentSummary');
 const { MemoryDocumentBody } = await import('./MemoryDocumentBody');
@@ -45,6 +50,7 @@ const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 let administration: Awaited<ReturnType<typeof createMachineAdministrationFixture>>;
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 let webLocks: ReturnType<typeof installWebLockManagerMock>;
+let caseSignal: AbortSignal;
 const baseline = storage.getState();
 const transcript: MemorySearchResultHitV1 = {
     sessionId: 'past-session', seqFrom: 1, seqTo: 2, createdAtFromMs: 1, createdAtToMs: 2,
@@ -62,7 +68,8 @@ const status = {
     tier1DbPath: null, deepDbPath: '/memory/deep.sqlite', tier1DbBytes: null, deepDbBytes: 1,
 };
 
-beforeEach(async () => {
+beforeEach(async ({ signal }) => {
+    caseSignal = signal;
     webLocks = installWebLockManagerMock();
     await homes.reset();
     storage.setState(baseline, true);
@@ -70,6 +77,12 @@ beforeEach(async () => {
     const machine = storage.getState().machineListByServerId[administration.serverIds[0]!]![0]!;
     await homes.addHome({ name: 'Memory Home', serverUrl: 'https://prompt-administration-1.example.test',
         serverIdentityId: 'srv_prompt_administration_1', accountId: 'account-a' });
+    homes.answer(administration.serverIds[0]!, '/v1/account/encryption/currentness', {
+        body: createPlainAccountEncryptionCurrentnessFixture(),
+    });
+    homes.answer(administration.serverIds[0]!, '/v1/machines', {
+        body: [createPlainMachineRowFixture({ id: machine.id, accountId: 'account-a' })],
+    });
     connection = await restoreServerAccountForTest({ serverUrl: 'https://prompt-administration-1.example.test',
         accountId: 'account-a', request: homes.request });
     installHomeGovernanceBoundaries(homes);
@@ -78,6 +91,7 @@ beforeEach(async () => {
             machineAdministrationTargetsLocalV1: { 'memory.settings': administration.targets[0]! } },
     });
     storage.getState().activateProfileScope({ serverId: administration.serverIds[0]!, accountId: 'account-a' });
+    await sync.refreshMachines();
 });
 afterEach(async () => {
     standardCleanup();
@@ -91,7 +105,7 @@ afterEach(async () => {
     webLocks.restore();
 });
 
-async function search(coverage: MemoryDocumentSearchCoverageV1 | null, hits: readonly MemorySearchResultHitV1[]) {
+async function search(coverage: MemoryDocumentSearchCoverageV1 | null, hits: readonly MemorySearchResultHitV1[], query = 'fact') {
     machineRpc.mockImplementation(async (request: Readonly<{ method: string }>) => request.method === RPC_METHODS.DAEMON_MEMORY_STATUS
         ? { ...status, ...(coverage ? { documentSearchSupported: true } : {}) }
         : { v: 1, ok: true, hits, ...(coverage ? { documents: coverage } : {}) });
@@ -99,8 +113,12 @@ async function search(coverage: MemoryDocumentSearchCoverageV1 | null, hits: rea
         <MemorySearchPanel testID="search" serverId={administration.serverIds[0]!} />
     </InjectedAuthProvider>);
     await flushHookEffects();
-    expect(screen.findByTestId('search.input')?.props.editable).toBe(true);
-    await act(async () => screen.findByTestId('search.input')!.props.onChangeText('fact'));
+    await waitForHomeGovernance(async () => {
+        caseSignal.throwIfAborted();
+        await flushHookEffects();
+        expect(screen.findByTestId('search.input')?.props.editable).toBe(true);
+    });
+    await act(async () => screen.findByTestId('search.input')!.props.onChangeText(query));
     await act(async () => {
         await vi.waitFor(() => expect(machineRpc.mock.calls.some(([request]) => request.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)).toBe(true));
     });
@@ -109,9 +127,185 @@ async function search(coverage: MemoryDocumentSearchCoverageV1 | null, hits: rea
 }
 
 describe('MemorySearchPanel corpus coverage', () => {
+    it.each(['A', '猫'])('searches the admitted one-character query %s', async query => {
+        const screen = await search({ state: 'ready' }, [document], query);
+        expect(machineRpc.mock.calls.find(([request]) => request.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)?.[0].payload)
+            .toMatchObject({ query });
+        expect(screen.findByTestId('search.remembered.0')).not.toBeNull();
+    });
+    it('keeps empty queries idle, debounces and cancels superseded reads, and shows pending searches while retaining hits', async () => {
+        const pending = createDeferred<unknown>();
+        const nextPending = createDeferred<unknown>();
+        machineRpc.mockImplementation(async (request: Readonly<{ method: string; payload?: { query?: string } }>) => {
+            if (request.method === RPC_METHODS.DAEMON_MEMORY_STATUS) return { ...status, documentSearchSupported: true };
+            if (request.payload?.query === 'A') return pending.promise;
+            if (request.payload?.query === 'B') return nextPending.promise;
+            return { v: 1, ok: true, hits: [document], documents: { state: 'ready' } };
+        });
+        const screen = await renderScreen(<InjectedAuthProvider credentials={connection!.credentials}>
+            <MemorySearchPanel testID="pending-search" serverId={administration.serverIds[0]!} />
+        </InjectedAuthProvider>);
+        await waitForHomeGovernance(async () => {
+            caseSignal.throwIfAborted();
+            await flushHookEffects();
+            expect(screen.findByTestId('pending-search.input')?.props.editable).toBe(true);
+        });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        try {
+            await act(async () => screen.findByTestId('pending-search.input')!.props.onChangeText(' '));
+            await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+            expect(machineRpc).not.toHaveBeenCalled();
+            await act(async () => screen.findByTestId('pending-search.input')!.props.onChangeText('A'));
+            await act(async () => { await vi.advanceTimersByTimeAsync(249); });
+            expect(machineRpc).not.toHaveBeenCalled();
+            await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+            const first = machineRpc.mock.calls.find(([request]) => request.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)?.[0];
+            expect(first?.payload).toMatchObject({ query: 'A' });
+            expect(screen.getTextContent()).toContain('universalSearch.searchingGroup');
+            expect(screen.getTextContent()).not.toContain('memoryContext.memory.resultCount');
+            expect(screen.findByTestId('pending-search.empty')).toBeNull();
+            await act(async () => screen.findByTestId('pending-search.input')!.props.onChangeText('猫'));
+            expect(first.signal.aborted).toBe(true);
+            await act(async () => pending.resolve({ v: 1, ok: true, hits: [], documents: { state: 'ready' } }));
+            await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+            expect(screen.findByTestId('pending-search.remembered.0')).not.toBeNull();
+            expect(screen.getTextContent()).toContain('memoryContext.memory.resultCount');
+            expect(screen.getTextContent()).not.toContain('universalSearch.searchingGroup');
+            await act(async () => screen.findByTestId('pending-search.input')!.props.onChangeText('B'));
+            await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+            expect(screen.findByTestId('pending-search.remembered.0')).not.toBeNull();
+            expect(screen.getTextContent()).toContain('universalSearch.searchingGroup');
+            expect(screen.getTextContent()).not.toContain('memoryContext.memory.resultCount');
+            await act(async () => nextPending.resolve({ v: 1, ok: true, hits: [], documents: { state: 'ready' } }));
+            expect(screen.findByTestId('pending-search.remembered.0')).toBeNull();
+            expect(screen.findByTestId('pending-search.empty')).not.toBeNull();
+            expect(screen.getTextContent()).toContain('memoryContext.memory.resultCount');
+            expect(screen.getTextContent()).not.toContain('universalSearch.searchingGroup');
+        } finally {
+            vi.useRealTimers();
+            pending.resolve({ v: 1, ok: true, hits: [] });
+            nextPending.resolve({ v: 1, ok: true, hits: [] });
+            await act(async () => screen.unmount());
+        }
+    });
+    it.each([false, true])('searches only the qualified Project through its Context entry (Source read-only: %s)', async (sourceReadOnly) => {
+        const serverId = administration.serverIds[0]!;
+        const projectRef = { serverId, projectKey: 'payments' };
+        const workspaceRef = { id: 'payments-checkout', ...projectRef, machineId: administration.targets[0]!.machineId,
+            rootPath: '/repo/payments', createdAtMs: 1,
+            ...(sourceReadOnly ? { source: { sourceId: 'team-source', revision: 1 } } : {}) };
+        const accountScope = { serverId, accountId: 'account-a' };
+        storage.getState().activateProjectAccountRowsScope(accountScope);
+        storage.getState().applyProjectAccountRowsForScope(accountScope, { scope: accountScope, status: 'ready', coverage: 'complete',
+            workspaceRefs: [workspaceRef], relationships: [], organizations: [], revisionsByPhysicalKey: {} });
+        const projectHit = { ...document, ref: { kind: 'doc', serverId, artifactId: 'payments-memory' }, summary: 'Payments fact', score: 0.5 };
+        const otherHit = { ...document, summary: 'Unrelated higher-ranked Project fact', score: 1 };
+        machineRpc.mockImplementation(async (request: Readonly<{ method: string; payload: { scope?: unknown } }>) =>
+            request.method === RPC_METHODS.DAEMON_MEMORY_STATUS
+                ? { ...status, projectSearchSupported: true, documentSearchSupported: true }
+                : { v: 1, ok: true, documents: { state: 'ready' }, project: { state: 'ready' },
+                    hits: JSON.stringify(request.payload.scope) === JSON.stringify({ type: 'project', projectRef })
+                        ? [projectHit] : [otherHit, projectHit] });
+        const screen = await renderScreen(<InjectedAuthProvider credentials={connection!.credentials}>
+            <ProjectContextBody workspaceRef={workspaceRef} />
+        </InjectedAuthProvider>);
+        if (sourceReadOnly) expect(screen.findByTestId('project-context.memory.remember')).toBeNull();
+        await screen.pressByTestIdAsync('project-context.memory.search');
+        const input = 'project-context.memory.searchPanel.input';
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId(input)?.props.editable).toBe(true)); });
+        await act(async () => screen.findByTestId(input)!.props.onChangeText('fact'));
+        await act(async () => { await vi.waitFor(() => expect(machineRpc.mock.calls.some(([request]) =>
+            request.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)).toBe(true)); });
+        await flushHookEffects();
+        expect(machineRpc.mock.calls.find(([request]) => request.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)?.[0].payload)
+            .toMatchObject({ scope: { type: 'project', projectRef } });
+        expect(screen.getTextContent()).toContain(projectHit.summary);
+        expect(screen.getTextContent()).not.toContain(otherHit.summary);
+    });
+    it('retains the typed unsupported cause and qualified Machine in the consumed model, clearing it after repair', async () => {
+        const serverId = administration.serverIds[0]!;
+        const scope = { type: 'project' as const, projectRef: { serverId, projectKey: 'payments' } };
+        machineRpc.mockResolvedValue(status);
+        const hook = await renderHook(() => useMemorySearchPanelModel({ serverId, scope }), {
+            wrapper: ({ children }) => <InjectedAuthProvider credentials={connection!.credentials}>{children}</InjectedAuthProvider>,
+        });
+        await act(async () => hook.getCurrent().setQuery('fact'));
+        await act(async () => { await vi.waitFor(() => expect(machineRpc.mock.calls.some(([request]) =>
+            request.method === RPC_METHODS.DAEMON_MEMORY_STATUS)).toBe(true)); });
+        await flushHookEffects();
+        expect(hook.getCurrent().results?.failure).toMatchObject({
+            error: { ok: false, errorCode: 'memory_project_scope_unsupported' },
+            target: { serverId: administration.targets[0]!.serverIdentityId, machineId: administration.targets[0]!.machineId },
+        });
+        expect(machineRpc.mock.calls.some(([request]) => request.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)).toBe(false);
+        machineRpc.mockImplementation(async (request: Readonly<{ method: string }>) => request.method === RPC_METHODS.DAEMON_MEMORY_STATUS
+            ? { ...status, projectSearchSupported: true, documentSearchSupported: true }
+            : { v: 1, ok: true, hits: [document], project: { state: 'ready' }, documents: { state: 'ready' } });
+        await act(async () => hook.getCurrent().retry());
+        await act(async () => { await vi.waitFor(() => expect(machineRpc.mock.calls.some(([request]) =>
+            request.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)).toBe(true)); });
+        await flushHookEffects();
+        expect(hook.getCurrent().results?.failure).toBeNull();
+        expect(hook.getCurrent().results?.documents).toHaveLength(1);
+    });
+    it('reports unsupported Project search distinctly instead of generic coverage, offline or no matches', async () => {
+        const serverId = administration.serverIds[0]!;
+        machineRpc.mockResolvedValue(status);
+        const screen = await renderScreen(<InjectedAuthProvider credentials={connection!.credentials}>
+            <MemorySearchPanel testID="unsupported-project" serverId={serverId}
+                scope={{ type: 'project', projectRef: { serverId, projectKey: 'payments' } }} />
+        </InjectedAuthProvider>);
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('unsupported-project.input')?.props.editable).toBe(true)); });
+        await act(async () => screen.findByTestId('unsupported-project.input')!.props.onChangeText('fact'));
+        await act(async () => { await vi.waitFor(() => expect(machineRpc.mock.calls.some(([request]) =>
+            request.method === RPC_METHODS.DAEMON_MEMORY_STATUS)).toBe(true)); });
+        await vi.waitFor(async () => {
+            await flushHookEffects();
+            expect(screen.findByTestId('unsupported-project.projectUnsupported')).not.toBeNull();
+        });
+        expect(screen.findByTestId('unsupported-project.documentsCoverage')).toBeNull();
+        expect(screen.findByTestId('unsupported-project.failed')).toBeNull();
+        expect(screen.findByTestId('unsupported-project.empty')).toBeNull();
+        expect(machineRpc.mock.calls.some(([request]) => request.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)).toBe(false);
+    });
+    it('preserves qualified Project scope and retained hits when the selected Machine goes offline', async () => {
+        const serverId = administration.serverIds[0]!;
+        const scope = { type: 'project' as const, projectRef: { serverId, projectKey: 'payments' } };
+        machineRpc.mockImplementation(async (request: Readonly<{ method: string }>) => request.method === RPC_METHODS.DAEMON_MEMORY_STATUS
+            ? { ...status, projectSearchSupported: true, documentSearchSupported: true }
+            : { v: 1, ok: true, hits: [document], documents: { state: 'ready' }, project: { state: 'partial' } });
+        const screen = await renderScreen(<InjectedAuthProvider credentials={connection!.credentials}>
+            <MemorySearchPanel testID="project-search" serverId={serverId} scope={scope} />
+        </InjectedAuthProvider>);
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('project-search.input')?.props.editable).toBe(true)); });
+        await act(async () => screen.findByTestId('project-search.input')!.props.onChangeText('fact'));
+        await act(async () => { await vi.waitFor(() => expect(machineRpc.mock.calls.some(([request]) =>
+            request.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)).toBe(true)); });
+        await flushHookEffects();
+        expect(screen.findByTestId('project-search.remembered.0')).not.toBeNull();
+        expect(machineRpc.mock.calls.find(([request]) => request.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)?.[0].payload).toMatchObject({ scope });
+        expect(screen.findByTestId('project-search.documentsCoverage')).not.toBeNull();
+        const machineId = administration.targets[0]!.machineId;
+        const selectedMachine = storage.getState().machines[machineId];
+        if (!selectedMachine) throw new Error('Expected the selected Machine fixture');
+        homes.answer(serverId, '/v1/machines', { body: [{
+            ...createPlainMachineRowFixture({ id: machineId, accountId: 'account-a' }), active: false,
+        }] });
+        const lastSeenAt = Date.now();
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(lastSeenAt + readMachineOnlineGraceMsFromEnv() + 1);
+        try {
+            await act(async () => storage.getState().applyMachines([{ ...selectedMachine, active: false, activeAt: lastSeenAt }],
+                false, { sourceServerId: serverId }));
+            await flushHookEffects();
+            expect(screen.findByTestId('project-search.unavailable')).not.toBeNull();
+            expect(screen.findByTestId('project-search.remembered.0')).not.toBeNull();
+            await act(async () => administration.selectTarget(administration.targets[1]!));
+            await flushHookEffects();
+            expect(screen.findByTestId('project-search.remembered.0')).toBeNull();
+        } finally { clock.mockRestore(); }
+    });
     it('renders admitted loaded and indexed facts through the real selected-daemon summary path', async () => {
         const serverId = administration.serverIds[0]!;
-        homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
         const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'memory_doc.v1', title: 'Memory' }, JSON.stringify({
             v: 1, index: ['one', 'two'].map(id => ({ id, text: id, createdAtMs: 1, sourceSessionRef: null })),
             topics: [{ title: 'detail', summary: 'Topic', facts: [{ id: 'topic', text: 'Detail', createdAtMs: 1, sourceSessionRef: null }] }],
@@ -128,13 +322,47 @@ describe('MemorySearchPanel corpus coverage', () => {
                 composing={false} onComposingChange={() => {}} emptyText="empty" />;
         }
         const screen = await renderScreen(<InjectedAuthProvider credentials={connection!.credentials}><Summary /></InjectedAuthProvider>);
-        await act(async () => { await vi.waitFor(() => expect(screen.getTextContent()).toContain('5 facts')); });
+        await vi.waitFor(async () => { await flushHookEffects(); expect(screen.getTextContent()).toContain('5 facts'); });
         expect(screen.getTextContent()).toContain('1 facts');
         expect(screen.getTextContent()).not.toContain('2 facts');
     });
+    it('reports the selected unavailable Machine for counts while the document remains readable, then recovers on the same Machine', async () => {
+        const serverId = administration.serverIds[0]!;
+        const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'memory_doc.v1', title: 'Memory' }, JSON.stringify({
+            v: 1, index: [{ id: 'key', text: 'Keep the saved fact readable.', createdAtMs: 1, sourceSessionRef: null }], topics: [],
+        }));
+        homes.answer(serverId, '/v1/public-shares?' + new URLSearchParams({ subjectKind: 'artifact', subjectId: artifactId }), { body: { publicShares: [] } });
+        const ref = { kind: 'doc' as const, serverId, artifactId };
+        const machineId = administration.targets[0]!.machineId;
+        const machine = storage.getState().machines[machineId]!;
+        const lastSeenAt = Date.now();
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(lastSeenAt + readMachineOnlineGraceMsFromEnv() + 1);
+        homes.answer(serverId, '/v1/machines', { body: [{ ...createPlainMachineRowFixture({ id: machineId, accountId: 'account-a' }), active: false }] });
+        await act(async () => storage.getState().applyMachines([{ ...machine, active: false, activeAt: lastSeenAt }], false, { sourceServerId: serverId }));
+        const hook = await renderHook(() => {
+            const source = useMemoryDocument({ ref, serverId });
+            return { source, summary: useMemoryDocumentSummary({ source, serverId }) };
+        }, { wrapper: ({ children }) => <InjectedAuthProvider credentials={connection!.credentials}>{children}</InjectedAuthProvider> });
+        try {
+            await vi.waitFor(async () => { await flushHookEffects(); expect(hook.getCurrent().source.status).toBe('ready'); });
+            expect(hook.getCurrent().source.view?.facts[0]?.text).toBe('Keep the saved fact readable.');
+            expect(hook.getCurrent().summary).toMatchObject({ state: 'unavailable', cause: {
+                reason: 'machine_unavailable', target: { serverId: administration.targets[0]!.serverIdentityId, machineId },
+            } });
+            expect(machineRpc).not.toHaveBeenCalled();
+            machineRpc.mockResolvedValue({ ...status, documents: { state: 'ready', facts: [{
+                ref, revision: { headerVersion: 1, bodyVersion: 1 }, indexedFactCount: 5, loadedFactCount: 1,
+            }] } });
+            homes.answer(serverId, '/v1/machines', { body: [createPlainMachineRowFixture({ id: machineId, accountId: 'account-a' })] });
+            await act(async () => storage.getState().applyMachines([{ ...machine, active: true, activeAt: Date.now() }], false, { sourceServerId: serverId }));
+            await vi.waitFor(async () => {
+                await flushHookEffects();
+                expect(hook.getCurrent().summary).toEqual({ state: 'ready', indexedFactCount: 5, loadedFactCount: 1 });
+            });
+        } finally { await hook.unmount(); clock.mockRestore(); }
+    });
     it('keeps a fresh summary stable and refuses late scoped status after its context changes', async () => {
         const serverId = administration.serverIds[0]!;
-        homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
         const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'memory_doc.v1', title: 'Memory' }, JSON.stringify({
             v: 1, index: [{ id: 'key', text: 'Key fact', createdAtMs: 1, sourceSessionRef: null }], topics: [],
         }));
@@ -151,20 +379,64 @@ describe('MemorySearchPanel corpus coverage', () => {
             return useMemoryDocumentSummary({ source, serverId, scope, preparationBasis: basis });
         }, { initialProps: { basis: 'initial' }, wrapper: ({ children }) =>
             <InjectedAuthProvider credentials={connection!.credentials}>{children}</InjectedAuthProvider> });
-        await act(async () => { await vi.waitFor(() => expect(hook.getCurrent()).toEqual({ state: 'ready', loadedFactCount: 1, indexedFactCount: 5 })); });
+        await vi.waitFor(async () => { await flushHookEffects(); expect(hook.getCurrent()).toEqual({ state: 'ready', loadedFactCount: 1, indexedFactCount: 5 }); });
         await hook.rerender();
         expect(machineRpc.mock.calls).toHaveLength(1);
         await hook.rerender({ basis: 'changed' });
-        expect(hook.getCurrent()).toEqual({ state: 'pending' });
+        expect(hook.getCurrent()).toMatchObject({ state: 'unavailable', cause: { reason: 'status_pending' } });
         await hook.rerender({ basis: 'latest' });
         expect(machineRpc.mock.calls[1]?.[0].signal.aborted).toBe(true);
         await act(async () => pending[0]!(response(2)));
-        expect(hook.getCurrent()).toEqual({ state: 'pending' });
+        expect(hook.getCurrent()).toMatchObject({ state: 'unavailable', cause: { reason: 'status_pending' } });
         await act(async () => pending[1]!(response(3)));
         expect(hook.getCurrent()).toEqual({ state: 'ready', loadedFactCount: 3, indexedFactCount: 5 });
         await hook.rerender();
         expect(machineRpc.mock.calls).toHaveLength(3);
         await hook.unmount();
+    });
+    it.each(['ready', 'pending', 'failed'] as const)('reports unavailable counts with the selected-daemon cause while an unanswered read remains cancellable, then accepts a late %s result', async outcome => {
+        const serverId = administration.serverIds[0]!;
+        const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'memory_doc.v1', title: 'Memory' }, JSON.stringify({
+            v: 1, index: [{ id: 'key', text: 'Key fact', createdAtMs: 1, sourceSessionRef: null }], topics: [],
+        }));
+        homes.answer(serverId, '/v1/public-shares?' + new URLSearchParams({ subjectKind: 'artifact', subjectId: artifactId }), { body: { publicShares: [] } });
+        const ref = { kind: 'doc' as const, serverId, artifactId };
+        const response = { ...status, documents: { state: 'ready', facts: [{
+            ref, revision: { headerVersion: 1, bodyVersion: 1 }, loadedFactCount: 1, indexedFactCount: 5,
+        }] } };
+        const pending = createDeferred<unknown>();
+        machineRpc.mockImplementation(() => pending.promise);
+        const hook = await renderHook(() => {
+            const source = useMemoryDocument({ ref, serverId });
+            return useMemoryDocumentSummary({ source, serverId });
+        }, { wrapper: ({ children }) => <InjectedAuthProvider credentials={connection!.credentials}>{children}</InjectedAuthProvider> });
+        try {
+            await vi.waitFor(async () => {
+                await flushHookEffects();
+                expect(machineRpc.mock.calls.some(([request]) => request.method === RPC_METHODS.DAEMON_MEMORY_STATUS)).toBe(true);
+            });
+            expect(hook.getCurrent()).toMatchObject({ state: 'unavailable', cause: {
+                reason: 'status_pending', target: { serverId: administration.targets[0]!.serverIdentityId,
+                    machineId: administration.targets[0]!.machineId },
+            } });
+            const request = machineRpc.mock.calls[0]![0];
+            expect(request.signal.aborted).toBe(false);
+            await hook.rerender();
+            expect(machineRpc.mock.calls).toHaveLength(1);
+            await act(async () => {
+                if (outcome === 'failed') pending.reject(createRpcCallError({ error: 'Status method unavailable', errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE }));
+                else pending.resolve(outcome === 'pending' ? { ...status, documents: { state: 'pending' } } : response);
+            });
+            if (outcome === 'ready') expect(hook.getCurrent()).toEqual({ state: 'ready', loadedFactCount: 1, indexedFactCount: 5 });
+            else expect(hook.getCurrent()).toMatchObject({ state: 'unavailable', cause: {
+                reason: outcome === 'pending' ? 'coverage_pending' : 'status_failed',
+                ...(outcome === 'failed' ? { errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE } : {}),
+            } });
+        } finally {
+            pending.resolve(response);
+            await hook.unmount();
+            expect(machineRpc.mock.calls[0]?.[0].signal.aborted).toBe(true);
+        }
     });
     it('keeps older-daemon Session hits usable while identifying unavailable document search', async () => {
         const screen = await search(null, [transcript]);
@@ -176,7 +448,7 @@ describe('MemorySearchPanel corpus coverage', () => {
         const screen = await search({ state: 'pending' }, [document, transcript]);
         expect(screen.findByTestId('search.remembered.0')).toBeTruthy();
         expect(screen.findByTestId('search.session.0')).toBeTruthy();
-        expect(screen.findByTestId('search.documentsCoverage-spinner')).toBeTruthy();
+        expect(screen.findByTestId('search.documentsCoverage-loading-spinner')).toBeTruthy();
     });
     it.each(['pending', 'unavailable'] as const)('does not claim ready-empty while document coverage is %s', async (state) => {
         const screen = await search({ state }, []);

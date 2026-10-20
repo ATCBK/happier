@@ -43,6 +43,177 @@ describe("Artifact document grants (real SQLite)", () => {
 
     const protocolHeaders = { "x-happier-account-stored-content-protocol": String(CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION) };
 
+    it('filters coarse kinds, reports authorized unclassified rows, and backfills without changing content', async () => {
+        const owner = await plainAccount();
+        const editor = await plainAccount();
+        const viewer = await plainAccount();
+        const stranger = await plainAccount();
+        const unknown = await plainArtifact(owner.id);
+        await plainArtifact(stranger.id);
+        await db.artifactAccountGrant.createMany({ data: [
+            { artifactId: unknown.id, accountId: editor.id, accessLevel: 'edit', createdByAccountId: owner.id },
+            { artifactId: unknown.id, accountId: viewer.id, accessLevel: 'view', createdByAccountId: owner.id },
+        ] });
+        await withAuthenticatedTestApp(app => artifactsRoutes(app), async app => {
+            const headers = { 'x-test-user-id': owner.id, ...protocolHeaders };
+            const id = crypto.randomUUID();
+            const create = await app.inject({ method: 'POST', url: '/v1/artifacts', headers, payload: {
+                id, kind: 'skill', header: encodePlainArtifactStoredContent({ kind: 'prompt_bundle.v2', bundleSchemaId: 'skills.skill_md_v1' }),
+                body: encodePlainArtifactStoredContent({ value: 'skill' }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            } });
+            expect(create.statusCode, create.body).toBe(200);
+            const list = async (accountId: string) => app.inject({ method: 'GET', url: '/v1/artifacts?kind=skill&limit=1',
+                headers: { 'x-test-user-id': accountId, ...protocolHeaders } });
+            const filtered = await list(owner.id);
+            expect(filtered.statusCode, filtered.body).toBe(200);
+            expect(filtered.json()).toMatchObject({ items: [{ id, kind: 'skill' }], hasUnclassified: true });
+            const denied = await app.inject({ method: 'POST', url: `/v1/artifacts/${unknown.id}`,
+                headers: { 'x-test-user-id': viewer.id, ...protocolHeaders }, payload: { kind: 'other', expectedHeaderVersion: 1 } });
+            expect(denied.statusCode, denied.body).toBe(404);
+            const conflict = await app.inject({ method: 'POST', url: `/v1/artifacts/${unknown.id}`, headers,
+                payload: { kind: 'other', expectedHeaderVersion: 0 } });
+            expect(conflict.json()).toMatchObject({ success: false, error: 'version-mismatch', currentHeaderVersion: 1 });
+            const set = await app.inject({ method: 'POST', url: `/v1/artifacts/${unknown.id}`,
+                headers: { 'x-test-user-id': editor.id, ...protocolHeaders }, payload: { kind: 'other', expectedHeaderVersion: 1 } });
+            expect(set.statusCode, set.body).toBe(200);
+            expect(set.json()).toEqual({ success: true });
+            const stored = await db.artifact.findUniqueOrThrow({ where: { id: unknown.id } });
+            expect(stored).toMatchObject({ kind: 'other', headerVersion: unknown.headerVersion, bodyVersion: unknown.bodyVersion,
+                header: unknown.header, body: unknown.body, dataEncryptionKey: unknown.dataEncryptionKey });
+            expect(stored.seq).toBe(unknown.seq + 1);
+            expect((await db.accountChange.findMany({ where: { artifactId: unknown.id } })).map(row => row.accountId).sort())
+                .toEqual([owner.id, editor.id, viewer.id].sort());
+            const changedAccount = await db.account.findUniqueOrThrow({ where: { id: owner.id } });
+            const repeat = await app.inject({ method: 'POST', url: `/v1/artifacts/${unknown.id}`, headers,
+                payload: { kind: 'skill', expectedHeaderVersion: 1 } });
+            expect(repeat.json()).toEqual({ success: true });
+            // Plain mode derives the hint from its actual header, even on a metadata-only call.
+            expect(await db.artifact.findUniqueOrThrow({ where: { id: unknown.id } })).toEqual(stored);
+            expect(await db.account.findUniqueOrThrow({ where: { id: owner.id } })).toEqual(changedAccount);
+            const exact = await app.inject({ method: 'GET', url: `/v1/artifacts/${unknown.id}`, headers });
+            expect(exact.json()).toMatchObject({ kind: 'other' });
+            const batch = await app.inject({ method: 'POST', url: '/v1/artifacts/read', headers, payload: { artifactIds: [unknown.id] } });
+            expect(batch.json()).toMatchObject({ items: [{ ok: true, artifact: { kind: 'other' } }] });
+            expect((await list(owner.id)).json()).toMatchObject({ items: [{ id }], hasUnclassified: false });
+            expect((await list(viewer.id)).json()).toEqual({ items: [], hasUnclassified: false });
+            const legacy = await app.inject({ method: 'GET', url: '/v1/artifacts', headers });
+            expect(Array.isArray(legacy.json())).toBe(true);
+            expect(legacy.json()).toHaveLength(2);
+        });
+    });
+
+    it('keeps filtered items and the unclassified flag in one snapshot during backfill', async () => {
+        const owner = await plainAccount();
+        const artifact = await db.artifact.create({ data: { id: crypto.randomUUID(), accountId: owner.id,
+            header: privacyKit.decodeBase64(encodePlainArtifactStoredContent({ kind: 'prompt_bundle.v2', bundleSchemaId: 'skills.skill_md_v1' })),
+            body: privacyKit.decodeBase64(encodePlainArtifactStoredContent({ body: 'Skill' })),
+            dataEncryptionKey: privacyKit.decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER), headerVersion: 1, bodyVersion: 1 } });
+        await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const headers = { 'x-test-user-id': owner.id, ...protocolHeaders };
+            const delegate = (await withSqliteReadSnapshot(async tx => tx)).artifact;
+            const original = delegate.findMany.bind(delegate);
+            let enter!: () => void;
+            let resume!: () => void;
+            const reached = new Promise<void>(resolve => { enter = resolve; });
+            const release = new Promise<void>(resolve => { resume = resolve; });
+            let paused = false;
+            // Pause the real first filtered DB query, then classify through the canonical transaction owner.
+            Object.defineProperty(delegate, 'findMany', { configurable: true, writable: true,
+                value: async (...args: Parameters<typeof original>) => {
+                    const rows = await original(...args);
+                    if (!paused && args[0]?.where?.kind === 'skill') { paused = true; enter(); await release; }
+                    return rows;
+                } });
+            const response = app.inject({ method: 'GET', url: '/v1/artifacts?kind=skill', headers });
+            try {
+                expect(await Promise.race([reached.then(() => 'barrier'), response.then(() => 'response')])).toBe('barrier');
+                const classified = await inTx(tx => updateArtifactTx(tx, { actorUserId: owner.id,
+                    artifactId: artifact.id, kind: 'skill', expectedHeaderVersion: 1 }));
+                expect(classified).toMatchObject({ ok: true });
+                resume();
+                const result = await response;
+                expect(result.statusCode, result.body).toBe(200);
+                const page = result.json();
+                expect(page.hasUnclassified || page.items.some((row: { id: string }) => row.id === artifact.id)).toBe(true);
+            } finally {
+                resume(); await response;
+                Object.defineProperty(delegate, 'findMany', { configurable: true, writable: true, value: original });
+            }
+        });
+    });
+
+    it('keeps completeness conservative when the first unclassified grant is revoked and another remains', async () => {
+        const owner = await plainAccount();
+        const recipient = await plainAccount();
+        const first = await plainArtifact(owner.id);
+        const second = await plainArtifact(owner.id);
+        await db.artifactAccountGrant.createMany({ data: [first, second].map(artifact => ({ artifactId: artifact.id,
+            accountId: recipient.id, accessLevel: 'view' as const, createdByAccountId: owner.id })) });
+        await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const delegate = (await withSqliteReadSnapshot(async tx => tx)).artifact;
+            const original = delegate.findMany.bind(delegate);
+            let enter!: () => void;
+            let resume!: () => void;
+            let witnessId = '';
+            const reached = new Promise<void>(resolve => { enter = resolve; });
+            const release = new Promise<void>(resolve => { resume = resolve; });
+            let paused = false;
+            // Revoke the actual selected DB witness after capture, preserving the second live grant.
+            Object.defineProperty(delegate, 'findMany', { configurable: true, writable: true,
+                value: async (...args: Parameters<typeof original>) => {
+                    const rows = await original(...args);
+                    if (!paused && args[0]?.where?.kind === null && args[0]?.take === 1 && rows[0]) {
+                        paused = true; witnessId = rows[0].id; enter(); await release;
+                    }
+                    return rows;
+                } });
+            const response = app.inject({ method: 'GET', url: '/v1/artifacts?kind=skill',
+                headers: { 'x-test-user-id': recipient.id, ...protocolHeaders } });
+            try {
+                expect(await Promise.race([reached.then(() => 'barrier'), response.then(() => 'response')])).toBe('barrier');
+                await db.artifactAccountGrant.deleteMany({ where: { artifactId: witnessId, accountId: recipient.id } });
+                resume();
+                const result = await response;
+                expect(result.statusCode, result.body).toBe(200);
+                expect(result.json()).toEqual({ items: [], hasUnclassified: true });
+            } finally {
+                resume(); await response;
+                Object.defineProperty(delegate, 'findMany', { configurable: true, writable: true, value: original });
+            }
+        });
+    });
+
+    it('invalidates an opaque old-writer kind when its header changes', async () => {
+        const ownerKeys = tweetnacl.box.keyPair();
+        const owner = await db.account.create({ data: { encryptionMode: 'e2ee', ...createSignedAccountContentBinding(ownerKeys.publicKey) } });
+        const key = tweetnacl.randomBytes(32);
+        const header = await sealSessionDataKeyBundleV0({ kind: 'prompt_doc.v2', title: 'Old prompt' }, key);
+        const body = await sealSessionDataKeyBundleV0({ body: 'Old body' }, key);
+        const artifact = await db.artifact.create({ data: { id: crypto.randomUUID(), accountId: owner.id, kind: 'prompt',
+            header, body, headerVersion: 1, bodyVersion: 1,
+            dataEncryptionKey: new Uint8Array(sealEncryptedDataKeyEnvelopeV1({ recipientPublicKey: ownerKeys.publicKey, dataKey: key, randomBytes: tweetnacl.randomBytes })) } });
+        await withAuthenticatedTestApp(app => artifactsRoutes(app), async app => {
+            const headers = { 'x-test-user-id': owner.id, ...protocolHeaders };
+            const unsafeHint = await app.inject({ method: 'POST', url: `/v1/artifacts/${artifact.id}`, headers,
+                payload: { kind: 'skill', body: privacyKit.encodeBase64(body), expectedBodyVersion: 1 } });
+            expect(unsafeHint.statusCode, unsafeHint.body).toBe(400);
+            const staleHint = await app.inject({ method: 'POST', url: `/v1/artifacts/${artifact.id}`, headers,
+                payload: { kind: 'skill', expectedHeaderVersion: 0, body: privacyKit.encodeBase64(body), expectedBodyVersion: 1 } });
+            expect(staleHint.json()).toMatchObject({ success: false, error: 'version-mismatch' });
+            const bodyOnly = await app.inject({ method: 'POST', url: `/v1/artifacts/${artifact.id}`, headers,
+                payload: { body: privacyKit.encodeBase64(await sealSessionDataKeyBundleV0({ body: 'Edited body' }, key)), expectedBodyVersion: 1 } });
+            expect(bodyOnly.json()).toMatchObject({ success: true, bodyVersion: 2 });
+            expect(await db.artifact.findUniqueOrThrow({ where: { id: artifact.id } })).toMatchObject({ kind: 'prompt' });
+            const response = await app.inject({ method: 'POST', url: `/v1/artifacts/${artifact.id}`, headers,
+                payload: { header: privacyKit.encodeBase64(await sealSessionDataKeyBundleV0({ kind: 'prompt_bundle.v2', bundleSchemaId: 'skills.skill_md_v1' }, key)), expectedHeaderVersion: 1 } });
+            expect(response.statusCode, response.body).toBe(200);
+            expect(response.json()).toMatchObject({ success: true, headerVersion: 2 });
+            expect(await db.artifact.findUniqueOrThrow({ where: { id: artifact.id } })).toMatchObject({ kind: null, bodyVersion: 2 });
+            const filtered = await app.inject({ method: 'GET', url: '/v1/artifacts?kind=skill', headers });
+            expect(filtered.json()).toEqual({ items: [], hasUnclassified: true });
+        });
+    });
+
     it.each(['owner', 'grantee'] as const)('qualifies an exact admitted header from one Artifact row (%s)', async caller => {
         const owner = await plainAccount();
         const grantee = await plainAccount();
@@ -133,6 +304,11 @@ describe("Artifact document grants (real SQLite)", () => {
                     const response = await app.inject({ method: 'GET', url: detailUrl, headers });
                     expect(response.statusCode, response.body).toBe(200);
                     expect(response.json()).toMatchObject({ publicAudience: expected });
+                    const batch = await app.inject({ method: 'POST', url: '/v1/artifacts/read', headers,
+                        payload: { artifactIds: [artifact.id] } });
+                    expect(batch.statusCode, batch.body).toBe(200);
+                    expect(batch.json().items).toMatchObject([{ artifactId: artifact.id, ok: true,
+                        artifact: { publicAudience: expected } }]);
                 };
                 expect((await app.inject({ method: 'GET',
                     url: `/v1/public-shares?subjectKind=artifact&subjectId=${artifact.id}`, headers })).statusCode).toBe(404);

@@ -26,6 +26,7 @@ import {
   fetchServerFeaturesSnapshot,
   observeServerFeaturesSnapshot,
 } from '@/features/serverFeaturesClient';
+import { retryHomeOperation, REMOTE_HOME_ENROLLMENT_POLL_INTERVAL_MS } from '@/api/client/retryHomeOperation';
 
 const MAX_PROVISIONING_RESPONSE_B64_CHARS = 4096;
 
@@ -98,7 +99,8 @@ export async function runRemoteTerminalEnrollment(params: Readonly<{
   onPairingRequest(request: RemoteTerminalEnrollmentPairingRequest): Promise<void> | void;
 }>): Promise<RemoteTerminalEnrollmentResult> {
   const deadlineMs = Date.now() + Math.max(1, Math.floor(params.timeoutMs));
-  const pollIntervalMs = Math.max(1, Math.floor(params.pollIntervalMs ?? 500));
+  const pollIntervalMs = Math.max(1, Math.floor(params.pollIntervalMs ?? REMOTE_HOME_ENROLLMENT_POLL_INTERVAL_MS));
+  const homeRetry = { deadlineMs, pollIntervalMs, signal: params.signal };
   throwIfStopped(params.signal, deadlineMs);
   const managedEnrollment = params.managedEnrollment === undefined ? undefined
     : ManagedEnrollmentCorrelationV1Schema.parse(params.managedEnrollment);
@@ -202,16 +204,19 @@ export async function runRemoteTerminalEnrollment(params: Readonly<{
       if (!token || !responseB64 || responseB64.length > MAX_PROVISIONING_RESPONSE_B64_CHARS) {
         throw new Error('Remote Home enrollment returned an invalid provisioning response.');
       }
-      const authenticatedSnapshot = await observeServerFeaturesSnapshot({
-        serverUrl: acquired.runtime.runtimeOrigin,
-        token,
-        timeoutMs: remainingMs(deadlineMs),
-        signal: params.signal,
-      });
-      verifyTerminalAuthEnrollmentRuntime({
-        target: params.target,
-        runtime: acquired.runtime,
-        snapshot: authenticatedSnapshot,
+      await retryHomeOperation(homeRetry, async () => {
+        throwIfStopped(params.signal, deadlineMs);
+        const authenticatedSnapshot = await observeServerFeaturesSnapshot({
+          serverUrl: acquired.runtime.runtimeOrigin,
+          token,
+          timeoutMs: remainingMs(deadlineMs),
+          signal: params.signal,
+        });
+        verifyTerminalAuthEnrollmentRuntime({
+          target: params.target,
+          runtime: acquired.runtime,
+          snapshot: authenticatedSnapshot,
+        });
       });
       const opened = openTerminalProvisioningResponse({
         payload: decodeBase64(responseB64),
@@ -229,10 +234,11 @@ export async function runRemoteTerminalEnrollment(params: Readonly<{
       if (managedEnrollment) {
         completion = await registerAndPersistManagedTerminalEnrollmentCredential({ token, opened,
           runtimeOrigin: acquired.runtime.runtimeOrigin, managedEnrollment,
+          homeRetry,
           assertCurrent: () => throwIfStopped(params.signal, deadlineMs) });
       } else {
         const persisted = await persistTerminalEnrollmentCredential({ token, opened });
-        const machineId = await registerTerminalEnrollmentMachine(persisted.credentials, acquired.runtime.runtimeOrigin);
+        const machineId = await registerTerminalEnrollmentMachine(persisted.credentials, acquired.runtime.runtimeOrigin, undefined, homeRetry);
         throwIfStopped(params.signal, deadlineMs);
         completion = { machineId, encryptionType: persisted.encryptionType };
       }

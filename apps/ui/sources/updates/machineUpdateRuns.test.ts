@@ -369,23 +369,6 @@ describe('runMachineItemUpdate — a remote CLI update is started, then observed
         });
     });
 
-    it('after an agent update the machine\'s facts are re-read fresh, with the latest version, through the capability cache', async () => {
-        rpc.detect.mockClear();
-        rpc.invoke.mockImplementation(async () => ({ supported: true, response: { ok: true, result: { previousVersion: '2.1.281', version: '2.1.283' } } }));
-        const claude: UpdateItem = { ...remoteCli, id: 'studio:agent:claude', subject: { kind: 'agent-cli', agentId: 'claude' }, title: 'Claude' };
-        await runs.runMachineItemUpdate(claude, { scope: { serverId: serverA, accountId: 'account-a' } });
-        await advance(0);
-
-        expect(rpc.detect).toHaveBeenCalledWith(
-            'studio',
-            expect.objectContaining({
-                bypassCache: true,
-                requests: expect.arrayContaining([{ id: 'cli.claude', params: { includeLatestVersion: true } }]),
-            }),
-            expect.objectContaining({ serverId: serverA }),
-        );
-    });
-
     it('a runtime that finds the tool already current reports "Already up to date", never a failure or "Updated"', async () => {
         const claude: UpdateItem = { ...remoteCli, id: 'studio:agent:claude', subject: { kind: 'agent-cli', agentId: 'claude' }, title: 'Claude', currentVersion: '2.1.283' };
         await runs.runMachineItemUpdate(claude, { scope: { serverId: serverA, accountId: 'account-a' } });

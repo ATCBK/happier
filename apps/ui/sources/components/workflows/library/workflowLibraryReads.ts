@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
 
 import { workflowDefinitionListCursorPhaseV1, type WorkflowDefinitionListResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
 import type { WorkflowPluginSourceV1 } from '@happier-dev/protocol/workflows';
@@ -28,6 +29,8 @@ import {
 import { subscribeVisibleWorkflowRunListInvalidation } from '@/sync/domains/workflows/workflowRunListInvalidation';
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { areServerAccountScopesEqual, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { useWorkflowAccountLifetime } from '../workflowAccountScope';
 
 /**
  * The Workflows destination's reads (FIN 04 §3.3). The column, library home and shared Runs list are
@@ -95,224 +98,262 @@ const INITIAL_DEFINITIONS: DefinitionsState = Object.freeze({
     deletedDefinitionId: null,
 });
 
-const definitionsCell = createCell<DefinitionsState>(INITIAL_DEFINITIONS);
-let definitionsInFlight: { lifetime: ActiveServerAccountScopeLifetime; promise: Promise<void>; kind: 'refresh' | 'more'; refreshRequested: boolean; deletionInvalidated: boolean } | null = null;
-let definitionReaderCount = 0;
-let unsubscribeDefinitionChange: (() => void) | null = null;
-let deletionRetirement: Readonly<{ dispose(): void }> | null = null;
+function createDefinitionLibraryReader(captureLifetime: () => ServerAccountScopeLifetime | null, addressed = false) {
+    const definitionsCell = createCell<DefinitionsState>(INITIAL_DEFINITIONS);
+    let definitionsInFlight: { lifetime: ActiveServerAccountScopeLifetime; promise: Promise<void>; kind: 'refresh' | 'more'; refreshRequested: boolean; deletionInvalidated: boolean } | null = null;
+    let definitionReaderCount = 0;
+    let unsubscribeDefinitionChange: (() => void) | null = null;
+    let deletionRetirement: Readonly<{ dispose(): void }> | null = null;
 
-/** The loaded Workflow domain retains acknowledgements, even before its first library demand. */
-function ensureDefinitionChangeObserver(): void {
-    if (unsubscribeDefinitionChange === null) {
-        unsubscribeDefinitionChange = subscribeHomeAccountChange((event) => {
-            const lifetime = captureActiveServerAccountScopeLifetime();
-            if (lifetime === null || !areServerProfileIdentifiersEquivalent(event.serverId, lifetime.scope.serverId)) return;
-            const deletedDefinitionId = event.deletedArtifactIds?.[0];
-            if (deletedDefinitionId !== undefined) {
-                const scopeKey = serverAccountScopeKeySuffix(lifetime.scope);
-                const cached = definitionsCell.get();
-                const current = cached.scopeKey === scopeKey ? cached : { ...INITIAL_DEFINITIONS, scopeKey };
-                definitionsCell.set({ ...current, deletedDefinitionId,
-                    definitions: current.definitions.filter(row => !event.deletedArtifactIds?.includes(row.definitionId)) });
-                deletionRetirement?.dispose();
-                deletionRetirement = lifetime.onRetire(() => {
-                    const latest = definitionsCell.get();
-                    if (latest.scopeKey === scopeKey && latest.deletedDefinitionId !== null) {
-                        definitionsCell.set({ ...latest, deletedDefinitionId: null });
-                    }
-                });
-            }
-            // Artifact ids in the incumbent wake do not carry kind information.
-            // The authoritative list decides membership, retaining equal known rows.
-            if (definitionsInFlight?.lifetime === lifetime) {
-                definitionsInFlight.refreshRequested = true;
-                // Ordinary wakes queue a recheck without withholding usable rows.
-                // Only an acknowledged deletion makes the pending result obsolete.
-                if (deletedDefinitionId !== undefined) definitionsInFlight.deletionInvalidated = true;
-            }
-            else if (definitionReaderCount > 0) void refreshDefinitions();
-        });
-    }
-}
-
-// One observer belongs to the retained cache's module lifetime. It opens no transport
-// and demands no list without a reader; a cold editor can still publish its landing feedback.
-ensureDefinitionChangeObserver();
-
-/** The rail, page and pickers share one demanded read and one Account wake observer. */
-function subscribeDefinitions(listener: () => void): () => void {
-    const unsubscribe = definitionsCell.subscribe(listener);
-    definitionReaderCount += 1;
-    ensureDefinitionChangeObserver();
-    return () => {
-        unsubscribe();
-        definitionReaderCount -= 1;
-        // The retained read cache still consumes acknowledged local deletions
-        // while an editor is open; only mounted readers demand a refetch.
-    };
-}
-
-function finishDefinitionRead(promise: Promise<void>, isCurrent: () => boolean): void {
-    const read = definitionsInFlight;
-    if (read?.promise !== promise) return;
-    definitionsInFlight = null;
-    // An invalidated plugin-discovery flight no longer owns any busy state,
-    // including when the editor is the only mounted view and no refresh is demanded.
-    if (read.deletionInvalidated && isCurrent()) {
-        const current = definitionsCell.get();
-        if (current.loadingMore) definitionsCell.set({ ...current, loadingMore: false });
-    }
-    if (read.refreshRequested && isCurrent() && definitionReaderCount > 0) void refreshDefinitions();
-    else if (isCurrent() && definitionReaderCount > 0 && !definitionsCell.get().loadMoreFailed
-        && workflowDefinitionListCursorPhaseV1(definitionsCell.get().nextCursor) === 'plugins-start') void loadMoreDefinitions();
-}
-
-function retainEqualLibraryRows<T>(previous: readonly T[], incoming: readonly T[], key: (row: T) => string): readonly T[] {
-    const previousById = new Map(previous.map((row) => [key(row), row]));
-    const rows = incoming.map((row) => {
-        const stored = previousById.get(key(row));
-        return stored !== undefined && sameStrictJsonValue(stored, row) ? stored : row;
-    });
-    return rows.length === previous.length && rows.every((row, index) => row === previous[index]) ? previous : rows;
-}
-
-/** Refresh demanded Account pages together, then discover plugins without gating saved rows. */
-function refreshDefinitions(): Promise<void> {
-    if (definitionReaderCount === 0) return Promise.resolve();
-    const lifetime = captureActiveServerAccountScopeLifetime();
-    if (lifetime === null) return Promise.resolve();
-    const scopeKey = serverAccountScopeKeySuffix(lifetime.scope);
-    // The same Home/Account can reactivate while its retired request is still pending.
-    // Only demand captured in this exact lifetime may join or queue behind that read.
-    if (definitionsInFlight?.lifetime === lifetime) return definitionsInFlight.promise;
-    const previous = definitionsCell.get();
-    const demandedPages = previous.scopeKey === scopeKey ? Math.max(1, previous.loadedPages) : 1;
-    // Another Account's rows are never shown while this one loads.
-    if (previous.scopeKey !== scopeKey) definitionsCell.set({ ...INITIAL_DEFINITIONS, scopeKey });
-    else if (previous.status === 'failed' || previous.loadingMore || previous.loadMoreFailed) definitionsCell.set({
-        ...previous, status: previous.status === 'failed' ? 'loading' : previous.status, loadingMore: false, loadMoreFailed: false,
-    });
-    const readDefinitions = async (): Promise<void> => {
-        let pluginContinuation: Readonly<{ cursor: string; loadedPages: number }> | null = null;
-        try {
-            let page = await listWorkflowDefinitions({});
-            const definitions = new Map(page.definitions.map((row) => [row.definitionId, row]));
-            const plugins = new Map((page.pluginWorkflows ?? []).map((row) => [row.workflow, row]));
-            let loadedPages = 1;
-            while (lifetime.isCurrent() && definitionReaderCount > 0 && !definitionsInFlight?.deletionInvalidated && page.nextCursor && (loadedPages < demandedPages
-                || (!pluginContinuation && workflowDefinitionListCursorPhaseV1(page.nextCursor) === 'plugins-start'))) {
-                if (!pluginContinuation && workflowDefinitionListCursorPhaseV1(page.nextCursor) !== 'artifacts') {
-                    // Account content and built-ins remain usable while the daemon is
-                    // pending. Same-Account refresh keeps last-known plugin rows until
-                    // their authoritative continuation replaces them.
-                    pluginContinuation = { cursor: page.nextCursor, loadedPages };
-                    const current = definitionsCell.get();
-                    const savedRows = retainEqualLibraryRows(current.definitions, [...definitions.values()], (row) => row.definitionId);
-                    // Already-visible equal rows need no transient refresh notification.
-                    if (!definitionsInFlight?.deletionInvalidated && (current.status !== 'loaded' || savedRows !== current.definitions)) definitionsCell.set({
-                        ...current, scopeKey, status: 'loaded', failure: null, definitions: savedRows,
-                        nextCursor: page.nextCursor, loadedPages, loadingMore: true, loadMoreFailed: false,
+    /** The loaded Workflow domain retains acknowledgements, even before its first library demand. */
+    function ensureDefinitionChangeObserver(): void {
+        if (unsubscribeDefinitionChange === null) {
+            unsubscribeDefinitionChange = subscribeHomeAccountChange((event) => {
+                const lifetime = captureLifetime();
+                if (lifetime === null || !areServerProfileIdentifiersEquivalent(event.serverId, lifetime.scope.serverId)) return;
+                const deletedDefinitionId = event.deletedArtifactIds?.[0];
+                if (deletedDefinitionId !== undefined) {
+                    const scopeKey = serverAccountScopeKeySuffix(lifetime.scope);
+                    const cached = definitionsCell.get();
+                    const current = cached.scopeKey === scopeKey ? cached : { ...INITIAL_DEFINITIONS, scopeKey };
+                    definitionsCell.set({ ...current, deletedDefinitionId,
+                        definitions: current.definitions.filter(row => !event.deletedArtifactIds?.includes(row.definitionId)) });
+                    deletionRetirement?.dispose();
+                    deletionRetirement = lifetime.onRetire(() => {
+                        const latest = definitionsCell.get();
+                        if (latest.scopeKey === scopeKey && latest.deletedDefinitionId !== null) {
+                            definitionsCell.set({ ...latest, deletedDefinitionId: null });
+                        }
                     });
                 }
-                page = await listWorkflowDefinitions({ cursor: page.nextCursor });
-                for (const row of page.definitions) definitions.set(row.definitionId, row);
-                for (const row of page.pluginWorkflows ?? []) plugins.set(row.workflow, row);
-                loadedPages += 1;
-            }
-            if (!lifetime.isCurrent() || definitionsInFlight?.deletionInvalidated) return;
-            const current = definitionsCell.get();
-            const next: DefinitionsState = {
-                scopeKey,
-                status: 'loaded',
-                failure: null,
-                loadingMore: false,
-                loadMoreFailed: false,
-                definitions: retainEqualLibraryRows(current.definitions, [...definitions.values()], (row) => row.definitionId),
-                pluginWorkflows: retainEqualLibraryRows(current.pluginWorkflows, [...plugins.values()], (row) => row.workflow),
-                nextCursor: page.nextCursor ?? null,
-                loadedPages,
-                deletedDefinitionId: current.deletedDefinitionId,
-            };
-            definitionsCell.set(sameStrictJsonValue(current, next) ? current : next);
-        } catch (error) {
-            if (!lifetime.isCurrent() || definitionsInFlight?.deletionInvalidated) return;
-            if (pluginContinuation) {
-                // Plugin failure must not turn readable Account rows into a failed
-                // initial load. Retry continues the same list phase.
-                definitionsCell.set({ ...definitionsCell.get(), nextCursor: pluginContinuation.cursor,
-                    loadedPages: pluginContinuation.loadedPages, loadingMore: false, loadMoreFailed: true });
-                return;
-            }
-            // A failed refresh keeps what is already loaded and says why.
-            definitionsCell.set({
-                ...definitionsCell.get(),
-                scopeKey,
-                status: 'failed',
-                failure: resolveWorkflowProblemPresentation(error),
+                // Artifact ids in the incumbent wake do not carry kind information.
+                // The authoritative list decides membership, retaining equal known rows.
+                if (definitionsInFlight?.lifetime === lifetime) {
+                    definitionsInFlight.refreshRequested = true;
+                    // Ordinary wakes queue a recheck without withholding usable rows.
+                    // Only an acknowledged deletion makes the pending result obsolete.
+                    if (deletedDefinitionId !== undefined) definitionsInFlight.deletionInvalidated = true;
+                }
+                else if (definitionReaderCount > 0) void refreshDefinitions();
             });
-        } finally {
-            finishDefinitionRead(promise, lifetime.isCurrent);
         }
+    }
+
+    // One observer belongs to the retained cache's module lifetime. It opens no transport
+    // and demands no list without a reader; a cold editor can still publish its landing feedback.
+    if (!addressed) ensureDefinitionChangeObserver();
+
+    /** The rail, page and pickers share one demanded read and one Account wake observer. */
+    function subscribeDefinitions(listener: () => void): () => void {
+        const unsubscribe = definitionsCell.subscribe(listener);
+        definitionReaderCount += 1;
+        ensureDefinitionChangeObserver();
+        return () => {
+            unsubscribe();
+            definitionReaderCount -= 1;
+            if (addressed && definitionReaderCount === 0) {
+                unsubscribeDefinitionChange?.(); unsubscribeDefinitionChange = null;
+                deletionRetirement?.dispose(); deletionRetirement = null;
+            }
+            // The retained read cache still consumes acknowledged local deletions
+            // while an editor is open; only mounted readers demand a refetch.
+        };
+    }
+
+    function finishDefinitionRead(promise: Promise<void>, isCurrent: () => boolean): void {
+        const read = definitionsInFlight;
+        if (read?.promise !== promise) return;
+        definitionsInFlight = null;
+        // An invalidated plugin-discovery flight no longer owns any busy state,
+        // including when the editor is the only mounted view and no refresh is demanded.
+        if (read.deletionInvalidated && isCurrent()) {
+            const current = definitionsCell.get();
+            if (current.loadingMore) definitionsCell.set({ ...current, loadingMore: false });
+        }
+        if (read.refreshRequested && isCurrent() && definitionReaderCount > 0) void refreshDefinitions();
+        else if (isCurrent() && definitionReaderCount > 0 && !definitionsCell.get().loadMoreFailed
+            && workflowDefinitionListCursorPhaseV1(definitionsCell.get().nextCursor) === 'plugins-start') void loadMoreDefinitions();
+    }
+
+    function retainEqualLibraryRows<T>(previous: readonly T[], incoming: readonly T[], key: (row: T) => string): readonly T[] {
+        const previousById = new Map(previous.map((row) => [key(row), row]));
+        const rows = incoming.map((row) => {
+            const stored = previousById.get(key(row));
+            return stored !== undefined && sameStrictJsonValue(stored, row) ? stored : row;
+        });
+        return rows.length === previous.length && rows.every((row, index) => row === previous[index]) ? previous : rows;
+    }
+
+    /** Refresh demanded Account pages together, then discover plugins without gating saved rows. */
+    function refreshDefinitions(): Promise<void> {
+        if (definitionReaderCount === 0) return Promise.resolve();
+        const lifetime = captureLifetime();
+        if (lifetime === null) return Promise.resolve();
+        const scopeKey = serverAccountScopeKeySuffix(lifetime.scope);
+        // The same Home/Account can reactivate while its retired request is still pending.
+        // Only demand captured in this exact lifetime may join or queue behind that read.
+        if (definitionsInFlight?.lifetime === lifetime) return definitionsInFlight.promise;
+        const previous = definitionsCell.get();
+        const demandedPages = previous.scopeKey === scopeKey ? Math.max(1, previous.loadedPages) : 1;
+        // Another Account's rows are never shown while this one loads.
+        if (previous.scopeKey !== scopeKey) definitionsCell.set({ ...INITIAL_DEFINITIONS, scopeKey });
+        else if (previous.status === 'failed' || previous.loadingMore || previous.loadMoreFailed) definitionsCell.set({
+            ...previous, status: previous.status === 'failed' ? 'loading' : previous.status, loadingMore: false, loadMoreFailed: false,
+        });
+        const readDefinitions = async (): Promise<void> => {
+            let pluginContinuation: Readonly<{ cursor: string; loadedPages: number }> | null = null;
+            try {
+                let page = await listWorkflowDefinitions(addressed ? { accountLifetime: lifetime } : {});
+                const definitions = new Map(page.definitions.map((row) => [row.definitionId, row]));
+                const plugins = new Map((page.pluginWorkflows ?? []).map((row) => [row.workflow, row]));
+                let loadedPages = 1;
+                while (lifetime.isCurrent() && definitionReaderCount > 0 && !definitionsInFlight?.deletionInvalidated && page.nextCursor && (loadedPages < demandedPages
+                    || (!pluginContinuation && workflowDefinitionListCursorPhaseV1(page.nextCursor) === 'plugins-start'))) {
+                    if (!pluginContinuation && workflowDefinitionListCursorPhaseV1(page.nextCursor) !== 'artifacts') {
+                        // Account content and built-ins remain usable while the daemon is
+                        // pending. Same-Account refresh keeps last-known plugin rows until
+                        // their authoritative continuation replaces them.
+                        pluginContinuation = { cursor: page.nextCursor, loadedPages };
+                        const current = definitionsCell.get();
+                        const savedRows = retainEqualLibraryRows(current.definitions, [...definitions.values()], (row) => row.definitionId);
+                        // Already-visible equal rows need no transient refresh notification.
+                        if (!definitionsInFlight?.deletionInvalidated && (current.status !== 'loaded' || savedRows !== current.definitions)) definitionsCell.set({
+                            ...current, scopeKey, status: 'loaded', failure: null, definitions: savedRows,
+                            nextCursor: page.nextCursor, loadedPages, loadingMore: true, loadMoreFailed: false,
+                        });
+                    }
+                    page = await listWorkflowDefinitions({ cursor: page.nextCursor, ...(addressed ? { accountLifetime: lifetime } : {}) });
+                    for (const row of page.definitions) definitions.set(row.definitionId, row);
+                    for (const row of page.pluginWorkflows ?? []) plugins.set(row.workflow, row);
+                    loadedPages += 1;
+                }
+                if (!lifetime.isCurrent() || definitionsInFlight?.deletionInvalidated) return;
+                const current = definitionsCell.get();
+                const next: DefinitionsState = {
+                    scopeKey,
+                    status: 'loaded',
+                    failure: null,
+                    loadingMore: false,
+                    loadMoreFailed: false,
+                    definitions: retainEqualLibraryRows(current.definitions, [...definitions.values()], (row) => row.definitionId),
+                    pluginWorkflows: retainEqualLibraryRows(current.pluginWorkflows, [...plugins.values()], (row) => row.workflow),
+                    nextCursor: page.nextCursor ?? null,
+                    loadedPages,
+                    deletedDefinitionId: current.deletedDefinitionId,
+                };
+                definitionsCell.set(sameStrictJsonValue(current, next) ? current : next);
+            } catch (error) {
+                if (!lifetime.isCurrent() || definitionsInFlight?.deletionInvalidated) return;
+                if (pluginContinuation) {
+                    // Plugin failure must not turn readable Account rows into a failed
+                    // initial load. Retry continues the same list phase.
+                    definitionsCell.set({ ...definitionsCell.get(), nextCursor: pluginContinuation.cursor,
+                        loadedPages: pluginContinuation.loadedPages, loadingMore: false, loadMoreFailed: true });
+                    return;
+                }
+                // A failed refresh keeps what is already loaded and says why.
+                definitionsCell.set({
+                    ...definitionsCell.get(),
+                    scopeKey,
+                    status: 'failed',
+                    failure: resolveWorkflowProblemPresentation(error),
+                });
+            } finally {
+                finishDefinitionRead(promise, lifetime.isCurrent);
+            }
+        };
+        const promise = readDefinitions();
+        definitionsInFlight = { lifetime, promise, kind: 'refresh', refreshRequested: false, deletionInvalidated: false };
+        return promise;
+    }
+
+    async function loadMoreDefinitions(): Promise<void> {
+        if (definitionReaderCount === 0) return;
+        const current = definitionsCell.get();
+        const lifetime = captureLifetime();
+        if (lifetime === null || current.nextCursor === null) return;
+        const cursor = current.nextCursor;
+        const scopeKey = serverAccountScopeKeySuffix(lifetime.scope);
+        if (current.scopeKey !== scopeKey) return;
+        const pending = definitionsInFlight;
+        if (pending && pending.lifetime !== lifetime) {
+            await refreshDefinitions();
+            return;
+        }
+        if (current.loadingMore) return;
+        if (pending?.lifetime === lifetime) {
+            await pending.promise;
+            if (pending.kind === 'refresh' && lifetime.isCurrent()) await loadMoreDefinitions();
+            return;
+        }
+        definitionsCell.set({ ...current, loadingMore: true, loadMoreFailed: false });
+        const readPage = async () => {
+            try {
+                const page = await listWorkflowDefinitions({ cursor, ...(addressed ? { accountLifetime: lifetime } : {}) });
+                if (!lifetime.isCurrent() || definitionsInFlight?.deletionInvalidated) return;
+                const latest = definitionsCell.get();
+                const seen = new Set(latest.definitions.map((entry) => entry.definitionId));
+                const addedDefinitions = page.definitions.filter((entry) => !seen.has(entry.definitionId));
+                const replacingPlugins = workflowDefinitionListCursorPhaseV1(cursor) === 'plugins-start';
+                const seenPlugins = new Set(replacingPlugins ? [] : latest.pluginWorkflows.map((entry) => entry.workflow));
+                const addedPlugins = (page.pluginWorkflows ?? []).filter((entry) => {
+                    if (seenPlugins.has(entry.workflow)) return false;
+                    seenPlugins.add(entry.workflow);
+                    return true;
+                });
+                definitionsCell.set({
+                    ...latest,
+                    loadingMore: false,
+                    definitions: addedDefinitions.length === 0 ? latest.definitions : [...latest.definitions, ...addedDefinitions],
+                    pluginWorkflows: replacingPlugins
+                        ? retainEqualLibraryRows(latest.pluginWorkflows, addedPlugins, (row) => row.workflow)
+                        : addedPlugins.length === 0 ? latest.pluginWorkflows : [...latest.pluginWorkflows, ...addedPlugins],
+                    nextCursor: page.nextCursor ?? null,
+                    loadedPages: latest.loadedPages + 1,
+                });
+            } catch {
+                // The loaded rows and the cursor stay; Retry asks for exactly this page again.
+                if (lifetime.isCurrent() && !definitionsInFlight?.deletionInvalidated) definitionsCell.set({ ...definitionsCell.get(), loadingMore: false, loadMoreFailed: true });
+            } finally {
+                finishDefinitionRead(promise, lifetime.isCurrent);
+            }
+        };
+        const promise = readPage();
+        definitionsInFlight = { lifetime, promise, kind: 'more', refreshRequested: false, deletionInvalidated: false };
+        await promise;
+    }
+
+    return {
+        cell: definitionsCell, subscribe: subscribeDefinitions,
+        refresh: refreshDefinitions,
+        retry: () => { void refreshDefinitions(); },
+        loadMore: () => { void loadMoreDefinitions(); },
+        dismissDeletion(definitionId: string) {
+            const current = definitionsCell.get();
+            if (current.deletedDefinitionId !== definitionId) return;
+            definitionsCell.set({ ...current, deletedDefinitionId: null });
+            deletionRetirement?.dispose(); deletionRetirement = null;
+        },
+        reset() {
+            unsubscribeDefinitionChange?.(); unsubscribeDefinitionChange = null;
+            deletionRetirement?.dispose(); deletionRetirement = null;
+            definitionsCell.set(INITIAL_DEFINITIONS); definitionsInFlight = null;
+            ensureDefinitionChangeObserver();
+        },
     };
-    const promise = readDefinitions();
-    definitionsInFlight = { lifetime, promise, kind: 'refresh', refreshRequested: false, deletionInvalidated: false };
-    return promise;
 }
 
-async function loadMoreDefinitions(): Promise<void> {
-    if (definitionReaderCount === 0) return;
-    const current = definitionsCell.get();
-    const lifetime = captureActiveServerAccountScopeLifetime();
-    if (lifetime === null || current.nextCursor === null) return;
-    const cursor = current.nextCursor;
-    const scopeKey = serverAccountScopeKeySuffix(lifetime.scope);
-    if (current.scopeKey !== scopeKey) return;
-    const pending = definitionsInFlight;
-    if (pending && pending.lifetime !== lifetime) {
-        await refreshDefinitions();
-        return;
+const activeDefinitionLibrary = createDefinitionLibraryReader(captureActiveServerAccountScopeLifetime);
+let addressedDefinitionLibraries = new WeakMap<ServerAccountScopeLifetime, ReturnType<typeof createDefinitionLibraryReader>>();
+function definitionLibraryForLifetime(lifetime: ServerAccountScopeLifetime | null | undefined) {
+    if (!lifetime) return activeDefinitionLibrary;
+    if (areServerAccountScopesEqual(lifetime.scope, captureActiveServerAccountScopeLifetime()?.scope)) return activeDefinitionLibrary;
+    let reader = addressedDefinitionLibraries.get(lifetime);
+    if (!reader) {
+        reader = createDefinitionLibraryReader(() => lifetime.isCurrent() ? lifetime : null, true);
+        addressedDefinitionLibraries.set(lifetime, reader);
     }
-    if (current.loadingMore) return;
-    if (pending?.lifetime === lifetime) {
-        await pending.promise;
-        if (pending.kind === 'refresh' && lifetime.isCurrent()) await loadMoreDefinitions();
-        return;
-    }
-    definitionsCell.set({ ...current, loadingMore: true, loadMoreFailed: false });
-    const readPage = async () => {
-        try {
-            const page = await listWorkflowDefinitions({ cursor });
-            if (!lifetime.isCurrent() || definitionsInFlight?.deletionInvalidated) return;
-            const latest = definitionsCell.get();
-            const seen = new Set(latest.definitions.map((entry) => entry.definitionId));
-            const addedDefinitions = page.definitions.filter((entry) => !seen.has(entry.definitionId));
-            const replacingPlugins = workflowDefinitionListCursorPhaseV1(cursor) === 'plugins-start';
-            const seenPlugins = new Set(replacingPlugins ? [] : latest.pluginWorkflows.map((entry) => entry.workflow));
-            const addedPlugins = (page.pluginWorkflows ?? []).filter((entry) => {
-                if (seenPlugins.has(entry.workflow)) return false;
-                seenPlugins.add(entry.workflow);
-                return true;
-            });
-            definitionsCell.set({
-                ...latest,
-                loadingMore: false,
-                definitions: addedDefinitions.length === 0 ? latest.definitions : [...latest.definitions, ...addedDefinitions],
-                pluginWorkflows: replacingPlugins
-                    ? retainEqualLibraryRows(latest.pluginWorkflows, addedPlugins, (row) => row.workflow)
-                    : addedPlugins.length === 0 ? latest.pluginWorkflows : [...latest.pluginWorkflows, ...addedPlugins],
-                nextCursor: page.nextCursor ?? null,
-                loadedPages: latest.loadedPages + 1,
-            });
-        } catch {
-            // The loaded rows and the cursor stay; Retry asks for exactly this page again.
-            if (lifetime.isCurrent() && !definitionsInFlight?.deletionInvalidated) definitionsCell.set({ ...definitionsCell.get(), loadingMore: false, loadMoreFailed: true });
-        } finally {
-            finishDefinitionRead(promise, lifetime.isCurrent);
-        }
-    };
-    const promise = readPage();
-    definitionsInFlight = { lifetime, promise, kind: 'more', refreshRequested: false, deletionInvalidated: false };
-    await promise;
+    return reader;
 }
 
 export type WorkflowDefinitionLibrary = Readonly<{
@@ -330,15 +371,11 @@ export type WorkflowDefinitionLibrary = Readonly<{
 
 /** The landing view owns how long its local acknowledgement remains visible. */
 export function dismissWorkflowLibraryDeletionReceipt(definitionId: string): void {
-    const current = definitionsCell.get();
-    if (current.deletedDefinitionId !== definitionId) return;
-    definitionsCell.set({ ...current, deletedDefinitionId: null });
-    deletionRetirement?.dispose();
-    deletionRetirement = null;
+    activeDefinitionLibrary.dismissDeletion(definitionId);
 }
 
-const retryDefinitions = () => { void refreshDefinitions(); };
-const requestMoreDefinitions = () => { void loadMoreDefinitions(); };
+const retryDefinitions = activeDefinitionLibrary.retry;
+const requestMoreDefinitions = activeDefinitionLibrary.loadMore;
 const subscribeInactiveDefinitions = (_listener: () => void) => () => {};
 const readInactiveDefinitions = () => INITIAL_DEFINITIONS;
 const INACTIVE_DEFINITION_LIBRARY: WorkflowDefinitionLibrary = Object.freeze({
@@ -350,16 +387,20 @@ const INACTIVE_DEFINITION_LIBRARY: WorkflowDefinitionLibrary = Object.freeze({
 });
 
 /** The saved definitions, refreshed when a surface that shows them mounts or the Account changes. */
-export function useWorkflowDefinitionLibrary(options?: Readonly<{ enabled?: boolean }>): WorkflowDefinitionLibrary {
+export function useWorkflowDefinitionLibrary(options?: Readonly<{ enabled?: boolean; accountLifetime?: ServerAccountScopeLifetime | null }>): WorkflowDefinitionLibrary {
+    const addressedLifetime = useWorkflowAccountLifetime(options?.accountLifetime);
     const enabled = options?.enabled ?? true;
-    const lifetime = useActiveServerAccountScopeLifetime();
+    const activeLifetime = useActiveServerAccountScopeLifetime();
+    const lifetime = addressedLifetime === undefined ? activeLifetime : addressedLifetime;
+    const reader = definitionLibraryForLifetime(addressedLifetime);
+    const readable = enabled && (addressedLifetime === undefined || lifetime?.isCurrent() === true);
     const scopeKey = lifetime === null ? null : serverAccountScopeKeySuffix(lifetime.scope);
     const state = React.useSyncExternalStore(
-        enabled ? subscribeDefinitions : subscribeInactiveDefinitions,
-        enabled ? definitionsCell.get : readInactiveDefinitions,
-        enabled ? definitionsCell.get : readInactiveDefinitions,
+        readable ? reader.subscribe : subscribeInactiveDefinitions,
+        readable ? reader.cell.get : readInactiveDefinitions,
+        readable ? reader.cell.get : readInactiveDefinitions,
     );
-    React.useEffect(() => { if (enabled && lifetime) void refreshDefinitions(); }, [enabled, lifetime]);
+    React.useEffect(() => { if (readable && lifetime) void reader.refresh(); }, [readable, lifetime, reader]);
     if (!enabled) return INACTIVE_DEFINITION_LIBRARY;
     const owned = state.scopeKey === scopeKey;
     return {
@@ -371,18 +412,19 @@ export function useWorkflowDefinitionLibrary(options?: Readonly<{ enabled?: bool
         hasMore: owned && state.nextCursor !== null,
         loadingMore: owned && state.loadingMore,
         loadMoreFailed: owned && state.loadMoreFailed,
-        retry: retryDefinitions,
-        loadMore: requestMoreDefinitions,
+        retry: reader.retry,
+        loadMore: reader.loadMore,
     };
 }
 
 /** Resolve one plugin source through the same scoped pages as the library and pickers. */
-export function useWorkflowPluginSource(workflow: string | null, enabled = true): Readonly<{
+export function useWorkflowPluginSource(workflow: string | null, enabled = true, accountLifetime?: ServerAccountScopeLifetime | null): Readonly<{
     source: WorkflowPluginSourceV1 | null;
     status: 'idle' | 'loading' | 'failed' | 'missing' | 'ready';
     retry: () => void;
 }> {
-    const library = useWorkflowDefinitionLibrary({ enabled: enabled && workflow !== null });
+    const library = useWorkflowDefinitionLibrary({ enabled: enabled && workflow !== null,
+        ...(accountLifetime === undefined ? {} : { accountLifetime }) });
     const source = library.pluginWorkflows.find((entry) => entry.workflow === workflow) ?? null;
     React.useEffect(() => {
         if (enabled && workflow !== null && source === null && library.status === 'loaded'
@@ -451,7 +493,7 @@ function refreshRunWindow(windowId: WorkflowRunListWindowId, invalidate = false)
     const previousWindow = ownedBefore ? previousStore.workflowRunListWindows[windowId] : undefined;
     const previousTailId = previousWindow?.runIds.at(-1);
     const attentionBoundary = (windowId === 'attention' || windowId === 'automationAttention') && previousTailId !== undefined
-        ? previousStore.workflowRunsById[previousTailId]
+        ? previousStore.workflowRunsById[workflowRunStoreKey(previousTailId)]
         : undefined;
     if (!ownedBefore) setRunWindowStatus(windowId, { ...INITIAL_RUN_STATUS, scopeKey });
     else if (previous.loadingMore || previous.loadMoreFailed) setRunWindowStatus(windowId, { ...previous, loadingMore: false, loadMoreFailed: false });
@@ -601,7 +643,7 @@ export function useWorkflowRunWindow(windowId: WorkflowRunListWindowId, options:
 
     const retry = React.useCallback(() => { void refreshRunWindow(windowId, true); }, [windowId]);
     const loadMore = React.useCallback(() => { void loadMoreRunWindow(windowId); }, [windowId]);
-    return {
+    return React.useMemo(() => ({
         serverId: enabled && owned && status.knownAt !== null ? scope?.serverId ?? null : null,
         status: !enabled ? 'loaded' : scopeKey === null ? 'failed' : owned ? status.status : 'loading',
         failure: owned ? status.failure : null,
@@ -613,18 +655,13 @@ export function useWorkflowRunWindow(windowId: WorkflowRunListWindowId, options:
         loadMoreFailed: owned && status.loadMoreFailed,
         retry,
         loadMore,
-    };
+    }), [enabled, hasNextCursor, loadMore, owned, retry, rows, runIds, scope?.serverId, scopeKey, status]);
 }
 
 /** Test seam: forget module read state between cases (the Run store is reset by its own owner). */
 export function resetWorkflowLibraryReadsForTests(): void {
-    unsubscribeDefinitionChange?.();
-    unsubscribeDefinitionChange = null;
-    deletionRetirement?.dispose();
-    deletionRetirement = null;
-    definitionsCell.set(INITIAL_DEFINITIONS);
-    definitionsInFlight = null;
+    activeDefinitionLibrary.reset();
+    addressedDefinitionLibraries = new WeakMap();
     runWindowStatusCell.set({});
     runWindowInFlight.clear();
-    ensureDefinitionChangeObserver();
 }

@@ -79,6 +79,7 @@ function capturedFromScreenshotItem(
 export function createManagedChromiumBrowserAnnotationCaptureProvider(input: Readonly<{
     machineId: string;
     serverId?: string | null;
+    signal?: AbortSignal;
 }>): BrowserAnnotationCaptureProvider {
     const machineId = input.machineId.trim();
     const available = machineId.length > 0;
@@ -99,6 +100,7 @@ export function createManagedChromiumBrowserAnnotationCaptureProvider(input: Rea
             const result = await dispatchBrowserContextActionViaMachineRpc({
                 machineId,
                 serverId: input.serverId,
+                signal: input.signal,
                 actionId: request.cropClip
                     ? 'browser.context.annotation.captureRegion'
                     : 'browser.context.captureScreenshot',

@@ -74,6 +74,7 @@ export async function fetchLocalServicePreviewSnapshotViaMachineRpc(
             serverId: input.serverId,
             method: RPC_METHODS.DAEMON_LOCAL_SERVICES_PREVIEW_SNAPSHOT,
             payload,
+            signal: input.signal,
         });
         if (isRpcMethodNotFoundResult(raw)) {
             return { ok: false, reason: 'unavailable' };
@@ -102,6 +103,7 @@ export async function openOrCreateLocalServicePreviewViaMachineRpc(
             serverId: input.serverId,
             method: RPC_METHODS.DAEMON_LOCAL_SERVICES_PREVIEW_OPEN_OR_CREATE,
             payload,
+            signal: input.signal,
         });
         if (isRpcMethodNotFoundResult(raw)) {
             return { ok: false, reason: 'unavailable' };
@@ -128,6 +130,7 @@ export async function revokeLocalServicePreviewViaMachineRpc(
             serverId: input.serverId,
             method: RPC_METHODS.DAEMON_LOCAL_SERVICES_PREVIEW_REVOKE,
             payload,
+            signal: input.signal,
         });
         if (isRpcMethodNotFoundResult(raw)) {
             return { ok: false, reason: 'unavailable' };

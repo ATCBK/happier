@@ -1,5 +1,7 @@
 import type { Machine } from '../../domains/state/storageTypes';
 import { areSessionValuesDeepEqual } from './areStoredSessionsEqual';
+import { hasCurrentMachineContent } from '../../domains/machines/resolveServerScopedMachines';
+import { isMachineOnline } from '@/utils/sessions/machineUtils';
 
 export function hasMachineDaemonStateAdvanced(
     previous: Machine | null | undefined,
@@ -30,6 +32,10 @@ export function hasMachineContributionRegistryProjectionChanged(
     if (!previous || !hasMachineDaemonStateAdvanced(previous, next)) return false;
     const previousState = readDaemonState(previous.daemonState);
     const nextState = readDaemonState(next.daemonState);
+    // A version-zero socket placeholder has no daemon observation yet.
+    // A positive version still carries the legacy invalidation signal even
+    // when its content is unavailable or predates the explicit revision.
+    if (!previousState && (previous.daemonStateVersion ?? 0) === 0) return false;
     const previousRevision = readContributionRegistryProjectionRevision(previousState);
     const nextRevision = readContributionRegistryProjectionRevision(nextState);
     // Older daemon publications have only the broad version signal. Retain
@@ -56,23 +62,52 @@ export function areStoredMachineSemanticsEqual(
     return areStoredMachineValuesEqual(previous, next, false);
 }
 
+/** Resource publications do not change launch choices. Content/key readiness still does. */
+export function areMachineLaunchInputsEqual(previous: Machine, next: Machine): boolean {
+    const nowMs = Date.now();
+    return areStoredMachineValuesEqual(previous, next, false, false)
+        && isMachineOnline(previous, nowMs) === isMachineOnline(next, nowMs)
+        && previous.isShared === next.isShared
+        && previous.installationPublicKey === next.installationPublicKey
+        && hasCurrentMachineContent(previous) === hasCurrentMachineContent(next);
+}
+
+function areMachineLaunchKeyBasesEqual(previous: Machine['keyBasis'], next: Machine['keyBasis']): boolean {
+    if (!previous || !next) return previous === next;
+    // Daemon revisions also advance for resources. Content readiness is checked
+    // separately; the owner envelope and metadata revision still affect launch.
+    return previous.dataEncryptionKey === next.dataEncryptionKey
+        && previous.metadataVersion === next.metadataVersion;
+}
+
+function areDaemonLaunchInputsEqual(previous: unknown, next: unknown): boolean {
+    if (previous === next) return true;
+    const left = readDaemonState(previous);
+    const right = readDaemonState(next);
+    if (!left || !right) return areSessionValuesDeepEqual(previous ?? null, next ?? null);
+    const keys = Object.keys(left).filter(key => key !== 'resources');
+    return keys.length === Object.keys(right).filter(key => key !== 'resources').length
+        && keys.every(key => Object.hasOwn(right, key) && areSessionValuesDeepEqual(left[key], right[key]));
+}
+
 function areStoredMachineValuesEqual(
     previous: Machine | null | undefined,
     next: Machine | null | undefined,
     includeHeartbeatTimestamps: boolean,
+    includeResources = true,
 ): boolean {
     if (previous === next) return true;
     if (!previous || !next) return previous === next;
     return previous.id === next.id
         && previous.kind === next.kind
-        && previous.seq === next.seq
+        && (!includeResources || previous.seq === next.seq)
         && previous.createdAt === next.createdAt
         && (!includeHeartbeatTimestamps || previous.updatedAt === next.updatedAt)
         && previous.active === next.active
         && (!includeHeartbeatTimestamps || previous.activeAt === next.activeAt)
         && (previous.revokedAt ?? null) === (next.revokedAt ?? null)
         && previous.metadataVersion === next.metadataVersion
-        && previous.daemonStateVersion === next.daemonStateVersion
+        && (!includeResources || previous.daemonStateVersion === next.daemonStateVersion)
         && (previous.replacedByMachineId ?? null) === (next.replacedByMachineId ?? null)
         && (previous.replacedAt ?? null) === (next.replacedAt ?? null)
         && (previous.replacementReason ?? null) === (next.replacementReason ?? null)
@@ -84,9 +119,13 @@ function areStoredMachineValuesEqual(
         && areSessionValuesDeepEqual(previous.operationProtocolCapabilities ?? null, next.operationProtocolCapabilities ?? null)
         && (previous.storageMode ?? null) === (next.storageMode ?? null)
         && (previous.dataEncryptionKey ?? null) === (next.dataEncryptionKey ?? null)
-        && areSessionValuesDeepEqual(previous.keyBasis ?? null, next.keyBasis ?? null)
+        && (includeResources
+            ? areSessionValuesDeepEqual(previous.keyBasis ?? null, next.keyBasis ?? null)
+            : areMachineLaunchKeyBasesEqual(previous.keyBasis, next.keyBasis))
         && areSessionValuesDeepEqual(previous.access ?? null, next.access ?? null)
         && areSessionValuesDeepEqual(previous.availability ?? null, next.availability ?? null)
         && areSessionValuesDeepEqual(previous.metadata ?? null, next.metadata ?? null)
-        && areSessionValuesDeepEqual(previous.daemonState ?? null, next.daemonState ?? null);
+        && (includeResources
+            ? areSessionValuesDeepEqual(previous.daemonState ?? null, next.daemonState ?? null)
+            : areDaemonLaunchInputsEqual(previous.daemonState, next.daemonState));
 }

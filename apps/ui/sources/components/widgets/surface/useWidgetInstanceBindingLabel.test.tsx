@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import type { InputHints } from '@happier-dev/protocol/inputs';
 import { createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
@@ -7,6 +7,8 @@ import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { isWidgetFollowingSurfaceSlot, useWidgetInstanceBindingLabel } from './useWidgetInstanceBindingLabel';
 import { useWidgetBindingValueLabels } from './useWidgetBindingValueLabels';
 import { describeWidgetGroupContext, readWidgetGroupFollowedValue, widgetGroupSurfaceContext } from '../group/widgetGroupInputs';
+
+vi.mock('@/sync/sync', async () => ({ sync: (await import('@/dev/testkit/mocks/sync')).createSessionListHydrationSyncBoundary() }));
 
 afterEach(() => standardCleanup());
 
@@ -115,6 +117,13 @@ it('names a copy by its chosen option words or its typed text, never by a stored
   expect(await label(typed, { branch: { kind: 'value', value: 'main' } })).toBe(
     'main',
   );
+});
+
+it('does not name a copy by a typed filesystem path, which is a location and not a name', async () => {
+  const typed: InputHints = { fields: [{ path: 'directory', widget: 'text', title: 'Directory' }] };
+  for (const path of ['/home/happier/happier-dev/packages', '~/work/happier', 'C:\\Users\\alice\\work', '\\\\server\\share'])
+    expect(await label(typed, { directory: { kind: 'value', value: path } })).toBeNull();
+  expect(await label(typed, { directory: { kind: 'value', value: 'happier-dev' } })).toBe('happier-dev');
 });
 
 it('resolves a JSON choice by the canonical option identity rather than raw object names', async () => {

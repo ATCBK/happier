@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { connect, createServer, type Server } from 'node:net';
@@ -216,6 +216,46 @@ describeWhenNative('Iroh Node lifecycle binding over the shared native runtime',
     await expect(addon.getTunnelStatus('missing-tunnel')).resolves.toBeNull();
   });
 
+  it('keeps filesystem and lifecycle reads responsive while retired-peer dials are pending', { timeout: 90_000 }, async () => {
+    const addon = requireNative();
+    const client = await addon.createEndpoint({ relayPolicy: 'disabled', capProfile: 'machineBulk' });
+    const peer = await addon.createEndpoint({ relayPolicy: 'disabled', capProfile: 'machineBulk' });
+    const peerStatus = await addon.getEndpointStatus(peer.endpointHandle);
+    await addon.shutdownEndpoint({ endpointHandle: peer.endpointHandle });
+    if (!peerStatus?.directAddresses.length) throw new Error('retired peer direct address missing');
+
+    // Fill the actual configured libuv pool, as concurrent daemon requests can.
+    // Native lifecycle waits must not take the pool needed by file logging,
+    // heartbeat persistence, DNS and requester admission.
+    const poolSize = Number(process.env.UV_THREADPOOL_SIZE ?? 4);
+    const pendingDials = Array.from({ length: poolSize }, () => addon.startMachineTunnel({
+      endpointHandle: client.endpointHandle,
+      endpointId: peer.endpointId,
+      directAddresses: peerStatus.directAddresses,
+      handshakeJson: JSON.stringify({ v: 1, flow: 'tcp_tunnel' }),
+    }).then(() => 'started', (error: unknown) => error));
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const observation = await Promise.race([
+        Promise.all([
+          stat(import.meta.filename),
+          addon.getEndpointStatus(client.endpointHandle),
+        ]).then(([, status]) => ({ kind: 'responsive' as const, active: status?.active })),
+        new Promise<{ kind: 'blocked' }>((resolve) => {
+          watchdog = setTimeout(() => resolve({ kind: 'blocked' }), 1_000);
+        }),
+      ]);
+      expect(observation).toEqual({ kind: 'responsive', active: true });
+    } finally {
+      clearTimeout(watchdog);
+      // The public shutdown boundary cancels dials before joining them; cleanup
+      // still works on the defective binding whose worker pool is saturated.
+      await addon.shutdownEndpoint({ endpointHandle: client.endpointHandle });
+      const settled = await Promise.all(pendingDials);
+      expect(settled.every((result) => result instanceof Error)).toBe(true);
+    }
+  });
+
   it('isolates Account-client identities and preserves Machine continuity after helper shutdown', { timeout: 90_000 }, async () => {
     const addon = requireNative();
     echo = await startEchoServer();
@@ -335,6 +375,12 @@ describeWhenNative('Iroh Node lifecycle binding over the shared native runtime',
     const status = await addon.getTunnelStatus(first.tunnelId);
     expect(status?.connectionActive).toBe(true);
     expect(status?.observedPath).toBe('direct');
+
+    // Beyond the pinned transport's 30-second dead-peer window, healthy
+    // application-idle connections must survive on Iroh's own keepalives.
+    await new Promise((resolveIdle) => setTimeout(resolveIdle, 35_000));
+    expect((await addon.getTunnelStatus(second.tunnelId))?.connectionActive).toBe(true);
+    await echoOverRuntimeOrigin(second.runtimeOrigin, 'same-idle-tunnel-still-serves-bytes');
 
     await addon.releaseHomeTunnel(first.tunnelId);
     expect(await expectOriginDown(first.runtimeOrigin)).toBe(true);

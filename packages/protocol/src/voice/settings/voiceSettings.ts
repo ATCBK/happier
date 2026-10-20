@@ -103,7 +103,7 @@ const VoiceUiSchema = z.object({
   updates: z.prefault(VoiceUiUpdatesSchema, {}),
 });
 
-export const VoiceExecutionMachineSettingsSchema = z.pipe(z.transform((input) => {
+export const VoiceExecutionMachineSettingsSchema = (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((input) => {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
   const raw = input as Record<string, unknown>;
   const normalizeId = (value: unknown): unknown => {

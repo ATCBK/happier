@@ -9,6 +9,15 @@ import type {
 } from './types';
 import type { TrackedSession } from '../types';
 import type { RestartSessionRunnerCompletion } from './restartSessionRunnerOnCurrentRuntime';
+import type { OwnerRemainderCapture } from '../processes/endOwnerRemainder';
+import { SessionRunnerRestartAdmissionUnsupportedError, type SessionRunnerRestartAdmissionRelease } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
+
+type RestartCompletionWaiter = Readonly<{
+  promise: Promise<RestartSessionRunnerCompletion>;
+  start: () => void;
+  cancel: () => void;
+  retire?: () => void;
+}>;
 
 export type RequestPlannedRunnerRestartParams = Readonly<{
   sessionId: string;
@@ -16,14 +25,18 @@ export type RequestPlannedRunnerRestartParams = Readonly<{
   completion?: Readonly<{
     hasPending: () => boolean;
     join: () => Promise<RestartSessionRunnerCompletion> | null;
-    create: () => Readonly<{ promise: Promise<RestartSessionRunnerCompletion>; cancel: () => void }>;
+    create: () => RestartCompletionWaiter;
   }>;
-  observeRunnerRetirement?: (tracked: TrackedSession, sessionId: string) => void | Promise<void>;
+  observeRunnerRetirement?: (tracked: TrackedSession, sessionId: string) => void | boolean | Promise<void | boolean>;
+  captureRunnerRemainder?: (tracked: TrackedSession, sessionId: string) => Promise<OwnerRemainderCapture | undefined>;
   deferral: PlannedRunnerRestartDeferral;
   restartRequestedPids: Set<number>;
   pidToTrackedSession: ReadonlyMap<number, TrackedSession>;
   requestSignal: (request: PlannedRunnerRestartSignalRequest) => Promise<PlannedRunnerRestartSignalResult>;
-  canSignal?: () => PlannedRunnerRestartSignalGateResult | Promise<PlannedRunnerRestartSignalGateResult>;
+  canSignal?: (signal: AbortSignal) => PlannedRunnerRestartSignalGateResult | Promise<PlannedRunnerRestartSignalGateResult>;
+  /** Receiving creation admission remains closed through activity/capture checks and the signal. */
+  prepareSignal?: (signal: AbortSignal) => Promise<SessionRunnerRestartAdmissionRelease | null>;
+  reason?: string;
   isShuttingDown?: () => boolean;
   isProcessSafeToSignal?: (params: Readonly<{
     pid: number;
@@ -84,7 +97,7 @@ export async function requestPlannedRunnerRestart(
   }
 
   const completionState: {
-    waiter?: Readonly<{ promise: Promise<RestartSessionRunnerCompletion>; cancel: () => void }>;
+    waiter?: RestartCompletionWaiter;
     promise?: Promise<RestartSessionRunnerCompletion>;
   } = {};
   let ownsReservation = false;
@@ -92,6 +105,7 @@ export async function requestPlannedRunnerRestart(
     completionState.waiter?.cancel();
     if (!ownsReservation) return;
     ownsReservation = false;
+    if (params.tracked.plannedRestartReason === params.reason) delete params.tracked.plannedRestartReason;
     params.restartRequestedPids.delete(expectedPid);
     clearRestartIntent({ pid: expectedPid, clearRestartIntentForPid: params.clearRestartIntentForPid, message });
   };
@@ -102,7 +116,7 @@ export async function requestPlannedRunnerRestart(
     ...(notSignaledReason ? { notSignaledReason } : {}),
     ...(completionState.promise ? { completionPromise: completionState.promise } : {}),
   });
-  const runSwitch = async (): Promise<PlannedRunnerRestartExecution> => {
+  const runSwitch = async (deferralSignal?: AbortSignal): Promise<PlannedRunnerRestartExecution> => {
     const joined = params.completion?.join();
     if (joined) {
       signaled = true;
@@ -117,6 +131,15 @@ export async function requestPlannedRunnerRestart(
     ownsReservation = true;
     completionState.waiter = params.completion?.create();
     completionState.promise = completionState.waiter?.promise;
+    // Reserve completion before waiting so equivalent callers join the same attempt.
+    // The respawn budget starts only when the signal is admitted; activity waits
+    // remain cancellable by their containing daemon/deferral lifetime.
+    const lifetime = new AbortController();
+    void completionState.promise?.then(() => lifetime.abort());
+    const cancelBeforeSignal = () => lifetime.abort(deferralSignal?.reason);
+    deferralSignal?.addEventListener('abort', cancelBeforeSignal, { once: true });
+    if (deferralSignal?.aborted) cancelBeforeSignal();
+    const signal = lifetime.signal;
     let ownerStillCurrent = true;
     let missingProcessObserved = false;
     const trackedWitnessIsCurrent = (): boolean => {
@@ -152,42 +175,84 @@ export async function requestPlannedRunnerRestart(
       }
       return trackedWitnessIsCurrent();
     };
-    const signalResult = await params.requestSignal({
-      tracked: params.tracked,
-      shouldSignal: async () => {
-        if (!await exactProcessWitnessIsCurrent()) return false;
-        const allowedByActivityGate = (await params.canSignal?.()) ?? true;
-        if (allowedByActivityGate !== true) {
-          notSignaledReason = allowedByActivityGate === false
-            ? 'activity_in_progress'
-            : allowedByActivityGate;
-          return false;
-        }
-        if (!await exactProcessWitnessIsCurrent()) return false;
-        // Shutdown can begin during either awaited process or activity probe.
-        if (params.isShuttingDown?.()) {
-          notSignaledReason = 'shutting_down';
-          return false;
-        }
-        return true;
-      },
-      onSignalFailure: (error) => {
-        clearUnsignaledRequest(params.onSignalFailureLogMessage
-          ?? '[DAEMON RUN] Failed to clear planned runner restart intent after signal failure');
-        params.logWarn?.(
-          params.onSignalFailureLogMessage ?? '[DAEMON RUN] Failed to signal planned runner restart',
-          error,
-        );
-      },
-      onProcessAlreadyMissing: () => {
-        missingProcessObserved = true;
-        if (params.observeProcessMissing) {
-          params.observeProcessMissing(params.tracked);
-        } else {
-          params.logWarn?.('[DAEMON RUN] Planned runner restart process was already missing before exit observer was ready');
-        }
-      },
-    });
+    let signalResult: PlannedRunnerRestartSignalResult = { status: 'skipped_stale_owner' };
+    let releaseSignalAdmission: SessionRunnerRestartAdmissionRelease | undefined;
+    try {
+      signalResult = await params.requestSignal({
+        tracked: params.tracked,
+        shouldSignal: async () => {
+          if (!await exactProcessWitnessIsCurrent()) return false;
+          if (params.prepareSignal && !releaseSignalAdmission) {
+            const receivingPid = params.tracked.sessionRunnerPid ?? expectedPid;
+            let release: SessionRunnerRestartAdmissionRelease | null;
+            try { release = await params.prepareSignal(signal); }
+            catch (error) {
+              if (!(error instanceof SessionRunnerRestartAdmissionUnsupportedError)) throw error;
+              params.tracked.runnerRestartAdmissionUnsupportedPid = receivingPid;
+              notSignaledReason = 'restart_admission_unsupported';
+              return false;
+            }
+            if (!release) { notSignaledReason = 'activity_observation_unavailable'; return false; }
+            releaseSignalAdmission = release;
+          }
+          const allowedByActivityGate = (await params.canSignal?.(signal)) ?? true;
+          if (allowedByActivityGate !== true) {
+            notSignaledReason = allowedByActivityGate === false
+              ? 'activity_in_progress'
+              : allowedByActivityGate;
+            return false;
+          }
+          if (params.captureRunnerRemainder) {
+            const captured = await params.captureRunnerRemainder(params.tracked, params.sessionId);
+            if (!captured) {
+              notSignaledReason = 'remainder_capture_unavailable';
+              return false;
+            }
+            params.tracked.ownerRemainderCapture = captured;
+          }
+          if (!await exactProcessWitnessIsCurrent()) return false;
+          if (signal.aborted || releaseSignalAdmission?.signal.aborted) {
+            notSignaledReason = 'activity_in_progress';
+            return false;
+          }
+          // Shutdown can begin during either awaited process or activity probe.
+          if (params.isShuttingDown?.()) {
+            notSignaledReason = 'shutting_down';
+            return false;
+          }
+          params.tracked.plannedRestartReason = params.reason;
+          completionState.waiter?.start();
+          return true;
+        },
+        onSignalFailure: (error) => {
+          clearUnsignaledRequest(params.onSignalFailureLogMessage
+            ?? '[DAEMON RUN] Failed to clear planned runner restart intent after signal failure');
+          params.logWarn?.(
+            params.onSignalFailureLogMessage ?? '[DAEMON RUN] Failed to signal planned runner restart',
+            error,
+          );
+        },
+        onProcessAlreadyMissing: () => {
+          missingProcessObserved = true;
+          if (params.observeProcessMissing) {
+            params.observeProcessMissing(params.tracked);
+          } else {
+            params.logWarn?.('[DAEMON RUN] Planned runner restart process was already missing before exit observer was ready');
+          }
+        },
+      });
+    } finally {
+      try {
+        if (signalResult.status === 'skipped_stale_owner') await releaseSignalAdmission?.();
+      } finally {
+        // The deferral queue retires its callback signal after applying a switch.
+        // Once signalled, receiver retirement/completion owns the hold instead.
+        deferralSignal?.removeEventListener('abort', cancelBeforeSignal);
+        // A signalled receiver retains the in-flight hold through physical exit.
+        // Its transport retirement (or completion) cancels that same request.
+        if (signalResult.status === 'skipped_stale_owner') lifetime.abort();
+      }
+    }
 
     if (!ownerStillCurrent || signalResult.status === 'skipped_stale_owner') {
       clearUnsignaledRequest('[DAEMON RUN] Failed to clear stale planned runner restart intent after skipped signal');
@@ -209,12 +274,17 @@ export async function requestPlannedRunnerRestart(
     }
 
     signaled = true;
+    completionState.waiter?.start();
     try {
       const observation = params.observeRunnerRetirement?.(params.tracked, params.sessionId);
-      if (observation) void observation.catch((error) => {
+      void Promise.resolve(observation).then(retired => {
+        if (retired === false) completionState.waiter?.retire?.();
+      }).catch((error) => {
+        completionState.waiter?.retire?.();
         params.logWarn?.('[DAEMON RUN] Failed to observe planned runner retirement', error);
       });
     } catch (error) {
+      completionState.waiter?.retire?.();
       params.logWarn?.('[DAEMON RUN] Failed to observe planned runner retirement', error);
     }
     return captureExecution();

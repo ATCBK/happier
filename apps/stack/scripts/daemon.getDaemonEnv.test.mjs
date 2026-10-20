@@ -196,3 +196,18 @@ test('getDaemonEnv preserves an explicit daemon service label', async () => {
 
   assert.equal(env.HAPPIER_DAEMON_SERVICE_LABEL, 'happier-daemon.preview.example.service');
 });
+
+test('getDaemonEnv keeps the stack webapp origin aligned with the server process', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'happy-stack-daemon-env-webapp-'));
+
+  const env = getDaemonEnv({
+    baseEnv: { HAPPIER_WEBAPP_URL: 'http://happier-qa.localhost:19364' },
+    cliHomeDir: dir,
+    internalServerUrl: 'http://127.0.0.1:3009',
+    publicServerUrl: 'http://happier-qa.localhost:3009',
+    stackName: 'qa',
+    cliIdentity: 'default',
+  });
+
+  assert.equal(env.HAPPIER_WEBAPP_URL, 'http://happier-qa.localhost:19364');
+});

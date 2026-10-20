@@ -4,6 +4,7 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import type { PromptStackEntryV1 } from '@happier-dev/protocol';
 import type { MemoryScopeTargetV1 } from '@happier-dev/protocol/actions/executor/types';
+import type { MemorySearchScope } from '@happier-dev/protocol/memory/memorySearch';
 
 import { MemoryDocumentBody } from '@/components/memory/MemoryDocumentBody';
 import { MemorySearchPanel } from '@/components/memory/MemorySearchPanel';
@@ -34,10 +35,14 @@ export const ContextMemorySection = React.memo(function ContextMemorySection(pro
     description: string;
     serverId: string;
     entry: PromptStackEntryV1 | null;
-    footer: string;
+    /** The context owner must finish its read before a missing attachment means empty. */
+    attachmentStatus?: 'loading' | 'ready' | 'unavailable';
+    footer: string | ((shared: boolean | null) => string | undefined);
     emptyText: string;
     readOnly?: boolean;
     scopeTarget?: MemoryScopeTargetV1;
+    /** Read scope is independent of permission to remember or manage this layer. */
+    searchScope?: MemorySearchScope;
     /** Takes the memory document out of this layer (the document itself stays in the library). */
     onDetach?: () => void;
     /** Sets or clears the entry's `maxChars`; omitted where this viewer cannot change the layer. */
@@ -57,14 +62,14 @@ export const ContextMemorySection = React.memo(function ContextMemorySection(pro
         serverId, scopeKey: JSON.stringify(props.scopeTarget), attachedRef,
     });
     const unattached = receipt?.attachment === 'conflict';
-    const source = useMemoryDocument({ ref, serverId });
+    const source = useMemoryDocument({ ref, serverId, attachmentStatus: props.attachmentStatus });
     const canRemember = !props.readOnly && Boolean(source.target || (!entry && source.status === 'none' && props.scopeTarget));
     const [composing, setComposing] = React.useState(false);
     // Search takes the section's body while it is open (the same panel Work › Memory opens).
     const [searching, setSearching] = React.useState(false);
     const navigateToSession = useNavigateToSession();
-    const openSession = React.useCallback((session: Readonly<{ serverId: string; sessionId: string }>) => {
-        fireAndForget(navigateToSession(session.sessionId, { serverId: session.serverId }), { tag: 'ContextMemorySection.openSession' });
+    const openSession = React.useCallback((session: Readonly<{ serverId: string; sessionId: string; messageId?: string }>) => {
+        fireAndForget(navigateToSession(session.sessionId, { serverId: session.serverId, messageId: session.messageId }), { tag: 'ContextMemorySection.openSession' });
     }, [navigateToSession]);
     const [budgetOpen, setBudgetOpen] = React.useState(false);
     const maxChars = entry?.maxChars;
@@ -76,6 +81,8 @@ export const ContextMemorySection = React.memo(function ContextMemorySection(pro
         <ItemGroup
             title={props.title}
             description={props.description}
+            // Search and + are a quiet icon cluster: they stay on the title line on a phone (lab `c-ctx` Ap).
+            actionLayout="trailing"
             action={(
                 <View style={styles.actions}>
                     <IconButton
@@ -117,13 +124,13 @@ export const ContextMemorySection = React.memo(function ContextMemorySection(pro
                 </View>
             )}
         >
-            {searching ? <MemorySearchPanel testID={`${props.testID}.searchPanel`} serverId={serverId} /> : null}
+            {searching ? <MemorySearchPanel testID={`${props.testID}.searchPanel`} serverId={serverId} scope={props.searchScope} /> : null}
             {searching ? null : <MemoryDocumentBody
                 testID={props.testID}
                 source={source}
                 serverId={serverId}
                 collapsedFactCount={COLLAPSED_FACTS}
-                footer={props.footer}
+                footer={typeof props.footer === 'function' ? props.footer(source.stale ? null : source.view?.shared ?? null) : props.footer}
                 readOnly={props.readOnly}
                 composing={composing}
                 onComposingChange={setComposing}

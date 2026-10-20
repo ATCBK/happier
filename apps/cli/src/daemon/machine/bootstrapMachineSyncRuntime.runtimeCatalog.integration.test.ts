@@ -81,6 +81,9 @@ import { reserveEphemeralPort } from '@/testkit/http/portUtils';
 import { withConfiguredDaemonTestHome } from '../testkit/fakeDaemonLifecycle.testkit';
 import { readSessionMarkerForPid, writeSessionMarker } from '../sessionRegistry';
 import { SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol';
+import { readOrCreateInstallationIdentitySync } from '@/daemon/identity/store';
+import { SESSION_FOLLOW_ZERO_FRONTIER_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
+import { SessionFollowObserveInactiveResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 
 type ConnectedApiMachineForBootstrap = NonNullable<Awaited<ReturnType<BootstrapMachineSyncRuntimeParams['createConnectedApiMachine']>>>;
 
@@ -229,6 +232,355 @@ function createProviderServerFeatures(enabled: boolean): FeaturesResponse {
 }
 
 describe('bootstrapMachineSyncRuntime', () => {
+    it('recovers independent Sessions, requester bindings, Follow and Workflow while an earlier startup waits', async () => {
+        await withConfiguredDaemonTestHome({ prefix: 'bootstrap-independent-recovery-' }, async ({ homeDir }) => {
+            const machineId = 'recovery-machine';
+            const accountId = 'recovery-account';
+            const installationId = readOrCreateInstallationIdentitySync().installationId;
+            const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`, encryption: null };
+            const sessionIds = ['c111111111111111111111111', 'c222222222222222222222222'];
+            const requesterIds = ['c333333333333333333333333', 'c444444444444444444444444'];
+            const firstStartup = createDeferred();
+            const firstReplyRecovery = createDeferred();
+            const effects: string[] = [];
+            const sessions = sessionIds.map(id => createSessionRecordFixture({ id, encryptionMode: 'plain',
+                metadataLayoutVersion: 0, active: false, pendingCount: 1, pendingVersion: 1,
+                pendingActivationAuthorization: { requestId: `resume-${id}`, requestedAt: 1, status: 'waiting' },
+                metadata: JSON.stringify({ machineId, path: homeDir, flavor: 'claude', claudeSessionId: `native-${id}`,
+                    runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} } }) }));
+            const app = fastify();
+            app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+            // The later Session is deliberately on the next page: discovery must
+            // continue while the first Session's physical startup is unresolved.
+            app.get('/v2/sessions', async request => new URL(request.url, 'http://fixture').searchParams.has('cursor')
+                ? { sessions: [sessions[1]], nextCursor: null, hasNext: false }
+                : { sessions: [sessions[0]], nextCursor: 'next', hasNext: true });
+            app.get('/v2/sessions/:sessionId', async request => ({ session: sessions.find(session => session.id === (request.params as { sessionId: string }).sessionId) }));
+            app.get('/v2/sessions/:sessionId/pending', async request => ({ pending: [{
+                localId: `resume-${(request.params as { sessionId: string }).sessionId}`, messageRole: 'user',
+                requestedAction: { v: 1, kind: 'send_now' }, deliveryStatus: { status: 'queued' },
+            }] }));
+            app.post('/v2/sessions/:sessionId/follows/inactive-observations', async () => ({ ok: false, v: 1, error: 'forbidden' }));
+            const restoreHttp = installAxiosFastifyAdapter({ app, origin: new URL(resolveServerHttpBaseUrl()).origin });
+            let connectOptions: { onConnect?: () => Promise<void> | void } | undefined;
+            const transport = { ...createApiMachineTransportFixture(),
+                setRPCHandlers: vi.fn(emptyMachineRpcLifecycleRegistration), registerLiveStreamRelayRoutes: vi.fn(),
+                connect: (options: typeof connectOptions) => { connectOptions = options; },
+                updateDaemonState: async () => 'published' as const, updateMachineMetadata: async () => 'published' as const,
+                emitExternalSessionTranscriptUpdate: vi.fn(), sendMachineTransferEnvelope: vi.fn(),
+                sendTransferRelayV2Envelope: vi.fn(), sendMachineLiveStreamRelayEnvelope: vi.fn(),
+                getPeerMediationMachineRpcHandlerManager: () => ({ invokeLocal: async () => ({ ok: true }) }),
+                requestSessionMessageReplyRecoveryForSession: async (sessionId: string) => {
+                    effects.push(`requester:${sessionId}`);
+                    if (sessionId === requesterIds[0]) await firstReplyRecovery.promise;
+                },
+            };
+            let runtime: BootstrapMachineSyncRuntimeResult | undefined;
+            let connecting: Promise<void> | undefined;
+            try {
+                runtime = await bootstrapMachineSyncRuntime({ cliVersion: 'test', machineId, credentials,
+                    machine: { id: machineId, encryptionMode: 'plain', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 },
+                    preferredHost: 'host', happyHomeDir: homeDir, happyLibDir: homeDir,
+                    filesystemAccessPolicy: { kind: 'osUser' }, takeoverRequested: false, isShuttingDown: () => false,
+                    createConnectedApiMachine: () => transport as unknown as ConnectedApiMachineForBootstrap,
+                    attachTransferRuntimeStatePublisher: async () => {}, startAutomationWorkerForMachine: () => null,
+                    startMemoryWorkerForMachine: async () => null, startVoiceInferenceWorkerForMachine: async () => null,
+                    // Only physical startup and socket/HTTP transport are held;
+                    // Pending eligibility, snapshots and activation run for real.
+                    spawnSessionForInternalResume: async options => {
+                        effects.push(`spawn:${options.existingSessionId}`);
+                        if (options.existingSessionId === sessionIds[0]) await firstStartup.promise;
+                        return { type: 'success', sessionId: options.existingSessionId! };
+                    },
+                    spawnSession: async () => { throw new Error('Recovery must use internal resume'); },
+                    stopSession: async () => ({ status: 'stopped' }), isSessionAlreadyRunning: async () => false,
+                    resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'recovery-home', machineId }),
+                    readRequesterSessionCredentialBindings: async () => ({ status: 'ready', bindings: requesterIds.map(sessionId => ({
+                        sessionId, attribution: { serverId: 'recovery-home', accountId: 'requester-account', machineId, installationId },
+                    })) }),
+                    resolveRequesterSessionRuntimeContext: async () => null,
+                    releaseRequesterSessionRuntimeContext: async () => {},
+                    dispatchSessionFollowOccurrence: async request => { if ('accountFollowSourcesChanged' in request) effects.push('follow'); },
+                    recoverWorkflowRuns: async trigger => { effects.push(`workflow:${trigger}`); },
+                    loadLocalSessionMetadataForHandoff: async () => null, beforeShutdown: async () => {}, requestShutdown: () => {},
+                    directPeerServerLifecycle: null, directTransferRegistryHost: createCliRegistryHostV1(),
+                    connectedServiceRefreshLoopHandle: null, connectedServiceQuotasLoopHandle: null, daemonServerWorkScheduler: {} as never,
+                });
+                if (!connectOptions?.onConnect) throw new Error('Machine connect callback missing');
+                let connected = false;
+                connecting = Promise.resolve(connectOptions.onConnect()).then(() => { connected = true; });
+                await vi.waitFor(() => expect(effects).toEqual(expect.arrayContaining([
+                    `spawn:${sessionIds[0]}`, `spawn:${sessionIds[1]}`,
+                    `requester:${requesterIds[0]}`, `requester:${requesterIds[1]}`, 'follow', 'workflow:startup',
+                ])));
+                expect(connected).toBe(false);
+                firstStartup.resolve();
+                firstReplyRecovery.resolve();
+                await connecting;
+                expect(connected).toBe(true);
+                await connectOptions.onConnect();
+                expect(effects).toContain('workflow:reconnect');
+            } finally {
+                firstStartup.resolve(); firstReplyRecovery.resolve();
+                await connecting;
+                if (runtime) await retireMachineSyncRuntimeAttempt(runtime);
+                restoreHttp(); await app.close();
+            }
+        });
+    });
+    it.each(['accepted', 'stopped', 'denied', 'busy', 'idle_host', 'storage_retry', 'unknown_retry'] as const)('admits a Discussion receiver original before local resume (%s)', async state => {
+        await withConfiguredDaemonTestHome({ prefix: 'bootstrap-discussion-' }, async ({ homeDir }) => {
+            const accountId = 'discussion-account';
+            const machineId = 'discussion-machine';
+            const sessionId = 'c123456789012345678901234';
+            const installationId = readOrCreateInstallationIdentitySync().installationId;
+            const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`, encryption: null };
+            const target = { homeId: 'discussion-home', accountId, sessionId, machineId, installationId };
+            const addressing = { discussionId: 'discussion', messageId: 'question', throughSeq: 2, participantSessionId: sessionId };
+            const actor = { v: 1, accountId, profile: null };
+            const message = { id: 'question', discussionId: 'discussion', localId: 'question', seq: 2,
+                authorAccountId: accountId, accountActor: actor, producerV1: null, mentionedAccountIds: [], createdAt: 1,
+                addressingV1: { throughSeq: 2, participantSessionIds: [sessionId] },
+                content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'Answer this question' },
+                    { t: 'mention', participant: { kind: 'session', sessionId } }] } } };
+            const destination = createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', metadataLayoutVersion: 0,
+                metadata: JSON.stringify({ machineId, path: homeDir, flavor: 'claude', claudeSessionId: 'native',
+                    runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} }, ...(state === 'stopped'
+                        ? { sessionExplicitStopV1: { v: 1, cause: 'explicit_stop', requestId: 'stop', requestedAtMs: 1 } } : {}) }),
+                active: state === 'busy' || state === 'idle_host', latestTurnStatus: state === 'busy' ? 'in_progress' : 'completed', pendingCount: 0 });
+            const app = fastify();
+            const homeRequests: string[] = [];
+            app.addHook('onRequest', async request => { homeRequests.push(`${request.method} ${request.url}`); });
+            app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+            app.get('/v2/sessions', async () => ({ sessions: [destination], nextCursor: null, hasNext: false }));
+            app.get(`/v2/sessions/${sessionId}`, async () => ({ session: destination }));
+            app.get(`/v2/sessions/${sessionId}/messages/reply-capability`, async () => ({ v: 1, protocolVersions: [1] }));
+            app.get(`/v2/sessions/${sessionId}/delivery-mutes`, async () => ({ scopes: [] }));
+            app.post(`/v2/sessions/${sessionId}/follows/inactive-observations`, async () => ({ ok: true, v: 1, sessionId, target,
+                currentSourceSessionIds: [], observations: [{ source: { kind: 'discussion', discussionId: 'discussion' }, destinationSessionId: sessionId, addressing,
+                    policy: { preset: 'important' }, event: { kind: 'needs_you', type: 'decision', mode: 'wait' } }] }));
+            app.get('/v1/discussions/discussion/messages', async () => ({ messages: [message], hasMoreOlder: false, messageSeq: 2 }));
+            app.get('/v1/discussions/discussion', async () => ({ discussion: { id: 'discussion', ownerAccountId: accountId,
+                encryptionMode: 'plain', anchor: null, access: 'owner', keyReadiness: true, dataEncryptionKey: null,
+                creationLocalId: 'creation', titleContent: { t: 'plain', v: { v: 1, title: 'Question' } },
+                latestMessage: { id: message.id, localId: message.localId, seq: message.seq, authorAccountId: accountId,
+                    accountActor: actor, producerV1: null, createdAt: 1 }, messageSeq: 2, lastReadSeq: 0, unreadCount: 1,
+                unreadMentionCount: 0, recentAuthorAccountIds: [accountId], archivedAt: null, capabilities: { postMessages: true,
+                    rename: true, archive: true, restore: false, askAgent: true, sendToSession: true, manageAccess: true, leave: false } } }));
+            const restoreHttp = installAxiosFastifyAdapter({ app, origin: new URL(resolveServerHttpBaseUrl()).origin });
+            const effects: string[] = [];
+            const retryStorage = state === 'storage_retry' || state === 'unknown_retry';
+            let connectOptions: { onConnect?: () => Promise<void> | void } | undefined;
+            const enqueue = vi.fn<ConnectedApiMachineForBootstrap['enqueueSessionPendingByMachine']>(async request => {
+                expect(request).toMatchObject({ sessionId, reply: { mode: 'return', discussion: addressing },
+                    requestedAction: { v: 1, kind: state === 'accepted' || state === 'denied' || retryStorage ? 'send_now' : 'enqueue' } });
+                effects.push('pending');
+                if (retryStorage && enqueue.mock.calls.length === 1) return state === 'storage_retry'
+                    ? { status: 'rejected', code: 'session_input_storage_unavailable' }
+                    : { status: 'outcomeUnknown', localId: request.localId, code: 'session_input_admission_outcome_unknown' };
+                return state === 'denied' ? { status: 'rejected', code: 'session_input_target_unavailable' }
+                    : { status: 'accepted', localId: request.localId };
+            });
+            const transport = { ...createApiMachineTransportFixture(),
+                setRPCHandlers: vi.fn(emptyMachineRpcLifecycleRegistration), registerLiveStreamRelayRoutes: vi.fn(),
+                connect: vi.fn((options: { onConnect?: () => Promise<void> | void }) => { connectOptions = options; }),
+                updateDaemonState: vi.fn(async () => 'published' as const), updateMachineMetadata: vi.fn(async () => 'published' as const),
+                emitExternalSessionTranscriptUpdate: vi.fn(), sendMachineTransferEnvelope: vi.fn(), sendTransferRelayV2Envelope: vi.fn(),
+                sendMachineLiveStreamRelayEnvelope: vi.fn(), enqueueSessionPendingByMachine: enqueue,
+                getPeerMediationMachineRpcHandlerManager: vi.fn(() => ({ invokeLocal: async () => ({ ok: true }) })),
+            };
+            const runtime = await bootstrapMachineSyncRuntime({ cliVersion: 'test', machineId,
+                machine: { id: machineId, encryptionMode: 'plain', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 },
+                credentials, preferredHost: 'host', happyHomeDir: homeDir, happyLibDir: homeDir,
+                filesystemAccessPolicy: { kind: 'osUser' }, takeoverRequested: false, isShuttingDown: () => false,
+                createConnectedApiMachine: () => transport as unknown as ConnectedApiMachineForBootstrap,
+                attachTransferRuntimeStatePublisher: async () => {}, startAutomationWorkerForMachine: () => null,
+                startMemoryWorkerForMachine: async () => null, startVoiceInferenceWorkerForMachine: async () => null,
+                spawnSessionForInternalResume: async options => { expect(options.existingSessionId).toBe(sessionId); expect(options.executionAuthorization).toBeUndefined();
+                    effects.push('spawn'); return { type: 'success', sessionId }; },
+                spawnSession: async () => { throw new Error('Automatic Follow must not use person Resume'); },
+                stopSession: async () => ({ status: 'stopped' }), isSessionAlreadyRunning: async () => state === 'busy' || state === 'idle_host',
+                resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: target.homeId, machineId }),
+                getServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({
+                    features: { sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } }, capabilities: {},
+                }) }), loadLocalSessionMetadataForHandoff: async () => null, beforeShutdown: async () => {}, requestShutdown: () => {},
+                directPeerServerLifecycle: null, directTransferRegistryHost: createCliRegistryHostV1(),
+                connectedServiceRefreshLoopHandle: null, connectedServiceQuotasLoopHandle: null, daemonServerWorkScheduler: {} as never,
+            });
+            try {
+                if (!connectOptions?.onConnect) throw new Error('Machine connect callback missing');
+                await connectOptions.onConnect();
+                expect(effects, JSON.stringify(homeRequests)).toEqual(state === 'accepted' ? ['pending', 'spawn'] : ['pending']);
+                if (retryStorage) {
+                    await connectOptions.onConnect();
+                    expect(effects, JSON.stringify(homeRequests)).toEqual(['pending', 'pending', 'spawn']);
+                    expect(enqueue.mock.calls[1]?.[0].localId).toBe(enqueue.mock.calls[0]?.[0].localId);
+                }
+            } finally { await retireMachineSyncRuntimeAttempt(runtime); restoreHttp(); await app.close(); }
+        });
+    });
+    it('resumes an absent Follow receiver without authored Pending on reconnect and daemon recreation', async () => {
+        await withConfiguredDaemonTestHome({ prefix: 'bootstrap-follow-wake-' }, async ({ homeDir }) => {
+            const accountId = 'follow-wake-account';
+            const machineId = 'follow-wake-machine';
+            const destinationSessionId = 'c123456789012345678901234';
+            const sourceSessionId = 'c123456789012345678901235';
+            const installationId = readOrCreateInstallationIdentitySync().installationId;
+            const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`, encryption: null };
+            const target = { homeId: 'follow-home', accountId, sessionId: destinationSessionId, machineId, installationId };
+            const metadata = { machineId, path: homeDir, flavor: 'claude', claudeSessionId: 'follow-native-session',
+                runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} } };
+            let destination = createSessionRecordFixture({ id: destinationSessionId, encryptionMode: 'plain',
+                metadata: JSON.stringify(metadata), metadataLayoutVersion: 0, active: false, pendingCount: 0 });
+            const source = createSessionRecordFixture({ id: sourceSessionId, encryptionMode: 'plain',
+                metadata: JSON.stringify({ machineId, path: homeDir, flavor: 'claude' }),
+                metadataLayoutVersion: 0, latestTurnId: 'failed-source-turn', latestTurnStatus: 'failed' });
+            const observation = { sourceSessionId, destinationSessionId, relation: 'manager', attachedAt: 1,
+                policy: { preset: 'important' }, delivered: SESSION_FOLLOW_ZERO_FRONTIER_V1,
+                observed: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, turn: { id: 'failed-source-turn', status: 'failed' } } };
+            const observationReads: unknown[] = [];
+            const acknowledged: unknown[] = [];
+            let listReads = 0;
+            let homeAvailable = true;
+            let targetAdmitted = true;
+            let holdDuringHydration = false;
+            const explicitStop = { v: 1, cause: 'explicit_stop', requestId: 'held-follow', requestedAtMs: 1 };
+            const app = fastify();
+            app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+            app.get('/v2/sessions', async () => { listReads += 1; return { sessions: [destination], nextCursor: null, hasNext: false }; });
+            app.get(`/v2/sessions/${destinationSessionId}`, async () => ({ session: destination }));
+            app.get(`/v2/sessions/${sourceSessionId}`, async () => {
+                if (holdDuringHydration) destination = { ...destination,
+                    metadata: JSON.stringify({ ...metadata, sessionExplicitStopV1: explicitStop }) };
+                return { session: source };
+            });
+            app.get(`/v1/sessions/${sourceSessionId}/messages`, async () => ({ messages: [], hasMore: false,
+                nextBeforeSeq: null, nextAfterSeq: null }));
+            app.post(`/v2/sessions/${destinationSessionId}/follows/inactive-observations`, async (request, reply) => {
+                observationReads.push(request.body);
+                if (!homeAvailable) return reply.code(503).send({ error: 'unavailable' });
+                if (!targetAdmitted) return { ok: false, v: 1, error: 'forbidden' };
+                return SessionFollowObserveInactiveResponseV1Schema.parse({ ok: true, v: 1, sessionId: destinationSessionId, target,
+                    currentSourceSessionIds: [sourceSessionId], observations: [observation] });
+            });
+            app.post(`/v2/sessions/${destinationSessionId}/follows/acknowledge`, async request => {
+                acknowledged.push(request.body);
+                return { ok: true, v: 1 };
+            });
+            const restoreHttp = installAxiosFastifyAdapter({ app, origin: new URL(resolveServerHttpBaseUrl()).origin });
+            const launches: string[] = [];
+            try {
+                // Recreate only the daemon composition; durable Home observations stay unchanged.
+                for (let daemonAttempt = 0; daemonAttempt < 2; daemonAttempt += 1) {
+                    let running = false;
+                    let requesterUnavailable = false;
+                    let changedSession: Parameters<ConnectedApiMachineForBootstrap['onSessionChanged']>[0] | undefined;
+                    let connectOptions: { onConnect?: () => Promise<void> | void } | undefined;
+                    const transport = { ...createApiMachineTransportFixture(),
+                        setRPCHandlers: vi.fn(emptyMachineRpcLifecycleRegistration), registerLiveStreamRelayRoutes: vi.fn(),
+                        connect: vi.fn((options: { onConnect?: () => Promise<void> | void }) => { connectOptions = options; }),
+                        updateDaemonState: vi.fn(async () => 'published' as const),
+                        updateMachineMetadata: vi.fn(async () => 'published' as const),
+                        onSessionChanged: vi.fn((listener: NonNullable<typeof changedSession>) => {
+                            changedSession = listener;
+                            return () => { changedSession = undefined; };
+                        }),
+                        emitExternalSessionTranscriptUpdate: vi.fn(), sendMachineTransferEnvelope: vi.fn(),
+                        sendTransferRelayV2Envelope: vi.fn(), sendMachineLiveStreamRelayEnvelope: vi.fn(),
+                        getPeerMediationMachineRpcHandlerManager: vi.fn(() => ({ invokeLocal: async () => ({ ok: true }) })),
+                    };
+                    // Machine socket and process spawn are external boundaries; scan, admission,
+                    // source hydration and inactive resume remain the real bootstrap composition.
+                    const machineClient = transport as unknown as ConnectedApiMachineForBootstrap;
+                    const runtime = await bootstrapMachineSyncRuntime({
+                        cliVersion: '0.0.0-test', machineId,
+                        machine: { id: machineId, encryptionMode: 'plain', metadata: null, metadataVersion: 0,
+                            daemonState: null, daemonStateVersion: 0 },
+                        credentials, preferredHost: 'host.local', happyHomeDir: homeDir, happyLibDir: homeDir,
+                        filesystemAccessPolicy: { kind: 'osUser' }, takeoverRequested: false, isShuttingDown: () => false,
+                        createConnectedApiMachine: () => machineClient,
+                        attachTransferRuntimeStatePublisher: async () => {}, startAutomationWorkerForMachine: () => null,
+                        startMemoryWorkerForMachine: async () => null, startVoiceInferenceWorkerForMachine: async () => null,
+                        spawnSessionForInternalResume: async options => {
+                            expect(options.existingSessionId).toBe(destinationSessionId);
+                            expect(options.executionAuthorization).toBeUndefined();
+                            launches.push(destinationSessionId);
+                            running = true;
+                            return { type: 'success', sessionId: destinationSessionId };
+                        },
+                        spawnSession: async () => { throw new Error('Automatic Follow must not use person Resume'); },
+                        stopSession: async () => ({ status: 'stopped' }), isSessionAlreadyRunning: async () => running,
+                        resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: target.homeId, machineId }),
+                        readRequesterSessionCredentialBindings: async () => ({ status: 'ready', bindings: requesterUnavailable ? [{
+                            sessionId: destinationSessionId, attribution: { serverId: 'requester-home', accountId: 'requester-account', machineId, installationId },
+                        }] : [] }),
+                        resolveRequesterSessionRuntimeContext: async () => null,
+                        releaseRequesterSessionRuntimeContext: async () => {},
+                        loadLocalSessionMetadataForHandoff: async () => null, beforeShutdown: async () => {}, requestShutdown: () => {},
+                        directPeerServerLifecycle: null, directTransferRegistryHost: createCliRegistryHostV1(),
+                        connectedServiceRefreshLoopHandle: null, connectedServiceQuotasLoopHandle: null,
+                        daemonServerWorkScheduler: {} as never,
+                    });
+                    try {
+                        if (!connectOptions?.onConnect) throw new Error('Machine connect callback missing');
+                        destination = { ...destination, metadata: JSON.stringify({ ...metadata, sessionExplicitStopV1: explicitStop }) };
+                        await connectOptions.onConnect();
+                        expect(launches).toHaveLength(daemonAttempt);
+                        destination = { ...destination, metadata: JSON.stringify(metadata), archivedAt: 1 };
+                        await connectOptions.onConnect();
+                        expect(launches).toHaveLength(daemonAttempt);
+                        destination = { ...destination, archivedAt: null };
+                        homeAvailable = false;
+                        await connectOptions.onConnect();
+                        expect(launches).toHaveLength(daemonAttempt);
+                        homeAvailable = true;
+                        // The first lifetime proves reconnect wake; the recreated
+                        // daemon below proves the exact change-feed wake path.
+                        if (daemonAttempt === 0) {
+                            await connectOptions.onConnect();
+                            expect(launches).toHaveLength(1);
+                        }
+                        const launchesBeforeChanges = launches.length;
+                        expect(changedSession).toBeTypeOf('function');
+                        if (!changedSession) throw new Error('Exact changed Session subscription missing');
+                        homeAvailable = false;
+                        await expect(Promise.resolve(changedSession({ sessionId: destinationSessionId, cursor: 0 })))
+                            .rejects.toThrow(/inactive Session Follow observation/);
+                        homeAvailable = true;
+                        requesterUnavailable = true;
+                        const readsBeforeUnavailableRequester = observationReads.length;
+                        await changedSession({ sessionId: destinationSessionId, cursor: 1 });
+                        expect(observationReads).toHaveLength(readsBeforeUnavailableRequester);
+                        requesterUnavailable = false;
+                        const scansBeforeUnrelatedChange = listReads;
+                        await changedSession({ sessionId: 'c123456789012345678901236', cursor: 1 });
+                        expect(listReads).toBe(scansBeforeUnrelatedChange);
+                        expect(launches).toHaveLength(launchesBeforeChanges);
+                        targetAdmitted = false;
+                        await changedSession({ sessionId: destinationSessionId, cursor: 2 });
+                        expect(launches).toHaveLength(launchesBeforeChanges);
+                        targetAdmitted = true;
+                        holdDuringHydration = true;
+                        await changedSession({ sessionId: destinationSessionId, cursor: 3 });
+                        expect(launches).toHaveLength(launchesBeforeChanges);
+                        holdDuringHydration = false;
+                        destination = { ...destination, metadata: JSON.stringify(metadata) };
+                        await changedSession({ sessionId: destinationSessionId, cursor: 4 });
+                        await connectOptions.onConnect();
+                    } finally { await retireMachineSyncRuntimeAttempt(runtime); }
+                }
+                expect(observationReads).toContainEqual({ v: 1, machineId, installationId });
+                expect(launches).toEqual([destinationSessionId, destinationSessionId]);
+                // A launch is not accepted native input. The resumed host retains hydration,
+                // dispatch/currentness and source-progress ACK responsibility.
+                expect(acknowledged).toEqual([]);
+            } finally { restoreHttp(); await app.close(); }
+        });
+    });
+
     it('starts machine sync with token-only credentials through the admitted Home route before Account settings are admitted', async ({ onTestFinished }) => {
         usageLimitRecoveryMutationCustodyMocks.create.mockClear();
         runtimeLeaseMocks.tryAcquireAuthoritativePluginRuntimeRegistryLease.mockReset();
@@ -248,7 +600,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             if (!url.startsWith(`${runtimeOrigin}/`)) return Promise.reject(new TypeError('canonical_home_unreachable'));
             return nativeFetch(input, init);
         }) satisfies typeof fetch);
-        onTestFinished(() => vi.unstubAllGlobals());
+        onTestFinished(() => { vi.unstubAllGlobals(); });
         const token = [
             Buffer.from('{}').toString('base64url'),
             Buffer.from(JSON.stringify({ sub: 'account-token-only' })).toString('base64url'),
@@ -260,6 +612,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             pause: vi.fn(),
             resume: vi.fn(),
             handleServerUpdate: vi.fn(),
+            liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
         };
         let isShuttingDown = false;
         const onUpdateRef: { current: ((update: unknown) => void) | null } = {
@@ -324,6 +677,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             attachTransferRuntimeStatePublisher: vi.fn(async () => {}),
             startAutomationWorkerForMachine,
             startMemoryWorkerForMachine,
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -567,10 +921,12 @@ describe('bootstrapMachineSyncRuntime', () => {
             pause: vi.fn(),
             resume: vi.fn(),
             handleServerUpdate: vi.fn(),
+            liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
         }));
         const memoryWorker: MemoryWorkerHandle = {
             stop: vi.fn(),
             reloadSettings: vi.fn(async () => {}),
+            clearIndex: vi.fn(async () => {}),
             ensureUpToDate: vi.fn(async () => {}),
       removeSessions: vi.fn(async () => {}),
       reconcileRetainedSessionAccess: vi.fn(async () => {}),
@@ -618,6 +974,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             attachTransferRuntimeStatePublisher,
             startAutomationWorkerForMachine,
             startMemoryWorkerForMachine,
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -664,6 +1021,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             pause: vi.fn(),
             resume: vi.fn(),
             handleServerUpdate: vi.fn(),
+            liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
         };
         const sharedMutationCustody = {
             bindRecoveredJournals: vi.fn(async () => ({
@@ -706,6 +1064,7 @@ describe('bootstrapMachineSyncRuntime', () => {
                 throw memoryFailure;
             }),
             startVoiceInferenceWorkerForMachine: vi.fn(async (): Promise<VoiceInferenceWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -755,6 +1114,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             startAutomationWorkerForMachine,
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
             startVoiceInferenceWorkerForMachine: vi.fn(async (): Promise<VoiceInferenceWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -828,9 +1188,11 @@ describe('bootstrapMachineSyncRuntime', () => {
                 pause: vi.fn(),
                 resume: vi.fn(),
                 handleServerUpdate: vi.fn(),
+                liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
             startVoiceInferenceWorkerForMachine: vi.fn(async (): Promise<VoiceInferenceWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -900,6 +1262,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             pause: vi.fn(),
             resume: vi.fn(),
             handleServerUpdate: vi.fn(),
+            liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
         };
         const fakeConnectedApiMachine = {
             ...createApiMachineTransportFixture(),
@@ -958,6 +1321,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             attachTransferRuntimeStatePublisher: vi.fn(async () => {}),
             startAutomationWorkerForMachine: vi.fn(() => automationWorker),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -1126,8 +1490,10 @@ describe('bootstrapMachineSyncRuntime', () => {
                 pause: vi.fn(),
                 resume: vi.fn(),
                 handleServerUpdate: vi.fn(),
+                liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -1401,8 +1767,10 @@ describe('bootstrapMachineSyncRuntime', () => {
                 pause: vi.fn(),
                 resume: vi.fn(),
                 handleServerUpdate: vi.fn(),
+                liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: spawnSession,
             spawnSession,
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             awaitAgentSessionOpen,
@@ -1601,8 +1969,10 @@ describe('bootstrapMachineSyncRuntime', () => {
                 pause: vi.fn(),
                 resume: vi.fn(),
                 handleServerUpdate: vi.fn(),
+                liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -1782,8 +2152,10 @@ describe('bootstrapMachineSyncRuntime', () => {
                 pause: vi.fn(),
                 resume: vi.fn(),
                 handleServerUpdate: vi.fn(),
+                liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -2028,8 +2400,10 @@ describe('bootstrapMachineSyncRuntime', () => {
                 pause: vi.fn(),
                 resume: vi.fn(),
                 handleServerUpdate: vi.fn(),
+                liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -2315,8 +2689,10 @@ describe('bootstrapMachineSyncRuntime', () => {
                 pause: vi.fn(),
                 resume: vi.fn(),
                 handleServerUpdate: vi.fn(),
+                liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -2435,6 +2811,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             attachTransferRuntimeStatePublisher: vi.fn(async () => {}),
             startAutomationWorkerForMachine: vi.fn(() => null),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -2527,6 +2904,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             attachTransferRuntimeStatePublisher: vi.fn(async () => {}),
             startAutomationWorkerForMachine: vi.fn(() => null),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -2598,8 +2976,14 @@ describe('bootstrapMachineSyncRuntime', () => {
             storedMetadata = handler(storedMetadata);
             return 'published' as const;
         });
+        const stopSessionForRemoval = vi.fn(async (_sessionId: string, _options?: unknown) => ({ status: 'stopped' as const }));
+        let onDeletedSession: ((change: Readonly<{ sessionId: string }>) => void | Promise<void>) | undefined;
         const fakeConnectedApiMachine = {
             ...createApiMachineTransportFixture(),
+            onSessionDeletedChange: vi.fn((listener: (change: Readonly<{ sessionId: string }>) => void | Promise<void>) => {
+                onDeletedSession = listener;
+                return () => { onDeletedSession = undefined; };
+            }),
             setRPCHandlers: vi.fn(emptyMachineRpcLifecycleRegistration),
             registerLiveStreamRelayRoutes: vi.fn(),
             connect: vi.fn((options: { onConnect?: () => Promise<void> | void }) => {
@@ -2659,12 +3043,14 @@ describe('bootstrapMachineSyncRuntime', () => {
             isShuttingDown: () => false,
             isPublicationQuiescing: () => publicationQuiescing,
             orphanedDeadDaemonSessions: [],
+            resolveRequesterSessionRuntimeContext: vi.fn(async () => null),
             createConnectedApiMachine: vi.fn(() => connectedApiMachine),
             attachTransferRuntimeStatePublisher: vi.fn(async () => {}),
             startAutomationWorkerForMachine: vi.fn(() => null),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
-            stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
+            stopSession: stopSessionForRemoval,
             isSessionAlreadyRunning: vi.fn(async () => false),
             loadLocalSessionMetadataForHandoff: vi.fn(async () => null),
             beforeShutdown: vi.fn(async () => {}),
@@ -2678,6 +3064,9 @@ describe('bootstrapMachineSyncRuntime', () => {
         });
         const onConnect = connectOptionsRef.current?.onConnect;
         if (!onConnect) throw new Error('expected machine connect options');
+        if (!onDeletedSession) throw new Error('expected managed directory deletion subscription');
+        await onDeletedSession({ sessionId: 'deleted-session' });
+        expect(stopSessionForRemoval).toHaveBeenCalledWith('deleted-session', { intent: 'lifecycle' });
         // This obligation appears after bootstrap; reconnect must discover the
         // canonical marker rather than relying on the initial in-memory list.
         await writeSessionMarker({ pid, happySessionId: 'startup-orphan', startedBy: 'daemon', processStartTimeMs });

@@ -59,6 +59,11 @@ describe('Channels V1 public management barrel', () => {
             resultSchema: management.ConversationDeliveryResolveResultV1JsonSchema,
         });
         expect(management.CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1).toEqual({
+            connectionList: { inputSchema: management.ConversationConnectionListInputV1Schema.jsonSchema, resultSchema: management.ConversationConnectionListResultV1Schema.jsonSchema },
+            bindingList: { inputSchema: management.ConversationBindingListInputV1Schema.jsonSchema, resultSchema: management.ConversationBindingListResultV1Schema.jsonSchema },
+            ingressAttention: { inputSchema: management.ConversationIngressAttentionInputV1Schema.jsonSchema, resultSchema: management.ConversationIngressAttentionResultV1Schema.jsonSchema },
+            deliveryAttention: { inputSchema: management.ConversationDeliveryAttentionInputV1Schema.jsonSchema, resultSchema: management.ConversationDeliveryAttentionResultV1Schema.jsonSchema },
+            deliveryRead: { inputSchema: management.ConversationDeliveryReadInputV1Schema.jsonSchema, resultSchema: management.ConversationDeliveryReadResultV1Schema.jsonSchema },
             conversationStart: {
                 inputSchema: management.ConversationStartInputV1JsonSchema,
                 resultSchema: management.ConversationStartResultV1JsonSchema,
@@ -66,6 +71,7 @@ describe('Channels V1 public management barrel', () => {
             connectionCreate: management.ConversationConnectionCreateManagementActionDeclarationV1,
             connectionTransfer: management.ConversationConnectionTransferManagementActionDeclarationV1,
             connectionPrepare: management.ConversationConnectionPrepareManagementActionDeclarationV1,
+            connectionSetupRemediate: management.ConversationConnectionSetupRemediateManagementActionDeclarationV1,
             connectionRetest: management.ConversationConnectionRetestManagementActionDeclarationV1,
             connectionUpdate: management.ConversationConnectionUpdateManagementActionDeclarationV1,
             connectionDelete: management.ConversationConnectionDeleteManagementActionDeclarationV1,

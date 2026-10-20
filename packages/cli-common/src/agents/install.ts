@@ -69,6 +69,7 @@ export type InstallAgentCliResult =
         | 'command-failed'
         | 'managed-runtime-unavailable'
         | 'download-failed'
+        | 'rate-limited'
         | 'verification-failed'
         | 'termination-failed'
         | 'update-not-available';

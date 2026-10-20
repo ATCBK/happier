@@ -7,6 +7,11 @@ import { RoleInstructionsOverrideV1Schema, RoleOverrideV1Schema } from './rolesV
 const SessionRoleIdentityV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: z.string().check(z.minLength(1)), roleId: z.string().check(z.minLength(1)),
 }));
+const SessionRoleSetV1Schema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.minLength(1)),
+  roleId: z.optional(z.string().check(z.minLength(1))),
+  answersWorkerQuestions: z.optional(z.boolean()),
+}).check(z.refine((input) => input.roleId !== undefined || input.answersWorkerQuestions !== undefined)));
 const RoleIdentityV1Schema = lazyZodSchema(() => z.strictObject({ roleId: z.string().check(z.minLength(1)) }));
 const RoleArtifactRevisionV1Schema = lazyZodSchema(() => z.strictObject({
   headerVersion: z.number().check(z.int(), z.nonnegative()),
@@ -35,7 +40,7 @@ const RoleActionUpdatedV1Schema = lazyZodSchema(() => z.strictObject({ updated: 
 
 /** V1 role mutations are executable declarations; all nested object boundaries are closed. */
 export const RoleActionInputSchemasV1 = {
-  'session.role.set': SessionRoleIdentityV1Schema,
+  'session.role.set': SessionRoleSetV1Schema,
   'session.roles.override.set': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(RoleOverrideV1Schema, { sessionId: z.string().check(z.minLength(1)) }))),
   'session.roles.override.clear': SessionRoleIdentityV1Schema,
   'session.roles.add': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionRoleIdentityV1Schema, { role: RoleArtifactV1Schema }))),

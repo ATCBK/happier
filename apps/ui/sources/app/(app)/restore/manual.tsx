@@ -4,7 +4,7 @@ import { t } from '@/text';
 import { WizardModalShell } from '@/components/onboarding/ui/WizardModalShell';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 import { SecretKeyLoginForm } from '@/components/account/restore/SecretKeyLoginForm';
-import { normalizeInternalReturnPath } from '@/utils/path/routeUtils';
+import { admitInternalRouteHref, normalizeInternalReturnPath } from '@/utils/path/routeUtils';
 import { resolveHomeAuthenticationTarget } from '@/auth/flows/resolveHomeAuthenticationTarget';
 import { Text } from '@/components/ui/text/Text';
 import { useAuth } from '@/auth/context/AuthContext';
@@ -82,7 +82,7 @@ export default function Restore() {
                                 refreshAuth: auth.refreshFromActiveServer,
                             });
                             if (switched !== 'blocked') {
-                                if (completedReturnTo) router.replace(completedReturnTo);
+                                if (completedReturnTo) router.replace(admitInternalRouteHref(completedReturnTo));
                                 else router.dismissTo('/');
                             }
                         }}
@@ -92,7 +92,7 @@ export default function Restore() {
                         {t('settingsAccount.nativePassword.serverUnavailable')}
                     </Text>
                 ) : (
-                    <SecretKeyLoginForm onSuccess={completedReturnTo ? () => router.replace(completedReturnTo) : undefined} />
+                    <SecretKeyLoginForm onSuccess={completedReturnTo ? () => router.replace(admitInternalRouteHref(completedReturnTo)) : undefined} />
                 )}
             </>
         </WizardModalShell>

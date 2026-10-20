@@ -9,7 +9,7 @@ import { invokeInputTypePicker, readInputTypeOptions, type InputTypePickerHostV1
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { renderSurface } from '../../../plugin-sdk/examples/public-authoring/ui/reviewPanel.native.tsx';
+import { renderSurface } from '../../../plugin-sdk/examples/public-authoring/ui/reviewPanelPortable.tsx';
 import { publicAuthoringDefinition } from '../../../plugin-sdk/examples/public-authoring/definition.ts';
 import { repositoryInputTypes, repositoryResources, repositoryInputTypeRef } from '../../../plugin-sdk/examples/public-authoring/inputTypes.ts';
 import { externalAuthoringPlugin } from '../../fixtures/external-authoring/src/index.ts';

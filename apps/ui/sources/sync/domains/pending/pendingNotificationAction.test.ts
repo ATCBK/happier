@@ -1,17 +1,20 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
+installDisconnectedServerSocketBoundary();
 beforeAll(loadSyncSingletonForTests);
+const accountConnections: Array<Awaited<ReturnType<typeof restoreServerAccountForTest>>> = [];
+
+afterEach(async () => {
+    for (const connection of accountConnections.splice(0).reverse()) await connection.dispose();
+});
 
 async function activateServerAccount(serverUrl: string, accountId: string) {
-    const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
-    const { createServerAccountScope } = await import('@/sync/domains/scope/serverAccountScope');
-
-    const server = await upsertAndActivateServer({ serverUrl, source: 'manual', scope: 'device', replaceEquivalentStoredUrl: true });
-    const scope = createServerAccountScope(server.id, accountId);
-    expect(scope).not.toBeNull();
-    if (!scope) throw new Error('Expected Account scope');
-    await activateScope(scope);
+    const connection = await restoreServerAccountForTest({ serverUrl, accountId });
+    accountConnections.push(connection);
+    const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+    expect(getActiveServerAccountScope()).toEqual({ serverId: connection.serverId, accountId });
 }
 
 async function activateScope(scope: { serverId: string; accountId: string }) {
@@ -23,6 +26,7 @@ async function activateScope(scope: { serverId: string; accountId: string }) {
 }
 
 async function activateServerWithoutAccount(serverUrl: string) {
+    for (const connection of accountConnections.splice(0).reverse()) await connection.dispose();
     const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
     const { switchConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
     const { storage } = await import('@/sync/domains/state/storage');

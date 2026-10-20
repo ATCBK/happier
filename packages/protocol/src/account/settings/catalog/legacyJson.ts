@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '../../../strings/maxCodeUnits.js';
 import { z } from 'zod/mini';
 
 import { StrictJsonValueSchema } from '../../../json/strictJsonValue.js';
@@ -21,7 +22,7 @@ function createBoundedLegacyJsonValueSchema(depthRemaining: number): z.ZodMiniTy
     z.null(),
     z.boolean(),
     z.number(),
-    z.string().check(z.maxLength(ACCOUNT_SETTING_MAX_STRING_BYTES)),
+    z.string().check(maxCodeUnits(ACCOUNT_SETTING_MAX_STRING_BYTES)),
   ]);
   if (depthRemaining === 0) return scalar;
 
@@ -29,7 +30,7 @@ function createBoundedLegacyJsonValueSchema(depthRemaining: number): z.ZodMiniTy
   return z.union([
     scalar,
     z.array(child).check(z.maxLength(ACCOUNT_SETTING_MAX_COLLECTION_ENTRIES)),
-    z.record(z.string().check(z.maxLength(ACCOUNT_SETTING_MAX_STRING_BYTES)), child).check(z.superRefine((value, ctx) => {
+    z.record(z.string().check(maxCodeUnits(ACCOUNT_SETTING_MAX_STRING_BYTES)), child).check(z.superRefine((value, ctx) => {
         if (Object.keys(value).length > ACCOUNT_SETTING_MAX_COLLECTION_ENTRIES) {
           ctx.addIssue({
             code: "custom",

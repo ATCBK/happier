@@ -9,8 +9,12 @@ import {
   type WorkflowStepExecutionSelection,
   type WorkflowValidationIssue,
   type WorkflowValidationResult,
+  workflowInputToFieldHint,
 } from '@happier-dev/protocol/workflows/workflowV1';
 import type { JsonValue } from '@happier-dev/protocol';
+import type { ActionSessionAddressV1 } from '@happier-dev/protocol/actions/sessionTargetV1';
+import { resolveWorkflowContextInputDefaultsV1 } from '@happier-dev/protocol/workflows';
+import { validateInputFieldSchema } from '@happier-dev/protocol/inputs/runtime';
 import type { WorkflowReferenceScope } from '@happier-dev/protocol/workflows/workflowReferenceV1';
 import { workflowBlockReferenceLabel } from './workflowBlockLabel';
 export { bindWorkflowSessionConversation, resolveWorkflowSessionBinding } from './workflowAuthoringSessionBinding';
@@ -411,25 +415,34 @@ export function projectWorkflowRunInputFields(params: Readonly<{
   values: Readonly<Record<string, JsonValue | undefined>>;
   /** Uncommitted text buffers; seeded values above are already semantic JSON. */
   rawTextValues?: Readonly<Record<string, string>>;
+  /** Host context supplies only defaults; an explicitly chosen input always wins. */
+  originSession?: ActionSessionAddressV1;
+  /** A Session-creation trigger binds this context only after the Session is born. */
+  deferOriginSessionDefault?: boolean;
 }>): readonly WorkflowRunInputFieldState[] {
+  const values = resolveWorkflowContextInputDefaultsV1({ inputs: [...params.inputs] },
+    Object.fromEntries(Object.entries(params.values).filter((entry): entry is [string, JsonValue] => entry[1] !== undefined)),
+    params.originSession);
   return params.inputs.map((definition) => {
     const rawText = params.rawTextValues?.[definition.name];
     const draft = rawText === undefined ? null : parseWorkflowInputTextDraft(definition, rawText);
     if (draft?.invalid) return { definition, value: undefined, blocking: true, errorCode: 'invalid_input' };
-    const supplied = draft === null ? params.values[definition.name] : draft.value;
+    const supplied = draft === null ? values[definition.name] : draft.value;
     const value = supplied === undefined ? definition.default : supplied;
     if (value === undefined) {
       return {
         definition,
         value,
-        blocking: definition.required,
+        blocking: definition.required && !(params.deferOriginSessionDefault && definition.defaultFrom === 'origin_session'),
         errorCode: definition.required ? 'missing_required_input' : null,
       };
     }
-    const matches = definition.valueType === 'json'
+    const matchesValueType = definition.valueType === 'json'
       || (definition.valueType === 'string' && typeof value === 'string')
       || (definition.valueType === 'number' && typeof value === 'number')
       || (definition.valueType === 'boolean' && typeof value === 'boolean');
+    const matches = matchesValueType && (!definition.inputType || !('hostType' in definition.inputType)
+      || validateInputFieldSchema({ field: workflowInputToFieldHint(definition), value }).status === 'valid');
     return {
       definition,
       value,

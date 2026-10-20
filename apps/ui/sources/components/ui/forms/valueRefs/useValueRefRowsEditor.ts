@@ -93,7 +93,8 @@ export function useValueRefEditorDraft(options: Readonly<{
     const setDraftLiteralValue = React.useCallback((literalValue: string) => {
         setDraft((current) => current && current.literalValue !== literalValue ? { ...current, literalValue } : current);
     }, []);
-    const setDraftSecretId = React.useCallback((secretId: string) => {
+    const setDraftSecretId = React.useCallback((selection: string | null) => {
+        const secretId = selection ?? '';
         setDraft((current) => current && current.secretId !== secretId ? { ...current, secretId } : current);
     }, []);
     const setDraftMachineVariable = React.useCallback((machineVariable: string) => {

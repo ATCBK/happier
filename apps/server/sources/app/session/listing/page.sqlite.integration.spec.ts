@@ -29,11 +29,13 @@ import {
     decodeV2SessionListCursorV2,
     encodeV2SessionListCursorV1,
     SessionListQueryResponseV1Schema,
+    ARTIFACT_PLAIN_DATA_KEY_MARKER,
 } from "@happier-dev/protocol";
+import { decodeBase64 } from "privacy-kit";
 import { createV2SessionAttentionPage, createV2SessionListInitialPage } from "./initialPage";
 import { readSessionMetadataOwnerAccountModes } from "@/app/session/metadata/sessionMetadataRecipientProjection";
 import { computeAccountActivityBadgeCounts } from "@/app/activity/accountActivityBadge";
-import { loadSessionDiscussionAttentionForAccounts } from "@/app/session/discussions/attentionFacts";
+import { loadDiscussionAttentionForAccounts } from "@/app/discussions/attentionFacts";
 import { listSessionsForAccount, readSessionListOwnerAccountModes } from "./service";
 import {
     conjoinSessionListWhereInputs,
@@ -41,6 +43,9 @@ import {
     createSessionViewerTagWhere,
 } from "./query";
 import { createV2SessionListServerTiming } from "./timing";
+import tweetnacl from "tweetnacl";
+import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
+import * as accountCurrentness from "@/app/encryption/accountContentKeyAdmission";
 
 const authentication = createPresentUserSessionAccessAuthentication();
 
@@ -58,6 +63,89 @@ describe("Session listing predicate composition (SQLite)", () => {
 
     it("filters exact folder ANY and tag ANY together before stable cursor paging", async () => {
         await verifyFolderSessionListing();
+    });
+
+    it("verifies one recipient Account binding per listing snapshot and verifies again on the next read", async () => {
+        const binding = createSignedAccountContentBinding(tweetnacl.box.keyPair().publicKey);
+        const owner = await db.account.create({ data: {
+            publicKey: binding.publicKey, encryptionMode: "e2ee",
+            contentPublicKey: Buffer.from(binding.contentPublicKey),
+            contentPublicKeySig: Buffer.from(binding.contentPublicKeySig),
+        } });
+        const { sealEncryptedDataKeyEnvelopeV1 } = await import("@happier-dev/protocol");
+        const envelope = sealEncryptedDataKeyEnvelopeV1({ dataKey: tweetnacl.randomBytes(32),
+            recipientPublicKey: binding.contentPublicKey, randomBytes: tweetnacl.randomBytes });
+        for (let index = 0; index < 3; index += 1) {
+            await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: "{}",
+                encryptionMode: "e2ee", dataKeyEnvelopes: { create: {
+                    recipientAccountId: owner.id, encryptedDataKey: Buffer.from(envelope),
+                } } } });
+        }
+        const rows = await findV2SessionListRows({ userId: owner.id, authentication,
+            orderBy: V2_SESSION_LIST_ORDER_BY });
+        // Transparent counter of the profiled signature-verifying owner; all
+        // currentness, readiness and projection logic still executes.
+        const verify = vi.spyOn(accountCurrentness, "deriveAccountEncryptionCurrentnessFromRow");
+        try {
+            const mapped = mapV2SessionListRows({ rows, userId: owner.id });
+            expect(mapped.sessions).toHaveLength(3);
+            expect(verify).toHaveBeenCalledTimes(1);
+            mapV2SessionListRows({ rows, userId: owner.id });
+            expect(verify).toHaveBeenCalledTimes(2);
+            const invalidRows = rows.map(row => ({ ...row, dataKeyEnvelopes: row.dataKeyEnvelopes.map(value => ({
+                ...value, recipientAccount: { ...value.recipientAccount, contentPublicKeySig: Buffer.alloc(64) },
+            })) }));
+            const invalid = mapV2SessionListRows({ rows: invalidRows, userId: owner.id });
+            expect(invalid.sessions).toHaveLength(3);
+            expect(verify).toHaveBeenCalledTimes(3);
+        } finally { verify.mockRestore(); }
+    });
+
+    it("keeps page reads and Account derivations independent of the number of own Sessions", async () => {
+        const binding = createSignedAccountContentBinding(tweetnacl.box.keyPair().publicKey);
+        const owner = await db.account.create({ data: {
+            publicKey: binding.publicKey, encryptionMode: "e2ee",
+            contentPublicKey: Buffer.from(binding.contentPublicKey),
+            contentPublicKeySig: Buffer.from(binding.contentPublicKeySig),
+        } });
+        const { sealEncryptedDataKeyEnvelopeV1 } = await import("@happier-dev/protocol");
+        const envelope = sealEncryptedDataKeyEnvelopeV1({ dataKey: tweetnacl.randomBytes(32),
+            recipientPublicKey: binding.contentPublicKey, randomBytes: tweetnacl.randomBytes });
+        for (let index = 0; index < 6; index += 1) {
+            await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: "{}",
+                encryptionMode: "e2ee", dataKeyEnvelopes: { create: {
+                    recipientAccountId: owner.id, encryptedDataKey: Buffer.from(envelope),
+                } } } });
+        }
+        const measure = async (limit: number) => {
+            const requests: string[] = [];
+            let projectionReads = 0;
+            const stop = observeSqliteRequests({ before: request => {
+                if (request.model) requests.push(`${request.model}.${request.action}`);
+                const args = request.args as { select?: { metadata?: boolean } } | undefined;
+                if (request.model === "Session" && request.action === "findMany" && args?.select?.metadata) {
+                    projectionReads += 1;
+                }
+            } });
+            const verify = vi.spyOn(accountCurrentness, "deriveAccountEncryptionCurrentnessFromRow");
+            try {
+                const timing = createV2SessionListServerTiming({ headers: { "x-happier-session-list-timing": "1" } });
+                const page = await listSessionsForAccount({ userId: owner.id, authentication,
+                    source: { kind: "legacy", storage: "active", limit }, rowRepresentabilityWhere: {},
+                    timing });
+                expect(page?.sessions).toHaveLength(limit);
+                expect(projectionReads).toBe(1);
+                let serverTiming = "";
+                timing.apply({ header: (_name, value) => { serverTiming = value; } });
+                expect(serverTiming).toMatch(/happier_v2_sessions_snapshot;dur=[0-9.]+/);
+                expect(serverTiming).toMatch(/happier_v2_sessions_readmission;dur=[0-9.]+/);
+                console.info("r194 page census", JSON.stringify({ limit, requests, derivations: verify.mock.calls.length, serverTiming }));
+                return { requests, derivations: verify.mock.calls.length };
+            } finally { stop(); verify.mockRestore(); }
+        };
+        const single = await measure(1);
+        const five = await measure(5);
+        expect(five).toEqual(single);
     });
 
     async function fixture() {
@@ -155,7 +243,7 @@ describe("Session listing predicate composition (SQLite)", () => {
                     mode: "effective_access_v1",
                     authentication: { env: process.env, authority: "present_user", authenticationEvidence: undefined },
                 }),
-                createSessionListScopeWhere({ accountId: viewer.id, scope: "following" }),
+                await createSessionListScopeWhere({ tx, accountId: viewer.id, scope: "following" }),
             ] } },
             orderBy: V2_SESSION_LIST_ORDER_BY, take: 1,
         }));
@@ -352,8 +440,8 @@ describe("Session listing predicate composition (SQLite)", () => {
             "accountSessionReadState",
             "session",
             "sessionAttentionStanding",
-            "sessionDiscussion",
-            "sessionDiscussionMessage",
+            "discussion",
+            "discussionMessage",
             "sessionGroupGrant",
             "sessionMessage",
             "sessionPin",
@@ -406,7 +494,7 @@ describe("Session listing predicate composition (SQLite)", () => {
             expect([...transactionReads]).toEqual(expect.arrayContaining([
                 "account.findUnique",
                 "session.findMany",
-                "sessionDiscussion.findMany",
+                "discussion.findMany",
                 "sessionShare.findMany",
                 "teamMembership.findMany",
             ]));
@@ -774,30 +862,33 @@ describe("Session listing predicate composition (SQLite)", () => {
             sessionId: shared.id, accountId: viewer.id, lastViewedSessionSeq: 0,
         } });
 
-        const conversation = async (sessionId: string) => await db.sessionDiscussion.create({ data: {
-            sessionId, creationLocalId: randomUUID(), creationEqualityEvidenceV1: { kind: "plainDigest", digest: "d" },
+        const conversation = async (sessionId: string) => await db.discussion.create({ data: {
+            ownerAccountId: owner.id, encryptionMode: "plain", dataEncryptionKey: decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER),
+            anchorSessionId: sessionId, anchorV1: { kind: "session", sessionId },
+            creationLocalId: randomUUID(), creationEqualityEvidenceV1: { kind: "plainDigest", digest: "d" },
             createdByAccountId: owner.id, titleContent: { t: "plain", v: { v: 1, title: "Rollout" } },
+            accountGrants: { create: { accountId: viewer.id, createdByAccountId: owner.id, accessLevel: "view" } },
             messageSeq: 1, lastMessageAt: new Date(4_000),
         } });
-        const post = async (discussion: { id: string; sessionId: string }) => {
-            const message = await db.sessionDiscussionMessage.create({ data: {
-                sessionId: discussion.sessionId, discussionId: discussion.id, localId: randomUUID(),
+        const post = async (discussion: { id: string }) => {
+            const message = await db.discussionMessage.create({ data: {
+                discussionId: discussion.id, localId: randomUUID(),
                 requestEqualityEvidenceV1: { kind: "plainDigest", digest: "d" }, seq: 1,
                 authorAccountId: owner.id,
                 content: { t: "plain", v: { v: 1, parts: [{ t: "text", text: "look" }] } },
             } });
-            await db.sessionDiscussionMessageMention.create({ data: { messageId: message.id, accountId: viewer.id } });
+            await db.discussionMessageMention.create({ data: { messageId: message.id, accountId: viewer.id } });
         };
 
         const tracked = await conversation(shared.id);
         await post(tracked);
-        await db.sessionDiscussionReadState.create({ data: {
+        await db.discussionReadState.create({ data: {
             discussionId: tracked.id, accountId: viewer.id, lastReadSeq: 0,
         } });
         // Same unread shape on a Session the viewer only browses.
         const browsed = await conversation(foreign.id);
         await post(browsed);
-        await db.sessionDiscussionReadState.create({ data: {
+        await db.discussionReadState.create({ data: {
             discussionId: browsed.id, accountId: viewer.id, lastReadSeq: 0,
         } });
 
@@ -818,10 +909,10 @@ describe("Session listing predicate composition (SQLite)", () => {
         expect((await createV2SessionAttentionPage({ authentication,  userId: viewer.id, where, candidateLimit: 50 })).rows).toEqual([]);
         expect((await computeAccountActivityBadgeCounts([viewer.id])).get(viewer.id)).toBe(0);
         expect(await loadSessionViewerProjection({ authentication,  accountId: viewer.id, sessionId: shared.id })).toBeNull();
-        expect((await loadSessionDiscussionAttentionForAccounts({
+        expect((await loadDiscussionAttentionForAccounts({
             accountIds: [viewer.id], sessionIds: [shared.id],
-        })).get(viewer.id)).toBeUndefined();
-        expect(await db.sessionDiscussionReadState.count({
+        })).get(viewer.id)?.get(shared.id)).toMatchObject({ unreadConversationCount: 1 });
+        expect(await db.discussionReadState.count({
             where: { accountId: viewer.id, discussionId: tracked.id },
         })).toBe(1);
         await db.sessionShare.create({ data: {
@@ -831,7 +922,7 @@ describe("Session listing predicate composition (SQLite)", () => {
 
         // Archiving the conversation removes the pressure without touching the
         // cursor, and the badge agrees with the list in the same breath.
-        await db.sessionDiscussion.update({ where: { id: tracked.id }, data: { archivedAt: new Date() } });
+        await db.discussion.update({ where: { id: tracked.id }, data: { archivedAt: new Date() } });
         expect((await createV2SessionAttentionPage({ authentication,  userId: viewer.id, where, candidateLimit: 50 })).rows).toEqual([]);
         expect((await computeAccountActivityBadgeCounts([viewer.id])).get(viewer.id)).toBe(0);
     });
@@ -982,7 +1073,7 @@ describe("Session listing predicate composition (SQLite)", () => {
         // Two 200-row candidate/admission batches each read discussion
         // candidacy once. Final projection consumes those exact observed facts
         // instead of issuing a third, duplicate read for the admitted row.
-        expect(counts.get("sessionDiscussion.findMany")).toBe(2);
+        expect(counts.get("discussion.findMany")).toBe(2);
     });
 
     it("projects 50- and 200-row viewer pages without per-row relation queries or transcript reads", async () => {
@@ -1074,7 +1165,7 @@ describe("Session listing predicate composition (SQLite)", () => {
         // canonical row/refill batches, but must not turn bounded projection
         // reads into one query per Session (or even one per distinct owner).
         expect(twoHundred.counts.get("account.findMany") ?? 0).toBeLessThan(owners.length);
-        expect(twoHundred.counts.get("sessionDiscussionMessage.findMany") ?? 0).toBeLessThan(owners.length);
+        expect(twoHundred.counts.get("discussionMessage.findMany") ?? 0).toBeLessThan(owners.length);
         expect(twoHundred.counts.get("sessionShare.findMany")).toBe(1);
         expect(twoHundred.counts.get("sessionTeamGrant.findMany")).toBe(1);
         expect(twoHundred.counts.get("sessionGroupGrant.findMany")).toBe(1);

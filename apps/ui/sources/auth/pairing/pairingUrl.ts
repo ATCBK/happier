@@ -151,7 +151,7 @@ export function consumeHomeQrInviteRestoreHandoff(handle: string): string | null
 export function buildHomeQrInviteRestoreRoutePath(
     rawLink: string,
     entryIntent: HomeQrEntryIntent,
-): string | null {
+): `/restore?${string}` | null {
     const link = String(rawLink ?? '').trim();
     if (!parseHomeQrInviteDeepLink(link)) return null;
     const handle = `home-qr-${randomUUID()}`;

@@ -636,7 +636,7 @@ async function enqueuePending(
         if (!isSubmitAccountLifetimeCurrent(opts)) return accountScopeRetiredResult('send_failed', 'pending', localId);
         const wakeResult = await port.ensureSessionRuntimeForPendingInput({
             ...resumeOptions,
-            ...(currentSession ? { pendingActivationAuthorization: currentSession.pendingActivationAuthorization } : {}),
+            ...(currentSession ? { pendingActivationAuthorization: currentSession.pendingActivationAuthorization ?? undefined } : {}),
         });
         if (!isSubmitAccountLifetimeCurrent(opts)) return accountScopeRetiredResult('send_failed', 'pending', localId);
         if (wakeResult.type === 'pending') {

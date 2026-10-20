@@ -26,6 +26,7 @@ import { resolveAgentCliCommand } from '@/packagedRuntime/managedTools/agentCliR
 import { buildAgentCliLaunchSpecFromResolution } from '@/packagedRuntime/managedTools/agentCliLaunchSpec';
 import { getRuntimeInstallableAdapter } from '@/packagedRuntime/installables/registry';
 import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
+import type { ProcessEnvInput } from '@/utils/processEnv/buildScopedProcessEnv';
 
 export type DaemonResolvedToolV1 = AgentDaemonResolvedToolV1;
 export type DaemonRunToolResultV1 = AgentDaemonRunToolResultV1;
@@ -37,7 +38,7 @@ export type DaemonSpawnHooks = AgentDaemonSpawnHooks;
 
 async function resolveCommandOnPath(
   command: string,
-  env: NodeJS.ProcessEnv,
+  env: ProcessEnvInput,
 ): Promise<string | null> {
   const trimmedCommand = command.trim();
   if (!trimmedCommand) return null;
@@ -79,7 +80,7 @@ function toDaemonToolSource(source: 'override' | 'system' | 'managed'): Extract<
 
 function resolveProviderCliTool(input: Readonly<{
   toolId: string;
-  processEnv: NodeJS.ProcessEnv;
+  processEnv: ProcessEnvInput;
 }>): Extract<DaemonResolvedToolV1, { ok: true }> | null {
   // `resolveAgentCliCommand` reads the generated bundled CLI runtime table.
   if (!isBundledAgentId(input.toolId)) return null;
@@ -138,7 +139,7 @@ async function terminatePreflightProcess(
 }
 
 export function createDaemonSpawnToolResolutionContext(params: Readonly<{
-  processEnv: NodeJS.ProcessEnv;
+  processEnv: ProcessEnvInput;
   signal?: AbortSignal;
   installablesRegistry?: InstallablesRegistrySource;
   logInfo?: (message: string) => void;

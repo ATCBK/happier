@@ -4,13 +4,29 @@ import type {
 } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import type { PromptArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
 import { listArtifactHeadersV1 } from '@happier-dev/protocol/artifacts/artifactListSelectionV1';
+import { deriveArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import type { WorkflowDefinitionArtifactOperations } from '@happier-dev/protocol/actions';
 import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { withActionAccountRequestSignal } from '@/sync/ops/actions/actionAccountContext';
+import { awaitPendingArtifactInventory } from '@/sync/engine/artifacts/syncArtifacts';
+import { encodeArtifactListCursor } from '@/sync/api/artifacts/apiArtifacts';
 import type { ArtifactFolderActionPortV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionsV1';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { throwIfAborted } from '@/utils/runtime/abortSignals';
 import { randomUUID } from '@/platform/randomUUID';
+import { readRegisteredStorageState } from '@/sync/domains/state/storageStateReaderBridge';
+import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+
+function readCompleteAccountArtifactInventory(scope: ServerAccountScope) {
+  const state = readRegisteredStorageState();
+  if (!state?.artifactsLoaded
+    || !areServerAccountScopesEqual(getActiveServerAccountScope(), scope)
+    || !areServerAccountScopesEqual(state.settingsScope, scope)) return null;
+  const rows = Object.values(state.artifacts);
+  // Loaded membership can still contain a refused header observation.
+  return rows.every(artifact => artifact.isDecrypted && artifact.rawHeader && artifact.access !== undefined) ? rows : null;
+}
 
 /** Keep reads and the writes they derive in one exact Home/Account lifetime. */
 export async function withUiPromptLibraryArtifactStore<T>(
@@ -148,6 +164,11 @@ export function createUiPromptLibraryArtifactStore(
   artifacts: WorkflowDefinitionArtifactOperations,
   account?: LazyActionAccountContext,
 ): PromptLibraryArtifactStore {
+  const storedArtifact = (artifact: Awaited<ReturnType<WorkflowDefinitionArtifactOperations['read']>>): PromptLibraryStoredArtifact | null => artifact ? {
+    id: artifact.artifactId, revision: artifact.revision, header: artifact.header,
+    body: typeof artifact.body === 'string' ? artifact.body : null,
+    owned: artifact.access === 'owner', access: artifact.access,
+  } : null;
   const organization: ArtifactFolderActionPortV1 | undefined = account ? {
     serverId: account.serverId,
     matchesServerId: serverId => areServerProfileIdentifiersEquivalent(serverId, account.serverId),
@@ -196,19 +217,17 @@ export function createUiPromptLibraryArtifactStore(
   } : undefined;
   return {
     ...(organization ? { organization } : {}),
+    ...(account ? { readMany: async (ids: readonly string[], options?: Readonly<{ signal?: AbortSignal }>) => {
+      throwIfAborted(options?.signal);
+      const results = await account.readArtifactContents(ids, options);
+      account.assertCurrent(); throwIfAborted(options?.signal);
+      return results.map(result => result.status === 'rejected' ? result
+        : { status: 'fulfilled' as const, value: storedArtifact(result.value) });
+    } } : {}),
     read: async (id, options) => {
       throwIfAborted(options?.signal);
       const artifact = await (account ? account.readArtifactContent(id, options) : artifacts.read(id, options));
-      return artifact
-        ? {
-            id: artifact.artifactId,
-            revision: artifact.revision,
-            header: artifact.header,
-            body: typeof artifact.body === 'string' ? artifact.body : null,
-            owned: artifact.access === 'owner',
-            access: artifact.access,
-          }
-        : null;
+      return storedArtifact(artifact);
     },
     create: async (input) => {
       throwIfAborted(input.signal);
@@ -236,7 +255,45 @@ export function createUiPromptLibraryArtifactStore(
     },
     list: async (options) => {
       throwIfAborted(options?.signal);
-      const page = await artifacts.list({ ...options, includeBody: false });
+      account?.assertCurrent();
+      const scope = account?.accountLifetime.scope;
+      // A selective read must not wait for an unrelated full inventory scan.
+      const filtered = options?.coarseKind !== undefined && account !== undefined;
+      let rows = scope ? readCompleteAccountArtifactInventory(scope) : null;
+      if (!filtered && !rows && account && scope
+        && areServerAccountScopesEqual(getActiveServerAccountScope(), scope)
+        && areServerAccountScopesEqual(readRegisteredStorageState()?.settingsScope, scope)) {
+        await withActionAccountRequestSignal(account, options?.signal, async signal => {
+          await awaitPendingArtifactInventory({ scope, credentials: account.credentials, signal });
+        });
+        account.assertCurrent();
+        throwIfAborted(options?.signal);
+        rows = readCompleteAccountArtifactInventory(scope);
+      }
+      if (account && rows) {
+        // Select pages with the existing header selector/cursor owner. An empty
+        // search requests local selection over this already complete inventory.
+        const page = await listArtifactHeadersV1({
+          options: { ...options, search: '' },
+          readPage: async pageOptions => ({
+            items: rows.map(artifact => ({ artifactId: artifact.id,
+              header: artifact.isDecrypted ? artifact.rawHeader ?? {} : {},
+              createdAt: artifact.createdAt, updatedAt: artifact.updatedAt, access: artifact.access }))
+              .filter(item => !pageOptions?.coarseKind || deriveArtifactCoarseKindV1(item.header) === pageOptions.coarseKind),
+            coverage: 'complete',
+          }),
+          encodeCursor: item => account.encodeArtifactListCursor(item),
+        });
+        account.assertCurrent();
+        return { items: page.items.map(item => ({ id: item.artifactId, header: item.header,
+          updatedAtMs: item.updatedAt, owned: item.access === 'owner' })), coverage: page.coverage,
+          ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) };
+      }
+      const page = account ? await listArtifactHeadersV1({
+        options: { ...options, includeBody: false },
+        readPage: pageOptions => account.listArtifacts(pageOptions ?? {}),
+        encodeCursor: encodeArtifactListCursor,
+      }) : await artifacts.list({ ...options, includeBody: false });
       return {
         items: page.items.map((item) => ({
           id: item.artifactId,

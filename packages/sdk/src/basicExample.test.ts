@@ -4,6 +4,8 @@ import { createServer, type IncomingMessage } from 'node:http';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+import { DiscussionMessageV1Schema } from '@happier-dev/protocol/discussions/models';
+import { createDiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 
 const basicExamplePath = fileURLToPath(new URL('../examples/basic/index.ts', import.meta.url));
 const comprehensiveExamplePath = fileURLToPath(new URL('../examples/comprehensive/index.ts', import.meta.url));
@@ -174,7 +176,14 @@ function successfulActionResponse(actionId: string): Readonly<Record<string, unk
     return { v: 1, actionId, execution: { ok: true, result: MESSAGE_SEND_RESULT } };
   }
 
-  if (actionId === 'session.discussion.post') {
+  if (actionId === 'discussion.post') {
+    const content = { v: 1, parts: [{ t: 'text', text: 'Starting a contextual run for this discussion.' }] } as const;
+    const committed = DiscussionMessageV1Schema.parse({
+      id: 'discussion-message-1', discussionId: 'discussion-1',
+      localId: 'external-plugin-thread-1-followup', seq: 1,
+      authorAccountId: null, accountActor: null, producerV1: null,
+      content: { t: 'plain', v: content }, mentionedAccountIds: [], createdAt: 1,
+    });
     return {
       v: 1,
       actionId,
@@ -183,19 +192,11 @@ function successfulActionResponse(actionId: string): Readonly<Record<string, unk
         result: {
           v: 1,
           serverId: 'server-1',
-          sessionId: 'session-1',
           messageSeq: 1,
           message: {
-            id: 'discussion-message-1',
-            discussionId: 'discussion-1',
-            localId: 'external-plugin-thread-1-followup',
-            seq: 1,
-            authorAccountId: null,
-            accountActor: null,
-            producerV1: null,
-            content: { v: 1, parts: [{ t: 'text', text: 'Starting a contextual run for this discussion.' }] },
-            mentionedAccountIds: [],
-            createdAt: 1,
+            ...committed,
+            content,
+            messageRef: createDiscussionMessageRefV1({ serverId: 'server-1', discussionId: 'discussion-1' }, committed),
           },
         },
       },
@@ -512,7 +513,7 @@ describe('external integration SDK example', () => {
     expect(result.stderr).toBe('');
     expect(result.stdout).not.toContain(sensitivePayload);
     expect(result.actionIds).toEqual([
-      'session.discussion.post',
+      'discussion.post',
       'execution.run.start',
       'session.message.send',
       'session.message.send',

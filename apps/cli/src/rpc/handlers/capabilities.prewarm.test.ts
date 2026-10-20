@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { CapabilitiesDescribeResponse } from '@happier-dev/protocol';
+import { buildMachineAgentsDetectRequest, MachinesAgentsListOutputSchema, projectMachineAgentsDetectResponse } from '@happier-dev/protocol/capabilities';
 import { CHECKLIST_IDS } from '@happier-dev/protocol/checklists';
 import type { CapabilitiesDetectResponse } from '@/capabilities/types';
 
@@ -80,6 +81,14 @@ describe('registerCapabilitiesHandlers prewarm', () => {
                 ? { ok: true, data: focusedResult.data }
                 : { ok: false, error: focusedResult.error },
         );
+        const agents = [{ agentId: firstAgent.id, title: 'Capability fixture' }];
+        // The composer uses the same request producer and strict inventory consumer.
+        // Exercise both through the registered encrypted RPC, not copied probe facts.
+        const request = buildMachineAgentsDetectRequest({ agents, includeLatestVersion: false });
+        const response = await call<CapabilitiesDetectResponse, typeof request>(RPC_METHODS.CAPABILITIES_DETECT, request);
+        const inventory = MachinesAgentsListOutputSchema.parse(projectMachineAgentsDetectResponse({ agents, response }));
+        expect(inventory.items).toMatchObject([{ agentId: firstAgent.id, installed: false }]);
+        expect(inventory.unavailable).toBeUndefined();
 
         // Source admission alone does not replace this daemon's published runtime.
         const successor = await createAuthoredAdmittedPluginRuntimeFixture({

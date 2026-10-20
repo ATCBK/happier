@@ -43,6 +43,7 @@ export type SkillsPageTranslation = Readonly<{
     removedFromSource: string;
     maskedOn: (params: Readonly<{ machine: string }>) => string;
     unreadable: string;
+    unnamed: string;
     writeOwn: string;
     review: string;
     decide: string;
@@ -104,6 +105,7 @@ const en: SkillsPageTranslation = {
     removedFromSource: 'Its source no longer has it. Keep your copy, or remove it.',
     maskedOn: ({ machine }) => `${machine}'s own copy wins there.`,
     unreadable: "Couldn't read this skill.",
+    unnamed: 'Unnamed skill',
     writeOwn: 'Write your own',
     review: 'Review',
     decide: 'Choose',
@@ -114,7 +116,7 @@ const en: SkillsPageTranslation = {
     firstPurpose:
       'A skill is a folder of instructions, sometimes with scripts, that an agent picks up when a task needs it. Yours now follow you to every machine.',
     firstSentence: ({ on, off }) =>
-      `${on} ${on === 1 ? 'skill is' : 'skills are'} on where you already used ${on === 1 ? 'it' : 'them'}. ${off} wait under your Home until you choose.`,
+      `${on > 0 ? `${on} ${on === 1 ? 'skill is' : 'skills are'} on where you already used ${on === 1 ? 'it' : 'them'}. ` : ''}${off} wait under your Home until you choose.`,
     choose: 'Choose what’s on',
     chooseOff: ({ count }) => `${count} off`,
     nothingElse: 'Nothing else changes until you choose.',
@@ -170,6 +172,7 @@ const de: SkillsPageTranslation = {
     removedFromSource: 'Die Quelle hat ihn nicht mehr. Behalte deine Kopie oder entferne ihn.',
     maskedOn: ({ machine }) => `Dort gewinnt die eigene Kopie von ${machine}.`,
     unreadable: 'Dieser Skill konnte nicht gelesen werden.',
+    unnamed: 'Unbenannter Skill',
     writeOwn: 'Selbst schreiben',
     review: 'Ansehen',
     decide: 'Entscheiden',
@@ -180,7 +183,7 @@ const de: SkillsPageTranslation = {
     firstPurpose:
       'Ein Skill ist ein Ordner mit Anweisungen, manchmal mit Skripten, den ein Agent nutzt, wenn eine Aufgabe ihn braucht. Deine folgen dir jetzt auf jede Maschine.',
     firstSentence: ({ on, off }) =>
-      `${on} ${on === 1 ? 'Skill ist' : 'Skills sind'} dort an, wo du ${on === 1 ? 'ihn' : 'sie'} schon genutzt hast. ${off} warten unter deinem Home, bis du wählst.`,
+      `${on > 0 ? `${on} ${on === 1 ? 'Skill ist' : 'Skills sind'} dort an, wo du ${on === 1 ? 'ihn' : 'sie'} schon genutzt hast. ` : ''}${off} warten unter deinem Home, bis du wählst.`,
     choose: 'Auswählen, was an ist',
     chooseOff: ({ count }) => `${count} aus`,
     nothingElse: 'Sonst ändert sich nichts, bis du wählst.',
@@ -236,6 +239,7 @@ const fr: SkillsPageTranslation = {
     removedFromSource: 'Sa source ne l’a plus. Gardez votre copie, ou retirez-le.',
     maskedOn: ({ machine }) => `La copie de ${machine} l’emporte là-bas.`,
     unreadable: 'Impossible de lire cette compétence.',
+    unnamed: 'Compétence sans nom',
     writeOwn: 'Écrire la vôtre',
     review: 'Examiner',
     decide: 'Choisir',
@@ -246,7 +250,7 @@ const fr: SkillsPageTranslation = {
     firstPurpose:
       'Un skill est un dossier d’instructions, parfois avec des scripts, qu’un agent utilise quand une tâche en a besoin. Les vôtres vous suivent maintenant sur chaque machine.',
     firstSentence: ({ on, off }) =>
-      `${on} ${on === 1 ? 'skill est activé' : 'skills sont activés'} là où vous les utilisiez déjà. ${off} attendent sous votre Home jusqu’à votre choix.`,
+      `${on > 0 ? `${on} ${on === 1 ? 'skill est activé' : 'skills sont activés'} là où vous les utilisiez déjà. ` : ''}${off} attendent sous votre Home jusqu’à votre choix.`,
     choose: 'Choisir ce qui est activé',
     chooseOff: ({ count }) => `${count} désactivés`,
     nothingElse: 'Rien d’autre ne change avant votre choix.',
@@ -302,6 +306,7 @@ const es: SkillsPageTranslation = {
     removedFromSource: 'Su origen ya no la tiene. Conserva tu copia o quítala.',
     maskedOn: ({ machine }) => `Allí gana la copia propia de ${machine}.`,
     unreadable: 'No se pudo leer esta habilidad.',
+    unnamed: 'Habilidad sin nombre',
     writeOwn: 'Escribir la tuya',
     review: 'Revisar',
     decide: 'Elegir',
@@ -312,7 +317,7 @@ const es: SkillsPageTranslation = {
     firstPurpose:
       'Una habilidad es una carpeta de instrucciones, a veces con scripts, que un agente usa cuando una tarea la necesita. Las tuyas ahora te siguen a todas tus máquinas.',
     firstSentence: ({ on, off }) =>
-      `${on} ${on === 1 ? 'habilidad está activada' : 'habilidades están activadas'} donde ya las usabas. ${off} esperan bajo tu Home hasta que elijas.`,
+      `${on > 0 ? `${on} ${on === 1 ? 'habilidad está activada' : 'habilidades están activadas'} donde ya las usabas. ` : ''}${off} esperan bajo tu Home hasta que elijas.`,
     choose: 'Elegir qué está activado',
     chooseOff: ({ count }) => `${count} desactivadas`,
     nothingElse: 'Nada más cambia hasta que elijas.',
@@ -371,6 +376,7 @@ const ca: SkillsPageTranslation = {
     removedFromSource: 'El seu origen ja no la té. Conserva la teva còpia o treu-la.',
     maskedOn: ({ machine }) => `Allà guanya la còpia pròpia de ${machine}.`,
     unreadable: 'No s’ha pogut llegir aquesta habilitat.',
+    unnamed: 'Habilitat sense nom',
     writeOwn: 'Escriu-ne una',
     review: 'Revisa',
     decide: 'Tria',
@@ -381,7 +387,7 @@ const ca: SkillsPageTranslation = {
     firstPurpose: 
       'Una habilitat és una carpeta d’instruccions, de vegades amb scripts, que un agent fa servir quan una tasca la necessita. Ara les teves et segueixen a totes les màquines.',
     firstSentence: ({ on, off }) =>
-      `${on} ${on === 1 ? 'habilitat està activada' : 'habilitats estan activades'} on ja les feies servir. ${off} esperen a la teva Home fins que triïs.`,
+      `${on > 0 ? `${on} ${on === 1 ? 'habilitat està activada' : 'habilitats estan activades'} on ja les feies servir. ` : ''}${off} esperen a la teva Home fins que triïs.`,
     choose: 'Tria què està activat',
     chooseOff: ({ count }) => `${count} desactivades`,
     nothingElse: 'Res més canvia fins que triïs.',
@@ -436,6 +442,7 @@ const it: SkillsPageTranslation = {
     removedFromSource: 'La sua fonte non la contiene più. Tieni la tua copia o rimuovila.',
     maskedOn: ({ machine }) => `Lì vince la copia di ${machine}.`,
     unreadable: 'Impossibile leggere questa skill.',
+    unnamed: 'Skill senza nome',
     writeOwn: 'Scrivine una',
     review: 'Rivedi',
     decide: 'Scegli',
@@ -446,7 +453,7 @@ const it: SkillsPageTranslation = {
     firstPurpose:
       'Una skill è una cartella di istruzioni, a volte con script, che un agente usa quando un compito ne ha bisogno. Le tue ora ti seguono su ogni macchina.',
     firstSentence: ({ on, off }) =>
-      `${on} skill ${on === 1 ? 'è attiva' : 'sono attive'} dove le usavi già. ${off} aspettano sotto la tua Home finché non scegli.`,
+      `${on > 0 ? `${on} skill ${on === 1 ? 'è attiva' : 'sono attive'} dove le usavi già. ` : ''}${off} aspettano sotto la tua Home finché non scegli.`,
     choose: 'Scegli cosa è attivo',
     chooseOff: ({ count }) => `${count} disattivate`,
     nothingElse: 'Nient’altro cambia finché non scegli.',
@@ -503,6 +510,7 @@ const pt: SkillsPageTranslation = {
     removedFromSource: 'A origem já não a tem. Mantenha a sua cópia ou remova-a.',
     maskedOn: ({ machine }) => `Lá prevalece a cópia de ${machine}.`,
     unreadable: 'Não foi possível ler esta habilidade.',
+    unnamed: 'Habilidade sem nome',
     writeOwn: 'Escrever a sua',
     review: 'Rever',
     decide: 'Escolher',
@@ -513,7 +521,7 @@ const pt: SkillsPageTranslation = {
     firstPurpose: 
       'Uma habilidade é uma pasta de instruções, por vezes com scripts, que um agente usa quando uma tarefa precisa dela. As suas seguem-no agora para todas as máquinas.',
     firstSentence: ({ on, off }) =>
-      `${on} ${on === 1 ? 'habilidade está ativada' : 'habilidades estão ativadas'} onde já as usava. ${off} esperam na sua Home até escolher.`,
+      `${on > 0 ? `${on} ${on === 1 ? 'habilidade está ativada' : 'habilidades estão ativadas'} onde já as usava. ` : ''}${off} esperam na sua Home até escolher.`,
     choose: 'Escolher o que está ativo',
     chooseOff: ({ count }) => `${count} desativadas`,
     nothingElse: 'Nada mais muda até escolher.',
@@ -567,6 +575,7 @@ const pl: SkillsPageTranslation = {
     removedFromSource: 'Źródło już jej nie ma. Zachowaj swoją kopię albo ją usuń.',
     maskedOn: ({ machine }) => `Tam wygrywa własna kopia ${machine}.`,
     unreadable: 'Nie udało się odczytać tej umiejętności.',
+    unnamed: 'Umiejętność bez nazwy',
     writeOwn: 'Napisz własną',
     review: 'Przejrzyj',
     decide: 'Wybierz',
@@ -577,7 +586,7 @@ const pl: SkillsPageTranslation = {
     firstPurpose:
       'Umiejętność to folder z instrukcjami, czasem ze skryptami, z którego agent korzysta, gdy zadanie tego wymaga. Twoje są teraz na każdej maszynie.',
     firstSentence: ({ on, off }) =>
-      `Włączone tam, gdzie już ich używano: ${on}. Czekają pod Twoim Home, aż wybierzesz: ${off}.`,
+      `${on > 0 ? `Włączone tam, gdzie już ich używano: ${on}. Czekają pod Twoim Home, aż wybierzesz: ` : ''}${off}.`,
     choose: 'Wybierz, co jest włączone',
     chooseOff: ({ count }) => `${count} wyłączone`,
     nothingElse: 'Nic więcej się nie zmieni, dopóki nie wybierzesz.',
@@ -631,6 +640,7 @@ const ru: SkillsPageTranslation = {
     removedFromSource: 'В источнике его больше нет. Оставьте свою копию или удалите его.',
     maskedOn: ({ machine }) => `Там действует собственная копия ${machine}.`,
     unreadable: 'Не удалось прочитать этот навык.',
+    unnamed: 'Навык без названия',
     writeOwn: 'Написать свой',
     review: 'Посмотреть',
     decide: 'Выбрать',
@@ -641,7 +651,7 @@ const ru: SkillsPageTranslation = {
     firstPurpose:
       'Скилл — это папка с инструкциями, иногда со скриптами, которую агент берёт, когда задача её требует. Ваши теперь следуют за вами на каждую машину.',
     firstSentence: ({ on, off }) =>
-      `Включены там, где вы их уже использовали: ${on}. Ждут под вашим Home, пока вы не выберете: ${off}.`,
+      `${on > 0 ? `Включены там, где вы их уже использовали: ${on}. Ждут под вашим Home, пока вы не выберете: ` : ''}${off}.`,
     choose: 'Выбрать, что включено',
     chooseOff: ({ count }) => `Выключено: ${count}`,
     nothingElse: 'Больше ничего не изменится, пока вы не выберете.',
@@ -695,6 +705,7 @@ const ja: SkillsPageTranslation = {
     removedFromSource: '取得元から削除されました。手元のコピーを残すか、削除してください。',
     maskedOn: ({ machine }) => `そこでは ${machine} 自身のコピーが優先されます。`,
     unreadable: 'このスキルを読み込めませんでした。',
+    unnamed: '名前のないスキル',
     writeOwn: '自分で書く',
     review: '確認',
     decide: '選ぶ',
@@ -705,7 +716,7 @@ const ja: SkillsPageTranslation = {
     firstPurpose:
       'スキルは、タスクに必要なときにエージェントが使う指示のフォルダーです（スクリプトを含むこともあります）。あなたのスキルはすべてのマシンについてきます。',
     firstSentence: ({ on, off }) =>
-      `${on}件はすでに使っていた場所でオンです。${off}件はあなたが選ぶまでHomeで待機します。`,
+      `${on > 0 ? `${on}件はすでに使っていた場所でオンです。` : ''}${off}件はあなたが選ぶまでHomeで待機します。`,
     choose: 'オンにするものを選ぶ',
     chooseOff: ({ count }) => `${count}件オフ`,
     nothingElse: '選ぶまでほかには何も変わりません。',
@@ -759,6 +770,7 @@ const zhHans: SkillsPageTranslation = {
     removedFromSource: '来源中已没有它。保留你的副本，或移除它。',
     maskedOn: ({ machine }) => `在那里，${machine} 自己的副本优先。`,
     unreadable: '无法读取此技能。',
+    unnamed: '未命名的技能',
     writeOwn: '自己编写',
     review: '查看',
     decide: '选择',
@@ -769,7 +781,7 @@ const zhHans: SkillsPageTranslation = {
     firstPurpose:
       '技能是一个指令文件夹，有时带脚本，任务需要时智能体会采用它。你的技能现在会跟随你到每台机器。',
     firstSentence: ({ on, off }) =>
-      `${on} 个技能在你用过的地方已开启。${off} 个在你的 Home 中等待你选择。`,
+      `${on > 0 ? `${on} 个技能在你用过的地方已开启。` : ''}${off} 个在你的 Home 中等待你选择。`,
     choose: '选择开启哪些',
     chooseOff: ({ count }) => `${count} 个已关闭`,
     nothingElse: '在你选择之前，其他一切不变。',
@@ -823,6 +835,7 @@ const zhHant: SkillsPageTranslation = {
     removedFromSource: '來源中已沒有它。保留你的副本，或移除它。',
     maskedOn: ({ machine }) => `在那裡，${machine} 自己的副本優先。`,
     unreadable: '無法讀取此技能。',
+    unnamed: '未命名的技能',
     writeOwn: '自己撰寫',
     review: '查看',
     decide: '選擇',
@@ -833,7 +846,7 @@ const zhHant: SkillsPageTranslation = {
     firstPurpose:
       '技能是一個指令資料夾，有時附帶指令碼，任務需要時代理會採用它。你的技能現在會跟著你到每台機器。',
     firstSentence: ({ on, off }) =>
-      `${on} 個技能在你用過的地方已開啟。${off} 個在你的 Home 中等你選擇。`,
+      `${on > 0 ? `${on} 個技能在你用過的地方已開啟。` : ''}${off} 個在你的 Home 中等你選擇。`,
     choose: '選擇開啟哪些',
     chooseOff: ({ count }) => `${count} 個已關閉`,
     nothingElse: '在你選擇之前，其他一切不變。',

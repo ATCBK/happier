@@ -5,6 +5,8 @@ import type { AgentStartContextV1 } from '../account/settings/admitAgentStartV1'
 import { ActionIdSchema } from './actionIds';
 import { projectActionWorkflowSelectionInputV1 } from './executor/agentStartAdmission';
 import { ExecutionRunStartRequestSchema } from '../execution/runs/startRequest';
+import { AgentExecutionTargetV1Schema } from '../agents/executionTargetV1';
+import { buildAcpConfigOptionOverridesV1 } from '../sessions/metadata/metadataOverridesV1';
 
 const workflowStartContext: AgentStartContextV1 = {
   caller: { kind: 'originless', runId: 'workflow-1', runDepth: 0 },
@@ -13,12 +15,17 @@ const workflowStartContext: AgentStartContextV1 = {
 };
 
 describe('createActionExecutor (review.start)', () => {
-  it.each([undefined, 'agentDefault'] as const)('carries explicit child selection %s through Review fanout to the Run receiver', async childSelection => {
+  it.each([undefined, 'agentDefault'] as const)('resolves Review omission through the Account-default child choice (%s)', async childSelection => {
     const requests: ReturnType<typeof ExecutionRunStartRequestSchema.parse>[] = [];
+    const sessionConfigOptionOverrides = buildAcpConfigOptionOverridesV1({
+      updatedAt: 1,
+      overrides: { reasoning_effort: { updatedAt: 1, value: 'low' } },
+    });
     const executor = createActionExecutor({
       // The machine transport is the boundary; the Action normalization, fanout
       // and receiver schema stay real so dropping the field changes the result.
       executionRunStart: async (_sessionId, input) => {
+        AgentExecutionTargetV1Schema.parse(input.backendTarget);
         requests.push(ExecutionRunStartRequestSchema.parse(input));
         return { runId: 'review-1', callId: 'review-call', sidechainId: 'review-call' };
       },
@@ -26,9 +33,13 @@ describe('createActionExecutor (review.start)', () => {
     } as ActionExecutorDeps);
     expect(await executor.execute('review.start', {
       sessionId: 's1', engineIds: ['codex', 'claude'], instructions: 'Review.',
+      sessionConfigOptionOverrides,
       ...(childSelection ? { childSelection } : {}),
     }, { surface: 'ui' })).toMatchObject({ ok: true, result: { results: [{ ok: true }, { ok: true }] } });
-    expect(requests.map(request => request.childSelection)).toEqual([childSelection, childSelection]);
+    expect(requests.map(request => request.childSelection)).toEqual(['agentDefault', 'agentDefault']);
+    expect(requests.map(request => request.sessionConfigOptionOverrides)).toEqual([
+      sessionConfigOptionOverrides, sessionConfigOptionOverrides,
+    ]);
   });
 
   it.each([
@@ -61,6 +72,7 @@ describe('createActionExecutor (review.start)', () => {
       ok: true, result: { results: [{ ok: true }] },
     });
     expect(executionRunStart.mock.calls[0]?.[1]).toMatchObject(expected);
+    expect(executionRunStart.mock.calls[0]?.[1]).not.toHaveProperty('childSelection');
   });
 
   it('applies per-target Connected-services over a blanket choice and refuses malformed fan-out before any start', async () => {
@@ -158,7 +170,8 @@ describe('createActionExecutor (review.start)', () => {
   });
   it('fans out bounded reviews then admits one narrator from only confirmed runs and launch provenance', async () => {
     const executionRunStart = vi.fn<ActionExecutorDeps['executionRunStart']>(async (_session, input) =>
-      input.backendTarget?.kind === 'builtInAgent' && input.backendTarget.agentId === 'claude'
+      input.backendTarget?.kind === 'agent' && input.backendTarget.identity.pluginId === 'happier.agent.claude'
+        && input.backendTarget.identity.localId === 'claude'
         ? { ok: false, errorCode: 'engine_failed', error: 'Engine failed' }
         : { runId: 'review-1', callId: 'call-1', sidechainId: 'call-1' });
     const executionRunAction = vi.fn<ActionExecutorDeps['executionRunAction']>(async () => ({ ok: true, data: { ok: true, result: {
@@ -417,7 +430,7 @@ describe('createActionExecutor (review.start)', () => {
     expect(executionRunStart).toHaveBeenCalledWith('s1', expect.objectContaining({
       intent: 'review', runClass: 'bounded',
       instructions: 'Review this.',
-      backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+      backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
     }), {});
   });
 
@@ -568,7 +581,8 @@ describe('createActionExecutor (review.start)', () => {
     });
     expect(executionRunStart).toHaveBeenCalledWith('s1', expect.objectContaining({
       intent: 'review',
-      backendTarget: { kind: 'configuredAcpBackend', backendId: 'review-bot' },
+      backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' },
+        definitionId: 'review-bot' },
       retentionPolicy: 'resumable',
     }), {});
   });

@@ -2,9 +2,11 @@ import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client
 import { randomUUID } from 'node:crypto';
 
 import { logger } from '@/ui/logger';
+import type { AgentStateRequestStore } from '@/agent/permissions/agentStateRequestStore';
 import { isActiveLatestTurnStatus } from '../../sessionTurnStatusSnapshot';
 import { deriveVoiceAgentTurnLocalId, readVoiceAgentTurnPayloadFromMeta } from '@happier-dev/protocol/messages/structured/voiceAgentTurnLocalId';
-import { hasRawComposerAttachmentSelectionV1 } from '@happier-dev/protocol/runtime/input/structuredInputV1';
+import { hasRawComposerAttachmentSelectionV1, hasRawSessionAttachmentSelectionV1, RawIngressStructuredInputV1Schema, HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1, readSessionAttachmentEnvelopeRecordsV1 } from '@happier-dev/protocol/runtime/input/structuredInputV1';
+import { SessionAttachmentDescriptorV1Schema, buildUploadedAttachment } from '@happier-dev/protocol/messages/structured/sessionAttachmentsInputV1';
 import { validatePluginHookPayloadV1 } from '@happier-dev/protocol/plugins/hooks';
 import { SessionMediaMessageMetaV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMediaV1';
 import type { SessionMediaMessageMetaV1, ComposerAttachmentInputV1, ComposerContentHandleV1 } from '@happier-dev/protocol';
@@ -65,14 +67,20 @@ import {
     assertCommittedTranscriptAdmission,
     type CommittedTranscriptAdmission,
     type CommittedTranscriptMessageOptions,
+    type CommittedTranscriptUserMessageOptions,
+    type CommittedTranscriptOriginal,
 } from '../../transcriptPort';
 import {
     admitSessionStructuredInputV1,
     preserveComposerAttachmentSelectionAcrossSessionInputTransformV1,
     validateComposerAttachmentRejoinCorrespondenceV1,
+    SessionStructuredInputAdmissionError,
     type SessionStructuredInputAdmissionPolicyV1,
 } from '@/session/services/admitSessionStructuredInputV1';
 import type { PersistedSessionUserMessageAdmission } from './sessionUserMessageAdmissionRejoin';
+import { projectRawIngressSessionAttachmentsV1, projectSessionAttachmentInputV1, SessionAttachmentIssuedRecordMissingError } from '@/session/attachments/projectRawIngressSessionAttachmentsV1';
+import { resolveTrustedSessionAttachmentLocalImagePaths } from '@/session/attachments/resolveTrustedSessionAttachmentLocalImagePaths';
+import { ComposerStagedMediaReleaseIntentV1Schema, type ComposerStagedMediaReleaseIntentV1 } from '@happier-dev/protocol/sessions/userMessageRpc';
 
 type PlainOrEncryptedPayload = string | { t: 'plain'; v: unknown };
 type SessionMessageRole = 'user' | 'agent' | 'event' | 'unknown';
@@ -112,6 +120,7 @@ type EnqueueCommittedTranscriptMessageParams = Readonly<{
     provenance: SessionTranscriptObservationProvenanceV1;
     surfaceItemReference?: SessionTranscriptSurfaceItemReferencesV1;
     admission?: CommittedTranscriptAdmission;
+    observeCommitSignal?: AbortSignal;
 }>;
 
 type EnqueueCommittedVoiceAgentTranscriptTurnParams = Readonly<{
@@ -151,6 +160,7 @@ export type SessionInputAdmissionSettlement = Readonly<{
     onDefinitiveAdmissionFailure: () => Promise<void> | void;
     /** Opaque target-daemon claims forwarded only through the Pending accepted fact. */
   stagedMediaHandles?: readonly ComposerContentHandleV1[];
+  stagedMediaReleaseIntents?: readonly ComposerStagedMediaReleaseIntentV1[];
   /** Existing finalizer facts used only to abandon a prepare before PATCH. */
   createdWorkspaceRelativePaths?: readonly string[];
   workingDirectory?: string;
@@ -191,6 +201,9 @@ function normalizeSessionInputTransformBeforeCommitResult(
     const stagedMediaHandles = Array.isArray(settlement?.stagedMediaHandles)
         ? settlement.stagedMediaHandles as readonly ComposerContentHandleV1[]
         : undefined;
+    const stagedMediaReleaseIntents = Array.isArray(settlement?.stagedMediaReleaseIntents)
+        ? settlement.stagedMediaReleaseIntents.map((intent) => ComposerStagedMediaReleaseIntentV1Schema.parse(intent))
+        : undefined;
     if (
         transformed
         && isSessionInputAdmissionSettlementCallback(onAccepted)
@@ -202,6 +215,7 @@ function normalizeSessionInputTransformBeforeCommitResult(
                 onAccepted,
                 onDefinitiveAdmissionFailure,
             ...(stagedMediaHandles ? { stagedMediaHandles } : {}),
+                ...(stagedMediaReleaseIntents ? { stagedMediaReleaseIntents } : {}),
                 ...(Array.isArray(settlement?.createdWorkspaceRelativePaths)
                     ? { createdWorkspaceRelativePaths: settlement.createdWorkspaceRelativePaths as readonly string[] }
                     : {}),
@@ -251,12 +265,14 @@ export type SessionClientTranscriptApiDeps = Readonly<{
     onPresence?: (presence: SessionPresenceSnapshot) => void;
     getMetadataSnapshot: () => Metadata | null;
     updateAgentState: (handler: (metadata: AgentState) => AgentState) => Promise<void>;
+    getAgentStateRequestStore?: () => AgentStateRequestStore | null;
     updateMetadata: (handler: (metadata: Metadata) => Metadata) => Promise<void>;
     enqueueCommittedTranscriptMessage: (params: EnqueueCommittedTranscriptMessageParams) => Promise<Readonly<{
         persisted: boolean;
         delivered: boolean;
         localId?: string;
         committedSequence?: number;
+        whenCommitted?: Promise<CommittedTranscriptOriginal | null>;
     }>>;
     enqueueCommittedVoiceAgentTranscriptTurn: (
         params: EnqueueCommittedVoiceAgentTranscriptTurnParams,
@@ -267,6 +283,7 @@ export type SessionClientTranscriptApiDeps = Readonly<{
     permissionToolCallRawInputByProviderAndId: Map<string, unknown>;
     toolCallInputByProviderAndId: Map<string, unknown>;
     maxToolCallCacheEntries?: number | undefined;
+    resolveSessionAttachment?: Parameters<typeof projectRawIngressSessionAttachmentsV1>[0]['resolveSessionAttachment'];
     transformSessionInputBeforeCommit?: (
         payload: Record<string, unknown>,
     ) => Promise<SessionInputTransformBeforeCommitResult> | SessionInputTransformBeforeCommitResult;
@@ -300,7 +317,7 @@ export type SessionClientTranscriptApiDeps = Readonly<{
 export type SessionClientTranscriptApi = Readonly<{
     enqueueUserTextMessageCommitted: (
         text: string,
-        opts: CommittedTranscriptMessageOptions,
+        opts: CommittedTranscriptUserMessageOptions,
     ) => Promise<Readonly<{ persisted: boolean; delivered: boolean }>>;
     enqueueSessionUserMessage: (params: Readonly<{
         callerInputAuthorization?: import('@happier-dev/protocol').ExternalActionExecutionAuthorizationV1;
@@ -337,6 +354,7 @@ export type SessionClientTranscriptApi = Readonly<{
         meta: Record<string, unknown>;
         composerAttachments: readonly ComposerAttachmentInputV1[];
         stagedMediaHandles: readonly ComposerContentHandleV1[];
+        stagedMediaReleaseIntents?: readonly ComposerStagedMediaReleaseIntentV1[];
         sessionMediaMetadata?: Readonly<{
             key: 'happier' | 'happierMedia';
             envelope: import('@happier-dev/protocol').SessionMediaMessageMetaV1;
@@ -350,7 +368,8 @@ export type SessionClientTranscriptApi = Readonly<{
         provider: ACPProvider,
         body: ACPMessageData,
         opts: CommittedTranscriptMessageOptions,
-    ) => Promise<Readonly<{ persisted: boolean; delivered: boolean }>>;
+    ) => Promise<Readonly<{ persisted: boolean; delivered: boolean; committedSequence?: number;
+        whenCommitted?: Promise<CommittedTranscriptOriginal | null> }>>;
     enqueueVoiceAgentTranscriptTurnCommitted: (
         provider: ACPProvider,
         params: VoiceAgentTranscriptTurnCommitParams,
@@ -378,7 +397,10 @@ export type SessionClientTranscriptApi = Readonly<{
     enqueueSessionEventCommitted: (
         event: SessionEventMessage,
         id?: string,
-    ) => Promise<Readonly<{ persisted: boolean; delivered: boolean; localId?: string; committedSequence?: number }>>;
+        meta?: Record<string, unknown>,
+        observeCommitSignal?: AbortSignal,
+    ) => Promise<Readonly<{ persisted: boolean; delivered: boolean; localId?: string; committedSequence?: number;
+        whenCommitted?: Promise<CommittedTranscriptOriginal | null> }>>;
     keepAlive: (thinking: boolean, mode: SessionAliveMode) => void;
     replayLatestPresence: () => void;
 }>;
@@ -499,7 +521,7 @@ export function createSessionClientTranscriptApi(
 
     const getPostSendReactionPort = (): PostSendReactionPort => ({
         sessionId: deps.sessionId,
-        updateAgentState: (updater) => deps.updateAgentState(updater),
+        getAgentStateRequestStore: deps.getAgentStateRequestStore,
         updateMetadata: (updater) => deps.updateMetadata(updater),
         getMetadataSnapshot: () => deps.getMetadataSnapshot(),
         usageObservationPublisher: deps.usageObservationPublisher,
@@ -519,6 +541,30 @@ export function createSessionClientTranscriptApi(
         composerAttachments: readonly ComposerAttachmentInputV1[];
         settlement?: SessionInputAdmissionSettlement;
     }>> => {
+        const projected = projectRawIngressSessionAttachmentsV1({
+            sessionId: deps.sessionId,
+            text: payload.text,
+            meta: payload.meta,
+            resolveSessionAttachment: deps.resolveSessionAttachment ?? (() => null),
+        });
+        const admissionPolicy = {
+            allowedLocalImagePaths: new Set([
+                ...(payload.structuredInputAdmissionPolicy?.allowedLocalImagePaths ?? []),
+                ...(projected.allowedLocalImagePaths ?? []),
+            ]),
+        };
+        const sessionPath = deps.getMetadataSnapshot()?.path;
+        if (typeof sessionPath === 'string' && sessionPath.length > 0) {
+            // Pending input already carries the prepared descriptor, not its volatile upload handle.
+            // Reuse the ordinary attachment verifier before retaining native image access.
+            for (const imagePath of await resolveTrustedSessionAttachmentLocalImagePaths({
+                cwd: sessionPath,
+                metadata: projected.meta,
+            })) {
+                admissionPolicy.allowedLocalImagePaths.add(imagePath);
+            }
+        }
+        payload = { ...payload, text: projected.text, meta: projected.meta };
         const admit = (input: Readonly<{
             text: string;
             meta: Record<string, unknown>;
@@ -527,9 +573,7 @@ export function createSessionClientTranscriptApi(
             const admitted = admitSessionStructuredInputV1({
                 text: input.text,
                 meta: input.meta,
-                ...(payload.structuredInputAdmissionPolicy
-                    ? { admissionPolicy: payload.structuredInputAdmissionPolicy }
-                    : {}),
+                admissionPolicy,
                 ...(input.preparedComposerAttachments
                     ? { preparedComposerAttachments: input.preparedComposerAttachments }
                     : {}),
@@ -604,7 +648,8 @@ export function createSessionClientTranscriptApi(
         provider: ACPProvider,
         body: ACPMessageData,
         opts: CommittedTranscriptMessageOptions,
-    ): Promise<Readonly<{ persisted: boolean; delivered: boolean }>> => {
+    ): Promise<Readonly<{ persisted: boolean; delivered: boolean; committedSequence?: number;
+        whenCommitted?: Promise<CommittedTranscriptOriginal | null> }>> => {
         const { normalizedBody, payload, localId, sidechainId, messageRole, surfaceItemReference } = await prepareCommittedAgentMessageViaPort(
             getTranscriptSendPort(),
             provider,
@@ -643,6 +688,7 @@ export function createSessionClientTranscriptApi(
             provenance: opts.provenance,
             ...(surfaceItemReference === undefined ? {} : { surfaceItemReference }),
             ...(opts.admission === undefined ? {} : { admission: opts.admission }),
+            ...(opts.observeCommitSignal === undefined ? {} : { observeCommitSignal: opts.observeCommitSignal }),
         });
         if (result.delivered) {
             const extracted = extractAssistantTextSnapshotFromAcpMessage(provider, normalizedBody);
@@ -661,6 +707,8 @@ export function createSessionClientTranscriptApi(
             provider,
             normalizedBody,
             localId,
+            createdAt,
+            provenance: opts.provenance,
         });
         return result;
     };
@@ -723,6 +771,8 @@ export function createSessionClientTranscriptApi(
             provider,
             normalizedBody: assistant.normalizedBody,
             localId: assistant.localId,
+            createdAt: assistantCreatedAt,
+            provenance: { kind: 'non_dependent', source: 'sidechain' },
         });
         return result;
     };
@@ -747,7 +797,7 @@ export function createSessionClientTranscriptApi(
         if (typeof meta.source !== 'string' || meta.source.trim().length === 0) meta.source = 'ui';
         if (typeof meta.sentFrom !== 'string' || meta.sentFrom.trim().length === 0) meta.sentFrom = 'ui';
         const selectedComposerAttachment = hasRawComposerAttachmentSelectionV1(meta);
-        if (originalText.length === 0 && !selectedComposerAttachment) {
+        if (originalText.length === 0 && !selectedComposerAttachment && !hasRawSessionAttachmentSelectionV1(meta)) {
             return { status: 'rejected', code: 'session_input_invalid' };
         }
         if (selectedComposerAttachment) {
@@ -794,12 +844,54 @@ export function createSessionClientTranscriptApi(
 
     return {
         async preparePendingMessageComposerAdmission(params) {
-            const transformed = await transformSessionInputPayloadBeforeCommit({
-                localId: params.localId,
-                text: params.text,
-                meta: params.meta,
-                timestampMs: Date.now(),
-            });
+            const raw = RawIngressStructuredInputV1Schema.safeParse(params.meta[HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]);
+            const legacySelection = raw.success ? raw.data.sessionAttachments ?? [] : [];
+            const resolvesIssuedSessionUploads = legacySelection.length > 0 && raw.success
+                && Object.keys(raw.data).every(key => key === 'v' || key === 'sessionAttachments');
+            let transformed: Awaited<ReturnType<typeof transformSessionInputPayloadBeforeCommit>>;
+            if (resolvesIssuedSessionUploads) {
+                // This new target-owned selection needs issued upload resolution before
+                // original Pending custody. Generic hooks still run once at final transcript
+                // admission; full Composer/Pending-edit preparation retains its path below.
+                if (legacySelection.some(handle => handle.sessionId !== deps.sessionId)) {
+                    throw new SessionStructuredInputAdmissionError('session_structured_input_session_attachment_invalid');
+                }
+                const persisted = await deps.findPersistedSessionUserMessageAdmission({ localId: params.localId });
+                let projected: ReturnType<typeof projectRawIngressSessionAttachmentsV1>;
+                if (persisted) {
+                    const descriptors = readSessionAttachmentEnvelopeRecordsV1(persisted.meta)
+                        .map(descriptor => SessionAttachmentDescriptorV1Schema.parse(descriptor));
+                    validateComposerAttachmentRejoinCorrespondenceV1({ meta: params.meta,
+                        preparedComposerAttachments: [], preparedSessionAttachments: descriptors });
+                    projected = projectSessionAttachmentInputV1({ text: params.text, meta: params.meta,
+                        uploaded: descriptors.map(descriptor => buildUploadedAttachment({ ...descriptor,
+                            ...(descriptor.attachmentHandle ? { attachmentHandle: { ...descriptor.attachmentHandle } } : {}),
+                        })),
+                    });
+                } else {
+                    const resolveSessionAttachment = deps.resolveSessionAttachment;
+                    if (!resolveSessionAttachment) {
+                        throw new SessionStructuredInputAdmissionError('session_structured_input_session_attachment_invalid');
+                    }
+                    try {
+                        projected = projectRawIngressSessionAttachmentsV1({ sessionId: deps.sessionId,
+                            text: params.text, meta: params.meta, resolveSessionAttachment });
+                    } catch (error) {
+                        if (error instanceof SessionAttachmentIssuedRecordMissingError) {
+                            // Both original-custody reads established absence before this
+                            // real issued-store lookup. No Pending input has been written.
+                            throw new SessionStructuredInputAdmissionError('session_attachment_upload_checkpoint_stale');
+                        }
+                        throw error;
+                    }
+                }
+                const admitted = admitSessionStructuredInputV1({ ...projected,
+                    admissionPolicy: { allowedLocalImagePaths: projected.allowedLocalImagePaths } });
+                transformed = { text: admitted.text, meta: admitted.meta, composerAttachments: [] };
+            } else {
+                transformed = await transformSessionInputPayloadBeforeCommit({ localId: params.localId,
+                    text: params.text, meta: params.meta, timestampMs: Date.now() });
+            }
             // Pending persistence is deliberately outside this API. Its canonical PATCH
             // owner decides acceptance; uncalled settlement callbacks retain custody.
             const sessionMediaMetadata = readSessionMediaMetadata(transformed.meta);
@@ -808,6 +900,9 @@ export function createSessionClientTranscriptApi(
                 meta: transformed.meta,
                 composerAttachments: transformed.composerAttachments,
                 stagedMediaHandles: transformed.settlement?.stagedMediaHandles ?? [],
+                ...(transformed.settlement?.stagedMediaReleaseIntents
+                    ? { stagedMediaReleaseIntents: transformed.settlement.stagedMediaReleaseIntents }
+                    : {}),
                 ...(sessionMediaMetadata ? { sessionMediaMetadata } : {}),
                 ...(transformed.settlement
                     && transformed.settlement.workingDirectory
@@ -823,8 +918,8 @@ export function createSessionClientTranscriptApi(
         },
 
 
-        async enqueueSessionEventCommitted(event, id) {
-            const prepared = prepareSessionEventMessageViaPort(getTranscriptSendPort(), event, id);
+        async enqueueSessionEventCommitted(event, id, meta, observeCommitSignal) {
+            const prepared = prepareSessionEventMessageViaPort(getTranscriptSendPort(), event, id, meta);
             const now = Date.now();
             return await deps.enqueueCommittedTranscriptMessage({
                 message: prepared.payload,
@@ -835,6 +930,7 @@ export function createSessionClientTranscriptApi(
                 createdAt: now,
                 updatedAt: now,
                 provenance: { kind: 'non_dependent', source: 'background' },
+                ...(observeCommitSignal ? { observeCommitSignal } : {}),
             });
         },
 
@@ -854,7 +950,7 @@ export function createSessionClientTranscriptApi(
             return await deps.enqueueCommittedTranscriptMessage({
                 message: prepared.payload,
                 localId: prepared.localId,
-                sidechainId: null,
+                sidechainId: opts.sidechainId ?? null,
                 messageRole: 'user',
                 createdAt,
                 updatedAt,
@@ -866,7 +962,7 @@ export function createSessionClientTranscriptApi(
         async enqueueSessionUserMessage(params) {
             const originalText = String(params.text ?? '');
             const selectedComposerAttachment = hasRawComposerAttachmentSelectionV1(params.meta);
-            if (originalText.length === 0 && !selectedComposerAttachment) return;
+            if (originalText.length === 0 && !selectedComposerAttachment && !hasRawSessionAttachmentSelectionV1(params.meta)) return;
             const disposition = await enqueueSessionUserMessageWithDisposition({
                 ...params,
                 localId: typeof params.localId === 'string' && params.localId.length > 0 ? params.localId : randomUUID(),

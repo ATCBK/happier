@@ -13,6 +13,8 @@ import { ManagedEnrollmentCorrelationV1Schema, type ManagedEnrollmentCorrelation
 import { ManagedBootstrapCarrierV1Schema } from '@happier-dev/protocol/machines/managed/providerFactsV1';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import type { SavedSecretRefV1 } from '@happier-dev/protocol';
+import { ManagedMachineControllerError } from './controllerErrors';
+import { REMOTE_HOME_ENROLLMENT_POLL_INTERVAL_MS, TERMINAL_AUTH_POLL_INTERVAL_MS, type HomeOperationRetry } from '@/api/client/retryHomeOperation';
 
 export type ManagedNativeBootstrapIO = Readonly<{
   /** Buffered stdout/stderr/status is sufficient; output observers are optional. */
@@ -22,6 +24,7 @@ export type ManagedNativeBootstrapIO = Readonly<{
 }>;
 export type ManagedMachineEnrollmentDependencies = Readonly<{
   readCurrentManagedRow(): Promise<ManagedMachineV1>;
+  onEnrollmentLifetime?(lifetime: HomeOperationRetry): void;
   native?: ManagedNativeBootstrapIO;
   materializeBootstrapCredential?(reference: Extract<SavedSecretRefV1, { kind: 'shared_resource' }>): Promise<Readonly<{ path: string; dispose(): Promise<void> }>>;
 }>;
@@ -35,9 +38,14 @@ export async function runManagedMachineEnrollment(input: Readonly<{
   channel?: 'stable' | 'preview' | 'dev';
   onEvent?: (event: InteractiveSystemTaskEventInput) => void;
   onTask?: (task: Readonly<{ taskId: string; kind: 'remote.ssh.bootstrapMachine.v1' }>) => void | Promise<void>;
+  /** The task's current unanswered question, then `null` once it is answered, so the waiting surface can ask it. */
+  onPrompt?: (prompt: Readonly<{ kind: string; message: string }> | null) => void;
 }>, deps: ManagedMachineEnrollmentDependencies): Promise<Readonly<{ machineId: string }>> {
   const correlation = ManagedEnrollmentCorrelationV1Schema.parse(input.correlation);
   const carrier = ManagedBootstrapCarrierV1Schema.parse(input.carrier);
+  const onEnrollmentDeadline = (deadlineMs: number) => deps.onEnrollmentLifetime?.({ deadlineMs,
+    pollIntervalMs: carrier.kind === 'native' ? TERMINAL_AUTH_POLL_INTERVAL_MS : REMOTE_HOME_ENROLLMENT_POLL_INTERVAL_MS,
+    signal: input.signal });
   if (input.target.homeServerIdentityId !== correlation.homeId || !input.target.descriptor) {
     throw new SystemTaskExecutionError('home_identity_mismatch', 'Managed enrollment requires its admitted Home descriptor.');
   }
@@ -66,17 +74,36 @@ export async function runManagedMachineEnrollment(input: Readonly<{
   const runPreparedTask = async (kind: InteractiveSystemTaskKind) => {
     const { getLiveSystemTasksRunnerAdapter } = await import('@/capabilities/systemTasks/liveSystemTasksRunner');
     const owner = getLiveSystemTasksRunnerAdapter();
-    const task = await owner.startAdmitted({ run: async (ctx) => kind.run({ ...ctx, emit: (event) => {
-      ctx.emit(event);
-      input.onEvent?.(event);
-    } }) });
+    let controllerFailure: ManagedMachineControllerError | undefined;
+    const task = await owner.startAdmitted({ run: async (ctx) => {
+      try {
+        return await kind.run({ ...ctx, emit: (event) => {
+          ctx.emit(event);
+          input.onEvent?.(event);
+        }, prompt: async (prompt) => {
+          input.onPrompt?.({ kind: prompt.kind, message: prompt.message });
+          try { return await ctx.prompt(prompt); } finally { input.onPrompt?.(null); }
+        } });
+      } catch (error) {
+        if (error instanceof ManagedMachineControllerError) {
+          controllerFailure = error;
+          throw new SystemTaskExecutionError(error.code, error.code);
+        }
+        throw error;
+      }
+    } });
     const cancel = () => { void owner.cancel(task); };
     input.signal?.addEventListener('abort', cancel, { once: true });
     if (input.signal?.aborted) cancel();
     try {
       await input.onTask?.({ ...task, kind: 'remote.ssh.bootstrapMachine.v1' });
       const result = await owner.wait(task);
-      if (!result.ok) throw new SystemTaskExecutionError(result.error?.code ?? 'system_task_failed', result.error?.message ?? 'Managed guest setup failed.');
+      if (!result.ok) {
+        // The task keeps its existing public error contract; its invoking
+        // operation retains the original typed controller observation.
+        if (controllerFailure && result.error?.code === controllerFailure.code) throw controllerFailure;
+        throw new SystemTaskExecutionError(result.error?.code ?? 'system_task_failed', result.error?.message ?? 'Managed guest setup failed.');
+      }
       const data = result.data;
       const machineId = data && typeof data === 'object' && !Array.isArray(data) && 'machineId' in data && typeof data.machineId === 'string' ? data.machineId : '';
       if (!machineId) throw new SystemTaskExecutionError('machine_registration_unconfirmed', 'Managed guest registration was not confirmed.');
@@ -96,7 +123,7 @@ export async function runManagedMachineEnrollment(input: Readonly<{
     try {
       await assertCurrent();
       const { createLiveRemoteSshBootstrapTaskKind } = await import('@/capabilities/systemTasks/ssh/liveRemoteSshBootstrap');
-      const task = createLiveRemoteSshBootstrapTaskKind({ assertManagedEnrollmentCurrent: async () => { await assertCurrent(); } });
+      const task = createLiveRemoteSshBootstrapTaskKind({ onEnrollmentDeadline, assertManagedEnrollmentCurrent: async () => { await assertCurrent(); } });
       return await runPreparedTask({ run: async (ctx) => task.run({ ...ctx, params: { ...configuration, ssh: {
         target: `${carrier.user}@${carrier.address}`, auth: 'keyfile', identityFile: credential.path,
           ...(carrier.port ? { port: carrier.port } : {}), hostKeyEvidence: carrier.hostKeyEvidence,
@@ -149,15 +176,7 @@ export async function runManagedMachineEnrollment(input: Readonly<{
     await assertCurrent();
   }
   let binaryPath = '';
-  const executor = createHappierJsonExecutorFromTextRunner(async (args, options) => {
-      if (!binaryPath) throw new SystemTaskExecutionError('cli_capability_missing', 'The native guest binary has not been installed.');
-      return await exec({ command: buildRemoteHappierInvocationCommand({ binaryPath, args, channel: configuration.channel }), ...options,
-        timeoutMs: options?.timeoutMs === undefined ? resolveLocalHappierCommandTimeoutMs(args) : options.timeoutMs,
-      });
-  });
-  const task = createRemoteNativeBootstrapMachineTaskKind({
-    configuration, executor, assertCurrent: async () => { await assertCurrent(); },
-    installRemoteCli: async (signal) => {
+  const installRemoteCli = async (signal?: AbortSignal) => {
       const platform = await exec({ command: 'uname -s; uname -m; printf "%s\\n" "$HOME"', signal });
       if (platform.status !== 0) throw new SystemTaskExecutionError('provider_unavailable', 'Native guest platform could not be observed.');
       const [os, arch, home] = platform.stdout.trim().split(/\r?\n/u);
@@ -179,7 +198,31 @@ export async function runManagedMachineEnrollment(input: Readonly<{
         },
       });
       binaryPath = installed.binaryPath;
-    },
+  };
+  if (row.enrolledMachineId) {
+    // Service-managed guests can update the installed CLI without issuing a new
+    // sign-in or changing the existing Machine. Native-process boot recovery is
+    // handled above and continues to reuse its retained installation.
+    await installRemoteCli(input.signal);
+    const args = ['daemon', 'service', 'install', '--json'];
+    const updated = await exec({
+      command: buildRemoteHappierInvocationCommand({ binaryPath, args, channel: configuration.channel }),
+      timeoutMs: resolveLocalHappierCommandTimeoutMs(args),
+    });
+    if (updated.status !== 0) throw new SystemTaskExecutionError('background_service_failed', 'The updated guest background service could not be installed.');
+    await assertCurrent();
+    return { machineId: row.enrolledMachineId };
+  }
+  const executor = createHappierJsonExecutorFromTextRunner(async (args, options) => {
+      if (!binaryPath) throw new SystemTaskExecutionError('cli_capability_missing', 'The native guest binary has not been installed.');
+      return await exec({ command: buildRemoteHappierInvocationCommand({ binaryPath, args, channel: configuration.channel }), ...options,
+        timeoutMs: options?.timeoutMs === undefined ? resolveLocalHappierCommandTimeoutMs(args) : options.timeoutMs,
+      });
+  });
+  const task = createRemoteNativeBootstrapMachineTaskKind({
+    onEnrollmentDeadline,
+    configuration, executor, assertCurrent: async () => { await assertCurrent(); },
+    installRemoteCli,
     approveLocalAuthRequest: async ({ publicKey, pairing, supportsTokenOnly, signal }) => {
       await assertCurrent();
       const { approveTerminalAuthRequest } = await import('@/auth/terminalAuthApproval');

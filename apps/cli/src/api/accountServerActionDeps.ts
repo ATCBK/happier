@@ -1,11 +1,12 @@
 import axios, { type AxiosResponse } from 'axios';
+import { readActionCredentialScopeDeniedHttpFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { ACCOUNT_API_TOKENS_CREATE_HTTP_PATH_V1, AccountApiTokensServerErrorV1Schema, ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1, ACCOUNT_API_TOKENS_REVOKE_ALL_HTTP_PATH_V1, ACCOUNT_API_TOKENS_REVOKE_HTTP_PATH_V1, ACCOUNT_API_TOKENS_UPDATE_HTTP_PATH_V1, AccountApiTokensCreateActionInputV1Schema, AccountApiTokensCreateActionOutputV1Schema, AccountApiTokensListActionInputV1Schema, AccountApiTokensListActionOutputV1Schema, AccountApiTokensRevokeActionInputV1Schema, AccountApiTokensRevokeActionOutputV1Schema, AccountApiTokensRevokeAllActionInputV1Schema, AccountApiTokensRevokeAllActionOutputV1Schema, AccountApiTokensUpdateActionInputV1Schema, AccountApiTokensUpdateActionOutputV1Schema } from '@happier-dev/protocol/auth/accountApiTokens';
 import { ProjectWorkerActionInputSchemasV1 } from '@happier-dev/protocol/actions/specs/projectWorkers';
 import type { ActionExecuteFailure, ActionExecutorDeps, ActionExecutorContext, ArtifactPublicLinkIssuedV1 } from '@happier-dev/protocol';
 import { createAccountServerWorkspaceWorkerPreferenceClient } from '@/api/workspaces/workspaceWorkerPreferences';
 import { observeProjectServicePlacementActualV1 } from '@happier-dev/protocol/workspaces/projectServicePlacementV1';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { getActiveProjectAccountRowsSnapshot, readProjectAccountRows } from '@/workspaces/projectAccountRows';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { readProjectAccountRowsObservation } from '@/workspaces/projectAccountRows';
 import { readWorkspaceSyncChildMachineFacts } from '@/workspaces/sync/workspaceSyncTargetAuthority';
 import { listCurrentAccountMachines } from '@/api/machine/resolveCurrentAccountMachineTarget';
 import { callExactMachineRpc } from '@/session/transport/rpc/machineRpc';
@@ -14,8 +15,9 @@ import { getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accoun
 import { ACCOUNT_EMAIL_CHANGE_REQUEST_PATH_V1, ACCOUNT_PASSWORD_CHANGE_PATH_V1, ACCOUNT_PASSWORD_ENROLL_PATH_V1, ACCOUNT_PASSWORD_REMOVE_PATH_V1, ACCOUNT_SECURITY_PATH_V1, ACCOUNT_TERMINAL_PRESENT_USER_POLICY_PATH_V1, AccountEmailChangeRequestResponseV1Schema, AccountEmailChangeRequestV1Schema, AccountPasswordChangeRequestV1Schema, AccountPasswordEnrollRequestV1Schema, AccountPasswordMutationResponseV1Schema, AccountPasswordRemoveRequestV1Schema, AccountSecurityGetResponseV1Schema, AccountSecurityRouteErrorV1Schema, AccountTerminalPresentUserPolicySetRequestV1Schema, AccountTerminalPresentUserPolicySetResponseV1Schema } from '@happier-dev/protocol/auth/accountSecurity';
 import { ACCOUNT_SESSIONS_SIGN_OUT_EVERYWHERE_HTTP_PATH_V1, AccountSessionsSignOutEverywhereActionInputV1Schema, AccountSessionsSignOutEverywhereServerOutputV1Schema } from '@happier-dev/protocol/auth/accountSessions';
 import { bindHomeDomainActionHttpRequestV1, homeDomainActionOutputSchemaV1, readHomeDomainActionErrorV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
+import { readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 import { bindSessionAccessActionHttpRequestV1 } from '@happier-dev/protocol/actions/sessionAccessActionFamily';
-import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { getActionSpec, resolveActionExecutionPlacementForInput } from '@happier-dev/protocol/actions/actionSpecs';
 import { bindMachineAccessActionHttpRequestV1 } from '@happier-dev/protocol/actions/machineAccessActionFamily';
 import { MachineAccessGrantsListResultV1Schema, MachineAccessMutationResultV1Schema, MachineAccessPrepareKeysInputV1Schema, MachineAccessRefusalV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { MachinePoolActionInputSchemasV1, MachinePoolActionOutputSchemasV1, machinePoolActionEndpointPathV1 } from '@happier-dev/protocol/machines/pools/actionsV1';
@@ -25,7 +27,7 @@ import { normalizeServerIdentityIdCapability } from '@happier-dev/protocol/featu
 import { MachinePoolErrorV1Schema } from '@happier-dev/protocol/machines/pools/v1';
 import { SessionPublicLinkCreateActionInputV1Schema, projectSessionPublicLinkActionResultV1, projectSessionPublicLinkCreateActionResultV1 } from '@happier-dev/protocol/sessions/access/sessionAccessActionsV1';
 import { SessionAccessErrorCodeV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   createAuthenticationHttpStatusError,
@@ -34,7 +36,7 @@ import {
   isAuthenticationStatus,
 } from '@/api/client/httpStatusError';
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { classifyActionTransportFailure } from '@/api/client/classifyServerEndpointError';
+import { classifyActionTransportFailure, classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
 import { configuration } from '@/configuration';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import type { StoredCredentials } from '@/persistence';
@@ -51,7 +53,7 @@ import {
   type ExternalActionMachineRequestSigningKey,
 } from '@/api/externalActionExecutionAuthorization';
 import { captureSessionOrganizationDisplayHost } from '@/api/sessionOrganizationDisplayHost';
-import { getUsageQueryKey, usageQueryToAnalyticsRequest } from '@happier-dev/protocol/inputs/usageQuery';
+import { getUsageQueryKey, resolveUsageQueryPeriod, usageQueryToAnalyticsRequest } from '@happier-dev/protocol/inputs/usageQuery';
 import { UsageAnalyticsQueryResponseSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { UsageModelPriceCatalogSchema } from '@happier-dev/protocol/usage/usageModelPriceCatalog';
 import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
@@ -69,7 +71,7 @@ import { loadMcpServerCatalogV1, type McpServerCatalogSnapshotV1 } from '@happie
 import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1, McpServerCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { resolveCliAccountStorageContext } from '@/api/client/accountKvJsonTransport';
 import { readAccountSettingsV2Raw } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
-import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { ActionExecuteFailureSchema, type AccountActionHttpFailureDetailsV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 
 export type AccountServerActionDeps = Pick<
@@ -100,7 +102,7 @@ type AccountServerActionFixedHome =
   | Readonly<{ serverId?: undefined; serverHttpBaseUrl?: undefined }>
   | Readonly<{ serverId: string; serverHttpBaseUrl: string }>;
 
-type AccountServerActionParams<TInputSchema extends z.ZodType, TOutputSchema extends z.ZodType> = Readonly<{
+type AccountServerActionParams<TInputSchema extends z.ZodMiniType, TOutputSchema extends z.ZodMiniType> = Readonly<{
   headers: Readonly<Record<string, string>>;
   path: string;
   input: z.input<TInputSchema>;
@@ -110,11 +112,19 @@ type AccountServerActionParams<TInputSchema extends z.ZodType, TOutputSchema ext
   signal?: AbortSignal;
 }>;
 
-const PublicShareDeleteHttpResponseSchema = z.object({
+const PublicShareDeleteHttpResponseSchema = z.looseObject({
   success: z.literal(true),
-}).loose();
+});
 
-async function executeAccountSecurityAction<TInputSchema extends z.ZodType, TOutputSchema extends z.ZodType>(
+function accountHttpOutcomeUnknown(category: AccountActionHttpFailureDetailsV1['category']): ActionExecuteFailure {
+  return { ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown', details: { category } };
+}
+
+function accountHttpTransportOutcomeUnknown(error: unknown): ActionExecuteFailure {
+  return accountHttpOutcomeUnknown(classifyServerEndpointError(error).kind === 'timeout' ? 'transport_timeout' : 'transport_error');
+}
+
+async function executeAccountSecurityAction<TInputSchema extends z.ZodMiniType, TOutputSchema extends z.ZodMiniType>(
   params: AccountServerActionParams<TInputSchema, TOutputSchema>,
 ): Promise<z.output<TOutputSchema> | ActionExecuteFailure> {
   const response = await axios.post<unknown>(
@@ -150,7 +160,7 @@ async function executeAccountSecurityAction<TInputSchema extends z.ZodType, TOut
   return params.outputSchema.parse(response.data);
 }
 
-async function executeAccountSecurityGet<TOutputSchema extends z.ZodType>(
+async function executeAccountSecurityGet<TOutputSchema extends z.ZodMiniType>(
   params: Readonly<{
     headers: Readonly<Record<string, string>>;
     path: string;
@@ -297,41 +307,47 @@ export function createAccountServerActionDeps(input: Readonly<{
     }
 
     let requestIssued = false;
-    const issueRequest = () => axios.request<unknown>({
-      method: params.method,
-      url: `${serverHttpBaseUrl}${params.path}`,
-      ...(params.body === undefined ? {} : { data: params.body }),
-      headers: { ...params.headers, 'Content-Type': 'application/json' },
-      timeout: 15_000,
-      ...(params.signal ? { signal: params.signal } : {}),
-      validateStatus: () => true,
-    });
+    const issueRequest = async (): Promise<Readonly<{ ok: true; response: AxiosResponse<unknown> }> | ActionExecuteFailure> => {
+      const response = await axios.request<unknown>({
+        method: params.method,
+        url: `${serverHttpBaseUrl}${params.path}`,
+        ...(params.body === undefined ? {} : { data: params.body }),
+        headers: { ...params.headers, 'Content-Type': 'application/json' },
+        // The Action signal owns cancellation; Home's transaction owner may
+        // recover across several attempts. This phase has no shorter deadline.
+        timeout: 0,
+        ...(params.signal ? { signal: params.signal } : {}),
+        validateStatus: () => true,
+      });
+      const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, response.data);
+      return scopeDenial ?? { ok: true, response };
+    };
     try {
       input.onRequestIssued?.();
       requestIssued = true;
-      const response = await issueRequest();
-      return { ok: true, response };
+      return await issueRequest();
     } catch (error) {
       const cancelled = params.signal?.aborted === true || axios.isCancel(error);
       const failure = classifyActionTransportFailure(error, { mutation, requestIssued, cancelled });
       if (!failure) throw error;
-      if (cancelled) return { ok: false, errorCode: failure, error: failure };
+      if (cancelled) return failure === 'outcome_unknown'
+        ? accountHttpTransportOutcomeUnknown(error) : { ok: false, errorCode: failure, error: failure };
       if (failure === 'outcome_unknown') {
         if (params.replayAmbiguousOnce) {
           try {
             // Public-link POST is value-idempotent. This reuses the one
             // materialized body so bearer and ciphertext bytes stay exact.
-            return { ok: true, response: await issueRequest() };
-          } catch {
-            return { ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' };
+            return await issueRequest();
+          } catch (replayError) {
+            return accountHttpTransportOutcomeUnknown(replayError);
           }
         }
-        return { ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' };
+        return accountHttpTransportOutcomeUnknown(error);
       }
       return { ok: false, errorCode: 'server_unreachable', error: 'server_unreachable' };
     }
   };
-  const settleAccountServerActionHttpOutput = <TOutputSchema extends z.ZodType>(params: Readonly<{
+  const settleAccountServerActionHttpOutput = <TOutputSchema extends z.ZodMiniType>(params: Readonly<{
     data: unknown;
     outputSchema: TOutputSchema;
     sideEffectClass: ReturnType<typeof getActionSpec>['sideEffectClass'];
@@ -343,7 +359,7 @@ export function createAccountServerActionDeps(input: Readonly<{
       if (!mutation) throw error;
       // A 2xx response with an unusable acknowledgement cannot establish that
       // a Home mutation settled without committing its effect.
-      return { ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' };
+      return accountHttpOutcomeUnknown('acknowledgement_schema');
     }
   };
   const readAccountApiTokenHttpFailure = (response: AxiosResponse<unknown>): ActionExecuteFailure | null => {
@@ -546,8 +562,7 @@ export function createAccountServerActionDeps(input: Readonly<{
             })),
           })));
           const accounts = profile.connectedAccountsV4.filter(account => account.status !== 'needs_reauth');
-          const periods = accountingReads.filter(read => request.queries.some(query =>
-            getUsageQueryKey(query) === getUsageQueryKey(read.query))).map(read => read.period);
+          const periods = request.queries.map(query => resolveUsageQueryPeriod(query, accountingNowMs));
           const starts = periods.flatMap(period => period.startMs === undefined ? [] : [period.startMs]);
           const ends = periods.flatMap(period => period.endMs === undefined ? [] : [period.endMs]);
           const range = starts.length === request.queries.length && ends.length === request.queries.length
@@ -581,7 +596,7 @@ export function createAccountServerActionDeps(input: Readonly<{
         if (context.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
         if (input.isCredentialCurrent && !await input.isCredentialCurrent()) return retired();
         const accounting = snapshots.filter((snapshot): snapshot is UsageAccountingSourceSnapshot => !('ok' in snapshot));
-        const detail = await readCliUsageDetail({ queries: request.queries.filter(query => query.includeSessionEvidence || query.includeWorkEvidence),
+        const detail = await readCliUsageDetail({ queries: request.queries.filter(query => query.includeAccounting && (query.includeSessionEvidence || query.includeWorkEvidence)),
           accounting, credentials, serverId, serverHttpBaseUrl, accountEncryptionMode,
           allowPrivateRead: !context.externalActionCredential && !context.externalActionExecutionAuthorization,
           nowMs: accountingNowMs, signal: context.signal, assertCurrent: check, read,
@@ -656,14 +671,17 @@ export function createAccountServerActionDeps(input: Readonly<{
         const request = ProjectWorkerActionInputSchemasV1[actionId].parse(actionInput);
         const desired = await client.getService(request);
         if (desired.status !== 'ready') return desired;
-        const unavailable = { ...desired, actual: { status: 'unavailable' as const } };
+        const unavailable = (reasonCode: 'external_observation_unsupported' | 'observation_unavailable') => ({
+          ...desired, actual: { status: 'unavailable' as const, reasonCode },
+        });
         // Project-row discovery has no verified external-effect carrier. Never substitute
         // the daemon's Account credential for an externally authorized read principal.
-        if (context.externalActionCredential || context.externalActionExecutionAuthorization) return unavailable;
+        if (context.externalActionCredential || context.externalActionExecutionAuthorization) return unavailable('external_observation_unsupported');
         const credentials = input.credentials?.token === input.token ? input.credentials : { token: input.token, encryption: null };
         try {
           if (!await isCurrent()) return { status: 'unavailable' };
-          const rows = await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => readProjectAccountRows({ credentials, serverId: targetServerId, signal }));
+          const observation = await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => readProjectAccountRowsObservation({ credentials, serverId: targetServerId, signal }));
+          const rows = observation.snapshot;
           const machines = await listCurrentAccountMachines({ token: credentials.token, serverHttpBaseUrl, signal });
           const actual = await observeProjectServicePlacementActualV1({ ...request,
             workspaceRefs: rows.workspaceRefs, relationships: rows.relationships,
@@ -671,13 +689,13 @@ export function createAccountServerActionDeps(input: Readonly<{
               ? [{ serverId: targetServerId, machineId: machine.id, projection: machine.devcontainerChild }] : []),
             readChildMachines: machineIds => readWorkspaceSyncChildMachineFacts({ serverId: targetServerId, serverHttpBaseUrl, credentials, signal,
               purpose: 'admitted_mapping', machineIds }),
-            isCurrent: async () => await isCurrent() && getActiveProjectAccountRowsSnapshot() === rows,
+            isCurrent: async () => await isCurrent() && await observation.isCurrent(),
             readSnapshot: snapshot => callExactMachineRpc({ credentials, serverUrl: serverHttpBaseUrl,
               machineId: snapshot.machineId, method: RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT,
               request: snapshot, requireCurrentMachine: true, signal }),
           });
           return await isCurrent() ? { ...desired, actual } : { status: 'unavailable' };
-        } catch { return await isCurrent() ? unavailable : { status: 'unavailable' }; }
+        } catch { return await isCurrent() ? unavailable('observation_unavailable') : { status: 'unavailable' }; }
       }
       if (actionId === 'projects.service.placement.set') return await client.setService(ProjectWorkerActionInputSchemasV1[actionId].parse(actionInput));
       if (actionId === 'projects.worker.preferences.get') return await client.get(ProjectWorkerActionInputSchemasV1[actionId].parse(actionInput));
@@ -749,19 +767,21 @@ export function createAccountServerActionDeps(input: Readonly<{
       return row ? { ...output, readiness: row.readiness, canPrepareKeys: row.audience.some(member => member.canPrepareKeys) } : output;
     },
     managedMachineAction: async ({ actionId, input: actionInput, context: actionContext, signal }) => {
-      // Retained inventory belongs to the Home; native effects still require
-      // the daemon's exact-controller managed Action adapter.
-      if (actionId !== 'machines.managed.list' && actionId !== 'machines.managed.get') {
+      // The Action catalog owns Account placement, including cancellation and
+      // setup decisions. Native effects retain the exact-controller adapter.
+      const spec = getActionSpec(actionId);
+      if (resolveActionExecutionPlacementForInput(spec, actionInput) !== 'account') {
         return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
       }
       const body = ManagedMachineActionInputSchemasV1[actionId].parse(actionInput);
+      if (!('homeId' in body)) throw new TypeError('Account-placed managed Actions require an explicit Home');
       const unavailable = await qualifiedHomeActionFailure({ actionId, homeId: body.homeId, context: actionContext, signal });
       if (unavailable) return unavailable;
       const path = managedMachineActionEndpointPathV1(actionId);
       const requestHeaders = resolveRequestHeaders({ context: actionContext, effectActionId: actionId, method: 'POST', path, body });
       if (!requestHeaders.ok) return externalAuthorizationUnavailable();
       const dispatch = await dispatchAccountServerActionHttpRequest({
-        headers: requestHeaders.headers, method: 'POST', path, body, sideEffectClass: 'read',
+        headers: requestHeaders.headers, method: 'POST', path, body, sideEffectClass: spec.sideEffectClass,
         ...(signal ? { signal } : {}),
       });
       if (!dispatch.ok) return dispatch;
@@ -772,6 +792,10 @@ export function createAccountServerActionDeps(input: Readonly<{
       if (response.status < 200 || response.status >= 300) {
         const refusal = ManagedErrorV1Schema.safeParse(response.data);
         if (refusal.success) return { ok: false, errorCode: refusal.data.code, error: refusal.data.code };
+        const confirmedRollback = readHomeDomainConfirmedRollbackV1(response.status, response.data);
+        if (confirmedRollback) {
+          return { ok: false, errorCode: confirmedRollback.code, error: confirmedRollback.code };
+        }
         if (isAuthenticationStatus(response.status)) {
           throw createAuthenticationHttpStatusError(response.status, 'Managed Machine Action authentication failed');
         }
@@ -780,7 +804,7 @@ export function createAccountServerActionDeps(input: Readonly<{
         }
         throw createHttpStatusError(response.status, 'Managed Machine Action request failed');
       }
-      return settleAccountServerActionHttpOutput({ data: response.data, outputSchema: ManagedMachineActionOutputSchemasV1[actionId], sideEffectClass: 'read' });
+      return settleAccountServerActionHttpOutput({ data: response.data, outputSchema: ManagedMachineActionOutputSchemasV1[actionId], sideEffectClass: spec.sideEffectClass });
     },
     machinePresetAction: async ({ actionId, input: actionInput, context: actionContext, signal }) => {
       const body = MachinePresetActionInputSchemasV1[actionId].parse(actionInput);
@@ -895,6 +919,13 @@ export function createAccountServerActionDeps(input: Readonly<{
       if (!dispatch.ok) return dispatch;
       const { response } = dispatch;
       if (response.status >= 400) {
+        // The Home completed the transaction and confirmed that every attempt
+        // rolled back. This is a definite typed failure, never response-loss
+        // ambiguity for the already-issued mutation.
+        const confirmedRollback = readHomeDomainConfirmedRollbackV1(response.status, response.data);
+        if (confirmedRollback) {
+          return { ok: false, errorCode: confirmedRollback.code, error: confirmedRollback.code };
+        }
         // A Home that named its refusal is answering, not failing — including a
         // 403 that carries a governance code, which is an authorization outcome
         // rather than a broken credential.
@@ -1123,8 +1154,14 @@ export function createAccountServerActionDeps(input: Readonly<{
           const result = spec.outputSchema?.parse(projected) ?? projected;
           if (localPublication && input.onPublicLinkIssued) {
             if (!projected || !('url' in projected) || typeof projected.url !== 'string') throw new Error('public_link_publication_unconfirmed');
-            await input.onPublicLinkIssued({ lookupId: localPublication.lookupId, secret: localPublication.secret, shareId: projected.id,
-              url: projected.url });
+            try {
+              await input.onPublicLinkIssued({ lookupId: localPublication.lookupId, secret: localPublication.secret, shareId: projected.id,
+                url: projected.url });
+            } catch {
+              // Local publication notification failed after a valid Home
+              // acknowledgement; do not misdiagnose it as a schema failure.
+              return { ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' };
+            }
           }
           return result;
         }
@@ -1135,7 +1172,7 @@ export function createAccountServerActionDeps(input: Readonly<{
         // but a malformed acknowledgement cannot prove whether its mutation
         // committed. Callers reconcile through the authoritative read owner;
         // this adapter neither retries nor fabricates an inverse operation.
-        return { ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' };
+        return accountHttpOutcomeUnknown('acknowledgement_schema');
       }
     },
     accountSessionsSignOutEverywhereAction: async ({ input: actionInput, context: actionContext, signal }) => {

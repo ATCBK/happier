@@ -30,8 +30,8 @@ import { useWidgetFrameBodyMeta } from '@/components/widgets/frame/widgetFrameBo
 import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
 import { machineGuardStore } from '@/sync/domains/machines/guard/machineGuardStore';
-import { keepMachineGuardWorkRunningViaAction } from '@/sync/domains/machines/guard/machineGuardRpc';
-import { useMachineGuardView } from '@/sync/domains/machines/guard/useMachineGuardView';
+import { DEFAULT_MACHINE_GUARD_ACTIVITY_QUERY, keepMachineGuardWorkRunningViaAction } from '@/sync/domains/machines/guard/machineGuardRpc';
+import { useMachineGuardActivity, useMachineGuardView } from '@/sync/domains/machines/guard/useMachineGuardView';
 export { isMachineGuardOn } from '@/sync/domains/machines/guard/useMachineGuardView';
 import { useMachineDaemonReadTarget } from '@/sync/domains/machines/useMachineDaemonReadTarget';
 import { t } from '@/text';
@@ -388,6 +388,12 @@ function GuardOn(
   }>,
 ) {
   const { size, view, policy, facts, open } = props;
+  const activity = useMachineGuardActivity({
+    ...props.target,
+    ...DEFAULT_MACHINE_GUARD_ACTIVITY_QUERY,
+    enabled: size !== 'small',
+  });
+  const entries = activity.list?.entries;
   const candidates = (
     <GuardCandidates
       view={view}
@@ -399,13 +405,13 @@ function GuardOn(
     />
   );
   const recent = (count: number, label: string) =>
-    view.recentActivity.length > 0 ? (
+    entries && entries.length > 0 ? (
       <View style={styles.section}>
         <MachineWidgetSectionLabel label={label} />
         <GuardRecent
           target={props.target}
           facts={facts}
-          entries={view.recentActivity.slice(0, count)}
+          entries={entries.slice(0, count)}
           open={open}
           testID={props.testID}
         />
@@ -431,7 +437,7 @@ function GuardOn(
       </MachineWidgetColumn>
     );
   if (size === 'wide') {
-    const last = view.recentActivity[0];
+    const last = entries?.[0];
     return (
       <MachineWidgetTwoColumns
         lead={

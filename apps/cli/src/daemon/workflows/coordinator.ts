@@ -1,5 +1,6 @@
 import { classifyWorkflowHoldV1, classifyWorkflowReviewEntryV1, projectWorkflowLoopItemDisplayLabelV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { freezeWorkflowLoopLimitsV1, projectWorkflowFiniteActionInputV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
+import { resolveWorkflowAcceptedStepSelectionV1, WorkflowStepSelectionErrorV1 } from '@happier-dev/protocol/workflows/workflowStepSelectionV1';
 import { deriveWorkflowReplacementId } from '@happier-dev/protocol/workflows/workflowInvocationIdentityV1';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { resolveWorkflowInvocationStructureV1, resolveWorkflowRetainedConversationAttemptV1 } from '@happier-dev/protocol/workflows/workflowInvocationStructureV1';
@@ -25,6 +26,7 @@ import { isAuthoritativeAutomationRunCancellation } from '@/daemon/automation/au
 import type { AutomationRunCause } from '@happier-dev/protocol/automations/run-cause';
 import type { LiveWorkProducerV1 } from '../lifecycle/managedActivity';
 import { RequesterWorkAttributionV1Schema, type RequesterWorkAttributionV1 } from '../lifecycle/requesterWorkAttribution';
+import type { WorkflowAcceptedOriginV1 } from '@happier-dev/protocol/workflows/workflowDefinitionV1';
 
 import {
   evaluateWorkflowCondition,
@@ -32,6 +34,7 @@ import {
   evaluateWorkflowStopCondition,
   selectWorkflowResultPath,
   materializeWorkflowStepInput,
+  captureWorkflowDiscussionContext,
   resolveWorkflowValueReference,
   isWorkflowJsonObject,
   WorkflowInputResolutionError,
@@ -84,10 +87,12 @@ export type WorkflowCoordinatorInvocation = Readonly<{
   resultProvenance?: WorkflowProgressEnvelopeV1['resultProvenance'];
   lifecycle: WorkflowInvocationLifecycleV1;
   result?: WorkflowJsonValue;
+  replyOutcome?: WorkflowProgressEnvelopeV1['replyOutcome'];
   usage?: WorkflowUsageV1;
   reason?: string;
   reasonMessage?: string;
   reasonDetails?: NonNullable<WorkflowProgressEnvelopeV1['reason']>['details'];
+  runtimeIssueV1?: NonNullable<WorkflowProgressEnvelopeV1['reason']>['runtimeIssueV1'];
   validationIssues?: WorkflowProgressEnvelopeV1['validationIssues'];
   execution?: WorkflowProgressEnvelopeV1['execution'];
   sharedConversationInvocationRecordId?: WorkflowProgressEnvelopeV1['sharedConversationInvocationRecordId'];
@@ -134,12 +139,14 @@ export type WorkflowCoordinatorStore = Readonly<{
     review?: WorkflowProgressEnvelopeV1['review'];
     resultProvenance?: WorkflowProgressEnvelopeV1['resultProvenance'];
     result?: WorkflowJsonValue;
+    replyOutcome?: WorkflowProgressEnvelopeV1['replyOutcome'];
     usage?: WorkflowUsageV1;
     /** Private invocation-scoped request state; never a selected step result. */
     interaction?: WorkflowJsonValue;
     reason?: string;
     reasonMessage?: string;
     reasonDetails?: NonNullable<WorkflowProgressEnvelopeV1['reason']>['details'];
+    runtimeIssueV1?: NonNullable<WorkflowProgressEnvelopeV1['reason']>['runtimeIssueV1'];
     validationIssues?: WorkflowProgressEnvelopeV1['validationIssues'];
     execution?: WorkflowProgressEnvelopeV1['execution'];
     sharedConversationInvocationRecordId?: WorkflowProgressEnvelopeV1['sharedConversationInvocationRecordId'];
@@ -165,7 +172,7 @@ export type WorkflowCoordinatorStore = Readonly<{
   readControl: (runId: string) => Promise<'running' | 'pause_requested' | 'cancel_requested'>;
 }>;
 
-export type WorkflowStepExecutionResult =
+export type WorkflowStepExecutionResult = (
   | Readonly<{
       kind: 'completed';
       result?: WorkflowJsonValue;
@@ -173,10 +180,11 @@ export type WorkflowStepExecutionResult =
       /** Native Execution Run results are already decoded; Session results remain exact assistant text. */
       resultEncoding?: 'raw_text' | 'typed';
     }>
-  | Readonly<{ kind: 'failed'; code: string; message?: string; reasonDetails?: NonNullable<WorkflowProgressEnvelopeV1['reason']>['details']; usage?: WorkflowUsageV1 }>
+  | Readonly<{ kind: 'failed'; code: string; message?: string; reasonDetails?: NonNullable<WorkflowProgressEnvelopeV1['reason']>['details']; runtimeIssueV1?: NonNullable<WorkflowProgressEnvelopeV1['reason']>['runtimeIssueV1']; usage?: WorkflowUsageV1 }>
   | Readonly<{ kind: 'needs_attention'; code: string; usage?: WorkflowUsageV1 }>
   | Readonly<{ kind: 'cancelled'; code?: string; usage?: WorkflowUsageV1 }>
-  | Readonly<{ kind: 'outcome_uncertain'; code: string; usage?: WorkflowUsageV1 }>;
+  | Readonly<{ kind: 'outcome_uncertain'; code: string; usage?: WorkflowUsageV1 }>
+) & Readonly<{ replyOutcome?: WorkflowProgressEnvelopeV1['replyOutcome'] }>;
 
 export type WorkflowStepExecutor = (params: Readonly<{
   runId: string;
@@ -192,6 +200,8 @@ export type WorkflowStepExecutor = (params: Readonly<{
   recoveryPreviousWorkspace?: WorkflowWorkspaceDescriptorV1;
   input: MaterializedWorkflowStepInput;
   execution: WorkflowStepExecutionSelection;
+  /** Concrete participant frozen by the accepted Run, never a fresh picker read. */
+  participant?: WorkflowMaterializedLeafV1['participant'];
   /** One immutable execution placement frozen at Run admission. */
   executionTarget: WorkflowRunExecutionTargetV1;
   workspace: WorkflowWorkspaceDescriptorV1;
@@ -200,6 +210,7 @@ export type WorkflowStepExecutor = (params: Readonly<{
   producerBinding?: WorkflowProducerBinding;
   conversationBinding?: WorkflowConversationBinding;
   originSessionId?: string;
+  origin?: WorkflowAcceptedOriginV1;
   /** Supplied only when ORC's real offered-row consumer is wired. */
   onOriginInputOffered?: (execution: Extract<NonNullable<WorkflowProgressEnvelopeV1['execution']>, { kind: 'session' }>, renderedText: string) => Promise<void>;
   /** Immutable authority admitted with the Run; leaf adapters reject broader effective requests. */
@@ -216,7 +227,8 @@ export type WorkflowStepExecutor = (params: Readonly<{
   beforeInputAdmission: () => Promise<void>;
   /** Exact pre-terminal Workflow fact emitted by a detached Execution Run. */
   onExecutionObservation?: (observation: Readonly<{
-    execution: Extract<NonNullable<WorkflowProgressEnvelopeV1['execution']>, { kind: 'detached_run' }>;
+    execution: Extract<NonNullable<WorkflowProgressEnvelopeV1['execution']>, { kind: 'detached_run' | 'action' }>;
+    setupConsentOutput?: Readonly<{ operation: import('@happier-dev/protocol/actions/operations/v1').ActionOperationSnapshotV1 }>;
     usage?: WorkflowUsageV1;
   }>) => Promise<void>;
   signal?: AbortSignal;
@@ -233,10 +245,12 @@ export type WorkflowStepPreparer = (params: Readonly<{
   recoveryPreviousExecution?: WorkflowProgressEnvelopeV1['execution'];
   recoveryPreviousWorkspace?: WorkflowWorkspaceDescriptorV1;
   execution: WorkflowStepExecutionSelection;
+  participant?: WorkflowMaterializedLeafV1['participant'];
   executionTarget: WorkflowRunExecutionTargetV1;
   producerBinding: WorkflowProducerBinding;
   conversationBinding?: WorkflowConversationBinding;
   originSessionId?: string;
+  origin?: WorkflowAcceptedOriginV1;
   onOriginInputOffered?: NonNullable<Parameters<WorkflowStepExecutor>[0]['onOriginInputOffered']>;
   authorization: WorkflowAcceptedAuthorizationV1;
   item?: Readonly<{ value: WorkflowJsonValue; index: number; position: number; count: number }>;
@@ -266,6 +280,7 @@ export type WorkflowActionExecutor = Readonly<{
   executor: Pick<ReturnType<typeof createActionExecutor>, 'prepare'>;
   buildContext: (params: Readonly<{ runId: string; authorization: WorkflowAcceptedAuthorizationV1;
     workDepth: number; originSessionId?: string; workspace: WorkflowWorkspaceDescriptorV1;
+    origin?: WorkflowAcceptedOriginV1;
     role?: WorkflowMaterializedLeafV1['role'];
     signal?: AbortSignal }>) => Promise<ActionExecutorContext>;
   observeRun: (run: ActionCompletionRun, params: Readonly<{ workspace: WorkflowWorkspaceDescriptorV1;
@@ -418,6 +433,8 @@ function effectiveLeaf(input: Readonly<{
   executionTarget: WorkflowRunExecutionTargetV1;
   materializedLeaves: readonly WorkflowMaterializedLeafV1[];
   sourceKey?: string;
+  itemValue?: WorkflowJsonValue;
+  inputs?: Readonly<Record<string, WorkflowJsonValue>>;
 }>, step: WorkflowStep) {
   const authoredDefinition = input.authoredDefinition;
   const authoredStep = findWorkflowStepById(authoredDefinition.blocks, step.id);
@@ -425,13 +442,15 @@ function effectiveLeaf(input: Readonly<{
   const leaf = input.materializedLeaves.find((candidate) => candidate.sourceKey === (input.sourceKey ?? '$root')
     && candidate.blockId === step.id && candidate.kind === 'step');
   if (!leaf) return undefined;
-  const selection = leaf.selection;
+  const selected = resolveWorkflowAcceptedStepSelectionV1(leaf, input.itemValue, input.inputs);
+  const selection = selected.selection;
   // Flattened defaults cannot establish explicit workspace intent. Keep every
   // frozen runtime field, while explicit inheritance stays lazy scope inheritance.
   const workspace = leaf.authoredWorkspace;
   return { selection: { ...selection, workspace },
-    role: leaf.role,
-    executionTarget: leaf.executionTarget, authoredDefinition,
+    participant: selected.participant,
+    role: selected.role,
+    executionTarget: selected.executionTarget, authoredDefinition,
     authoredStep: { ...authoredStep, execution: { ...authoredStep.execution, workspace } } };
 }
 
@@ -446,6 +465,7 @@ export function doesWorkflowImmediateEligibleStepTargetSession(input: Readonly<{
   checkpoint: WorkflowCheckpointEnvelopeV1 | null;
   executionTarget: WorkflowRunExecutionTargetV1;
   materializedLeaves: readonly WorkflowMaterializedLeafV1[];
+  inputs?: Readonly<Record<string, WorkflowJsonValue>>;
   sessionId: string;
 }>): boolean {
   if (input.checkpoint?.frontier.paused) return false;
@@ -461,7 +481,7 @@ async function readInvocationResult(
   record: WorkflowCoordinatorInvocation | undefined,
   store: WorkflowCoordinatorStore,
   frame: Frame,
-  sessionContext?: Pick<WorkflowValueResolutionRuntime, 'resolveSessionContext' | 'resolveSessionContextField'>,
+  sessionContext?: Pick<WorkflowValueResolutionRuntime, 'resolveSessionContext' | 'resolveSessionContextField' | 'resolveDiscussionContext'>,
 ): Promise<WorkflowJsonValue> {
   if (record?.lifecycle !== 'completed') throw new WorkflowInputResolutionError('missing_reference');
   const result = record.result !== undefined ? record.result : await store.readContainerResult(record, async (workflow) => {
@@ -491,7 +511,7 @@ async function readInvocationResultPath(
   path: readonly (string | number)[],
   store: WorkflowCoordinatorStore,
   frame: Frame,
-  sessionContext?: Pick<WorkflowValueResolutionRuntime, 'resolveSessionContext' | 'resolveSessionContextField'>,
+  sessionContext?: Pick<WorkflowValueResolutionRuntime, 'resolveSessionContext' | 'resolveSessionContextField' | 'resolveDiscussionContext'>,
 ): Promise<WorkflowJsonValue> {
   if (record?.lifecycle !== 'completed') throw new WorkflowInputResolutionError('missing_reference');
   if (record.container?.kind === 'loop' && path[0] === 'outcome') {
@@ -506,12 +526,12 @@ function createResolutionRuntime(
   inputs: Readonly<Record<string, WorkflowJsonValue>>,
   frame: Frame,
   store: WorkflowCoordinatorStore,
-  sessionContext?: Pick<WorkflowValueResolutionRuntime, 'resolveSessionContext' | 'resolveSessionContextField'>,
+  sessionContext?: Pick<WorkflowValueResolutionRuntime, 'resolveSessionContext' | 'resolveSessionContextField' | 'resolveDiscussionContext'>,
 ): WorkflowValueResolutionRuntime {
   const runId = frame.scopeRunId;
   const binding = createWorkflowProducerBinding({ runId, frame, store });
   const resultOf = async (record: WorkflowCoordinatorInvocation | undefined) => await readInvocationResult(record, store, frame, sessionContext);
-  return {
+  return captureWorkflowDiscussionContext({
     inputs,
     ...sessionContext,
     ...(frame.item ? { item: frame.item } : {}),
@@ -548,7 +568,7 @@ function createResolutionRuntime(
       }
       return count;
     },
-  };
+  });
 }
 
 async function resolveLoopSourceSelection(
@@ -820,7 +840,8 @@ class WorkflowReviewHolds {
 type WorkflowCoordinatorDependencies = Readonly<{
   requesterWorkAttributionV1?: RequesterWorkAttributionV1;
   store: WorkflowCoordinatorStore;
-  sessionContext?: Pick<WorkflowValueResolutionRuntime, 'resolveSessionContext' | 'resolveSessionContextField'>;
+  /** Origin-owned context readers. Their content is retained in the existing invocation input. */
+  sessionContext?: Pick<WorkflowValueResolutionRuntime, 'resolveSessionContext' | 'resolveSessionContextField' | 'resolveDiscussionContext'>;
   executeStep: WorkflowStepExecutor;
   prepareStep?: WorkflowStepPreparer;
   action?: WorkflowActionExecutor;
@@ -834,6 +855,8 @@ type WorkflowCoordinatorDependencies = Readonly<{
   allocateInvocationRecordId?: () => string;
   rootInvocationRecordId?: string;
   onReviewEntered?: (params: Readonly<{ runId: string; invocation: WorkflowCoordinatorInvocation }>) => Promise<void>;
+  /** Publish accepted leaf output; replay repairs its external acknowledgement without executing again. */
+  onInvocationCompleted?: (params: Readonly<{ runId: string; invocation: WorkflowCoordinatorInvocation }>) => Promise<void>;
 }>;
 
 export function createWorkflowCoordinator(deps: WorkflowCoordinatorDependencies): Readonly<{
@@ -850,6 +873,7 @@ export function createWorkflowCoordinator(deps: WorkflowCoordinatorDependencies)
     workDepth: number;
     authorization: WorkflowAcceptedAuthorizationV1;
     originSessionId?: string;
+    origin?: WorkflowAcceptedOriginV1;
     automationCause?: AutomationRunCause;
     signal?: AbortSignal;
   }>) => Promise<WorkflowCoordinatorResult>;
@@ -869,7 +893,7 @@ export function createWorkflowCoordinator(deps: WorkflowCoordinatorDependencies)
   return {
     liveWorkProducer,
     refreshReviewHolds: async () => { await activeHolds?.refresh(); },
-    run: async ({ runId, definition, authoredDefinition, inputs, executionTarget, materializedLeaves, frozenChildren, workDepth, authorization, originSessionId, automationCause, signal }) => {
+    run: async ({ runId, definition, authoredDefinition, inputs, executionTarget, materializedLeaves, frozenChildren, workDepth, authorization, originSessionId, origin, automationCause, signal }) => {
       const root: Frame = {
         scopeRunId: runId,
         conversationOwnerKey: deps.rootInvocationRecordId ?? workflowInvocationKey({ runId, blockId: '$root', scope: [], attempt: 0 }),
@@ -893,13 +917,15 @@ export function createWorkflowCoordinator(deps: WorkflowCoordinatorDependencies)
       try {
         const context = withAbortSignal({
           runId, definition, authoredDefinition, inputs, executionTarget, materializedLeaves, frozenChildren,
-          workDepth, sourceKey: '$root', authorization, originSessionId, automationCause, rootOwnerKey: root.conversationOwnerKey,
+          workDepth, sourceKey: '$root', authorization, originSessionId, origin, automationCause, rootOwnerKey: root.conversationOwnerKey,
           deps: { ...deps, store: trackedStore,
             ...(deps.sessionContext ? { sessionContext: {
               ...(deps.sessionContext.resolveSessionContext ? { resolveSessionContext: (recentTurns: number) =>
                 holds.track(() => deps.sessionContext!.resolveSessionContext!(recentTurns)) } : {}),
               ...(deps.sessionContext.resolveSessionContextField ? { resolveSessionContextField: (field: 'usage.tokensUsed' | 'goal.tokenBudget') =>
                 holds.track(() => deps.sessionContext!.resolveSessionContextField!(field)) } : {}),
+              ...(deps.sessionContext.resolveDiscussionContext ? { resolveDiscussionContext: (scope: 'addressing_message' | 'so_far') =>
+                holds.track(() => deps.sessionContext!.resolveDiscussionContext!(scope)) } : {}),
             } } : {}),
             executeStep: (input) => holds.track(() => deps.executeStep(input)),
             ...(deps.prepareStep ? { prepareStep: (input: Parameters<WorkflowStepPreparer>[0]) => holds.track(() => deps.prepareStep!(input)) } : {}),
@@ -944,6 +970,7 @@ export function createWorkflowCoordinator(deps: WorkflowCoordinatorDependencies)
           ...(error.state === 'waiting_for_review' ? { parkRevision: holds.parkRevision } : {}) };
         if (error instanceof WorkflowLeafFailure) return { state: error.state, reason: error.code };
         if (error instanceof WorkflowInputResolutionError) return { state: 'failed', reason: error.code };
+        if (error instanceof WorkflowStepSelectionErrorV1) return { state: 'failed', reason: error.code };
         throw error;
       } finally {
         holds.close();
@@ -967,6 +994,7 @@ type ExecutionContext = Readonly<{
   projectWorkspace?: WorkflowWorkspaceSource;
   rootOwnerKey: string;
   originSessionId?: string;
+  origin?: WorkflowAcceptedOriginV1;
   automationCause?: AutomationRunCause;
   signal?: AbortSignal;
   admissionGate: KeyedAdmissionGate;
@@ -1538,6 +1566,7 @@ async function reserveOwnedNativeInputs(context: ExecutionContext): Promise<void
       ...(admitted.parentKey ? { parentKey: admitted.parentKey } : {}) });
     if (current?.recordId !== admitted.recordId) continue;
     const structure = await resolveWorkflowInvocationStructure({ definition: context.definition,
+      inputs: context.inputs,
       frozenChildren: context.frozenChildren,
       invocation: row, readInvocation,
       keyOfInvocation: ({ index, progress }) => workflowInvocationKey({ runId: index.runId,
@@ -1545,7 +1574,7 @@ async function reserveOwnedNativeInputs(context: ExecutionContext): Promise<void
     });
     if (!structure) throw new WorkflowLeafFailure('interrupted', 'continuation_unavailable');
     const leaf = effectiveLeaf({ ...context, definition: structure.definition, authoredDefinition: structure.definition,
-      sourceKey: structure.sourceKey }, structure.step);
+      sourceKey: structure.sourceKey, itemValue: structure.frame.item?.value, inputs: structure.inputs }, structure.step);
     if (!leaf) throw new WorkflowLeafFailure('interrupted', 'target_unavailable');
     if (leaf.executionTarget.kind !== 'detached_run') continue;
     const conversationBinding = resolveWorkflowConversationBinding({
@@ -1760,6 +1789,7 @@ async function executeActionBlock(
     const actionRequestId = `${context.runId}/${row.logicalInvocationRecordId ?? row.recordId}/${row.attempt}`;
     const actionContext: ActionExecutorContext = { ...await context.holds.track(() => context.deps.action!.buildContext({ runId: context.runId, authorization: context.authorization,
       workDepth: context.workDepth, workspace: actionWorkspace, ...(context.originSessionId ? { originSessionId: context.originSessionId } : {}),
+      ...(context.origin ? { origin: context.origin } : {}),
       ...(frozen.role ? { role: frozen.role } : {}),
       ...(context.signal ? { signal: context.signal } : {}) })), actionRequestId };
     // Qualified plugin Actions consume the same host front door and approval
@@ -1842,6 +1872,7 @@ async function executeActionBlock(
     const approvalWorkspace = workspace;
     const actionContext = { ...await context.holds.track(() => context.deps.action!.buildContext({
       runId: context.runId, authorization: context.authorization, workDepth: context.workDepth, workspace: approvalWorkspace,
+      ...(context.origin ? { origin: context.origin } : {}),
       ...(context.originSessionId ? { originSessionId: context.originSessionId } : {}),
       ...(frozen.role ? { role: frozen.role } : {}), ...(context.signal ? { signal: context.signal } : {}),
     })), actionRequestId: row.execution.actionRequestId };
@@ -1881,7 +1912,7 @@ async function executeActionBlock(
   if (!completed) return await fail('outcome_uncertain', 'outcome_uncertain');
   // The command owner confirms cancellation with its exact terminal output.
   // Native launch failures can carry details while their execution remains unknown.
-  if (actionId.data === 'machines.command.run' && completed.kind === 'failed'
+  if (actionId === 'machines.command.run' && completed.kind === 'failed'
     && completed.errorCode === 'command_cancelled' && completed.value !== undefined
     && classifyWorkflowAbort(context.signal) === 'cancelled' && row.execution?.kind === 'action') {
     await context.deps.store.commitFact({ key: row.key, lifecycle: 'cancelled',
@@ -2022,16 +2053,20 @@ async function executeStepBlock(
     }
     return await executeStepBlock(step, scope, frame, context, parentKey, memberOrdinal, supplementalInputValues);
   }
-  const selectedLeaf = effectiveLeaf(context, step);
+  const selectedLeaf = effectiveLeaf({ ...context, itemValue: frame.item?.value }, step);
   if (!selectedLeaf) throw new WorkflowLeafFailure('interrupted', 'target_unavailable');
   const { selection: selectedExecution, executionTarget } = selectedLeaf;
-  const conversationBinding = resolveWorkflowConversationBinding({
+  const conversationBinding = selectedLeaf.participant?.kind === 'session'
+    ? { kind: 'existing_session' as const, sessionId: selectedLeaf.participant.session.sessionId,
+      machineId: selectedLeaf.participant.machineId }
+    : selectedLeaf.participant?.kind === 'model' ? { kind: 'fresh' as const }
+    : resolveWorkflowConversationBinding({
     execution: selectedExecution,
     authoredConversation: selectedLeaf.authoredStep.execution?.conversation,
     inheritedOwnerKey: frame.conversationOwnerKey,
     rootOwnerKey: context.rootOwnerKey,
     targetClass: executionTarget.kind,
-  });
+    });
   if (existing?.lifecycle === 'completed') {
     if (existing.execution && conversationBinding.kind === 'shared') {
       // Replaying a terminal predecessor releases no input. Its serialized,
@@ -2046,6 +2081,7 @@ async function executeStepBlock(
       });
     }
     const result = existing.result ?? null;
+    await context.deps.onInvocationCompleted?.({ runId: context.runId, invocation: existing });
     return result;
   }
   if (existing) {
@@ -2169,7 +2205,7 @@ async function executeStepBlock(
   let nativeTerminalCommitted = false;
   let admissionFailure: { error: unknown } | undefined;
   try {
-    if (admitted.execution && conversationBinding.kind === 'shared') {
+    if (admitted.execution && admitted.execution.kind !== 'action' && conversationBinding.kind === 'shared') {
       await context.deps.store.commitSharedConversation({
         scopeOwnerKey: conversationBinding.scopeOwnerKey,
         targetClass: conversationBinding.targetClass,
@@ -2200,12 +2236,14 @@ async function executeStepBlock(
         producerBinding,
         conversationBinding,
         ...(context.originSessionId ? { originSessionId: context.originSessionId } : {}),
+        ...(context.origin ? { origin: context.origin } : {}),
         ...(onOriginInputOffered ? { onOriginInputOffered } : {}),
         ...(recoveryPrevious?.execution ? { recoveryPreviousExecution: recoveryPrevious.execution } : {}),
         ...(recoveryPrevious?.workspace?.descriptor
           ? { recoveryPreviousWorkspace: recoveryPrevious.workspace.descriptor }
           : {}),
         execution: selectedExecution,
+        ...(selectedLeaf.participant ? { participant: selectedLeaf.participant } : {}),
         executionTarget,
         authorization: context.authorization,
         ...(frame.item ? { item: frame.item } : {}),
@@ -2250,7 +2288,8 @@ async function executeStepBlock(
       conversationBinding,
       ...(context.projectWorkspace ? { projectWorkspace: context.projectWorkspace } : {}),
       ...(defaultWorkspaceOwner ? { defaultWorkspaceOwner } : {}),
-      ...((conversationBinding.kind === 'from_step' || conversationBinding.kind === 'existing_session' || conversationBinding.kind === 'origin_session'
+      ...((selectedLeaf.participant?.kind === 'model'
+        || conversationBinding.kind === 'from_step' || conversationBinding.kind === 'existing_session' || conversationBinding.kind === 'origin_session'
         || conversationBinding.kind === 'shared')
         && executionTarget.kind === 'session' && (!selectedExecution.workspace || selectedExecution.workspace.kind === 'inherit')
         ? { useConversationWorkspace: true } : {}),
@@ -2286,6 +2325,7 @@ async function executeStepBlock(
       producerBinding,
       conversationBinding,
       ...(context.originSessionId ? { originSessionId: context.originSessionId } : {}),
+      ...(context.origin ? { origin: context.origin } : {}),
       ...(onOriginInputOffered ? { onOriginInputOffered,
         readOriginInputControl: async () => await context.deps.store.readControl(context.runId) } : {}),
       ...(recoveryPrevious?.execution ? { recoveryPreviousExecution: recoveryPrevious.execution } : {}),
@@ -2294,6 +2334,7 @@ async function executeStepBlock(
         : {}),
       input,
       execution: selectedExecution,
+      ...(selectedLeaf.participant ? { participant: selectedLeaf.participant } : {}),
       executionTarget,
       workspace: workspaceResolution.workspace,
       ...(preparedStep?.preparedStep !== undefined
@@ -2347,6 +2388,9 @@ async function executeStepBlock(
           && durableExecution.providerResumeIdentity
           ? { ...correspondence, providerResumeIdentity: durableExecution.providerResumeIdentity }
           : correspondence;
+        if (durableExecution?.kind === 'action' && correspondence.kind === 'detached_run'
+          && (durableExecution.actionId !== 'execution.run.start' || durableExecution.input.runId !== correspondence.runId
+            || durableExecution.localInputId !== correspondence.localInputId)) throw new Error('workflow_invocation_fact_conflict');
         durableExecution = persistedCorrespondence;
         const current = await context.deps.store.read(key);
         const lifecycle = isOriginInput && current?.lifecycle === 'cancel_requested' ? 'cancel_requested' : 'running';
@@ -2367,10 +2411,34 @@ async function executeStepBlock(
       },
       onExecutionObservation: async (observation) => {
         const currentExecution = durableExecution;
+        if (observation.execution.kind === 'action') {
+          const incoming = observation.execution;
+          const consent = observation.setupConsentOutput
+            ? readWorkflowProjectSetupConsentHold(incoming.actionId, observation.setupConsentOutput) : null;
+          if (currentExecution && (currentExecution.kind !== 'action'
+            || currentExecution.actionId !== incoming.actionId || currentExecution.actionRequestId !== incoming.actionRequestId
+            || !sameStrictJsonValue(currentExecution.input, incoming.input)
+            || !sameStrictJsonValue(currentExecution.awaitedOperations, incoming.awaitedOperations))) {
+            throw new Error('workflow_invocation_fact_conflict');
+          }
+          if (incoming.actionId !== (executionTarget.kind === 'session' ? 'session.spawn_new' : 'execution.run.start')
+            || incoming.awaitedOperations?.some(operation => operation.machineId !== workspaceResolution.workspace.machineId)) {
+            throw new Error('workflow_invocation_fact_conflict');
+          }
+          const current = await context.deps.store.read(key);
+          if (current?.lifecycle === 'cancel_requested' || current?.lifecycle === 'cancelled'
+            || context.signal?.aborted) return;
+          durableExecution = incoming;
+          await context.deps.store.commitFact({ key, lifecycle: consent ? 'needs_attention' : 'running', execution: incoming,
+            ...(consent ? { reason: consent.code } : {}) });
+          return;
+        }
         if (currentExecution && (
-          currentExecution.kind !== 'detached_run'
+          currentExecution.kind !== 'action' && (currentExecution.kind !== 'detached_run'
           || currentExecution.runId !== observation.execution.runId
-          || currentExecution.localInputId !== observation.execution.localInputId
+          || currentExecution.localInputId !== observation.execution.localInputId)
+          || currentExecution.kind === 'action' && (currentExecution.actionId !== 'execution.run.start'
+            || currentExecution.localInputId !== observation.execution.localInputId)
         )) {
           throw new Error('workflow_invocation_fact_conflict');
         }
@@ -2411,7 +2479,8 @@ async function executeStepBlock(
             observation: { kind: 'failed', code: error.code } }) === 'waiting_for_review') {
             const row = await enterReview({ key, lifecycle: 'waiting_for_review', reason: error.code,
               ...(error.resultFailureReason ? { reasonMessage: error.resultFailureReason } : {}),
-              ...(execution.usage ? { usage: execution.usage } : {}) }, context, () => {
+              ...(execution.usage ? { usage: execution.usage } : {}),
+              ...(execution.replyOutcome ? { replyOutcome: execution.replyOutcome } : {}) }, context, () => {
               nativeTerminalCommitted = true;
               releaseAdmission();
             });
@@ -2424,6 +2493,7 @@ async function executeStepBlock(
             reason: error.code,
             ...(error.resultFailureReason ? { reasonMessage: error.resultFailureReason } : {}),
             ...(execution.usage ? { usage: execution.usage } : {}),
+            ...(execution.replyOutcome ? { replyOutcome: execution.replyOutcome } : {}),
           });
           nativeTerminalCommitted = true;
         }
@@ -2433,21 +2503,24 @@ async function executeStepBlock(
         isGeneration: isReviewGeneration, inputCompleted: true, observation: { kind: 'completed' } }) === 'waiting_for_review') {
         const row = await enterReview({ key, lifecycle: 'waiting_for_review', result,
           review: { resultSource: { kind: 'execution_input' } },
-          ...(execution.usage ? { usage: execution.usage } : {}) }, context, () => {
+          ...(execution.usage ? { usage: execution.usage } : {}),
+          ...(execution.replyOutcome ? { replyOutcome: execution.replyOutcome } : {}) }, context, () => {
           nativeTerminalCommitted = true;
           releaseAdmission();
         });
         await awaitReviewedInvocation(row, context);
         return await executeStepBlock(step, scope, frame, context, parentKey, memberOrdinal, supplementalInputValues);
       }
-      await context.deps.store.commitFact({
+      const completed = await context.deps.store.commitFact({
         key,
         lifecycle: 'completed',
         result,
         ...(isReviewGeneration ? { review: { resultSource: { kind: 'execution_input' as const } } } : {}),
         ...(execution.usage ? { usage: execution.usage } : {}),
+        ...(execution.replyOutcome ? { replyOutcome: execution.replyOutcome } : {}),
       });
       nativeTerminalCommitted = true;
+      await context.deps.onInvocationCompleted?.({ runId: context.runId, invocation: completed });
       return result;
     }
     const generationContinuationRefused = execution.kind === 'needs_attention' && !rejoining && !durableExecution
@@ -2456,14 +2529,23 @@ async function executeStepBlock(
       isGeneration: isReviewGeneration, inputCompleted: false, observation: execution,
       continuationRefusedBeforeAdmission: generationContinuationRefused }) === 'waiting_for_review') {
       const row = await enterReview({ key, lifecycle: 'waiting_for_review', reason: execution.code,
+        ...(execution.kind === 'failed' && execution.runtimeIssueV1 ? { runtimeIssueV1: execution.runtimeIssueV1 } : {}),
         ...(execution.kind === 'failed' && execution.reasonDetails ? { reasonDetails: execution.reasonDetails } : {}),
         ...(execution.kind === 'failed' && execution.message !== undefined ? { reasonMessage: execution.message } : {}),
-        ...(execution.usage ? { usage: execution.usage } : {}) }, context, () => {
+        ...(execution.usage ? { usage: execution.usage } : {}),
+        ...(execution.replyOutcome ? { replyOutcome: execution.replyOutcome } : {}) }, context, () => {
         nativeTerminalCommitted = true;
         releaseAdmission();
       });
       await awaitReviewedInvocation(row, context);
       return await executeStepBlock(step, scope, frame, context, parentKey, memberOrdinal, supplementalInputValues);
+    }
+    if (execution.kind === 'cancelled' && durableExecution?.kind === 'action'
+      && durableExecution.actionId === 'session.spawn_new') {
+      // Ending startup observation before input admission does not end the
+      // original spawn. Recovery must observe that operation and handle any
+      // Session it creates before this leaf can release custody.
+      throw new WorkflowRuntimeInterruption();
     }
     const authorizationRevoked = context.signal?.aborted
       && context.signal.reason === WORKFLOW_AUTHORIZATION_NOT_CURRENT_ABORT_REASON;
@@ -2500,11 +2582,14 @@ async function executeStepBlock(
       key,
       lifecycle: failStopClosure ? 'cancelled' : execution.kind,
       reason,
+      ...(execution.kind === 'failed' && execution.runtimeIssueV1 && reason === execution.code
+        ? { runtimeIssueV1: execution.runtimeIssueV1 } : {}),
       ...(execution.kind === 'failed' && execution.reasonDetails && reason === execution.code
         ? { reasonDetails: execution.reasonDetails } : {}),
       ...(execution.kind === 'failed' && execution.message !== undefined
         ? { reasonMessage: execution.message } : {}),
       ...(execution.usage ? { usage: execution.usage } : {}),
+      ...(execution.replyOutcome ? { replyOutcome: execution.replyOutcome } : {}),
     });
     nativeTerminalCommitted = execution.kind === 'failed' || execution.kind === 'cancelled';
     if (authorizationRevoked && execution.kind === 'cancelled') {

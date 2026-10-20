@@ -20,6 +20,8 @@ import type {
   PluginInvocableActionId,
 } from '@happier-dev/plugin-sdk/actions';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { getPluginMachineExecutionRouting, isPluginActionApprovalRequestCreated } from '@happier-dev/plugin-sdk/actions';
+import type { PluginUiHostApi } from '@happier-dev/plugin-sdk/ui';
 
 type FixtureContributionRef = Readonly<{
   pluginId: string;
@@ -29,6 +31,46 @@ type FixtureContributionRef = Readonly<{
 type FixtureCancellationOptions = Readonly<{
   signal?: AbortSignal;
 }>;
+
+/** External author code consumes the exact host decision, reads it, then corrects it with current CAS. */
+export async function memoryDecisionAuthoringFixture(
+  actions: Pick<ActionsService, 'execute'>,
+  input: PluginActionInputById['memory.decision.save'],
+  options: FixtureCancellationOptions,
+) {
+  const saved = await actions.execute('memory.decision.save', input, options);
+  if (isPluginActionApprovalRequestCreated(saved) || !saved.ok) return { saved };
+  const ref = { kind: 'doc' as const, artifactId: saved.artifactId };
+  const read = await actions.execute('memory.read', { ref }, options);
+  if (isPluginActionApprovalRequestCreated(read)) return { saved, read };
+  const corrected = await actions.execute('memory.update', { ref, expectedRevision: read.revision,
+    factId: saved.factId, text: `${input.text} after review`,
+  }, options);
+  return { saved, read, corrected };
+}
+
+/** The mounted UI transport executes the very same public author workflow. */
+export function memoryDecisionUiAuthoringFixture(
+  hostApi: Pick<PluginUiHostApi, 'executeAction'>,
+  input: PluginActionInputById['memory.decision.save'],
+  options: FixtureCancellationOptions,
+) {
+  return memoryDecisionAuthoringFixture({ execute: hostApi.executeAction }, input, options);
+}
+
+/** An installed author consumes the host's review, then resubmits its exact target and revision. */
+export async function memoryDuplicateChoiceAuthoringFixture(actions: ActionsService, options: FixtureCancellationOptions) {
+  const text = 'Use the Project database';
+  const result = await actions.execute('memory.remember', { scope: 'account', text }, options);
+  if (isPluginActionApprovalRequestCreated(result)) return result;
+  if (result.ok) return result.factId;
+  const candidate = result.candidates[0];
+  return actions.execute('memory.remember', { ref: result.ref, expectedRevision: result.revision, text,
+    duplicateChoice: candidate
+      ? { kind: 'update', factId: candidate.factId, expectedRevision: result.revision }
+      : { kind: 'keep_both', expectedRevision: result.revision },
+  }, options);
+}
 
 type BoundaryCall = Readonly<{
   action: PluginInvocableActionId | FixtureContributionRef;
@@ -249,7 +291,7 @@ const { manifest, activate } = definePlugin({
           'contributed Action result was not returned through ActionsService',
         );
         assert(
-          contributedWithOrigin.executionOrigin.materializationRef.pluginId === contributedAction.pluginId,
+          getPluginMachineExecutionRouting(contributedWithOrigin.executionOrigin).pluginId === contributedAction.pluginId,
           'contributed Action execution origin was not host-stamped for its exact target',
         );
         if (!('status' in hostResult)) {

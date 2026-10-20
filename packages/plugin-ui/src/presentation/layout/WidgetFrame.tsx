@@ -25,6 +25,7 @@ import {
   HappierDisclosureChevron,
 } from '../collection/DisclosureChevron.js';
 import { HAPPIER_PAGE_METRICS } from './pageMetrics.js';
+import { HappierBodyEdgeContext } from './columnEdge.js';
 import { resolveHappierPageTextStyle } from './pageText.js';
 import { HappierMaterialSurface, type HappierMaterialSurfaceRender } from './Surface.js';
 import type { HappierSurfaceGradient } from './material.js';
@@ -354,8 +355,12 @@ export function HappierWidgetFrame(props: HappierWidgetFrameProps) {
       </View>
     );
   } else {
-    // A plain source leaves a narrow frame before the title truncates.
-    const plain: ReactNode = below ? props.source : resolveHappierWidgetFrameSource({ widthPx, source: props.source });
+    // A plain source leaves a narrow frame before the title truncates. A source that only repeats the title (a
+    // widget still named after its source) is the same fact twice: the title says it once.
+    const repeatsTitle = typeof props.source === 'string' && typeof props.title === 'string'
+      && props.source.trim() === props.title.trim();
+    const plain: ReactNode = repeatsTitle ? null
+      : below ? props.source : resolveHappierWidgetFrameSource({ widthPx, source: props.source });
     source = renderSlot(plain, 'source', `${testID}.source`, renderText);
   }
   const meta = below ? props.meta
@@ -520,7 +525,7 @@ export function HappierWidgetFrame(props: HappierWidgetFrameProps) {
             props.bodyStyle,
           ]}
         >
-          {props.children}
+          <HappierBodyEdgeContext.Provider value>{props.children}</HappierBodyEdgeContext.Provider>
         </View>
         {props.footer ? (
           <View

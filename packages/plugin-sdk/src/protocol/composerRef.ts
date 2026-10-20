@@ -25,6 +25,7 @@ import type { ProtocolComposableSchema } from './protocolFacade.js';
  */
 export type ProtocolComposerRefV1 =
     | Readonly<{ kind: 'session'; sessionId: string }>
+    | Readonly<{ kind: 'discussion'; discussionId: string }>
     | Readonly<{ kind: 'newSession'; instanceId: string }>
     | Readonly<{ kind: 'pendingMessage'; sessionId: string; localId: string }>
     | Readonly<{ kind: 'participantMessage'; sessionId: string; instanceId: string }>

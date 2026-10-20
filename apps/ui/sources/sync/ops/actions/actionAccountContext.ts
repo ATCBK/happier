@@ -1,4 +1,5 @@
 import { pick } from 'zod/mini';
+import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 import { TokenStorage, subscribeHomeCredentialMutations, areCredentialsEqual } from '@/auth/storage/tokenStorage';
 import type { ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { readCredentialAuthorityKind } from '@/auth/context/credentialAuthority';
@@ -28,9 +29,10 @@ import { resolveServerScopedTransport } from '@/sync/runtime/orchestration/serve
 import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/connectionManager';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { parseToken } from '@/utils/auth/parseToken';
-import { createArtifactWithHeaderViaApi, decryptArtifactListItems, fetchArtifactWithBodyFromApi, updateArtifactWithHeaderViaApi,
+import { createArtifactWithHeaderViaApi, decryptArtifactListItems, fetchArtifactWithBodyFromApi, fetchArtifactsWithBodiesFromApi, updateArtifactWithHeaderViaApi,
     fetchArtifactBodyRevisionsFromApi, fetchArtifactBinaryFromApi, restoreArtifactBodyRevisionViaApi, type ArtifactDataKeyCache } from '@/sync/engine/artifacts/syncArtifacts';
-import { createArtifactAccessApi, deleteArtifact as deleteArtifactApi, fetchArtifacts as fetchArtifactsApi, fetchArtifactStorageUsage, encodeArtifactListCursor } from '@/sync/api/artifacts/apiArtifacts';
+import { listArtifactHeadersV1 } from '@happier-dev/protocol/artifacts/artifactListSelectionV1';
+import { createArtifactAccessApi, deleteArtifact as deleteArtifactApi, fetchArtifactListPage, fetchArtifactStorageUsage, encodeArtifactListCursor } from '@/sync/api/artifacts/apiArtifacts';
 import { HappyError } from '@/utils/errors/errors';
 import type { ArtifactBodyInput, ArtifactHeader, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { isEmbedWindowContext } from '@/embed/isEmbedWindowContext';
@@ -51,9 +53,10 @@ function readableRawArtifactHeader(artifact: DecryptedArtifact | null): Readonly
 }
 
 const artifactAccessProjectionSchema = pick(ArtifactAccessRecipientCensusResponseV1Schema, { ownerAccountId: true, access: true });
-type ArtifactCreateOperation = Readonly<{ artifactId?: string; header: Readonly<Record<string, unknown>>; body: ArtifactBodyInput; savedBy?: ArtifactSavedByV1; source?: ArtifactWorkspaceSourceV1; signal?: AbortSignal }>;
+type ArtifactCreateOperation = Readonly<{ artifactId?: string; header: Readonly<Record<string, unknown>>; body: ArtifactBodyInput; savedBy?: ArtifactSavedByV1; source?: ArtifactWorkspaceSourceV1; memoryDecisionSource?: CoordinationMessageRefV1; signal?: AbortSignal }>;
 type ArtifactUpdateOperation = Omit<Parameters<WorkflowDefinitionArtifactOperations['update']>[0], 'body'> & Readonly<{ body: ArtifactBodyInput; savedBy?: ArtifactSavedByV1 }>;
 type ArtifactHtmlBundleRead = Readonly<{ bundle: ArtifactHtmlBundleV1; revision: Readonly<{ headerVersion: number; bodyVersion: number }> }>;
+type ArtifactReadOptions = Readonly<{ signal?: AbortSignal; prepareRecipientKeys?: boolean }>;
 type ActionEffectClass = ReturnType<typeof getActionSpec>['sideEffectClass'];
 export type RawSettingsMutationOptions = Readonly<{
     signal?: AbortSignal;
@@ -121,7 +124,10 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 assertCurrent(); const result = await run(); assertResultCurrent(effectClass); return result;
             },
             fetchArtifact: async (_artifactId: string) => unavailable(),
-            readArtifactContent: async (..._args: Parameters<WorkflowDefinitionArtifactOperations['read']>) => artifactUnavailable(),
+            readArtifact: async (_artifactId: string, _options?: ArtifactReadOptions): Promise<DecryptedArtifact | null> => artifactUnavailable(),
+            readArtifactContent: async (..._args: Parameters<WorkflowDefinitionArtifactOperations['read']>): ReturnType<WorkflowDefinitionArtifactOperations['read']> => artifactUnavailable(),
+            readArtifactContents: async (_ids: readonly string[], _options?: Parameters<WorkflowDefinitionArtifactOperations['read']>[1]):
+                Promise<PromiseSettledResult<Awaited<ReturnType<WorkflowDefinitionArtifactOperations['read']>>>[]> => artifactUnavailable(),
             createArtifact: async (_header: Readonly<Record<string, unknown>>, _body: string) => unavailable(),
             createArtifactDocument: async (_input: ArtifactCreateOperation) => artifactUnavailable(),
             updateArtifactDocument: async (_input: ArtifactUpdateOperation) => artifactUnavailable(),
@@ -132,7 +138,8 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
             listArtifactRevisions: async (_artifactId: string, _signal?: AbortSignal) => artifactUnavailable(),
             restoreArtifactRevision: async (_input: ArtifactActionInputV1<'artifact.revisions.restore'>, _signal?: AbortSignal, _savedBy?: ArtifactSavedByV1) => artifactUnavailable(),
             readArtifactStorageUsage: async (_signal?: AbortSignal) => artifactUnavailable(),
-            readArtifactPublicLinkResource: async (_artifactId: string, _signal?: AbortSignal): Promise<ArtifactPublicLinkKeyholdingResourceV1 | null> => artifactUnavailable(),
+            readArtifactPublicLinkResource: async (_artifactId: string, _signal?: AbortSignal,
+                _options?: Readonly<{ prepareRecipientKeys?: boolean }>): Promise<ArtifactPublicLinkKeyholdingResourceV1 | null> => artifactUnavailable(),
             readArtifactHtmlBundle: async (_artifactId: string, _signal?: AbortSignal): Promise<ArtifactHtmlBundleRead> => artifactUnavailable(),
         };
     }
@@ -279,20 +286,21 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
         const canPublish = () => {
             return accountLifetime.isCurrent() && areAccountSettingsScopesEqual(storage.getState().settingsScope, scope);
         };
-        const artifactParams = async () => ({
-            request, serverId, credentials, encryption: (await resolveAccountEncryption()).encryption, artifactDataKeys,
-        });
-        const readArtifact = async (artifactId: string, options?: Readonly<{ signal?: AbortSignal }>) => {
+        const artifactParams = async () => {
             assertCurrent();
-            const artifact = await fetchArtifactWithBodyFromApi({ ...await artifactParams(), artifactId, signal: options?.signal ?? signal });
+            return { request, serverId, credentials, encryption: (await resolveAccountEncryption()).encryption, artifactDataKeys };
+        };
+        const readArtifact = async (artifactId: string, options?: ArtifactReadOptions) => {
+            assertCurrent();
+            const artifact = await fetchArtifactWithBodyFromApi({ ...await artifactParams(), artifactId, signal: options?.signal ?? signal,
+                prepareRecipientKeys: options?.prepareRecipientKeys });
             assertCurrent();
             return artifact;
         };
-        const fetchArtifact = async (artifactId: string, options?: Readonly<{ signal?: AbortSignal }>) => {
+        const fetchArtifact = async (artifactId: string, options?: ArtifactReadOptions) => {
             const artifact = await readArtifact(artifactId, options);
             if (canPublish()) {
-                // One read publishes one row. `applyArtifacts` also marks the whole list as read, which made the
-                // Library show its first-visit state while the list was still loading.
+                // One read publishes one row, without claiming inventory readiness.
                 if (artifact) storage.getState().updateArtifact(artifact);
                 else storage.getState().deleteArtifact(artifactId);
             }
@@ -327,12 +335,21 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
             remove: (input, operationSignal) => withArtifactPreparation(input.artifactId, () => accessApi.remove(input, operationSignal), operationSignal),
         };
         const listArtifacts = async (options: Parameters<WorkflowDefinitionArtifactOperations['list']>[0]) => {
+                // Only the background inventory yields to the routed Session.
+                // Exact reads and user writes (including Approve) have their
+                // own captured Account and must not wait for that acquisition.
+                const { sync } = await import('@/sync/sync');
+                await sync.awaitBootstrapForegroundAcquisition();
                 assertCurrent();
                 const params = await artifactParams();
                 assertCurrent();
-                const artifacts = await fetchArtifactsApi(credentials, { request, ...options });
+                const page = await fetchArtifactListPage(credentials, { request, ...options, serverId });
+                const artifacts = page.items;
                 assertCurrent();
-                const openedArtifacts = await decryptArtifactListItems({ ...params, artifacts, includeBody: options.includeBody });
+                // Header inventories classify content without consuming private attribution.
+                // Exact/body reads retain its validation and disclosure boundary.
+                const openedArtifacts = await decryptArtifactListItems({ ...params, artifacts,
+                    includeBody: options.includeBody, includeProvenance: options.includeBody === true });
                 assertCurrent();
                 const items = [];
                 let coverage: 'complete' | 'partial' = 'complete';
@@ -354,13 +371,14 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 const last = artifacts.at(-1);
                 const nextCursor = options.limit !== undefined && artifacts.length === options.limit && last
                     ? encodeArtifactListCursor({ artifactId: last.id, updatedAt: last.updatedAt }) : undefined;
-                return { items, coverage, ...(nextCursor ? { nextCursor } : {}) };
+                return { items, coverage, ...(page.hasUnclassified === undefined ? {} : { hasUnclassified: page.hasUnclassified }),
+                    ...(nextCursor ? { nextCursor } : {}) };
         };
-        const createArtifactDocument = async ({ artifactId, header, body, savedBy, source, signal: operationSignal }: ArtifactCreateOperation) => {
+        const createArtifactDocument = async ({ artifactId, header, body, savedBy, source, memoryDecisionSource, signal: operationSignal }: ArtifactCreateOperation) => {
             assertCurrent();
             const publication: { artifact?: DecryptedArtifact } = {};
             await createArtifactWithHeaderViaApi({ ...await artifactParams(), artifactId, signal: operationSignal ?? signal,
-                header, body, source, savedBy: savedBy ?? { kind: 'person', accountId },
+                header, body, source, memoryDecisionSource, savedBy: savedBy ?? { kind: 'person', accountId },
                 addArtifact: (artifact) => {
                     publication.artifact = artifact;
                     if (canPublish()) storage.getState().addArtifact(artifact);
@@ -370,14 +388,14 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
             if (!created?.isDecrypted || created.bodyVersion === undefined) throw artifactContentUnavailable();
             return { artifactId: created.id, artifact: created, revision: { headerVersion: created.headerVersion, bodyVersion: created.bodyVersion } };
         };
-        const updateArtifactDocument = async ({ artifactId, expectedRevision, header, body, savedBy, signal: operationSignal }: ArtifactUpdateOperation) => {
+        const updateArtifactDocument = async ({ artifactId, expectedRevision, header, body, savedBy, memoryDecisionSource, signal: operationSignal }: ArtifactUpdateOperation) => {
                 const current = await fetchArtifact(artifactId, { signal: operationSignal });
                 if (!current) return { ok: false as const, errorCode: 'not_found', error: 'Artifact not found' };
                 readableArtifactHeader(current);
                 const publication: { artifact?: DecryptedArtifact } = {};
                 try {
                     await updateArtifactWithHeaderViaApi({ ...await artifactParams(), artifactId, expectedRevision, signal: operationSignal ?? signal,
-                        header, body, savedBy: savedBy ?? { kind: 'person', accountId }, getArtifact: () => current,
+                        header, body, memoryDecisionSource, savedBy: savedBy ?? { kind: 'person', accountId }, getArtifact: () => current,
                         updateArtifact: (artifact) => {
                             publication.artifact = artifact;
                             if (canPublish()) storage.getState().updateArtifact(artifact);
@@ -393,18 +411,19 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                     throw error;
                 }
         };
-        const readArtifactDocument = async (publish: boolean, ...[artifactId, options]: Parameters<WorkflowDefinitionArtifactOperations['read']>) => {
-                const artifact = await (publish ? fetchArtifact : readArtifact)(artifactId, options);
+        const projectArtifactDocument = async (artifact: DecryptedArtifact | null,
+            options?: Parameters<WorkflowDefinitionArtifactOperations['read']>[1]) => {
                 if (!artifact) return null;
+                const artifactId = artifact.id;
                 const header = readableRawArtifactHeader(artifact);
                 if (artifact.bodyVersion === undefined || (artifact.body !== null && typeof artifact.body !== 'string')) throw artifactContentUnavailable();
                 const access = requireArtifactAccessProjection(artifact);
                 const sharing = artifactKindHasSharedWidgetInputsV1(header.kind)
                     ? { shared: await readArtifactSharedAudienceV1({ current: { artifactId, header, ...access,
                         publicAudience: artifact.publicAudience }, signal: options?.signal,
-                        readGrants: () => publish
-                            ? artifactAccessGrants.list({ artifactId }, options?.signal)
-                            : accessApi.list({ artifactId }, options?.signal) }) } : {};
+                        // The audience is a read of this row, not a roster operation: listing through
+                        // `artifactAccessGrants` would reopen and re-prepare the Artifact just read.
+                        readGrants: () => accessApi.list({ artifactId }, options?.signal) }) } : {};
                 assertCurrent();
                 return { artifactId: artifact.id, header, body: artifact.body,
                     provenance: artifact.provenance,
@@ -412,9 +431,24 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                     publicAudience: artifact.publicAudience,
                     revision: { headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion } };
         };
+        const readArtifactDocument = async (publish: boolean, ...[artifactId, options]: Parameters<WorkflowDefinitionArtifactOperations['read']>) =>
+            projectArtifactDocument(await (publish ? fetchArtifact : readArtifact)(artifactId, options), options);
+        const readArtifactContents = async (artifactIds: readonly string[], options?: Parameters<WorkflowDefinitionArtifactOperations['read']>[1]) => {
+            assertCurrent(); options?.signal?.throwIfAborted();
+            const results = await fetchArtifactsWithBodiesFromApi({ ...await artifactParams(), artifactIds,
+                signal: options?.signal ?? signal });
+            assertCurrent(); options?.signal?.throwIfAborted();
+            return Promise.allSettled(results.map(async result => {
+                if (result.status === 'rejected') throw result.reason;
+                return projectArtifactDocument(result.value, options);
+            }));
+        };
         const workflowArtifacts: WorkflowDefinitionArtifactOperations = {
             read: (...args) => readArtifactDocument(true, ...args),
-            list: listArtifacts,
+            // A coarse-kind read is one filtered request while every row is classified; the shared selector
+            // restarts from the full inventory when the server reports unclassified rows.
+            list: (options) => options.coarseKind === undefined ? listArtifacts(options)
+                : listArtifactHeadersV1({ options, readPage: pageOptions => listArtifacts(pageOptions ?? {}), encodeCursor: encodeArtifactListCursor }),
             create: async (input) => (await createArtifactDocument(input)).artifactId,
             update: updateArtifactDocument,
             delete: async (artifactId, options) => {
@@ -516,6 +550,7 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                     // Settings owner separately guards publication into the live scope.
                     if (result?.status !== 'applied') assertCurrent();
                     if (!result) throw new Error('Account Settings mutation did not run');
+                    if (result.status === 'invalid') return requireOneShotAccountSettingsMutationApplied(result);
                     if (!options?.observeOutcome) requireOneShotAccountSettingsMutationApplied(result);
                     return result;
                 } finally { cancellation.dispose(); }
@@ -549,9 +584,11 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 } finally { stopWatching(); }
             },
             fetchArtifact,
+            readArtifact,
             // Finite content observations use the same codec and authority without
             // invalidating the list that is currently reading them.
-            readArtifactContent: (...args: Parameters<WorkflowDefinitionArtifactOperations['read']>) => readArtifactDocument(false, ...args),
+            readArtifactContent: (...args: Parameters<WorkflowDefinitionArtifactOperations['read']>): ReturnType<WorkflowDefinitionArtifactOperations['read']> => readArtifactDocument(false, ...args),
+            readArtifactContents,
             createArtifactDocument,
             updateArtifactDocument,
             readArtifactHtmlBundle: async (artifactId: string, operationSignal?: AbortSignal): Promise<ArtifactHtmlBundleRead> => {
@@ -565,15 +602,18 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 const mime = typeof artifact.body === 'string' ? typeof header.mime === 'string' ? header.mime : undefined : artifact.body.mime;
                 return { bundle: artifactHtmlBundleFromBodyV1(body, mime, 'stored'), revision: { headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion } };
             },
-            readArtifactPublicLinkResource: async (artifactId: string, operationSignal?: AbortSignal): Promise<ArtifactPublicLinkKeyholdingResourceV1 | null> => {
-                const artifact = await fetchArtifact(artifactId, { signal: operationSignal });
+            readArtifactPublicLinkResource: async (artifactId: string, operationSignal?: AbortSignal,
+                options?: Readonly<{ prepareRecipientKeys?: boolean }>): Promise<ArtifactPublicLinkKeyholdingResourceV1 | null> => {
+                const artifact = await fetchArtifact(artifactId, { signal: operationSignal, prepareRecipientKeys: options?.prepareRecipientKeys });
                 if (!artifact) return null;
                 const header = readableRawArtifactHeader(artifact);
-                const { accountMode } = await resolveAccountEncryption();
+                // A shared resource retains its owner's admitted mode, not this reader's Account mode.
+                const mode = artifact.storageMode;
+                if (mode !== 'plain' && mode !== 'e2ee') throw artifactContentUnavailable();
                 assertCurrent();
                 return { artifactId: artifact.id, header, body: artifact.body,
-                    ...requireArtifactAccessProjection(artifact), encryptionMode: accountMode,
-                    dataKey: accountMode === 'plain' ? null : artifactDataKeys.get(artifactId)?.dataKey ?? null,
+                    ...requireArtifactAccessProjection(artifact), encryptionMode: mode,
+                    dataKey: mode === 'plain' ? null : artifactDataKeys.get(artifactId)?.dataKey ?? null,
                     ...(artifact.bodyVersion === undefined ? {} : { revision: { headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion } }) };
             },
             workflowArtifacts, homeHubArtifactTransport, artifactAccessGrants, encodeArtifactListCursor, listArtifacts,
@@ -618,6 +658,20 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
 }
 
 export type LazyActionAccountContext = Awaited<ReturnType<typeof captureLazyActionAccountContext>>;
+
+/** One RPC observation borrows its Action's caller and Account cancellation owners. */
+export async function withActionAccountRequestSignal<TResult>(
+    account: Partial<Pick<LazyActionAccountContext, 'accountLifetime' | 'invocationSignal'>> | undefined,
+    signal: AbortSignal | undefined,
+    operation: (signal: AbortSignal | undefined) => Promise<TResult>,
+): Promise<TResult> {
+    if (!account?.accountLifetime) return await operation(signal ?? account?.invocationSignal);
+    const cancellation = new AbortController();
+    const retirement = account.accountLifetime.onRetire(() => cancellation.abort());
+    const merged = mergeAbortSignals([cancellation.signal, signal ?? account.invocationSignal]);
+    try { return await operation(merged.signal); }
+    finally { merged.dispose(); retirement.dispose(); }
+}
 
 /** Only the original Home-open Artifact's known ACK may outlive presentation focus. */
 export async function captureHomeOpenApprovalSettlementAccount(original: LazyActionAccountContext, request: ApprovalRequest) {

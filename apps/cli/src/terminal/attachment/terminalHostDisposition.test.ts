@@ -452,12 +452,49 @@ describe('executeTerminalHostDisposition', () => {
         executeTerminalHostDisposition(input),
       ]);
 
-      expect(results.filter((result) => result.status === 'destroyed')).toHaveLength(1);
-      expect(results.filter((result) => result.status === 'parked')).toHaveLength(1);
+      expect(results).toEqual([
+        { status: 'destroyed', attachmentId: attachment.attachmentId },
+        { status: 'destroyed', attachmentId: attachment.attachmentId },
+      ]);
       expect(dispose).toHaveBeenCalledTimes(1);
       await expect(readTerminalHostAttachmentInfo({ happyHomeDir: dir.name, sessionId: 'session-1' }))
         .resolves.toBeNull();
     } finally {
+      dir.removeCallback();
+    }
+  });
+
+  it('joins the exact in-flight result after its descriptor has already been removed', async () => {
+    const dir = tmp.dirSync({ unsafeCleanup: true });
+    let releaseRetirement!: () => void;
+    const pending = new Promise<void>((resolve) => { releaseRetirement = resolve; });
+    try {
+      const sessionId = 'session-retirement-pending';
+      const attachment = await writeTerminalHostAttachmentInfo({ happyHomeDir: dir.name, sessionId, handle: HANDLE });
+      let descriptorRemoved = false;
+      const dispose = vi.fn(async () => undefined);
+      const input = {
+        happyHomeDir: dir.name, sessionId, expectedAttachmentId: attachment.attachmentId,
+        intent: { kind: 'destroy_owned_host' as const, reason: 'explicit_user_stop' as const },
+        adapter: buildAdapter(dispose),
+        removeAttachmentInfo: async (target: Parameters<typeof removeTerminalHostAttachmentInfo>[0]) => {
+          const removed = await removeTerminalHostAttachmentInfo(target);
+          descriptorRemoved = true;
+          await pending;
+          return removed;
+        },
+      };
+      const first = executeTerminalHostDisposition(input);
+      await vi.waitFor(() => expect(descriptorRemoved).toBe(true));
+      const joined = executeTerminalHostDisposition(input);
+      releaseRetirement();
+      await expect(Promise.all([first, joined])).resolves.toEqual([
+        { status: 'destroyed', attachmentId: attachment.attachmentId },
+        { status: 'destroyed', attachmentId: attachment.attachmentId },
+      ]);
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      releaseRetirement();
       dir.removeCallback();
     }
   });
@@ -530,13 +567,21 @@ describe('executeTerminalHostDisposition', () => {
     };
     const removeAttachmentInfo = vi.fn(async () => true);
 
-    await expect(executeConfirmedDeadTerminalHostAttachmentRetirement({
+    const input = {
       happyHomeDir: '/tmp/happy',
       sessionId: legacy.sessionId,
       expectedAttachmentInfo: legacy,
       readAttachmentInfo: vi.fn(async () => legacy),
       removeAttachmentInfo,
-    })).resolves.toEqual({ status: 'retired', attachmentId: null });
+    };
+    await expect(Promise.all([
+      executeConfirmedDeadTerminalHostAttachmentRetirement(input),
+      executeConfirmedDeadTerminalHostAttachmentRetirement(input),
+    ])).resolves.toEqual([
+      { status: 'retired', attachmentId: null },
+      { status: 'retired', attachmentId: null },
+    ]);
+    expect(removeAttachmentInfo).toHaveBeenCalledOnce();
     expect(removeAttachmentInfo).toHaveBeenCalledWith({
       happyHomeDir: '/tmp/happy',
       sessionId: legacy.sessionId,

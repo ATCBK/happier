@@ -2,6 +2,7 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { AccountUsernameUpdateErrorV1Schema } from '../account/profile.js';
 import { z } from 'zod/mini';
 import { ACTION_ID_FAMILIES_V1 } from './actionIds.js';
+import { FriendsMutationErrorSchema } from '../social/friends.js';
 
 import {
   HOME_GOVERNANCE_ACTION_IDS_V1,
@@ -48,6 +49,7 @@ import {
  */
 export const HOME_DOMAIN_ACTION_IDS_V1 = [
   ...ACTION_ID_FAMILIES_V1.account_profile,
+  ...ACTION_ID_FAMILIES_V1.friends,
   ...HOME_GOVERNANCE_ACTION_IDS_V1,
   ...HOME_IDENTITY_ACTION_IDS_V1,
   ...TEAM_HOME_ACTION_IDS_V1,
@@ -62,6 +64,7 @@ export const HOME_DOMAIN_ACTION_IDS_V1 = [
 
 export type HomeDomainActionIdV1 =
   | typeof ACTION_ID_FAMILIES_V1.account_profile[number]
+  | typeof ACTION_ID_FAMILIES_V1.friends[number]
   | HomeGovernanceActionIdV1
   | HomeIdentityActionIdV1
   | typeof TEAM_HOME_ACTION_IDS_V1[number]
@@ -81,6 +84,7 @@ export function isHomeDomainActionIdV1(value: string): value is HomeDomainAction
 
 const HOME_DOMAIN_ERROR_SCHEMAS_V1 = [
   AccountUsernameUpdateErrorV1Schema,
+  FriendsMutationErrorSchema,
   HomeGovernanceErrorV1Schema,
   HomeSettingsInvalidErrorV1Schema,
   TeamErrorV1Schema,
@@ -101,12 +105,12 @@ type HomeDomainActionObjectErrorV1 = z.infer<
 export type HomeDomainActionErrorCodeV1 =
   | HomeDomainActionObjectErrorV1['error']
   | z.infer<typeof ProviderErrorV1Schema>['code']
-  | 'session_absent' | 'session_delete_conflict';
+  | 'session_absent' | 'session_active' | 'session_delete_conflict';
 
 // The session DELETE route predates typed error codes. Keep its exact released
 // refusals at the same Home error boundary as the other domain envelopes.
 const SessionDeleteRefusalSchema = lazyZodSchema(() => z.strictObject({
-  error: z.enum(['Session not found or not owned by user', 'Session delete condition was lost']),
+  error: z.enum(['Session not found or not owned by user', 'Session is active', 'Session delete condition was lost']),
 }));
 
 /**
@@ -125,7 +129,10 @@ export function readHomeDomainActionErrorV1(value: unknown): Readonly<{
   const sessionDelete = SessionDeleteRefusalSchema.safeParse(value);
   if (sessionDelete.success) return {
     code: sessionDelete.data.error === 'Session not found or not owned by user'
-      ? 'session_absent' : 'session_delete_conflict',
+      ? 'session_absent'
+      : sessionDelete.data.error === 'Session is active'
+        ? 'session_active'
+        : 'session_delete_conflict',
     details: sessionDelete.data,
   };
   const provider = ProviderErrorV1Schema.safeParse(value);
@@ -134,7 +141,7 @@ export function readHomeDomainActionErrorV1(value: unknown): Readonly<{
     : null;
 }
 
-export type HomeDomainActionTransportV1 = Readonly<{ method: string; path: string }>;
+export type HomeDomainActionTransportV1 = Readonly<{ method: string; path: string; preservePathFieldsInBody?: true }>;
 
 /** The exact Home-local transport this intent declared on its Action row. */
 export function homeDomainActionTransportV1(

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
 import { SessionModelTransitionRequestV1Schema, SessionModelTransitionResultV1Schema } from '@happier-dev/protocol/sessions/control/modelTransitionV1';
 import { projectExecutionRunChildChoiceV1, withExecutionRunStartFailureDetails, ExecutionRunStartFailureDetailsV1Schema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
@@ -12,7 +13,7 @@ import { standardCleanup } from '@/dev/testkit';
 // The default executor, Account capture, Action admission, scoped client and strict codecs stay real.
 const account = createProviderSettingsAccountHarness();
 let respond: Parameters<typeof installSessionActionRpcBoundary>[0] = () => { throw new Error('Unexpected Session RPC'); };
-const requests = installSessionActionRpcBoundary(request => respond(request));
+const requests = installSessionActionRpcBoundary((request, context) => respond(request, context));
 await loadSyncSingletonForTests();
 const { storage } = await import('@/sync/domains/state/storage');
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
@@ -46,7 +47,7 @@ describe('Provider routing Actions through the real UI composition', () => {
         const { serverId, accountId } = await account.restore({ machines: [createMachineFixture({ id: 'machine_1', active: true, activeAt: Date.now() })] });
         installSessionActionFixture({ homes: account.home, storage, serverId, session: { id: 'lead' } });
         const childChoice = projectExecutionRunChildChoiceV1({ agentTargetKey: 'agent:happier.agent.claude/claude',
-            parentModelSelection: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: 'pc_parent', modelId: 'parent-model' },
+            parentModelSelection: ProviderBoundModelRefSchema.parse({ agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: 'pc_parent', modelId: 'parent-model' }),
             parentRouteCompatibility: 'incompatible' });
         const details = withExecutionRunStartFailureDetails({ childChoice }, 'noRunCreated');
         respond = request => {

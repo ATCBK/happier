@@ -1,9 +1,11 @@
+import { z } from 'zod/mini';
 import { PendingActivationAuthorizationV1Schema } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
 import { SessionAccessAccountSummaryV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessPrincipalV1';
 import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { V2SessionListResponseSchema, V2SessionRecordSchema, V2SessionByIdNotFoundSchema, type V2SessionListResponse } from '@happier-dev/protocol/sessions/control/contract';
 import { parseSessionRuntimeActivityProjectionFields } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
 import { buildSessionListServerQueryV1, type SessionListQueryV1 } from '@happier-dev/protocol/sessions/listing/query';
+import { withSessionOwnerMetadataCiphertextValidationReuseV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 
 import { createNotAuthenticatedError } from '@/sync/runtime/connectivity/authErrors';
 import {
@@ -398,7 +400,7 @@ function coerceLegacySessionRecord(raw: unknown): V2SessionRecord | null {
         // when the id is omitted and never persisted as a second source.
         ...(Object.prototype.hasOwnProperty.call(raw, 'responsibleAccount')
             ? {
-                responsibleAccount: SessionAccessAccountSummaryV1Schema.nullable().parse(raw.responsibleAccount),
+                responsibleAccount: z.nullable(SessionAccessAccountSummaryV1Schema).parse(raw.responsibleAccount),
               }
             : {}),
         latestTurnStatus: raw.latestTurnStatus === 'in_progress'
@@ -576,6 +578,7 @@ export async function fetchSessionListPageCompat(params: Readonly<{
     limit: number;
     allowLegacyV1Fallback?: boolean;
     telemetryFields?: SyncPerformanceTelemetryFields;
+    getPreviousOwnerMetadataEnvelope?: (sessionId: string) => unknown;
 }>): Promise<{
     sessions: V2SessionListResponse['sessions'];
     nextCursor: string | null;
@@ -660,13 +663,18 @@ export async function fetchSessionListPageCompat(params: Readonly<{
     const v2ParseFields = typeof v2ResponseChars === 'number'
         ? { ...v2TelemetryFields, responseChars: v2ResponseChars }
         : v2TelemetryFields;
+    const previousOwnerEnvelopes = isRecord(v2Body) && Array.isArray(v2Body.sessions)
+        ? v2Body.sessions.flatMap(row => isRecord(row) && typeof row.id === 'string'
+            ? [params.getPreviousOwnerMetadataEnvelope?.(row.id)] : [])
+        : [];
 
     if (v2Response.ok) {
         if (isQuery) {
             const parsedQuery = syncPerformanceTelemetry.measure(
                 'sync.sessions.snapshot.fetchPage.responseSchema',
                 v2ParseFields,
-                () => SessionListQueryResponseV1Schema.safeParse(v2Body),
+                () => withSessionOwnerMetadataCiphertextValidationReuseV1(previousOwnerEnvelopes,
+                    () => SessionListQueryResponseV1Schema.safeParse(v2Body)),
             );
             if (!parsedQuery.success) {
                 throw new HappyError('Invalid /v2/sessions/query response', false, {
@@ -683,7 +691,8 @@ export async function fetchSessionListPageCompat(params: Readonly<{
                 source: 'v2',
             };
         }
-        const parsed = parseCompatSessionListResponse(v2Body, v2ParseFields);
+        const parsed = withSessionOwnerMetadataCiphertextValidationReuseV1(previousOwnerEnvelopes,
+            () => parseCompatSessionListResponse(v2Body, v2ParseFields));
         if (parsed) {
             return {
                 sessions: parsed.sessions,

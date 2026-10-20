@@ -28,12 +28,12 @@ function reportReconnectCatchUpFailure(params: { onDebug: (message: string, data
     });
 }
 
-function snapshotReasonForChangesFallback(reason: 'connect' | 'reconnect'): SessionSnapshotRefreshReason {
-    return reason;
+function snapshotReasonForChangesFallback(reason: 'connect' | 'reconnect' | 'live'): SessionSnapshotRefreshReason {
+    return reason === 'live' ? 'explicit-drain' : reason;
 }
 
 export async function runSessionChangesSyncOnConnect(params: {
-    reason: 'connect' | 'reconnect';
+    reason: 'connect' | 'reconnect' | 'live';
     token: string;
     sessionId: string;
     lastObservedMessageSeq: number;
@@ -64,7 +64,7 @@ export async function runSessionChangesSyncOnConnect(params: {
         let transcriptCatchUpSucceeded = true;
         // If the server indicates the cursor is invalid (future cursor or pruned floor),
         // force a snapshot rebuild so we don't miss deletion signals.
-        if (params.reason === 'reconnect') {
+        if (params.reason !== 'connect') {
             try {
                 await params.catchUpSessionMessages({
                     afterSeq: params.lastObservedMessageSeq,
@@ -95,7 +95,7 @@ export async function runSessionChangesSyncOnConnect(params: {
 
         // Backwards compatibility: old servers may not support /v2/changes yet (e.g. 404).
         // On reconnect, fall back to the snapshot-based convergence path.
-        if (params.reason === 'reconnect') {
+        if (params.reason !== 'connect') {
             try {
                 await params.catchUpSessionMessages({
                     afterSeq: params.lastObservedMessageSeq,

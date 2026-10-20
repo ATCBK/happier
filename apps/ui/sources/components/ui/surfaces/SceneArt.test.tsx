@@ -74,7 +74,8 @@ describe('SceneArt', () => {
                 light: planetLightForProgress(0.38),
             });
             expect(screen.findHostByTestId('scene-planet-body')?.props.style[0]).toMatchObject({ left: 0, top: 0, width: 232, height: 92.8 });
-            return createPlanetCanvasSceneCache()(canvas.props, 1);
+            return createPlanetCanvasSceneCache()({ width: canvas.props.width, height: canvas.props.height,
+                options: canvas.props.options }, 1);
         };
         const rich = await renderLook('rich', 0.7, true);
         const airy = await renderLook('airy', 0, false);

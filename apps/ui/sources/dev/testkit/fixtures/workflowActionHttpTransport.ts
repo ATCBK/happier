@@ -16,6 +16,14 @@ import { parseToken } from '@/utils/auth/parseToken';
 import { createPlainAccountEncryptionCurrentnessFixture } from './accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from './featureFixtures';
 import { createWorkflowDefinitionFixture } from './workflowRunFixtures';
+import { AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema } from '@happier-dev/protocol/account/authoringMemory';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { CurrentCursorResponseSchema } from '@happier-dev/protocol/changes';
+import { PushTokensResponseSchema, PushTokensRemoteAlertProjectionV2Schema } from '@happier-dev/protocol/push/pushTokenRegistration';
+import { createPlainProjectAccountRowListFixture } from './projectAccountRows';
+import { FeedResponseSchema } from '@/sync/domains/social/feedTypes';
+import type { FetchedMachineRow } from '@/sync/engine/machines/syncMachines';
+import { createEmptyAccountBootstrapHttpResponse } from './accountBootstrapHttpBoundary';
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
 function record(value: unknown): Record<string, unknown> {
@@ -30,6 +38,7 @@ export function createWorkflowActionHttpTransport(params: Readonly<{
     accountId: () => string;
     automationDefinitions?: (url: URL, init?: RequestInit) => Promise<Response | undefined>;
     automationRuns?: (url: URL, init?: RequestInit) => Promise<Response>;
+    machineRows?: () => readonly FetchedMachineRow[];
 }>) {
     const base = createRootLayoutFeaturesResponse();
     const features = FeaturesResponseSchema.parse({ ...base,
@@ -56,6 +65,19 @@ export function createWorkflowActionHttpTransport(params: Readonly<{
         try { requestAccountId = authorization?.startsWith('Bearer ') ? parseToken(authorization.slice(7)) : null; } catch { /* Invalid bearer remains unauthenticated. */ }
         if (!requestAccountId) return json({ error: 'Not authenticated' }, 401);
         if (target.pathname === '/v1/account/profile') return json(AccountProfileSchema.parse({ id: requestAccountId }));
+        if ((init?.method ?? 'GET') === 'GET' && target.pathname === '/v1/push-tokens') {
+            return json(target.searchParams.get('projectionVersion') === '2'
+                ? PushTokensRemoteAlertProjectionV2Schema.parse({ v: 2,
+                    accountRemoteAlerts: { settingsVersion: settingsByAccount.get(requestAccountId)?.version ?? 1, status: 'disabled' }, tokens: [] })
+                : PushTokensResponseSchema.parse({ tokens: [] }));
+        }
+        if ((init?.method ?? 'GET') === 'GET' && target.pathname === '/v1/feed') {
+            return json(FeedResponseSchema.parse({ items: [], hasMore: false }));
+        }
+        if (target.pathname === '/v1/machines') return json(params.machineRows?.() ?? []);
+        if (target.pathname === '/v2/cursor') return json(CurrentCursorResponseSchema.parse({ cursor: 0, changesFloor: 0 }));
+        if (target.pathname === AUTHORING_MEMORY_ROUTE_V1) return json(AuthoringMemoryListResponseV1Schema.parse({ rows: [] }));
+        if (target.pathname === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return json(createPlainProjectAccountRowListFixture());
         if (target.pathname === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
         if (target.pathname === '/v2/account/settings') {
             let settings = settingsByAccount.get(requestAccountId);
@@ -78,6 +100,9 @@ export function createWorkflowActionHttpTransport(params: Readonly<{
             id: decodeURIComponent(target.pathname.slice('/v1/machines/'.length)), dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
         } });
         if (target.pathname === '/v1/artifacts') {
+            // Sync's header census reads the fixture's current storage snapshot.
+            // Only the body-inclusive Workflow library read consumes its scripted page.
+            if (target.searchParams.get('includeBody') !== 'true') return json(artifacts);
             const page = WorkflowDefinitionListResultV1Schema.parse(await reply('workflow.definition.list', {}));
             if (page.nextCursor || page.pluginWorkflows?.length) throw new Error('HTTP fixture requires real Artifact pagination/plugin transport');
             const seed = createWorkflowDefinitionFixture({ defaults: { agentTarget: {
@@ -175,7 +200,12 @@ export function createWorkflowActionHttpTransport(params: Readonly<{
             return json({ runs: page.runs.map(run => ({ ...run, ownerAccountId: requestAccountId })),
                 ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}), acceptedEnvelopesByRunId, keyCensusByRunId });
         }
-        throw new Error(`Unexpected HTTP fixture route ${target.pathname}`);
+        const bootstrap = createEmptyAccountBootstrapHttpResponse(target.pathname, init);
+        if (bootstrap) return bootstrap;
+        // An unimplemented API route still answers from a reachable Home, just
+        // like the server's not-found handler and the Account connection harness.
+        // Required routes must prove their successful domain outcome above it.
+        return json({ error: 'Not found', path: target.pathname, method: init?.method ?? 'GET' }, 404);
     };
     return { fetch, features };
 }

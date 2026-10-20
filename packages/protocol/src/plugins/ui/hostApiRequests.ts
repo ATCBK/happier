@@ -9,6 +9,7 @@ import {
   type PluginContributionIdentityV1,
 } from '../contributionIdentity.js';
 import { PluginIdSchema } from '../pluginId.js';
+import { QualifiedConnectedAccountPurposeV1Schema } from '../../connect/connectedAccountPurposeIdentity.js';
 import { PluginContributionLocalIdSchema } from '../contributionIdentity.js';
 import {
   QualifiedConnectedAccountIdSchema,
@@ -30,6 +31,7 @@ import {
 } from './composer.js';
 import {
   ComposerAttachmentAuthorValueV1Schema,
+  ComposerAttachmentValueV1Schema,
   MAX_COMPOSER_ATTACHMENT_INSTANCES_V1,
 } from '../../runtime/input/composerAttachmentV1.js';
 import {
@@ -48,8 +50,9 @@ import {
   normalizePluginUiSubPathV1,
 } from './semanticCommands.js';
 import { PluginUiSurfaceContextV1Schema } from './surfaceContext.js';
-import { PluginUiContextEnrichmentV1Schema } from './currentUiContext.js';
+import { CurrentUiContextSnapshotV1Schema, PluginUiContextEnrichmentV1Schema } from './currentUiContext.js';
 import { asProtocolZod } from '../actions/internalProtocolZodAdapter.js';
+import { defineProtocolCanonicalJsonValue } from '../actions/protocolComposableSchema.js';
 import {
   PluginTargetedContributionSelectionV1Schema,
   PluginUiTargetedContributionOperationV1Schema,
@@ -466,6 +469,7 @@ export const PluginUiOpenConnectedAccountsRequestV1Schema = lazyZodSchema(() => 
   z.strictObject({
     service: asProtocolZod(PluginContributionIdentityV1Schema),
     accountId: zMini.optional(asProtocolZod(QualifiedConnectedAccountIdSchema)),
+    purpose: zMini.optional(QualifiedConnectedAccountPurposeV1Schema),
   }),
 ]));
 export type PluginUiOpenConnectedAccountsRequestV1 =
@@ -518,12 +522,22 @@ export const PluginUiExecuteActionRequestV1Schema = lazyZodSchema(() => z.strict
 export type PluginUiExecuteActionRequestV1 =
   z.infer<typeof PluginUiExecuteActionRequestV1Schema>;
 
+/** Admission for a caller-owned Account effect; it does not invoke a daemon handler. */
+export const PluginUiActionAdmissionResultV1Schema = lazyZodSchema(() => z.strictObject({
+  admitted: z.boolean(),
+}));
+
 export type PluginUiJsonObjectV1 = { readonly [key: string]: PluginUiJsonValueV1 };
 
+function isPluginUiJsonObject(value: PluginUiJsonValueV1): value is PluginUiJsonObjectV1 {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /** Selection values share the incumbent bounded host-input JSON boundary. */
-export const PluginUiJsonObjectV1Schema = lazyZodSchema(() => PluginUiLaunchInputV1Schema.check(zMini.refine((value): value is PluginUiJsonObjectV1 => (
-    typeof value === 'object' && value !== null && !Array.isArray(value)
-  ), 'Action input selection values must be JSON objects.')));
+export const PluginUiJsonObjectV1Schema = lazyZodSchema(() => asProtocolZod(defineProtocolCanonicalJsonValue<PluginUiJsonObjectV1>({
+  maxSerializedUtf8Bytes: PLUGIN_UI_LAUNCH_INPUT_MAX_UTF8_BYTES_V1,
+  parse: (value) => isPluginUiJsonObject(value) ? value : null,
+})));
 
 /**
  * No-invoke selection names one exact operation already admitted into the
@@ -655,6 +669,11 @@ export const PluginUiNewSessionSeedV1Schema = lazyZodSchema(() => z.strictObject
   initialSessionFacts: zMini.optional(SessionIdentityAdditionsV1Schema),
   promptStack: zMini.optional(SessionPromptStackV1Schema),
   prompt: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  /** Captured screen data becomes the declared current-screen attachment at the seed owner. */
+  currentUiContext: z.optional(CurrentUiContextSnapshotV1Schema.check(z.refine(
+    value => ComposerAttachmentValueV1Schema.safeParse(value).success,
+    { message: 'Current-screen context must fit the Composer attachment value contract.' },
+  ))),
   profileId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   origin: zMini.optional(PluginUiNewSessionSeedOriginV1Schema),
   /**
@@ -686,7 +705,8 @@ export const PluginUiNewSessionSeedV1Schema = lazyZodSchema(() => z.strictObject
    * consumes the seed read-only and freezes the parsed array.
    */
   attachments: z.optional(z.readonly(z.array(PluginUiNewSessionSeedAttachmentV1Schema).check(z.minLength(1), z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1)))),
-}));
+}).check(z.refine(seed => (seed.attachments?.length ?? 0) + (seed.currentUiContext ? 1 : 0) <= MAX_COMPOSER_ATTACHMENT_INSTANCES_V1,
+  { message: 'Seeded attachments must fit the Composer attachment instance contract.' })));
 export type PluginUiNewSessionSeedV1 = z.infer<typeof PluginUiNewSessionSeedV1Schema>;
 
 const SessionNewSessionSeedFailureV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [

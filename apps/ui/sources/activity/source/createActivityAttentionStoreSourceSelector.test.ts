@@ -1,11 +1,15 @@
 import { projectLegacySessionAccessCapabilitiesV1 } from '@happier-dev/protocol';
 import { describe, expect, it, vi } from 'vitest';
+import * as linkedSessionMetadata from '@happier-dev/protocol/sessions/external/linked-metadata';
 
-import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit';
+import { createSessionAccessFixture, createSessionFixture, createSessionViewerFixture } from '@/dev/testkit';
+import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { storage } from '@/sync/domains/state/storageStore';
+import { buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization';
 
 import { createActivityAttentionStoreSourceSelector } from './createActivityAttentionStoreSourceSelector';
+import { readActivitySessionRulePolicies } from './readActivitySessionRulePolicies';
 
 function expectNoObjectKeysOrValuesOnRecords(action: () => void, guardedRecords: readonly object[]): void {
     const originalObjectKeys = Object.keys.bind(Object);
@@ -32,6 +36,94 @@ function expectNoObjectKeysOrValuesOnRecords(action: () => void, guardedRecords:
 }
 
 describe('createActivityAttentionStoreSourceSelector', () => {
+    it('invalidates demanded rule facts after a tag-only assignment change', () => {
+        const base = storage.getState();
+        const session = createSessionFixture({ id: 'tagged', serverId: 'home-a', viewer: createSessionViewerFixture() });
+        const state = { ...base, sessions: { [session.id]: session }, sessionListRowsByServerId: {},
+            ordinarySessionListMembershipByServerId: { 'home-a': [session.id] } };
+        const selector = createActivityAttentionStoreSourceSelector({}, { includeSessionMessages: false, includeFollowRuleFacts: true });
+        const first = selector(state);
+        const key = buildSessionOrganizationSessionKey('home-a', session.id);
+        const changed = selector({ ...state, sessionOrganizationTagAssignmentsBySessionKey: {
+            [key]: { sessionId: session.id, tagIds: ['urgent'] },
+        } });
+        expect(changed).not.toBe(first);
+        expect(selector({ ...state, sessionOrganizationTagAssignmentsBySessionKey: {
+            [key]: { sessionId: session.id, tagIds: ['urgent'] },
+            [buildSessionOrganizationSessionKey('home-a', 'unloaded')]: { sessionId: 'unloaded', tagIds: ['unrelated'] },
+        } })).toBe(changed);
+        const source = { ...changed, personalFollowRulesByServerId: { 'home-a': { status: 'ready' as const, accountId: 'alice', rules: [{
+            ruleId: 'tagged', receiver: { kind: 'account' as const }, version: 0,
+            definition: { v: 1 as const, enabled: true, policy: { preset: 'important' as const }, filter: normalizeSessionListFilterV1({
+                scope: 'all_accessible', homeServerIds: ['home-a'], startedBy: ['you', 'triggers', 'agents'],
+                tagIds: [{ serverId: 'home-a', tagId: 'urgent' }],
+            }) },
+        }] } } };
+        const address = { serverId: 'home-a', sessionId: session.id };
+        expect(readActivitySessionRulePolicies(source, address, session, 1_000)).toEqual([{ preset: 'important' }]);
+        expect(readActivitySessionRulePolicies({ ...source, followRuleTagAssignmentsBySessionKey: {} }, address, session, 1_000)).toEqual([]);
+    });
+    it('keeps unknown Project censuses unavailable to rule exclusions and invalidates when complete facts arrive', () => {
+        const base = storage.getState();
+        const scope = { serverId: 'home-a', accountId: 'alice' };
+        const workspaceRefs = [{ id: 'checkout', serverId: scope.serverId, machineId: 'machine', rootPath: '/repo',
+            projectKey: 'payments', createdAtMs: 1, lastOpenedAtMs: null }];
+        const rows = { scope, status: 'ready' as const, coverage: 'partial' as const,
+            workspaceRefs, relationships: [], organizations: [], revisionsByPhysicalKey: {} };
+        const selector = createActivityAttentionStoreSourceSelector({}, { includeSessionMessages: false, includeFollowRuleFacts: true });
+        const state = { ...base, profileScope: scope, projectAccountRows: rows };
+        const partial = selector(state);
+        expect(partial.followRuleWorkspaceRefsV1).toBeUndefined();
+        expect(partial.workspaceRefsV1).toEqual(workspaceRefs);
+        const complete = selector({ ...state, projectAccountRows: { ...rows, coverage: 'complete' } });
+        expect(complete).not.toBe(partial);
+        expect(complete.followRuleWorkspaceRefsV1).toEqual(workspaceRefs);
+        expect(selector({ ...state, profileScope: { ...scope, accountId: 'bob' },
+            projectAccountRows: { ...rows, coverage: 'complete' } }).followRuleWorkspaceRefsV1).toBeUndefined();
+    });
+    it('invalidates rule matching when an opened Project changes without an attention change', () => {
+        const base = storage.getState();
+        const session = createSessionFixture({ id: 'rule-source', serverId: 'home-a', metadata: { ...createSessionFixture().metadata, path: '/Users/tester/project', host: 'tester.local', projectId: 'payments' } });
+        const state = { ...base, sessions: { [session.id]: session }, sessionListRowsByServerId: {},
+            ordinarySessionListMembershipByServerId: { 'home-a': [session.id] } };
+        const selector = createActivityAttentionStoreSourceSelector({}, { includeSessionMessages: false, includeFollowRuleFacts: true });
+        const first = selector(state);
+        expect(selector({ ...state, lastSyncAt: 99 })).toBe(first);
+        const moved = { ...session, metadata: { ...session.metadata, path: '/Users/tester/project', host: 'tester.local', projectId: 'design' } };
+        expect(selector({ ...state, sessions: { [session.id]: moved } })).not.toBe(first);
+    });
+    it('parses shared linked metadata once across real store readers and refreshes replacement metadata', () => {
+        const previous = storage.getState();
+        const metadata = { path: '/repo', host: 'localhost', externalSessionV1: {
+            v: 1 as const, agentId: 'codex', machineId: 'machine-a', remoteSessionId: 'remote-a',
+            source: { kind: 'codexHome' as const, home: 'user' as const },
+        } };
+        const parse = vi.spyOn(linkedSessionMetadata, 'readNonAuthoritativeLinkedExternalSessionV1FromMetadata');
+        const session = createSessionFixture({ id: 'linked', serverId: 'home-a', metadata });
+        const row = buildSessionListRenderableFromSession(session);
+        const selector = createActivityAttentionStoreSourceSelector({}, { includeSessionMessages: false });
+        const stop = storage.subscribe(state => selector(state));
+        try {
+            storage.setState({ sessions: { linked: session }, sessionListRowsByServerId: { 'home-a': { linked: row } },
+                ordinarySessionListMembershipByServerId: { 'home-a': ['linked'] } });
+            const first = selector(storage.getState());
+            for (let index = 0; index < 10; index++) {
+                storage.setState({ lastSyncAt: index });
+                // A second mounted Activity surface uses its own semantic selector,
+                // but the immutable linked input has not changed.
+                createActivityAttentionStoreSourceSelector({}, { includeSessionMessages: false })(storage.getState());
+            }
+            expect(selector(storage.getState())).toBe(first);
+            expect(parse.mock.calls.filter(([input]) => input === metadata)).toHaveLength(1);
+            const updated = { ...metadata, externalSessionV1: { ...metadata.externalSessionV1, remoteSessionId: 'remote-b' } };
+            storage.setState({ sessions: { linked: { ...session, metadata: updated } },
+                sessionListRowsByServerId: { 'home-a': { linked: { ...row, metadata: updated } } } });
+            const next = selector(storage.getState());
+            expect(next).not.toBe(first);
+            expect(next.sessionsById.linked.metadata?.externalSessionV1).toMatchObject({ remoteSessionId: 'remote-b' });
+            expect(parse.mock.calls.filter(([input]) => input === updated)).toHaveLength(1);
+        } finally { stop(); parse.mockRestore(); storage.setState(previous); }
+    });
     it.each(['hydrated', 'list'] as const)('updates pending-navigation eligibility when %s content availability changes', async (kind) => {
         const { buildPendingNavigationFromSource } = await import('./buildPendingNavigationFromSource');
         const session = createSessionFixture({ id: 'waiting', serverId: 'home-a', active: true,

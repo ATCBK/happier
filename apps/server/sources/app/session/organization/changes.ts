@@ -1,4 +1,4 @@
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { markAccountChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import type { Tx } from "@/storage/inTx";
 
 export type SessionOrganizationChangeScope =
@@ -80,7 +80,7 @@ export async function markSessionOrganizationChanged(
         deletedTagIds?: readonly string[];
         scopeKeys?: readonly string[];
     }>,
-): Promise<number> {
+): Promise<AccountChangePublication> {
     await bumpSessionOrganizationCheckpoint(tx, params.accountId);
     return await markAccountChanged(tx, {
         accountId: params.accountId,
@@ -135,7 +135,7 @@ export async function markSessionFolderAssignmentChanged(
         sessionId: string;
         folderId: string | null;
     }>,
-): Promise<number> {
+): Promise<AccountChangePublication> {
     await bumpSessionOrganizationCheckpoint(tx, params.accountId);
     return await markAccountChanged(tx, {
         accountId: params.accountId,
@@ -155,7 +155,7 @@ export async function markBulkSessionFolderAssignmentsChanged(
         folderIds: readonly string[];
         toFolderId: string | null;
     }>,
-): Promise<number> {
+): Promise<AccountChangePublication> {
     await bumpSessionOrganizationCheckpoint(tx, params.accountId);
     return await markAccountChanged(tx, {
         accountId: params.accountId,

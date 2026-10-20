@@ -26,6 +26,19 @@ const TRACKED_CAUGHT_UP: SessionPersonalAttentionInputV1 = {
 };
 
 describe('resolveSessionPersonalAttentionV1', () => {
+  it('keeps only the accepted one-shot source in attention without ongoing tracking', () => {
+    expect(resolveSessionPersonalAttentionV1({ ...TRACKED_CAUGHT_UP, tracked: false,
+      pendingPermissionRequestCount: 5, hasPrimarySessionFailure: true,
+      onceDelivery: { event: 'ready', turnId: 'turn-a', agentStateVersion: 3 },
+    })).toMatchObject({ needsAttention: true, reasons: ['ready_after_read'] });
+    expect(resolveSessionPersonalAttentionV1({ ...TRACKED_CAUGHT_UP, tracked: false,
+      onceDelivery: { event: 'user_action_required', requestId: 'request-a', agentStateVersion: 3 },
+    }).needsAttention).toBe(false);
+    expect(resolveSessionPersonalAttentionV1({ ...TRACKED_CAUGHT_UP, tracked: false,
+      onceDelivery: { event: 'user_action_required', requestId: 'request-a', agentStateVersion: 3 },
+      currentRequestIds: ['request-a'],
+    }).primary).toBe('user_action_required');
+  });
   it('uses authorized external-session unread facts without bypassing personal tracking', () => {
     const external = { ...TRACKED_CAUGHT_UP, externalSessionHasUnread: true };
     expect(resolveSessionPersonalAttentionV1(external).reasons).toEqual(['unread']);

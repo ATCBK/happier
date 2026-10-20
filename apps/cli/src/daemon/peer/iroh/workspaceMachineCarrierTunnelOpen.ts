@@ -23,6 +23,7 @@ import {
 } from './machineCarrier';
 import type { DaemonMachineIrohRuntime } from './daemonMachineIrohRuntime';
 import type { DirectRouteGrantTrustRoot } from '../mediation/verifyDirectRouteGrant';
+import { logger } from '@/ui/logger';
 
 type TargetMachineCarrierSnapshot = Readonly<{
   id: string;
@@ -66,14 +67,30 @@ export function createWorkspaceMachineCarrierTunnelOpen(input: Readonly<{
   async function open(
     request: WorkspaceSyncMachineTunnelOpenInput,
   ): Promise<FiniteTransferMachineTunnel | WorkspaceSyncMachineTunnel> {
+    const trace = (stage: string): void => {
+      if (process.env.HAPPIER_WEB_LATENCY_TRACE !== '1' || request.flow !== 'workspace_sync') return;
+      // Emit only canonical correlation ids, never caller content, descriptors,
+      // grants, proofs or thrown values. Reuse the existing file-only latency opt-in.
+      if (!/^(?:relationship_[0-9a-f]{64}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/iu.test(request.operationId)) return;
+      try {
+        logger.warnLocalFile('[workspace-sync-carrier-stage]', { operationId: request.operationId, stage });
+      } catch { /* Diagnostics cannot change transport admission or its error. */ }
+    };
+    const runStage = async <T>(stage: string, operation: () => Promise<T>): Promise<T> => {
+      trace(`${stage}.begin`);
+      try { return await operation(); }
+      finally { trace(`${stage}.end`); }
+    };
     if (request.sourceMachineId !== input.localMachineId) {
       throw machineCarrierUnavailableError();
     }
     request.signal?.throwIfAborted();
-    const targetRead = request.signal
-      ? input.readTargetMachine(request.targetMachineId, request.signal)
-      : input.readTargetMachine(request.targetMachineId);
-    const target = await awaitMachineCarrierControlPlane(targetRead, request.signal);
+    const target = await runStage('target_read', async () => {
+      const targetRead = request.signal
+        ? input.readTargetMachine(request.targetMachineId, request.signal)
+        : input.readTargetMachine(request.targetMachineId);
+      return await awaitMachineCarrierControlPlane(targetRead, request.signal);
+    });
     const targetEndpoint = readMachineIrohEndpointAuthorityV1({
       capabilities: target?.operationProtocolCapabilities,
       revision: target?.operationProtocolCapabilitiesRevision,
@@ -121,19 +138,20 @@ export function createWorkspaceMachineCarrierTunnelOpen(input: Readonly<{
         },
       });
       request.signal?.throwIfAborted();
-      const grantRequestResult = request.signal
-        ? input.mintGrant(grantRequest, request.signal)
-        : input.mintGrant(grantRequest);
-      const grant = SignedDirectRouteGrantV2Schema.parse(await awaitMachineCarrierControlPlane(
-        grantRequestResult,
-        request.signal,
-      ));
+      const grant = await runStage('grant_mint', async () => {
+        const grantRequestResult = request.signal
+          ? input.mintGrant(grantRequest, request.signal)
+          : input.mintGrant(grantRequest);
+        return SignedDirectRouteGrantV2Schema.parse(await awaitMachineCarrierControlPlane(grantRequestResult, request.signal));
+      });
       const proof = proofHandle.sign(grant);
       request.signal?.throwIfAborted();
-      const currentRead = request.signal
-        ? input.readTargetMachine(request.targetMachineId, request.signal)
-        : input.readTargetMachine(request.targetMachineId);
-      const current = await awaitMachineCarrierControlPlane(currentRead, request.signal);
+      const current = await runStage('endpoint_revalidation', async () => {
+        const currentRead = request.signal
+          ? input.readTargetMachine(request.targetMachineId, request.signal)
+          : input.readTargetMachine(request.targetMachineId);
+        return await awaitMachineCarrierControlPlane(currentRead, request.signal);
+      });
       const currentEndpoint = readMachineIrohEndpointAuthorityV1({
         capabilities: current?.operationProtocolCapabilities,
         revision: current?.operationProtocolCapabilitiesRevision,
@@ -182,13 +200,13 @@ export function createWorkspaceMachineCarrierTunnelOpen(input: Readonly<{
           close: tunnel.close,
         };
       }
-      const tunnel = await requireExpectedRemoteEndpoint(await awaitMachineCarrierTunnelOpen(input.runtime.openTunnel({
+      const tunnel = await runStage('native_tunnel_open', async () => requireExpectedRemoteEndpoint(await awaitMachineCarrierTunnelOpen(input.runtime.openTunnel({
             alpn: MACHINE_ALPN,
             remoteEndpointId: verified.remoteEndpointId,
             flow: 'workspace_sync',
             operationId: request.operationId,
             handshake,
-          }, endpoint), request.signal), verified.remoteEndpointId);
+          }, endpoint), request.signal), verified.remoteEndpointId));
       return {
         localPort: tunnel.localPort,
         localCapability: tunnel.localCapability,

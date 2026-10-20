@@ -60,6 +60,10 @@ const request = {
   requestedAction: { v: 1 as const, kind: 'enqueue' as const },
 };
 
+// Collect the handler before a test's lifetime so slow source transformation
+// cannot resume an expired test inside its neighbor's boundary mocks.
+await import('./machineUpdateHandler');
+
 describe('machine Session Pending enqueue', () => {
   beforeEach(() => {
     vi.clearAllMocks();

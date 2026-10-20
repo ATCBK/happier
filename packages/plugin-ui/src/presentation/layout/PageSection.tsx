@@ -17,9 +17,10 @@ import { useOptionalHappierUiTheme, useOptionalHappierUiTypography } from '../..
 import type { HappierLayoutChangeEvent, HappierPortableStyle, HappierStyleProp } from '../portableTypes.js';
 import { HappierText } from '../text/Text.js';
 import { HAPPIER_PAGE_METRICS, isHappierSectionActionStacked } from './pageMetrics.js';
-import { resolveHappierPageTextStyle } from './pageText.js';
+import { HAPPIER_PAGE_TEXT, resolveHappierPageTextStyle } from './pageText.js';
 import { HappierMaterialSurface, type HappierMaterialSurfaceRender } from './Surface.js';
 import type { HappierSurfaceGradient } from './material.js';
+import { HappierBodyEdgeContext } from './columnEdge.js';
 
 /**
  * The shape of a page section's sheet: the page radius and a hairline edge on
@@ -104,6 +105,13 @@ function renderSectionText(
 const SECTION_ACTION_GAP_PX = 12;
 
 /**
+ * True while a section's action sits on its own line beneath the text (a narrow page). A button with
+ * no resting fill (`plain`) reads it to put its label on the section's text edge instead of insetting
+ * the label by its own padding.
+ */
+export const HappierSectionActionStackedContext = createContext(false);
+
+/**
  * A page section's heading: a sentence-case title with its description above
  * the rows, and an optional section action aligned with the title. The action
  * defaults to staying beside the text while the page label column fits
@@ -116,6 +124,7 @@ const SECTION_ACTION_GAP_PX = 12;
 export function HappierPageSectionHeader(props: HappierPageSectionHeaderProps) {
   const [headerWidthPx, setHeaderWidthPx] = useState<number | null>(null);
   const [actionWidthPx, setActionWidthPx] = useState<number | null>(null);
+  const [titleWidthPx, setTitleWidthPx] = useState<number | null>(null);
   const hasAction = props.action !== null && props.action !== undefined && props.action !== false;
   const handleLayout = useCallback((event: HappierLayoutChangeEvent) => {
     const next = event.nativeEvent.layout.width;
@@ -125,13 +134,19 @@ export function HappierPageSectionHeader(props: HappierPageSectionHeaderProps) {
     const next = event.nativeEvent.layout.width;
     setActionWidthPx((current) => (current === next ? current : next));
   }, []);
+  const handleTitleLayout = useCallback((event: HappierLayoutChangeEvent) => {
+    const next = event.nativeEvent.layout.width;
+    setTitleWidthPx((current) => (current === next ? current : next));
+  }, []);
   const renderText = props.renderText ?? renderDefaultSectionText;
+  const hasTitle = props.title !== null && props.title !== undefined && props.title !== false && props.title !== '';
   const stacked = hasAction && isHappierSectionActionStacked({
     headerWidthPx: headerWidthPx === null ? null : headerWidthPx - props.insetPx * 2,
     actionWidthPx,
     actionLayout: props.actionLayout,
     gapPx: SECTION_ACTION_GAP_PX,
     hasDescription: props.description !== null && props.description !== undefined && props.description !== false && props.description !== '',
+    titleWidthPx,
   });
   return (
     <View
@@ -142,7 +157,7 @@ export function HappierPageSectionHeader(props: HappierPageSectionHeaderProps) {
       style={[
         {
           flexDirection: 'row',
-          alignItems: 'flex-end',
+          alignItems: 'flex-start',
           gap: SECTION_ACTION_GAP_PX,
           paddingTop: HAPPIER_PAGE_METRICS.sectionGapPx,
           paddingBottom: HAPPIER_PAGE_METRICS.sectionHeaderGapPx,
@@ -158,10 +173,24 @@ export function HappierPageSectionHeader(props: HappierPageSectionHeaderProps) {
           ? { flexGrow: 0, flexShrink: 0, flexBasis: 'auto', alignSelf: 'stretch' }
           : { flex: 1, minWidth: 0 }}
       >
-        {renderSectionText(props.title, 'sectionTitle', renderText)}
+        {hasTitle ? (
+          // Sized to the title (up to the text column), so a short title is measured at its own width.
+          <View onLayout={handleTitleLayout} style={{ alignSelf: 'flex-start', maxWidth: '100%' }}>
+            {renderSectionText(props.title, 'sectionTitle', renderText)}
+          </View>
+        ) : null}
         {renderSectionText(props.description, 'sectionDescription', renderText)}
       </View>
-      {hasAction ? <View onLayout={handleActionLayout}>{props.action}</View> : null}
+      {hasAction ? (
+        <View
+          onLayout={handleActionLayout}
+          // Beside the text the action is centred on the title's line, so its label reads on the
+          // title's line whatever the description below; its own box may reach past that line.
+          style={stacked || !hasTitle ? null : { height: HAPPIER_PAGE_TEXT.sectionTitle.lineHeight, justifyContent: 'center' }}
+        >
+          <HappierSectionActionStackedContext.Provider value={stacked}>{props.action}</HappierSectionActionStackedContext.Provider>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -175,6 +204,12 @@ export type HappierPageSection = Readonly<{
    * separators all start and end here.
    */
   rowInsetPx: number;
+  /**
+   * The rows sit inside a drawn sheet (edge and fill), not laid flat on the page or a pane. A quiet
+   * line that stands in for rows (an empty state, a section's one-line description) then takes a
+   * row's vertical room so it doesn't touch the sheet's edge.
+   */
+  framed?: boolean;
 }>;
 
 /**
@@ -284,13 +319,16 @@ export function HappierPageSheet(props: HappierPageSheetProps) {
       };
   const rowDividerColor = props.colors.rowDivider;
   const rowInsetPx = props.rowInsetPx ?? HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx;
-  const section = useMemo(() => ({ rowDividerColor, rowInsetPx }), [rowDividerColor, rowInsetPx]);
+  const framed = props.surface !== 'none';
+  const section = useMemo(() => ({ rowDividerColor, rowInsetPx, framed }), [framed, rowDividerColor, rowInsetPx]);
   const rowDividers = props.rowDividers !== false;
   const withRowDividers = (rows: ReactNode) => (rowDividers ? withHappierPageSectionDividers(rows) : withoutHappierPageSectionDividers(rows));
   const children = flattenSectionRows(props.children);
   const grouped = children.some(isSheetGroup);
   return (
     <HappierPageSectionContext.Provider value={section}>
+      {/* A sheet inside a widget body draws its rows' own edge again. */}
+      <HappierBodyEdgeContext.Provider value={false}>
       <HappierMaterialSurface testID={props.testID} materialRole={props.surface === 'none' ? undefined : 'card'} gradient={props.surface === 'none' ? null : props.gradient} renderMaterialSurface={props.renderMaterialSurface} style={[sheetStyle, props.style]}>
         {grouped
           ? children.map((child, index) => (isSheetGroup(child) ? (
@@ -313,6 +351,7 @@ export function HappierPageSheet(props: HappierPageSheetProps) {
             ) : cloneElement(child, { key: child.key ?? `page-sheet-row-${index}`, showDivider: false } as DividerChildProps & { key: string })))
           : withRowDividers(children)}
       </HappierMaterialSurface>
+      </HappierBodyEdgeContext.Provider>
     </HappierPageSectionContext.Provider>
   );
 }

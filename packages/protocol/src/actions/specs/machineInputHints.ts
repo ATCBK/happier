@@ -1,7 +1,7 @@
 import type { MachinePresetActionIdV1 } from '../../machines/managed/machinePresetActionIdsV1.js';
 import type { ManagedMachineActionIdV1 } from '../../machines/managed/actionIdsV1.js';
 import type { MachinePoolActionIdV1 } from '../../machines/pools/actionsV1.js';
-import type { ActionInputFieldHint } from '../actionInputHintsRuntime.js';
+import type { ActionInputFieldHint, ActionInputOption } from '../actionInputHintsRuntime.js';
 
 // Explicit producer metadata keeps review operands visible without inspecting
 // lazy schemas at catalog startup or guessing fields from arbitrary input.
@@ -22,12 +22,22 @@ const members = { path: 'members', title: 'Machine members and priority tiers', 
 const description = { path: 'description', title: 'Description', widget: 'textarea' } as const;
 // Revision is required only for immediate effects; the strict domain union
 // validates deferred effects without making the absent arm unreviewable.
-const effectFields = [home, managed,
-  { path: 'when', title: 'When', widget: 'text', required: true },
-  { path: 'intent', title: 'Requested effect', widget: 'text', required: true },
+const nativeEffectOptions = [
+  { value: 'start', label: 'Start', labelKey: 'actionPresentation.options.start' },
+  { value: 'stop', label: 'Stop', labelKey: 'actionPresentation.options.stop' },
+  { value: 'suspend', label: 'Suspend', labelKey: 'actionPresentation.options.suspend' },
+  { value: 'resume', label: 'Resume', labelKey: 'actionPresentation.options.resume' },
+  { value: 'delete', label: 'Delete', labelKey: 'actionPresentation.options.delete' },
+] satisfies ActionInputOption[];
+const effectFields = (options: readonly ActionInputOption[]): ActionInputFieldHint[] => [home, managed,
+  { path: 'when', title: 'When', widget: 'select', required: true, options: [
+    { value: 'now', label: 'Now', labelKey: 'actionPresentation.options.now' },
+    { value: 'after-idle', label: 'After idle', labelKey: 'actionPresentation.options.afterIdle' },
+  ] },
+  { path: 'intent', title: 'Requested effect', widget: 'select', required: true, options },
   { ...revision, required: false },
   { path: 'afterMs', title: 'Idle delay (milliseconds)', widget: 'number' },
-] satisfies ActionInputFieldHint[];
+];
 
 export const MACHINE_PRESET_INPUT_FIELDS = {
   'machines.presets.list': [home, owner,
@@ -60,7 +70,7 @@ export const MACHINE_POOL_INPUT_FIELDS = {
 } satisfies Record<MachinePoolActionIdV1, ActionInputFieldHint[]>;
 
 export const MANAGED_MACHINE_INPUT_FIELDS = {
-  'machines.provisioners.list': [home, { ...controller, required: false }],
+  'machines.provisioners.list': [home, { ...controller, required: false }, { ...contribution, required: false }],
   'machines.provisioners.check': [home, controller, contribution, credentials],
   'machines.provisioners.options': [home, controller, contribution, credentials,
     { path: 'selectors', title: 'Provisioning choices', widget: 'json', required: true }],
@@ -80,8 +90,8 @@ export const MANAGED_MACHINE_INPUT_FIELDS = {
     { path: 'presetId', title: 'Preset id', widget: 'text', required: true },
     { path: 'presetRevision', title: 'Preset revision', widget: 'integer', required: true }],
   'machines.managed.cancel': [home, managed, intentRevision],
-  'machines.managed.power.set': effectFields,
-  'machines.managed.delete': [...effectFields,
+  'machines.managed.power.set': effectFields(nativeEffectOptions.filter(option => option.value !== 'delete')),
+  'machines.managed.delete': [...effectFields(nativeEffectOptions.filter(option => option.value === 'delete')),
     { path: 'reviewedDependencies', title: 'Dependencies reviewed', widget: 'boolean', required: true }],
   'machines.managed.rebuild': [home,
     { path: 'managedMachineId', title: 'Managed machine id', widget: 'text', required: true }, revision,

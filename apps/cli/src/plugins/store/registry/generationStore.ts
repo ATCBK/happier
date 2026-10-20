@@ -4,7 +4,7 @@ import { copyFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, writeF
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginAvailabilityPortableReleaseSourceClassV1Schema } from '@happier-dev/protocol/plugins/availability/actions';
 import { PluginReleaseFactsV1Schema } from '@happier-dev/protocol/plugins/availability/v1';
@@ -71,7 +71,7 @@ function installReviewPrincipalPairMatches(record: InstallReviewPrincipalPair): 
 
 function validateInstallReviewPrincipalPair(
   record: InstallReviewPrincipalPair,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   if (record.installReviewPrincipalPresentation && !record.installReviewPrincipalDigest) {
     context.addIssue({
@@ -90,32 +90,32 @@ function validateInstallReviewPrincipalPair(
   }
 }
 
-const GenerationFileSchema = z.object({
+const GenerationFileSchema = z.strictObject({
   relativePath: PortableRelativePathSchema,
-  byteLength: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-}).strict();
+  byteLength: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+});
 
-const ValidatedAgentSessionRunnerFactoryFactV1Schema = z.object({
-  localAgentId: z.string().trim().min(1).max(256),
-  locator: z.object({
-    module: z.string().regex(/^\.[/][A-Za-z0-9._/-]+$/u),
-    export: z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/u),
+const ValidatedAgentSessionRunnerFactoryFactV1Schema = z.strictObject({
+  localAgentId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+  locator: z.strictObject({
+    module: z.string().check(z.regex(/^\.[/][A-Za-z0-9._/-]+$/u)),
+    export: z.string().check(z.regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/u)),
     runtimeApiVersion: z.literal(1),
     externalSessionsExport:
-      z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/u).optional(),
-  }).strict(),
+      z.optional(z.string().check(z.regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/u))),
+  }),
   normalizedModulePath: PortableRelativePathSchema,
   loadMode: z.enum(['immutable-js', 'source-ts']),
-}).strict();
+});
 
-export const ValidatedAgentSessionRunnerFactoriesRecordV1Schema = z.object({
+export const ValidatedAgentSessionRunnerFactoriesRecordV1Schema = z.strictObject({
   t: z.literal('happier_agent_session_runner_factories_v1'),
   schemaVersion: z.literal(1),
   pluginId: asHostProtocolZod(PluginIdSchema),
   immutableGenerationId: PortableStorageIdSchema,
   manifestAuthority: z.literal('external'),
-  factories: z.array(ValidatedAgentSessionRunnerFactoryFactV1Schema).max(256),
-}).strict().superRefine((record, context) => {
+  factories: z.array(ValidatedAgentSessionRunnerFactoryFactV1Schema).check(z.maxLength(256)),
+}).check(z.superRefine((record, context) => {
   const ids = record.factories.map((factory) => factory.localAgentId);
   if (
     new Set(ids).size !== ids.length
@@ -127,7 +127,7 @@ export const ValidatedAgentSessionRunnerFactoriesRecordV1Schema = z.object({
       message: 'Validated Agent runner factory facts must be unique and sorted by Agent id',
     });
   }
-});
+}));
 export type ValidatedAgentSessionRunnerFactoriesRecordV1 = z.infer<
   typeof ValidatedAgentSessionRunnerFactoriesRecordV1Schema
 >;
@@ -146,19 +146,19 @@ function validatedAgentSessionRunnerFactoriesRecordPath(
 // This is an exact storage-identity fact, not a health, revocation, or
 // currentness registry. Its only purpose is to prevent a completed retirement
 // from being undone by the old directory reappearing after cleanup/restart.
-const RetiredPluginGenerationMarkerV1Schema = z.object({
+const RetiredPluginGenerationMarkerV1Schema = z.strictObject({
   t: z.literal('happier_retired_plugin_generation_v1'),
   schemaVersion: z.literal(1),
   pluginId: asHostProtocolZod(PluginIdSchema),
   immutableGenerationId: PortableStorageIdSchema,
-}).strict();
+});
 
-export const ImmutablePluginGenerationRecordSchema = z.object({
+export const ImmutablePluginGenerationRecordSchema = z.strictObject({
   t: z.literal('happier_plugin_generation_v1'),
   schemaVersion: z.literal(1),
   pluginId: asHostProtocolZod(PluginIdSchema),
   immutableGenerationId: PortableStorageIdSchema,
-  createdAtMs: z.number().int().nonnegative(),
+  createdAtMs: z.number().check(z.int(), z.nonnegative()),
   files: z.array(GenerationFileSchema),
   manifestRelativePath: PortableRelativePathSchema,
   /**
@@ -167,10 +167,10 @@ export const ImmutablePluginGenerationRecordSchema = z.object({
    * no reader can re-derive this from the materialized bytes.
    */
   sourceProvenance: PluginSourceProvenanceSchema,
-  sourceCustody: asHostProtocolZod(
+  sourceCustody: z.optional(asHostProtocolZod(
     ManagedPluginSourceCustodyV1Schema,
-  ).optional(),
-}).strict().superRefine((record, context) => {
+  )),
+}).check(z.superRefine((record, context) => {
   const paths = record.files.map((file) => file.relativePath);
   if (new Set(paths).size !== paths.length || paths.some((path, index) => index > 0 && paths[index - 1]! >= path)) {
     context.addIssue({ code: 'custom', path: ['files'], message: 'Generation file inventory must be unique and sorted' });
@@ -189,7 +189,7 @@ export const ImmutablePluginGenerationRecordSchema = z.object({
       message: 'Generation source custody must name the generation record identity',
     });
   }
-});
+}));
 export type ImmutablePluginGenerationRecord = z.infer<typeof ImmutablePluginGenerationRecordSchema>;
 
 export type ImmutablePluginGenerationMaterialization = Readonly<{
@@ -249,13 +249,13 @@ export type PluginInstallationAvailabilityProjection = {
   release?: z.infer<typeof PluginReleaseFactsV1Schema>;
 };
 
-export const PluginInstallationAvailabilityProjectionSchema: z.ZodType<
+export const PluginInstallationAvailabilityProjectionSchema: z.ZodMiniType<
   PluginInstallationAvailabilityProjection
-> = z.object({
+> = z.strictObject({
   sourceClass: PluginInstallationAvailabilitySourceClassSchema,
   portableRelease: z.boolean(),
-  release: asHostProtocolZod(PluginReleaseFactsV1Schema).optional(),
-}).strict().superRefine((value, context) => {
+  release: z.optional(asHostProtocolZod(PluginReleaseFactsV1Schema)),
+}).check(z.superRefine((value, context) => {
   if (value.sourceClass === 'localPath' && value.portableRelease) {
     context.addIssue({
       code: 'custom',
@@ -270,7 +270,7 @@ export const PluginInstallationAvailabilityProjectionSchema: z.ZodType<
       message: 'Portable installation availability must carry exactly one release fact set',
     });
   }
-});
+}));
 
 export function createDefaultPluginInstallationAvailabilityProjection(
   distribution: PluginDistributionIdentity,
@@ -299,19 +299,19 @@ export type PluginRollbackRetentionRecord = {
   approvedAuthorityManifest?: ParsedPluginManifestV2;
 };
 
-export const PluginRollbackRetentionRecordSchema: z.ZodType<PluginRollbackRetentionRecord> = z.object({
+export const PluginRollbackRetentionRecordSchema: z.ZodMiniType<PluginRollbackRetentionRecord> = z.strictObject({
   pluginId: asHostProtocolZod(PluginIdSchema),
   immutableGenerationId: PortableStorageIdSchema,
-  retainedAtMs: z.number().int().nonnegative(),
+  retainedAtMs: z.number().check(z.int(), z.nonnegative()),
   byteAvailability: z.enum(['available', 'missing', 'corrupt', 'evicted', 'sourceIneligible']),
-  pluginVersion: z.string().min(1).max(256),
+  pluginVersion: z.string().check(z.minLength(1), z.maxLength(256)),
   distribution: PluginDistributionIdentitySchema,
-  admittedIntegrity: AlgorithmQualifiedIntegritySchema.optional(),
-  availability: PluginInstallationAvailabilityProjectionSchema.optional(),
-  installReviewPrincipalDigest: asHostProtocolZod(PluginInstallReviewPrincipalDigestSchema).optional(),
-  installReviewPrincipalPresentation: asHostProtocolZod(PluginInstallReviewPrincipalPresentationV1Schema).optional(),
-  approvedAuthorityManifest: asHostProtocolZod(PluginManifestV2Schema).optional(),
-}).strict().superRefine((record, context) => {
+  admittedIntegrity: z.optional(AlgorithmQualifiedIntegritySchema),
+  availability: z.optional(PluginInstallationAvailabilityProjectionSchema),
+  installReviewPrincipalDigest: z.optional(asHostProtocolZod(PluginInstallReviewPrincipalDigestSchema)),
+  installReviewPrincipalPresentation: z.optional(asHostProtocolZod(PluginInstallReviewPrincipalPresentationV1Schema)),
+  approvedAuthorityManifest: z.optional(asHostProtocolZod(PluginManifestV2Schema)),
+}).check(z.superRefine((record, context) => {
   if (record.distribution.kind === 'localPath' && record.admittedIntegrity) {
     context.addIssue({ code: 'custom', path: ['admittedIntegrity'], message: 'Local path rollback retention cannot declare acquisition integrity' });
   }
@@ -323,7 +323,7 @@ export const PluginRollbackRetentionRecordSchema: z.ZodType<PluginRollbackRetent
     context.addIssue({ code: 'custom', path: ['availability', 'sourceClass'], message: 'Rollback availability source class must match its installation distribution' });
   }
   validateInstallReviewPrincipalPair(record, context);
-});
+}));
 
 export type PluginInstallationStateRecord = {
   enabled: boolean;
@@ -341,22 +341,22 @@ export type PluginInstallationStateRecord = {
   approvedAuthorityManifest?: ParsedPluginManifestV2;
 };
 
-const PluginInstallationStateRecordSchema: z.ZodType<PluginInstallationStateRecord> = z.object({
+const PluginInstallationStateRecordSchema: z.ZodMiniType<PluginInstallationStateRecord> = z.strictObject({
   enabled: z.boolean(),
   /** Stable across updates/rollbacks; replaced only when the installation is removed. */
-  materializationId: PortableStorageIdSchema.optional(),
-  trust: PluginTrustRecordSchema.optional(),
-  source: z.object({
+  materializationId: z.optional(PortableStorageIdSchema),
+  trust: z.optional(PluginTrustRecordSchema),
+  source: z.strictObject({
     distribution: PluginDistributionIdentitySchema,
-    admittedIntegrity: AlgorithmQualifiedIntegritySchema.optional(),
-  }).strict(),
+    admittedIntegrity: z.optional(AlgorithmQualifiedIntegritySchema),
+  }),
   updatePolicy: PluginUpdatePolicyV1Schema,
-  optionalAccess: z.array(PluginAccessSelectionSchema).max(512),
-  availability: PluginInstallationAvailabilityProjectionSchema.optional(),
-  installReviewPrincipalDigest: asHostProtocolZod(PluginInstallReviewPrincipalDigestSchema).optional(),
-  installReviewPrincipalPresentation: asHostProtocolZod(PluginInstallReviewPrincipalPresentationV1Schema).optional(),
-  approvedAuthorityManifest: asHostProtocolZod(PluginManifestV2Schema).optional(),
-}).strict().superRefine((record, context) => {
+  optionalAccess: z.array(PluginAccessSelectionSchema).check(z.maxLength(512)),
+  availability: z.optional(PluginInstallationAvailabilityProjectionSchema),
+  installReviewPrincipalDigest: z.optional(asHostProtocolZod(PluginInstallReviewPrincipalDigestSchema)),
+  installReviewPrincipalPresentation: z.optional(asHostProtocolZod(PluginInstallReviewPrincipalPresentationV1Schema)),
+  approvedAuthorityManifest: z.optional(asHostProtocolZod(PluginManifestV2Schema)),
+}).check(z.superRefine((record, context) => {
   if (record.source.distribution.kind === 'localPath' && record.source.admittedIntegrity) {
     context.addIssue({ code: 'custom', path: ['source', 'admittedIntegrity'], message: 'Local path installation cannot declare acquisition integrity' });
   }
@@ -368,7 +368,7 @@ const PluginInstallationStateRecordSchema: z.ZodType<PluginInstallationStateReco
     context.addIssue({ code: 'custom', path: ['availability', 'sourceClass'], message: 'Installation availability source class must match its installation distribution' });
   }
   validateInstallReviewPrincipalPair(record, context);
-});
+}));
 
 export type PluginInstallationStateRevision = {
   t: 'happier_plugin_installations_v1';
@@ -385,20 +385,20 @@ export type PluginInstallationStateRevision = {
   >;
 };
 
-const CanonicalPluginInstallationStateRevisionSchema: z.ZodType<PluginInstallationStateRevision> = z.object({
+const CanonicalPluginInstallationStateRevisionSchema: z.ZodMiniType<PluginInstallationStateRevision> = z.strictObject({
   t: z.literal('happier_plugin_installations_v1'),
   schemaVersion: z.literal(1),
   revisionId: PortableStorageIdSchema,
-  createdAtMs: z.number().int().nonnegative(),
+  createdAtMs: z.number().check(z.int(), z.nonnegative()),
   plugins: z.record(asHostProtocolZod(PluginIdSchema), PluginInstallationStateRecordSchema),
   rollbackRetention: z.array(PluginRollbackRetentionRecordSchema),
-  hardRevocationRevisions: z.record(
+  hardRevocationRevisions: z.optional(z.record(
     asHostProtocolZod(PluginIdSchema),
-    z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  ).optional(),
-  runtimeCatalog: PluginStateFileV1Schema.optional(),
-  retainedRuntimeCatalog: z.record(PortableStorageIdSchema, PluginStateRecordSchema).optional(),
-}).strict().superRefine((state, context) => {
+    z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+  )),
+  runtimeCatalog: z.optional(PluginStateFileV1Schema),
+  retainedRuntimeCatalog: z.optional(z.record(PortableStorageIdSchema, PluginStateRecordSchema)),
+}).check(z.superRefine((state, context) => {
   const priorRetentionCount = new Map<string, number>();
   const retainedGenerationIds = new Set<string>();
   const materializationIds = new Set<string>();
@@ -489,9 +489,9 @@ const CanonicalPluginInstallationStateRevisionSchema: z.ZodType<PluginInstallati
       context.addIssue({ code: 'custom', path: ['rollbackRetention', index], message: 'Retention source identity must match the current installation' });
     }
   }
-});
+}));
 
-export const PluginInstallationStateRevisionSchema: z.ZodType<PluginInstallationStateRevision> =
+export const PluginInstallationStateRevisionSchema: z.ZodMiniType<PluginInstallationStateRevision> =
   CanonicalPluginInstallationStateRevisionSchema;
 
 type PluginExecutionAuthority = Readonly<{

@@ -10,7 +10,7 @@ import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback
 import { DeferredAnchoredTooltip } from '@/components/ui/overlays/DeferredAnchoredTooltip';
 import { useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
 import { resolveTabBarMetrics } from '@/components/ui/navigation/tabBarMetrics';
-import { useSetting } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/store/settingsReadHooks';
 import { t } from '@/text';
 import {
     shouldForceFreshNewSessionEntryFromPressEvent,

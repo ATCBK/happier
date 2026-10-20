@@ -48,7 +48,7 @@ type DestinationMachine = Readonly<{
 }>;
 
 export type PrepareSessionFollowSourceKeyDeps = Readonly<{
-    resolveContext: (serverId: string, options?: Readonly<{ intent?: 'retry' }>) => Promise<PreparationContext>;
+    resolveContext: (serverId: string, options?: Readonly<{ intent?: 'retry'; signal?: AbortSignal }>) => Promise<PreparationContext>;
     resolveDestination: (input: Readonly<{
         serverId: string;
         accountId: string;
@@ -60,6 +60,7 @@ export type PrepareSessionFollowSourceKeyDeps = Readonly<{
         machineId: string;
         request: SessionFollowSourceKeyPrepareRequestV1;
         authorization: SessionFollowSourceKeyPrepareAuthorizationV1;
+        signal?: AbortSignal;
     }>) => Promise<unknown>;
 }>;
 
@@ -79,6 +80,7 @@ const defaultDeps: PrepareSessionFollowSourceKeyDeps = {
                 token: context.token,
                 sessionId,
                 timeoutMs: context.timeoutMs,
+                ...(options?.signal ? { signal: options.signal } : {}),
                 ...(options?.intent === 'retry' ? { explicitRetry: true } : {}),
                 ...(context.encryption ? {
                     decryptEncryptionKey: (value: string) => context.encryption!.decryptEncryptionKey(value),
@@ -108,7 +110,7 @@ const defaultDeps: PrepareSessionFollowSourceKeyDeps = {
         const machine = resolveServerScopedMachine(state, serverId, exactMachineId);
         return machine ? { machineId: exactMachineId, machine } : null;
     },
-    callMachine: async ({ serverId, accountId, machineId, request, authorization }) => (
+    callMachine: async ({ serverId, accountId, machineId, request, authorization, signal }) => (
         await machineRpcWithServerScope({
             serverId,
             accountId,
@@ -119,6 +121,7 @@ const defaultDeps: PrepareSessionFollowSourceKeyDeps = {
             // Server admission for this operation is part of the exact route; never
             // bypass it through a direct peer decision made only by the client.
             preferScoped: true,
+            ...(signal ? { signal } : {}),
         })
     ),
 };
@@ -129,18 +132,23 @@ const defaultDeps: PrepareSessionFollowSourceKeyDeps = {
  * exact current Machine; no readiness is inferred from edge eligibility.
  */
 export async function prepareSessionFollowSourceKey(
-    input: Readonly<{ serverId: string; sourceSessionId: string; destinationSessionId: string; intent?: 'retry' }>,
+    input: Readonly<{ serverId: string; sourceSessionId: string; destinationSessionId: string; intent?: 'retry'; signal?: AbortSignal }>,
     deps: PrepareSessionFollowSourceKeyDeps = defaultDeps,
 ): Promise<SessionFollowSourceKeyPreparationResult> {
     let context: PreparationContext;
     try {
-        context = await deps.resolveContext(input.serverId, input.intent ? { intent: input.intent } : undefined);
+        input.signal?.throwIfAborted();
+        context = await deps.resolveContext(input.serverId, input.intent || input.signal ? {
+            ...(input.intent ? { intent: input.intent } : {}), ...(input.signal ? { signal: input.signal } : {}),
+        } : undefined);
     } catch {
         return { kind: 'waiting', reason: 'runner_unreachable' };
     }
 
     try {
+        input.signal?.throwIfAborted();
         const sourceCrypto = await context.resolveSourceCrypto(input.sourceSessionId);
+        input.signal?.throwIfAborted();
         if (sourceCrypto.encryptionMode === 'plain') return { kind: 'not_needed' };
         if (sourceCrypto.encryptionMode !== 'e2ee') {
             return { kind: 'waiting', reason: 'source_key_unavailable' };
@@ -172,6 +180,7 @@ export async function prepareSessionFollowSourceKey(
                 machineId: destination.machineId,
                 request,
                 authorization,
+                ...(input.signal ? { signal: input.signal } : {}),
             });
             SessionFollowSourceKeyPrepareResponseV1Schema.parse(response);
             return { kind: 'prepared' };

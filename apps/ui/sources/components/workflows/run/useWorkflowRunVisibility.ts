@@ -8,13 +8,16 @@ import { createTeamAddress } from '@/sync/domains/teams/teamAddress';
 import { observeTeam, refreshTeam } from '@/sync/engine/teams/teamsDirectoryEngine';
 import { getTeamSnapshot, subscribeTeamsSnapshots } from '@/sync/store/teams/teamsSnapshots';
 import type { TeamSummaryV1 } from '@happier-dev/protocol/teams';
+import { useWorkflowAccountLifetime } from '../workflowAccountScope';
 
 type GrantedTeam = Readonly<{ id: string; name: string | null; sessionCreationPolicy: TeamSummaryV1['policy']['sessionCreationPolicy'] }>;
 const EMPTY_TEAMS: readonly GrantedTeam[] = Object.freeze([]);
 
 /** Artifact grants nominate Teams; the existing Team reader decides which are viewable. */
 export function useWorkflowRunVisibility(sourceArtifactId: string | null | undefined) {
-    const lifetime = useActiveServerAccountScopeLifetime();
+    const activeLifetime = useActiveServerAccountScopeLifetime();
+    const addressedLifetime = useWorkflowAccountLifetime();
+    const lifetime = addressedLifetime === undefined ? activeLifetime : addressedLifetime;
     const scope = lifetime?.scope ?? null;
     const identity = JSON.stringify([scope?.serverId, scope?.accountId, sourceArtifactId]);
     const [attempt, retry] = React.useReducer((value: number) => value + 1, 0);
@@ -36,6 +39,7 @@ export function useWorkflowRunVisibility(sourceArtifactId: string | null | undef
         const releases: Array<() => void> = [];
         setState({ identity, lifetime, status: 'loading', teams: EMPTY_TEAMS });
         void callWorkflowAction({ actionId: 'artifact.access.grants.list', input: { artifactId: sourceArtifactId },
+            accountLifetime: lifetime,
             parseResult: (value) => {
                 const grants = ArtifactAccessGrantsListResponseV1Schema.parse(value);
                 if (grants.artifactId !== sourceArtifactId) throw new Error('artifact_access_source_mismatch');

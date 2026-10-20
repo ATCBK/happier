@@ -6,6 +6,7 @@ import type {
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
 import type { RpcHandler, RpcHandlerManagerLike } from '@/api/rpc/types';
 import type { AgentState, Metadata, UserMessage } from '@/api/types';
+import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type {
   MaterializeNextPendingOptions,
   MaterializeNextPendingResult,
@@ -22,22 +23,12 @@ import { DurableRegisteredSessionStateFieldDeliveryUnavailableError } from '../s
 export type DeferredApiSessionTarget = Readonly<{
   sessionId: string;
   rpcHandlerManager: RpcHandlerManagerLike;
-  enqueueSessionEventCommitted?: (
-    event: unknown,
-    id?: string,
-  ) => Promise<Readonly<{ persisted: boolean; delivered: boolean }>>;
-  sendAgentMessageEphemeral?: (provider: unknown, body: unknown, opts: unknown) => EphemeralSendResult;
-  sendAgentMessageEphemeralDelta?: (provider: unknown, body: unknown, opts: unknown) => EphemeralSendResult;
+  enqueueSessionEventCommitted?: ApiSessionClient['enqueueSessionEventCommitted'];
+  sendAgentMessageEphemeral?: ApiSessionClient['sendAgentMessageEphemeral'];
+  sendAgentMessageEphemeralDelta?: ApiSessionClient['sendAgentMessageEphemeralDelta'];
   getEphemeralStreamConnectionEpoch?: () => number;
-  enqueueAgentMessageCommitted?: (
-    provider: unknown,
-    body: unknown,
-    opts: unknown,
-  ) => Promise<Readonly<{ persisted: boolean; delivered: boolean }>>;
-  enqueueUserTextMessageCommitted?: (
-    text: string,
-    opts: unknown,
-  ) => Promise<Readonly<{ persisted: boolean; delivered: boolean }>>;
+  enqueueAgentMessageCommitted?: ApiSessionClient['enqueueAgentMessageCommitted'];
+  enqueueUserTextMessageCommitted?: ApiSessionClient['enqueueUserTextMessageCommitted'];
   onUserMessage?: (callback: (data: UserMessage) => boolean | void) => void;
   on?: (eventName: 'metadata-updated', listener: () => void) => unknown;
   off?: (eventName: 'metadata-updated', listener: () => void) => unknown;
@@ -49,8 +40,10 @@ export type DeferredApiSessionTarget = Readonly<{
   ) => void | Promise<void>;
   updateMetadata: (updater: (metadata: Metadata) => Metadata) => void | Promise<void>;
   updateAgentState: (updater: (state: AgentState) => AgentState) => void | Promise<void>;
+  updateAgentStateRequestSettlement: (updater: (state: AgentState) => AgentState) => Promise<void>;
   keepAlive: (thinking: boolean, mode: 'local' | 'remote') => void;
   getMetadataSnapshot: () => Metadata | null;
+  getAgentStateSnapshot: () => AgentState | null;
   fetchLatestUserPermissionIntentFromTranscript?: (
     opts?: { take?: number },
   ) => Promise<{ intent: import('@/api/types').PermissionMode; updatedAt: number } | null>;
@@ -140,7 +133,7 @@ export class DeferredApiSessionClient {
   }
 
   enqueueSessionEventCommitted(
-    _event: unknown,
+    _event: Parameters<ApiSessionClient['enqueueSessionEventCommitted']>[0],
     _id?: string,
   ): Promise<Readonly<{ persisted: boolean; delivered: boolean }>> {
     const target = this.target;
@@ -164,7 +157,9 @@ export class DeferredApiSessionClient {
     return deferred.promise;
   }
 
-  sendAgentMessageEphemeral(_provider: unknown, _body: unknown, _opts: unknown): EphemeralSendResult {
+  sendAgentMessageEphemeral(_provider: Parameters<ApiSessionClient['sendAgentMessageEphemeral']>[0],
+    _body: Parameters<ApiSessionClient['sendAgentMessageEphemeral']>[1],
+    _opts: Parameters<ApiSessionClient['sendAgentMessageEphemeral']>[2]): EphemeralSendResult {
     const target = this.target;
     if (target && !this.flushInFlight) {
       const send = target.sendAgentMessageEphemeral;
@@ -177,7 +172,9 @@ export class DeferredApiSessionClient {
     return createEphemeralSendFailure('transport_unavailable', this.getEphemeralStreamConnectionEpoch());
   }
 
-  sendAgentMessageEphemeralDelta(_provider: unknown, _body: unknown, _opts: unknown): EphemeralSendResult {
+  sendAgentMessageEphemeralDelta(_provider: Parameters<ApiSessionClient['sendAgentMessageEphemeralDelta']>[0],
+    _body: Parameters<ApiSessionClient['sendAgentMessageEphemeralDelta']>[1],
+    _opts: Parameters<ApiSessionClient['sendAgentMessageEphemeralDelta']>[2]): EphemeralSendResult {
     const target = this.target;
     if (target && !this.flushInFlight) {
       const send = target.sendAgentMessageEphemeralDelta;
@@ -196,9 +193,9 @@ export class DeferredApiSessionClient {
   }
 
   enqueueAgentMessageCommitted(
-    _provider: unknown,
-    _body: unknown,
-    _opts: unknown,
+    _provider: Parameters<ApiSessionClient['enqueueAgentMessageCommitted']>[0],
+    _body: Parameters<ApiSessionClient['enqueueAgentMessageCommitted']>[1],
+    _opts: Parameters<ApiSessionClient['enqueueAgentMessageCommitted']>[2],
   ): Promise<Readonly<{ persisted: boolean; delivered: boolean }>> {
     const target = this.target;
     if (target && !this.flushInFlight) {
@@ -230,7 +227,7 @@ export class DeferredApiSessionClient {
 
   enqueueUserTextMessageCommitted(
     _text: string,
-    _opts: unknown,
+    _opts: Parameters<ApiSessionClient['enqueueUserTextMessageCommitted']>[1],
   ): Promise<Readonly<{ persisted: boolean; delivered: boolean }>> {
     const target = this.target;
     if (target && !this.flushInFlight) {
@@ -431,6 +428,25 @@ export class DeferredApiSessionClient {
     return deferred.promise;
   }
 
+  updateAgentStateRequestSettlement(updater: (state: AgentState) => AgentState): Promise<void> {
+    const target = this.target;
+    if (target && !this.flushInFlight) return target.updateAgentStateRequestSettlement(updater);
+    const deferred = createDeferredPromise<void>();
+    const unavailable = () => deferred.reject(new Error('Request settlement unavailable before Session attachment'));
+    if (this.cancelled) {
+      unavailable();
+      return deferred.promise;
+    }
+    this.pushBufferedCall(async attached => {
+      await attached.updateAgentStateRequestSettlement(updater);
+      deferred.resolve();
+    }, { hint: 'updateAgentStateRequestSettlement' }, {
+      onDrop: unavailable,
+      onError: error => deferred.reject(error),
+    });
+    return deferred.promise;
+  }
+
   keepAlive(_thinking: boolean, _mode: 'local' | 'remote'): void {
     const target = this.target;
     if (target && !this.flushInFlight) {
@@ -445,6 +461,10 @@ export class DeferredApiSessionClient {
     const target = this.target;
     if (!target) return null;
     return target.getMetadataSnapshot();
+  }
+
+  getAgentStateSnapshot(): AgentState | null {
+    return this.target?.getAgentStateSnapshot() ?? null;
   }
 
   async fetchLatestUserPermissionIntentFromTranscript(
@@ -884,7 +904,7 @@ export class DeferredApiSessionClient {
 
   private enqueueSessionEventCommittedOnTarget(
     target: DeferredApiSessionTarget,
-    event: unknown,
+    event: Parameters<ApiSessionClient['enqueueSessionEventCommitted']>[0],
     id?: string,
   ): Promise<Readonly<{ persisted: boolean; delivered: boolean }>> {
     if (typeof target.enqueueSessionEventCommitted !== 'function') {

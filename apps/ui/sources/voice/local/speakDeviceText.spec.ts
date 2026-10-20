@@ -69,19 +69,21 @@ describe('speakDeviceText', () => {
         expect(onStart).not.toHaveBeenCalled();
     });
 
-    it('skips ExpoSpeech.speak when interrupted while acquiring the playback lease', async () => {
+    it.each(['abort', 'retire'] as const)('skips ExpoSpeech.speak after %s while acquiring the playback lease', async reason => {
         speakSpy.mockReset();
         const onStart = vi.fn();
         const controller = new AbortController();
+        let current = true;
         let resolveApply!: () => void;
         vi.mocked(audioSession.nativeModule.configureAudioSession).mockImplementationOnce(request => new Promise(resolve => {
             resolveApply = () => resolve({ generation: request.generation, aecAvailable: true, aecActive: false, route: 'speaker' });
         }));
         speakSpy.mockImplementationOnce((_text: string, opts: SpeechOptions) => opts.onDone?.());
 
-        const speaking = speakDeviceText('hello', onStart, { signal: controller.signal });
+        const speaking = speakDeviceText('hello', onStart, { signal: controller.signal, isCurrent: () => current });
         await vi.waitFor(() => expect(audioSession.nativeModule.configureAudioSession).toHaveBeenCalledTimes(1));
-        controller.abort();
+        if (reason === 'abort') controller.abort();
+        else current = false;
         resolveApply();
 
         await expect(speaking).resolves.toBeUndefined();

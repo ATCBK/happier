@@ -18,6 +18,7 @@ export function createCliProviderActionExecuteV1(params: Readonly<{
     machineId: string; serverId?: string; method: string; request: unknown; signal?: AbortSignal;
     authority?: ActionExecutorContext['authority']; authorization?: ActionExecutorContext['rpcSessionAuthorization'];
     context?: ActionExecutorContext; effectActionId?: string; exactMachine?: true;
+    timeoutMs?: number | null;
   }>): Promise<unknown>;
 }>): NonNullable<ActionExecutorDeps['providerActionExecute']> {
   const scopeKey = runWithServerHttpBaseUrl(params.serverHttpBaseUrl, () => resolveAccountSettingsScopeKey(params.credentials));
@@ -28,10 +29,11 @@ export function createCliProviderActionExecuteV1(params: Readonly<{
       const active = params.operationContext ? params.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
       if (params.operationContext && !active || active && active.scopeKey !== scopeKey) throw Object.assign(new Error('scope-retired'), { code: 'scope-retired' });
     },
-    rpc: ({ machineId, method, request, context }) => params.callMachineAction({
+    rpc: ({ machineId, method, request, context, operationTimeoutMs }) => params.callMachineAction({
       machineId, serverId: params.serverId, method, request: request.input, signal: context.signal,
       authority: context.authority, authorization: context.rpcSessionAuthorization,
       context, effectActionId: request.actionId, exactMachine: true,
+      ...(operationTimeoutMs === null ? { timeoutMs: null } : {}),
     }),
     setDefault: (input, context) => setDefaultProviderModelSelection({ credentials: params.credentials, ...input, signal: context.signal }),
     account: createCliAccountProviderActionExecuteV1(params),

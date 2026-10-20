@@ -109,6 +109,7 @@ export type NavigationListDestination = Readonly<{
 const TEXT_COLOR_ROLE: Readonly<Record<HappierCollectionListTextRole, 'text' | 'secondaryText' | 'mutedText'>> = {
   title: 'text',
   count: 'mutedText',
+  subtitle: 'secondaryText',
   groupTitle: 'secondaryText',
   groupHeading: 'text',
   groupCount: 'mutedText',
@@ -130,7 +131,7 @@ function NavigationListText(props: Readonly<{
       style={{
         ...resolveHappierTextStepStyle(HAPPIER_COLLECTION_LIST_TEXT[props.role], typography),
         color: theme.colors[TEXT_COLOR_ROLE[props.role]],
-        ...(props.role === 'groupTitle' || props.role === 'groupHeading' ? { flexShrink: 1 } : null),
+        ...(props.role === 'groupTitle' || props.role === 'groupHeading' || props.role === 'subtitle' ? { flexShrink: 1 } : null),
       }}
     >
       {props.children}

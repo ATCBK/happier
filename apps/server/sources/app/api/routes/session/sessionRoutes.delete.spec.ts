@@ -28,7 +28,7 @@ describe("session delete", () => {
         expect(result.response).toEqual({ success: true });
     });
 
-    it("answers an absent or not-owned session with 404 and a lost delete condition with 409", async () => {
+    it("answers absent, active, and lost-condition refusals without claiming deletion", async () => {
         const route = await createSessionRouteTestBuilder(
             "DELETE",
             "/v1/sessions/:sessionId",
@@ -40,6 +40,9 @@ describe("session delete", () => {
         sessionDelete.mockResolvedValueOnce({ ok: false, error: "conflict" });
         const conflicted = await route.invoke({ params: { sessionId: "s1" } });
 
+        sessionDelete.mockResolvedValueOnce({ ok: false, error: "active" });
+        const active = await route.invoke({ params: { sessionId: "s1" } });
+
         expect(absent.reply.statusCode).toBe(404);
         expect(absent.response).toEqual({
             error: "Session not found or not owned by user",
@@ -48,5 +51,7 @@ describe("session delete", () => {
         expect(conflicted.response).toEqual({
             error: "Session delete condition was lost",
         });
+        expect(active.reply.statusCode).toBe(409);
+        expect(active.response).toEqual({ error: "Session is active" });
     });
 });

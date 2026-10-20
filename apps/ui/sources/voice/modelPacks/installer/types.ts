@@ -1,4 +1,4 @@
-import type { File as ExpoFile } from 'expo-file-system';
+import type { Directory as ExpoDirectory, File as ExpoFile } from 'expo-file-system';
 import type { NativeModelPackDownload } from './nativeDownload';
 
 export type InstallMode = 'require_installed' | 'download_if_missing';
@@ -18,10 +18,11 @@ export type ExpoFsFile = {
   bytes: () => Promise<Uint8Array>;
   open(): Pick<ReturnType<ExpoFile['open']>, 'readBytes' | 'close'>;
   text: () => Promise<string>;
+  copy: (destination: ExpoFsFile | { uri: string }) => void;
   /** Write content; `{ append: true }` appends without rewriting the whole file. */
   write(content: string | Uint8Array, options?: { append?: boolean }): void;
-  create?: (options?: { intermediates?: boolean; idempotent?: boolean }) => void;
-  delete?: (options?: { idempotent?: boolean }) => void;
+  create?: ExpoFile['create'];
+  delete?: ExpoFile['delete'];
 };
 
 /** Minimal structural view of the Expo `Directory` handle. Mirrors `expo-file-system`'s `Directory`. */
@@ -29,8 +30,8 @@ export type ExpoFsDirectory = {
   uri: string;
   readonly name: string;
   readonly exists: boolean;
-  create?: (options?: { intermediates?: boolean; idempotent?: boolean }) => void;
-  delete?: (options?: { idempotent?: boolean }) => void;
+  create?: ExpoDirectory['create'];
+  delete?: ExpoDirectory['delete'];
   move: (destination: ExpoFsDirectory | { uri: string }) => void;
   list: () => (ExpoFsDirectory | ExpoFsFile)[];
 };

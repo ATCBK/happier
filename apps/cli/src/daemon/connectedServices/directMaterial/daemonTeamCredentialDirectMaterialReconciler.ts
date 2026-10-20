@@ -114,6 +114,7 @@ function connectedMember(account: QualifiedConnectedAccountRef): TeamCredentialS
 export function createDaemonTeamCredentialDirectMaterialReconciler(params: Readonly<{
   token: string;
   accountId: string;
+  signal?: AbortSignal;
   homeDomainAction: HomeDomainAction;
   establishedRuntimeOwner: Pick<QualifiedConnectedAccountEstablishedRuntimeOwner, 'readMaterialSnapshot'>;
   listAccounts(service: QualifiedConnectedAccountRef['service'], signal: AbortSignal): Promise<Readonly<{
@@ -152,6 +153,7 @@ export function createDaemonTeamCredentialDirectMaterialReconciler(params: Reado
 
   return Object.freeze({
     async census(input, signal) {
+      signal = signal && params.signal ? AbortSignal.any([signal, params.signal]) : signal ?? params.signal;
       return await fetchTeamCredentialDirectMaterialCensus({
         token: params.token,
         teamId: input.teamId,
@@ -162,6 +164,7 @@ export function createDaemonTeamCredentialDirectMaterialReconciler(params: Reado
       });
     },
     async reconcile(target, signal) {
+      signal = signal && params.signal ? AbortSignal.any([signal, params.signal]) : signal ?? params.signal;
       const resources = await listOwnedResources({
         accountId: params.accountId,
         homeDomainAction: params.homeDomainAction,

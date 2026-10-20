@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createSign, generateKeyPairSync } from "node:crypto";
+import * as privacyKit from "privacy-kit";
 
 type OidcCodeRecord = { nonce: string };
 
@@ -7,16 +8,19 @@ type StartOidcStubServerOptions = {
     includeRefreshToken?: boolean;
     includeUserInfoEndpoint?: boolean;
     userInfoClaims?: Record<string, unknown>;
+    onUserInfoRequest?: () => void | Promise<void>;
 };
 
 export type OidcStubServer = {
     issuer: string;
     close: () => Promise<void>;
     reset: () => void;
+    /** Only exact issued bearer tokens are accepted by the stub UserInfo endpoint. */
+    issueAccessToken: (claims: Record<string, unknown>, userInfoClaims: Record<string, unknown>) => string;
 };
 
-function base64Url(input: Buffer): string {
-    return input.toString("base64url");
+function base64Url(input: Uint8Array): string {
+    return privacyKit.encodeBase64(Uint8Array.from(input), "base64url").replace(/=+$/, "");
 }
 
 function signJwtRs256(params: {
@@ -24,8 +28,8 @@ function signJwtRs256(params: {
     payload: Record<string, unknown>;
     privateKeyPem: string;
 }): string {
-    const encodedHeader = base64Url(Buffer.from(JSON.stringify(params.header), "utf8"));
-    const encodedPayload = base64Url(Buffer.from(JSON.stringify(params.payload), "utf8"));
+    const encodedHeader = base64Url(new TextEncoder().encode(JSON.stringify(params.header)));
+    const encodedPayload = base64Url(new TextEncoder().encode(JSON.stringify(params.payload)));
     const data = `${encodedHeader}.${encodedPayload}`;
     const signer = createSign("RSA-SHA256");
     signer.update(data);
@@ -53,6 +57,7 @@ export async function startOidcStubServer(options: StartOidcStubServerOptions = 
     const privateKeyPem = privateKey.export({ format: "pem", type: "pkcs8" }).toString("utf8");
 
     const authCodes = new Map<string, OidcCodeRecord>();
+    const issuedAccessTokens = new Map<string, Record<string, unknown>>();
     let issuer = "";
 
     const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -143,6 +148,22 @@ export async function startOidcStubServer(options: StartOidcStubServerOptions = 
         }
 
         if (options.includeUserInfoEndpoint && (req.method === "POST" || req.method === "GET") && url.pathname === "/userinfo") {
+            await options.onUserInfoRequest?.();
+            const authorization = req.headers.authorization ?? "";
+            const bearer = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+            const issuedClaims = issuedAccessTokens.get(bearer);
+            if (issuedClaims) {
+                res.statusCode = 200;
+                res.setHeader("content-type", "application/json");
+                res.end(JSON.stringify(issuedClaims));
+                return;
+            }
+            if (bearer !== "at_1") {
+                res.statusCode = 401;
+                res.setHeader("www-authenticate", 'Bearer error="invalid_token"');
+                res.end();
+                return;
+            }
             res.statusCode = 200;
             res.setHeader("content-type", "application/json");
             res.end(
@@ -180,6 +201,21 @@ export async function startOidcStubServer(options: StartOidcStubServerOptions = 
         },
         reset: () => {
             authCodes.clear();
+            issuedAccessTokens.clear();
+        },
+        issueAccessToken: (claims, userInfoClaims) => {
+            const token = signJwtRs256({
+                header: { typ: "at+jwt", alg: "RS256", kid },
+                payload: {
+                    iss: issuer,
+                    exp: Math.floor(Date.now() / 1000) + 600,
+                    iat: Math.floor(Date.now() / 1000),
+                    ...claims,
+                },
+                privateKeyPem,
+            });
+            issuedAccessTokens.set(token, userInfoClaims);
+            return token;
         },
     };
 }

@@ -22,7 +22,8 @@ import { TeamAuthenticationStep } from '@/components/teams/entry/TeamAuthenticat
 import { useExactHomeDestination } from '@/components/account/auth/useExactHomeDestination';
 import { getCurrentAuth } from '@/auth/context/currentAuth';
 import { useServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { teamDetailPath } from '@/components/settings/teams/teamsRoutes';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { parseToken } from '@/utils/auth/parseToken';
@@ -306,14 +307,6 @@ export const TeamJoinScreen = React.memo(function TeamJoinScreen(props: Readonly
         );
     }
 
-    if (scopeResolution.kind === 'resolving' && !selection) {
-        return (
-            <TeamJoinStateShell stepId="resolving-account" onBack={exit}>
-                <SurfaceStateCard testID="team-join-resolving-account" kind="loading" title={t('common.loading')} accessibilitySemantics="status" />
-            </TeamJoinStateShell>
-        );
-    }
-
     // Membership is already committed; only reaching its Home is left. A device
     // that cannot get there keeps a visible retry instead of being dropped onto
     // whichever Home it was looking at before.
@@ -366,7 +359,7 @@ export const TeamJoinScreen = React.memo(function TeamJoinScreen(props: Readonly
     const matchingScope = !recoveringIdentity && scopeResolution.kind === 'bound'
         ? scopeResolution.scope
         : null;
-    if (props.postAuthContinuation && !matchingScope) {
+    if (props.postAuthContinuation && !matchingScope && scopeResolution.kind !== 'resolving') {
         return (
             <TeamJoinStateShell stepId="post-auth-account-unavailable" onBack={exit}>
                 <SurfaceStateCard
@@ -416,12 +409,20 @@ export const TeamJoinScreen = React.memo(function TeamJoinScreen(props: Readonly
                         // resolution return to this same explicit Join surface.
                         if (selected.execution.kind !== 'mtls'
                             && authenticatedHome.teamId === selection.teamId) {
-                            setCompletedAdmission({
+                            const admission = {
                                 outcome: 'joined',
                                 teamId: authenticatedHome.teamId,
                                 teamName: selection.teamName,
                                 accountId: accountIdFromToken(authenticatedHome.credentials.token),
-                            });
+                            } as const;
+                            // Off-Home auth stores the credential without publishing it into
+                            // the focused Account. Reach its existing profile owner before
+                            // asking for a name; focus retry never repeats admission.
+                            if (!areServerProfileIdentifiersEquivalent(target.serverId, getActiveServerSnapshot().serverId)) {
+                                void destination.continueToHome(target.serverId, () => setCompletedAdmission(admission));
+                            } else {
+                                setCompletedAdmission(admission);
+                            }
                             return;
                         }
                         setSelection(null);
@@ -435,9 +436,10 @@ export const TeamJoinScreen = React.memo(function TeamJoinScreen(props: Readonly
 
     return (
         <TeamAuthEntrySurface
-            invitation={props.postAuthContinuation && matchingScope
-                ? { continuation: props.postAuthContinuation, accountScope: matchingScope }
+            invitation={props.postAuthContinuation
+                ? { continuation: props.postAuthContinuation, accountScope: matchingScope ?? undefined }
                 : { token: tokenParse.success ? tokenParse.data : '', accountScope: matchingScope ?? undefined }}
+            accountScopeResolving={scopeResolution.kind === 'resolving'}
             target={target.target}
             onBack={exit}
             onUseCurrentAccount={recoveringIdentity ? useCurrentAccount : undefined}

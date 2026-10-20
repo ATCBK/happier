@@ -278,7 +278,7 @@ async function createPackOperationSource(locator: string): Promise<
       destinationRootPath: operationRootPath,
     });
     const operationLocator = sourceResolution.kind === 'manifest'
-      ? operationRootPath
+      ? join(operationRootPath, relative(originalRootPath, sourceResolution.source.manifestPath))
       : sourceResolution.entry.kind === 'packageRoot'
         ? operationRootPath
         : join(

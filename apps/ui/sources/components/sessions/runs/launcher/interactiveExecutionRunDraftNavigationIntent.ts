@@ -1,12 +1,13 @@
 import { ExecutionRunDraftCorrelationIdSchema } from '@happier-dev/protocol/execution/runs/index';
-import { SessionDiscussionSelectionSourceV1Schema, type SessionDiscussionSelectionSourceV1 } from '@happier-dev/protocol/sessions/discussions/content';
+import { DiscussionSelectionSourceV1Schema, type DiscussionSelectionSourceV1 } from '@happier-dev/protocol/discussions/content';
 
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 type InteractiveExecutionRunDraftNavigationIntent = Readonly<{
     addressKey: string;
-    source: SessionDiscussionSelectionSourceV1 & Readonly<{ draftCorrelationId: string }>;
+    source: DiscussionSelectionSourceV1 & Readonly<{ draftCorrelationId: string }>;
     initialText: string;
 }>;
 
@@ -19,14 +20,14 @@ const pendingByCorrelationId = new Map<string, InteractiveExecutionRunDraftNavig
  */
 export function publishInteractiveExecutionRunDraftNavigationIntent(input: Readonly<{
     address: SessionAddress;
-    source: SessionDiscussionSelectionSourceV1 & Readonly<{ draftCorrelationId: string }>;
+    source: DiscussionSelectionSourceV1 & Readonly<{ draftCorrelationId: string }>;
     initialText: string;
 }>): Readonly<{ correlationId: string; href: string }> {
-    const parsedSource = SessionDiscussionSelectionSourceV1Schema.parse(input.source);
+    const parsedSource = DiscussionSelectionSourceV1Schema.parse(input.source);
     const correlationId = ExecutionRunDraftCorrelationIdSchema.parse(input.source.draftCorrelationId);
     const source = Object.freeze({ ...parsedSource, draftCorrelationId: correlationId });
-    if (source.sessionId !== input.address.sessionId) {
-        throw new Error('Discussion selection source does not match the destination Session');
+    if (!areServerProfileIdentifiersEquivalent(source.serverId, input.address.serverId)) {
+        throw new Error('Discussion selection source does not match the destination Home');
     }
     pendingByCorrelationId.set(correlationId, Object.freeze({
         addressKey: sessionAddressKey(input.address),
@@ -48,7 +49,7 @@ export function consumeInteractiveExecutionRunDraftNavigationIntent(input: Reado
     address: SessionAddress;
     correlationId: string;
 }>): Readonly<{
-    source: SessionDiscussionSelectionSourceV1 & Readonly<{ draftCorrelationId: string }>;
+    source: DiscussionSelectionSourceV1 & Readonly<{ draftCorrelationId: string }>;
     initialText: string;
 }> | null {
     const pending = readInteractiveExecutionRunDraftNavigationIntent(input);
@@ -62,7 +63,7 @@ export function readInteractiveExecutionRunDraftNavigationIntent(input: Readonly
     address: SessionAddress;
     correlationId: string;
 }>): Readonly<{
-    source: SessionDiscussionSelectionSourceV1 & Readonly<{ draftCorrelationId: string }>;
+    source: DiscussionSelectionSourceV1 & Readonly<{ draftCorrelationId: string }>;
     initialText: string;
 }> | null {
     const correlationId = input.correlationId.trim();

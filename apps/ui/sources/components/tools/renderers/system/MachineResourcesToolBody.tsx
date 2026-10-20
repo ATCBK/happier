@@ -146,7 +146,7 @@ function ProposalAnalysing(
             <View
               style={[
                 styles.skeleton,
-                { backgroundColor: theme.colors.border.default },
+                { backgroundColor: theme.colors.surface.skeleton },
               ]}
             />
           </View>

@@ -146,13 +146,17 @@ export function reviewCommentActorsEqualV1(left: ReviewCommentActorRefV1, right:
   return false;
 }
 
-export function reviewCommentTransitionAllowedV1(from: ReviewCommentStateV1, to: ReviewCommentStateV1): boolean {
+export function reviewCommentTransitionTargetsV1(from: ReviewCommentStateV1): readonly ReviewCommentStateV1[] {
   const transitions: Record<ReviewCommentStateV1, readonly ReviewCommentStateV1[]> = {
     proposed: ['open', 'dismissed'], open: ['delegated', 'pending_review', 'resolved', 'dismissed'],
     delegated: ['open', 'pending_review', 'resolved', 'dismissed'],
     pending_review: ['open', 'resolved', 'dismissed'], resolved: ['open'], dismissed: ['open'],
   };
-  return transitions[from].includes(to);
+  return transitions[from];
+}
+
+export function reviewCommentTransitionAllowedV1(from: ReviewCommentStateV1, to: ReviewCommentStateV1): boolean {
+  return reviewCommentTransitionTargetsV1(from).includes(to);
 }
 
 /** One structural mutation owner; server admission and client sealing consume its result. */
@@ -203,7 +207,7 @@ export function deriveReviewCommentStructuralMutationV1(params: Readonly<{
       v: 1, id, accountId: params.accountId, projectId: input.projectId, workspace: input.workspace,
       ...(mutation.actionId === 'reviews.comments.create' ? {
         workspaceId: mutation.input.workspaceId,
-        sessionId: params.actor.kind === 'workflow' ? params.workflowOriginSessionId : mutation.input.sessionId,
+        sessionId: params.actor.kind === 'workflow' ? mutation.input.sessionId ?? params.workflowOriginSessionId : mutation.input.sessionId,
         runId: mutation.input.runId, engineId: mutation.input.engineId, findingId: mutation.input.findingId,
         findingIdentity: mutation.input.findingIdentity, findingSeverity: mutation.input.findingSeverity,
         reviewedFingerprint: mutation.input.reviewedFingerprint, anchorIndex: mutation.input.anchorIndex,

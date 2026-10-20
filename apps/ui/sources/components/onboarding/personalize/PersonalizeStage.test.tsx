@@ -1,10 +1,9 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { StyleSheet } from 'react-native';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { installMessageViewCommonModuleMocks } from '@/components/sessions/transcript/messageViewTestHelpers';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
 import { glassPresetMaterials } from '@/components/ui/glass/glassMaterial';
@@ -13,7 +12,11 @@ import { readPersonalizeChoices } from './personalizeFlowModel';
 import { PersonalizeStage, buildPersonalizeListSample } from './PersonalizeStage';
 import { SessionTranscriptSample, ThinkingDisplayPreview } from '@/components/settings/session/SessionSettingPreviews';
 
-installMessageViewCommonModuleMocks({ storage: importOriginal => importOriginal() });
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 afterEach(standardCleanup);
 
 describe('Personalize stage content geometry', () => {

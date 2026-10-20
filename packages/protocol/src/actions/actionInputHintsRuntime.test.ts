@@ -7,6 +7,31 @@ import { normalizeActionInputByFieldHints, resolveEffectiveActionInputFields } f
 import { InputHintsSchema, normalizeInputByFieldHints, resolveEffectiveInputFields } from '../inputs/index.js';
 
 describe('resolveEffectiveActionInputFields', () => {
+  it('lets every workflow-trigger list union arm be authored through the shared Action fields', () => {
+    const spec = getActionSpec('workflow.trigger.list');
+    const cases = [
+      { workflow: 'builtin:keep-going' },
+      { scope: 'account_all' },
+      { scope: 'account_inline' },
+      { automationId: 'automation-1', review: true },
+    ];
+    for (const input of cases) {
+      expect(spec.inputSchema.safeParse(input).success).toBe(true);
+      const fields = resolveEffectiveActionInputFields(spec, input);
+      for (const key of Object.keys(input)) {
+        expect(fields.find(field => field.path === key), key).toBeDefined();
+      }
+      for (const field of fields.filter(field => field.required)) {
+        expect(input, field.path).toHaveProperty(field.path);
+      }
+    }
+    expect(resolveEffectiveActionInputFields(spec, {}).find(field => field.path === 'workflow'))
+      .toMatchObject({ required: true, optionsSourceId: 'workflows.references.available' });
+    expect(resolveEffectiveActionInputFields(spec, { review: true }).find(field => field.path === 'automationId'))
+      .toMatchObject({ required: true });
+    expect(resolveEffectiveActionInputFields(getActionSpec('session.trigger.list'), {}))
+      .toContainEqual(expect.objectContaining({ path: 'sessionId', required: true }));
+  });
   it('uses the neutral field owner for structured selections and conditional fields', () => {
     const a = { service: { pluginId: 'com.acme.accounts', localId: 'service' }, accountId: 'a' };
     const b = { ...a, accountId: 'b' };

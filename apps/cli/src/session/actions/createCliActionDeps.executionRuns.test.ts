@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createLocalScmRepositoryFixture } from '@/scm/contracts/scmBackendContractFixtures';
+import { createLocalScmRepositoryFixture } from '@/testkit/scm/scmBackendContractFixtures';
 import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { createLocalTestMetadata, createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
@@ -50,7 +50,7 @@ vi.mock('@/session/transport/http/sessionsHttp', async (importOriginal) => ({
 
 import { createPluginInvocationActionsService } from '@/plugins/runtime/invocation/services/actions';
 import { createPluginActionCallerMaterializationFixture } from '@/plugins/runtime/invocation/services/actionCaller.testkit';
-import { createCliActionDeps } from './createCliActionDeps';
+import { createCliActionDeps, type MachineActionDirectTargetTransport } from './createCliActionDeps';
 
 const executionMaterialization = createPluginActionCallerMaterializationFixture('acme.execution');
 
@@ -78,6 +78,25 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
 describe('detached exact Run output observation transport', () => {
+  it('preserves the current causal ceiling on a direct retained Run send without start depth', async () => {
+    const invoke = vi.fn<MachineActionDirectTargetTransport['invoke']>(async () => ({ ok: true }));
+    const deps = createCliActionDeps({ token: 'token', credentials: { token: 'token', encryption: null },
+      sessionId: 'cli-global', mode: 'plain', ctx: null,
+      machineActionDirectTargetTransport: { machineId: 'machine-1', invoke } });
+    const causalPermissionAuthority = { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'default' as const };
+    expect(await deps.detachedExecutionRunSend(null, { runId: 'retained-run', message: 'Next Workflow step', delivery: 'prompt' }, {
+      targetMachineId: 'machine-1', surface: 'agent', authority: 'account_automation',
+      causalPermissionAuthority, effectiveCallerPermissionMode: 'read-only',
+    })).toEqual({ ok: true });
+    // This host-private transport is the authority boundary consumed by the
+    // registered Action receiver; a retained send has no new start depth.
+    expect(invoke).toHaveBeenCalledWith(SESSION_RPC_METHODS.EXECUTION_RUN_SEND, expect.objectContaining({ runId: 'retained-run' }),
+      expect.objectContaining({ localActionContext: expect.objectContaining({
+        causalPermissionAuthority, callerPermissionMode: 'read-only', authority: 'account_automation',
+      }) }));
+    expect(invoke.mock.calls[0]?.[2]?.localActionContext).not.toHaveProperty('agentStartWorkDepth');
+  });
+
   it.each(['list', 'start'] as const)('uses the installed exact Machine transport for ordinary detached Run %s', async (operation) => {
     const response = operation === 'list' ? { runs: [] } : { runId: 'detached-run', callId: 'call', sidechainId: 'sidechain' };
     const invoke = vi.fn(async () => response);
@@ -110,6 +129,11 @@ describe('detached exact Run output observation transport', () => {
     callMachineRpc.mockClear();
     expect(await deps.executionRunList(null, {}, { targetMachineId: 'machine-2', workDepth: 1 }))
       .toMatchObject({ ok: false, code: 'execution_run_target_unavailable' });
+    expect(await deps.detachedExecutionRunSend(null, { runId: 'retained-run', message: 'Keep the admitted ceiling', delivery: 'prompt' }, {
+      targetMachineId: 'machine-2',
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' },
+      effectiveCallerPermissionMode: 'read-only',
+    })).toMatchObject({ ok: false, code: 'execution_run_target_unavailable' });
     expect(callMachineRpc).not.toHaveBeenCalled();
     expect(invoke).not.toHaveBeenCalled();
   });
@@ -228,7 +252,8 @@ function createExecutionRunSuccessCase<K extends ExecutionRunActionId>(
   };
 }
 
-function createExecutionRunActionsService() {
+function createExecutionRunActionsService(detachedTransport?: 'installed' | 'public') {
+  const directInvoke = vi.fn<MachineActionDirectTargetTransport['invoke']>();
   const credentials = {
     token: 'token',
     encryption: null,
@@ -246,6 +271,9 @@ function createExecutionRunActionsService() {
     ctx: null,
     getCurrentSessionWorkDepth: () => 0,
     getCurrentTurnWorkDepth: () => 0,
+    ...(detachedTransport === 'installed' ? {
+      machineActionDirectTargetTransport: { machineId: 'machine-1', invoke: directInvoke },
+    } : {}),
   });
   const actionExecutor = createActionExecutor({
     ...deps,
@@ -259,7 +287,8 @@ function createExecutionRunActionsService() {
       resolveCurrentPluginMaterializationRef:
         executionMaterialization.resolveCurrentPluginMaterializationRef,
       occurrenceId: 'generation-1',
-      surface: 'agent',
+      // Agent turns carry private admitted authority; ordinary plugin calls do not.
+      surface: detachedTransport === 'public' ? 'plugin' : 'agent',
       session: { id: 'session-1' },
       readActiveTurnAdmissionWitness: () => ({
         inputId: 'execution-run-test-input',
@@ -279,7 +308,7 @@ function createExecutionRunActionsService() {
     actionExecutor,
     invokeContributedAction: vi.fn(),
   });
-  return { service, retirement };
+  return { service, retirement, directInvoke };
 }
 
 describe('createCliActionDeps execution-run plugin bindings', () => {
@@ -713,182 +742,233 @@ describe('createCliActionDeps execution-run plugin bindings', () => {
     });
   });
 
-  it('routes detached execution.run.send through V2 preflight to the exact Session-origin machine', async () => {
-    const { service } = createExecutionRunActionsService();
-    serveSessionRecord({ id: 'session-1', active: true, machineId: 'machine-1' });
-    callMachineRpc
-      .mockResolvedValueOnce({
-        results: {
-          'tool.executionRuns': {
-            ok: true,
-            data: {
-              protocolVersion: 2,
-              features: { detachedScope: true },
+  describe.each(['installed', 'public'] as const)('detached %s transport', (transport) => {
+    it('routes detached execution.run.send through V2 preflight to the exact Session-origin machine', async () => {
+      const { service, directInvoke } = createExecutionRunActionsService(transport);
+      serveSessionRecord({ id: 'session-1', active: true, machineId: 'machine-1' });
+      const rpc = transport === 'installed' ? directInvoke : callMachineRpc;
+      rpc
+        .mockResolvedValueOnce({
+          results: {
+            'tool.executionRuns': {
+              ok: true,
+              data: {
+                protocolVersion: 2,
+                features: { detachedScope: true },
+              },
             },
           },
+        })
+        .mockResolvedValueOnce({ ok: true });
+
+      await expect(service.execute('execution.run.send', {
+        sessionId: null,
+        runId: 'run-1',
+        message: 'Continue',
+      })).resolves.toEqual({ ok: true });
+
+      const requests = transport === 'installed'
+        ? directInvoke.mock.calls.map(([method, request]) => ({ machineId: 'machine-1', method, request }))
+        : callMachineRpc.mock.calls.map(([request]) => ({
+            machineId: request.machineId,
+            method: request.method,
+            request: request.request,
+          }));
+      expect(requests).toEqual([
+        {
+          machineId: 'machine-1',
+          method: RPC_METHODS.CAPABILITIES_DETECT,
+          request: { requests: [{ id: 'tool.executionRuns' }] },
         },
-      })
-      .mockResolvedValueOnce({ ok: true });
-
-    await expect(service.execute('execution.run.send', {
-      sessionId: null,
-      runId: 'run-1',
-      message: 'Continue',
-    })).resolves.toEqual({ ok: true });
-
-    expect(callMachineRpc.mock.calls.map(([request]) => ({
-      machineId: request.machineId,
-      method: request.method,
-      request: request.request,
-    }))).toEqual([
-      {
-        machineId: 'machine-1',
-        method: RPC_METHODS.CAPABILITIES_DETECT,
-        request: { requests: [{ id: 'tool.executionRuns' }] },
-      },
-      {
-        machineId: 'machine-1',
-        method: SESSION_RPC_METHODS.EXECUTION_RUN_SEND,
-        request: {
-          runId: 'run-1',
-          message: 'Continue',
-          delivery: 'steer_if_supported',
-        },
-      },
-    ]);
-    expect(callMachineRpc.mock.calls[1]?.[0]).toMatchObject({ timeoutMs: null });
-    expect(callSessionRpc).not.toHaveBeenCalled();
-  });
-
-  it('keeps detached stream cancellation under execution-run lifecycle ownership', async () => {
-    const { service } = createExecutionRunActionsService();
-    serveSessionRecord({ id: 'session-1', active: true, machineId: 'machine-1' });
-    callMachineRpc
-      .mockResolvedValueOnce({
-        results: {
-          'tool.executionRuns': {
-            ok: true,
-            data: {
-              protocolVersion: 2,
-              features: { detachedScope: true },
-            },
+        {
+          machineId: 'machine-1',
+          method: SESSION_RPC_METHODS.EXECUTION_RUN_SEND,
+          request: {
+            sessionId: null,
+            runId: 'run-1',
+            message: 'Continue',
+            delivery: 'steer_if_supported',
           },
         },
-      })
-      .mockResolvedValueOnce({ ok: true });
-
-    await expect(service.execute('execution.run.stream.cancel', {
-      sessionId: null,
-      runId: 'run-1',
-      streamId: 'stream-1',
-    })).resolves.toEqual({ ok: true });
-
-    expect(callMachineRpc.mock.calls[1]?.[0]).toMatchObject({
-      machineId: 'machine-1',
-      method: SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_CANCEL,
-      request: { runId: 'run-1', streamId: 'stream-1' },
-      timeoutMs: null,
+      ]);
+      if (transport === 'installed') {
+        expect(directInvoke.mock.calls[1]?.[2]).toMatchObject({
+          signal: expect.any(AbortSignal),
+          localActionContext: { authority: 'account_automation', callerPermissionMode: 'default',
+            causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' } },
+        });
+        expect(callMachineRpc).not.toHaveBeenCalled();
+      } else {
+        expect(callMachineRpc.mock.calls[1]?.[0]).toMatchObject({ timeoutMs: null });
+        expect(directInvoke).not.toHaveBeenCalled();
+      }
+      expect(callSessionRpc).not.toHaveBeenCalled();
     });
-    expect(callSessionRpc).not.toHaveBeenCalled();
-  });
 
-  it('keeps detached stop under execution-run lifecycle ownership', async () => {
-    const { service } = createExecutionRunActionsService();
-    serveSessionRecord({ id: 'session-1', active: true, machineId: 'machine-1' });
-    callMachineRpc
-      .mockResolvedValueOnce({
-        results: {
-          'tool.executionRuns': {
-            ok: true,
-            data: {
-              protocolVersion: 2,
-              features: { detachedScope: true },
+    it('keeps detached stream cancellation under execution-run lifecycle ownership', async () => {
+      const { service, directInvoke } = createExecutionRunActionsService(transport);
+      serveSessionRecord({ id: 'session-1', active: true, machineId: 'machine-1' });
+      const rpc = transport === 'installed' ? directInvoke : callMachineRpc;
+      rpc
+        .mockResolvedValueOnce({
+          results: {
+            'tool.executionRuns': {
+              ok: true,
+              data: {
+                protocolVersion: 2,
+                features: { detachedScope: true },
+              },
             },
           },
-        },
-      })
-      .mockResolvedValueOnce({ ok: true });
+        })
+        .mockResolvedValueOnce({ ok: true });
 
-    await expect(service.execute('execution.run.stop', {
-      sessionId: null,
-      runId: 'run-1',
-    })).resolves.toEqual({ ok: true });
+      await expect(service.execute('execution.run.stream.cancel', {
+        sessionId: null,
+        runId: 'run-1',
+        streamId: 'stream-1',
+      })).resolves.toEqual({ ok: true });
 
-    expect(callMachineRpc.mock.calls[1]?.[0]).toMatchObject({
-      machineId: 'machine-1',
-      method: SESSION_RPC_METHODS.EXECUTION_RUN_STOP,
-      request: { runId: 'run-1' },
-      timeoutMs: null,
+      if (transport === 'installed') {
+        expect(directInvoke.mock.calls[1]).toEqual([
+          SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_CANCEL,
+          { runId: 'run-1', streamId: 'stream-1' },
+          expect.objectContaining({ signal: expect.any(AbortSignal), localActionContext: expect.objectContaining({
+            surface: 'agent', authority: 'account_automation', callerPermissionMode: 'default',
+          }) }),
+        ]);
+        expect(callMachineRpc).not.toHaveBeenCalled();
+      } else {
+        expect(callMachineRpc.mock.calls[1]?.[0]).toMatchObject({
+          machineId: 'machine-1',
+          method: SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_CANCEL,
+          request: { runId: 'run-1', streamId: 'stream-1' },
+          timeoutMs: null,
+        });
+        expect(directInvoke).not.toHaveBeenCalled();
+      }
+      expect(callSessionRpc).not.toHaveBeenCalled();
     });
-    expect(callSessionRpc).not.toHaveBeenCalled();
-  });
 
-  it('projects a detached execution.run.send failure returned by the exact machine', async () => {
-    const { service } = createExecutionRunActionsService();
-    serveSessionRecord({ id: 'session-1', active: true, machineId: 'machine-1' });
-    callMachineRpc
-      .mockResolvedValueOnce({
-        results: {
-          'tool.executionRuns': {
-            ok: true,
-            data: {
-              protocolVersion: 2,
-              features: { detachedScope: true },
+    it('keeps detached stop under execution-run lifecycle ownership', async () => {
+      const { service, directInvoke } = createExecutionRunActionsService(transport);
+      serveSessionRecord({ id: 'session-1', active: true, machineId: 'machine-1' });
+      const rpc = transport === 'installed' ? directInvoke : callMachineRpc;
+      rpc
+        .mockResolvedValueOnce({
+          results: {
+            'tool.executionRuns': {
+              ok: true,
+              data: {
+                protocolVersion: 2,
+                features: { detachedScope: true },
+              },
             },
           },
-        },
-      })
-      .mockResolvedValueOnce({
-        ok: false,
-        errorCode: 'execution_run_not_allowed',
-        error: 'Execution runs disabled',
+        })
+        .mockResolvedValueOnce({ ok: true });
+
+      await expect(service.execute('execution.run.stop', {
+        sessionId: null,
+        runId: 'run-1',
+      })).resolves.toEqual({ ok: true });
+
+      if (transport === 'installed') {
+        expect(directInvoke.mock.calls[1]).toEqual([
+          SESSION_RPC_METHODS.EXECUTION_RUN_STOP,
+          { runId: 'run-1' },
+          expect.objectContaining({ signal: expect.any(AbortSignal), localActionContext: expect.objectContaining({
+            surface: 'agent', authority: 'account_automation', callerPermissionMode: 'default',
+          }) }),
+        ]);
+        expect(callMachineRpc).not.toHaveBeenCalled();
+      } else {
+        expect(callMachineRpc.mock.calls[1]?.[0]).toMatchObject({
+          machineId: 'machine-1',
+          method: SESSION_RPC_METHODS.EXECUTION_RUN_STOP,
+          request: { runId: 'run-1' },
+          timeoutMs: null,
+        });
+        expect(directInvoke).not.toHaveBeenCalled();
+      }
+      expect(callSessionRpc).not.toHaveBeenCalled();
+    });
+
+    it('projects a detached execution.run.send failure returned by the exact machine', async () => {
+      const { service, directInvoke } = createExecutionRunActionsService(transport);
+      serveSessionRecord({ id: 'session-1', active: true, machineId: 'machine-1' });
+      const rpc = transport === 'installed' ? directInvoke : callMachineRpc;
+      rpc
+        .mockResolvedValueOnce({
+          results: {
+            'tool.executionRuns': {
+              ok: true,
+              data: {
+                protocolVersion: 2,
+                features: { detachedScope: true },
+              },
+            },
+          },
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          errorCode: 'execution_run_not_allowed',
+          error: 'Execution runs disabled',
+        });
+
+      await expect(service.execute('execution.run.send', {
+        sessionId: null,
+        runId: 'run-1',
+        message: 'Continue',
+      })).rejects.toMatchObject({
+        code: 'execution_run_not_allowed',
+        message: 'Execution runs disabled',
       });
 
-    await expect(service.execute('execution.run.send', {
-      sessionId: null,
-      runId: 'run-1',
-      message: 'Continue',
-    })).rejects.toMatchObject({
-      code: 'execution_run_not_allowed',
-      message: 'Execution runs disabled',
+      const methods = transport === 'installed'
+        ? directInvoke.mock.calls.map(([method]) => method)
+        : callMachineRpc.mock.calls.map(([request]) => request.method);
+      expect(methods).toEqual([
+        RPC_METHODS.CAPABILITIES_DETECT,
+        SESSION_RPC_METHODS.EXECUTION_RUN_SEND,
+      ]);
+      expect(callSessionRpc).not.toHaveBeenCalled();
     });
 
-    expect(callMachineRpc.mock.calls.map(([request]) => request.method)).toEqual([
-      RPC_METHODS.CAPABILITIES_DETECT,
-      SESSION_RPC_METHODS.EXECUTION_RUN_SEND,
-    ]);
-    expect(callSessionRpc).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['notSent', 'execution_run_target_unavailable'],
-    ['outcomeUnknown', 'execution_run_send_outcome_unknown'],
-  ] as const)('classifies a detached send transport failure with %s disposition', async (disposition, errorCode) => {
-    const sendError = new Error(`send ${disposition}`);
-    const { service } = createExecutionRunActionsService();
-    serveSessionRecord({ id: 'session-1', active: true, machineId: 'machine-1' });
-    callMachineRpc
-      .mockResolvedValueOnce({
-        results: {
-          'tool.executionRuns': {
-            ok: true,
-            data: {
-              protocolVersion: 2,
-              features: { detachedScope: true },
+    it.each([
+      ['notSent', 'execution_run_target_unavailable'],
+      ['outcomeUnknown', 'execution_run_send_outcome_unknown'],
+    ] as const)('classifies a detached send transport failure with %s disposition', async (disposition, errorCode) => {
+      const sendError = new Error(`send ${disposition}`);
+      const { service, directInvoke } = createExecutionRunActionsService(transport);
+      serveSessionRecord({ id: 'session-1', active: true, machineId: 'machine-1' });
+      const rpc = transport === 'installed' ? directInvoke : callMachineRpc;
+      rpc
+        .mockResolvedValueOnce({
+          results: {
+            'tool.executionRuns': {
+              ok: true,
+              data: {
+                protocolVersion: 2,
+                features: { detachedScope: true },
+              },
             },
           },
-        },
-      })
-      .mockRejectedValueOnce(sendError);
-    readMachineRpcRequestDisposition.mockImplementation((error) => (
-      error === sendError ? disposition : null
-    ));
+        })
+        .mockRejectedValueOnce(sendError);
+      readMachineRpcRequestDisposition.mockImplementation((error) => (
+        error === sendError ? disposition : null
+      ));
 
-    await expect(service.execute('execution.run.send', {
-      sessionId: null,
-      runId: 'run-1',
-      message: 'Continue',
-    })).rejects.toMatchObject({ code: errorCode });
+      await expect(service.execute('execution.run.send', {
+        sessionId: null,
+        runId: 'run-1',
+        message: 'Continue',
+      })).rejects.toMatchObject({ code: errorCode });
+      // The notSent code also describes a pre-dispatch refusal, so prove this
+      // fixture actually reached the transport whose disposition it classifies.
+      expect(rpc).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('forwards plugin cancellation to the pending execution-run dependency and rejects late settlement', async () => {
@@ -1383,7 +1463,7 @@ describe('createCliActionDeps execution-run plugin bindings', () => {
       }) },
     });
     await expect(deps.executionRunCheckProtocolV2?.(null, {
-      detachedScope: true, startAndWait: false,
+      detachedScope: true, startAndWait: false, exactInputResults: false, runScopedAgentBindings: false, secretReferenceOverlay: false,
     }, { exactMachineId: 'machine-1' })).resolves.toMatchObject({
       ok: false, errorCode,
     });

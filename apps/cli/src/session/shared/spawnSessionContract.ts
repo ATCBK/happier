@@ -1,14 +1,13 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
+import type { ActionExecutorContext } from '@happier-dev/protocol';
 import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { SessionIdSchema, TurnIdSchema } from '@happier-dev/protocol/sessions/idsV1';
 import { SessionOrganizationPlacementV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
-import { SessionSpawnLaunchErrorV1Schema } from '@happier-dev/protocol/spawnSession';
-import { SessionCreationTerminalSpawnErrorDetailSchema, SessionLaunchRetiredV1Schema, SpawnSessionErrorCodeSchema, isSessionCreationTerminalSpawnErrorDetail } from '@happier-dev/protocol/spawnSession';
+import { SpawnSessionErrorCodeSchema, normalizeSpawnSessionErrorDetail } from '@happier-dev/protocol/spawnSession';
 import { SessionTurnProviderCheckpointV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnMutationV1';
-import type { AcpConfigOptionOverridesV1, AgentExecutionTargetV1, AgentSessionStartupInstructionsV1, BackendTargetRefV2, CallerInputConstraintsV1, MachinePoolSelectionOriginV1, ConnectedServiceMaterializationIdentityV1, RuntimeDescriptorV1, SessionAttachMetadataIdentityPolicy, SessionCapabilitySelectionV1, SessionInitialAccessDraftV1, SessionReportsToV1, SessionRolesV1, SessionInitialGoalRequestV1, SessionCreateOriginFieldsV1, SessionModelSelectionV1, SessionProviderBindingMetadataV1, SessionProviderBindingSecurityChangeConfirmationV1, SecretReferenceOverlayV1, SpawnSessionExecutionAuthorization, SpawnSessionErrorCode, SpawnSessionErrorDetail } from '@happier-dev/protocol';
+import type { AcpConfigOptionOverridesV1, AgentExecutionTargetV1, AgentSessionStartupInstructionsV1, BackendTargetRefV2, CallerInputConstraintsV1, MachinePoolSelectionOriginV1, ConnectedServiceMaterializationIdentityV1, RuntimeDescriptorV1, SessionAttachMetadataIdentityPolicy, SessionCapabilitySelectionV1, SessionInitialAccessDraftV1, SessionManagerV1, SessionRolesV1, SessionInitialGoalRequestV1, SessionCreateOriginFieldsV1, SessionModelSelectionV1, SessionProviderBindingMetadataV1, SessionProviderBindingSecurityChangeConfirmationV1, SecretReferenceOverlayV1, SpawnSessionExecutionAuthorization, SpawnSessionErrorCode, SpawnSessionErrorDetail } from '@happier-dev/protocol';
 
 import type { PermissionMode, SessionCreationOutcome } from '@/api/types';
-import { SpawnFailureSpawnErrorDetailSchema } from '@happier-dev/protocol/spawnSession';
 import type {
   HostPrivatePersistedTakeoverAdmission,
 } from '@/daemon/spawn/persistedTakeoverAdmission';
@@ -30,26 +29,21 @@ export function isAgentSessionContinuationUnreachableError(error: unknown): erro
 
 export const SESSION_RUNNER_EXIT_CODES = Object.freeze({
   CONTINUATION_UNREACHABLE: 78,
+  TERMINAL_FOLLOW_ADMISSION_FAILED: 79,
 });
 
-const NativeForkProviderSessionIdSchema = z.string().min(1).max(2_000).refine(
-  (value) => value === value.trim(),
-  'Provider session id must not contain leading or trailing whitespace',
-);
-const NativeForkCwdSchema = z.string().min(1).max(10_000).refine(
-  (value) => value.trim().length > 0,
-  'Native fork cwd must not be blank',
-);
+const NativeForkProviderSessionIdSchema = z.string().check(z.minLength(1), z.maxLength(2_000), z.refine((value) => value === value.trim(), 'Provider session id must not contain leading or trailing whitespace'));
+const NativeForkCwdSchema = z.string().check(z.minLength(1), z.maxLength(10_000), z.refine((value) => value.trim().length > 0, 'Native fork cwd must not be blank'));
 
-export const NativeForkSourceSchema = z.object({
+export const NativeForkSourceSchema = z.readonly(z.strictObject({
   sessionId: asHostProtocolZod(SessionIdSchema),
   providerSessionId: NativeForkProviderSessionIdSchema,
   cwd: NativeForkCwdSchema,
-  target: z.object({
+  target: z.optional(z.readonly(z.strictObject({
     turnId: TurnIdSchema,
     providerCheckpoint: SessionTurnProviderCheckpointV1Schema,
-  }).strict().readonly().optional(),
-}).strict().readonly();
+  }))),
+}));
 export type NativeForkSource = z.infer<typeof NativeForkSourceSchema>;
 
 const NATIVE_FORK_SOURCE_V1_TRANSPORT_PREFIX = 'nfs1:';
@@ -98,6 +92,10 @@ export function deserializeNativeForkSourceV1(value: string): NativeForkSource {
  * depends on the high-level handler graph merely to describe a spawn request or response.
  */
 export interface SpawnSessionOptions extends SessionCreateOriginFieldsV1 {
+  /** Authored Session ceiling, committed before the native runner opens. */
+  workspaceWrites?: 'allow' | 'deny';
+  /** Original cold-start operation, retained only until native Session open. Never serialized. */
+  projectSetupOperation?: import('@/workspaces/projectSetup/projectSetupExecution').ProjectSetupOperationContext;
   allowedTools?: readonly string[];
   unlistedTools?: 'ask' | 'deny';
   /** Invocation-only verified credential/policy owner; excluded from durable spawn state. */
@@ -112,6 +110,8 @@ export interface SpawnSessionOptions extends SessionCreateOriginFieldsV1 {
   verifyRequesterMachineAdmissionCurrent?: () => Promise<boolean>;
   /** Host-owned handoff acceptance immediately before physical launch; never persisted. */
   beforeSessionRunnerLaunch?: () => Promise<boolean>;
+  /** Invocation-only admitted Resume caller; raw spawn requests cannot supply this. */
+  resumeActionContext?: ActionExecutorContext;
   machineId?: string;
   directory: string;
   /** Daemon-owned directory routing fact; filesystem authority comes from the allocation record. */
@@ -154,7 +154,7 @@ export interface SpawnSessionOptions extends SessionCreateOriginFieldsV1 {
   initialAccess?: SessionInitialAccessDraftV1;
   /** Canonical host-sealed trigger intents committed with fresh Session birth. */
   initialTriggers?: readonly import('@happier-dev/protocol').SessionInitialTriggerAdmissionV1[];
-  reportsTo?: SessionReportsToV1;
+  manager?: SessionManagerV1;
   /** Host-resolved role selection and complete lead snapshot, seeded in fresh owner metadata only. */
   initialSessionRolesV1?: SessionRolesV1;
   primaryTeamId?: string | null;
@@ -199,7 +199,7 @@ export interface SpawnSessionOptions extends SessionCreateOriginFieldsV1 {
   attachMetadataIdentityPolicy?: SessionAttachMetadataIdentityPolicy;
   permissionMode?: PermissionMode;
   /** Host-only caller authority for this launch; never part of the raw spawn wire or respawn state. */
-  creationAuthorization?: Readonly<{ token: string }>;
+  creationAuthorization?: import('@happier-dev/protocol/sessions/creation/sessionCreationAuthorizationV1').SessionCreationAuthorizationV1;
   callerInputConstraints?: CallerInputConstraintsV1;
   permissionModeUpdatedAt?: number;
   agentModeId?: string;
@@ -257,51 +257,55 @@ export type SpawnSessionResult =
     runtimeFailureReason?: import('@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1').PendingActivationFailureDetailsV1['runtimeReason'];
   };
 
-export const SessionCreationOutcomeSchema = z.object({
+export const SessionCreationOutcomeSchema = z.strictObject({
   disposition: z.enum(['created', 'rejoined']),
   organizationPlacement: SessionOrganizationPlacementV1Schema,
-}).strict();
+});
 
 /** Local daemon control transport schemas, consumed by the real HTTP routes. */
+const SpawnSessionControlErrorDetailSchema = z.pipe(z.unknown(), z.transform((value, context) => {
+  const detail = normalizeSpawnSessionErrorDetail(value);
+  if (detail) return detail;
+  context.issues.push({ code: 'custom', message: 'Invalid Session spawn error detail', input: context.value });
+  return z.NEVER;
+}));
+
 export const SpawnSessionControlBadRequestSchema = z.object({
   success: z.boolean(),
   error: z.string(),
-  errorCode: z.string().optional(),
-  agentId: z.string().optional(),
-  errorDetail: z.union([SessionCreationTerminalSpawnErrorDetailSchema, SpawnFailureSpawnErrorDetailSchema, SessionLaunchRetiredV1Schema, SessionSpawnLaunchErrorV1Schema]).optional(),
+  errorCode: z.optional(z.string()),
+  agentId: z.optional(z.string()),
+  errorDetail: z.optional(SpawnSessionControlErrorDetailSchema),
 });
 
 export const SpawnSessionControlErrorResponseSchema = z.object({
   success: z.boolean(),
-  error: z.string().optional(),
-  errorCode: z.string().optional(),
-  agentId: z.string().optional(),
-  errorDetail: z.union([SessionCreationTerminalSpawnErrorDetailSchema, SpawnFailureSpawnErrorDetailSchema, SessionLaunchRetiredV1Schema, SessionSpawnLaunchErrorV1Schema]).optional(),
+  error: z.optional(z.string()),
+  errorCode: z.optional(z.string()),
+  agentId: z.optional(z.string()),
+  errorDetail: z.optional(SpawnSessionControlErrorDetailSchema),
 });
 
 export const SpawnSessionNonceControlResponseSchema = z.object({
   success: z.literal(true),
   status: z.enum(['success', 'error', 'pending', 'not_found']),
-  sessionId: z.string().optional(),
-  sessionCreationOutcome: SessionCreationOutcomeSchema.optional(),
+  sessionId: z.optional(z.string()),
+  sessionCreationOutcome: z.optional(SessionCreationOutcomeSchema),
   errorCode: z.optional(SpawnSessionErrorCodeSchema),
-  errorMessage: z.string().optional(),
-  agentId: z.string().optional(),
-  errorDetail: z.unknown().optional(),
+  errorMessage: z.optional(z.string()),
+  agentId: z.optional(z.string()),
+  errorDetail: z.optional(z.unknown()),
 });
 
 export function projectSpawnSessionControlErrorResponse(
   error: Pick<Extract<SpawnSessionResult, { type: 'error' }>, 'errorCode' | 'errorMessage' | 'agentId' | 'errorDetail'>,
 ) {
+  const errorDetail = normalizeSpawnSessionErrorDetail(error.errorDetail);
   return {
     success: false as const,
     error: error.errorMessage,
     errorCode: error.errorCode,
     ...(error.agentId !== undefined ? { agentId: error.agentId } : {}),
-    ...(isSessionCreationTerminalSpawnErrorDetail(error.errorDetail) || SpawnFailureSpawnErrorDetailSchema.safeParse(error.errorDetail).success
-      || SessionLaunchRetiredV1Schema.safeParse(error.errorDetail).success
-      || SessionSpawnLaunchErrorV1Schema.safeParse(error.errorDetail).success
-      ? { errorDetail: error.errorDetail }
-      : {}),
+    ...(errorDetail ? { errorDetail } : {}),
   };
 }

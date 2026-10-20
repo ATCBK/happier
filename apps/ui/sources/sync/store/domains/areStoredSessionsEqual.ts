@@ -1,5 +1,7 @@
 import type { Session } from '../../domains/state/storageTypes';
+import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
+import { SESSION_OWNER_METADATA_PROJECTION } from '@/sync/domains/session/readSessionOwnerMetadataView';
 
 function arePlainObjectValuesEqual(
     previous: Record<string, unknown>,
@@ -56,6 +58,7 @@ export function areStoredSessionsEqual(
     next: Session,
 ): boolean {
     if (!previous) return false;
+    if ((previous[SESSION_OWNER_METADATA_PROJECTION] ?? null) !== (next[SESSION_OWNER_METADATA_PROJECTION] ?? null)) return false;
 
     const activeAtMatches =
         previous.activeAt === next.activeAt
@@ -90,11 +93,13 @@ export function areStoredSessionsEqual(
         && areSessionValueEqual(previous.viewer, next.viewer)
         && (previous.pendingPermissionRequestCount ?? null) === (next.pendingPermissionRequestCount ?? null)
         && (previous.pendingUserActionRequestCount ?? null) === (next.pendingUserActionRequestCount ?? null)
-        && (previous.reportsTo?.sessionId ?? null) === (next.reportsTo?.sessionId ?? null)
+        && readSessionManagerSessionIdV1(previous) === readSessionManagerSessionIdV1(next)
         && previous.origin?.kind === next.origin?.kind
         && previous.origin?.runId === next.origin?.runId
         && previous.workDepth === next.workDepth
-        && areSessionValueEqual(previous.reports ?? null, next.reports ?? null)
+        && previous.ownerAccountId === next.ownerAccountId
+        && previous.receivedRuleCount === next.receivedRuleCount
+        && areSessionValueEqual(previous.managedSessions ?? null, next.managedSessions ?? null)
         && (previous.latestTurnStatus ?? null) === (next.latestTurnStatus ?? null)
         && (previous.latestTurnStatusObservedAt ?? null) === (next.latestTurnStatusObservedAt ?? null)
         && (previous.runtimeActivityState ?? null) === (next.runtimeActivityState ?? null)

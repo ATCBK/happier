@@ -1,10 +1,13 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ReviewCommentActionIdV1, ReviewCommentV1 } from '@happier-dev/protocol';
 import { ReviewCommentTransitionRequestV1Schema } from '@happier-dev/protocol';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { flushHookEffects, pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
+import { commitPreferredLanguage, getPreferredLanguage } from '@/text/preferredLanguage';
 import type {
     PluginPermissionGrant,
     PluginPermissionPendingGrantRequest,
@@ -25,10 +28,15 @@ vi.mock('@/components/ui/text/Text', async () => {
     const { createUiTextModuleMock } = await import('@/dev/testkit/mocks/uiText');
     return createUiTextModuleMock();
 });
+// The popover's portal and window measurement are the boundary; the real More menu and its rows render inline.
+vi.mock('@/components/ui/popover/Popover', async (importOriginal) =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    const { getPreferredLanguage } = await import('@/text/preferredLanguage');
     return createTextModuleMock({ translate: (key: string, params?: Record<string, unknown>) => {
+        if (getPreferredLanguage() === 'fr') return `fr:${key}`;
         if (key === 'files.reviewComments.durable.count') return String(params?.count ?? '');
         if (key === 'files.reviewComments.durable.directWriteGrant.body') return String(params?.pluginId ?? '');
         if (key === 'files.reviewComments.durable.bulkFailure') return `${String(params?.commentId ?? '')}:${String(params?.errorCode ?? '')}`;
@@ -94,11 +102,73 @@ function deferred<T>() {
     return { promise, resolve, reject };
 }
 
+/** A menu opens and selects on the next frame (its own scheduling, with a timer fallback); wait it out. */
+const settleMenu = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
+
 describe('ReviewCommentsSessionSurface', () => {
+    let initialLanguage: ReturnType<typeof getPreferredLanguage>;
     beforeEach(() => {
+        initialLanguage = getPreferredLanguage();
+        commitPreferredLanguage('en');
         modalMock.prompt.mockReset();
         submitMessageSpy.mockReset();
         resetReviewRunCommentsForTests();
+    });
+    afterEach(async () => { await act(async () => { commitPreferredLanguage(initialLanguage); }); });
+
+    it('updates mounted comment, filter and toolbar labels when the committed locale changes', async () => {
+        const execute = vi.fn(async () => ({ items: [comment()], cursor: null }));
+        const screen = await renderScreen(<ReviewCommentsSessionSurface projectId="project-1" execute={execute} testID="comments" />);
+        await flushHookEffects();
+        const keys = ['reply', 'resolve', 'bulkResolve', 'states.open', 'headerTitle'];
+        for (const key of keys) expect(screen.getTextContent()).toContain(`files.reviewComments.durable.${key}`);
+        await act(async () => { commitPreferredLanguage('fr'); });
+        for (const key of keys) expect(screen.getTextContent()).toContain(`fr:files.reviewComments.durable.${key}`);
+        expect(screen.findHostByTestId('review-comment-comment-1')).not.toBeNull();
+        expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['edit', 'reply'] as const)('submits %s text through the real Action policy without a second confirmation', async (operation) => {
+        const original = comment();
+        let edited = original;
+        let reply: ReviewCommentV1 | undefined;
+        const confirm = vi.fn(async () => false);
+        // Persistent comment transport and the host confirmation dialog are the boundaries.
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+            presentUserActionConfirmation: confirm,
+            reviewCommentAction: async ({ actionId, input }) => {
+                if (actionId === 'reviews.comments.list') return { items: [edited], cursor: null };
+                if (actionId === 'reviews.comments.edit') {
+                    const request = input as { nextBody: string };
+                    edited = { ...original, body: request.nextBody, bodyVersion: 2, serverRevision: 2 };
+                    return { comment: edited };
+                }
+                if (actionId === 'reviews.comments.reply') {
+                    const request = input as { body: string };
+                    reply = comment({ id: 'reply-1', parentCommentId: original.id, threadId: original.threadId, body: request.body });
+                    return { parent: original, comment: reply };
+                }
+                throw new Error(`Unexpected comment operation ${actionId}`);
+            },
+        }));
+        const execute = async (actionId: ReviewCommentActionIdV1, input: unknown) => {
+            const result = await executor.execute(actionId, input, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } });
+            if (!result.ok) throw new Error(result.errorCode);
+            return result.result;
+        };
+        modalMock.prompt.mockResolvedValue('Submitted text');
+        const screen = await renderScreen(<ReviewCommentsSessionSurface projectId="project-1" execute={execute} testID="comments" />);
+        await flushHookEffects();
+        if (operation === 'edit') {
+            await screen.pressByTestIdAsync('review-comment-comment-1-more');
+            await settleMenu();
+        }
+        await screen.pressByTestIdAsync(`review-comment-comment-1-${operation}`);
+        await settleMenu();
+        expect(operation === 'edit' ? edited.body : reply?.body).toBe('Submitted text');
+        expect(modalMock.prompt).toHaveBeenCalledTimes(1);
+        expect(confirm).not.toHaveBeenCalled();
+        expect(screen.findHostByTestId('comments-mutation-error')).toBeNull();
     });
 
     /**
@@ -135,6 +205,91 @@ describe('ReviewCommentsSessionSurface', () => {
         expect(readReviewRunComments(RUN).comments).toEqual([
             expect.objectContaining({ id: 'finding-comment', state: 'dismissed', serverRevision: 4 }),
         ]);
+    });
+
+    it.each(['resolved', 'dismissed'] as const)('reopens a %s comment from History through the durable Action', async (state) => {
+        const closed = comment({ id: 'history-comment', state, serverRevision: 3 });
+        const execute = vi.fn(async (actionId: ReviewCommentActionIdV1, input: unknown) => {
+            if (actionId === 'reviews.comments.list') return { items: [closed], cursor: null };
+            const request = ReviewCommentTransitionRequestV1Schema.parse(input);
+            return { comment: { ...closed, state: request.toState, serverRevision: 4 } };
+        });
+        const screen = await renderScreen(<ReviewCommentsSessionSurface projectId="project-1" execute={execute} testID="comments" />);
+        await flushHookEffects();
+        await screen.pressByTestIdAsync('comments-show-history');
+        await screen.pressByTestIdAsync('review-comment-history-comment-reopen');
+        await flushHookEffects();
+        expect(execute).toHaveBeenCalledWith('reviews.comments.transition', expect.objectContaining({
+            commentId: 'history-comment', expectedState: state, expectedServerRevision: 3, toState: 'open',
+        }));
+        expect(screen.findHostByTestId('review-comment-history-comment')).toBeNull();
+        await screen.pressByTestIdAsync('comments-show-active');
+        expect(screen.findByTestId('review-comment-history-comment-resolve')).not.toBeNull();
+    });
+
+    it('reads as loading, never empty, until the first list arrives', async () => {
+        let release: (value: unknown) => void = () => {};
+        const execute = vi.fn(async (actionId: ReviewCommentActionIdV1) => {
+            if (actionId === 'reviews.comments.list') return await new Promise((resolve) => { release = resolve; });
+            throw new Error('unexpected');
+        });
+        const screen = await renderScreen(<ReviewCommentsSessionSurface projectId="project-1" execute={execute} testID="comments" />);
+        await flushHookEffects();
+        expect(screen.getTextContent()).toContain('common.loading');
+        expect(screen.getTextContent()).not.toContain('files.reviewComments.durable.empty');
+        await act(async () => { release({ items: [], cursor: null }); });
+        await flushHookEffects();
+        expect(screen.getTextContent()).toContain('files.reviewComments.durable.empty');
+        expect(screen.getTextContent()).not.toContain('common.loading');
+    });
+
+    it('puts a failed action on the card that failed and retries it from there', async () => {
+        let reject = true;
+        const execute = vi.fn(async (actionId: ReviewCommentActionIdV1, input: unknown) => {
+            if (actionId === 'reviews.comments.list') {
+                return { items: [comment({ id: 'other-comment' }), comment({ id: 'failed-comment' })], cursor: null };
+            }
+            if (reject) throw Object.assign(new Error('private diagnostic'), { code: 'review_comment_conflict' });
+            const request = ReviewCommentTransitionRequestV1Schema.parse(input);
+            return { comment: comment({ id: request.commentId, state: request.toState, serverRevision: 2 }) };
+        });
+        const screen = await renderScreen(<ReviewCommentsSessionSurface projectId="project-1" execute={execute} testID="comments" />);
+        await flushHookEffects();
+        await screen.pressByTestIdAsync('review-comment-failed-comment-resolve');
+        await flushHookEffects();
+        const failedCard = screen.findHostByTestId('review-comment-failed-comment');
+        const otherCard = screen.findHostByTestId('review-comment-other-comment');
+        expect(failedCard?.findAll((node) => node.props.testID === 'comments-mutation-error').length).toBeGreaterThan(0);
+        expect(otherCard?.findAll((node) => node.props.testID === 'comments-mutation-error').length).toBe(0);
+        reject = false;
+        await screen.pressByTestIdAsync('comments-mutation-error-retry');
+        await flushHookEffects();
+        expect(execute).toHaveBeenLastCalledWith('reviews.comments.transition', expect.objectContaining({
+            commentId: 'failed-comment', toState: 'resolved',
+        }));
+        expect(screen.findHostByTestId('comments-mutation-error')).toBeNull();
+        expect(screen.findHostByTestId('review-comment-failed-comment')).toBeNull();
+    });
+
+    it('handles a rejected comment mutation inline and preserves the comment for retry', async () => {
+        let reject = true;
+        const execute = vi.fn(async (actionId: ReviewCommentActionIdV1) => {
+            if (actionId === 'reviews.comments.list') return { items: [comment({ id: 'retry-comment' })], cursor: null };
+            if (reject) throw Object.assign(new Error('private diagnostic'), { code: 'review_comment_conflict' });
+            return { comment: comment({ id: 'retry-comment', state: 'resolved', serverRevision: 2 }) };
+        });
+        const screen = await renderScreen(<ReviewCommentsSessionSurface projectId="project-1" execute={execute} testID="comments" />);
+        await flushHookEffects();
+        await screen.pressByTestIdAsync('review-comment-retry-comment-resolve');
+        await flushHookEffects();
+        expect(screen.findHostByTestId('comments-mutation-error')).not.toBeNull();
+        expect(screen.getTextContent()).not.toContain('private diagnostic');
+        expect(screen.findByTestId('review-comment-retry-comment-resolve')).not.toBeNull();
+        reject = false;
+        await screen.pressByTestIdAsync('review-comment-retry-comment-resolve');
+        await flushHookEffects();
+        expect(screen.findHostByTestId('comments-mutation-error')).toBeNull();
+        expect(screen.findHostByTestId('review-comment-retry-comment')).toBeNull();
     });
 
     it('shows a decision made on the review result in this panel without a reload', async () => {
@@ -202,7 +357,10 @@ describe('ReviewCommentsSessionSurface', () => {
         });
         const screen = await renderScreen(<ReviewCommentsSessionSurface projectId="project-1" sessionId="chosen-session" execute={execute} />);
         await flushHookEffects();
+        await screen.pressByTestIdAsync('review-comment-comment-1-more');
+        await settleMenu();
         await screen.pressByTestIdAsync('review-comment-comment-1-delegate');
+        await settleMenu();
         await flushHookEffects();
         clock.mockRestore();
         expect(execute).toHaveBeenCalledWith('reviews.comments.transition', expect.objectContaining({
@@ -593,7 +751,7 @@ describe('ReviewCommentsSessionSurface', () => {
                 return {
                     bulkActionId: 'bulk-1',
                     updated: [],
-                    failed: [{ commentId: 'proposed-1', errorCode: 'review_comment_permission_denied', error: 'not allowed' }],
+                    failed: [{ commentId: 'open-1', errorCode: 'review_comment_permission_denied', error: 'not allowed' }],
                 };
             }
             if (actionId === 'reviews.comments.reply') {
@@ -620,9 +778,15 @@ describe('ReviewCommentsSessionSurface', () => {
         );
         await flushHookEffects();
 
+        await screen.pressByTestIdAsync('review-comment-open-1-more');
+        await settleMenu();
         await pressTestInstanceAsync(screen.findByTestId('review-comment-open-1-edit'), 'review-comment-open-1-edit');
+        await settleMenu();
         await pressTestInstanceAsync(screen.findByTestId('review-comment-open-1-resolve'), 'review-comment-open-1-resolve');
+        await screen.pressByTestIdAsync('review-comment-open-1-more');
+        await settleMenu();
         await pressTestInstanceAsync(screen.findByTestId('review-comment-open-1-redact'), 'review-comment-open-1-redact');
+        await settleMenu();
         await pressTestInstanceAsync(screen.findByTestId('review-comment-open-1-reply'), 'review-comment-open-1-reply');
         await pressTestInstanceAsync(screen.findByTestId('review-comments-session-panel-bulk-resolve'), 'review-comments-session-panel-bulk-resolve');
         await flushHookEffects();
@@ -657,12 +821,10 @@ describe('ReviewCommentsSessionSurface', () => {
             projectId: 'project-1', commentIds: ['open-1', 'reply-1'], expectedState: 'open',
             expectedServerRevisions: { 'open-1': 1, 'reply-1': 1 }, toState: 'resolved',
         }));
-        expect(execute).toHaveBeenCalledWith('reviews.comments.bulkTransition', expect.objectContaining({
-            projectId: 'project-1', commentIds: ['proposed-1'], expectedState: 'proposed',
-            expectedServerRevisions: { 'proposed-1': 1 }, toState: 'resolved',
-        }));
+        expect(execute.mock.calls.filter(([actionId]) => actionId === 'reviews.comments.bulkTransition'))
+            .not.toContainEqual(['reviews.comments.bulkTransition', expect.objectContaining({ expectedState: 'proposed' })]);
         expect(screen.getTextContent()).toContain('files.reviewComments.durable.bulkPartialFailure');
-        expect(screen.getTextContent()).toContain('proposed-1');
+        expect(screen.getTextContent()).toContain('open-1:review_comment_permission_denied');
         expect(screen.getTextContent()).toContain('review_comment_permission_denied');
     });
 });

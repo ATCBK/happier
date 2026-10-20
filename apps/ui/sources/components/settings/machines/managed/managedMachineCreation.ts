@@ -14,6 +14,7 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 import type { ManagedMachineSelectionDraft, ManagedMachineAcquisitionDraft } from '@/sync/domains/state/newSessionManagedMachineDraft';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import type { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { classifyHomeActionOutcome } from '@/sync/ops/home/homeActionOutcome';
 import { homeDomainFailureCode } from '@/sync/api/home/homeDomainActions';
 import { awaitActionApprovalResult, createActionApprovalContinuation, type ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
@@ -66,7 +67,7 @@ export async function runManagedMachineCreation(input: Readonly<{
     onAcquisitionChange: (value: ManagedMachineAcquisitionDraft) => void;
     onProgress: (value: ManagedMachineCreationProgress) => void;
     onApprovalPending: (value: ActionApprovalRegistration) => void;
-    executeAction?: ReturnType<typeof createFrontDoorActionExecute>;
+    executeAction?: ReturnType<typeof createDefaultActionExecutor>['execute'];
 }>): Promise<ManagedMachineCreationResult> {
     const execute = input.executeAction ?? createFrontDoorActionExecute();
     let acquisition = input.acquisition;

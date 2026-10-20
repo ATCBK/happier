@@ -97,6 +97,19 @@ function file(path: string, status: ScmFileStatus['status'] = 'modified'): ScmFi
 }
 
 describe('useChangedFilesReviewDiffLoading', () => {
+    it('does not request an anchor when the viewport explicitly demands no diffs', async () => {
+        const { machineRpcWithServerScope } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc');
+        const { useChangedFilesReviewDiffLoading } = await import('./useChangedFilesReviewDiffLoading');
+        const hook = await renderHook(() => useChangedFilesReviewDiffLoading({
+            sessionId: 's1', isRepo: true, reviewFiles: [file('a.ts')], diffArea: 'pending',
+            requestedPaths: [], snapshotSignature: 'empty-demand', diffCache: null,
+            tooLarge: false, selectedPath: '', normalizeError, fallbackError: 'failed',
+        }));
+        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
+        expect(hook.getCurrent().diffStateSource.getDiffState('a.ts').status).toBe('idle');
+        hook.unmount();
+    });
+
     it('defaults to fetching only a single diff when requestedPaths is missing', async () => {
         const { machineRpcWithServerScope } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc');
         const { useChangedFilesReviewDiffLoading } = await import('./useChangedFilesReviewDiffLoading');
@@ -128,6 +141,64 @@ describe('useChangedFilesReviewDiffLoading', () => {
         expect(hook.getCurrent().diffStateSource.getDiffState('b.ts').status).toBe('idle');
         expect(hook.getCurrent().diffStateSource.getDiffState('c.ts').status).toBe('idle');
         hook.unmount();
+    });
+
+    it('keeps a validated snapshot across elapsed time and unrelated renders', async () => {
+        const { machineRpcWithServerScope } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc');
+        const { useChangedFilesReviewDiffLoading } = await import('./useChangedFilesReviewDiffLoading');
+        const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+        let reviewFiles = [file('a.ts')];
+        function Test() {
+            useChangedFilesReviewDiffLoading({
+                sessionId: 's1', isRepo: true, reviewFiles, diffArea: 'pending',
+                requestedPaths: ['a.ts'], snapshotSignature: 'unchanged', diffCache: null,
+                minRefetchMs: 60_000, tooLarge: false, selectedPath: '', normalizeError, fallbackError: 'failed',
+            });
+            return null;
+        }
+        const screen = await renderScreen(React.createElement(Test));
+        try {
+            expect(machineRpcWithServerScope).toHaveBeenCalledTimes(1);
+            now.mockReturnValue(121_000);
+            reviewFiles = [...reviewFiles];
+            await screen.update(React.createElement(Test));
+            expect(machineRpcWithServerScope).toHaveBeenCalledTimes(1);
+        } finally {
+            await screen.unmount();
+            now.mockRestore();
+        }
+    });
+
+    it('shares pending workspace RPCs across rerenders and revalidates a new snapshot', async () => {
+        const { renderHook: renderOwnerHook } = await import('@/dev/testkit');
+        const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
+        const { machineRpcWithServerScope } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc');
+        const { ScmDiffCache } = await import('@/scm/diffCache/scmDiffCache');
+        const { fetchWorkspaceUnifiedDiffForPath } = await import('@/scm/diff/fetchWorkspaceUnifiedDiffForPath');
+        const { useChangedFilesReviewDiffLoading } = await import('./useChangedFilesReviewDiffLoading');
+        const scope = { serverId: 'server', machineId: 'm1', rootPath: '/repo' };
+        const diffCache = new ScmDiffCache({ maxEntries: 10, maxTotalBytes: 10_000, now: () => 1 });
+        const pending = createDeferred<{ success: true; diff: string }>();
+        vi.mocked(machineRpcWithServerScope).mockImplementationOnce(async () => pending.promise);
+        const hook = await renderOwnerHook(({ signature }) => useChangedFilesReviewDiffLoading({
+            sessionId: '', reviewScopeKey: 'workspace:repo', isRepo: true, reviewFiles: [file('a.ts')],
+            diffArea: 'pending', requestedPaths: ['a.ts'], snapshotSignature: signature, diffCache,
+            tooLarge: false, selectedPath: '', normalizeError, fallbackError: 'failed',
+            fetchUnifiedDiffForPath: input => fetchWorkspaceUnifiedDiffForPath({ ...input, scope }),
+        }), { initialProps: { signature: 'workspace-first' } });
+        try {
+            await hook.rerender({ signature: 'workspace-first' });
+            expect(machineRpcWithServerScope).toHaveBeenCalledTimes(1);
+            await act(async () => pending.resolve({ success: true, diff: 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n' }));
+            await vi.waitFor(() => expect(hook.getCurrent().diffStateSource.getDiffState('a.ts').status).toBe('loaded'));
+            await hook.rerender({ signature: 'workspace-first' });
+            expect(machineRpcWithServerScope).toHaveBeenCalledTimes(1);
+            await hook.rerender({ signature: 'workspace-second' });
+            await vi.waitFor(() => expect(machineRpcWithServerScope).toHaveBeenCalledTimes(2));
+            await vi.waitFor(() => expect(hook.getCurrent().diffStateSource.getDiffState('a.ts').diff).toContain('+change:pending'));
+        } finally {
+            await hook.unmount();
+        }
     });
 
     it('only fetches diffs for requestedPaths', async () => {
@@ -325,21 +396,18 @@ describe('useChangedFilesReviewDiffLoading', () => {
             return null;
         }
 
-        let tree: renderer.ReactTestRenderer | null = null;
-        tree = (await renderScreen(React.createElement(Test))).tree;
+        const screen = await renderScreen(React.createElement(Test));
 
-        await waitForCondition(() =>
-            current!.diffStateSource.getDiffState('a.ts').status === 'loaded'
-            && current!.diffStateSource.getDiffState('b.ts').status === 'loaded',
-        );
+        await vi.waitFor(() => expect([
+            current!.diffStateSource.getDiffState('a.ts'),
+            current!.diffStateSource.getDiffState('b.ts'),
+        ]).toMatchObject([{ status: 'loaded' }, { status: 'loaded' }]));
 
         expect(current!.diffStateSource.getDiffState('a.ts').status).toBe('loaded');
         expect(current!.diffStateSource.getDiffState('b.ts').status).toBe('loaded');
 
         requestedPaths = ['b.ts'];
-        act(() => {
-            tree!.update(React.createElement(Test));
-        });
+        await screen.update(React.createElement(Test));
 
         await waitForCondition(() =>
             current!.diffStateSource.getDiffState('a.ts').status === 'loaded'
@@ -348,6 +416,7 @@ describe('useChangedFilesReviewDiffLoading', () => {
 
         expect(current!.diffStateSource.getDiffState('a.ts').status).toBe('loaded');
         expect(current!.diffStateSource.getDiffState('b.ts').status).toBe('loaded');
+        await screen.unmount();
     });
 
     it('fetches diffs for newly requested paths when requestedPaths changes', async () => {
@@ -375,8 +444,7 @@ describe('useChangedFilesReviewDiffLoading', () => {
             return null;
         }
 
-        let tree: renderer.ReactTestRenderer | null = null;
-        tree = (await renderScreen(React.createElement(Test))).tree;
+        const screen = await renderScreen(React.createElement(Test));
 
         expect(vi.mocked(machineRpcWithServerScope)).toHaveBeenCalledTimes(1);
         expect(vi.mocked(machineRpcWithServerScope).mock.calls[0]?.[0]?.payload).toEqual(expect.objectContaining({ path: 'a.ts', area: 'pending', cwd: '/repo' }));
@@ -384,9 +452,7 @@ describe('useChangedFilesReviewDiffLoading', () => {
         expect(current!.diffStateSource.getDiffState('b.ts').status).toBe('idle');
 
         requestedPaths = ['b.ts'];
-        act(() => {
-            tree!.update(React.createElement(Test));
-        });
+        await screen.update(React.createElement(Test));
 
         await waitForCondition(() => vi.mocked(machineRpcWithServerScope).mock.calls.length === 2);
         expect(vi.mocked(machineRpcWithServerScope).mock.calls[1]?.[0]?.payload).toEqual(expect.objectContaining({ path: 'b.ts', area: 'pending', cwd: '/repo' }));

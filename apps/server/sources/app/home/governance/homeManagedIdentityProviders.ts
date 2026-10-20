@@ -1,6 +1,7 @@
 import type { OidcProviderConfig } from "@/app/auth/providers/managed/identityProviderDocuments";
 import {
     createIdentityProviderInstanceInTx,
+    acquireIdentityProviderMutationAdmissionInTx,
     deleteIdentityProviderInstanceInTx,
     listIdentityProviderInstancesInTx,
     preflightDeleteIdentityProviderInstanceInTx,
@@ -23,6 +24,7 @@ import {
 import { createExternalAuthorizeAttempt } from "@/app/api/routes/connect/oauthExternal/createExternalAuthorizeUrl";
 import { consumeIdentityConnectionTestResultInTx } from "@/app/api/routes/connect/oauthExternal/identityConnectionTestResult";
 import { inTx, type Tx } from "@/storage/inTx";
+import type { AccountAdmissionIntent } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import {
     authorizeTeamIdentityAdministrationInTx,
 } from "@/app/teams/identity/teamIdentityAdministrationAuthority";
@@ -46,6 +48,18 @@ async function canManageHomeAuthenticationInTx(tx: Tx, actorAccountId: string): 
 
 function providerOwner(input: Readonly<{ owner?: ProviderCatalogContext }>): ProviderCatalogContext {
     return input.owner ?? HOME_PROVIDER_CONTEXT;
+}
+
+async function acquireHomeProviderMutationAdmissionInTx(
+    tx: Tx,
+    input: Readonly<{ actorAccountId: string; owner?: ProviderCatalogContext; id?: string }>,
+    intent: AccountAdmissionIntent = "exclusive",
+): Promise<void> {
+    await acquireIdentityProviderMutationAdmissionInTx(tx, {
+        owner: providerOwner(input), ...(input.id ? { id: input.id } : {}),
+        additionalAccountIds: [input.actorAccountId],
+        intent,
+    });
 }
 
 type HomeProviderAuditAction = Extract<HomeAdministrationActionV1, `identity_provider.${string}`>;
@@ -157,6 +171,7 @@ export async function createHomeManagedOidcProvider(input: Readonly<{
     clientSecret: string;
 }> & Partial<TeamOperationAuthenticationContext>) {
     return await inTx(async (tx) => {
+        await acquireHomeProviderMutationAdmissionInTx(tx, input);
         const denied = await authorizeProviderOwnerInTx(tx, input);
         if (denied) return denied;
         const owner = providerOwner(input);
@@ -187,6 +202,7 @@ export async function updateHomeManagedIdentityProvider(input: Readonly<{
     config?: unknown;
 }> & Partial<TeamOperationAuthenticationContext>) {
     return await inTx(async (tx) => {
+        await acquireHomeProviderMutationAdmissionInTx(tx, input, input.config === undefined ? "content" : "exclusive");
         const denied = await authorizeProviderOwnerInTx(tx, input);
         if (denied) return denied;
         const owner = providerOwner(input);
@@ -216,6 +232,7 @@ export async function replaceHomeManagedIdentityProviderSecret(input: Readonly<{
     clientSecret: string;
 }> & Partial<TeamOperationAuthenticationContext>) {
     return await inTx(async (tx) => {
+        await acquireHomeProviderMutationAdmissionInTx(tx, input);
         const denied = await authorizeProviderOwnerInTx(tx, input);
         if (denied) return denied;
         const owner = providerOwner(input);
@@ -258,6 +275,7 @@ export async function setHomeManagedIdentityProviderEnabled(input: Readonly<{
         if (validation.status !== "validated") return validation;
 
         return await inTx(async (tx) => {
+            await acquireHomeProviderMutationAdmissionInTx(tx, input);
             const denied = await authorizeProviderOwnerInTx(tx, input);
             if (denied) return denied;
             const currentRuntime = await resolveRuntimeInTx(tx, {
@@ -291,6 +309,7 @@ export async function setHomeManagedIdentityProviderEnabled(input: Readonly<{
         }, { isolationLevel: "Serializable" /* Provider availability changes participate in the final-login viability family. */ });
     }
     return await inTx(async (tx) => {
+        await acquireHomeProviderMutationAdmissionInTx(tx, input);
         const denied = await authorizeProviderOwnerInTx(tx, input);
         if (denied) return denied;
         const owner = providerOwner(input);
@@ -471,6 +490,7 @@ export async function consumeHomeManagedIdentityProviderTest(input: Readonly<{
     resultHandle: string;
 }> & TeamOperationAuthenticationContext) {
     return await inTx(async (tx) => {
+        await acquireHomeProviderMutationAdmissionInTx(tx, input);
         const denied = await authorizeProviderOwnerInTx(tx, input);
         if (denied) return denied;
         const result = await consumeIdentityConnectionTestResultInTx(tx, {
@@ -542,6 +562,7 @@ export async function deleteHomeManagedIdentityProvider(input: Readonly<{
     expectedRevision: number;
 }> & Partial<TeamOperationAuthenticationContext>) {
     return await inTx(async (tx) => {
+        await acquireHomeProviderMutationAdmissionInTx(tx, input);
         const denied = await authorizeProviderOwnerInTx(tx, input);
         if (denied) return denied;
         const owner = providerOwner(input);

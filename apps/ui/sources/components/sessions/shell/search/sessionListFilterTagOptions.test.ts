@@ -21,7 +21,9 @@ function projection(tags: readonly UiSessionOrganizationTag[]): SessionOrganizat
     return {
         schemaVersion: 1,
         version: 1,
+        orderedPinSessionIds: [],
         pinnedSessionIds: [],
+        railPinnedSessionIds: [],
         pinsBySessionId: {},
         foldersById: {},
         folderAssignmentsBySessionId: {},

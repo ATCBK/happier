@@ -1,6 +1,7 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 
 import { SessionWorkStateContent } from './SessionWorkStateContent';
 import { SessionWorkStatePopover } from './SessionWorkStatePopover';
@@ -623,7 +624,7 @@ describe('SessionWorkStatePopover', () => {
             },
         );
         expect(confirm).toHaveBeenCalledTimes(2);
-        expect(onSetGoal).toHaveBeenCalledWith({ status: 'active', tokenBudget: null });
+        expect(onSetGoal).toHaveBeenCalledWith({ status: 'active', tokenBudget: null }, expect.any(AbortSignal));
 
         act(() => tree?.unmount());
     });
@@ -668,7 +669,7 @@ describe('SessionWorkStatePopover', () => {
         });
 
         expect(confirm).not.toHaveBeenCalled();
-        expect(onSetGoal).toHaveBeenCalledWith({ status: 'active' });
+        expect(onSetGoal).toHaveBeenCalledWith({ status: 'active' }, expect.any(AbortSignal));
 
         act(() => tree?.unmount());
     });
@@ -712,7 +713,7 @@ describe('SessionWorkStatePopover', () => {
             objective: 'Ship goals again',
             status: 'active',
             resumeInactiveWithInitialGoal: false,
-        });
+        }, expect.any(AbortSignal));
 
         act(() => tree?.unmount());
     });
@@ -805,7 +806,7 @@ describe('SessionWorkStatePopover', () => {
             await tree?.root.findByProps({ testID: 'session-goal-complete-button' }).props.onPress();
         });
 
-        expect(onSetGoal).toHaveBeenCalledWith({ status: 'complete' });
+        expect(onSetGoal).toHaveBeenCalledWith({ status: 'complete' }, expect.any(AbortSignal));
 
         act(() => tree?.unmount());
     });
@@ -972,10 +973,14 @@ describe('SessionWorkStatePopover', () => {
         act(() => tree?.unmount());
     });
 
-    it('clears the goal after clear confirmation is accepted', async () => {
+    it.each(['success', 'refusal', 'rejection'] as const)('settles the goal clear after confirmation is accepted (%s)', async (outcome) => {
         confirm.mockResolvedValueOnce(true);
         const anchorRef = { current: null } as React.RefObject<any>;
-        const onClearGoal = vi.fn().mockResolvedValue({ ok: true });
+        const onClearGoal = outcome === 'rejection'
+            ? vi.fn().mockRejectedValue(new Error('session_goal_control_remote_unavailable'))
+            : vi.fn().mockResolvedValue(outcome === 'success'
+                ? { ok: true }
+                : { ok: false, error: 'session_goal_control_remote_unavailable' });
         const onRequestClose = vi.fn();
 
         let tree: renderer.ReactTestRenderer | undefined;
@@ -1004,22 +1009,56 @@ describe('SessionWorkStatePopover', () => {
             await tree?.root.findByProps({ testID: 'session-goal-clear-button' }).props.onPress();
         });
 
-        // Accepting the confirm runs the clear mutation and closes the popover; the confirm is still
-        // asked before the close (U-2 order).
+        // Keep the caller mounted until acknowledgement, then close before reporting a refusal.
         expect(onClearGoal).toHaveBeenCalledTimes(1);
         expect(onRequestClose).toHaveBeenCalledTimes(1);
         expect(confirm.mock.invocationCallOrder[0]).toBeLessThan(onRequestClose.mock.invocationCallOrder[0]);
+        if (outcome === 'success') {
+            expect(alert).not.toHaveBeenCalled();
+        } else {
+            expect(alert).toHaveBeenCalledWith('session.workState.notReadyTitle:', 'session.workState.notReadyMessage:');
+            expect(onRequestClose.mock.invocationCallOrder[0]).toBeLessThan(alert.mock.invocationCallOrder[0]);
+        }
 
         act(() => tree?.unmount());
     });
 
-    it('closes the popover before showing a goal mutation error alert', async () => {
+    it('retires Clear on dismissal without a false failure or closing a reopened editor', async () => {
+        confirm.mockResolvedValueOnce(true);
+        const result = createDeferred<{ ok: true }>();
+        const onClearGoal = vi.fn((_signal?: AbortSignal) => result.promise);
+        const props = {
+            anchorRef: { current: null } as React.RefObject<null>,
+            snapshot: { v: 1 as const, backendId: 'codex', updatedAt: 10, primaryItemId: 'goal:codex',
+                items: [{ id: 'goal:codex', kind: 'goal' as const, origin: 'vendor' as const,
+                    status: 'active' as const, title: 'Ship goals', updatedAt: 10 }] },
+            editableGoal: true,
+            onRequestClose: vi.fn(),
+            onClearGoal,
+        };
+        let tree: renderer.ReactTestRenderer | undefined;
+        await act(async () => { tree = renderer.create(<SessionWorkStatePopover {...props} open />); });
+        openGoalActionsMenu(tree);
+        await act(async () => { tree?.root.findByProps({ testID: 'session-goal-clear-button' }).props.onPress(); });
+        const signal = onClearGoal.mock.calls[0]?.[0];
+        expect(signal?.aborted).toBe(false);
+        expect(props.onRequestClose).not.toHaveBeenCalled();
+        await act(async () => { await tree?.root.findByProps({ testID: 'session-work-state-popover-surface' }).props.onRequestClose(); });
+        expect(signal?.aborted).toBe(true);
+        await act(async () => { tree?.update(<SessionWorkStatePopover {...props} open={false} />); });
+        await act(async () => { tree?.update(<SessionWorkStatePopover {...props} open />); });
+        await act(async () => { result.resolve({ ok: true }); });
+        expect(props.onRequestClose).toHaveBeenCalledOnce();
+        expect(alert).not.toHaveBeenCalled();
+        act(() => tree?.unmount());
+    });
+
+    it.each(['result', 'rejection'] as const)('closes the popover before showing a goal mutation error alert (%s)', async (failure) => {
         const anchorRef = { current: null } as React.RefObject<any>;
         const onRequestClose = vi.fn();
-        const onSetGoal = vi.fn().mockResolvedValue({
-            ok: false,
-            error: 'session_goal_control_remote_unavailable',
-        });
+        const onSetGoal = failure === 'result'
+            ? vi.fn().mockResolvedValue({ ok: false, error: 'session_goal_control_remote_unavailable' })
+            : vi.fn().mockRejectedValue(new Error('session_goal_control_remote_unavailable'));
 
         let tree: renderer.ReactTestRenderer | undefined;
         await act(async () => {
@@ -1215,9 +1254,182 @@ describe('SessionWorkStatePopover', () => {
         act(() => tree?.unmount());
     });
 
-    it('holds a pending "setting goal" state until the work-state confirms, then closes', async () => {
+    it('drops a dismissed goal confirmation when the same popover is reopened', async () => {
+        const props = {
+            anchorRef: { current: null } as React.RefObject<null>,
+            snapshot: {
+                v: 1 as const,
+                backendId: 'codex',
+                updatedAt: 10,
+                primaryItemId: 'goal:codex',
+                items: [{ id: 'goal:codex', kind: 'goal' as const, origin: 'vendor' as const,
+                    status: 'active' as const, title: 'Ship goals', updatedAt: 10 }],
+            },
+            editableGoal: true,
+            onRequestClose: vi.fn(),
+            onSetGoal: vi.fn().mockResolvedValue({ ok: true }),
+        };
+        let tree: renderer.ReactTestRenderer | undefined;
+        await act(async () => { tree = renderer.create(<SessionWorkStatePopover {...props} open />); });
+        openGoalActionsMenu(tree);
+        await act(async () => {
+            tree?.root.findByProps({ testID: 'session-goal-complete-button' }).props.onPress();
+        });
+        expect(tree?.root.findByProps({ testID: 'session-goal-pending' })).toBeTruthy();
+        await act(async () => {
+            await tree?.root.findByProps({ testID: 'session-work-state-popover-surface' }).props.onRequestClose();
+        });
+        expect(props.onRequestClose).toHaveBeenCalledOnce();
+        expect(confirm).not.toHaveBeenCalled();
+        await act(async () => { tree?.update(<SessionWorkStatePopover {...props} open={false} />); });
+        await act(async () => { tree?.update(<SessionWorkStatePopover {...props} open />); });
+        expect(tree?.root.findAllByProps({ testID: 'session-goal-pending' })).toHaveLength(0);
+        await act(async () => { tree?.root.findByProps({ testID: 'session-goal-edit-button' }).props.onPress(); });
+        expect(tree?.root.findByProps({ testID: 'session-goal-save-button' }).props.disabled).toBe(false);
+        act(() => tree?.unmount());
+    });
+
+    it.each(['success', 'failure'] as const)('ignores a late %s from a dismissed goal mutation', async (outcome) => {
+        const result = createDeferred<{ ok: true } | { ok: false; error: string }>();
+        const props = {
+            anchorRef: { current: null } as React.RefObject<null>,
+            snapshot: {
+                v: 1 as const,
+                backendId: 'codex',
+                updatedAt: 10,
+                primaryItemId: 'goal:codex',
+                items: [{ id: 'goal:codex', kind: 'goal' as const, origin: 'vendor' as const,
+                    status: 'active' as const, title: 'Ship goals', updatedAt: 10 }],
+            },
+            editableGoal: true,
+            onRequestClose: vi.fn(),
+            onSetGoal: vi.fn(() => result.promise),
+        };
+        let tree: renderer.ReactTestRenderer | undefined;
+        await act(async () => { tree = renderer.create(<SessionWorkStatePopover {...props} open />); });
+        openGoalActionsMenu(tree);
+        await act(async () => {
+            tree?.root.findByProps({ testID: 'session-goal-complete-button' }).props.onPress();
+        });
+        await act(async () => {
+            await tree?.root.findByProps({ testID: 'session-work-state-popover-surface' }).props.onRequestClose();
+        });
+        await act(async () => { tree?.update(<SessionWorkStatePopover {...props} open={false} />); });
+        await act(async () => { tree?.update(<SessionWorkStatePopover {...props} open />); });
+        await act(async () => {
+            result.resolve(outcome === 'success' ? { ok: true } : { ok: false, error: 'RPC failed' });
+        });
+        expect(tree?.root.findAllByProps({ testID: 'session-goal-pending' })).toHaveLength(0);
+        expect(props.onRequestClose).toHaveBeenCalledOnce();
+        expect(alert).not.toHaveBeenCalled();
+        // Cancellation is about this editor's wait; a later native publication still wins.
+        if (outcome === 'success') {
+            const snapshot = { ...props.snapshot, updatedAt: 11,
+                items: props.snapshot.items.map(item => ({ ...item, title: 'Authoritative native goal', updatedAt: 11 })) };
+            await act(async () => { tree?.update(<SessionWorkStatePopover {...props} snapshot={snapshot} open />); });
+            expect(collectText(tree?.toJSON())).toContain('Authoritative native goal');
+        }
+        act(() => tree?.unmount());
+    });
+
+    it.each(['awaiting acknowledgement', 'awaiting confirmation'] as const)('lets the set-first-goal Cancel dismiss while %s, and reopens editable without the old request closing it', async (stage) => {
+        const result = createDeferred<{ ok: true }>();
+        const requestClose = vi.fn();
+        const onSetGoal = vi.fn((_request: unknown, _signal?: AbortSignal) => result.promise);
+        const props = { snapshot: null, editableGoal: true, requestClose, onSetGoal, onClearGoal: vi.fn() };
+        let tree: renderer.ReactTestRenderer | undefined;
+        await act(async () => { tree = renderer.create(<SessionWorkStateContent {...props} open />); });
+        act(() => {
+            tree?.root.findByProps({ testID: 'session-goal-objective-input' }).props.onChangeText('Ship goals');
+        });
+        await act(async () => { tree?.root.findByProps({ testID: 'session-goal-save-button' }).props.onPress(); });
+        const signal = onSetGoal.mock.calls[0]?.[1];
+        expect(signal?.aborted).toBe(false);
+        if (stage === 'awaiting confirmation') {
+            await act(async () => { result.resolve({ ok: true }); });
+            expect(tree?.root.findByProps({ testID: 'session-goal-pending' })).toBeTruthy();
+        }
+
+        // Busy or pending: the one existing Cancel stays usable and dismisses without a discard prompt.
+        expect(tree?.root.findByProps({ testID: 'session-goal-cancel-button' }).props.disabled).toBeFalsy();
+        await act(async () => { await tree?.root.findByProps({ testID: 'session-goal-cancel-button' }).props.onPress(); });
+        expect(requestClose).toHaveBeenCalledTimes(1);
+        expect(confirm).not.toHaveBeenCalled();
+        expect(signal?.aborted).toBe(true);
+
+        await act(async () => { tree?.update(<SessionWorkStateContent {...props} open={false} />); });
+        await act(async () => { tree?.update(<SessionWorkStateContent {...props} open />); });
+        if (stage === 'awaiting acknowledgement') {
+            await act(async () => { result.resolve({ ok: true }); });
+        }
+        // The reopened control is editable, shows no stale wait state, and the old request cannot dismiss it.
+        expect(tree?.root.findAllByProps({ testID: 'session-goal-pending' })).toHaveLength(0);
+        expect(tree?.root.findAllByProps({ testID: 'session-goal-pending-slow' })).toHaveLength(0);
+        act(() => {
+            tree?.root.findByProps({ testID: 'session-goal-objective-input' }).props.onChangeText('Ship goals again');
+        });
+        expect(tree?.root.findByProps({ testID: 'session-goal-save-button' }).props.disabled).toBe(false);
+        expect(tree?.root.findByProps({ testID: 'session-goal-cancel-button' }).props.disabled).toBeFalsy();
+        expect(requestClose).toHaveBeenCalledTimes(1);
+        expect(alert).not.toHaveBeenCalled();
+        act(() => tree?.unmount());
+    });
+
+    it.each(['awaiting acknowledgement', 'awaiting confirmation'] as const)('lets the edit-existing-goal Cancel dismiss while %s, never claiming rollback', async (stage) => {
+        const result = createDeferred<{ ok: true }>();
+        const requestClose = vi.fn();
+        const onSetGoal = vi.fn((_request: unknown, _signal?: AbortSignal) => result.promise);
+        const snapshot = {
+            v: 1 as const,
+            backendId: 'codex',
+            updatedAt: 10,
+            primaryItemId: 'goal:codex',
+            items: [{ id: 'goal:codex', kind: 'goal' as const, origin: 'vendor' as const,
+                status: 'active' as const, title: 'Ship goals', updatedAt: 10 }],
+        };
+        const props = { snapshot, editableGoal: true, requestClose, onSetGoal, onClearGoal: vi.fn() };
+        let tree: renderer.ReactTestRenderer | undefined;
+        await act(async () => { tree = renderer.create(<SessionWorkStateContent {...props} open />); });
+        await act(async () => { tree?.root.findByProps({ testID: 'session-goal-edit-button' }).props.onPress(); });
+        act(() => {
+            tree?.root.findByProps({ testID: 'session-goal-objective-input' }).props.onChangeText('Ship goals faster');
+        });
+        await act(async () => { tree?.root.findByProps({ testID: 'session-goal-save-button' }).props.onPress(); });
+        const signal = onSetGoal.mock.calls[0]?.[1];
+        expect(signal?.aborted).toBe(false);
+        if (stage === 'awaiting confirmation') {
+            await act(async () => { result.resolve({ ok: true }); });
+            expect(tree?.root.findByProps({ testID: 'session-goal-pending' })).toBeTruthy();
+        }
+
+        // Busy or pending: the Save is held, but Cancel stays usable and dismisses without a discard prompt.
+        expect(tree?.root.findByProps({ testID: 'session-goal-save-button' }).props.disabled).toBe(true);
+        expect(tree?.root.findByProps({ testID: 'session-goal-cancel-edit-button' }).props.disabled).toBeFalsy();
+        await act(async () => { await tree?.root.findByProps({ testID: 'session-goal-cancel-edit-button' }).props.onPress(); });
+        expect(requestClose).toHaveBeenCalledTimes(1);
+        expect(confirm).not.toHaveBeenCalled();
+        expect(signal?.aborted).toBe(true);
+
+        await act(async () => { tree?.update(<SessionWorkStateContent {...props} open={false} />); });
+        await act(async () => { tree?.update(<SessionWorkStateContent {...props} open />); });
+        if (stage === 'awaiting acknowledgement') {
+            await act(async () => { result.resolve({ ok: true }); });
+        }
+        // The reopened control shows the authoritative goal, no stale wait, and the old request cannot dismiss it.
+        expect(tree?.root.findAllByProps({ testID: 'session-goal-pending' })).toHaveLength(0);
+        expect(tree?.root.findAllByProps({ testID: 'session-goal-pending-slow' })).toHaveLength(0);
+        expect(collectText(tree?.toJSON())).toContain('Ship goals');
+        expect(collectText(tree?.toJSON())).not.toContain('Ship goals faster');
+        expect(tree?.root.findByProps({ testID: 'session-goal-edit-button' }).props.disabled).toBeFalsy();
+        expect(requestClose).toHaveBeenCalledTimes(1);
+        expect(alert).not.toHaveBeenCalled();
+        act(() => tree?.unmount());
+    });
+
+    it.each(['before', 'after'] as const)('settles when work-state confirmation arrives %s the mutation acknowledgement', async (confirmationOrder) => {
         const anchorRef = { current: null } as React.RefObject<any>;
-        const onSetGoal = vi.fn().mockResolvedValue({ ok: true });
+        const result = createDeferred<{ ok: true }>();
+        const onSetGoal = vi.fn(() => result.promise);
         const onRequestClose = vi.fn();
 
         const activeSnapshot = {
@@ -1248,10 +1460,13 @@ describe('SessionWorkStatePopover', () => {
             await tree?.root.findByProps({ testID: 'session-goal-complete-button' }).props.onPress();
         });
 
-        const pending = tree?.root.findByProps({ testID: 'session-goal-pending' });
-        expect(pending).toBeTruthy();
-        expect(pending!.findAll((node) => typeof node.type === 'string' && node.props.accessibilityRole === 'progressbar'))
-            .toHaveLength(1);
+        if (confirmationOrder === 'after') {
+            await act(async () => { result.resolve({ ok: true }); });
+            const pending = tree?.root.findByProps({ testID: 'session-goal-pending' });
+            expect(pending).toBeTruthy();
+            expect(pending!.findAll((node) => typeof node.type === 'string' && node.props.accessibilityRole === 'progressbar'))
+                .toHaveLength(1);
+        }
         expect(onRequestClose).not.toHaveBeenCalled();
 
         // The native work-state now reflects the change → confirmation closes the popover.
@@ -1272,6 +1487,11 @@ describe('SessionWorkStatePopover', () => {
                 onClearGoal={vi.fn()}
             />);
         });
+
+        if (confirmationOrder === 'before') {
+            expect(onRequestClose).not.toHaveBeenCalled();
+            await act(async () => { result.resolve({ ok: true }); });
+        }
 
         expect(onRequestClose).toHaveBeenCalledTimes(1);
         expect(() => tree?.root.findByProps({ testID: 'session-goal-pending' })).toThrow();
@@ -1397,7 +1617,7 @@ describe('SessionWorkStatePopover', () => {
             objective: 'Ship goals',
             tokenBudget: null,
             resumeInactiveWithInitialGoal: false,
-        });
+        }, expect.any(AbortSignal));
 
         act(() => tree?.unmount());
     });

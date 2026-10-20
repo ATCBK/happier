@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ChildProcess } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -31,7 +32,7 @@ describe('spawnHappyCLI runtime executable selection', () => {
   });
 
   it('spawns Node using process.execPath when subprocess runtime is node', async () => {
-    const spawnMock = vi.fn();
+    const spawnMock = vi.fn<typeof import('node:child_process').spawn>().mockReturnValue(new ChildProcess());
     vi.doMock('child_process', async () => {
       const actual = await vi.importActual<typeof import('child_process')>('child_process');
       return { ...actual, spawn: spawnMock };
@@ -72,7 +73,7 @@ describe('spawnHappyCLI runtime executable selection', () => {
   });
 
   it('keeps API Tokens and CLI continuation handoffs out of generic Happier children', async () => {
-    const spawnMock = vi.fn();
+    const spawnMock = vi.fn<typeof import('node:child_process').spawn>().mockReturnValue(new ChildProcess());
     vi.doMock('child_process', async () => {
       const actual = await vi.importActual<typeof import('child_process')>('child_process');
       return { ...actual, spawn: spawnMock };
@@ -100,7 +101,7 @@ describe('spawnHappyCLI runtime executable selection', () => {
   });
 
   it('spawns using the bun binary name when subprocess runtime is bun (not running under bun)', async () => {
-    const spawnMock = vi.fn();
+    const spawnMock = vi.fn<typeof import('node:child_process').spawn>().mockReturnValue(new ChildProcess());
     vi.doMock('child_process', async () => {
       const actual = await vi.importActual<typeof import('child_process')>('child_process');
       return { ...actual, spawn: spawnMock };
@@ -121,7 +122,7 @@ describe('spawnHappyCLI runtime executable selection', () => {
   });
 
   it('uses the resolved JavaScript runtime under bun when subprocess runtime is node', async () => {
-    const spawnMock = vi.fn();
+    const spawnMock = vi.fn<typeof import('node:child_process').spawn>().mockReturnValue(new ChildProcess());
     vi.doMock('child_process', async () => {
       const actual = await vi.importActual<typeof import('child_process')>('child_process');
       return { ...actual, spawn: spawnMock };

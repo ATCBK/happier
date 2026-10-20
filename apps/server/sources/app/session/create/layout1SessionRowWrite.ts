@@ -1,6 +1,6 @@
 import { initializeSessionOwnerReadStateInTx } from "@/app/session/personal/readState";
 import { resolveSessionAccessForOperation } from "@/app/session/access/sessionAccess";
-import { attachCreatedSessionReportsToInTx, type SessionReportsToSetResult } from "@/app/session/relations/sessionReportsToService";
+import { attachCreatedSessionManagerInTx, type SessionManagerSetResult } from "@/app/session/follow/sessionManagerService";
 import { workflowRunIdentityWhere } from "@/app/workflows/workflowRunService";
 import { encodeSessionOwnerMetadataEnvelopeV1, SESSION_METADATA_LAYOUT_VERSION_V1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { AutomationDefinitionCreateRequestSchema } from '@happier-dev/protocol/automations/automationApiV3';
@@ -18,7 +18,7 @@ import { resolveAutomationRecipeFeaturePolicy } from "@/app/automations/automati
 import type { AutomationTriggerCreateRequest } from '@happier-dev/protocol/automations/automationApiV3';
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { publishSessionCreationInTx } from "./publishSessionCreationInTx";
-import type { ExternalActionExecutionAuthorizationBindingV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import type { SessionCreationExecutionAuthorization } from './apiTokenSessionCreationAuthorization';
 import { readSessionCreationApiTokenIdInTx } from "./apiTokenSessionCreationAuthorization";
 import {
     applyInitialSessionAccessInTx,
@@ -29,6 +29,7 @@ import {
     scheduleReleasedDirectShareEvent,
 } from "@/app/session/access/publishSessionAccessChange";
 import { ACCOUNT_DISPLAY_PROFILE_SELECT } from "@/app/account/profile/accountDisplayProfile";
+import { validateDiscussionParticipantBirthInTx, bindDiscussionParticipantSessionInTx } from "@/app/discussions/accessService";
 import {
     validatePlannedSessionTeamCredentialBindingIntentInTx,
     writeSessionTeamCredentialBindingsInTx,
@@ -131,10 +132,10 @@ export class SessionCreationOriginError extends Error {
     }
 }
 
-export class SessionCreationReportsToError extends Error {
-    constructor(readonly result: Extract<SessionReportsToSetResult, { ok: false }>) {
+export class SessionCreationManagerError extends Error {
+    constructor(readonly result: Extract<SessionManagerSetResult, { ok: false }>) {
         super(result.error);
-        this.name = "SessionCreationReportsToError";
+        this.name = "SessionCreationManagerError";
     }
 }
 
@@ -168,7 +169,7 @@ export async function insertLayout1SessionRowInTx(
         ownerAccountMode: "e2ee" | "plain";
         authentication: SessionAccessAuthentication;
         sessionId?: string;
-        sessionCreationAuthorization?: ExternalActionExecutionAuthorizationBindingV1;
+        sessionCreationAuthorization?: SessionCreationExecutionAuthorization;
     }>,
 ): Promise<CreatedSessionRow> {
     const { prepared, effectiveEncryptionMode } = params;
@@ -223,6 +224,14 @@ export async function insertLayout1SessionRowInTx(
         });
         if (!run) throw new SessionCreationOriginError();
     }
+    if (prepared.discussionParticipant) {
+        if (!prepared.discussionParticipantLaunch) throw new SessionCreationOriginError();
+        const admission = await validateDiscussionParticipantBirthInTx(tx, {
+            accountId: prepared.accountId, discussionParticipant: prepared.discussionParticipant,
+            launch: prepared.discussionParticipantLaunch, authentication: params.authentication,
+        });
+        if (!admission.ok || admission.value.sessionId !== null) throw new SessionCreationOriginError();
+    }
     const createdAt = new Date();
     const createdByApiTokenId = await readSessionCreationApiTokenIdInTx(tx, prepared.accountId, params.sessionCreationAuthorization);
     const session = await tx.session.create({
@@ -233,6 +242,8 @@ export async function insertLayout1SessionRowInTx(
             originKind: prepared.originKind ?? "none",
             originSessionId: prepared.originSessionId ?? null,
             originRunId: prepared.originRunId ?? null,
+            originDiscussionId: prepared.discussionParticipant?.discussionId ?? null,
+            originDiscussionParticipantSlotId: prepared.discussionParticipant?.participantSlotId ?? null,
             workDepth: prepared.workDepth ?? 0,
             tag: prepared.tag,
             encryptionMode: effectiveEncryptionMode,
@@ -272,12 +283,19 @@ export async function insertLayout1SessionRowInTx(
         authentication: params.authentication,
     });
     if (!accessResult.ok) throw new SessionInitialAccessError(accessResult.error);
-    if (prepared.reportsTo) {
-        const relation = await attachCreatedSessionReportsToInTx(tx, {
-            accountId: prepared.accountId, sessionId: session.id,
-            leadSessionId: prepared.reportsTo.sessionId, authentication: params.authentication,
+    if (prepared.discussionParticipant && prepared.discussionParticipantLaunch) {
+        const bound = await bindDiscussionParticipantSessionInTx(tx, {
+            accountId: prepared.accountId, discussionParticipant: prepared.discussionParticipant,
+            launch: prepared.discussionParticipantLaunch, sessionId: session.id, authentication: params.authentication,
         });
-        if (!relation.ok) throw new SessionCreationReportsToError(relation);
+        if (!bound.ok) throw new SessionCreationOriginError();
+    }
+    if (prepared.manager) {
+        const relation = await attachCreatedSessionManagerInTx(tx, {
+            accountId: prepared.accountId, sessionId: session.id,
+            managerSessionId: prepared.manager.sessionId, authentication: params.authentication,
+        });
+        if (!relation.ok) throw new SessionCreationManagerError(relation);
     }
     if (accessResult.directShares.length > 0) {
         const sharedByUser = await tx.account.findUnique({
@@ -288,7 +306,7 @@ export async function insertLayout1SessionRowInTx(
             const recipientAccountId = directShare.sharedWithUserId;
             scheduleReleasedDirectShareEvent(tx, {
                 recipientAccountId,
-                cursor: accessResult.effects.accountCursors.get(recipientAccountId) ?? 0,
+                publication: accessResult.effects.accountCursors.get(recipientAccountId),
                 event: projectReleasedDirectShareEvent({
                     recipientAccountId,
                     effects: accessResult.effects,

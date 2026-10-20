@@ -3,6 +3,11 @@ export const POPOVER_Z_INDEX = 200000;
 export const MODAL_Z_INDEX_STEP = 10;
 export const MODAL_Z_INDEX = POPOVER_Z_INDEX + MODAL_Z_INDEX_STEP;
 export const SCREEN_OVERLAY_Z_INDEX = 90000;
+/**
+ * The transient notice (toast) floats above every dialog: its Undo stays reachable while the dialog
+ * that made the change is still open. Stacked modals step by `MODAL_Z_INDEX_STEP`, far below this.
+ */
+export const NOTICE_Z_INDEX = POPOVER_Z_INDEX + 100000;
 
 /** The attribute that marks a screen's popover host (see `PopoverPortalTargetProvider`). */
 export const POPOVER_PORTAL_HOST_ATTRIBUTE = 'data-happy-popover-portal-host';

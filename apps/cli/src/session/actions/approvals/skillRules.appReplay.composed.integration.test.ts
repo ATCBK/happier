@@ -1,11 +1,15 @@
 import '../../../../../ui/sources/dev/vitestSetup';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, onTestFailed, vi } from 'vitest';
 import { Server } from 'socket.io';
 import { io } from 'socket.io-client';
 import { createLightSqliteHarness } from '../../../../../server/sources/testkit/lightSqliteHarness';
 import { createAuthenticatedTestApp } from '../../../../../server/sources/app/api/testkit/sqliteFastify';
 import { accountRoutes } from '../../../../../server/sources/app/api/routes/account/accountRoutes';
 import { artifactsRoutes } from '../../../../../server/sources/app/api/routes/artifacts/artifactsRoutes';
+import { machinesRoutes } from '../../../../../server/sources/app/api/routes/machines/machinesRoutes';
+import { registerPluginAvailabilityRoutes } from '../../../../../server/sources/app/plugins/availability/routes';
+import { createPluginAvailabilityOperations } from '../../../../../server/sources/app/plugins/availability/operations';
+import { getOrCreateServerIdentityId, initializeServerIdentityCache } from '../../../../../server/sources/app/serverIdentity/serverIdentity';
 import { enableOptionalStatics } from '../../../../../server/sources/app/api/utils/enableOptionalStatics';
 import { auth } from '../../../../../server/sources/app/auth/auth';
 import { db } from '../../../../../server/sources/storage/db';
@@ -18,12 +22,29 @@ import { reloadConfiguration } from '@/configuration';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { bootstrapAccountSettingsContext, resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
+import { featuresRoutes } from '../../../../../server/sources/app/api/routes/features/featuresRoutes';
+import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
+import { definePlugin } from '@happier-dev/plugin-sdk';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { readPluginSkills } from '@/prompts/skills/library/readPluginSkills';
+import { seedPluginSkillDefaults } from '@/prompts/skills/library/seedPluginSkillDefaults';
+import { pluginSkillIdV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import { SkillReadResultV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillReadV1';
+import { registerDaemonContributionRegistryProjectionHandler } from '@/rpc/handlers/daemonContributionRegistryProjection';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { MACHINE_PLAIN_DATA_KEY_MARKER, encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
+import type { RpcHandler } from '@/api/rpc/types';
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 import { describeApprovalRequestFields } from '@happier-dev/protocol/actions';
 import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1, McpServerCatalogRowReadResponseV1Schema, McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
+import { MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 import { SKILL_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { skillFileFromBytesV1 } from '@happier-dev/protocol/prompts/library/skills/skillZipV1';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
@@ -40,14 +61,109 @@ const { TokenStorage } = await import('../../../../../ui/sources/auth/storage/to
 const { createDefaultActionExecutor } = await import('../../../../../ui/sources/sync/ops/actions/defaultActionExecutor');
 const { setRuntimeFetch } = await import('../../../../../ui/sources/utils/system/runtimeFetch');
 
-describe('CLI skill-rule approval replayed by the app', () => {
+describe('CLI capability approval replayed by the app', () => {
   let sqlite: Awaited<ReturnType<typeof createLightSqliteHarness>>;
   beforeAll(async () => {
     sqlite = await createLightSqliteHarness({ tempDirPrefix: 'happier-skill-rule-app-replay-', initAuth: true, initEncrypt: true });
   }, 0);
   afterAll(async () => { await homes.reset(); if (sqlite) await sqlite.close(); });
 
-  it.each([false, true])('writes and restores the rule through original Account custody (miswired storage: %s)', async miswired => {
+  it('lists, reads, seeds reach and copies an installed external plugin skill through authenticated HTTP and SQLite', async () => {
+    const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'HAPPIER_SERVER_UI_DIR', 'HAPPIER_SERVER_UI_REQUIRED']);
+    const app = createAuthenticatedTestApp({ authentication: 'real' }) as import('../../../../../server/sources/app/api/types').Fastify;
+    const account = await db.account.create({ data: { encryptionMode: 'plain', settingsVersion: 1 } });
+    for (const key of PromptLibraryCatalogKeyV1Schema.options) await db.userKVStore.create({ data: {
+      accountId: account.id, key: buildPromptLibraryPhysicalKeyV1(key), version: 1,
+      value: new TextEncoder().encode(JSON.stringify({ t: 'plain', v: emptyPromptLibraryRecordV1(key) })),
+    } });
+    const credentials = { token: await auth.createToken(account.id, undefined, { kind: 'account', authority: 'present_user' }), encryption: null };
+    const pluginId = 'com.acme.library-skills';
+    const skillId = pluginSkillIdV1({ pluginId, localId: 'check' });
+    const author = definePlugin({ id: pluginId, version: '1.0.0', entrypoints: { daemon: './daemon.mjs' },
+      skills: { check: { directory: './resources/check' } } });
+    let runtime: Awaited<ReturnType<typeof createAuthoredAdmittedPluginRuntimeFixture>> | undefined;
+    let sourceSockets: Server | undefined;
+    try {
+      env.patch({ HAPPIER_SERVER_UI_DIR: undefined, HAPPIER_SERVER_UI_REQUIRED: '0' });
+      enableOptionalStatics(app); accountRoutes(app); artifactsRoutes(app); machinesRoutes(app); registerPluginAvailabilityRoutes(app);
+      sourceSockets = new Server(app.server, { path: '/v1/updates' });
+      const url = await app.listen({ port: 0, host: '127.0.0.1' });
+      env.patch({ HAPPIER_HOME_DIR: `${sqlite.baseDir}/plugin-library-home`, HAPPIER_SERVER_URL: url, HAPPIER_WEBAPP_URL: url });
+      reloadConfiguration(); resetInMemoryAccountSettingsContextForTests();
+      runtime = await createAuthoredAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+        plugins: [{ manifest: author.manifest, files: { 'daemon.mjs': 'export function activate() {}',
+          'resources/check/SKILL.md': '---\nname: check\ndescription: Check a project\n---\nCheck instructions',
+          'resources/check/reference.txt': 'Supporting content',
+        } }] });
+      const homeId = await getOrCreateServerIdentityId(), machineId = 'plugin-library-machine';
+      await db.machine.create({ data: { id: machineId, accountId: account.id, installationId: 'plugin-library-installation',
+        metadata: encodePlainMachineStoredContent({ host: 'Plugin source', platform: process.platform, homeDir: runtime.happyHomeDir }),
+        dataEncryptionKey: Buffer.from(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64'), active: true, lastActiveAt: new Date() } });
+      const materializationId = runtime.registry.contributes.materializationIdsByPluginId?.[pluginId];
+      if (!materializationId) throw new Error('Installed source materialization is unavailable');
+      await createPluginAvailabilityOperations().reportMaterializations({ accountId: account.id, publisherMachineId: machineId,
+        input: { expectedRevision: null, snapshot: { serverIdentityId: homeId, machineId, materializations: [{
+          serverIdentityId: homeId, machineId, materializationId, pluginId, version: '1.0.0', sourceClass: 'localPath',
+          portableRelease: false, uiArtifacts: [], enabled: true, trustState: 'trusted', observedAt: Date.now(),
+        }] } } });
+      const sourceHandlers = new Map<string, RpcHandler>();
+      const currentRuntime = runtime;
+      registerDaemonContributionRegistryProjectionHandler({ registerHandler: (method, handler) => { sourceHandlers.set(method, handler); } }, {
+        resolveRuntimeRegistry: async () => currentRuntime.registry,
+        resolveGeneration: async () => currentRuntime.controller.getState().generation,
+        resolvePluginProjectionExecutionOriginContext: () => ({ serverIdentityId: homeId, machineId }),
+      });
+      sourceSockets.use((socket, next) => {
+        void auth.verifyTokenForRoute(String(socket.handshake.auth.token)).then(verified => {
+          if (verified?.userId === account.id) next(); else next(new Error('Unauthorized'));
+        }, next);
+      });
+      sourceSockets.on('connection', socket => socket.on(SOCKET_RPC_EVENTS.CALL, async (raw: unknown, acknowledge: (value: unknown) => void) => {
+        if (!raw || typeof raw !== 'object' || !('method' in raw) || !('params' in raw)
+          || raw.method !== `${machineId}:${RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE}`) {
+          acknowledge({ ok: false, error: 'unsupported_method' }); return;
+        }
+        const result = await sourceHandlers.get(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)!(raw.params);
+        acknowledge({ ok: true, result });
+      }));
+      eventRouter.setIo(sourceSockets);
+      await runWithServerHttpBaseUrl(url, async () => {
+        await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force' });
+        const accountStore = createCliApprovalsArtifactStore({ credentials });
+        const port = accountStore.skillRules;
+        const skills = await readPluginSkills(undefined, undefined, currentRuntime.registry.contributes);
+        await seedPluginSkillDefaults({ skills, port });
+        const deps = createCliActionDeps({ credentials, token: credentials.token, sessionId: 'cli-global', mode: 'plain', ctx: null });
+        const execute = createActionExecutor({ ...deps, isActionApprovalRequired: () => false });
+        const listed = await execute.execute('skills.list', {}, { surface: 'ui' });
+        expect(listed.ok).toBe(true);
+        if (!listed.ok) throw new Error('Plugin skill list failed');
+        const item = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(listed.result).items.find(item => item.skillId === skillId);
+        expect(item).toMatchObject({ name: 'check', provenance: { kind: 'plugin', pluginId }, rules: [expect.objectContaining({ enabled: true })] });
+        const read = await execute.execute('skills.read', { skillId, file: 'reference.txt' }, { surface: 'ui' });
+        expect(read.ok).toBe(true);
+        if (!read.ok) throw new Error('Plugin skill read failed');
+        expect(SkillReadResultV1Schema.parse(read.result)).toMatchObject({ skillId, file: { path: 'reference.txt' } });
+        const copied = await execute.execute('skills.duplicate', { skillId, name: 'my-check' }, { surface: 'ui' });
+        expect(copied.ok).toBe(true);
+        if (!copied.ok) throw new Error('Plugin skill copy failed');
+        const copy = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.duplicate'].parse(copied.result);
+        expect(copy).toMatchObject({ name: 'my-check', provenance: { kind: 'written' } });
+        const storedCopy = await accountStore.promptLibraryStore.read(copy.skillId);
+        expect(storedCopy).toBeDefined();
+        expect(await execute.execute('skills.update', { skillId, expectedRevision: item!.revision, description: 'Changed' }, { surface: 'ui' }))
+          .toMatchObject({ ok: false });
+      });
+    } finally {
+      await runtime?.dispose(); await sourceSockets?.close(); await app.close(); resetInMemoryAccountSettingsContextForTests();
+      env.restore(); reloadConfiguration();
+    }
+  });
+
+  it.each([['skill', false], ['skill', true], ['MCP', false], ['MCP', true], ['prompt', false], ['prompt', true]] as const)(
+    'writes and restores %s through original Account custody (miswired storage: %s)', async (family, miswired) => {
+    let phase = 'setup';
+    onTestFailed(() => { console.info(`[capability-approval-replay] ${family}, miswired=${miswired}, phase=${phase}`); });
     const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'HAPPIER_SERVER_UI_DIR', 'HAPPIER_SERVER_UI_REQUIRED']);
     const locks = installWebLockManagerMock();
     const app = createAuthenticatedTestApp({ authentication: 'real' }) as import('../../../../../server/sources/app/api/types').Fastify;
@@ -56,9 +172,11 @@ describe('CLI skill-rule approval replayed by the app', () => {
       accountId: account.id, key: buildPromptLibraryPhysicalKeyV1(key), version: 1,
       value: new TextEncoder().encode(JSON.stringify({ t: 'plain', v: emptyPromptLibraryRecordV1(key) })),
     } });
-    const credentials = { token: await auth.createToken(account.id, undefined, { kind: 'account', authority: 'present_user' }), encryption: null };
+    const credentials = { token: await auth.createToken(account.id, undefined, { kind: 'account', authority: 'present_user' }), encryption: null,
+      ...(family === 'prompt' ? { credentialProvenance: 'stored_session' as const } : {}) };
     const machineId = 'skill-rule-machine';
     const sockets = new Server(app.server, { path: '/v1/updates' });
+    let promptWriteAttempted = false;
     sockets.use((socket, next) => {
       void (async () => {
         const token: unknown = socket.handshake.auth.token;
@@ -73,6 +191,14 @@ describe('CLI skill-rule approval replayed by the app', () => {
     try {
       env.patch({ HAPPIER_SERVER_UI_DIR: undefined, HAPPIER_SERVER_UI_REQUIRED: '0' });
       enableOptionalStatics(app); accountRoutes(app); artifactsRoutes(app);
+      if (family === 'prompt') { await initializeServerIdentityCache(); featuresRoutes(app); }
+      if (family === 'prompt' && miswired) app.addHook('preValidation', async request => {
+        // Wrong HTTP binding control: the strict Home route receives no mutation operands.
+        if (request.method === 'POST' && request.url === `${PROMPT_LIBRARY_ROWS_ROUTE_V1}/invocations`) {
+          promptWriteAttempted = true;
+          request.body = {};
+        }
+      });
       const url = await app.listen({ port: 0, host: '127.0.0.1' });
       env.patch({ HAPPIER_HOME_DIR: `${sqlite.baseDir}/cli-home-${miswired}`, HAPPIER_SERVER_URL: url, HAPPIER_WEBAPP_URL: url });
       reloadConfiguration(); resetInMemoryAccountSettingsContextForTests();
@@ -102,6 +228,12 @@ describe('CLI skill-rule approval replayed by the app', () => {
         await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force' });
         const deps = createCliActionDeps({ credentials, token: credentials.token, sessionId: 'cli-global', mode: 'plain', ctx: null });
         const cli = createActionExecutor(deps);
+        const appExecutor = createDefaultActionExecutor({ resolveServerIdForSessionId: () => null });
+        homes.answer(profileId!, '/v1/artifacts', { select: async input => {
+          const response = await request('/v1/artifacts', input === null ? undefined : { method: 'POST', body: JSON.stringify(input) });
+          return { status: response.status, body: await response.json() };
+        } });
+        if (family === 'skill') {
         const seed = await createActionExecutor({ ...deps, isActionApprovalRequired: () => false }).execute('skills.create', {
           name: 'approval-replay', files: [skillFileFromBytesV1('SKILL.md', new TextEncoder().encode('---\nname: approval-replay\n---\nA rule replay skill.'), 0o644)],
           where: { kind: 'replace', rules: [] },
@@ -129,7 +261,6 @@ describe('CLI skill-rule approval replayed by the app', () => {
           const response = await request(path, input === null ? undefined : { method: 'POST', body: JSON.stringify(input) });
           return { status: response.status, body: await response.json() };
         } });
-        const appExecutor = createDefaultActionExecutor({ resolveServerIdForSessionId: () => null });
         const decided = await appExecutor.execute('approval.request.decide', { artifactId, decision: 'approve' }, { surface: 'ui', serverId: profileId });
         const row = PromptLibraryRowReadResponseV1Schema.parse(await (await request(rulePath)).json());
         if (row.status !== 'present') throw new Error('Rules row unavailable');
@@ -158,11 +289,70 @@ describe('CLI skill-rule approval replayed by the app', () => {
           if (content.status !== 'opened' || content.record.key !== 'skill-rules') throw new Error('Restored rules row unreadable');
           expect(content.record.value.rules.filter(rule => rule.skillId === skill.skillId)).toEqual([]);
         }
+        } else if (family === 'prompt') {
+          // Real CLI composition, authenticated Home HTTP, strict catalog CAS and
+          // durable approvals. No mounted app or substituted replay executor.
+          const serverIdentityId = await getOrCreateServerIdentityId();
+          expect(FeaturesResponseSchema.parse(await (await request('/v1/features/authenticated')).json())
+            .capabilities.serverIdentity.serverIdentityId).toBe(serverIdentityId);
+          const terminal = createCliActionExecutorFromCredentials({ credentials, serverId: profileId!, serverApiUrl: url,
+            serverIdentityId, readCredentials: async () => credentials });
+          const readInvocations = async () => {
+            const row = PromptLibraryRowReadResponseV1Schema.parse(await (await request(`${PROMPT_LIBRARY_ROWS_ROUTE_V1}/invocations`)).json());
+            if (row.status !== 'present') throw new Error('Missing invocation catalog');
+            const opened = openPromptLibraryContentV1({ key: 'invocations', content: row.content, mode: 'plain', material: null });
+            if (opened.status !== 'opened' || opened.record.key !== 'invocations') throw new Error('Unreadable invocation catalog');
+            return { revision: row.revision, entries: opened.record.value.entries };
+          };
+          let invocationId = '';
+          for (const actionId of ['prompts.invocation.create', 'prompts.invocation.update', 'prompts.invocation.delete'] as const) {
+            const before = await readInvocations();
+            const fields = { token: actionId.endsWith('create') ? 'daily' : 'weekly', title: 'Review', target: { kind: 'doc', artifactId: 'doc' } };
+            const input = getActionSpec(actionId).inputSchema.parse(actionId.endsWith('create') ? fields
+              : { invocationId, expectedRevision: before.revision, ...(actionId.endsWith('update') ? fields : {}) });
+            phase = `${actionId} proposal`;
+            const proposed = await terminal.execute(actionId, input, { surface: 'cli', authority: 'account_automation',
+              serverId: profileId, serverIdentityId, actionRequestId: `prompt-${actionId}`, actionCaller: { kind: 'host' } });
+            expect(proposed, JSON.stringify(proposed)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+            if (!proposed.ok || !proposed.result || typeof proposed.result !== 'object' || !('artifactId' in proposed.result)
+              || typeof proposed.result.artifactId !== 'string') throw new Error('Missing prompt approval');
+            const artifactId = proposed.result.artifactId;
+            expect(await readInvocations()).toEqual(before);
+            const approval = ApprovalRequestV2Schema.parse(await deps.approvalsGet!({ artifactId }));
+            expect(approval.actionArgs).toEqual(input);
+            phase = `${actionId} CLI decision`;
+            const decided = await terminal.execute('approval.request.decide', { artifactId, decision: 'approve' }, {
+              surface: 'cli', authority: 'present_user', serverId: profileId, serverIdentityId,
+            });
+            if (miswired) {
+              expect(promptWriteAttempted).toBe(true);
+              expect(decided).not.toMatchObject({ ok: true, result: { status: 'executed', execution: { result: { status: 'updated' } } } });
+              expect(await readInvocations()).toEqual(before);
+              break;
+            }
+            expect(decided, JSON.stringify(decided)).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+            const settled = ApprovalRequestV2Schema.parse(await deps.approvalsGet!({ artifactId }));
+            if (!settled.execution?.ok) throw new Error('Prompt approval did not execute');
+            const receipt = getActionSpec(actionId).outputSchema!.parse(settled.execution.result);
+            expect(receipt).toMatchObject({ status: 'updated' });
+            if (!receipt || typeof receipt !== 'object' || !('invocationId' in receipt) || typeof receipt.invocationId !== 'string') throw new Error('Missing shortcut identity');
+            invocationId = receipt.invocationId;
+            const after = await readInvocations();
+            expect(after.revision).toBe(before.revision + 1);
+            expect(after.entries).toMatchObject(actionId.endsWith('delete') ? [] : [{ id: invocationId, token: actionId.endsWith('create') ? '/daily' : '/weekly' }]);
+            await terminal.execute('approval.request.decide', { artifactId, decision: 'approve' }, { surface: 'cli', authority: 'present_user', serverId: profileId, serverIdentityId });
+            expect(await readInvocations()).toEqual(after);
+          }
+        } else {
         // The same production CLI/app wiring owns MCP approval replay. Only the
         // authenticated HTTP boundary is forwarded; catalog policy/CAS stays real.
         const mcpId = `review-mcp-${miswired}`;
+        const catalogRead = await cli.execute('mcp.servers.list', {}, { surface: 'cli', authority: 'account_automation' });
+        if (!catalogRead.ok) throw new Error('MCP catalog seed read failed');
+        const catalog = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.list'].parse(catalogRead.result);
+        if (catalog.status !== 'ready') throw new Error('MCP catalog seed is not ready');
         await expect(createActionExecutor({ ...deps, isActionApprovalRequired: () => false }).execute('mcp.servers.create', {
-          expectedRevision: 'absent', entry: { id: mcpId, name: `review_${miswired}`, title: 'Issue tracker', transport: 'stdio',
+          expectedRevision: catalog.revision, entry: { id: mcpId, name: `review_${miswired}`, title: 'Issue tracker', transport: 'stdio',
             stdio: { command: 'issue-mcp', args: ['--workspace', 'team'] }, env: {}, createdAt: 1, updatedAt: 1 },
           where: { kind: 'replace', rules: [] },
         }, { surface: 'cli', authority: 'account_automation' })).resolves.toMatchObject({ ok: true, result: { status: 'updated' } });
@@ -192,6 +382,7 @@ describe('CLI skill-rule approval replayed by the app', () => {
           if (input !== null) mcpWriteStatuses.push(response.status);
           return { status: response.status, body: await response.json() };
         } });
+        phase = 'MCP approval decision';
         const mcpDecided = await appExecutor.execute('approval.request.decide', { artifactId: mcpArtifactId, decision: 'approve' }, { surface: 'ui', serverId: profileId });
         const readMcp = async () => {
           const row = McpServerCatalogRowReadResponseV1Schema.parse(await (await request(MCP_SERVER_CATALOG_ROWS_ROUTE_V1)).json());
@@ -199,7 +390,7 @@ describe('CLI skill-rule approval replayed by the app', () => {
           return McpServerCatalogV1Schema.parse(row.content.v).servers.find(server => server.id === mcpId);
         };
         if (miswired) {
-          expect(mcpDecided).toMatchObject({ ok: true, result: { execution: { result: { ok: false } } } });
+          expect(mcpDecided).toMatchObject({ ok: true, result: { status: 'failed', execution: { ok: false, errorCode: 'mcp_catalog_operation_failed' } } });
           expect(mcpWriteStatuses).toContain(400);
           expect((await readMcp())?.tools?.overrides?.delete_issue).toBeUndefined();
         } else {
@@ -207,11 +398,30 @@ describe('CLI skill-rule approval replayed by the app', () => {
           expect((await readMcp())?.tools?.overrides.delete_issue).toBe('allow');
           const settledMcp = ApprovalRequestV2Schema.parse(await deps.approvalsGet!({ artifactId: mcpArtifactId }));
           expect(describeApprovalRequestFields(settledMcp)).toEqual(pendingMcp);
+          phase = 'MCP repeated approval';
           await expect(appExecutor.execute('approval.request.decide', { artifactId: mcpArtifactId, decision: 'approve' }, { surface: 'ui', serverId: profileId }))
             .resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
-          await expect(appExecutor.execute('mcp.servers.tools.set', { serverId: mcpId, tools: { delete_issue: 'inherit' } }, { surface: 'ui', serverId: profileId }))
-            .resolves.toMatchObject({ ok: true });
+          phase = 'MCP policy restoration';
+          // Restore through a separately approved invocation as well. A bare UI
+          // call can legitimately await mounted host confirmation, absent here.
+          const restoration = await cli.execute('mcp.servers.tools.set', { serverId: mcpId, tools: { delete_issue: 'inherit' } }, {
+            surface: 'cli', authority: 'account_automation', serverId: profileId, runtimeAccountId: account.id,
+            defaultSessionMachineId: machineId, actionCaller: { kind: 'host' }, actionRequestId: 'cli-mcp-restore',
+          });
+          expect(restoration).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+          if (!restoration.ok || !restoration.result || typeof restoration.result !== 'object' || !('artifactId' in restoration.result)
+            || typeof restoration.result.artifactId !== 'string') throw new Error('Missing MCP restoration approval');
+          const restoreArtifactId = restoration.result.artifactId;
+          for (const path of [`/v1/artifacts/${restoreArtifactId}`, `/v1/artifacts/${restoreArtifactId}/recipients`, `/v1/artifacts/${restoreArtifactId}/content`]) {
+            homes.answer(profileId!, path, { select: async input => {
+              const response = await request(path, input === null ? undefined : { method: 'POST', body: JSON.stringify(input) });
+              return { status: response.status, body: await response.json() };
+            } });
+          }
+          await expect(appExecutor.execute('approval.request.decide', { artifactId: restoreArtifactId, decision: 'approve' }, { surface: 'ui', serverId: profileId }))
+            .resolves.toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
           expect((await readMcp())?.tools?.overrides.delete_issue).toBeUndefined();
+        }
         }
       });
     } finally {

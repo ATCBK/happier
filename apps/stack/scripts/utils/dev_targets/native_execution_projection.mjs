@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, posix, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { loadDevTargetsConfig, parseDevTargetsConfig, resolveDevTargetExecutionPolicy } from './config.mjs';
+import { loadDevTargetExecutionConfig, loadDevTargetsConfig, parseDevTargetsConfig, resolveDevTargetExecutionPolicy } from './config.mjs';
 import { resolveRepoStackIdentity, resolveStacksStorageRoot } from '../stack/repo_stack_identity.mjs';
 import { resolveDevTargetServicePlans } from './service_placement.mjs';
 import { resolveMutagenSessionName } from './mutagen_project.mjs';
@@ -60,7 +60,7 @@ export function resolveCommandRepositoryConfig(config, { repoRoot, executorRepoR
   });
 }
 
-export function renderNativeExecutionProjection(config, { repoRoot = '', executorRepoRoot = null, stackBaseDir = '.', env = process.env } = {}) {
+export function renderNativeExecutionProjection(config, { repoRoot = '', executorRepoRoot = null, configPath = null, stackBaseDir = '.', env = process.env } = {}) {
   const normalized = executorRepoRoot
     ? resolveCommandRepositoryConfig(config, { repoRoot, executorRepoRoot })
     : parseDevTargetsConfig(config);
@@ -75,6 +75,7 @@ export function renderNativeExecutionProjection(config, { repoRoot = '', executo
   const lines = [
     assignment('HSTACK_EXEC_PROJECTION_VERSION', '2'),
     assignment('projection_repo_root', repoRoot),
+    ...(configPath ? [assignment('projection_config_path', resolve(configPath))] : []),
     assignment('projection_mutagen_data_dir', syncRuntime.dataDir),
     assignment('projection_mutagen_ssh_path', syncRuntime.opensshDir),
     assignment('command_mode', policy.mode),
@@ -146,7 +147,7 @@ export async function prepareCommandRepository({ configPath, repoRoot, executorR
 
 export async function writeNativeExecutionProjection({ configPath, outputPath, repoRoot = '', skipUnchanged = false, env = process.env }) {
   const raw = JSON.parse(await readFile(configPath, 'utf8'));
-  const rendered = renderNativeExecutionProjection(raw, { repoRoot, stackBaseDir: dirname(configPath), env });
+  const rendered = renderNativeExecutionProjection(raw, { repoRoot, configPath, stackBaseDir: dirname(configPath), env });
   // Sibling dispatch can run with read-only stack storage. Regular projection
   // refreshes still advance mtime, which the native launcher uses for freshness.
   if (skipUnchanged) {
@@ -163,6 +164,11 @@ export async function writeNativeExecutionProjection({ configPath, outputPath, r
 }
 
 async function main() {
+  if (process.argv[2] === '--validate-execution-config') {
+    const loaded = await loadDevTargetExecutionConfig();
+    process.stdout.write(`${loaded.path}\n`);
+    return;
+  }
   if (process.argv[2] === '--write-sync-policy') {
     await writeFile(new URL('./native_sync_readiness.sh', import.meta.url), renderNativeSyncReadinessPolicy());
     return;

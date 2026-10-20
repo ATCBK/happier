@@ -6,9 +6,11 @@ import { RpcError, RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/prot
 import type { ActionOperationRunner } from './actionOperationRunner';
 import type { ActionOperationStore } from './actionOperationStore';
 import type { ActionOperationDomainOwner, ActionOperationScope } from './actionOperationTypes';
+import { ProjectServiceMoveStartClaimV1Schema, ProjectServiceMoveStartClaimResultV1Schema } from '@happier-dev/protocol/workspaces/projectServiceRelocationV1';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 export type ActionOperationRpcContext = Readonly<Partial<Pick<RpcHandlerContext,
-  'signal' | 'machineAdmission' | 'verifyMachineAdmissionCurrent'>>>;
+  'signal' | 'machineAdmission' | 'verifyMachineAdmissionCurrent' | 'requesterSessionBootstrap'>>>;
 
 /** Admission is transport-owned; no Action input can select the owning Account. */
 export async function resolveActionOperationScope(
@@ -17,19 +19,24 @@ export async function resolveActionOperationScope(
   sessionId?: string,
 ): Promise<ActionOperationScope | null> {
   const admission = context?.machineAdmission;
+  const session = !admission ? context?.requesterSessionBootstrap : undefined;
+  if (session && (session.attribution.machineId !== deps.machineId || context?.signal?.aborted
+    || !await session.isCurrent() || context?.signal?.aborted)) {
+    throw new RpcError(RPC_ERROR_MESSAGES.FORBIDDEN, RPC_ERROR_CODES.FORBIDDEN);
+  }
   if (admission && (admission.machineId !== deps.machineId || context?.signal?.aborted
     || !context.verifyMachineAdmissionCurrent || !await context.verifyMachineAdmissionCurrent())) {
     throw new RpcError(RPC_ERROR_MESSAGES.FORBIDDEN, RPC_ERROR_CODES.FORBIDDEN);
   }
   // Current foreign Machine routing always carries verified admission. Retained
   // owned predecessor routing and in-process callers keep their local Account.
-  const accountId = admission?.actorAccountId ?? await deps.resolveAccountId();
+  const accountId = admission?.actorAccountId ?? session?.attribution.accountId ?? await deps.resolveAccountId();
   return accountId ? { accountId, machineId: deps.machineId, ...(sessionId ? { sessionId } : {}) } : null;
 }
 
 export function createActionOperationRpcHandlers(deps: Readonly<{
   store: ActionOperationStore;
-  runner: Pick<ActionOperationRunner, 'cancel'> & Partial<Pick<ActionOperationRunner, 'waitForTerminal' | 'refreshSetupReview'>>;
+  runner: Pick<ActionOperationRunner, 'cancel'> & Partial<Pick<ActionOperationRunner, 'waitForTerminal' | 'refreshSetupReview' | 'claimServiceMoveStart'>>;
   owner?: () => ActionOperationDomainOwner | null;
   machineId: string;
   resolveAccountId: () => Promise<string | null>;
@@ -83,8 +90,15 @@ export function createActionOperationRpcHandlers(deps: Readonly<{
       }
       const inspected = deps.store.get(scope, request.operationId);
       if (inspected?.domainRef?.kind === 'projectCommand') deps.onInspection?.(inspected);
-      if (version === 2 && inspected?.setupReview && deps.runner.refreshSetupReview) {
-        const refresh = deps.runner.refreshSetupReview(scope, request.operationId);
+      const domainOwner = projected && owner && deps.owner?.() === owner ? owner : null;
+      const refreshSetupReview = domainOwner?.refreshSetupReview?.bind(domainOwner) ?? deps.runner.refreshSetupReview?.bind(deps.runner);
+      if (version === 2 && inspected?.setupReview && refreshSetupReview) {
+        const refresh = refreshSetupReview(scope, request.operationId).then(async () => {
+          if (!domainOwner) return;
+          const fresh = await domainOwner.get(scope, request.operationId);
+          await resolveScope(context);
+          if (deps.owner?.() === domainOwner && fresh) deps.store.project(fresh);
+        });
         if (('refreshSetupReview' in request && request.refreshSetupReview) || request.includeSetupReview) {
           // Human consent needs freshly measured effect facts before its decision.
           await refresh;
@@ -96,8 +110,9 @@ export function createActionOperationRpcHandlers(deps: Readonly<{
           void refresh.catch(() => undefined);
         }
       }
-      const operation = request.waitForTerminal && deps.runner.waitForTerminal
-        ? await deps.runner.waitForTerminal(scope, request.operationId, context?.signal,
+      const waitForTerminal = domainOwner?.waitForTerminal?.bind(domainOwner) ?? deps.runner.waitForTerminal?.bind(deps.runner);
+      const operation = request.waitForTerminal && waitForTerminal
+        ? await waitForTerminal(scope, request.operationId, context?.signal,
           request.includeSetupReview ? { includeSetupReview: true } : undefined)
         : deps.store.get(scope, request.operationId);
       if (request.waitForTerminal) await resolveScope(context);
@@ -107,6 +122,13 @@ export function createActionOperationRpcHandlers(deps: Readonly<{
   };
 
   return Object.freeze({
+    async claimServiceMoveStart(raw: unknown, context?: ActionOperationRpcContext) {
+      const request = ProjectServiceMoveStartClaimV1Schema.parse(raw);
+      const scope = await resolveScope(context);
+      const result = context?.machineAdmission?.installationId === request.installationId
+        ? deps.runner.claimServiceMoveStart?.(scope, request.requestId, request.input) : undefined;
+      return ProjectServiceMoveStartClaimResultV1Schema.parse(result ?? { kind: 'refused', reasonCode: 'service_move_not_starting' });
+    },
     list: (raw: unknown, context?: ActionOperationRpcContext) => list(raw, context, 1),
     listV2: (raw: unknown, context?: ActionOperationRpcContext) => list(raw, context, 2),
     get: (raw: unknown, context?: ActionOperationRpcContext) => get(raw, context, 1),
@@ -141,4 +163,5 @@ export function registerActionOperationRpcHandlers(
   registrar.registerHandler(ACTION_OPERATION_RPC_METHODS_V1.cancel, handlers.cancel);
   registrar.registerHandler(ACTION_OPERATION_RPC_METHODS_V2.list, handlers.listV2);
   registrar.registerHandler(ACTION_OPERATION_RPC_METHODS_V2.get, handlers.getV2);
+  registrar.registerHandler(RPC_METHODS.DAEMON_SERVICE_MOVE_START_CLAIM, handlers.claimServiceMoveStart);
 }

@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { encodeTerminalConnectLinkV4Payload } from '@happier-dev/protocol';
 import { standardCleanup } from '@/dev/testkit';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import { installTerminalRouteCommonModuleMocks, initializeTerminalRouteRuntimeForTests, renderTerminalRoute } from './terminalRouteTestHelpers';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -22,7 +23,9 @@ vi.mock('@/modal', async () => {
     return createModalModuleMock({ spies: { alertAsync: modalAlertAsyncMock } }).module;
 });
 
+const browser = await installBrowserRuntimeForTests({ url: 'https://ui.example.test/terminal' });
 await initializeTerminalRouteRuntimeForTests();
+afterAll(() => browser.restore());
 
 function createV4Params(serverUrl: string, serverIdentityId: string) {
     const descriptor = {
@@ -61,6 +64,8 @@ async function activateServer(serverUrl: string) {
 
 describe('TerminalScreen unauthenticated redirect', () => {
     beforeEach(async () => {
+        browser.activate();
+        browser.window.sessionStorage.clear();
         installTerminalRouteCommonModuleMocks({ router: () => routerMock.module });
         replaceMock.mockClear();
         modalAlertAsyncMock.mockClear();

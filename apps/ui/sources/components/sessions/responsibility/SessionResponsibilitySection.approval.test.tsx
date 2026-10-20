@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
+import { CurrentCursorResponseSchema, tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
+import { SetSessionResponsibilityResponseSchema } from '@happier-dev/protocol/sessions/access/sessionResponsibilityV1';
 
 // Imported from their owning testkit modules, never the `@/dev/testkit` barrel:
 // the harness installs its network boundaries with `vi.doMock`, which only
@@ -9,6 +10,10 @@ import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import {
     createHomeGovernanceHarness,
@@ -18,14 +23,15 @@ import {
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import type { useSessionResponsibilityController as UseController } from './useSessionResponsibilityController';
 
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 /**
- * Responsibility assignment awaiting its default confirmation, end to end.
+ * Responsibility assignment awaiting an Account-required confirmation, end to end.
  *
- * teams-lane-04/11-responsible-assignment.md §7.1: "Dangerous mutation
- * confirmation is required by default and may be explicitly disabled by the user
- * in the canonical Actions policy." So the ordinary outcome of choosing someone is
- * an approval, and it must never look like a completed assignment. The Account
- * here has no stored Actions settings at all: the default alone defers it.
+ * The current Action declaration directly admits the present user's reversible
+ * assignment. An explicit Ask-first Account policy still defers that intent to
+ * an approval, which must never look like a completed assignment.
  *
  * The real controller reaches the shared Action front door, which persists an open
  * approval in the Home's stateful Artifact store; the Inbox decides it through the
@@ -73,11 +79,13 @@ const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 
 const ACCOUNT_ID = 'account-owner';
+const HOME_IDENTITY_ID = 'srv_responsibility_home';
 const SESSION_ID = 'session-1';
 const RESPONSIBILITY_SET_PATH = '/v2/sessions/responsibility/set';
+let disposeRestoredAccount: (() => Promise<void>) | null = null;
 
 function summary(accountId: string, firstName: string, username: string) {
-    return { kind: 'account' as const, accountId, firstName, lastName: null, username, avatarUrl: null };
+    return { kind: 'account' as const, accountId, name: firstName, firstName, lastName: null, username, avatarUrl: null };
 }
 
 /**
@@ -87,12 +95,16 @@ function summary(accountId: string, firstName: string, username: string) {
  * Home listed for it, assigned to Alice.
  */
 async function addResponsibilityHome(): Promise<string> {
-    const serverId = await harness.addHome({
+    let serverId = await harness.addHome({
         name: 'Home One',
         serverUrl: 'https://responsibility-home.example',
         accountId: ACCOUNT_ID,
+        currentAccount: true,
+        serverIdentityId: HOME_IDENTITY_ID,
     });
-    const features = createRootLayoutFeaturesResponse();
+    const features = createRootLayoutFeaturesResponse({ capabilities: {
+        serverIdentity: { serverIdentityId: HOME_IDENTITY_ID },
+    } });
     if (!tryWriteServerEnabledBitInPlace(features, 'sharing.session', true)) {
         throw new Error('The sharing.session feature bit could not be written by its own writer');
     }
@@ -106,10 +118,37 @@ async function addResponsibilityHome(): Promise<string> {
     primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
 
     const { storage } = await import('@/sync/domains/state/storage');
-    const scope = { serverId, accountId: ACCOUNT_ID };
-    await storage.getState().activateSettingsScope(scope, []);
-    storage.getState().activateProfileScope(scope, []);
-    storage.getState().activateSessionLocalStateScope(scope);
+    const { getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
+    const profile = getServerProfileById(serverId);
+    const home = profile ? harness.findByServerUrl(profile.serverUrl) : null;
+    if (!home?.accountId || !home.token) throw new Error('Responsibility fixture Home has no signed-in Account');
+    const restoredAccount = await restoreServerAccountForTest({
+        serverUrl: home.serverUrl,
+        serverIdentityId: HOME_IDENTITY_ID,
+        accountId: home.accountId,
+        credentials: { token: home.token },
+        request: async (input, init) => {
+            const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+            const method = (init?.method ?? 'GET').toUpperCase();
+            if (method === 'GET' && path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (method === 'GET' && path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (method === 'GET' && path === '/v2/cursor') return Response.json(CurrentCursorResponseSchema.parse({ cursor: 0, changesFloor: 0 }));
+            if (method === 'GET' && path === '/v1/account/project-rows/list') return Response.json(createPlainProjectAccountRowListFixture());
+            if (method === 'GET' && ['/v1/machines', '/v1/artifacts', '/v1/kv'].includes(path)) return Response.json([]);
+            const bootstrapResponse = createEmptyAccountBootstrapHttpResponse(path, init);
+            return bootstrapResponse ?? harness.request(input, init);
+        },
+    });
+    serverId = restoredAccount.serverId;
+    primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
+    disposeRestoredAccount = () => restoredAccount.dispose();
+    harness.answer(serverId, RESPONSIBILITY_SET_PATH, { body: SetSessionResponsibilityResponseSchema.parse({
+                changed: true,
+                responsibleAccountId: 'account-bob',
+                responsibleAccount: summary('account-bob', 'Bob', 'bob'),
+                autoFollowed: false,
+            }) });
+    await harness.requireUiApproval(serverId, 'session.responsibility.set');
     // The Home's listing of this Session, written through the exact-Home list
     // row owner the Session cache uses (`concurrentSessionCache`).
     storage.getState().applyServerScopedSessionListRows(serverId, [createSessionListRenderableSessionFixture({
@@ -147,8 +186,8 @@ async function renderAssignment(serverId: string) {
         </>;
     }
     const screen = await renderScreen(<Mounted />, {
-        createNodeMock: (element: React.ReactElement) => (
-            (element.props as Readonly<{ testID?: string }>).testID === 'session-responsibility-row' ? rowNode : null
+        createNodeMock: (element) => (
+            element.props.testID === 'session-responsibility-row' ? rowNode : null
         ),
     });
     const { storage } = await import('@/sync/domains/state/storage');
@@ -157,31 +196,46 @@ async function renderAssignment(serverId: string) {
         rows: storage.getState().sessionListRowsByServerId,
         requests: harness.requests.map((request) => request.path),
     })).toBe('editable'));
+    // A runner-owned timeout can preempt the waiting assertion. Preserve the
+    // deciding Account/Artifact phase without logging credentials or bodies.
     return { screen, rowNode, controller: () => latest! };
 }
 
 /** The one approval the Home persisted for this assignment, decoded as stored. */
-function storedApproval(serverId: string): Readonly<{ id: string; request: Record<string, unknown> }> {
+async function storedApproval(serverId: string, controller: () => ReturnType<typeof UseController>): Promise<Readonly<{ id: string; request: Record<string, unknown> }>> {
+    await waitForHomeGovernance(() => expect(controller().pendingApproval ?? controller().failure).not.toBeNull());
     const rows = harness.artifacts(serverId).list();
-    if (rows.length !== 1) throw new Error(`expected_one_approval_artifact:${rows.length}`);
+    expect(rows, JSON.stringify({ failure: controller().failure, pending: controller().pending,
+        requests: harness.requests.map(request => request.path) })).toHaveLength(1);
     return { id: rows[0]!.id, request: JSON.parse(harness.artifacts(serverId).readPlainBody(rows[0]!.id)!) };
 }
 
-describe('responsibility assignment awaiting its default confirmation', () => {
+describe('responsibility assignment awaiting its required confirmation', () => {
     beforeEach(async () => {
         await harness.reset();
+
+
+
         routerPush.mockReset();
         layout.tablet = true;
     });
 
-    afterEach(() => standardCleanup());
+    afterEach(async () => {
+        await standardCleanup();
+        await disposeRestoredAccount?.();
+        disposeRestoredAccount = null;
+    });
 
     it.each([['compact', false], ['anchored', true]] as const)('returns from the %s picker to an accessible approval and settles once', async (_host, tablet) => {
         layout.tablet = tablet;
         const serverId = await addResponsibilityHome();
         const { screen, rowNode, controller } = await renderAssignment(serverId);
 
-        await screen.pressByTestIdAsync('session-responsibility-row');
+        if (tablet) {
+            await screen.pressByTestIdAsync('session-responsibility-row');
+        } else {
+            act(() => { screen.pressByTestId('session-responsibility-row'); });
+        }
         const choice = 'session-responsibility-picker.list:root:option:session-responsibility:account:account-bob';
         await waitForHomeGovernance(() => expect(screen.findByTestId(choice)).not.toBeNull());
         if (tablet) {
@@ -190,7 +244,7 @@ describe('responsibility assignment awaiting its default confirmation', () => {
             expect(screen.findHostByTestId('responsibility-main')!.props.pointerEvents).toBe('none');
         }
         await screen.pressByTestIdAsync(choice);
-        const approval = storedApproval(serverId);
+        const approval = await storedApproval(serverId, controller);
         expect(approval.request).toMatchObject({
             status: 'open',
             actionId: 'session.responsibility.set',
@@ -250,7 +304,7 @@ describe('responsibility assignment awaiting its default confirmation', () => {
         await act(async () => { await controller().loadCandidates(); });
         expect(controller().candidates.candidates.map(candidate => candidate.accountId)).toEqual(['account-bob']);
         await act(async () => { expect(await controller().setResponsibleAccount('account-bob')).toBe(false); });
-        const approval = storedApproval(serverId);
+        const approval = await storedApproval(serverId, controller);
         harness.answer(serverId, RESPONSIBILITY_SET_PATH, { dispatchThenFail: true });
         harness.answer(serverId, `/v2/sessions/${SESSION_ID}?accessProjectionVersion=1`, { status, body: { error: code } });
         await decideApprovalAsInbox(serverId, approval.id, 'approve');
@@ -290,7 +344,7 @@ describe('responsibility assignment awaiting its default confirmation', () => {
         const { screen, controller } = await renderAssignment(serverId);
 
         await act(async () => { expect(await controller().setResponsibleAccount('account-bob')).toBe(false); });
-        const approval = storedApproval(serverId);
+        const approval = await storedApproval(serverId, controller);
         await waitForHomeGovernance(() => expect(controller().pendingApproval).not.toBeNull());
 
         await expect(decideApprovalAsInbox(serverId, approval.id, 'reject')).resolves.toMatchObject({ ok: true });

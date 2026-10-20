@@ -2,17 +2,26 @@ import React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createPlainAccountEncryptionCurrentnessFixture, createRootLayoutFeaturesResponse, pressTestInstanceAsync, renderScreen as renderCanonicalScreen, standardCleanup } from '@/dev/testkit';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { SessionCurrentProjectionRecordV1Schema, SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema } from '@happier-dev/protocol';
-import { createModelBackedSessionItemTestComponent } from './sessionItemRowViewModelTestFixture';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
-import { SessionListSelectionProvider, createSessionListSelectionStore } from './selection/SessionListSelectionContext';
 import { SESSION_ACTION_RENAME_ID } from '@/components/sessions/actions/sessionActionIds';
 
+
+
+import { AccountProfileSchema } from '@happier-dev/protocol';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+
+
+
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+
+
+
+vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
+    const { createFrontDoorActionExecuteForVitest } = await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary');
+    return { ...original, createFrontDoorActionExecute: createFrontDoorActionExecuteForVitest(original) };
+});
 
 const modalPromptSpy = vi.fn(async () => 'Renamed Session');
 const modalShowSpy = vi.fn(() => 'fork-strategy-modal');
@@ -83,6 +92,14 @@ installSessionShellCommonModuleMocks({
 vi.doUnmock('@/sync/domains/state/storage');
 vi.doUnmock('@/hooks/session/useDraft');
 vi.doUnmock('@/agents/registry/registryUiBehavior');
+// Install platform/router options before any renderer or selection consumer can
+// cache the common helper's default web boundary.
+const { createPlainAccountEncryptionCurrentnessFixture, createRootLayoutFeaturesResponse, pressTestInstanceAsync, renderScreen: renderCanonicalScreen, standardCleanup } = await import('@/dev/testkit');
+const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+const { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+const { createModelBackedSessionItemTestComponent } = await import('./sessionItemRowViewModelTestFixture');
+const { SessionListSelectionProvider, createSessionListSelectionStore } = await import('./selection/SessionListSelectionContext');
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
 const { storage } = await import('@/sync/domains/state/storage');
@@ -124,11 +141,16 @@ function hasCopyDebugInformationMenuItem(items: unknown): boolean {
 
 describe('SessionItem context menu press suppression', () => {
     beforeEach(async () => {
+
+
         previousStorageState = storage.getState();
         metadataRequests.length = 0;
         wireSession = undefined;
         account = await restoreServerAccountForTest({ serverUrl: 'https://server_a', accountId: 'row-account', request: async (input, init) => {
             const url = new URL(String(input));
+
+
+                if (url.pathname === '/v1/account/profile') return Response.json(AccountProfileSchema.parse({ id: 'row-account' }));
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             if (url.pathname === '/v1/features' || url.pathname === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
@@ -161,8 +183,11 @@ describe('SessionItem context menu press suppression', () => {
                 }
                 return Response.json({ session: wireSession });
             }
-            return Response.json({}, { status: 404 });
+            const bootstrapResponse = createEmptyAccountBootstrapHttpResponse(url.pathname, init);
+                if (bootstrapResponse) return bootstrapResponse;
+                return Response.json({}, { status: 404 });
         } });
+        await vi.waitFor(() => expect(storage.getState().profile.id).toBe('row-account'));
         storage.setState({ sessions: {}, sessionListRowsByServerId: {}, ordinarySessionListMembershipByServerId: {} });
     });
     afterEach(async () => {
@@ -207,7 +232,7 @@ describe('SessionItem context menu press suppression', () => {
         expect(closedMenus[0].props.open).toBe(false);
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <SessionItem
                     session={session}
                     serverId="server_a"
@@ -369,7 +394,7 @@ describe('SessionItem context menu press suppression', () => {
         );
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <SessionItem
                     session={session}
                     selected={false}
@@ -478,7 +503,7 @@ describe('SessionItem context menu press suppression', () => {
         });
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <SessionItem
                     session={session}
                     serverId="server_a"
@@ -615,14 +640,13 @@ describe('SessionItem context menu press suppression', () => {
             serverId: account.home.id,
             metadata: {
                 name: 'Old Session',
-                serverId: 'server_a',
                 path: '/repo',
                 host: 'devbox',
             },
         });
         storage.getState().applySessions([session]);
         wireSession = SessionCurrentProjectionRecordV1Schema.parse({ ...session,
-            metadataLayoutVersion: 0, metadata: JSON.stringify(session.metadata), agentState: null, ownerMetadata: null,
+            metadataLayoutVersion: 0, metadata: JSON.stringify(session.metadata), agentState: null,
             effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: session.access!.capabilities },
             responsibleAccountId: null, responsibleAccount: null, share: null, archivedAt: null,
             dataEncryptionKey: null, pendingCount: 0, pendingVersion: 0,
@@ -640,7 +664,7 @@ describe('SessionItem context menu press suppression', () => {
                 compact={false}
                 nativeContextMenuOpen={true}
                 onNativeContextMenuOpenChange={onNativeContextMenuOpenChange}
-                serverId="server_a"
+                serverId={account.home.id}
             />,
         );
 

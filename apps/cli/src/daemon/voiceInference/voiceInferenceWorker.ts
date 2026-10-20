@@ -83,6 +83,7 @@ export async function startVoiceInferenceWorker(params?: Readonly<{
     getDiagnostics: _getDiagnostics,
     setDiagnostics: _setDiagnostics,
     runExclusive: _runExclusive,
+    runWithModelLease: _runWithModelLease,
     runLifecycleExclusive: _runLifecycleExclusive,
     warmRuntimeForPack: _warmRuntimeForPack,
     ...publicLifecycle

@@ -10,19 +10,6 @@ import {
     type ComposerKeyboardLayout,
 } from './index';
 
-vi.mock('react-native-reanimated', async () => {
-    const React = await import('react');
-    return {
-        __esModule: true,
-        default: {
-            View: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-                React.createElement('AnimatedView', props, props.children),
-        },
-        useAnimatedStyle: (factory: () => unknown) => factory(),
-        Easing: { bezier: () => (value: number) => value, linear: (value: number) => value },
-    };
-});
-
 function isSharedValueUpdater<T>(value: T | ((current: T) => T)): value is (current: T) => T {
     return typeof value === 'function';
 }

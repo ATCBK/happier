@@ -1,22 +1,22 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ReviewAssumptionSchema } from '@happier-dev/protocol/reviews/ReviewAssumption';
 import { ReviewFindingSchema } from '@happier-dev/protocol/reviews/ReviewFinding';
 import { ReviewQuestionSchema } from '@happier-dev/protocol/reviews/ReviewQuestion';
 import { ExecutionRunStructuredRunRefSchema } from '@happier-dev/protocol/messages/structured/executionRunStructuredRunRef';
 
-export const ReviewFollowUpIntentInputSchema = z.object({
+export const ReviewFollowUpIntentInputSchema = z.looseObject({
   kind: z.literal('review_follow_up.v1'),
   parentRunRef: ExecutionRunStructuredRunRefSchema,
-  threadId: z.string().min(1),
-  findingIds: z.array(z.string().min(1)).default([]),
-  replyToQuestionId: z.string().min(1).optional(),
-  messageMarkdown: z.string().min(1),
-  summary: z.string().min(1),
-  overviewMarkdown: z.string().min(1),
-  findings: z.array(ReviewFindingSchema).default([]),
-  questions: z.array(ReviewQuestionSchema).default([]),
-  assumptions: z.array(ReviewAssumptionSchema).default([]),
-}).passthrough();
+  threadId: z.string().check(z.minLength(1)),
+  findingIds: z._default(z.array(z.string().check(z.minLength(1))), []),
+  replyToQuestionId: z.optional(z.string().check(z.minLength(1))),
+  messageMarkdown: z.string().check(z.minLength(1)),
+  summary: z.string().check(z.minLength(1)),
+  overviewMarkdown: z.string().check(z.minLength(1)),
+  findings: z._default(z.array(ReviewFindingSchema), []),
+  questions: z._default(z.array(ReviewQuestionSchema), []),
+  assumptions: z._default(z.array(ReviewAssumptionSchema), []),
+});
 
 export type ReviewFollowUpIntentInput = z.infer<typeof ReviewFollowUpIntentInputSchema>;

@@ -180,7 +180,7 @@ export type MachineStorageActionInputById = {
         scanId?: string | undefined;
         view?: {
             tab: 'old' | 'folders' | 'large' | 'insights' | 'find';
-            depth: 1 | 3 | 2;
+            depth: 1 | 2 | 3;
             nodeId?: string | undefined;
             sort?: {
                 by: 'size' | 'items' | 'name' | 'changed' | 'since';
@@ -190,7 +190,7 @@ export type MachineStorageActionInputById = {
             pageSize?: number | undefined;
             minBytes?: number | undefined;
             olderThanDays?: number | undefined;
-            olderThanMonths?: 3 | 6 | 12 | undefined;
+            olderThanMonths?: 6 | 3 | 12 | undefined;
             query?: {
                 name?: string | undefined;
                 kind?: 'file' | 'folder' | 'package' | undefined;
@@ -426,7 +426,7 @@ export type MachineStorageActionResultById = {
             itemId: string;
             kind: 'category-item' | 'worktree' | 'suggestion' | 'disk-node';
             title: string;
-            evidence: string[];
+            evidence: ('unknown' | 'directory_permission_unavailable' | 'managed_acp_install' | 'runner_snapshot_root' | 'managed_cache_root' | 'connected_service_home' | 'execution_run_isolation_owner' | 'execution_run_isolation_facts_unavailable' | 'happier_temporary_directory' | 'temporary_lifecycle_owner' | 'temporary_lifecycle_facts_unavailable' | 'voice_model_pack_install_record' | 'model_pack_facts_unavailable' | 'browser_recording_owner' | 'recording_expired' | 'happier_trash_root' | 'happier_data_remainder' | 'managed_session_directory_record' | 'managed_session_directory_record_unavailable' | 'session_workspace_upload' | 'worktree_parent' | 'registration_unavailable' | 'scm_orphan_back_reference' | 'scm_registered_worktree' | 'nested_worktree_kept' | 'nested_worktrees_children_first' | 'log_file_modified_time' | 'trusted_disk_index' | 'scm_ignored' | 'browser_profile_cache' | 'unused_after_policy' | 'repository_not_in_use' | 'verified_cache_location' | 'empty_folder_relisted' | 'trash_entry' | `recognizer:${string}` | `manifest:${string}`)[];
             path: string;
             size: {
                 allocatedBytes: number;
@@ -459,7 +459,7 @@ export type MachineStorageActionResultById = {
             itemId: string;
             kind: 'category-item' | 'worktree' | 'suggestion' | 'disk-node';
             title: string;
-            evidence: string[];
+            evidence: ('unknown' | 'directory_permission_unavailable' | 'managed_acp_install' | 'runner_snapshot_root' | 'managed_cache_root' | 'connected_service_home' | 'execution_run_isolation_owner' | 'execution_run_isolation_facts_unavailable' | 'happier_temporary_directory' | 'temporary_lifecycle_owner' | 'temporary_lifecycle_facts_unavailable' | 'voice_model_pack_install_record' | 'model_pack_facts_unavailable' | 'browser_recording_owner' | 'recording_expired' | 'happier_trash_root' | 'happier_data_remainder' | 'managed_session_directory_record' | 'managed_session_directory_record_unavailable' | 'session_workspace_upload' | 'worktree_parent' | 'registration_unavailable' | 'scm_orphan_back_reference' | 'scm_registered_worktree' | 'nested_worktree_kept' | 'nested_worktrees_children_first' | 'log_file_modified_time' | 'trusted_disk_index' | 'scm_ignored' | 'browser_profile_cache' | 'unused_after_policy' | 'repository_not_in_use' | 'verified_cache_location' | 'empty_folder_relisted' | 'trash_entry' | `recognizer:${string}` | `manifest:${string}`)[];
             path: string;
             size: {
                 allocatedBytes: number;
@@ -1114,7 +1114,7 @@ export type MachineStorageActionResultById = {
             itemId: string;
             kind: 'category-item' | 'worktree' | 'suggestion' | 'disk-node';
             title: string;
-            evidence: string[];
+            evidence: ('unknown' | 'directory_permission_unavailable' | 'managed_acp_install' | 'runner_snapshot_root' | 'managed_cache_root' | 'connected_service_home' | 'execution_run_isolation_owner' | 'execution_run_isolation_facts_unavailable' | 'happier_temporary_directory' | 'temporary_lifecycle_owner' | 'temporary_lifecycle_facts_unavailable' | 'voice_model_pack_install_record' | 'model_pack_facts_unavailable' | 'browser_recording_owner' | 'recording_expired' | 'happier_trash_root' | 'happier_data_remainder' | 'managed_session_directory_record' | 'managed_session_directory_record_unavailable' | 'session_workspace_upload' | 'worktree_parent' | 'registration_unavailable' | 'scm_orphan_back_reference' | 'scm_registered_worktree' | 'nested_worktree_kept' | 'nested_worktrees_children_first' | 'log_file_modified_time' | 'trusted_disk_index' | 'scm_ignored' | 'browser_profile_cache' | 'unused_after_policy' | 'repository_not_in_use' | 'verified_cache_location' | 'empty_folder_relisted' | 'trash_entry' | `recognizer:${string}` | `manifest:${string}`)[];
             path: string;
             size: {
                 allocatedBytes: number;
@@ -1211,7 +1211,7 @@ export type MachineStorageActionResultById = {
             itemId: string;
             kind: 'category-item' | 'worktree' | 'suggestion' | 'disk-node';
             title: string;
-            evidence: string[];
+            evidence: ('unknown' | 'directory_permission_unavailable' | 'managed_acp_install' | 'runner_snapshot_root' | 'managed_cache_root' | 'connected_service_home' | 'execution_run_isolation_owner' | 'execution_run_isolation_facts_unavailable' | 'happier_temporary_directory' | 'temporary_lifecycle_owner' | 'temporary_lifecycle_facts_unavailable' | 'voice_model_pack_install_record' | 'model_pack_facts_unavailable' | 'browser_recording_owner' | 'recording_expired' | 'happier_trash_root' | 'happier_data_remainder' | 'managed_session_directory_record' | 'managed_session_directory_record_unavailable' | 'session_workspace_upload' | 'worktree_parent' | 'registration_unavailable' | 'scm_orphan_back_reference' | 'scm_registered_worktree' | 'nested_worktree_kept' | 'nested_worktrees_children_first' | 'log_file_modified_time' | 'trusted_disk_index' | 'scm_ignored' | 'browser_profile_cache' | 'unused_after_policy' | 'repository_not_in_use' | 'verified_cache_location' | 'empty_folder_relisted' | 'trash_entry' | `recognizer:${string}` | `manifest:${string}`)[];
             path: string;
             size: {
                 allocatedBytes: number;
@@ -1305,7 +1305,7 @@ export type MachineStorageActionResultById = {
             itemId: string;
             kind: 'category-item' | 'worktree' | 'suggestion' | 'disk-node';
             title: string;
-            evidence: string[];
+            evidence: ('unknown' | 'directory_permission_unavailable' | 'managed_acp_install' | 'runner_snapshot_root' | 'managed_cache_root' | 'connected_service_home' | 'execution_run_isolation_owner' | 'execution_run_isolation_facts_unavailable' | 'happier_temporary_directory' | 'temporary_lifecycle_owner' | 'temporary_lifecycle_facts_unavailable' | 'voice_model_pack_install_record' | 'model_pack_facts_unavailable' | 'browser_recording_owner' | 'recording_expired' | 'happier_trash_root' | 'happier_data_remainder' | 'managed_session_directory_record' | 'managed_session_directory_record_unavailable' | 'session_workspace_upload' | 'worktree_parent' | 'registration_unavailable' | 'scm_orphan_back_reference' | 'scm_registered_worktree' | 'nested_worktree_kept' | 'nested_worktrees_children_first' | 'log_file_modified_time' | 'trusted_disk_index' | 'scm_ignored' | 'browser_profile_cache' | 'unused_after_policy' | 'repository_not_in_use' | 'verified_cache_location' | 'empty_folder_relisted' | 'trash_entry' | `recognizer:${string}` | `manifest:${string}`)[];
             path: string;
             size: {
                 allocatedBytes: number;

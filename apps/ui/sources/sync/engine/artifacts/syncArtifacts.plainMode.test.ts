@@ -198,18 +198,19 @@ describe('syncArtifacts plaintext account storage', () => {
         ]);
     });
 
-    it('hydrates Launch Profile document bodies through the existing mode-aware Artifact sync owner', async () => {
+    it('leaves Launch Profile bodies to their scoped catalog owner', async () => {
         const full = { ...buildPlainArtifact(),
             header: encodePlainArtifactStoredContent({ kind: 'launch-profile.v1', title: 'Shared', name: 'Shared', profileId: 'shared' }),
             body: encodePlainArtifactStoredContent({ body: '{"kind":"launch-profile.v1"}' }),
         };
         const { body: _body, ...listRow } = full;
         mocks.fetchArtifacts.mockResolvedValueOnce([listRow]);
-        mocks.fetchArtifact.mockResolvedValueOnce(full);
         const applied: DecryptedArtifact[][] = [];
         await fetchAndApplyArtifactsList({ credentials: { token: 'token-only' }, request: httpRequest, encryption: null,
             artifactDataKeys: new Map(), applyArtifacts: (rows) => applied.push(rows) });
-        expect(applied.at(-1)?.[0]).toMatchObject({ id: full.id, isDecrypted: true, body: '{"kind":"launch-profile.v1"}' });
+        expect(applied.at(-1)?.[0]).toMatchObject({ id: full.id, isDecrypted: true });
+        expect(applied.at(-1)?.[0]?.body).toBeUndefined();
+        expect(mocks.fetchArtifact).not.toHaveBeenCalled();
     });
 
     it('enriches open usage notice headers with exact-read privacy and body before Inbox admission', async () => {

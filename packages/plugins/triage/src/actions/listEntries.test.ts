@@ -1,4 +1,4 @@
-import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { PluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import type { PluginAccountCollectionDefinition } from '@happier-dev/plugin-sdk/collections';
 import {
     TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1,
@@ -10,6 +10,8 @@ import { AgentRuntimeJsonValueV1Schema } from '@happier-dev/protocol';
 import { describe, expect, it, vi } from 'vitest';
 
 import { MAX_TRIAGE_LIST_WINDOW_ROWS_V1 } from '../projection/listWindow.js';
+import { createTriageListWindowStore } from '../projection/listWindowStore.js';
+import { readTriageListFailureNotice, resolveTriageListShellState } from '../ui/shell/windowState.js';
 import { CORPUS_SOURCE_INSTANCES_COLLECTION_ID, CORPUS_SOURCE_INSTANCE_LIFECYCLE } from '../corpus/collections/ids.js';
 import { toCorpusStoredValue } from '../corpus/collections/rowCodec.js';
 import type { CorpusSourceInstanceRowV1 } from '../corpus/collections/rows.js';
@@ -24,6 +26,7 @@ import {
 } from './listEntries.js';
 import {
     MAX_TRIAGE_LIST_SOURCE_BATCH_V1,
+    TriageListEntriesResultV1Schema,
     type TriageListEntriesInputV1,
     type TriageListEntriesResultV1,
 } from './listEntriesProtocol.js';
@@ -84,10 +87,13 @@ describe('the aggregate list Action handler', () => {
         const observed: unknown[] = [];
         let disposedObservations = 0;
         const dispatched: unknown[] = [];
+        let scanFailure: unknown;
+        const warn = vi.fn();
 
         const context = {
             signal: new AbortController().signal,
             services: {
+                logger: { warn },
                 storage: {
                     account: {
                         collection: (definition: PluginAccountCollectionDefinition) => (
@@ -109,6 +115,7 @@ describe('the aggregate list Action handler', () => {
                 actions: {
                     executeAdmittedTargetedOperation: async (operation: unknown): Promise<TriageScanResultV1> => {
                         dispatched.push(operation);
+                        if (scanFailure) throw scanFailure;
                         return {
                             kind: 'complete',
                             observations: [{
@@ -154,6 +161,49 @@ describe('the aggregate list Action handler', () => {
         }]);
         expect(result.window.rows.map((row) => row.entryRef.entryId)).toEqual(['17']);
         expect(result.window.coverage).toBe('complete');
+
+        // Real handler -> strict wire consumer -> mounted store -> existing failure notice.
+        // The source id is deliberately external; no bundled-plugin path may be required.
+        scanFailure = new PluginError({
+            code: 'plugin_action_caller_unavailable', retryable: false,
+            message: 'private provider message', details: { credential: 'private provider data' },
+        });
+        let listReadFailure: unknown;
+        const store = createTriageListWindowStore({
+            readEntries: async input => {
+                if (listReadFailure) throw listReadFailure;
+                return TriageListEntriesResultV1Schema.parse(
+                    await createTriageListEntriesActionHandler()(input, context),
+                );
+            },
+            nowMs: () => 1000,
+        });
+        await store.refresh('view');
+        const snapshot = store.getSnapshot();
+        expect(snapshot.window?.lanes[0]?.health).toEqual({
+            kind: 'unavailable', error: { code: 'plugin_action_caller_unavailable', retryable: false },
+        });
+        expect(snapshot.unreadableSources?.[0]).toMatchObject({
+            code: 'plugin_action_caller_unavailable', retryable: false,
+        });
+        const state = resolveTriageListShellState(snapshot);
+        expect(state.kind).toBe('window');
+        if (state.kind !== 'window' || !state.failure) throw new Error('Expected named source failure');
+        expect(readTriageListFailureNotice(state.failure).description).toContain('plugin_action_caller_unavailable');
+        expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+            sourceInstanceId: INSTANCE_ID, code: 'plugin_action_caller_unavailable', retryable: false,
+        }));
+        expect(JSON.stringify([snapshot, warn.mock.calls])).not.toContain('private provider');
+        // A later transport refusal must not keep diagnosing the earlier source scan.
+        listReadFailure = new PluginError({ code: 'transport_unavailable', retryable: true });
+        await store.refresh('manual');
+        expect(store.getSnapshot().unreadableSources?.[0]?.code).not.toBe('plugin_action_caller_unavailable');
+        listReadFailure = undefined;
+        scanFailure = undefined;
+        await store.refresh('manual');
+        expect(store.getSnapshot().unreadableSources).toBeUndefined();
+        expect(store.getSnapshot().window?.coverage).toBe('complete');
+        store.dispose();
     });
 });
 
@@ -608,14 +658,14 @@ describe('the aggregate list continuation set', () => {
         expect(result.window.coverage).toBe('partial');
     });
 
-    it('resumes each named lane at its own frontier and starts the rest at the first page', async () => {
+    it('resumes each named lane and starts other explicitly selected lanes at their first page', async () => {
         const { collections, control } = createTestkitCorpusCollections();
         const [first, second, third] = seedInstances(control, 3);
         const seen = new Map<string, unknown>();
 
         await listTriageEntries({
             v: 1,
-            sources: { kind: 'allConfigured' },
+            sources: { kind: 'selected', sourceInstanceIds: [first, second, third] },
             limit: 10,
             order: 'newest',
             resume: [

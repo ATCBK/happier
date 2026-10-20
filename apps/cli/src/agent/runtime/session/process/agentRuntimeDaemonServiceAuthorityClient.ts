@@ -6,13 +6,14 @@ import {
   AgentRuntimeDaemonServiceResponseV1Schema,
   type AgentRuntimeDaemonServiceRequestV1,
   type AgentRuntimeDaemonServiceResponseV1,
+  type RunnerDaemonPluginServicesPreparationCauseV1,
 } from './agentRuntimeDaemonServiceProtocol';
 import type {
   AgentRuntimeDaemonModelTransitionAuthorizationResultV1,
   AgentRuntimeDaemonTurnContributionsResultV1,
 } from './agentRuntimeRunnerProtocol';
 import { createProviderErrorV1, ProviderErrorCodeV1Schema } from '@happier-dev/protocol/providers/errors';
-import type { SessionInputAdmissionResultV1 } from '@happier-dev/protocol';
+import type { SessionInputEnqueueResultV1 } from '@happier-dev/protocol';
 import { TeamCredentialErrorCodeV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import {
   readAgentRuntimeDaemonServiceAuthority,
@@ -32,8 +33,7 @@ import {
 import { PluginError } from '@happier-dev/plugin-sdk';
 import { TeamCredentialDirectMaterialOperationError } from '@/daemon/connectedServices/directMaterial/teamCredentialDirectMaterialClient';
 import { isProvenPreDispatchConnectionFailure } from '@/api/client/classifyServerEndpointError';
-
-const DEFAULT_AGENT_RUNTIME_DAEMON_SERVICE_TIMEOUT_MS = 300_000;
+import { readMcpRequestAuthDiagnosticCode } from '@/mcp/runtime/mcpRequestAuth';
 
 export const RUNNER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_TRANSITION_CODE =
   'runner_agent_runtime_daemon_service_authority_transition';
@@ -59,24 +59,26 @@ export function isCurrentRunnerAgentRuntimeDaemonServiceAuthorityTransition(
       === RUNNER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_TRANSITION_CODE;
 }
 
-function unavailableResponse(): AgentRuntimeDaemonServiceResponseV1 {
+function unavailableResponse(cause?: RunnerDaemonPluginServicesPreparationCauseV1): AgentRuntimeDaemonServiceResponseV1 {
   return {
     ok: false,
     error: {
       code: NATIVE_AGENT_SESSION_EFFECT_AUTHORITY_UNAVAILABLE_CODE,
       message:
         'Native Agent privileged effect authority is unavailable before dispatch',
+      ...(cause ? { cause } : {}),
     },
   };
 }
 
-function unknownOutcomeResponse(): AgentRuntimeDaemonServiceResponseV1 {
+function unknownOutcomeResponse(cause?: RunnerDaemonPluginServicesPreparationCauseV1): AgentRuntimeDaemonServiceResponseV1 {
   return {
     ok: false,
     error: {
       code: NATIVE_AGENT_SESSION_EFFECT_OUTCOME_UNKNOWN_CODE,
       message:
         'Native Agent privileged effect outcome is unknown after dispatch',
+      ...(cause ? { cause } : {}),
     },
   };
 }
@@ -329,7 +331,7 @@ export async function admitCurrentRunnerSessionInput(
     timeoutMs?: number | null;
     signal?: AbortSignal;
   }>,
-): Promise<SessionInputAdmissionResultV1> {
+): Promise<SessionInputEnqueueResultV1> {
   if (input.signal?.aborted) {
     return { status: 'rejected', code: 'session_input_cancelled' };
   }
@@ -438,6 +440,14 @@ export async function authorizeCurrentAgentRuntimeDaemonModelTransition(
   ) {
     return response.result.authorization;
   }
+  if (!response.ok) {
+    const providerCode = ProviderErrorCodeV1Schema.safeParse(response.error.code);
+    if (providerCode.success) {
+      throw Object.assign(new Error(providerCode.data), createProviderErrorV1(providerCode.data, {
+        connectionId: input.selection.providerConnectionId,
+      }));
+    }
+  }
   throw createNativeAgentSessionEffectBoundaryError(
     'authority_unavailable_before_effect',
   );
@@ -527,6 +537,18 @@ export async function dispatchCurrentRunnerDaemonPluginService(
     return decodeRunnerDaemonPluginServiceWireValueV1(
       response.result.value,
     );
+  }
+  if (
+    !response.ok
+    && response.error.code === NATIVE_AGENT_SESSION_EFFECT_OUTCOME_UNKNOWN_CODE
+    && response.error.cause
+  ) {
+    throw new PluginError({
+      code: response.error.code,
+      message: response.error.message,
+      retryable: false,
+      details: { cause: response.error.cause },
+    });
   }
   if (
     !response.ok
@@ -738,9 +760,10 @@ export async function dispatchCurrentAgentRuntimeDaemonServiceRequest(
     return unavailableResponse();
   }
 
-  const timeoutMs = input.timeoutMs === undefined
-    ? DEFAULT_AGENT_RUNTIME_DAEMON_SERVICE_TIMEOUT_MS
-    : input.timeoutMs;
+  // Native launch preparation can await Project setup, approval and requester
+  // admission. Its containing operation owns cancellation and any deadline;
+  // elapsed transport time does not establish a failed privileged effect.
+  const timeoutMs = input.timeoutMs ?? null;
   const timeoutSignal =
     timeoutMs === null ? null : AbortSignal.timeout(timeoutMs);
   const signal = input.signal && timeoutSignal
@@ -775,20 +798,23 @@ export async function dispatchCurrentAgentRuntimeDaemonServiceRequest(
       // run, so the only honest classification is outcome unknown — never a
       // proven pre-dispatch miss. Every other 503 shape (the daemon-quiescing
       // refusal or an unparseable body) was refused before dispatch.
+      let settledCandidate: unknown = null;
+      try { settledCandidate = rawBody.trim() ? JSON.parse(rawBody) as unknown : null; }
+      catch { /* Malformed control responses retain the existing classification. */ }
+      const settled = AgentRuntimeDaemonServiceResponseV1Schema.safeParse(settledCandidate);
+      // The existing private cause carries code-only evidence for MCP omission
+      // logs. It never changes whether a privileged effect was attempted.
+      let cause: RunnerDaemonPluginServicesPreparationCauseV1 | undefined;
+      if (request.operation.kind === 'mcp.request_auth.open') {
+        let code: ReturnType<typeof readMcpRequestAuthDiagnosticCode> = 'mcp_request_auth_unavailable';
+        if (settled.success && !settled.data.ok) code = readMcpRequestAuthDiagnosticCode(settled.data.error);
+        else if (settledCandidate && typeof settledCandidate === 'object' && 'errorCode' in settledCandidate
+          && settledCandidate.errorCode === 'daemon_shutting_down') code = 'daemon_shutting_down';
+        cause = { code, stage: 'dispatch' };
+      }
       if (response.status === 503) {
-        let settledCandidate: unknown = null;
-        try {
-          settledCandidate = rawBody.trim()
-            ? JSON.parse(rawBody) as unknown
-            : null;
-        } catch {
-          settledCandidate = null;
-        }
-        const settled = settledCandidate === null
-          ? null
-          : AgentRuntimeDaemonServiceResponseV1Schema.safeParse(settledCandidate);
         if (
-          settled?.success
+          settled.success
           && settled.data.ok === false
           && (
             settled.data.error.code
@@ -797,10 +823,10 @@ export async function dispatchCurrentAgentRuntimeDaemonServiceRequest(
               === 'agent_runtime_daemon_service_admission_invalid'
           )
         ) {
-          return unknownOutcomeResponse();
+          return unknownOutcomeResponse(cause);
         }
       }
-      return unavailableResponse();
+      return unavailableResponse(cause);
     }
     const parsedBody = rawBody.trim()
       ? JSON.parse(rawBody) as unknown
@@ -836,6 +862,8 @@ export async function dispatchCurrentAgentRuntimeDaemonServiceRequest(
     if (isProvenPreDispatchConnectionFailure(error)) {
       return unavailableResponse();
     }
-    return unknownOutcomeResponse();
+    return unknownOutcomeResponse(timeoutSignal?.aborted
+      ? { code: 'TimeoutError', stage: 'dispatch' }
+      : undefined);
   }
 }

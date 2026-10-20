@@ -1,17 +1,23 @@
 import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-    renderScreen,
-    standardCleanup,
-} from '@/dev/testkit';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { storage } from '@/sync/domains/state/storageStore';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { profileDefaults } from '@/sync/domains/profiles/profile';
 import {
     installSessionSettingsEntryModuleMocks,
     resetSessionSettingsEntryState,
     sessionSettingsEntryState,
 } from './sessionSettingsEntryTestHelpers';
-import { createUseSettingMutableMockFromReader } from '@/dev/testkit/mocks/storage';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+const initialStorage = storage.getState();
+
+async function renderScreen(element: React.ReactElement) {
+    storage.setState({ settings: settingsParse({}), profile: { ...profileDefaults, id: 'p' } });
+    const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
+    return renderScreen(element);
+}
 
 let windowDimensions: { width: number; height: number } = { width: 1200, height: 800 };
 // What the page asked the modal boundary to show.
@@ -40,30 +46,6 @@ installSessionSettingsEntryModuleMocks({
                 scale: 2,
                 fontScale: 1,
             }),
-        });
-    },
-    storageModule: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                useSettingMutable: createUseSettingMutableMockFromReader(() => [false, vi.fn()]),
-                useProfile: () => ({
-                    id: 'p',
-                    timestamp: 0,
-                    name: null,
-                    firstName: null,
-                    lastName: null,
-                    username: null,
-                    avatar: null,
-                    linkedProviders: [],
-                    connectedServices: [],
-                    connectedServicesV2: [],
-                    connectedServiceCredentialRevisionsV1: [],
-                    connectedAccountsV4: [],
-                    connectedAccountGroupsV4: [],
-                }),
-            },
         });
     },
 });
@@ -138,6 +120,7 @@ describe('Settings → Account (grouping)', () => {
         resetSessionSettingsEntryState();
         shownModals.length = 0;
         standardCleanup();
+        storage.setState(initialStorage, true);
     });
 
     it('shows add-phone and link-new-device actions on desktop web when camera APIs are available', async () => {
@@ -147,7 +130,6 @@ describe('Settings → Account (grouping)', () => {
             userAgent: 'Mozilla/5.0 (X11; Linux x86_64)',
             mediaDevices: { getUserMedia: async () => ({}) },
         } as any);
-        vi.resetModules();
         const { default: AccountScreen } = await import('@/app/(app)/settings/account');
         const screen = await renderScreen(<AccountScreen />);
         expect(screen.findByTestId('settings-account-add-your-phone')).toBeTruthy();
@@ -170,7 +152,6 @@ describe('Settings → Account (grouping)', () => {
     it('hides "Add your phone" on phone-sized web but keeps "Add another Home" without a camera', async () => {
         windowDimensions = { width: 360, height: 800 };
         vi.stubGlobal('navigator', { maxTouchPoints: 5, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0)' } as any);
-        vi.resetModules();
 
         const { default: AccountScreen } = await import('@/app/(app)/settings/account');
         const screen = await renderScreen(<AccountScreen />);
@@ -182,7 +163,6 @@ describe('Settings → Account (grouping)', () => {
     it('keeps "Add another Home" reachable on camera-unavailable desktop web and gates only "Link new device"', async () => {
         windowDimensions = { width: 1200, height: 800 };
         vi.stubGlobal('navigator', { maxTouchPoints: 0, userAgent: 'Mozilla/5.0 (X11; Linux x86_64)' } as any);
-        vi.resetModules();
 
         const { default: AccountScreen } = await import('@/app/(app)/settings/account');
         const screen = await renderScreen(<AccountScreen />);
@@ -205,7 +185,6 @@ describe('Settings → Account (grouping)', () => {
             userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
             mediaDevices: { getUserMedia: async () => ({}) },
         } as any);
-        vi.resetModules();
 
         const { default: AccountScreen } = await import('@/app/(app)/settings/account');
         const screen = await renderScreen(<AccountScreen />);
@@ -217,8 +196,7 @@ describe('Settings → Account (grouping)', () => {
     it('shows "Add your phone" on desktop-sized web even when the viewport is narrow', async () => {
         windowDimensions = { width: 480, height: 700 };
         vi.stubGlobal('navigator', { maxTouchPoints: 0, userAgent: 'Mozilla/5.0 (X11; Linux x86_64)' } as any);
-        vi.stubGlobal('window', { matchMedia: () => ({ matches: false }) } as any);
-        vi.resetModules();
+        Object.defineProperty(window, 'matchMedia', { configurable: true, value: () => ({ matches: false }) });
 
         const { default: AccountScreen } = await import('@/app/(app)/settings/account');
         const screen = await renderScreen(<AccountScreen />);

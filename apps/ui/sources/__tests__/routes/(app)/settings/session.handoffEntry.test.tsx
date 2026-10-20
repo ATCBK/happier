@@ -11,7 +11,6 @@ import {
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 installSessionSettingsEntryModuleMocks({
-    useDeviceType: 'tablet',
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({

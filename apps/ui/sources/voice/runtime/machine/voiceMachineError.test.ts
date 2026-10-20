@@ -233,6 +233,15 @@ describe('classifyRealtimeProviderFailure', () => {
 });
 
 describe('classifyVoiceMachineError', () => {
+    it('maps a typed signed-out Agent refusal to authentication recovery', () => {
+        expect(classifyVoiceMachineError({ code: 'agent_signed_out' }, {
+            kind: 'provider_error', reason: 'agent_signed_out',
+        })).toMatchObject({
+            kind: 'authentication_required', reason: 'agent_signed_out',
+            recoveryAction: 'connect_agent', presentation: 'error', recoverable: false,
+        });
+    });
+
     it('maps abort errors to turn_aborted', () => {
         const aborted = Object.assign(new Error('turn_aborted'), { name: 'AbortError' });
         expect(classifyVoiceMachineError(aborted)).toMatchObject({ kind: 'turn_aborted' });

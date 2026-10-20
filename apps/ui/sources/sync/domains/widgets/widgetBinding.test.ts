@@ -87,7 +87,7 @@ describe('configured widget executable target', () => {
         .toMatchObject({ status: 'denied', reasonCode: 'widget_target_identity_mismatch' });
       const checkout = { serverId, id: 'checkout', machineId: 'machine', rootPath: '/repo', createdAtMs: 0 };
       expect(resolveConfiguredWidgetTarget({ ...input, definition: { kind: 'builtin', id: 'project_code' }, targetKind: 'app',
-        descriptor: readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'project_code' })!, providedContext: { checkout: [checkout] },
+        descriptor: readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'project_code' })!, workspaceRefs: [checkout], providedContext: { checkout: [checkout] },
         resolvedInput: { status: 'ready', input: { checkout: { ...checkout, serverId: serverIdentityId } } } }))
         .toMatchObject({ status: 'ready', target: { kind: 'workspace', checkout } });
     } finally { await connection.dispose(); }
@@ -108,7 +108,7 @@ describe('configured widget executable target', () => {
     const checkout = { serverId: 'home', id: 'checkout', machineId: 'machine', rootPath: '/repo', createdAtMs: 0 };
     const base = { scope: { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } },
       targetKind: 'app' as const, appRuntime: { ...runtime('home', 'machine'), serverId: null },
-      providedContext: { checkout: [checkout] }, readSession: () => { throw new Error('No Session for a checkout'); } };
+      providedContext: { checkout: [checkout] }, workspaceRefs: [checkout], readSession: () => { throw new Error('No Session for a checkout'); } };
     expect(resolveConfiguredWidgetTarget({ ...base, definition: { kind: 'builtin', id: 'project_code' },
       descriptor: readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'project_code' })!, resolvedInput: { status: 'ready', input: { checkout } } }))
       .toMatchObject({ status: 'ready', target: { kind: 'workspace', checkout } });
@@ -123,12 +123,12 @@ describe('configured widget executable target', () => {
       resolvedInput: { status: 'ready', input: { source } }, readSession: () => ({ status: 'denied', reasonCode: 'widget_session_access_denied' }) }))
       .toMatchObject({ status: 'denied', reasonCode: 'widget_session_access_denied' });
   });
-  it('admits only the exact context checkout without borrowing AppShell or inventing a Session', () => {
+  it('admits the exact authorized checkout on every host without borrowing AppShell or trusting page values', () => {
     const checkout = { serverId: 'home', id: 'checkout', machineId: 'machine', rootPath: '/repo', createdAtMs: 0,
       repositoryIdentity: { kind: 'github' as const, deployment: 'https://github.com', repository: 'owner/repo' } };
     const base = { scope: { serverId: 'home', accountId: 'viewer', owner: { kind: 'project' as const, projectId: 'stable-project' } },
       definition: { kind: 'builtin' as const, id: 'project_code' }, targetKind: 'app' as const,
-      descriptor: readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'project_code' })!, providedContext: { checkout: [checkout], project: [] },
+      descriptor: readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'project_code' })!, providedContext: { checkout: [checkout], project: [] }, workspaceRefs: [checkout],
       resolvedInput: { status: 'ready' as const, input: { checkout } }, appRuntime: runtime('home', 'machine'),
       readSession: () => { throw new Error('Project widgets must not request a Session'); } };
     expect(resolveConfiguredWidgetTarget(base)).toMatchObject({ status: 'ready', target: { kind: 'workspace', checkout, workspace: {
@@ -141,7 +141,14 @@ describe('configured widget executable target', () => {
       .toMatchObject({ status: 'denied', reasonCode: 'widget_target_scope_mismatch' });
     expect(resolveConfiguredWidgetTarget({ ...base, resolvedInput: { status: 'ready', input: { checkout: { ...checkout, rootPath: '/repo/' } } } }))
       .toMatchObject({ status: 'ready', target: { kind: 'workspace', workspace: { rootPath: '/repo' } } });
-    expect(resolveConfiguredWidgetTarget({ ...base, providedContext: { checkout: [checkout, checkout], project: [] } }))
+    for (const owner of [{ kind: 'home' }, { kind: 'workBoard', boardId: 'board' },
+      { kind: 'pluginArea', pluginId: 'acme.page', pageId: 'page', area: 'main' }, { kind: 'corePage', pageId: 'usage', area: 'main' }] as const) {
+      expect(resolveConfiguredWidgetTarget({ ...base, scope: { ...base.scope, owner }, providedContext: {} }))
+        .toMatchObject({ status: 'ready', target: { kind: 'workspace', checkout } });
+    }
+    expect(resolveConfiguredWidgetTarget({ ...base, workspaceRefs: [] }))
+      .toMatchObject({ status: 'denied', reasonCode: 'widget_target_identity_mismatch' });
+    expect(resolveConfiguredWidgetTarget({ ...base, workspaceRefs: [checkout, checkout] }))
       .toMatchObject({ status: 'denied', reasonCode: 'widget_target_identity_mismatch' });
   });
   it('admits the saved inputless constant on every host without borrowing a machine scope', () => {

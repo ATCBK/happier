@@ -8,6 +8,7 @@ import { disconnectActiveServerConnection } from '@/sync/runtime/orchestration/c
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { removeProviderMachineStateV1 } from '@happier-dev/protocol/providers/settings/operationsV1';
 import { DEFAULT_PROVIDER_SETTINGS_V1, ProviderSettingsV1Schema } from '@happier-dev/protocol/providers/settings/v1';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { AUTHORING_MEMORY_ROUTE_V1 } from '@happier-dev/protocol/account/authoringMemory';
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
@@ -25,6 +26,7 @@ beforeAll(loadSyncSingletonForTests);
 let disposeHome: (() => Promise<void>) | undefined;
 const revokedSecretRef = formatSharedSavedSecretRefV1('secret-a');
 const keptSecretRef = formatSharedSavedSecretRefV1('secret-b');
+const providerConnectionId = ProviderConnectionIdSchema.parse('pc_a');
 afterEach(async () => {
     resetProviderCatalogEngineForTests();
     resetProviderCatalogSnapshotsForTests();
@@ -141,8 +143,8 @@ describe('machine Account operations through captured HTTP', () => {
         expect(state.catalog.connections[0]?.endpointOverridesByMachineId).toEqual({
             kept: [{ endpointTemplateId: 'chat', baseUrl: 'http://127.0.0.1:2234/v1' }],
         });
-        expect(state.catalog.secretBindingsByConnectionId.pc_a?.byMachineId).toEqual({ kept: { apiKey: keptSecretRef } });
-        expect(state.catalog.manualModelsByConnectionId.pc_a).toEqual([{ id: 'kept/model', addedAt: 1 }]);
+        expect(state.catalog.secretBindingsByConnectionId[providerConnectionId]?.byMachineId).toEqual({ kept: { apiKey: keptSecretRef } });
+        expect(state.catalog.manualModelsByConnectionId[providerConnectionId]).toEqual([{ id: 'kept/model', addedAt: 1 }]);
         expect(state.mutations).toHaveLength(1);
         expect(state.mutations[0]).toMatchObject({ expectedRevision: 1, referencedSavedSecretIds: [keptSecretRef],
             savedSecretRevisions: [{ resourceId: 'secret-b', expectedRevision: 8 }] });
@@ -169,11 +171,11 @@ describe('machine Account operations through captured HTTP', () => {
             providerCleanup: 'pending', retryable: true });
         expect(state.catalog.machineGrants.map(grant => grant.machineId)).toEqual(['revoked', 'kept']);
         expect(state.mutations).toHaveLength(1);
-        state.catalog = { ...state.catalog, manualModelsByConnectionId: { pc_a: [{ id: 'concurrent/model', addedAt: 9 }] } };
+        state.catalog = { ...state.catalog, manualModelsByConnectionId: { [providerConnectionId]: [{ id: 'concurrent/model', addedAt: 9 }] } };
         state.revision = 2;
         state.writeBehavior = 'updated';
         await expect(cleanup(scope)).resolves.toEqual({ ok: true, machineAlreadyRevoked: true, providerCleanup: 'complete' });
-        expect(state.catalog.manualModelsByConnectionId.pc_a).toEqual([{ id: 'concurrent/model', addedAt: 9 }]);
+        expect(state.catalog.manualModelsByConnectionId[providerConnectionId]).toEqual([{ id: 'concurrent/model', addedAt: 9 }]);
         expect(state.mutations.at(-1)?.expectedRevision).toBe(2);
         expect(state.settingsWrites).toBe(0);
     });

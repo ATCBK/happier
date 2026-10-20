@@ -3,10 +3,10 @@ import { ACCOUNT_DISPLAY_PROFILE_SELECT, projectAccountDisplayProfileV1 } from "
 import { listSessionTeamCredentialBindingConsequencesInTx } from "@/app/teams/credentials/sessionBinding";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import { projectSessionEffectiveAccessV1, resolveSessionAccessForOperation } from "./sessionAccess";
-import type { SessionAccessAuthentication } from "./sessionAccessAuthentication";
-import { enforceTeamExternalSharingPolicyInTx, isSubjectExternalToTeamInTx } from "./sessionAccessExternalSharingPolicy";
-import { resolveSessionAccessGrantSubjectInTx } from "./sessionAccessGrantEligibility";
-import { teamPolicyStillRequiresGrant } from "./sessionAccessGrantService";
+import { backgroundDeliveryAuthentication, type SessionAccessAuthentication } from "./sessionAccessAuthentication";
+import { classifySubjectsExternalToTeamInTx, enforceTeamExternalSharingPolicyInTx } from "./sessionAccessExternalSharingPolicy";
+import { resolveSessionAccessGrantSubjectsInTx } from "./sessionAccessGrantEligibility";
+import { teamsPolicyStillRequireGrants } from "./sessionAccessGrantService";
 
 /** What the grant inspector answers: the roster projection, or a typed refusal. */
 type SessionAccessGrantInspectionResult =
@@ -21,6 +21,7 @@ type SessionAccessGrantInspectionResult =
 export async function inspectSessionAccessGrants(params: Readonly<{
     actorAccountId: string;
     sessionId: string;
+    recipientAccountId?: string;
     authentication: SessionAccessAuthentication;
 }>): Promise<SessionAccessGrantInspectionResult> {
     return await readSnapshotWithCurrentAdmission<SessionAccessGrantInspectionResult>(async (tx): Promise<SessionAccessGrantInspectionResult> => {
@@ -36,6 +37,9 @@ export async function inspectSessionAccessGrants(params: Readonly<{
             return { ok: false, error: "session_access_authentication_unavailable" };
         }
         if (admission.status !== "allowed" || !admission.access.capabilities.readTranscript) {
+            return { ok: false, error: "session_access_forbidden" };
+        }
+        if (params.recipientAccountId !== undefined && !admission.access.capabilities.manageAccess) {
             return { ok: false, error: "session_access_forbidden" };
         }
         const session = await tx.session.findUniqueOrThrow({
@@ -81,23 +85,26 @@ export async function inspectSessionAccessGrants(params: Readonly<{
         const externalSharing = primaryTeamId === null ? null : await enforceTeamExternalSharingPolicyInTx(tx, {
             actorAccountId: params.actorAccountId, primaryTeamId, authentication: params.authentication,
         });
+        const subjects = facts.map((row) => row.grant.subject);
+        const eligibilityBySubject = await resolveSessionAccessGrantSubjectsInTx(tx, {
+            actorAccountId: params.actorAccountId, sessionOwnerAccountId: session.accountId,
+            subjects, hasExistingGrant: true,
+        });
+        const requiredTeamIds = await teamsPolicyStillRequireGrants(tx, facts.flatMap((row) =>
+            row.grant.subject.kind === "team" && "requiredByTeamPolicy" in row.grant && row.grant.requiredByTeamPolicy === true
+                ? [row.grant.subject.teamId] : []));
+        const externalBySubject = externalSharing === null || primaryTeamId === null ? []
+            : await classifySubjectsExternalToTeamInTx(tx, { primaryTeamId, subjects });
         const grants: SessionAccessGrantRowV1[] = [];
-        for (const row of facts) {
+        for (const [index, row] of facts.entries()) {
             // "May this be changed?" and "may this be removed?" are two questions
             // the one subject resolver already answers in its two modes. The grant
             // writer admits removing a retained grant whose subject has since been
             // archived or deactivated, so the affordance asks it the same way
-            // instead of deriving removal from the set verdict. Removal mode only
-            // skips checks the set mode also applies, so an accepted set verdict
-            // needs no second read.
-            const eligibility = await resolveSessionAccessGrantSubjectInTx(tx, { actorAccountId: params.actorAccountId, sessionOwnerAccountId: session.accountId, subject: row.grant.subject, hasExistingGrant: true });
-            const removalEligibility = eligibility.ok
-                ? eligibility
-                : await resolveSessionAccessGrantSubjectInTx(tx, { actorAccountId: params.actorAccountId, sessionOwnerAccountId: session.accountId, subject: row.grant.subject, hasExistingGrant: true, removingExistingGrant: true });
-            const required = row.grant.subject.kind === "team" && "requiredByTeamPolicy" in row.grant && row.grant.requiredByTeamPolicy === true
-                && await teamPolicyStillRequiresGrant(tx, row.grant.subject.teamId);
-            const external = externalSharing !== null && primaryTeamId !== null
-                && await isSubjectExternalToTeamInTx(tx, { primaryTeamId, subject: row.grant.subject });
+            // from the same batched facts, without re-reading inactive subjects.
+            const { eligibility, removalEligibility } = eligibilityBySubject[index]!;
+            const required = row.grant.subject.kind === "team" && requiredTeamIds.has(row.grant.subject.teamId);
+            const external = externalBySubject[index] === true;
             grants.push({ ...row, allowedTransitions: projectSessionAccessGrantTransitionsV1({
                 current: { accessLevel: row.grant.accessLevel, canApprovePermissions: row.grant.canApprovePermissions },
                 canDelegate: admission.access.capabilities.managePermissionDelegation,
@@ -129,6 +136,20 @@ export async function inspectSessionAccessGrants(params: Readonly<{
         if (current.status !== "allowed"
             || (captured.value.effectiveAccess.capabilities.managePermissionDelegation
                 && !current.access.capabilities.managePermissionDelegation)) return { ok: false, error: "session_access_forbidden" };
-        return { ...captured, value: { ...captured.value, effectiveAccess: projectSessionEffectiveAccessV1(current.access) } };
+        const value = { ...captured.value, effectiveAccess: projectSessionEffectiveAccessV1(current.access) };
+        if (params.recipientAccountId === undefined) return { ok: true, value };
+        if (value.visibility !== "complete") return { ok: false, error: "session_access_forbidden" };
+        // This host-only preview has no verified credential evidence from the
+        // recipient. The current access owner must qualify their grants itself;
+        // the manager's authentication cannot stand in for the recipient's.
+        const recipient = await resolveSessionAccessForOperation(tx, {
+            accountId: params.recipientAccountId,
+            sessionId: params.sessionId,
+            authentication: backgroundDeliveryAuthentication(),
+        });
+        return { ok: true, value: { ...value, recipientAccess: {
+            accountId: params.recipientAccountId,
+            effectiveAccess: recipient.status === "allowed" ? projectSessionEffectiveAccessV1(recipient.access) : null,
+        } } };
     });
 }

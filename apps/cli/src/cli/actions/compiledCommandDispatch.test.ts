@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { getActionSpec } from '@happier-dev/protocol';
 import { encodeTerminalStreamBytes, TerminalStreamReadOkResponseSchema } from '@happier-dev/protocol/terminal/stream';
 import { captureConsoleJsonOutput, captureConsoleText } from '@/testkit/logger/captureOutput';
+import { seedTestServerProfile } from '@/testkit/serverProfiles';
+import { getServerProfile } from '@/server/serverProfiles';
 
 import { actionCliCommandPattern, compileActionCliCommands, findCompiledActionCliCommand, listCompiledActionCliCommands } from './compiledCommands';
 import { renderActionCliCommandHelp } from './commandHelp';
@@ -10,6 +12,14 @@ import { runCompiledActionCliCommand } from './executeCommand';
 import { resolveCompiledActionCliCompletionCandidates } from './commandCompletion';
 
 type Execution = Readonly<{ actionId: string; input: unknown }>;
+
+beforeAll(async () => {
+  await seedTestServerProfile({ id: 'cloud', homeId: 'srv_action_cloud_fixture', serverUrl: 'https://cloud.example.test' });
+  await seedTestServerProfile({ id: 'selected-home-profile', homeId: 'srv_selected_home_server_identity',
+    serverUrl: 'https://selected-home.example.test', localServerUrl: 'http://127.0.0.1:43100',
+    webappUrl: 'https://app.selected-home.example.test' });
+  await seedTestServerProfile({ id: 'home-b', homeId: 'srv_server_identity_b', serverUrl: 'https://home-b.example.test' });
+});
 
 function runState(runId: string, status: 'running' | 'succeeded') {
   return {
@@ -113,6 +123,23 @@ function withoutLocalId(execution: Execution): Execution {
 }
 
 describe('compiled Action CLI command dispatch', () => {
+  it.each([
+    ['skills', 'skills.rules.set', 'skillId'],
+    ['mcp', 'mcp.rules.set', 'serverId'],
+  ] as const)('dispatches %s replacement rules through both declared paths', async (family, actionId, idField) => {
+    const output = captureConsoleText();
+    const rules = [{ target: { t: 'allMachines' }, enabled: true },
+      { target: { t: 'machine', machineId: 'machine-1' }, agentId: 'codex', enabled: false }];
+    try {
+      for (const path of [[family, 'rules', 'set'], [family, 'rules']]) {
+        for (const replacement of [rules, []]) {
+          expect(await run(path, ['--item-ids', 'item-1', '--rules-json', JSON.stringify(replacement)]))
+            .toEqual([{ actionId, input: { items: [{ [idField]: 'item-1' }],
+              change: { kind: 'replace', rules: replacement } } }]);
+        }
+      }
+    } finally { output.restore(); }
+  });
   it('dispatches session capability changes through compiled Actions', async () => {
     const output = captureConsoleText();
     try {
@@ -187,24 +214,7 @@ describe('compiled Action CLI command dispatch', () => {
     const createExecutorFn = vi.fn(() => ({ resolveSessionTarget: vi.fn(), execute }));
     const readCredentialsFn = vi.fn();
     const readCredentialsForServerIdFn = vi.fn(async () => ({ token: 'selected-home-token' }));
-    const getServerProfileFn = vi.fn(async () => ({
-      id: 'selected-home-profile',
-      name: 'Selected Home',
-      serverUrl: 'https://selected-home.example.test',
-      localServerUrl: 'http://127.0.0.1:43100',
-      webappUrl: 'https://app.selected-home.example.test',
-      createdAt: 1,
-      updatedAt: 1,
-      lastUsedAt: 1,
-      homeConnectionDescriptorAuthority: 'exact' as const,
-      homeConnectionDescriptor: {
-        v: 1 as const,
-        homeServerIdentityId: 'selected-home-server-identity',
-        canonicalServerUrl: 'https://selected-home.example.test',
-        revision: 1,
-        endpoints: [{ kind: 'https' as const, url: 'https://selected-home.example.test' }],
-      },
-    }));
+    const getServerProfileFn = getServerProfile;
     const output = captureConsoleJsonOutput();
     try {
       await runCompiledActionCliCommand({
@@ -233,7 +243,7 @@ describe('compiled Action CLI command dispatch', () => {
       credentials: { token: 'selected-home-token' },
       serverId: 'selected-home-profile',
       serverApiUrl: 'http://127.0.0.1:43100',
-      serverIdentityId: 'selected-home-server-identity',
+      serverIdentityId: 'srv_selected_home_server_identity',
     }));
     expect(execute).toHaveBeenCalledWith(
       'identity.providers.list',
@@ -282,13 +292,7 @@ describe('compiled Action CLI command dispatch', () => {
         deps: {
           readCredentialsFn: vi.fn(async () => null),
           readCredentialsForServerIdFn: vi.fn(async () => ({ token: 'home-b-token' } as never)),
-          getServerProfileFn: vi.fn(async () => ({
-            id: 'home-b',
-            serverUrl: 'https://home-b.example.test',
-            localServerUrl: null,
-            homeConnectionDescriptorAuthority: 'exact',
-            homeConnectionDescriptor: { homeServerIdentityId: 'server-identity-b' },
-          } as never)),
+          getServerProfileFn: getServerProfile,
           createServerFeaturesSnapshotStoreFn: vi.fn(() => ({ refresh: vi.fn(async () => ({})) } as never)),
           createExecutorFn,
         },
@@ -300,7 +304,7 @@ describe('compiled Action CLI command dispatch', () => {
     expect(createExecutorFn).toHaveBeenCalledWith(expect.objectContaining({
       serverId: 'home-b',
       serverApiUrl: 'https://home-b.example.test',
-      serverIdentityId: 'server-identity-b',
+      serverIdentityId: 'srv_server_identity_b',
       credentials: expect.objectContaining({ token: 'home-b-token' }),
     }));
   });
@@ -361,13 +365,7 @@ describe('compiled Action CLI command dispatch', () => {
         deps: {
           readCredentialsFn,
           readCredentialsForServerIdFn,
-          getServerProfileFn: vi.fn(async () => ({
-            id: 'home-b',
-            serverUrl: 'https://home-b.example.test',
-            localServerUrl: null,
-            homeConnectionDescriptorAuthority: 'exact',
-            homeConnectionDescriptor: { homeServerIdentityId: 'server-identity-b' },
-          } as never)),
+          getServerProfileFn: getServerProfile,
           createServerFeaturesSnapshotStoreFn: vi.fn(() => ({ refresh: vi.fn(async () => ({})) } as never)),
           createExecutorFn,
         },
@@ -381,7 +379,7 @@ describe('compiled Action CLI command dispatch', () => {
     expect(createExecutorFn).toHaveBeenCalledWith(expect.objectContaining({
       serverId: 'home-b',
       serverApiUrl: 'https://home-b.example.test',
-      serverIdentityId: 'server-identity-b',
+      serverIdentityId: 'srv_server_identity_b',
     }));
     expect(execute).toHaveBeenCalledWith(
       actionId,
@@ -704,12 +702,15 @@ describe('compiled Action CLI command dispatch', () => {
 
   it('keeps --machine-id physical routing out of Action input', async () => {
     const { executions, deps } = harness();
+    const createExecutor = deps.createExecutorFn;
+    const execute = vi.fn(async (actionId: string, input: unknown, _context: unknown) => createExecutor().execute(actionId, input));
     await runCompiledActionCliCommand({
       command: commandFor(['session', 'send']),
       argv: ['session', 'send', 'session_1', 'Go.', '--machine-id', 'machine_7'],
-      deps: deps as never,
+      deps: { ...deps, createExecutorFn: () => ({ ...createExecutor(), execute }) } as never,
     });
     expect(executions[0]!.input).not.toHaveProperty('machineId');
+    expect(execute.mock.calls[0]?.[2]).not.toHaveProperty('externalActionTarget');
     expect(renderActionCliCommandHelp(commandFor(['session', 'send'])))
       .toContain('--machine-id <machineId>');
   });

@@ -35,7 +35,7 @@ async function toggleAccountEncryptionMode(params: Readonly<{
   await expect(params.page.getByTestId('settings-account-encryption-mode-switch')).toHaveCount(1, { timeout: 120_000 });
   const migrateOk = params.page.waitForResponse(
     (resp) =>
-      resp.url().endsWith('/v1/account/encryption/migrate') && resp.request().method() === 'POST' && resp.status() === 200,
+      new URL(resp.url()).pathname === '/v1/account/encryption/migrate' && resp.request().method() === 'POST' && resp.status() === 200,
     { timeout: 60_000 },
   );
   await params.page.getByTestId('settings-account-encryption-mode-switch').click();
@@ -61,7 +61,7 @@ async function createNewSessionDraft(params: Readonly<{
   const draftId = new URL(params.page.url()).searchParams.get('draftId');
   if (!draftId) throw new Error('new-session draft route did not establish a draftId');
   const mutation = params.page.waitForResponse(
-    (response) => response.url().endsWith('/v1/account/session-drafts/mutate')
+    (response) => new URL(response.url()).pathname === '/v1/account/session-drafts/mutate'
       && response.request().method() === 'POST'
       && response.status() === 200,
     { timeout: 60_000 },
@@ -93,7 +93,7 @@ async function createExistingSessionDraft(params: Readonly<{
   const composer = params.page.getByTestId('session-composer-input');
   await expect(composer).toBeVisible({ timeout: 60_000 });
   const mutation = params.page.waitForResponse(
-    (response) => response.url().endsWith('/v1/account/session-drafts/mutate')
+    (response) => new URL(response.url()).pathname === '/v1/account/session-drafts/mutate'
       && response.request().method() === 'POST'
       && response.status() === 200,
     { timeout: 60_000 },

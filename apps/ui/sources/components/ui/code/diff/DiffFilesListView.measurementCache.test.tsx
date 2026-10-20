@@ -102,8 +102,7 @@ describe('DiffFilesListView measurement-cache contract', () => {
             { key: 'k2', filePath: 'src/b.ts', unifiedDiff: 'diff\n', oldText: null, newText: null },
         ] as any;
 
-        let tree!: renderer.ReactTestRenderer;
-        tree = (await renderScreen(<DiffFilesListView
+        const screen = await renderScreen(<DiffFilesListView
                     files={files}
                     expandedKeys={new Set()}
                     onToggleExpanded={vi.fn()}
@@ -112,12 +111,11 @@ describe('DiffFilesListView measurement-cache contract', () => {
                     showLineNumbers={true}
                     showPrefix={true}
                     virtualizeFileList
-                />)).tree;
+                />);
 
         clearMeasurementCacheSpy.mockClear();
 
-        await act(async () => {
-            tree.update(
+        await screen.update(
                 <DiffFilesListView
                     files={files}
                     expandedKeys={new Set(['k1'])}
@@ -129,7 +127,6 @@ describe('DiffFilesListView measurement-cache contract', () => {
                     virtualizeFileList
                 />,
             );
-        });
 
         expect(clearMeasurementCacheSpy).toHaveBeenCalledTimes(0);
     });
@@ -143,8 +140,7 @@ describe('DiffFilesListView measurement-cache contract', () => {
         ] as any;
         const onToggleExpanded = vi.fn();
 
-        let tree!: renderer.ReactTestRenderer;
-        tree = (await renderScreen(<DiffFilesListView
+        const screen = await renderScreen(<DiffFilesListView
                     files={files}
                     expandedKeys={new Set()}
                     onToggleExpanded={onToggleExpanded}
@@ -153,15 +149,14 @@ describe('DiffFilesListView measurement-cache contract', () => {
                     showLineNumbers={true}
                     showPrefix={true}
                     virtualizeFileList
-                />)).tree;
+                />);
 
-        const beforeList = tree.root.findByType('LegendList' as any);
+        const beforeList = screen.tree.root.findByType('LegendList' as any);
         const renderItemBefore = beforeList.props.renderItem;
         const extraDataBefore = beforeList.props.extraData;
         const dataBefore = beforeList.props.data;
 
-        await act(async () => {
-            tree.update(
+        await screen.update(
                 <DiffFilesListView
                     files={files}
                     expandedKeys={new Set(['k1'])}
@@ -173,9 +168,8 @@ describe('DiffFilesListView measurement-cache contract', () => {
                     virtualizeFileList
                 />,
             );
-        });
 
-        const afterList = tree.root.findByType('LegendList' as any);
+        const afterList = screen.tree.root.findByType('LegendList' as any);
         expect(afterList.props.renderItem).toBe(renderItemBefore);
         expect(afterList.props.extraData).toBe(extraDataBefore);
         expect(afterList.props.data).not.toBe(dataBefore);

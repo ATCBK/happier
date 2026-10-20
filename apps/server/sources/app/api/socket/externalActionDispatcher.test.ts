@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { symbols, type DestinationStream } from 'pino';
 import { Server } from 'socket.io';
 import { API_TOKEN_FULL_GRANT_V1 } from "@happier-dev/protocol/auth/apiTokenGrant";
 
@@ -13,6 +14,8 @@ import {
     type ExternalActionRequestEnvelopeV1,
 } from "@happier-dev/protocol/actions";
 import { SOCKET_RPC_EVENTS } from "@happier-dev/protocol/socketRpc";
+import { logger } from '@/utils/logging/log';
+import { TransactionAcquisitionUnavailableError, TransactionConflictExhaustedError } from '@/storage/inTx';
 
 import {
     EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1,
@@ -75,6 +78,209 @@ function dispatchedResponse(value: unknown) {
 }
 
 describe("createExternalActionDaemonDispatcher", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    function capturePhaseRecords() {
+        const records: Record<string, unknown>[] = [];
+        // Capture the real logger's output boundary, retaining its serialization.
+        const stream = (logger as unknown as { [symbols.streamSym]: DestinationStream })[symbols.streamSym];
+        vi.spyOn(stream, 'write').mockImplementation((message) => {
+            records.push(JSON.parse(message));
+        });
+        return records;
+    }
+
+    it.each(['machine_resolution', 'daemon_forward'] as const)(
+        'witnesses %s without disclosing thrown content or changing placement failure', async (phase) => {
+            const records = capturePhaseRecords();
+            const error = new TypeError('private-input-marker private-account-marker private-envelope-marker');
+            error.name = 'private-error-name-marker';
+            const dispatch = createExternalActionDaemonDispatcher({
+                io: {} as never,
+                resolveMachine: async () => {
+                    if (phase === 'machine_resolution') throw error;
+                    return 'available';
+                },
+                forwardRpc: async () => { throw error; },
+            });
+
+            await expect(dispatch({ actionId: 'browser.diagnostics.snapshot', principal,
+                envelope: { v: 2, requestId: 'request-phase-witness',
+                    target: { kind: 'machine', machineId: 'machine-1' },
+                    payload: { t: 'encrypted', c: 'private-envelope-marker' } },
+            })).resolves.toEqual({ kind: 'placement_error', code: 'target_unavailable' });
+            const witnesses = records.filter((record) => record.msg === '[external-action-phase]');
+            expect(witnesses).toMatchObject([{ phase, machineId: 'machine-1', errorClass: 'TypeError',
+                requestId: 'request-phase-witness', refusalBranch: 'phase_exception',
+                message: 'Unexpected phase failure (details redacted)' }]);
+            expect(JSON.stringify(witnesses)).not.toContain('private-');
+        },
+    );
+
+    it.each([
+        ['database_connection_unavailable', new TransactionAcquisitionUnavailableError(new Error('private-db'))],
+        ['database_transaction_conflict_exhausted', new TransactionConflictExhaustedError(new Error('private-db'))],
+    ] as const)('projects exhausted database dispatch failure as %s', async (code, error) => {
+        const dispatch = createExternalActionDaemonDispatcher({
+            io: {} as never,
+            resolveMachine: async () => { throw error; },
+            forwardRpc: vi.fn(),
+        });
+
+        await expect(dispatch({
+            actionId: 'browser.diagnostics.snapshot',
+            principal,
+            envelope: { v: 1, requestId: 'request-db-failure',
+                target: { kind: 'machine', machineId: 'machine-1' }, input: {} },
+        })).resolves.toEqual({ kind: 'placement_error', code });
+    });
+
+    it('witnesses an unresolved Session placement with its caller request id', async () => {
+        const records = capturePhaseRecords();
+        const dispatch = createExternalActionDaemonDispatcher({
+            io: {} as never,
+            resolveSessionMachine: async () => null,
+            resolveMachine: async () => 'available',
+            forwardRpc: vi.fn(),
+        });
+
+        await expect(dispatch({
+            actionId: 'session.stop',
+            principal,
+            envelope: { v: 1, requestId: 'request-session-unresolved',
+                target: { kind: 'session', sessionId: 'session-1' }, input: {} },
+        })).resolves.toEqual({ kind: 'placement_error', code: 'target_unavailable' });
+        expect(records.filter((record) => record.msg === '[external-action-phase]')).toMatchObject([{
+            requestId: 'request-session-unresolved',
+            refusalBranch: 'session_machine_unresolved',
+        }]);
+    });
+
+    it.each([
+        ['not_owned', 'target_not_local', 'machine_not_owned'],
+        ['unavailable', 'target_unavailable', 'machine_unavailable'],
+        ['external_action_update_required', 'encrypted_action_unsupported', 'machine_external_action_update_required'],
+        ['session_input_update_required', 'session_input_target_update_required', 'machine_session_input_update_required'],
+    ] as const)('witnesses the %s Machine availability refusal', async (availability, code, refusalBranch) => {
+        const records = capturePhaseRecords();
+        const dispatch = createExternalActionDaemonDispatcher({
+            io: {} as never,
+            resolveMachine: async () => availability,
+            forwardRpc: vi.fn(),
+        });
+
+        await expect(dispatch({
+            actionId: availability === 'session_input_update_required' ? 'session.message.send' : 'session.spawn_new',
+            principal,
+            envelope: { v: 1, requestId: `request-${availability}`,
+                target: { kind: 'machine', machineId: 'machine-1' }, input: {} },
+        })).resolves.toEqual({ kind: 'placement_error', code });
+        expect(records.filter((record) => record.msg === '[external-action-phase]')).toMatchObject([{
+            requestId: `request-${availability}`,
+            refusalBranch,
+            availability,
+        }]);
+    });
+
+    it.each([
+        ['daemon_forward_not_ok', async () => ({ ok: false as const, error: 'private-transport-marker' })],
+        ['daemon_response_unparsable', async () => ({ ok: true as const, result: { private: 'response-marker' } })],
+    ] as const)('witnesses %s without logging transport material', async (refusalBranch, forwardRpc) => {
+        const records = capturePhaseRecords();
+        const dispatch = createExternalActionDaemonDispatcher({
+            io: {} as never,
+            resolveMachine: async () => 'available',
+            forwardRpc,
+        });
+
+        await expect(dispatch({
+            actionId: 'session.spawn_new',
+            principal,
+            envelope: { v: 1, requestId: `request-${refusalBranch}`,
+                target: { kind: 'machine', machineId: 'machine-1' }, input: {} },
+        })).resolves.toEqual({ kind: 'placement_error', code: 'target_unavailable' });
+        const witnesses = records.filter((record) => record.msg === '[external-action-phase]');
+        expect(witnesses).toMatchObject([{ requestId: `request-${refusalBranch}`, refusalBranch }]);
+        expect(JSON.stringify(witnesses)).not.toContain('private-');
+    });
+
+    it.each([
+        ['database_connection_unavailable', new TransactionAcquisitionUnavailableError(new Error('private-guard-db'))],
+        ['database_transaction_conflict_exhausted', new TransactionConflictExhaustedError(new Error('private-guard-db'))],
+    ] as const)('preserves %s from the exact-target currentness guard', async (code, error) => {
+        const records = capturePhaseRecords();
+        let resolution = 0;
+        const exactTarget = {
+            id: 'machine-socket',
+            data: {
+                clientType: 'machine-scoped',
+                machineId: 'machine-1',
+                verifiedMachineInstallationId: 'installation-1',
+            },
+            timeout: vi.fn(() => ({ emitWithAck: vi.fn() })),
+        };
+        const forwardRpc: ExternalActionForwardRpcCall = async (params) => {
+            const candidates = await params.targetGuard?.filterTargets([exactTarget] as never) ?? [];
+            return candidates.length === 0
+                ? { ok: false, error: 'private-guard-transport' }
+                : { ok: true, result: {} };
+        };
+        const dispatch = createExternalActionDaemonDispatcher({
+            io: {} as never,
+            resolveMachine: async () => {
+                resolution += 1;
+                if (resolution === 1) return 'available';
+                throw error;
+            },
+            forwardRpc,
+        });
+
+        await expect(dispatch({
+            actionId: 'session.spawn_new',
+            principal,
+            envelope: { v: 1, requestId: `request-guard-${code}`,
+                target: { kind: 'machine', machineId: 'machine-1' }, input: {} },
+        })).resolves.toEqual({ kind: 'placement_error', code });
+        const witnesses = records.filter((record) => record.msg === '[external-action-phase]');
+        expect(witnesses).toMatchObject([{
+            phase: 'target_currentness',
+            requestId: `request-guard-${code}`,
+            refusalBranch: 'phase_exception',
+        }]);
+        expect(JSON.stringify(witnesses)).not.toContain('private-');
+    });
+
+    it('witnesses only a correlated daemon encrypted-envelope rejection without exposing its envelope', async () => {
+        const records = capturePhaseRecords();
+        const dispatch = createExternalActionDaemonDispatcher({
+            io: {} as never,
+            resolveMachine: async () => 'available',
+            forwardRpc: async () => ({ ok: true, result: { kind: 'invalid_request',
+                errorCode: 'invalid_encrypted_envelope', requestId: 'request-daemon-admission' } }),
+        });
+        const request = { actionId: 'browser.diagnostics.snapshot', principal,
+            envelope: { v: 2 as const, requestId: 'request-daemon-admission',
+                target: { kind: 'machine' as const, machineId: 'machine-1' },
+                payload: { t: 'encrypted' as const, c: 'private-envelope-marker' } } };
+        await expect(dispatch(request)).resolves.toEqual({ kind: 'invalid_request',
+            errorCode: 'invalid_encrypted_envelope', requestId: 'request-daemon-admission' });
+        const witnesses = records.filter((record) => record.msg === '[external-action-phase]');
+        expect(witnesses).toMatchObject([{ phase: 'daemon_envelope_admission', machineId: 'machine-1',
+            errorClass: 'DaemonAdmissionError', message: 'invalid_encrypted_envelope',
+            refusalBranch: 'daemon_envelope_rejected', requestId: 'request-daemon-admission' }]);
+        expect(JSON.stringify(witnesses)).not.toContain('private-');
+        records.length = 0;
+        await expect(dispatch({ ...request, envelope: { ...request.envelope, requestId: 'different-request' } }))
+            .resolves.toEqual({ kind: 'submitted_unknown' });
+        expect(records.filter((record) => record.msg === '[external-action-phase]')).toEqual([]);
+
+        // A diagnostic destination failure must not replace the daemon's public refusal.
+        const stream = (logger as unknown as { [symbols.streamSym]: DestinationStream })[symbols.streamSym];
+        vi.spyOn(stream, 'write').mockImplementation(() => { throw new Error('private-log-sink-marker'); });
+        await expect(dispatch(request)).resolves.toEqual({ kind: 'invalid_request',
+            errorCode: 'invalid_encrypted_envelope', requestId: 'request-daemon-admission' });
+    });
+
     it("returns operation-scoped update required before sending an authorized invocation to an old daemon", async () => {
         const forwardRpc = vi.fn();
         const resolveMachine = vi.fn(async (input: Readonly<{
@@ -661,7 +867,7 @@ describe("createExternalActionDaemonDispatcher", () => {
         }));
     });
 
-    it("derives a Session target from the current Session publisher projection rather than a machine default", async () => {
+    it("derives a runtime-effect Session target from the current publisher rather than a machine default", async () => {
         const envelope: ExternalActionRequestEnvelopeV1 = {
             v: 1,
             target: { kind: "session", sessionId: "session-1" },
@@ -691,7 +897,7 @@ describe("createExternalActionDaemonDispatcher", () => {
         }));
         const forwardRpc = vi.fn(async () => ({
             ok: true as const,
-            result: relayResponse("session.message.send", envelope),
+            result: relayResponse("session.stop", envelope),
         }));
         const dispatch = createExternalActionDaemonDispatcher({
             io: io as never,
@@ -701,11 +907,11 @@ describe("createExternalActionDaemonDispatcher", () => {
         });
 
         const result = await dispatch({
-            actionId: "session.message.send",
+            actionId: "session.stop",
             envelope,
             principal,
         });
-        expect(result).toEqual(dispatchedResponse(response("session.message.send", envelope)));
+        expect(result).toEqual(dispatchedResponse(response("session.stop", envelope)));
 
         expect(resolveProjectedCurrentPublisher).toHaveBeenCalledWith({
             expectedAccountId: "account-1",
@@ -717,7 +923,7 @@ describe("createExternalActionDaemonDispatcher", () => {
         }));
     });
 
-    it("resolves a Session target hosted by a publisher that is not in the Account-wide room", async () => {
+    it("resolves a runtime effect hosted by a publisher outside the Account-wide room", async () => {
         const envelope: ExternalActionRequestEnvelopeV1 = {
             v: 1,
             target: { kind: "session", sessionId: "session-1" },
@@ -746,7 +952,7 @@ describe("createExternalActionDaemonDispatcher", () => {
         };
         const forwardRpc = vi.fn(async () => ({
             ok: true as const,
-            result: relayResponse("session.message.send", envelope),
+            result: relayResponse("session.stop", envelope),
         }));
         const dispatch = createExternalActionDaemonDispatcher({
             io: io as never,
@@ -761,11 +967,11 @@ describe("createExternalActionDaemonDispatcher", () => {
         });
 
         const result = await dispatch({
-            actionId: "session.message.send",
+            actionId: "session.stop",
             envelope,
             principal,
         });
-        expect(result).toEqual(dispatchedResponse(response("session.message.send", envelope)));
+        expect(result).toEqual(dispatchedResponse(response("session.stop", envelope)));
         expect(rooms).toEqual(["session:session-1:account-1"]);
         expect(forwardRpc).toHaveBeenCalledWith(expect.objectContaining({
             method: `runner-machine:${EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1}`,
@@ -822,6 +1028,7 @@ describe("createExternalActionDaemonDispatcher", () => {
     });
 
     it("forwards request cancellation only after the exact target socket is selected", async () => {
+        const records = capturePhaseRecords();
         const controller = new AbortController();
         const emit = vi.fn();
         const io = {
@@ -849,6 +1056,7 @@ describe("createExternalActionDaemonDispatcher", () => {
             actionId: "session.message.send",
             envelope: {
                 v: 1,
+                requestId: 'request-aborted',
                 target: { kind: "machine", machineId: "machine-1" },
                 input: {},
             },
@@ -862,6 +1070,10 @@ describe("createExternalActionDaemonDispatcher", () => {
         expect(emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.CANCEL, {
             requestId: expect.any(String),
         });
+        expect(records.filter((record) => record.msg === '[external-action-phase]')).toMatchObject([{
+            requestId: 'request-aborted',
+            refusalBranch: 'aborted',
+        }]);
     });
 
     it("preserves the daemon's authenticated V2 cancellation outcome after submission", async () => {
@@ -957,6 +1169,7 @@ describe("createExternalActionDaemonDispatcher", () => {
     });
 
     it("returns target_required when the server has no exact target", async () => {
+        const records = capturePhaseRecords();
         const forwardRpc = vi.fn();
         const dispatch = createExternalActionDaemonDispatcher({
             io: {} as never,
@@ -966,9 +1179,13 @@ describe("createExternalActionDaemonDispatcher", () => {
 
         await expect(dispatch({
             actionId: "session.spawn_new",
-            envelope: { v: 1, input: {} },
+            envelope: { v: 1, requestId: 'request-target-required', input: {} },
             principal,
         })).resolves.toEqual({ kind: "placement_error", code: "target_required" });
         expect(forwardRpc).not.toHaveBeenCalled();
+        expect(records.filter((record) => record.msg === '[external-action-phase]')).toMatchObject([{
+            requestId: 'request-target-required',
+            refusalBranch: 'target_required',
+        }]);
     });
 });

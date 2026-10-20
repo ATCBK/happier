@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { SessionHumanPresenceViewerV1Schema } from '@happier-dev/protocol/sessions';
 import { createSessionHumanPresenceStore } from './sessionHumanPresenceStore';
 
 const address = { serverId: 'home-a', sessionId: 'session-1' };
-const viewer = (accountId: string, typing = false) => ({
+const viewer = (accountId: string, typing = false) => SessionHumanPresenceViewerV1Schema.parse({
     account: { kind: 'account', accountId, firstName: accountId, lastName: null, username: null, avatarUrl: null },
     typing,
 });
@@ -56,15 +57,15 @@ describe('human presence observation store', () => {
     it('keeps the Session root and two discussions isolated through replacement and unavailable admission', () => {
         const store = createSessionHumanPresenceStore();
         const home = store.attachHome(address.serverId, 'self');
-        const discussionA = { ...address, discussionId: 'discussion-a' };
-        const discussionB = { ...address, discussionId: 'discussion-b' };
+        const discussionA = { serverId: address.serverId, discussionId: 'discussion-a' };
+        const discussionB = { serverId: address.serverId, discussionId: 'discussion-b' };
         home.beginDeclaration([address.sessionId], [
-            { sessionId: address.sessionId, discussionId: discussionA.discussionId },
-            { sessionId: address.sessionId, discussionId: discussionB.discussionId },
+            { discussionId: discussionA.discussionId },
+            { discussionId: discussionB.discussionId },
         ]);
         home.confirmDeclaration([address.sessionId], [
-            { sessionId: address.sessionId, discussionId: discussionA.discussionId },
-            { sessionId: address.sessionId, discussionId: discussionB.discussionId },
+            { discussionId: discussionA.discussionId },
+            { discussionId: discussionB.discussionId },
         ]);
         const notifications = { root: 0, discussionA: 0, discussionB: 0 };
         const unsubscribeRoot = store.subscribe(address, () => notifications.root++);
@@ -72,23 +73,23 @@ describe('human presence observation store', () => {
         const unsubscribeDiscussionB = store.subscribe(discussionB, () => notifications.discussionB++);
         home.receiveSnapshot(snapshot([viewer('root')]));
         expect(notifications).toEqual({ root: 1, discussionA: 0, discussionB: 0 });
-        home.receiveSnapshot({ ...snapshot([viewer('a')]), discussionId: discussionA.discussionId, observedAt: 101 });
+        home.receiveSnapshot({ v: 1, discussionId: discussionA.discussionId, observedAt: 101, viewers: [viewer('a')] });
         expect(notifications).toEqual({ root: 1, discussionA: 1, discussionB: 0 });
-        home.receiveSnapshot({ ...snapshot([viewer('b')]), discussionId: discussionB.discussionId, observedAt: 102 });
+        home.receiveSnapshot({ v: 1, discussionId: discussionB.discussionId, observedAt: 102, viewers: [viewer('b')] });
         expect(notifications).toEqual({ root: 1, discussionA: 1, discussionB: 1 });
 
         expect(store.read(address)).toMatchObject({ status: 'live', viewers: [viewer('root')] });
         expect(store.read(discussionA)).toMatchObject({ status: 'live', viewers: [viewer('a')] });
         expect(store.read(discussionB)).toMatchObject({ status: 'live', viewers: [viewer('b')] });
 
-        home.beginDeclaration([], [{ sessionId: address.sessionId, discussionId: discussionB.discussionId }]);
-        home.confirmDeclaration([], [{ sessionId: address.sessionId, discussionId: discussionB.discussionId }]);
+        home.beginDeclaration([], [{ discussionId: discussionB.discussionId }]);
+        home.confirmDeclaration([], [{ discussionId: discussionB.discussionId }]);
         expect(store.read(address)).toMatchObject({ status: 'unavailable', viewers: [] });
         expect(store.read(discussionA)).toMatchObject({ status: 'unavailable', viewers: [] });
         expect(store.read(discussionB)).toMatchObject({ status: 'stale', viewers: [viewer('b')] });
 
         home.receiveSnapshot(snapshot([viewer('must-not-leak')]));
-        home.receiveSnapshot({ ...snapshot([viewer('must-not-leak')]), discussionId: discussionA.discussionId });
+        home.receiveSnapshot({ v: 1, discussionId: discussionA.discussionId, observedAt: 103, viewers: [viewer('must-not-leak')] });
         expect(store.read(address).viewers).toEqual([]);
         expect(store.read(discussionA).viewers).toEqual([]);
         expect(store.read(discussionB).viewers).toEqual([viewer('b')]);
@@ -110,5 +111,26 @@ describe('human presence observation store', () => {
         expect(changes).toBe(0);
         home.setStatus('unsupported');
         expect(store.read(address)).toMatchObject({ status: 'unsupported', viewers: [] });
+    });
+
+    it('keeps a Discussion snapshot exclusive and scoped to its captured Home and Account', () => {
+        const store = createSessionHumanPresenceStore();
+        const target = { serverId: 'home-a', discussionId: 'same-id' };
+        const first = store.attachHome(target.serverId, 'account-a');
+        first.beginDeclaration([], [{ discussionId: target.discussionId }]);
+        first.confirmDeclaration([], [{ discussionId: target.discussionId }]);
+        first.receiveSnapshot({ v: 1, discussionId: target.discussionId, observedAt: 1, viewers: [viewer('peer-a')] });
+        const observation = store.read(target, 'account-a');
+        first.receiveSnapshot({ v: 1, sessionId: 'source', discussionId: target.discussionId, observedAt: 2, viewers: [] });
+        first.receiveSnapshot({ v: 1, sourceSessionId: 'source', discussionId: target.discussionId, observedAt: 2, viewers: [] });
+        expect(store.read(target, 'account-a')).toBe(observation);
+        expect(store.read({ ...target, serverId: 'home-b' })).toMatchObject({ status: 'unavailable', viewers: [] });
+        const next = store.attachHome(target.serverId, 'account-b');
+        next.beginDeclaration([], [{ discussionId: target.discussionId }]);
+        next.confirmDeclaration([], [{ discussionId: target.discussionId }]);
+        first.receiveSnapshot({ v: 1, discussionId: target.discussionId, observedAt: 3, viewers: [viewer('retired-peer')] });
+        next.receiveSnapshot({ v: 1, discussionId: target.discussionId, observedAt: 4, viewers: [viewer('peer-b')] });
+        expect(store.read(target, 'account-a')).toMatchObject({ status: 'unavailable', viewers: [] });
+        expect(store.read(target, 'account-b')).toMatchObject({ status: 'live', viewers: [viewer('peer-b')] });
     });
 });

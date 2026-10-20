@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { WebSocketServer } from 'ws';
 
-import type { JsonValue } from '@happier-dev/plugin-sdk';
+import { PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
 import type {
     ExecService,
     PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
@@ -17,7 +17,11 @@ import type {
 } from '@happier-dev/plugin-sdk/exec/protocol-clients';
 
 import { createCodexNativeAppServerClient } from './client';
+import { buildCodexAppServerConfigOverrides } from './config/overrides';
 import { createCodexAppServerRealtimeConversation } from './realtime';
+import { PLUGIN_MANIFEST } from '../../../manifest.js';
+
+type AgentNativeLaunchQualifier = NonNullable<NonNullable<Parameters<ExecService['spawn']>[1]>['nativeLaunch']>;
 
 function processResult(stdout: string, options?: Readonly<{
     exitCode?: number;
@@ -115,6 +119,48 @@ function createCapturingExec(
 }
 
 describe('createCodexAppServerClient', () => {
+    it('accepts confinement on the exact runtime selected by the managed install recipe', async () => {
+        const recipe = PLUGIN_MANIFEST.contributes.agents[0]?.cli.install.managed;
+        expect(recipe).toMatchObject({ kind: 'github_release_binary', releaseTag: 'rust-v0.162.1' });
+        const version = recipe && 'releaseTag' in recipe && typeof recipe.releaseTag === 'string'
+            ? recipe.releaseTag.replace(/^rust-v/u, '') : '';
+        const capture = createCapturingExec({
+            async request(method): Promise<JsonValue> {
+                if (method === 'initialize') return { userAgent: `happier_cli/${version} (fixture)` };
+                return { config: { mcp_servers: {}, features: { code_mode: { excluded_tool_namespaces: ['functions'] } } } };
+            },
+        }, processResult(JSON.stringify({ models: [{ slug: 'fixture', tool_mode: 'code_mode_only' }] })));
+        const client = await createCodexNativeAppServerClient({
+            exec: capture.exec, processEnv: {}, toolRestrictionRequired: true,
+            configOverrides: buildCodexAppServerConfigOverrides({}, { unlistedTools: 'deny', allowedTools: [] }),
+        });
+        await client.dispose();
+    });
+    it('preserves typed host native launch refusals when realtime is advertised', async () => {
+        const capture = createCapturingExec({}, processResult('realtime_conversation stable true\n'));
+        const refusal = new PluginError({ code: 'native_environment_launch_required', message: 'Native launch was refused' });
+        vi.spyOn(capture.exec.clients, 'spawn').mockRejectedValueOnce(refusal);
+        await expect(createCodexNativeAppServerClient({ exec: capture.exec, processEnv: {} })).rejects.toBe(refusal);
+    });
+    it.each([undefined, { kind: 'daemonProxy' as const }])('qualifies only a cold stdio launch, preserving nonactivating probes and proxy attachment (%j)', async (transport) => {
+        const capture = createCapturingExec();
+        const spawn = vi.spyOn(capture.exec.clients, 'spawn');
+        // Opaque host-issued value represented only at the genuine Exec boundary.
+        const nativeLaunch = Object.freeze({}) as AgentNativeLaunchQualifier;
+        const controller = new AbortController();
+        const client = await createCodexNativeAppServerClient({
+            exec: capture.exec, processEnv: {}, nativeLaunch, signal: controller.signal,
+            ...(transport ? { transport } : {}),
+        });
+        expect(spawn.mock.calls[0]?.[1]).toEqual({
+            signal: controller.signal,
+            ...(transport ? {} : { nativeLaunch }),
+        });
+        for (const call of vi.mocked(capture.exec.run).mock.calls) {
+            expect(call[1]).toEqual({ signal: controller.signal });
+        }
+        await client.dispose();
+    });
     it('refuses enabled native MCP entries from the selected session cwd outside the injected subset', async () => {
         const capture = createCapturingExec({
             async request(method, params): Promise<JsonValue> {
@@ -129,18 +175,21 @@ describe('createCodexAppServerClient', () => {
             toolRestrictionAllowedMcpServerKeys: [],
         })).rejects.toMatchObject({ code: 'codex_tool_restriction_unsupported_runtime' });
     });
-    it('refuses confinement when native namespace support is unknown instead of trusting echoed config', async () => {
+    it.each(['0.159.2', '0.163.0'])('refuses empty-deny confinement on unverified runtime %s instead of trusting echoed config', async (version) => {
         const capture = createCapturingExec({
             async request(method): Promise<JsonValue> {
-                if (method === 'initialize') return { userAgent: 'happier_cli/0.159.2 (fixture)' };
+                if (method === 'initialize') return { userAgent: `happier_cli/${version} (fixture)` };
                 return { config: { features: { code_mode: { excluded_tool_namespaces: ['functions'] } } } };
             },
         });
         await expect(createCodexNativeAppServerClient({
             exec: capture.exec, processEnv: {},
             toolRestrictionRequired: true,
-            configOverrides: ['features.code_mode.excluded_tool_namespaces=["functions"]'],
-        })).rejects.toMatchObject({ code: 'codex_tool_restriction_unsupported_runtime' });
+            configOverrides: buildCodexAppServerConfigOverrides({}, { unlistedTools: 'deny', allowedTools: [] }),
+        })).rejects.toMatchObject({
+            code: 'codex_tool_restriction_unsupported_runtime',
+            message: expect.stringContaining('machines.agents.install'),
+        });
     });
     it('serializes the native spawn through initialization without locking ongoing clients', async () => {
         // Exec is the host-owned process/protocol boundary. Simulate the native
@@ -231,6 +280,7 @@ describe('createCodexAppServerClient', () => {
             const client = await createCodexNativeAppServerClient({
                 exec: capture.exec,
                 processEnv: {},
+                nativeLaunch: Object.freeze({}) as AgentNativeLaunchQualifier,
                 transport: {
                     kind: 'unixWebSocket',
                     socketPath,
@@ -808,6 +858,61 @@ describe('createCodexAppServerClient', () => {
         expect(notificationCalls).toEqual([{ suffix: 'two' }]);
         expect(registeredRequest).toBeNull();
         expect(registeredNotification).toBeNull();
+    });
+
+    it('publishes all synchronous notification handlers before the following notification', async () => {
+        const transport: { receive?: Parameters<PluginJsonRpcClient['onNotification']>[0] } = {};
+        const capture = createCapturingExec({
+            onNotification(handler) {
+                transport.receive = handler;
+                return { dispose: () => { delete transport.receive; } };
+            },
+        });
+        const client = await createCodexNativeAppServerClient({ exec: capture.exec, processEnv: {} });
+        try {
+            const output: string[] = [];
+            client.registerNotificationHandler('item/completed', () => undefined);
+            client.registerNotificationHandler('item/completed', () => { output.push('corrected final'); });
+            client.registerNotificationHandler('item/agentMessage/delta', () => { output.push('following delta'); });
+            if (!transport.receive) throw new Error('Missing JSON-RPC notification subscription');
+            const completed = transport.receive({ method: 'item/completed' });
+            const following = transport.receive({ method: 'item/agentMessage/delta' });
+            await Promise.all([completed, following]);
+            expect(output).toEqual(['corrected final', 'following delta']);
+        } finally {
+            await client.dispose();
+        }
+    });
+
+    it('awaits asynchronous notification handlers and propagates their failure', async () => {
+        const transport: { receive?: Parameters<PluginJsonRpcClient['onNotification']>[0] } = {};
+        const capture = createCapturingExec({
+            onNotification(handler) {
+                transport.receive = handler;
+                return { dispose: () => { delete transport.receive; } };
+            },
+        });
+        const client = await createCodexNativeAppServerClient({ exec: capture.exec, processEnv: {} });
+        try {
+            let finish: () => void = () => { throw new Error('Handler has not started'); };
+            const output: string[] = [];
+            client.registerNotificationHandler('item/completed', () => new Promise<void>((resolve) => {
+                finish = () => { output.push('async completed'); resolve(); };
+            }));
+            client.registerNotificationHandler('item/completed', () => { output.push('following handler'); });
+            if (!transport.receive) throw new Error('Missing JSON-RPC notification subscription');
+            const completed = transport.receive({ method: 'item/completed' });
+            expect(output).toEqual([]);
+            finish();
+            await completed;
+            expect(output).toEqual(['async completed', 'following handler']);
+
+            const failure = new Error('Notification failed');
+            client.registerNotificationHandler('turn/completed', async () => { throw failure; });
+            await expect(transport.receive({ method: 'turn/completed' })).rejects.toBe(failure);
+        } finally {
+            await client.dispose();
+        }
     });
 
     it('passes request-specific timeout overrides through to the JSON-RPC client', async () => {

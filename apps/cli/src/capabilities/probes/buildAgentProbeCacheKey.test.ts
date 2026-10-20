@@ -3,6 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { buildAgentProbeCacheKey } from './buildAgentProbeCacheKey';
 
 describe('buildAgentProbeCacheKey', () => {
+  it('shares an observation across the runtime id and its equivalent concrete built-in target without merging distinct accounts or configured backends', () => {
+    const context = { agentId: 'opencode', cwd: '/workspace', connectedServiceSelection: 'selected-account' };
+    const runtimeId = buildAgentProbeCacheKey(context);
+    expect(buildAgentProbeCacheKey({ ...context, backendTarget: { kind: 'builtInAgent', agentId: 'opencode' } })).toBe(runtimeId);
+    expect(buildAgentProbeCacheKey({ ...context, connectedServiceSelection: 'other-account' })).not.toBe(runtimeId);
+    expect(buildAgentProbeCacheKey({ ...context, backendTarget: { kind: 'configuredAcpBackend', backendId: 'custom' } })).not.toBe(runtimeId);
+  });
+
   it('keys cold probes only by their non-secret runtime inputs', () => {
     expect(buildAgentProbeCacheKey({
       agentId: 'codex' as const,

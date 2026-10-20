@@ -1,11 +1,12 @@
 import * as React from 'react';
 import type { PrincipalRefV1 } from '@happier-dev/protocol/teams/principal';
-import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { ActionApprovalRequestCreatedResultSchema, isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { MachineAccessGrantsListResponseV1Schema, MachineAccessRefusalV1Schema, MachineAccessMutationResultV1Schema,
-    MachineKeyPreparationResultV1Schema, type MachineAccessGrantsListResponseV1,
+    MachineAccessGrantSetInputV1Schema, MachineKeyPreparationResultV1Schema, type MachineAccessGrantsListResponseV1,
     type MachineAccessLevelV1, type MachineAccessGrantRowV1 } from '@happier-dev/protocol/machines/machineAccessV1';
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import { createActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
+import { presentActionApproval } from '@/components/approvals/actionApprovalPresentation';
 import { sessionAccessSubjectKey } from '@/components/sessions/access/projectSessionAccessEditorSnapshot';
 import { useSessionAccessDirectory } from '@/components/sessions/access/useSessionAccessDirectory';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -21,6 +22,7 @@ import type { ShareGrantRowModel, ShareOperationModel, ShareSheetActions,
     ShareSheetModel, ShareUiError, ShareUiReason } from '../shareSheetTypes';
 import { presentSharePrincipal } from '../sharePrincipalPresentation';
 import { useShareViewerProfile } from '../useShareViewerProfile';
+import { useActiveHomeSettling } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
 
 export type MachineShareGrantRow = ShareGrantRowModel & Readonly<{
     removalConsequences: readonly string[];
@@ -40,14 +42,21 @@ function isAuthorityLoss(code: string): boolean {
     return ['access_denied', 'account_scope_mismatch', 'action_account_scope_changed', 'not_authenticated', 'machine_access_stale_scope'].includes(code);
 }
 
-function failure(code: string, machine: string, person = t('shareSheet.person')): ShareUiError {
+/** A role change that did not save: what was asked for, and the access that still holds. */
+type UnsavedRoleChange = Readonly<{ draft: MachineAccessLevelV1; current: MachineAccessLevelV1 }>;
+const levelLabel = (level: MachineAccessLevelV1) => t(level === 'admin' ? 'machines.sharing.manage' : 'machines.sharing.use');
+
+function failure(code: string, machine: string, person = t('shareSheet.person'), change?: UnsavedRoleChange): ShareUiError {
     if (code === 'recipient_encryption_incompatible' || code === 'recipient_incompatible') return { code,
         message: t('machines.sharing.incompatible', { machine, person }), retryable: false };
     if (isAuthorityLoss(code) || code === 'custodian_protected') return { code,
         message: code === 'custodian_protected' ? t('machines.sharing.custodianProtected') : t('machines.sharing.denied', { machine }), retryable: false };
     // An issued mutation without acknowledgement cannot safely be replayed by a row Retry.
-    return { code, message: t('machines.sharing.unavailable', { machine }),
-        retryable: !['outcome_unknown', 'machine_access_stale_scope', 'unsupported_action', 'approval_rejected', 'approval_canceled'].includes(code) };
+    const retryable = !isActionApprovalDeclinedErrorCode(code)
+        && !['outcome_unknown', 'machine_access_stale_scope', 'unsupported_action'].includes(code);
+    return { code, retryable, message: change && retryable
+        ? t('machines.sharing.saveFailed', { person, draft: levelLabel(change.draft), current: levelLabel(change.current) })
+        : t('machines.sharing.unavailable', { machine }) };
 }
 function errorCode(value: unknown): string {
     if (value && typeof value === 'object') {
@@ -64,7 +73,11 @@ export function useMachineShareController(input: Readonly<{ machineId: string; m
     const principal = (ref: PrincipalRefV1, name: string | null) => presentSharePrincipal({ ref, name,
         viewerAccountId: scope.accountId, profile: ref.kind === 'account' && ref.accountId === scope.accountId ? viewerProfile : null });
     const identity = `${scope.serverId}:${scope.accountId}:${machineId}`;
-    const [execute] = React.useState(() => createFrontDoorActionExecute());
+    type ConfirmUserAction = NonNullable<NonNullable<Parameters<typeof createFrontDoorActionExecute>[1]>['presentUserActionConfirmation']>;
+    const confirmUserAction = React.useRef<ConfirmUserAction | null>(null);
+    const [execute] = React.useState(() => createFrontDoorActionExecute(undefined, {
+        presentUserActionConfirmation: args => confirmUserAction.current!(args),
+    }));
     const lifetimeRef = React.useRef<AbortController | null>(null);
     const pending = React.useRef<AbortController | null>(null);
     const [state, setState] = React.useState<State>({ response: null, phase: 'initial', operations: {} });
@@ -74,6 +87,22 @@ export function useMachineShareController(input: Readonly<{ machineId: string; m
     const intents = React.useRef(new Map<string, Mutation>());
     const names = React.useRef(new Map<string, string>());
     const response = state.response;
+    const responseRef = React.useRef(response);
+    responseRef.current = response;
+    // The Action policy decides whether a confirmation shows; this only words it. A grant names the
+    // machine, the person and the role it gives, so "Share a machine" is never a bare question.
+    confirmUserAction.current = async ({ actionId, input, context }) => {
+        const presentation = presentActionApproval({ actionId, actionArgs: input, subject: machineName });
+        const grant = actionId === 'machines.access.grant.set' ? MachineAccessGrantSetInputV1Schema.safeParse(input) : null;
+        const message = grant?.success
+            ? [`${names.current.get(sessionAccessSubjectKey(grant.data.principal)) ?? t('shareSheet.person')} · ${
+                t(grant.data.level === 'admin' ? 'machines.sharing.manage' : 'machines.sharing.use')}`,
+                t('machines.sharing.trustedOsLead', { machine: machineName })].join('\n\n')
+            : presentation.summary ?? '';
+        return Modal.confirm(presentation.title ?? t('approvals.untitled'), message,
+            { ...(presentation.confirmLabel ? { confirmText: presentation.confirmLabel } : {}),
+                ...(context.signal ? { signal: context.signal } : {}) });
+    };
     const target = React.useMemo(() => ({ serverId: scope.serverId, machineId }), [scope.serverId, machineId]);
     const context = React.useMemo(() => ({ surface: 'ui' as const, source: 'ui_button' as const, authority: 'present_user' as const,
         serverId: scope.serverId, expectedAccountId: scope.accountId }), [scope.serverId, scope.accountId]);
@@ -137,6 +166,17 @@ export function useMachineShareController(input: Readonly<{ machineId: string; m
         void load();
         return () => { unsubscribe(); stopCredentials(); lifetime.abort(); pending.current?.abort(); };
     }, [load, scope.serverId, scope.accountId, machineId, machineName, clearProjection]);
+    // A read that failed while the Home was still being reached (right after a restart) has not settled into a
+    // failure: it reads as loading, and is read again once the Home answers.
+    const homeSettling = useActiveHomeSettling(scope.serverId);
+    const phaseRef = React.useRef(state.phase);
+    phaseRef.current = state.phase;
+    const wasSettling = React.useRef(false);
+    React.useEffect(() => {
+        if (wasSettling.current && !homeSettling && phaseRef.current === 'error') void load();
+        wasSettling.current = homeSettling;
+    }, [homeSettling, load]);
+    const readSettling = homeSettling && state.phase === 'error' && state.issue?.retryable === true;
     const approval = useActionApprovalContinuation({ scopeKey: identity, serverId: scope.serverId, onExecuted: () => { void load(); } });
     const directory = useSessionAccessDirectory({ scope, availability: 'available', contextTeams: NO_TEAMS,
         operations: state.operations, revision, enabled: response?.canManage === true && state.phase === 'ready' });
@@ -158,9 +198,15 @@ export function useMachineShareController(input: Readonly<{ machineId: string; m
             : mutation.actionId === 'machines.access.grant.remove' ? { ...target, principal: mutation.principal } : target;
         const fail = (code: string) => {
             if (lifetime.signal.aborted) return;
-            if (isAuthorityLoss(code)) { clearProjection(failure(code, machineName)); return; }
+            const row = responseRef.current?.grants.find(candidate => sessionAccessSubjectKey(candidate.principal) === key);
+            const issue = failure(code, machineName, names.current.get(key) ?? row?.display.name ?? undefined,
+                mutation.actionId === 'machines.access.grant.set' && row && row.level !== mutation.level
+                    ? { draft: mutation.level, current: row.level } : undefined);
+            // Replace the previous successful mutation's live-region status too.
+            announceAccessibilityMessage(issue.message);
+            if (isAuthorityLoss(code)) { clearProjection(issue); return; }
             setState(previous => ({ ...previous, operations: { ...previous.operations,
-                [key]: { kind: 'error', error: failure(code, machineName, names.current.get(key)) } } }));
+                [key]: { kind: 'error', error: issue } } }));
         };
         const settle = async (value: unknown) => {
             if (lifetime.signal.aborted) return;
@@ -278,7 +324,7 @@ export function useMachineShareController(input: Readonly<{ machineId: string; m
             }),
         })) },
     };
-    return { model, actions, response, viewerRow, inherited, canLeave, loading: state.phase === 'initial', issue: state.issue,
+    return { model, actions, response, viewerRow, inherited, canLeave, loading: state.phase === 'initial' || readSettling, issue: readSettling ? undefined : state.issue,
         notice, retryContent: load, approvalId: approval.approvalId,
         prepareKeys: (ref: PrincipalRefV1) => { if (canWrite && response?.grants.some(row =>
             sessionAccessSubjectKey(row.principal) === sessionAccessSubjectKey(ref) && row.audience.some(member => member.canPrepareKeys)))

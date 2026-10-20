@@ -11,6 +11,7 @@ import { executeScmCommitPlanAction } from './executeScmCommitPlanAction';
 import { executeScmActionOperation } from '../actions/executeScmActionOperation';
 import { createScmBackendRegistry } from '../registry';
 import { buildCommitPlanAcceptance } from '../../../../ui/sources/components/sessions/files/commits/commitPlanAcceptance';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 
 async function setup(detached = false) {
   const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'happier-u5-apply-')));
@@ -45,6 +46,15 @@ async function setup(detached = false) {
 }
 
 describe('accepted commit plan through registered canonical writer', () => {
+  it('returns a complete application that can settle its approval as strict JSON', async () => {
+    const { cwd, accept } = await setup();
+    const response = await accept();
+    expect(response).toMatchObject({ success: true, result: { application: { status: 'complete' } } });
+    expect(git(cwd, ['log', '--format=%s', '-2']).split('\n')).toEqual(['fix: b.txt', 'fix: a.txt']);
+    expect(() => getActionSpec('approval.request.decide').outputSchema.parse({
+      ok: true, status: 'executed', execution: { executedAtMs: 1, ok: true, result: response },
+    })).not.toThrow();
+  });
   it('creates an exact zero-parent first commit from UI acceptance with retained comparison refs', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'happier-u5-unborn-')));
     git(cwd, ['init', '-q']); git(cwd, ['config', 'user.name', 'U5 Fixture']); git(cwd, ['config', 'user.email', 'u5@example.test']);

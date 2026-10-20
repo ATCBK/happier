@@ -4,7 +4,8 @@ import { View, type TextStyle } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { scaleTextStyle } from '@/components/ui/text/uiFontScale';
-import { useLocalSetting } from '@/sync/store/hooks';
+import { useGlassBackedInk } from '@/components/ui/glass/glassBackedInk';
+import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 import { extractWebAttachmentFilesFromDataTransfer } from '@/utils/files/webAttachmentDataTransfer';
 import { useWebFileDropZone } from '@/hooks/ui/useWebFileDropZone.web';
 import { normalizeKeyboardKeyPressEvent, type KeyPressEvent as KeyboardKeyPressEvent } from '@/keyboard/events';
@@ -68,6 +69,8 @@ interface MultiTextInputProps {
     value: string;
     onChangeText: (text: string) => void;
     placeholder?: string;
+    /** The placeholder's ink: a theme token, which backed glass steps up like any quiet ink. Defaults to `input.placeholder`. */
+    placeholderTextColor?: string;
     maxHeight?: number;
     editable?: boolean;
     paddingTop?: number;
@@ -111,6 +114,58 @@ type WebTextStyleOverride = Readonly<{
 }>;
 
 type WebTextareaStyle = CSSProperties;
+
+type TextareaResize = Readonly<{
+    node: HTMLTextAreaElement;
+    maxHeight: number;
+    collapse: boolean;
+    onMeasure: (contentHeight: number, height: number) => void;
+}>;
+
+// A document can mount hundreds of composers in one commit. Interleaving each
+// textarea's height writes and geometry reads forces a full layout per field.
+// Finish the same measurements together before paint, retaining both the
+// wrapper's height lock and the input's own scroll position during collapse.
+const pendingTextareaResizes = new Map<HTMLTextAreaElement, TextareaResize>();
+function scheduleTextareaResize(resize: TextareaResize): void {
+    const scheduled = pendingTextareaResizes.size > 0;
+    pendingTextareaResizes.set(resize.node, resize);
+    if (scheduled) return;
+    queueMicrotask(() => {
+        const entries = [...pendingTextareaResizes.values()]
+            .filter(({ node }) => node.isConnected !== false)
+            .map((entry) => ({
+                ...entry,
+                wrapper: entry.collapse ? entry.node.parentElement : null,
+                wrapperHeight: entry.collapse ? entry.node.parentElement?.offsetHeight : undefined,
+                previousWrapperHeight: entry.node.parentElement?.style.height ?? '',
+                scrollTop: entry.node.scrollTop,
+            }));
+        pendingTextareaResizes.clear();
+        for (const entry of entries) {
+            if (!entry.collapse) continue;
+            if (entry.wrapper) entry.wrapper.style.height = `${entry.wrapperHeight}px`;
+            entry.node.style.height = 'auto';
+        }
+        const measured = entries.map((entry) => {
+            const scrollHeight = entry.node.scrollHeight;
+            const contentHeight = Number.isFinite(scrollHeight) ? Math.ceil(scrollHeight) : entry.maxHeight;
+            return {
+                ...entry,
+                contentHeight: entry.collapse ? contentHeight : Math.max(contentHeight, entry.maxHeight),
+                height: entry.collapse ? Math.min(entry.maxHeight, Math.max(0, contentHeight)) : entry.maxHeight,
+            };
+        });
+        for (const entry of measured) {
+            entry.node.style.height = `${entry.height}px`;
+            if (entry.wrapper) entry.wrapper.style.height = entry.previousWrapperHeight;
+        }
+        for (const entry of measured) {
+            if (entry.node.scrollTop !== entry.scrollTop) entry.node.scrollTop = entry.scrollTop;
+            entry.onMeasure(entry.contentHeight, entry.height);
+        }
+    });
+}
 
 function toCssLength(value: TextStyle['fontSize'] | TextStyle['lineHeight'] | TextStyle['letterSpacing']) {
     if (typeof value === 'number') return `${value}px`;
@@ -183,6 +238,7 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         () => resolveWebTextStyle(props.textStyle, uiFontScale),
         [props.textStyle, uiFontScale],
     );
+    const placeholderInk = useGlassBackedInk()(props.placeholderTextColor ?? theme.colors.input.placeholder);
     const textareaStyle = React.useMemo<WebTextareaStyle>(() => ({
         width: '100%',
         padding: '0',
@@ -202,7 +258,10 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         paddingRight: props.paddingRight,
         ...scaledTextStyle,
         caretColor: theme.colors.input.text,
-    }), [
+        // `theme.css` paints the raw textarea's placeholder from it.
+        '--happier-placeholder-color': placeholderInk,
+    }) as WebTextareaStyle, [
+        placeholderInk,
         props.paddingBottom,
         props.paddingLeft,
         props.paddingRight,
@@ -259,61 +318,17 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
     }, [onContentHeightChange]);
 
     const applyTextareaHeight = React.useCallback((node: HTMLTextAreaElement, nextValueLength = liveValueRef.current.length) => {
-        if (nextValueLength > WEB_TEXTAREA_AUTOSIZE_VALUE_LENGTH_LIMIT) {
-            // No collapse-to-measure for oversized text (that double reflow is
-            // what this branch avoids), but consumers still need the TRUE
-            // content height — the expand toggle only appears when it exceeds
-            // the collapsed max height, and reporting the clamped height made
-            // the toggle vanish for >50k-char messages. A plain scrollHeight
-            // read before any style write adds no extra reflow: the box height
-            // is already explicit, so this is the same layout the browser
-            // flushes at paint.
-            const measuredContentHeight = Number.isFinite(node.scrollHeight) && node.scrollHeight > 0
-                ? Math.ceil(node.scrollHeight)
-                : normalizedMaxHeight;
-            notifyContentHeightChange(Math.max(measuredContentHeight, normalizedMaxHeight));
-            node.style.height = `${normalizedMaxHeight}px`;
-            setTextareaHeight((current) => (current === normalizedMaxHeight ? current : normalizedMaxHeight));
-            return;
-        }
-
-        // Collapse-to-measure forces a synchronous reflow at the `scrollHeight`
-        // read. Without a lock, that one reflow shrinks the composer row to the
-        // collapsed textarea height, the transcript's flex sibling grows by the
-        // freed pixels, and the browser natively clamps its scrollTop — a tail
-        // jump per keystroke/composer scroll event that survives the height
-        // restore (live capture 2026-07-20). Pixel-lock the wrapper for the
-        // whole non-explicit-height window so siblings only ever see the final
-        // measured height.
-        const wrapper = node.parentElement;
-        const previousWrapperHeight = wrapper ? wrapper.style.height : '';
-        // The collapse also destroys the textarea's OWN scroll offset: while the
-        // box fits its content its maximum scroll offset is 0, so the browser
-        // clamps scrollTop away and the visible text jumps to the top of the
-        // draft on every keystroke once the text overflows. Carry it across the
-        // whole non-explicit-height window — this runs inside one synchronous
-        // layout pass, so no paint ever observes the collapsed offset.
-        const previousScrollTop = node.scrollTop;
-        if (wrapper) {
-            wrapper.style.height = `${wrapper.offsetHeight}px`;
-        }
-        try {
-            node.style.height = 'auto';
-            const measuredHeight = Number.isFinite(node.scrollHeight) ? Math.ceil(node.scrollHeight) : normalizedMaxHeight;
-            notifyContentHeightChange(measuredHeight);
-            const nextHeight = Math.min(normalizedMaxHeight, Math.max(0, measuredHeight));
-            node.style.height = `${nextHeight}px`;
-            setTextareaHeight((current) => (current === nextHeight ? current : nextHeight));
-        } finally {
-            if (wrapper) {
-                wrapper.style.height = previousWrapperHeight;
-            }
-            // Re-apply after the final height so the browser clamps against the
-            // restored box: a shorter draft legitimately caps the offset.
-            if (node.scrollTop !== previousScrollTop) {
-                node.scrollTop = previousScrollTop;
-            }
-        }
+        scheduleTextareaResize({
+            node,
+            maxHeight: normalizedMaxHeight,
+            // Oversized drafts retain the existing no-collapse policy and
+            // report their true content height for the expand affordance.
+            collapse: nextValueLength <= WEB_TEXTAREA_AUTOSIZE_VALUE_LENGTH_LIMIT,
+            onMeasure: (contentHeight, height) => {
+                notifyContentHeightChange(contentHeight);
+                setTextareaHeight(current => current === height ? current : height);
+            },
+        });
     }, [normalizedMaxHeight, notifyContentHeightChange]);
 
     React.useLayoutEffect(() => {

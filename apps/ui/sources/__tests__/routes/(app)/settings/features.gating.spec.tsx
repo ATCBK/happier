@@ -1,7 +1,7 @@
 import * as React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createRootLayoutFeaturesResponse, renderSettingsView } from '@/dev/testkit';
+import { createRootLayoutFeaturesResponse, renderSettingsView as renderBaseSettingsView, standardCleanup } from '@/dev/testkit';
 import {
     installSessionSettingsEntryModuleMocks,
 } from './sessionSettingsEntryTestHelpers';
@@ -24,18 +24,22 @@ vi.mock('@/hooks/server/useEffectiveServerSelection', () => ({
     useEffectiveServerSelection: () => useEffectiveServerSelectionMock(),
 }));
 
-type MutableHookResult<T> = readonly [T, (next: T) => void];
+let settingsFixture: Record<string, unknown>;
+let localSettingsFixture: Record<string, unknown>;
 
-function createNoopMutable<T>(value: T): MutableHookResult<T> {
-    return [value, vi.fn()] as const;
+async function renderSettingsView(element: React.ReactElement) {
+    // Build-policy cases deliberately reload the route realm; seed that realm's real store.
+    const [{ storage }, { settingsParse }, { localSettingsParse }] = await Promise.all([
+        import('@/sync/domains/state/storageStore'), import('@/sync/domains/settings/settings'), import('@/sync/domains/settings/localSettings'),
+    ]);
+    storage.setState({ settings: settingsParse(settingsFixture), localSettings: localSettingsParse(localSettingsFixture) });
+    return renderBaseSettingsView(element);
 }
+afterEach(() => standardCleanup());
 
 function listTitles(screen: Awaited<ReturnType<typeof renderSettingsView>>) {
     return screen.findAll((node) => typeof node.props?.title === 'string').map((node) => node.props.title as string);
 }
-
-const useSettingMutableMock = vi.fn();
-const useLocalSettingMutableMock = vi.fn();
 
 describe('FeaturesSettingsScreen gating', () => {
     beforeEach(() => {
@@ -69,38 +73,15 @@ describe('FeaturesSettingsScreen gating', () => {
                     },
                 }).module;
             },
-            storageModule: async (importOriginal) => {
-                const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-                return createStorageModuleStub({
-                    importOriginal,
-                    useSettingMutable: (key: string) => useSettingMutableMock(key),
-                    useLocalSettingMutable: (key: string) => useLocalSettingMutableMock(key),
-                });
-            },
         });
 
         useEffectiveServerSelectionMock.mockReturnValue({ serverIds: [] });
         useServerFeaturesMainSelectionSnapshotMock.mockReturnValue({ status: 'ready', serverIds: [], snapshotsByServerId: {} });
 
-        useSettingMutableMock.mockImplementation((key: string) => {
-            if (key === 'experiments') return createNoopMutable(true);
-            if (key === 'featureToggles') return createNoopMutable({});
-            if (key === 'useProfiles') return createNoopMutable(false);
-            if (key === 'agentInputEnterToSend') return createNoopMutable(false);
-            if (key === 'agentInputHistoryScope') return createNoopMutable('perSession');
-            if (key === 'hideInactiveSessions') return createNoopMutable(false);
-            if (key === 'groupInactiveSessionsByProject') return createNoopMutable(false);
-            if (key === 'useEnhancedSessionWizard') return createNoopMutable(false);
-            if (key === 'useMachinePickerSearch') return createNoopMutable(false);
-            if (key === 'usePathPickerSearch') return createNoopMutable(false);
-            return createNoopMutable(null);
-        });
-
-        useLocalSettingMutableMock.mockImplementation((key: string) => {
-            if (key === 'commandPaletteEnabled') return createNoopMutable(false);
-            if (key === 'devModeEnabled') return createNoopMutable(false);
-            return createNoopMutable(false);
-        });
+        settingsFixture = { experiments: true, featureToggles: {}, useProfiles: false, agentInputEnterToSend: false,
+            agentInputHistoryScope: 'perSession', hideInactiveSessions: false, groupInactiveSessionsByProject: false,
+            useEnhancedSessionWizard: false, useMachinePickerSearch: false, usePathPickerSearch: false };
+        localSettingsFixture = { commandPaletteEnabled: false, devModeEnabled: false };
     });
 
     it('hides build-policy denied feature toggles from the list', async () => {
@@ -182,21 +163,7 @@ describe('FeaturesSettingsScreen gating', () => {
 
     it('exposes neither a master Connected Accounts toggle nor a switch for connected-account usage', async () => {
         vi.resetModules();
-        const setFeatureToggles = vi.fn();
-
-        useSettingMutableMock.mockImplementation((key: string) => {
-            if (key === 'experiments') return createNoopMutable(true);
-            if (key === 'featureToggles') return [{ 'connectedServices.quotas': true }, setFeatureToggles] as const;
-            if (key === 'useProfiles') return createNoopMutable(false);
-            if (key === 'agentInputEnterToSend') return createNoopMutable(false);
-            if (key === 'agentInputHistoryScope') return createNoopMutable('perSession');
-            if (key === 'hideInactiveSessions') return createNoopMutable(false);
-            if (key === 'groupInactiveSessionsByProject') return createNoopMutable(false);
-            if (key === 'useEnhancedSessionWizard') return createNoopMutable(false);
-            if (key === 'useMachinePickerSearch') return createNoopMutable(false);
-            if (key === 'usePathPickerSearch') return createNoopMutable(false);
-            return createNoopMutable(null);
-        });
+        settingsFixture.featureToggles = { 'connectedServices.quotas': true };
 
         const { default: FeaturesSettingsScreen } = await import('@/app/(app)/settings/features');
 
@@ -208,26 +175,8 @@ describe('FeaturesSettingsScreen gating', () => {
     it('shows stable terminal layout and renderer settings without enabling experiments', async () => {
         vi.resetModules();
 
-        useSettingMutableMock.mockImplementation((key: string) => {
-            if (key === 'experiments') return createNoopMutable(false);
-            if (key === 'featureToggles') return createNoopMutable({});
-            if (key === 'useProfiles') return createNoopMutable(false);
-            if (key === 'agentInputEnterToSend') return createNoopMutable(false);
-            if (key === 'agentInputHistoryScope') return createNoopMutable('perSession');
-            if (key === 'hideInactiveSessions') return createNoopMutable(false);
-            if (key === 'groupInactiveSessionsByProject') return createNoopMutable(false);
-            if (key === 'useEnhancedSessionWizard') return createNoopMutable(false);
-            if (key === 'useMachinePickerSearch') return createNoopMutable(false);
-            if (key === 'usePathPickerSearch') return createNoopMutable(false);
-            return createNoopMutable(null);
-        });
-
-        useLocalSettingMutableMock.mockImplementation((key: string) => {
-            if (key === 'commandPaletteEnabled') return createNoopMutable(false);
-            if (key === 'devModeEnabled') return createNoopMutable(false);
-            if (key === 'terminalRendererPreference') return createNoopMutable('native');
-            return createNoopMutable(false);
-        });
+        settingsFixture.experiments = false;
+        localSettingsFixture.terminalRendererPreference = 'native';
 
         const { default: FeaturesSettingsScreen } = await import('@/app/(app)/settings/features');
 

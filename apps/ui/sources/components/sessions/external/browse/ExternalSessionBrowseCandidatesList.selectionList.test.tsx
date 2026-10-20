@@ -4,1037 +4,1609 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createCapturingLegendListMock, renderScreen } from '@/dev/testkit';
 import { createResolvedAgentCatalogEntryFixture } from '@/dev/testkit/fixtures/agentCatalogFixtures';
 import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
+import { ExternalSessionsCandidatesListResponseSchema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
+import { projectConversationSearchCandidates } from './projectConversationSearchCandidates';
 
 const accessibilityPlatform = vi.hoisted(() => ({
-    os: 'web' as 'web' | 'ios' | 'android',
+  os: 'web' as 'web' | 'ios' | 'android',
 }));
 const announceForAccessibilityMock = vi.hoisted(() => vi.fn());
 
 vi.mock('react-native', async () => {
-    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    const base = await createReactNativeWebMock();
-    return {
-        ...base,
-        AccessibilityInfo: {
-            ...base.AccessibilityInfo,
-            announceForAccessibility: announceForAccessibilityMock,
-        },
-        Platform: {
-            ...base.Platform,
-            get OS() {
-                return accessibilityPlatform.os;
-            },
-        },
-    };
+  const { createReactNativeWebMock } =
+    await import('@/dev/testkit/mocks/reactNative');
+  const base = await createReactNativeWebMock();
+  return {
+    ...base,
+    AccessibilityInfo: {
+      ...base.AccessibilityInfo,
+      announceForAccessibility: announceForAccessibilityMock,
+    },
+    Platform: {
+      ...base.Platform,
+      get OS() {
+        return accessibilityPlatform.os;
+      },
+    },
+  };
 });
 
-const { module: capturedLegendList, state: legendListState } = createCapturingLegendListMock({
+const { module: capturedLegendList, state: legendListState } =
+  createCapturingLegendListMock({
     renderItems: true,
     renderItemLimit: 20,
-});
+  });
 
 // The factory runs while this file's static imports are still being evaluated (the virtualized list
 // backend imports Legend transitively), before `capturedLegendList` is initialized; read it at render.
 vi.mock('@legendapp/list/react-native', () => ({
-    LegendList: React.forwardRef<unknown, Record<string, unknown>>((props, ref) =>
-        React.createElement(capturedLegendList.LegendList, { ...props, ref })),
+  LegendList: React.forwardRef<unknown, Record<string, unknown>>((props, ref) =>
+    React.createElement(capturedLegendList.LegendList, { ...props, ref }),
+  ),
 }));
 
-vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: (key: string) => key }));
+vi.mock('@/text', async () =>
+  (await import('@/dev/testkit/mocks/text')).createTextModuleMock({
+    translate: (key: string) => key,
+  }),
+);
 
 const candidate = {
-    remoteSessionId: 'session-1',
-    title: 'Existing session',
-    updatedAtMs: 1_700_000_000_000,
-    activity: 'idle' as const,
-    details: { path: '/repo' },
+  remoteSessionId: 'session-1',
+  title: 'Existing session',
+  updatedAtMs: 1_700_000_000_000,
+  activity: 'idle' as const,
+  details: { path: '/repo' },
 };
 
-const agentCatalogEntry = createResolvedAgentCatalogEntryFixture({ agentId: 'claude' });
+const agentCatalogEntry = createResolvedAgentCatalogEntryFixture({
+  agentId: 'claude',
+});
 const agentIdentity = {
-    entry: agentCatalogEntry,
-    machineId: null,
-    serverId: null,
-    current: true,
+  entry: agentCatalogEntry,
+  machineId: null,
+  serverId: null,
+  current: true,
 };
 
 type CandidatePresentationReadCounts = {
-    candidateKey: number;
-    title: number;
-    details: number;
-    updatedAtMs: number;
-    activity: number;
+  candidateKey: number;
+  title: number;
+  details: number;
+  updatedAtMs: number;
+  activity: number;
 };
 
 function createInstrumentedCandidates(
-    count: number,
-    reads: CandidatePresentationReadCounts,
+  count: number,
+  reads: CandidatePresentationReadCounts,
 ) {
-    return Array.from({ length: count }, (_, index) => {
-        const candidateWithGetters: {
-            remoteSessionId: string;
-            candidateKey: string;
-            title: string;
-            updatedAtMs: number;
-            activity: 'idle';
-            details: { path: string };
-            linkedSessionId?: string;
-            imported?: boolean;
-        } = {
-            remoteSessionId: `session-${index}`,
-            candidateKey: `candidate-${index}`,
-            title: `Session ${index}`,
-            updatedAtMs: 0,
-            activity: 'idle',
-            details: { path: `/repo/project-${index % 4}` },
-            linkedSessionId: index % 2 === 0 ? `linked-${index}` : undefined,
-            imported: index % 3 === 0,
-        };
-        Object.defineProperties(candidateWithGetters, {
-            candidateKey: {
-                enumerable: true,
-                get: () => {
-                    reads.candidateKey += 1;
-                    return `candidate-${index}`;
-                },
-            },
-            title: {
-                enumerable: true,
-                get: () => {
-                    reads.title += 1;
-                    return `Session ${index}`;
-                },
-            },
-            details: {
-                enumerable: true,
-                get: () => {
-                    reads.details += 1;
-                    return { path: `/repo/project-${index % 4}` };
-                },
-            },
-            updatedAtMs: {
-                enumerable: true,
-                get: () => {
-                    reads.updatedAtMs += 1;
-                    return 1_700_000_000_000 + index;
-                },
-            },
-            activity: {
-                enumerable: true,
-                get: () => {
-                    reads.activity += 1;
-                    return 'idle' as const;
-                },
-            },
-        });
-        return candidateWithGetters;
+  return Array.from({ length: count }, (_, index) => {
+    const candidateWithGetters: {
+      remoteSessionId: string;
+      candidateKey: string;
+      title: string;
+      updatedAtMs: number;
+      activity: 'idle';
+      details: { path: string };
+      linkedSessionId?: string;
+      imported?: boolean;
+    } = {
+      remoteSessionId: `session-${index}`,
+      candidateKey: `candidate-${index}`,
+      title: `Session ${index}`,
+      updatedAtMs: 0,
+      activity: 'idle',
+      details: { path: `/repo/project-${index % 4}` },
+      linkedSessionId: index % 2 === 0 ? `linked-${index}` : undefined,
+      imported: index % 3 === 0,
+    };
+    Object.defineProperties(candidateWithGetters, {
+      candidateKey: {
+        enumerable: true,
+        get: () => {
+          reads.candidateKey += 1;
+          return `candidate-${index}`;
+        },
+      },
+      title: {
+        enumerable: true,
+        get: () => {
+          reads.title += 1;
+          return `Session ${index}`;
+        },
+      },
+      details: {
+        enumerable: true,
+        get: () => {
+          reads.details += 1;
+          return { path: `/repo/project-${index % 4}` };
+        },
+      },
+      updatedAtMs: {
+        enumerable: true,
+        get: () => {
+          reads.updatedAtMs += 1;
+          return 1_700_000_000_000 + index;
+        },
+      },
+      activity: {
+        enumerable: true,
+        get: () => {
+          reads.activity += 1;
+          return 'idle' as const;
+        },
+      },
     });
+    return candidateWithGetters;
+  });
 }
 
 function defaultProps() {
-    return {
-        candidates: [candidate],
-        loading: false,
-        error: null,
-        offline: false,
-        nextCursor: 'cursor-1',
-        paginationRequestKey: 'scope-default\u0000cursor-1',
-        loadingMore: false,
-        searchAugmenting: false,
-        searchIncomplete: false,
-        annotationsIncomplete: false,
-        preparation: null,
-        linkingSessionId: null,
-        searchQuery: '',
-        onSearchQueryChange: vi.fn(),
-        selectionAuthorityGeneration: 0,
-        onSelectCandidate: vi.fn(),
-        onLoadMore: vi.fn(),
-        onRetry: vi.fn(),
-        onCancelPreparation: vi.fn(),
-    } as const;
+  return {
+    candidates: [candidate],
+    loading: false,
+    error: null,
+    offline: false,
+    nextCursor: 'cursor-1',
+    paginationRequestKey: 'scope-default\u0000cursor-1',
+    loadingMore: false,
+    searchAugmenting: false,
+    searchIncomplete: false,
+    annotationsIncomplete: false,
+    preparation: null,
+    linkingSessionId: null,
+    searchQuery: '',
+    onSearchQueryChange: vi.fn(),
+    selectionAuthorityGeneration: 0,
+    onSelectCandidate: vi.fn(),
+    onLoadMore: vi.fn(),
+    onRetry: vi.fn(),
+    onCancelPreparation: vi.fn(),
+  } as const;
 }
 
 describe('ExternalSessionBrowseCandidatesList machine inventory', () => {
-    it.each(['loading', 'signedOut'] as const)('shows the inventory %s before daemon capability state', async (inventoryStatus) => {
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...defaultProps()}
-            candidates={[]}
-            projectionPhase="unsupported"
-            scope={{ kind: 'inventory', status: inventoryStatus }}
-        />);
-        expect(screen.findByTestId(inventoryStatus === 'loading'
+  it.each(['loading', 'signedOut'] as const)(
+    'shows the inventory %s before daemon capability state',
+    async (inventoryStatus) => {
+      const { ExternalSessionBrowseCandidatesList } =
+        await import('./ExternalSessionBrowseCandidatesList');
+      const screen = await renderScreen(
+        <ExternalSessionBrowseCandidatesList
+          {...defaultProps()}
+          candidates={[]}
+          projectionPhase="unsupported"
+          scope={{ kind: 'inventory', status: inventoryStatus }}
+        />,
+      );
+      expect(
+        screen.findByTestId(
+          inventoryStatus === 'loading'
             ? 'direct-session-candidates:loading'
-            : 'direct-session-candidates:inventory-unavailable')).not.toBeNull();
-        expect(screen.findByTestId('direct-session-candidates:home-unreachable')).toBeNull();
-        expect(screen.findByTestId('direct-session-candidates:unavailable')).toBeNull();
-    });
+            : 'direct-session-candidates:inventory-unavailable',
+        ),
+      ).not.toBeNull();
+      expect(
+        screen.findByTestId('direct-session-candidates:home-unreachable'),
+      ).toBeNull();
+      expect(
+        screen.findByTestId('direct-session-candidates:unavailable'),
+      ).toBeNull();
+    },
+  );
 });
 
 describe('ExternalSessionBrowseCandidatesList Agent-session deletion affordance', () => {
-    const TRIGGER_TEST_ID = 'external-session-candidate-actions:session-1';
+  const TRIGGER_TEST_ID = 'external-session-candidate-actions:session-1';
 
-    it.each([
-        ['the listing advertised deletion', true, true],
-        ['the listing advertised nothing', false, false],
-    ])('shows the destructive row control only when %s', async (_label, supported, expected) => {
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...defaultProps()}
-            candidateDeleteSupported={supported}
-            deletingCandidateKey={null}
-            onDeleteCandidate={vi.fn()}
-        />);
+  it.each([
+    ['the listing advertised deletion', true, true],
+    ['the listing advertised nothing', false, false],
+  ])(
+    'shows the destructive row control only when %s',
+    async (_label, supported, expected) => {
+      const { ExternalSessionBrowseCandidatesList } =
+        await import('./ExternalSessionBrowseCandidatesList');
+      const screen = await renderScreen(
+        <ExternalSessionBrowseCandidatesList
+          {...defaultProps()}
+          candidateDeleteSupported={supported}
+          deletingCandidateKey={null}
+          onDeleteCandidate={vi.fn()}
+        />,
+      );
 
-        expect(screen.findByTestId(TRIGGER_TEST_ID) !== null).toBe(expected);
-    });
+      expect(screen.findByTestId(TRIGGER_TEST_ID) !== null).toBe(expected);
+    },
+  );
 
-    it('never offers deletion without a consumer that can perform it', async () => {
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...defaultProps()}
-            candidateDeleteSupported
-            deletingCandidateKey={null}
-        />);
+  it('never offers deletion without a consumer that can perform it', async () => {
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...defaultProps()}
+        candidateDeleteSupported
+        deletingCandidateKey={null}
+      />,
+    );
 
-        expect(screen.findByTestId(TRIGGER_TEST_ID)).toBeNull();
-    });
+    expect(screen.findByTestId(TRIGGER_TEST_ID)).toBeNull();
+  });
 
-    it('names the destructive control after its own candidate for touch and screen readers', async () => {
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...defaultProps()}
-            candidateDeleteSupported
-            deletingCandidateKey={null}
-            onDeleteCandidate={vi.fn()}
-        />);
+  it('names the destructive control after its own candidate for touch and screen readers', async () => {
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...defaultProps()}
+        candidateDeleteSupported
+        deletingCandidateKey={null}
+        onDeleteCandidate={vi.fn()}
+      />,
+    );
 
-        const trigger = screen.findByTestId(TRIGGER_TEST_ID);
-        // A bare ellipsis says nothing about which session it acts on, and the
-        // control is always present rather than revealed on hover.
-        expect(trigger?.props.accessibilityLabel).toBe(
-            'externalSessions.browseCandidateActionsAccessibilityLabel',
-        );
-    });
+    const trigger = screen.findByTestId(TRIGGER_TEST_ID);
+    // A bare ellipsis says nothing about which session it acts on, and the
+    // control is always present rather than revealed on hover.
+    expect(trigger?.props.accessibilityLabel).toBe(
+      'externalSessions.browseCandidateActionsAccessibilityLabel',
+    );
+  });
 });
 
 describe('ExternalSessionBrowseCandidatesList SelectionList shell', () => {
-    beforeEach(() => {
-        accessibilityPlatform.os = 'web';
-        announceForAccessibilityMock.mockClear();
-    });
-
-    it('renders decoded snippets and keeps unsearchable rows visible but inert', async () => {
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...defaultProps()}
-            searchTarget="content"
-            contentSearchSupported
-            contentSearchSubmitted
-            contentCoverage="partial"
-            searchQuery="世界"
-            candidates={[
-                { ...candidate, match: { snippet: 'Hello\n"世界"', sourceItemId: 'message-1', messageIndex: 3 } },
-                { ...candidate, remoteSessionId: 'native-only', title: 'Native thread' },
-            ]}
-        />);
-        // The decoded snippet, with the query marked in the shared Find tint.
-        expect(screen.findByTestId('external-session-candidate-match:session-1')?.props.children?.props).toMatchObject({
-            text: 'Hello\n"世界"', ranges: [{ start: 7, end: 9, current: false }],
-        });
-        expect(screen.findByTestId('direct-session-candidate:native-only')?.props.accessibilityState?.disabled).toBe(true);
-        expect(screen.findByTestId('direct-session-candidates-content-partial')).not.toBeNull();
-    });
-
-    it('offers Stop only for a conversation search the user started; a typed phrase still offers Search', async () => {
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const onSearchSubmit = vi.fn();
-        const onCancelPreparation = vi.fn();
-        const base = { ...defaultProps(), candidates: [], searchQuery: 'flaky e2e', searchTarget: 'content' as const,
-            contentSearchSupported: true, loading: true, onSearchSubmit, onCancelPreparation };
-        // The quiet indexed lookup behind a typed phrase is not a search the user asked for.
-        const typed = await renderScreen(<ExternalSessionBrowseCandidatesList {...base} />);
-        expect(typed.findByTestId('direct-session-candidates:content-unsearched')).not.toBeNull();
-        const label = (screen: Awaited<ReturnType<typeof renderScreen>>) => (screen.findByTestId('direct-session-candidates-content-submit')
-            ?.findAll((node) => typeof node.children?.[0] === 'string').map((node) => node.children[0]) ?? []).join('');
-        expect(label(typed)).toContain('externalSessions.browseContentSubmit');
-        await typed.pressByTestIdAsync('direct-session-candidates-content-submit');
-        expect(onSearchSubmit).toHaveBeenCalledWith('flaky e2e');
-        expect(onCancelPreparation).not.toHaveBeenCalled();
-
-        const searching = await renderScreen(<ExternalSessionBrowseCandidatesList {...base} contentSearchSubmitted />);
-        expect(label(searching)).toContain('externalSessions.browseIndexingStop');
-    });
-
-    it('never declares no matches while content coverage is unsupported or unsearched', async () => {
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...defaultProps()}
-            candidates={[]}
-            searchQuery="body"
-            searchTarget="content"
-            contentSearchSupported={false}
-            contentCoverage="unsupported"
-            nextCursor={null}
-        />);
-        expect(screen.findByTestId('direct-session-candidates:content-unsupported')).not.toBeNull();
-        expect(screen.findByTestId('direct-session-candidates:no-matches')).toBeNull();
-    });
-
-    it('shows incomplete coverage and an explicit continuation for a settled empty content page', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[]}
-            searchQuery="body"
-            searchTarget="content"
-            contentSearchSupported
-            contentSearchSubmitted
-            contentCoverage="partial"
-            nextCursor="unfinished-content-scan"
-        />);
-
-        expect(screen.getTextContent()).toContain('externalSessions.browseContentPartial');
-        expect(screen.getTextContent()).not.toContain('common.loading');
-        expect(screen.getTextContent()).toContain('externalSessions.browseContentMore');
-        await screen.pressByTestIdAsync('direct-session-candidates:pagination:more');
-        expect(props.onLoadMore).toHaveBeenCalledTimes(1);
-    });
-
-    it('keeps candidate options and pending-state projection within the virtualized window', async () => {
-        const props = defaultProps();
-        const reads: CandidatePresentationReadCounts = {
-            candidateKey: 0,
-            title: 0,
-            details: 0,
-            updatedAtMs: 0,
-            activity: 0,
-        };
-        const candidates = createInstrumentedCandidates(10_000, reads);
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={candidates}
-            agentIdentity={agentIdentity}
-        />);
-
-        expect(screen.findAllByType('LegendListItem' as never)).toHaveLength(20);
-        // Project grouping is structural and may read every candidate path. The
-        // rest of the candidate projection must stay inside the mounted window.
-        expect(reads.details).toBe(10_000);
-        expect(reads.candidateKey).toBeLessThan(200);
-        expect(reads.title).toBeLessThan(200);
-        expect(reads.updatedAtMs).toBeLessThan(200);
-        expect(reads.activity).toBeLessThan(200);
-
-        reads.candidateKey = 0;
-        reads.title = 0;
-        reads.details = 0;
-        reads.updatedAtMs = 0;
-        reads.activity = 0;
-        await screen.update(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={candidates}
-            agentIdentity={agentIdentity}
-            linkingSessionId="candidate-5000"
-        />);
-
-        expect(reads.details).toBe(0);
-        expect(reads.candidateKey).toBeLessThan(200);
-        expect(reads.title).toBeLessThan(200);
-        expect(reads.updatedAtMs).toBeLessThan(200);
-        expect(reads.activity).toBeLessThan(200);
-    });
-
-    it('preserves first-seen project grouping before virtualizing candidates', async () => {
-        const props = defaultProps();
-        const candidates = [
-            { ...candidate, remoteSessionId: 'project-a-first', candidateKey: 'project-a-first', details: { path: '/repo/a' } },
-            { ...candidate, remoteSessionId: 'project-b-only', candidateKey: 'project-b-only', details: { path: '/repo/b' } },
-            { ...candidate, remoteSessionId: 'project-a-second', candidateKey: 'project-a-second', details: { path: '/repo/a' } },
-        ];
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={candidates}
-        />);
-
-        expect(screen.findByTestId('direct-session-candidates:section:project:/repo/a:header')).not.toBeNull();
-        expect(screen.findByTestId('direct-session-candidates:section:project:/repo/b:header')).not.toBeNull();
-        const candidateOrder = Array.from(new Set(screen.tree.root.findAll(
-            (node) => typeof node.props?.testID === 'string'
-                && node.props.testID.startsWith('direct-session-candidate:'),
-        ).map((node) => node.props.testID)));
-        expect(candidateOrder).toEqual([
-            'direct-session-candidate:project-a-first',
-            'direct-session-candidate:project-a-second',
-            'direct-session-candidate:project-b-only',
-        ]);
-    });
-
-    it('retains lazy candidate visuals when linking state updates the mounted row', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList {...props} />);
-
-        await screen.update(<ExternalSessionBrowseCandidatesList
-            {...props}
-            linkingSessionId="session-1"
-        />);
-
-        const optionRow = screen.findByTestId('direct-session-candidate:session-1');
-        expect(optionRow?.props.disabled).toBe(true);
-    });
-
-    it('withholds every candidate activation while one link is in flight', async () => {
-        const props = defaultProps();
-        const candidates = [
-            { ...candidate, remoteSessionId: 'session-a', candidateKey: 'candidate-a' },
-            { ...candidate, remoteSessionId: 'session-b', candidateKey: 'candidate-b' },
-            { ...candidate, remoteSessionId: 'session-c', candidateKey: 'candidate-c' },
-        ];
-        const { act } = await import('react-test-renderer');
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={candidates}
-            linkingSessionId="candidate-b"
-        />);
-
-        // The pending row keeps its spinner; every other row is visibly inert
-        // rather than offering an activation the single-flight owner would drop.
-        expect(screen.findAllByTestId('direct-session-candidate:candidate-b')
-            .some((node) => node.props.loading === true)).toBe(true);
-        for (const candidateKey of ['candidate-a', 'candidate-b', 'candidate-c']) {
-            expect(screen.findByTestId(`direct-session-candidate:${candidateKey}`)?.props.disabled).toBe(true);
-        }
-
-        await screen.pressByTestIdAsync('direct-session-candidate:candidate-c');
-        expect(props.onSelectCandidate).not.toHaveBeenCalled();
-
-        const keyboardHost = screen
-            .findAllByTestId('direct-session-candidates:header')
-            .find((node) => typeof node.props?.onKeyPress === 'function');
-        expect(keyboardHost).toBeDefined();
-
-        for (const key of ['ArrowDown', 'Enter']) {
-            await act(async () => {
-                (keyboardHost!.props.onKeyPress as (event: unknown) => void)({
-                    key,
-                    nativeEvent: { key },
-                    preventDefault: () => {},
-                    stopPropagation: () => {},
-                });
-            });
-        }
-
-        expect(props.onSelectCandidate).not.toHaveBeenCalled();
-
-        // Once the link settles, the same rows are activatable again.
-        await screen.update(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={candidates}
-            linkingSessionId={null}
-        />);
-        await screen.pressByTestIdAsync('direct-session-candidate:candidate-c');
-        expect(props.onSelectCandidate).toHaveBeenCalledWith(candidates[2], 0);
-    });
-
-    it('keeps loaded candidates mounted when the next page fails and retries inline', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            error="Next page failed"
-        />);
-
-        expect(screen.findByTestId('direct-session-candidate:session-1')).not.toBeNull();
-        expect(screen.findByTestId('direct-session-candidates:pagination:error')).not.toBeNull();
-        await screen.pressByTestIdAsync('direct-session-candidates:pagination:retry');
-        expect(props.onRetry).toHaveBeenCalledTimes(1);
-    });
-
-    it('marks a stopped index build incomplete with a retry instead of an end-of-list marker', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            nextCursor={null}
-            paginationRequestKey={null}
-            preparation={null}
-            preparationStopped
-        />);
-
-        const candidateRow = screen.findByTestId('direct-session-candidate:session-1');
-        expect(candidateRow).not.toBeNull();
-        expect(candidateRow?.props.disabled).toBeFalsy();
-        expect(screen.findByTestId('direct-session-candidates:pagination:end')).toBeNull();
-        const notice = screen.findByTestId('direct-session-candidates:pagination:error');
-        expect(notice?.findAllByProps({
-            children: 'externalSessions.browseIndexingCancelled',
-        }).length).toBeGreaterThan(0);
-        await screen.pressByTestIdAsync('direct-session-candidates:pagination:retry');
-        expect(props.onRetry).toHaveBeenCalledTimes(1);
-    });
-
-    it('presents incomplete link and import annotations without disabling candidate actions', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            annotationsIncomplete
-        />);
-
-        const notice = screen.findByTestId('direct-session-candidates-annotations-incomplete');
-        expect(notice).not.toBeNull();
-        expect(notice?.props).toMatchObject({
-            accessibilityLiveRegion: 'polite',
-            role: 'status',
-            'aria-live': 'polite',
-        });
-        expect(notice?.props.children).toBe('externalSessions.browseAnnotationsIncomplete');
-        expect(screen.findByTestId('direct-session-candidate:session-1')?.props.disabled).toBeFalsy();
-    });
-
-    it('shows only the progress row while indexing, and the status notice only once indexing is done', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            annotationsIncomplete
-            preparation={{ kind: 'building_candidate_index', scanned: 50 } as never}
-        />);
-        // Statuses are still being established while the index builds: not a notice yet.
-        expect(screen.findByTestId('direct-session-candidates-annotations-incomplete')).toBeNull();
-
-        await screen.update(<ExternalSessionBrowseCandidatesList {...props} annotationsIncomplete preparation={null} />);
-        expect(screen.findByTestId('direct-session-candidates-annotations-incomplete')).not.toBeNull();
-    });
-
-    it('uses automatic end reach without rendering a manual Load More row', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList {...props} />);
-
-        expect(screen.findByTestId('direct-session-candidates-load-more')).toBeNull();
-        legendListState.props?.onEndReached?.();
-        legendListState.props?.onEndReached?.();
-        expect(props.onLoadMore).toHaveBeenCalledTimes(1);
-    });
-
-    it('names the incremental-search progressbar without exposing a second unlabeled wrapper', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            searchAugmenting
-            searchQuery="hidden session"
-        />);
-
-        const searchProgress = screen.findByTestId('direct-session-candidates-search-augmenting');
-        expect(searchProgress?.props.accessibilityLabel).toBeUndefined();
-        expect(searchProgress?.findAllByProps({
-            accessibilityRole: 'progressbar',
-            accessibilityLabel: 'common.loading',
-        })).toHaveLength(1);
-    });
-
-    it('says a missing machine is gone before claiming no agent can browse (state precedence)', async () => {
-        const props = defaultProps();
-        const onChooseMachine = vi.fn();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[]}
-            nextCursor={null}
-            browseCapabilityAvailable={false}
-            scope={{ kind: 'gone', homeName: 'Studio', onChooseMachine }}
-        />);
-
-        expect(screen.findByTestId('direct-session-candidates:machine-gone')).not.toBeNull();
-        expect(screen.findByTestId('direct-session-candidates:no-agents')).toBeNull();
-        expect(screen.getTextContent()).toContain('settingsPlugins.targetSelection.missingInHome');
-        await screen.pressByTestIdAsync('direct-session-candidates:machine-gone-action');
-        expect(onChooseMachine).toHaveBeenCalledTimes(1);
-    });
-
-    it('shows an inventory read failure without diagnosing the Home or declaring the machine gone', async () => {
-        const props = defaultProps();
-        const onChooseMachine = vi.fn();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[]}
-            nextCursor={null}
-            browseCapabilityAvailable={false}
-            scope={{ kind: 'inventory', status: 'error', onChooseMachine }}
-        />);
-
-        expect(screen.findByTestId('direct-session-candidates:inventory-unavailable')).not.toBeNull();
-        expect(screen.findByTestId('direct-session-candidates:machine-gone')).toBeNull();
-        expect(screen.findByTestId('direct-session-candidates:no-agents')).toBeNull();
-        expect(screen.getTextContent()).toContain('common.unavailable');
-        expect(screen.getTextContent()).not.toContain('settingsPlugins.targetSelection.unreachableHome');
-        await screen.pressByTestIdAsync('direct-session-candidates:inventory-unavailable-action');
-        expect(onChooseMachine).toHaveBeenCalledTimes(1);
-    });
-
-    it('asks for a machine, and says an unreachable machine is offline, before any agent state', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[]}
-            nextCursor={null}
-            browseCapabilityAvailable={false}
-            scope={{ kind: 'unselected', onChooseMachine: vi.fn() }}
-        />);
-        expect(screen.findByTestId('direct-session-candidates:no-machine')).not.toBeNull();
-        expect(screen.findByTestId('direct-session-candidates:no-agents')).toBeNull();
-
-        await screen.update(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[]}
-            nextCursor={null}
-            browseCapabilityAvailable={false}
-            machineLabel="MacBook Pro"
-            scope={{ kind: 'offline', onChooseMachine: vi.fn() }}
-        />);
-        expect(screen.findByTestId('direct-session-candidates:offline')).not.toBeNull();
-        expect(screen.findByTestId('direct-session-candidates:no-agents')).toBeNull();
-    });
-
-    it('renders an actionable offline state instead of an empty list', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[]}
-            error="Machine offline"
-            offline
-            nextCursor={null}
-        />);
-
-        const offline = screen.findByTestId('direct-session-candidates:offline');
-        expect(offline).not.toBeNull();
-        expect(offline?.props.accessibilityRole).toBe('alert');
-        expect(offline?.props.accessibilityLiveRegion).toBe('assertive');
-        expect(offline?.props.role).toBe('alert');
-        expect(offline?.props['aria-live']).toBe('assertive');
-        expect(screen.tree.root.findAllByProps({ accessibilityLiveRegion: 'assertive' })).toHaveLength(1);
-        await screen.pressByTestIdAsync('direct-session-candidates:offline-action');
-        expect(props.onRetry).toHaveBeenCalledTimes(1);
-    });
-
-    it('prefers the current machine-offline reason over a stale candidate Agent failure', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[]}
-            error="externalSessions.browseAgentUnavailable"
-            offline
-            nextCursor={null}
-        />);
-
-        const text = screen.getTextContent();
-        expect(text).toContain('externalSessions.browseMachineOfflineBody');
-        expect(text).not.toContain('externalSessions.browseAgentUnavailable');
-    });
-
-    it('announces an empty-list load failure without adding a second live region', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[]}
-            error="List failed"
-            nextCursor={null}
-        />);
-
-        const error = screen.findByTestId('direct-session-candidates:error');
-        expect(error?.props.accessibilityRole).toBe('alert');
-        expect(error?.props.accessibilityLiveRegion).toBe('assertive');
-        expect(screen.tree.root.findAllByProps({ accessibilityLiveRegion: 'assertive' })).toHaveLength(1);
-    });
-
-    it('shows a settled empty listing as the page empty state', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[]}
-            nextCursor={null}
-            agentLabel="Claude Code"
-            sourceLabel="Default Claude config"
-        />);
-
-        // The settled empty listing is the page empty state inside the results area (the toolbar
-        // above keeps the agent and source visible), not a bare "no candidates" line.
-        const empty = screen.findByTestId('direct-session-candidates:empty');
-        expect(empty).not.toBeNull();
-        expect(screen.getTextContent()).toContain('externalSessions.browseEmptyTitle');
-        expect(screen.findByTestId('direct-session-candidates:no-matches')).toBeNull();
-    });
-
-    it('answers a search without matches with one line and a way to clear it', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[]}
-            nextCursor={null}
-            searchQuery="postgres"
-        />);
-
-        expect(screen.findByTestId('direct-session-candidates:no-matches')).not.toBeNull();
-        expect(screen.findByTestId('direct-session-candidates:empty')).toBeNull();
-        await screen.pressByTestIdAsync('direct-session-candidates:no-matches:clear');
-        expect(props.onSearchQueryChange).toHaveBeenCalledWith('');
-    });
-
-    it('continues an empty cursor page through SelectionList without a manual action', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[]}
-            nextCursor="cursor-after-empty-page"
-        />);
-
-        expect(screen.findByTestId('direct-session-candidates:empty-continuation')).toBeNull();
-        expect(screen.getTextContent()).not.toContain('externalSessions.browseLoadMore');
-        expect(typeof legendListState.props?.onEndReached).toBe('function');
-        legendListState.props?.onEndReached?.();
-        legendListState.props?.onEndReached?.();
-        expect(props.onLoadMore).toHaveBeenCalledTimes(1);
-    });
-
-    it('allows the same opaque cursor to paginate again after the browse scope changes', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            paginationRequestKey={'scope-a\u0000cursor-1'}
-        />);
-
-        legendListState.props?.onEndReached?.();
-        expect(props.onLoadMore).toHaveBeenCalledTimes(1);
-
-        await screen.update(<ExternalSessionBrowseCandidatesList
-            {...props}
-            machineLabel="Another machine"
-            paginationRequestKey={'scope-b\u0000cursor-1'}
-        />);
-        legendListState.props?.onEndReached?.();
-
-        expect(props.onLoadMore).toHaveBeenCalledTimes(2);
-    });
-
-    it('formats section and row paths against the selected machine home directory', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[{
-                ...candidate,
-                title: 'Home project',
-                details: { path: 'C:\\Users/alice\\projects/happier' },
-            }]}
-            machineHomeDir="C:\\Users\\alice"
-        />);
-
-        expect(screen.getTextContent()).toContain('~/projects/happier');
-        expect(screen.getTextContent()).not.toContain('C:\\Users');
-    });
-
-    it('names a candidate with its visible project identity and trailing activity/link state', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[{
-                ...candidate,
-                details: { path: '/Users/alice/projects/happier' },
-                linkedSessionId: 'happier-session-1',
-                imported: true,
-            }]}
-            agentLabel="Codex"
-            machineLabel="MacBook Pro"
-            machineHomeDir="/Users/alice"
-        />);
-
-        const option = screen.findByTestId('direct-session-candidate:session-1');
-        expect(option?.props.accessibilityLabel).toBe(
-            `Existing session, Codex · MacBook Pro · ~/projects/happier, ${formatShortRelativeTime(candidate.updatedAtMs)}, status.ready, externalSessions.browseLinked, externalSessions.browseImported`,
-        );
-        expect(option?.props.accessibilityLabel).not.toContain('/Users/alice');
-    });
-
-    it('shows only what tells rows apart: the Agent and machine chosen in the band are not repeated on every row', async () => {
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...defaultProps()}
-            candidates={[{ ...candidate, details: { path: '/Users/alice/projects/happier' } }]}
-            agentLabel="Codex"
-            machineLabel="MacBook Pro"
-            machineHomeDir="/Users/alice"
-        />);
-        const option = screen.findByTestId('direct-session-candidate:session-1');
-        // Spoken alone, the row still says whose and where.
-        expect(option?.props.accessibilityLabel).toContain('Codex · MacBook Pro');
-        expect(screen.getTextContent()).toContain('~/projects/happier');
-        expect(screen.getTextContent()).not.toContain('MacBook Pro');
-    });
-
-    it('renders mounted cold-index progress instead of an empty result', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[]}
-            loading
-            nextCursor={null}
-            preparation={{
-                kind: 'building_candidate_index',
-                scanned: 50,
-                total: 100,
-            }}
-        />);
-
-        const progress = screen.findByTestId('direct-session-candidates:indexing');
-        expect(progress).not.toBeNull();
-        expect(progress?.props.accessibilityLabel).toBe('externalSessions.browseIndexingProgress');
-        expect(progress?.findAllByProps({
-            testID: 'direct-session-candidates:indexing:cancel',
-        })).toHaveLength(0);
-        expect(screen.findByTestId('direct-session-candidates:loading')).toBeNull();
-        await screen.pressByTestIdAsync('direct-session-candidates:indexing:cancel');
-        expect(props.onCancelPreparation).toHaveBeenCalledTimes(1);
-    });
-
-    it('keeps indexing progress and its cancel affordance reachable beside served rows', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[candidate]}
-            loading
-            nextCursor={null}
-            preparation={{
-                kind: 'building_candidate_index',
-                scanned: 50,
-                total: 100,
-            }}
-        />);
-
-        expect(screen.findByTestId('direct-session-candidate:session-1')).not.toBeNull();
-        const progress = screen.findByTestId('direct-session-candidates:indexing');
-        expect(progress).not.toBeNull();
-        expect(progress?.props.accessibilityLabel).toBe('externalSessions.browseIndexingProgress');
-        expect(screen.findAllHostsByTestId('direct-session-candidates:indexing')).toHaveLength(1);
-        expect(screen.findByTestId('direct-session-candidates:loading')).toBeNull();
-
-        await screen.pressByTestIdAsync('direct-session-candidates:indexing:cancel');
-        expect(props.onCancelPreparation).toHaveBeenCalledTimes(1);
-    });
-
-    it('renders accessible bounded indeterminate progress when the total is unknown', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[]}
-            loading
-            nextCursor={null}
-            preparation={{
-                kind: 'building_candidate_index',
-                scanned: 50,
-            }}
-        />);
-
-        const progress = screen.findByTestId('direct-session-candidates:indexing');
-        expect(progress?.props.accessibilityRole).toBe('progressbar');
-        expect(progress?.props.accessibilityLabel).toBe('externalSessions.browseIndexing');
-        expect(progress?.props.accessibilityValue).toBeUndefined();
-        expect(progress?.props.accessibilityLiveRegion).toBeUndefined();
-        expect(progress?.props['aria-live']).toBeUndefined();
-        expect(progress?.findAllByProps({
-            accessibilityElementsHidden: true,
-            importantForAccessibility: 'no-hide-descendants',
-            'aria-hidden': true,
-        })).toHaveLength(1);
-    });
-
-    it('coalesces indexing announcements while keeping the current progress value queryable', async () => {
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        // The live region is mounted before the index build starts, so the build's
-        // arrival is inserted into an existing region and actually spoken.
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[]}
-            loading
-            nextCursor={null}
-            preparation={null}
-        />);
-        const silentRegion = screen.findByTestId('direct-session-candidates:indexing:a11y-status');
-        expect((silentRegion?.props.children as { props?: { children?: unknown } } | undefined)?.props?.children)
-            .toBe('');
-
-        await screen.update(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[]}
-            loading
-            nextCursor={null}
-            preparation={{
-                kind: 'building_candidate_index',
-                scanned: 50,
-                total: 100,
-            }}
-        />);
-
-        const announcement = screen.findByTestId('direct-session-candidates:indexing:a11y-status');
-        expect(announcement?.props).toMatchObject({
-            accessibilityLiveRegion: 'polite',
-            role: 'status',
-            'aria-live': 'polite',
-            'aria-atomic': true,
-        });
-        expect((announcement?.props.children as { props?: { children?: unknown } } | undefined)?.props?.children)
-            .toBe('externalSessions.browseIndexing');
-
-        const progress = screen.findByTestId('direct-session-candidates:indexing');
-        expect(progress?.props.accessibilityLiveRegion).toBeUndefined();
-        expect(progress?.props['aria-live']).toBeUndefined();
-        expect(progress?.props.accessibilityValue).toEqual({ min: 0, max: 100, now: 50 });
-
-        await screen.update(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[]}
-            loading
-            nextCursor={null}
-            preparation={{
-                kind: 'building_candidate_index',
-                scanned: 75,
-                total: 100,
-            }}
-        />);
-
-        const updatedAnnouncement = screen.findByTestId('direct-session-candidates:indexing:a11y-status');
-        expect((updatedAnnouncement?.props.children as { props?: { children?: unknown } } | undefined)?.props?.children)
-            .toBe('externalSessions.browseIndexing');
-        expect(screen.findByTestId('direct-session-candidates:indexing')?.props.accessibilityValue)
-            .toEqual({ min: 0, max: 100, now: 75 });
-    });
-
-    it('announces indexing and incomplete candidate-status changes on iOS', async () => {
-        accessibilityPlatform.os = 'ios';
-        const props = defaultProps();
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[]}
-            scope={{ kind: 'inventory', status: 'loading' }}
-            nextCursor={null}
-            preparation={null}
-        />);
-
-        expect(announceForAccessibilityMock).toHaveBeenCalledOnce();
-        expect(announceForAccessibilityMock).toHaveBeenLastCalledWith(
-            'common.loading',
-        );
-
-        await screen.update(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[]}
-            loading
-            nextCursor={null}
-            preparation={{
-                kind: 'building_candidate_index',
-                scanned: 50,
-                total: 100,
-            }}
-        />);
-
-        expect(screen.findByTestId('direct-session-candidates:indexing:a11y-status')).toBeNull();
-        expect(announceForAccessibilityMock).toHaveBeenCalledTimes(2);
-        expect(announceForAccessibilityMock).toHaveBeenLastCalledWith(
-            'externalSessions.browseIndexing',
-        );
-
-        await screen.update(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[]}
-            loading
-            nextCursor={null}
-            preparation={{
-                kind: 'building_candidate_index',
-                scanned: 75,
-                total: 100,
-            }}
-        />);
-
-        const updatedProgress = screen.findByTestId('direct-session-candidates:indexing');
-        expect(updatedProgress?.props.accessibilityValue).toEqual({ min: 0, max: 100, now: 75 });
-        expect(announceForAccessibilityMock).toHaveBeenCalledTimes(2);
-
-        await screen.update(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[candidate]}
-            searchIncomplete
-        />);
-
-        expect(announceForAccessibilityMock).toHaveBeenCalledTimes(3);
-        expect(announceForAccessibilityMock).toHaveBeenLastCalledWith(
-            'externalSessions.browseSearchIncomplete',
-        );
-
-        await screen.update(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[candidate]}
-            searchIncomplete
-            annotationsIncomplete
-        />);
-
-        expect(announceForAccessibilityMock).toHaveBeenCalledTimes(4);
-        expect(announceForAccessibilityMock).toHaveBeenLastCalledWith(
-            'externalSessions.browseSearchIncomplete externalSessions.browseAnnotationsIncomplete',
-        );
-    });
-
-    it('distinguishes same-title projects accessibly and selects by the opaque daemon key', async () => {
-        const props = defaultProps();
-        const projectACandidate = {
+  beforeEach(() => {
+    accessibilityPlatform.os = 'web';
+    announceForAccessibilityMock.mockClear();
+  });
+
+  it('renders decoded snippets and keeps unsearchable rows visible but inert', async () => {
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...defaultProps()}
+        searchTarget="content"
+        contentSearchSupported
+        contentSearchSubmitted
+        contentCoverage="partial"
+        nextCursor={null}
+        searchQuery="世界"
+        candidates={[
+          {
             ...candidate,
-            candidateKey: 'project-a-key',
-            details: { path: '/Users/alice/projects/project-a' },
-            linkData: { projectId: 'project-a' },
-        };
-        const projectBCandidate = {
+            match: {
+              snippet: 'Hello\n"世界"',
+              sourceItemId: 'message-1',
+              messageIndex: 3,
+            },
+          },
+          {
             ...candidate,
-            candidateKey: 'project-b-key',
-            details: { path: '/Users/alice/projects/project-b' },
-            linkData: { projectId: 'project-b' },
-        };
-        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
-        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
-            {...props}
-            candidates={[projectACandidate, projectBCandidate]}
-            machineHomeDir="/Users/alice"
-        />);
-
-        const projectALabel = screen.findByTestId('direct-session-candidate:project-a-key')?.props.accessibilityLabel;
-        const projectBLabel = screen.findByTestId('direct-session-candidate:project-b-key')?.props.accessibilityLabel;
-        expect(projectALabel).toContain('~/projects/project-a');
-        expect(projectBLabel).toContain('~/projects/project-b');
-        expect(projectALabel).not.toBe(projectBLabel);
-        expect(`${String(projectALabel)} ${String(projectBLabel)}`).not.toContain('/Users/alice');
-
-        await screen.pressByTestIdAsync('direct-session-candidate:project-b-key');
-
-        expect(props.onSelectCandidate).toHaveBeenCalledWith(projectBCandidate, 0);
+            remoteSessionId: 'native-only',
+            title: 'Native thread',
+          },
+        ]}
+      />,
+    );
+    // The decoded snippet uses the canonical one-line preview, with exact display ranges.
+    expect(
+      screen.findByTestId('external-session-candidate-match:session-1')?.props
+        .children?.props,
+    ).toMatchObject({
+      text: 'Hello "世界"',
+      ranges: [{ start: 7, end: 9, current: false }],
     });
+    expect(
+      screen.findByTestId('direct-session-candidate:native-only')?.props
+        .accessibilityState?.disabled,
+    ).toBe(true);
+    // Rows on screen: what could not be covered closes the list instead of sitting above it, and the
+    // bare "Done" marker is gone.
+    expect(screen.getTextContent()).toContain('externalSessions.browseContentPartial');
+    expect(screen.getTextContent()).not.toContain('common.done');
+    expect(screen.findByTestId('direct-session-candidates-content-partial')).toBeNull();
+  });
+
+  it('ends a fully covered conversation search without a marker', async () => {
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...defaultProps()}
+        searchTarget="content"
+        contentSearchSupported
+        contentSearchSubmitted
+        contentCoverage="complete"
+        searchQuery="flaky e2e"
+        candidates={[{ ...candidate, match: { snippet: 'flaky e2e', sourceItemId: 'message-1' } }]}
+      />,
+    );
+    expect(screen.getTextContent()).not.toContain('common.done');
+    expect(screen.getTextContent()).not.toContain('externalSessions.browseContentPartial');
+  });
+
+  // F9 (r11): Browse closed its rows with a centred line in other words than History; it now sits on the rows' edge.
+  it('closes a partial conversation search with History\'s coverage line', async () => {
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...defaultProps()}
+        searchTarget="content"
+        contentSearchSupported
+        contentSearchSubmitted
+        contentCoverage="partial"
+        contentCoverageLabel="Partial results: Devbox"
+        nextCursor={null}
+        searchQuery="flaky e2e"
+        candidates={[{ ...candidate, match: { snippet: 'flaky e2e', sourceItemId: 'message-1' } }]}
+      />,
+    );
+    expect(screen.getTextContent()).toContain('Partial results: Devbox');
+    expect(screen.getTextContent()).not.toContain('externalSessions.browseContentPartial');
+    expect(screen.getTextContent()).not.toContain('common.done');
+  });
+
+  it('lets "Search more conversations" alone say a search with rows is unfinished', async () => {
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...defaultProps()}
+        searchTarget="content"
+        contentSearchSupported
+        contentSearchSubmitted
+        contentCoverage="partial"
+        searchQuery="flaky e2e"
+        candidates={[{ ...candidate, match: { snippet: 'flaky e2e', sourceItemId: 'message-1' } }]}
+      />,
+    );
+    expect(screen.findByTestId('direct-session-candidates-content-partial')).toBeNull();
+  });
+
+  it('renders proven link/import status through the candidate projection and leaves unproven native absence neutral', async () => {
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const match = {
+      snippet: 'the flaky e2e is the settings sheet',
+      sourceItemId: 'message-1',
+      messageIndex: 0,
+    };
+    const page = ExternalSessionsCandidatesListResponseSchema.parse({ ok: true, nextCursor: null, candidates: [
+      { ...candidate, remoteSessionId: 'scanned', messageCount: 212, match },
+      { ...candidate, remoteSessionId: 'linked', linkedSessionId: 'happier-1', match },
+      { ...candidate, remoteSessionId: 'imported', imported: true, linkedSessionId: 'happier-2', match },
+      // A native record and complete tag annotations do not prove absence of a hosted Session.
+      { ...candidate, remoteSessionId: 'happier-launched', match },
+    ] });
+    if (!page.ok) throw new Error('Expected a successful candidate page');
+    const projected = projectConversationSearchCandidates(page.candidates.map(candidate => ({
+      machineId: 'machine-1', mode: 'standard' as const, agentId: 'claude', sourceKey: 'claude',
+      source: { kind: 'claudeConfig' }, candidate,
+    })), { machineId: 'machine-1', agentId: 'claude', sourceKey: 'claude' }, 'flaky e2e');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...defaultProps()}
+        searchTarget="content"
+        contentSearchSupported
+        contentSearchSubmitted
+        contentCoverage="complete"
+        searchQuery="flaky e2e"
+        candidates={[
+          ...projected,
+          {
+            ...candidate,
+            remoteSessionId: 'indexed',
+            searchMode: 'indexed' as const,
+            match,
+          },
+        ]}
+      />,
+    );
+    const status = (id: string) =>
+      screen.findHostByTestId(`external-session-candidate-status:${id}`)?.props
+        .accessibilityLabel;
+    expect(status('scanned')).toBeUndefined();
+    expect(status('happier-launched')).toBeUndefined();
+    expect(status('linked')).toBe('externalSessions.browseContentInHappier');
+    expect(status('imported')).toBe('externalSessions.browseContentInHappier');
+    // An index-only hit carries no link annotations, so it claims neither.
+    expect(
+      screen.findHostByTestId('external-session-candidate-status:indexed'),
+    ).toBeNull();
+    expect(
+      screen.findByTestId('external-session-candidate-linked:linked'),
+    ).toBeNull();
+    const text = screen.getTextContent();
+    expect(
+      text.split('externalSessions.browseContentMessageCount').length - 1,
+    ).toBe(1);
+  });
+
+  it('renders plain Markdown hit titles and snippets with exact display matches', async () => {
+    const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
+    const candidates = [
+      { ...candidate, remoteSessionId: 'title-hit', title: '# 🪴 **silver meadow** _notes_',
+        match: { snippet: '🪴 **silver meadow** _notes_', sourceItemId: 'title-message', messageIndex: 0 } },
+      { ...candidate, remoteSessionId: 'body-hit', title: '# Project notes',
+        match: { snippet: '… 🪴 **silver meadow** in [the guide](https://example.test) and `files`.', sourceItemId: 'body-message', messageIndex: 1 } },
+    ];
+    const screen = await renderScreen(<ExternalSessionBrowseCandidatesList {...defaultProps()}
+      searchTarget="content" contentSearchSupported contentSearchSubmitted contentCoverage="complete"
+      searchQuery="silver meadow" nextCursor={null} candidates={candidates} />);
+    const text = screen.getTextContent();
+    expect(text).not.toContain('**');
+    expect(text).not.toContain('_notes_');
+    expect(text).not.toContain('# Project');
+    expect(text).not.toContain('https://example.test');
+    expect(text).not.toContain('`files`');
+    expect(text).toContain('Project notes');
+    expect(text).toContain('the guide');
+    // One title match (the duplicate snippet disappears) and one body match, after an emoji.
+    expect(screen.findAllHostsByTestId('find-match-all').map(mark => mark.children.join('')))
+      .toEqual(['silver meadow', 'silver meadow']);
+    // Display projection never changes the native searchable corpus or its locator.
+    expect(candidates[0]!.match).toEqual({ snippet: '🪴 **silver meadow** _notes_', sourceItemId: 'title-message', messageIndex: 0 });
+  });
+
+  it('offers Stop only for a conversation search the user started; a typed phrase still offers Search', async () => {
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const onSearchSubmit = vi.fn();
+    const onCancelPreparation = vi.fn();
+    const base = {
+      ...defaultProps(),
+      candidates: [],
+      searchQuery: 'flaky e2e',
+      searchTarget: 'content' as const,
+      contentSearchSupported: true,
+      loading: true,
+      onSearchSubmit,
+      onCancelPreparation,
+    };
+    // The quiet indexed lookup behind a typed phrase is not a search the user asked for.
+    const typed = await renderScreen(
+      <ExternalSessionBrowseCandidatesList {...base} />,
+    );
+    expect(
+      typed.findByTestId('direct-session-candidates:content-unsearched'),
+    ).not.toBeNull();
+    const label = (screen: Awaited<ReturnType<typeof renderScreen>>) =>
+      (
+        screen
+          .findByTestId('direct-session-candidates-content-submit')
+          ?.findAll((node) => typeof node.children?.[0] === 'string')
+          .map((node) => node.children[0]) ?? []
+      ).join('');
+    expect(label(typed)).toContain('externalSessions.browseContentSubmit');
+    await typed.pressByTestIdAsync('direct-session-candidates-content-submit');
+    expect(onSearchSubmit).toHaveBeenCalledWith('flaky e2e');
+    expect(onCancelPreparation).not.toHaveBeenCalled();
+
+    const searching = await renderScreen(
+      <ExternalSessionBrowseCandidatesList {...base} contentSearchSubmitted />,
+    );
+    expect(label(searching)).toContain('externalSessions.browseIndexingStop');
+  });
+
+  it('never declares no matches while content coverage is unsupported or unsearched', async () => {
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...defaultProps()}
+        candidates={[]}
+        searchQuery="body"
+        searchTarget="content"
+        contentSearchSupported={false}
+        contentCoverage="unsupported"
+        nextCursor={null}
+      />,
+    );
+    expect(
+      screen.findByTestId('direct-session-candidates:content-unsupported'),
+    ).not.toBeNull();
+    expect(
+      screen.findByTestId('direct-session-candidates:no-matches'),
+    ).toBeNull();
+  });
+
+  it('shows incomplete coverage and an explicit continuation for a settled empty content page', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[]}
+        searchQuery="body"
+        searchTarget="content"
+        contentSearchSupported
+        contentSearchSubmitted
+        contentCoverage="partial"
+        nextCursor="unfinished-content-scan"
+      />,
+    );
+
+    // Nothing matched yet, and the rest is still to be searched: not a claim about coverage.
+    expect(screen.getTextContent()).toContain(
+      'externalSessions.browseContentNothingYet',
+    );
+    expect(screen.getTextContent()).not.toContain('externalSessions.browseContentPartial');
+    expect(screen.getTextContent()).not.toContain('common.loading');
+    expect(screen.getTextContent()).toContain(
+      'externalSessions.browseContentMore',
+    );
+    await screen.pressByTestIdAsync(
+      'direct-session-candidates:pagination:more',
+    );
+    expect(props.onLoadMore).toHaveBeenCalledTimes(1);
+  });
+
+  it('says when Search more finds nothing new, and reports a failed page as the one message of its state', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const content = { searchQuery: 'body', searchTarget: 'content', contentSearchSupported: true,
+      contentSearchSubmitted: true, contentCoverage: 'partial' } as const;
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList {...props} {...content} />,
+    );
+    expect(screen.getTextContent()).not.toContain('conversationSearch.moreNothingNew');
+    await screen.pressByTestIdAsync('direct-session-candidates:pagination:more');
+    expect(props.onLoadMore).toHaveBeenCalledTimes(1);
+
+    // The page came back with no new row and more remains: the line says so and the control stays.
+    await screen.update(<ExternalSessionBrowseCandidatesList {...props} {...content} nextCursor="cursor-2" />);
+    expect(screen.getTextContent()).toContain('conversationSearch.moreNothingNew');
+    expect(screen.findByTestId('direct-session-candidates:pagination:more')).not.toBeNull();
+
+    // Nothing new and nothing left: the end is named.
+    await screen.update(<ExternalSessionBrowseCandidatesList {...props} {...content} nextCursor={null} />);
+    expect(screen.getTextContent()).toContain('conversationSearch.moreExhausted');
+
+    // A failed page is reported by its error alone: no "nothing yet" coverage line beside it.
+    const failed = await renderScreen(
+      <ExternalSessionBrowseCandidatesList {...props} {...content} candidates={[]} error="The source could not be read." />,
+    );
+    expect(failed.getTextContent()).toContain('The source could not be read.');
+    expect(failed.getTextContent()).not.toContain('externalSessions.browseContentNothingYet');
+  });
+
+  it('keeps candidate options and pending-state projection within the virtualized window', async () => {
+    const props = defaultProps();
+    const reads: CandidatePresentationReadCounts = {
+      candidateKey: 0,
+      title: 0,
+      details: 0,
+      updatedAtMs: 0,
+      activity: 0,
+    };
+    const candidates = createInstrumentedCandidates(10_000, reads);
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={candidates}
+        agentIdentity={agentIdentity}
+      />,
+    );
+
+    expect(screen.findAllByType('LegendListItem' as never)).toHaveLength(20);
+    // Project grouping is structural and may read every candidate path. The
+    // rest of the candidate projection must stay inside the mounted window.
+    expect(reads.details).toBe(10_000);
+    expect(reads.candidateKey).toBeLessThan(200);
+    expect(reads.title).toBeLessThan(200);
+    expect(reads.updatedAtMs).toBeLessThan(200);
+    expect(reads.activity).toBeLessThan(200);
+
+    reads.candidateKey = 0;
+    reads.title = 0;
+    reads.details = 0;
+    reads.updatedAtMs = 0;
+    reads.activity = 0;
+    await screen.update(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={candidates}
+        agentIdentity={agentIdentity}
+        linkingSessionId="candidate-5000"
+      />,
+    );
+
+    expect(reads.details).toBe(0);
+    expect(reads.candidateKey).toBeLessThan(200);
+    expect(reads.title).toBeLessThan(200);
+    expect(reads.updatedAtMs).toBeLessThan(200);
+    expect(reads.activity).toBeLessThan(200);
+  });
+
+  it('preserves first-seen project grouping before virtualizing candidates', async () => {
+    const props = defaultProps();
+    const candidates = [
+      {
+        ...candidate,
+        remoteSessionId: 'project-a-first',
+        candidateKey: 'project-a-first',
+        details: { path: '/repo/a' },
+      },
+      {
+        ...candidate,
+        remoteSessionId: 'project-b-only',
+        candidateKey: 'project-b-only',
+        details: { path: '/repo/b' },
+      },
+      {
+        ...candidate,
+        remoteSessionId: 'project-a-second',
+        candidateKey: 'project-a-second',
+        details: { path: '/repo/a' },
+      },
+    ];
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={candidates}
+      />,
+    );
+
+    expect(
+      screen.findByTestId(
+        'direct-session-candidates:section:project:/repo/a:header',
+      ),
+    ).not.toBeNull();
+    expect(
+      screen.findByTestId(
+        'direct-session-candidates:section:project:/repo/b:header',
+      ),
+    ).not.toBeNull();
+    const candidateOrder = Array.from(
+      new Set(
+        screen.tree.root
+          .findAll(
+            (node) =>
+              typeof node.props?.testID === 'string' &&
+              node.props.testID.startsWith('direct-session-candidate:'),
+          )
+          .map((node) => node.props.testID),
+      ),
+    );
+    expect(candidateOrder).toEqual([
+      'direct-session-candidate:project-a-first',
+      'direct-session-candidate:project-a-second',
+      'direct-session-candidate:project-b-only',
+    ]);
+  });
+
+  it('retains lazy candidate visuals when linking state updates the mounted row', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList {...props} />,
+    );
+
+    await screen.update(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        linkingSessionId="session-1"
+      />,
+    );
+
+    const optionRow = screen.findByTestId('direct-session-candidate:session-1');
+    expect(optionRow?.props.disabled).toBe(true);
+  });
+
+  it('withholds every candidate activation while one link is in flight', async () => {
+    const props = defaultProps();
+    const candidates = [
+      {
+        ...candidate,
+        remoteSessionId: 'session-a',
+        candidateKey: 'candidate-a',
+      },
+      {
+        ...candidate,
+        remoteSessionId: 'session-b',
+        candidateKey: 'candidate-b',
+      },
+      {
+        ...candidate,
+        remoteSessionId: 'session-c',
+        candidateKey: 'candidate-c',
+      },
+    ];
+    const { act } = await import('react-test-renderer');
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={candidates}
+        linkingSessionId="candidate-b"
+      />,
+    );
+
+    // The pending row keeps its spinner; every other row is visibly inert
+    // rather than offering an activation the single-flight owner would drop.
+    expect(
+      screen
+        .findAllByTestId('direct-session-candidate:candidate-b')
+        .some((node) => node.props.loading === true),
+    ).toBe(true);
+    for (const candidateKey of ['candidate-a', 'candidate-b', 'candidate-c']) {
+      expect(
+        screen.findByTestId(`direct-session-candidate:${candidateKey}`)?.props
+          .disabled,
+      ).toBe(true);
+    }
+
+    await screen.pressByTestIdAsync('direct-session-candidate:candidate-c');
+    expect(props.onSelectCandidate).not.toHaveBeenCalled();
+
+    const keyboardHost = screen
+      .findAllByTestId('direct-session-candidates:header')
+      .find((node) => typeof node.props?.onKeyPress === 'function');
+    expect(keyboardHost).toBeDefined();
+
+    for (const key of ['ArrowDown', 'Enter']) {
+      await act(async () => {
+        (keyboardHost!.props.onKeyPress as (event: unknown) => void)({
+          key,
+          nativeEvent: { key },
+          preventDefault: () => {},
+          stopPropagation: () => {},
+        });
+      });
+    }
+
+    expect(props.onSelectCandidate).not.toHaveBeenCalled();
+
+    // Once the link settles, the same rows are activatable again.
+    await screen.update(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={candidates}
+        linkingSessionId={null}
+      />,
+    );
+    await screen.pressByTestIdAsync('direct-session-candidate:candidate-c');
+    expect(props.onSelectCandidate).toHaveBeenCalledWith(candidates[2], 0);
+  });
+
+  it('keeps loaded candidates mounted when the next page fails and retries inline', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        error="Next page failed"
+      />,
+    );
+
+    expect(
+      screen.findByTestId('direct-session-candidate:session-1'),
+    ).not.toBeNull();
+    expect(
+      screen.findByTestId('direct-session-candidates:pagination:error'),
+    ).not.toBeNull();
+    await screen.pressByTestIdAsync(
+      'direct-session-candidates:pagination:retry',
+    );
+    expect(props.onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks a stopped index build incomplete with a retry instead of an end-of-list marker', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        nextCursor={null}
+        paginationRequestKey={null}
+        preparation={null}
+        preparationStopped
+      />,
+    );
+
+    const candidateRow = screen.findByTestId(
+      'direct-session-candidate:session-1',
+    );
+    expect(candidateRow).not.toBeNull();
+    expect(candidateRow?.props.disabled).toBeFalsy();
+    expect(
+      screen.findByTestId('direct-session-candidates:pagination:end'),
+    ).toBeNull();
+    const notice = screen.findByTestId(
+      'direct-session-candidates:pagination:error',
+    );
+    expect(
+      notice?.findAllByProps({
+        children: 'externalSessions.browseIndexingCancelled',
+      }).length,
+    ).toBeGreaterThan(0);
+    await screen.pressByTestIdAsync(
+      'direct-session-candidates:pagination:retry',
+    );
+    expect(props.onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('presents incomplete link and import annotations without disabling candidate actions', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList {...props} annotationsIncomplete />,
+    );
+
+    const notice = screen.findByTestId(
+      'direct-session-candidates-annotations-incomplete',
+    );
+    expect(notice).not.toBeNull();
+    expect(notice?.props).toMatchObject({
+      accessibilityLiveRegion: 'polite',
+      role: 'status',
+      'aria-live': 'polite',
+    });
+    expect(notice?.props.children).toBe(
+      'externalSessions.browseAnnotationsIncomplete',
+    );
+    expect(
+      screen.findByTestId('direct-session-candidate:session-1')?.props.disabled,
+    ).toBeFalsy();
+  });
+
+  it('shows only the progress row while indexing, and the status notice only once indexing is done', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        annotationsIncomplete
+        preparation={{ kind: 'building_candidate_index', scanned: 50 } as never}
+      />,
+    );
+    // Statuses are still being established while the index builds: not a notice yet.
+    expect(
+      screen.findByTestId('direct-session-candidates-annotations-incomplete'),
+    ).toBeNull();
+
+    await screen.update(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        annotationsIncomplete
+        preparation={null}
+      />,
+    );
+    expect(
+      screen.findByTestId('direct-session-candidates-annotations-incomplete'),
+    ).not.toBeNull();
+  });
+
+  it('uses automatic end reach without rendering a manual Load More row', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList {...props} />,
+    );
+
+    expect(
+      screen.findByTestId('direct-session-candidates-load-more'),
+    ).toBeNull();
+    legendListState.props?.onEndReached?.();
+    legendListState.props?.onEndReached?.();
+    expect(props.onLoadMore).toHaveBeenCalledTimes(1);
+  });
+
+  it('names the incremental-search progressbar without exposing a second unlabeled wrapper', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        searchAugmenting
+        searchQuery="hidden session"
+      />,
+    );
+
+    const searchProgress = screen.findByTestId(
+      'direct-session-candidates-search-augmenting',
+    );
+    expect(searchProgress?.props.accessibilityLabel).toBeUndefined();
+    expect(
+      searchProgress?.findAllByProps({
+        accessibilityRole: 'progressbar',
+        accessibilityLabel: 'common.loading',
+      }),
+    ).toHaveLength(1);
+  });
+
+  it('says a missing machine is gone before claiming no agent can browse (state precedence)', async () => {
+    const props = defaultProps();
+    const onChooseMachine = vi.fn();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[]}
+        nextCursor={null}
+        browseCapabilityAvailable={false}
+        scope={{ kind: 'gone', homeName: 'Studio', onChooseMachine }}
+      />,
+    );
+
+    expect(
+      screen.findByTestId('direct-session-candidates:machine-gone'),
+    ).not.toBeNull();
+    expect(
+      screen.findByTestId('direct-session-candidates:no-agents'),
+    ).toBeNull();
+    expect(screen.getTextContent()).toContain(
+      'settingsPlugins.targetSelection.missingInHome',
+    );
+    await screen.pressByTestIdAsync(
+      'direct-session-candidates:machine-gone-action',
+    );
+    expect(onChooseMachine).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows an inventory read failure without diagnosing the Home or declaring the machine gone', async () => {
+    const props = defaultProps();
+    const onChooseMachine = vi.fn();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[]}
+        nextCursor={null}
+        browseCapabilityAvailable={false}
+        scope={{ kind: 'inventory', status: 'error', onChooseMachine }}
+      />,
+    );
+
+    expect(
+      screen.findByTestId('direct-session-candidates:inventory-unavailable'),
+    ).not.toBeNull();
+    expect(
+      screen.findByTestId('direct-session-candidates:machine-gone'),
+    ).toBeNull();
+    expect(
+      screen.findByTestId('direct-session-candidates:no-agents'),
+    ).toBeNull();
+    expect(screen.getTextContent()).toContain('common.unavailable');
+    expect(screen.getTextContent()).not.toContain(
+      'settingsPlugins.targetSelection.unreachableHome',
+    );
+    await screen.pressByTestIdAsync(
+      'direct-session-candidates:inventory-unavailable-action',
+    );
+    expect(onChooseMachine).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks for a machine, and says an unreachable machine is offline, before any agent state', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[]}
+        nextCursor={null}
+        browseCapabilityAvailable={false}
+        scope={{ kind: 'unselected', onChooseMachine: vi.fn() }}
+      />,
+    );
+    expect(
+      screen.findByTestId('direct-session-candidates:no-machine'),
+    ).not.toBeNull();
+    expect(
+      screen.findByTestId('direct-session-candidates:no-agents'),
+    ).toBeNull();
+
+    await screen.update(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[]}
+        nextCursor={null}
+        browseCapabilityAvailable={false}
+        machineLabel="MacBook Pro"
+        scope={{ kind: 'offline', onChooseMachine: vi.fn() }}
+      />,
+    );
+    expect(
+      screen.findByTestId('direct-session-candidates:offline'),
+    ).not.toBeNull();
+    expect(
+      screen.findByTestId('direct-session-candidates:no-agents'),
+    ).toBeNull();
+  });
+
+  it('renders an actionable offline state instead of an empty list', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[]}
+        error="Machine offline"
+        offline
+        nextCursor={null}
+      />,
+    );
+
+    const offline = screen.findByTestId('direct-session-candidates:offline');
+    expect(offline).not.toBeNull();
+    expect(offline?.props.accessibilityRole).toBe('alert');
+    expect(offline?.props.accessibilityLiveRegion).toBe('assertive');
+    expect(offline?.props.role).toBe('alert');
+    expect(offline?.props['aria-live']).toBe('assertive');
+    expect(
+      screen.tree.root.findAllByProps({ accessibilityLiveRegion: 'assertive' }),
+    ).toHaveLength(1);
+    await screen.pressByTestIdAsync('direct-session-candidates:offline-action');
+    expect(props.onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('prefers the current machine-offline reason over a stale candidate Agent failure', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[]}
+        error="externalSessions.browseAgentUnavailable"
+        offline
+        nextCursor={null}
+      />,
+    );
+
+    const text = screen.getTextContent();
+    expect(text).toContain('externalSessions.browseMachineOfflineBody');
+    expect(text).not.toContain('externalSessions.browseAgentUnavailable');
+  });
+
+  it('announces an empty-list load failure without adding a second live region', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[]}
+        error="List failed"
+        nextCursor={null}
+      />,
+    );
+
+    const error = screen.findByTestId('direct-session-candidates:error');
+    expect(error?.props.accessibilityRole).toBe('alert');
+    expect(error?.props.accessibilityLiveRegion).toBe('assertive');
+    expect(
+      screen.tree.root.findAllByProps({ accessibilityLiveRegion: 'assertive' }),
+    ).toHaveLength(1);
+  });
+
+  it('shows a settled empty listing as the page empty state', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[]}
+        nextCursor={null}
+        agentLabel="Claude Code"
+        sourceLabel="Default Claude config"
+      />,
+    );
+
+    // The settled empty listing is the page empty state inside the results area (the toolbar
+    // above keeps the agent and source visible), not a bare "no candidates" line.
+    const empty = screen.findByTestId('direct-session-candidates:empty');
+    expect(empty).not.toBeNull();
+    expect(screen.getTextContent()).toContain(
+      'externalSessions.browseEmptyTitle',
+    );
+    expect(
+      screen.findByTestId('direct-session-candidates:no-matches'),
+    ).toBeNull();
+  });
+
+  it('answers a search without matches with one line and a way to clear it', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[]}
+        nextCursor={null}
+        searchQuery="postgres"
+      />,
+    );
+
+    expect(
+      screen.findByTestId('direct-session-candidates:no-matches'),
+    ).not.toBeNull();
+    expect(screen.findByTestId('direct-session-candidates:empty')).toBeNull();
+    await screen.pressByTestIdAsync(
+      'direct-session-candidates:no-matches:clear',
+    );
+    expect(props.onSearchQueryChange).toHaveBeenCalledWith('');
+  });
+
+  it('continues an empty cursor page through SelectionList without a manual action', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[]}
+        nextCursor="cursor-after-empty-page"
+      />,
+    );
+
+    expect(
+      screen.findByTestId('direct-session-candidates:empty-continuation'),
+    ).toBeNull();
+    expect(screen.getTextContent()).not.toContain(
+      'externalSessions.browseLoadMore',
+    );
+    expect(typeof legendListState.props?.onEndReached).toBe('function');
+    legendListState.props?.onEndReached?.();
+    legendListState.props?.onEndReached?.();
+    expect(props.onLoadMore).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows the same opaque cursor to paginate again after the browse scope changes', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        paginationRequestKey={'scope-a\u0000cursor-1'}
+      />,
+    );
+
+    legendListState.props?.onEndReached?.();
+    expect(props.onLoadMore).toHaveBeenCalledTimes(1);
+
+    await screen.update(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        machineLabel="Another machine"
+        paginationRequestKey={'scope-b\u0000cursor-1'}
+      />,
+    );
+    legendListState.props?.onEndReached?.();
+
+    expect(props.onLoadMore).toHaveBeenCalledTimes(2);
+  });
+
+  it('formats section and row paths against the selected machine home directory', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[
+          {
+            ...candidate,
+            title: 'Home project',
+            details: { path: 'C:\\Users/alice\\projects/happier' },
+          },
+        ]}
+        machineHomeDir="C:\\Users\\alice"
+      />,
+    );
+
+    expect(screen.getTextContent()).toContain('~/projects/happier');
+    expect(screen.getTextContent()).not.toContain('C:\\Users');
+  });
+
+  it('names a candidate with its visible project identity and trailing activity/link state', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[
+          {
+            ...candidate,
+            details: { path: '/Users/alice/projects/happier' },
+            linkedSessionId: 'happier-session-1',
+            imported: true,
+          },
+        ]}
+        agentLabel="Codex"
+        machineLabel="MacBook Pro"
+        machineHomeDir="/Users/alice"
+      />,
+    );
+
+    const option = screen.findByTestId('direct-session-candidate:session-1');
+    expect(option?.props.accessibilityLabel).toBe(
+      `Existing session, Codex · MacBook Pro · ~/projects/happier, ${formatShortRelativeTime(candidate.updatedAtMs)}, status.ready, externalSessions.browseLinked, externalSessions.browseImported`,
+    );
+    expect(option?.props.accessibilityLabel).not.toContain('/Users/alice');
+  });
+
+  it('shows only what tells rows apart: the Agent and machine chosen in the band are not repeated on every row', async () => {
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...defaultProps()}
+        candidates={[
+          { ...candidate, details: { path: '/Users/alice/projects/happier' } },
+        ]}
+        agentLabel="Codex"
+        machineLabel="MacBook Pro"
+        machineHomeDir="/Users/alice"
+      />,
+    );
+    const option = screen.findByTestId('direct-session-candidate:session-1');
+    // Spoken alone, the row still says whose and where.
+    expect(option?.props.accessibilityLabel).toContain('Codex · MacBook Pro');
+    expect(screen.getTextContent()).toContain('~/projects/happier');
+    expect(screen.getTextContent()).not.toContain('MacBook Pro');
+  });
+
+  it('renders mounted cold-index progress instead of an empty result', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[]}
+        loading
+        nextCursor={null}
+        preparation={{
+          kind: 'building_candidate_index',
+          scanned: 50,
+          total: 100,
+        }}
+      />,
+    );
+
+    const progress = screen.findByTestId('direct-session-candidates:indexing');
+    expect(progress).not.toBeNull();
+    expect(progress?.props.accessibilityLabel).toBe(
+      'externalSessions.browseIndexingProgress',
+    );
+    expect(
+      progress?.findAllByProps({
+        testID: 'direct-session-candidates:indexing:cancel',
+      }),
+    ).toHaveLength(0);
+    expect(screen.findByTestId('direct-session-candidates:loading')).toBeNull();
+    await screen.pressByTestIdAsync(
+      'direct-session-candidates:indexing:cancel',
+    );
+    expect(props.onCancelPreparation).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps indexing progress and its cancel affordance reachable beside served rows', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[candidate]}
+        loading
+        nextCursor={null}
+        preparation={{
+          kind: 'building_candidate_index',
+          scanned: 50,
+          total: 100,
+        }}
+      />,
+    );
+
+    expect(
+      screen.findByTestId('direct-session-candidate:session-1'),
+    ).not.toBeNull();
+    const progress = screen.findByTestId('direct-session-candidates:indexing');
+    expect(progress).not.toBeNull();
+    expect(progress?.props.accessibilityLabel).toBe(
+      'externalSessions.browseIndexingProgress',
+    );
+    expect(
+      screen.findAllHostsByTestId('direct-session-candidates:indexing'),
+    ).toHaveLength(1);
+    expect(screen.findByTestId('direct-session-candidates:loading')).toBeNull();
+
+    await screen.pressByTestIdAsync(
+      'direct-session-candidates:indexing:cancel',
+    );
+    expect(props.onCancelPreparation).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders accessible bounded indeterminate progress when the total is unknown', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[]}
+        loading
+        nextCursor={null}
+        preparation={{
+          kind: 'building_candidate_index',
+          scanned: 50,
+        }}
+      />,
+    );
+
+    const progress = screen.findByTestId('direct-session-candidates:indexing');
+    expect(progress?.props.accessibilityRole).toBe('progressbar');
+    expect(progress?.props.accessibilityLabel).toBe(
+      'externalSessions.browseIndexing',
+    );
+    expect(progress?.props.accessibilityValue).toBeUndefined();
+    expect(progress?.props.accessibilityLiveRegion).toBeUndefined();
+    expect(progress?.props['aria-live']).toBeUndefined();
+    expect(
+      progress?.findAllByProps({
+        accessibilityElementsHidden: true,
+        importantForAccessibility: 'no-hide-descendants',
+        'aria-hidden': true,
+      }),
+    ).toHaveLength(1);
+  });
+
+  it('coalesces indexing announcements while keeping the current progress value queryable', async () => {
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    // The live region is mounted before the index build starts, so the build's
+    // arrival is inserted into an existing region and actually spoken.
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[]}
+        loading
+        nextCursor={null}
+        preparation={null}
+      />,
+    );
+    const silentRegion = screen.findByTestId(
+      'direct-session-candidates:indexing:a11y-status',
+    );
+    expect(
+      (
+        silentRegion?.props.children as
+          | { props?: { children?: unknown } }
+          | undefined
+      )?.props?.children,
+    ).toBe('');
+
+    await screen.update(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[]}
+        loading
+        nextCursor={null}
+        preparation={{
+          kind: 'building_candidate_index',
+          scanned: 50,
+          total: 100,
+        }}
+      />,
+    );
+
+    const announcement = screen.findByTestId(
+      'direct-session-candidates:indexing:a11y-status',
+    );
+    expect(announcement?.props).toMatchObject({
+      accessibilityLiveRegion: 'polite',
+      role: 'status',
+      'aria-live': 'polite',
+      'aria-atomic': true,
+    });
+    expect(
+      (
+        announcement?.props.children as
+          | { props?: { children?: unknown } }
+          | undefined
+      )?.props?.children,
+    ).toBe('externalSessions.browseIndexing');
+
+    const progress = screen.findByTestId('direct-session-candidates:indexing');
+    expect(progress?.props.accessibilityLiveRegion).toBeUndefined();
+    expect(progress?.props['aria-live']).toBeUndefined();
+    expect(progress?.props.accessibilityValue).toEqual({
+      min: 0,
+      max: 100,
+      now: 50,
+    });
+
+    await screen.update(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[]}
+        loading
+        nextCursor={null}
+        preparation={{
+          kind: 'building_candidate_index',
+          scanned: 75,
+          total: 100,
+        }}
+      />,
+    );
+
+    const updatedAnnouncement = screen.findByTestId(
+      'direct-session-candidates:indexing:a11y-status',
+    );
+    expect(
+      (
+        updatedAnnouncement?.props.children as
+          | { props?: { children?: unknown } }
+          | undefined
+      )?.props?.children,
+    ).toBe('externalSessions.browseIndexing');
+    expect(
+      screen.findByTestId('direct-session-candidates:indexing')?.props
+        .accessibilityValue,
+    ).toEqual({ min: 0, max: 100, now: 75 });
+  });
+
+  it('announces indexing and incomplete candidate-status changes on iOS', async () => {
+    accessibilityPlatform.os = 'ios';
+    const props = defaultProps();
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[]}
+        scope={{ kind: 'inventory', status: 'loading' }}
+        nextCursor={null}
+        preparation={null}
+      />,
+    );
+
+    expect(announceForAccessibilityMock).toHaveBeenCalledOnce();
+    expect(announceForAccessibilityMock).toHaveBeenLastCalledWith(
+      'common.loading',
+    );
+
+    await screen.update(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[]}
+        loading
+        nextCursor={null}
+        preparation={{
+          kind: 'building_candidate_index',
+          scanned: 50,
+          total: 100,
+        }}
+      />,
+    );
+
+    expect(
+      screen.findByTestId('direct-session-candidates:indexing:a11y-status'),
+    ).toBeNull();
+    expect(announceForAccessibilityMock).toHaveBeenCalledTimes(2);
+    expect(announceForAccessibilityMock).toHaveBeenLastCalledWith(
+      'externalSessions.browseIndexing',
+    );
+
+    await screen.update(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[]}
+        loading
+        nextCursor={null}
+        preparation={{
+          kind: 'building_candidate_index',
+          scanned: 75,
+          total: 100,
+        }}
+      />,
+    );
+
+    const updatedProgress = screen.findByTestId(
+      'direct-session-candidates:indexing',
+    );
+    expect(updatedProgress?.props.accessibilityValue).toEqual({
+      min: 0,
+      max: 100,
+      now: 75,
+    });
+    expect(announceForAccessibilityMock).toHaveBeenCalledTimes(2);
+
+    await screen.update(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[candidate]}
+        searchIncomplete
+      />,
+    );
+
+    expect(announceForAccessibilityMock).toHaveBeenCalledTimes(3);
+    expect(announceForAccessibilityMock).toHaveBeenLastCalledWith(
+      'externalSessions.browseSearchIncomplete',
+    );
+
+    await screen.update(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[candidate]}
+        searchIncomplete
+        annotationsIncomplete
+      />,
+    );
+
+    expect(announceForAccessibilityMock).toHaveBeenCalledTimes(4);
+    expect(announceForAccessibilityMock).toHaveBeenLastCalledWith(
+      'externalSessions.browseSearchIncomplete externalSessions.browseAnnotationsIncomplete',
+    );
+  });
+
+  it('distinguishes same-title projects accessibly and selects by the opaque daemon key', async () => {
+    const props = defaultProps();
+    const projectACandidate = {
+      ...candidate,
+      candidateKey: 'project-a-key',
+      details: { path: '/Users/alice/projects/project-a' },
+      linkData: { projectId: 'project-a' },
+    };
+    const projectBCandidate = {
+      ...candidate,
+      candidateKey: 'project-b-key',
+      details: { path: '/Users/alice/projects/project-b' },
+      linkData: { projectId: 'project-b' },
+    };
+    const { ExternalSessionBrowseCandidatesList } =
+      await import('./ExternalSessionBrowseCandidatesList');
+    const screen = await renderScreen(
+      <ExternalSessionBrowseCandidatesList
+        {...props}
+        candidates={[projectACandidate, projectBCandidate]}
+        machineHomeDir="/Users/alice"
+      />,
+    );
+
+    const projectALabel = screen.findByTestId(
+      'direct-session-candidate:project-a-key',
+    )?.props.accessibilityLabel;
+    const projectBLabel = screen.findByTestId(
+      'direct-session-candidate:project-b-key',
+    )?.props.accessibilityLabel;
+    expect(projectALabel).toContain('~/projects/project-a');
+    expect(projectBLabel).toContain('~/projects/project-b');
+    expect(projectALabel).not.toBe(projectBLabel);
+    expect(`${String(projectALabel)} ${String(projectBLabel)}`).not.toContain(
+      '/Users/alice',
+    );
+
+    await screen.pressByTestIdAsync('direct-session-candidate:project-b-key');
+
+    expect(props.onSelectCandidate).toHaveBeenCalledWith(projectBCandidate, 0);
+  });
 });

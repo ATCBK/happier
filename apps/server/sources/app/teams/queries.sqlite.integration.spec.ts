@@ -101,7 +101,7 @@ describe('Team directory (SQLite integration)', () => {
     expect(archivedPage.page.items[0]?.capabilities.restoreTeam).toBe(true);
   });
 
-  it('excludes a suspended membership, which confers nothing', async () => {
+  it('retains a suspended native membership for self-leave without Team read authority', async () => {
     const viewer = await account();
     const suspended = await team(`AD ${crypto.randomUUID()}`, [viewer]);
     await db.teamMembership.updateMany({
@@ -112,7 +112,10 @@ describe('Team directory (SQLite integration)', () => {
     const page = await list(viewer.id);
     expect(page.ok).toBe(true);
     if (!page.ok) return;
-    expect(page.page.items.map((item) => item.id)).not.toContain(suspended.id);
+    expect(page.page.items.find((item) => item.id === suspended.id)).toMatchObject({
+      capabilities: { ...NO_TEAM_CAPABILITIES_V1, leave: true },
+      counts: null,
+    });
   });
 
   it('keeps the administrative scope explicit and reserved to Home authority', async () => {

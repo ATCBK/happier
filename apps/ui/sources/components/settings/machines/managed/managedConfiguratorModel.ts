@@ -8,6 +8,7 @@ import { createPluginJsonSchemaZodValueAdapter } from '@happier-dev/protocol/plu
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { PluginJsonSchemaV2 } from '@happier-dev/protocol/plugins/contributions/public-types';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
+import { PluginJsonValueV2Schema } from '@happier-dev/protocol/plugins/contributions/jsonSchema';
 import { qualifiedPurposeKey } from '@happier-dev/protocol/connect/connectedAccountPurposeBindings';
 import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualifiedConnectedAccountPersistence';
 import type { MachineRetentionDefaultsV1, MachineRetentionOverrideV1 } from '@happier-dev/protocol/account/settings/machineRetentionDefaultsV1';
@@ -108,7 +109,7 @@ export function managedConfiguratorOptionsSelectors(draft: ManagedConfiguratorDr
     const parsed = draft.optionsSelectors !== undefined ? schema.safeParse(draft.optionsSelectors)
         : draft.preset && draft.selected ? createStoredReadSchema(schema).safeParse(draft.selected.launch)
             : schema.safeParse({});
-    return parsed.success ? parsed.data : null;
+    return parsed.success ? PluginJsonValueV2Schema.parse(parsed.data) : null;
 }
 export function setManagedConfiguratorOptionsSelectors(draft: ManagedConfiguratorDraft,
     selectors: Readonly<Record<string, unknown>>): ManagedConfiguratorDraft {

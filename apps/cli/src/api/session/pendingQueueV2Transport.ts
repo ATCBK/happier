@@ -11,13 +11,15 @@ import { emitSocketWithAck } from '@/session/transport/shared/socketAck';
 import { ACCEPTED_PENDING_SETTLEMENT_EVENT_V1, AcceptedPendingSettlementRequestV1Schema, AcceptedPendingSettlementResponseV1Schema } from '@happier-dev/protocol/sessions/pending/acceptedPendingSettlementV1';
 import { normalizePendingDeliveryBlockedReason } from '@happier-dev/protocol/sessions/messages/pendingDeliveryBlockedReason';
 import { normalizePendingDeliveryStatusV1, parsePendingDeliveryStatusV1 } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
-import { normalizePendingRequestedActionV1, PendingRequestedActionV1Schema, PendingResetStartSetInputV1Schema, PendingResetStartSetResultV1Schema, type PendingRequestedActionV1, type PendingResetStartBindingV1, type PendingResetStartSetInputV1, type PendingResetStartSetResultV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { normalizePendingRequestedActionV1, PendingRequestedActionV1Schema, PendingResetStartSetInputV1Schema, SessionPendingActionSetResultV1Schema, type PendingRequestedActionV1, type PendingResetStartBindingV1, type PendingResetStartSetInputV1, type SessionPendingActionSetResultV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { PendingProviderActionSchema } from '@happier-dev/protocol/sessions/pending/pendingProviderAction';
 import { SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import type { SessionPendingEnqueueByMachineRequestV1 } from '@happier-dev/protocol/sessions/messages/sessionPendingMachineAdmissionV1';
 import { SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1, SessionPendingAdmissionSettlementRequestV1Schema, SessionPendingAdmissionSettlementResponseV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingAdmissionSettlementV1';
 import { SESSION_PENDING_EXECUTION_RUN_MATERIALIZE_NEXT_EVENT_V2, SESSION_PENDING_EXECUTION_RUN_ACCEPTED_EVENT_V2, SESSION_PENDING_EXECUTION_RUN_BLOCK_EVENT_V2, SessionPendingExecutionRunMaterializeNextRequestV2Schema, SessionPendingExecutionRunMaterializeNextResponseV2Schema, SessionPendingExecutionRunAcceptedRequestV2Schema, SessionPendingExecutionRunAcceptedResponseV2Schema, SessionPendingExecutionRunBlockRequestV2Schema, SessionPendingExecutionRunBlockResponseV2Schema, SessionExecutionRunPendingEnqueueRequestV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingExecutionRunMachineAdmissionV2';
 import { ParticipantExecutionRunRecipientRoutingIdentityV1Schema } from '@happier-dev/protocol/messages/structured/participantMessageV1';
 import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
+import { RetainedContextPendingMaterializeRequestV5Schema, type RetainedPendingContextV1 } from '@happier-dev/protocol/sessions/pending/retainedPendingContextV1';
 import { SessionMessageRoleSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
 import type { PendingDeliveryBlockedReason, PendingDeliveryStatusV1, PendingProviderAction, SessionInputRequestEqualityEvidenceV1, SessionInputAdmissionReceiptV1, SessionPendingAdmissionSettlementRequestV1, SessionMessageRole, SessionPendingExecutionRunMaterializeNextRequestV2, SessionPendingExecutionRunAcceptedRequestV2, SessionPendingExecutionRunBlockRequestV2, AcceptedPendingSettlementResponseV1, SessionExecutionRunPendingEnqueueRequestV1 } from '@happier-dev/protocol';
 import { SessionAccessErrorCodeV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
@@ -53,12 +55,13 @@ export async function readPendingResetStartsForSource(params: Readonly<{
     return PendingResetStartsReadResultV1Schema.parse(response.data);
 }
 
-/** Binds exact existing custody, or creates a new input already held for reset. */
+/** Updates exact existing custody, or creates a new input already held for reset. */
 export async function updatePendingQueueV2RequestedAction(params: Readonly<{
     token: string; sessionId: string; localId: string; requestedAction: PendingRequestedActionV1; signal?: AbortSignal;
+    resumeWhenAvailable?: boolean;
     initialInput?: PendingResetStartSetInputV1['initialInput'];
     resolveAuthorizationHeaders: (request: Readonly<{ method: 'PATCH' | 'POST'; path: string; body: unknown }>) => Readonly<Record<string, string>> | null;
-}>): Promise<PendingResetStartSetResultV1> {
+}>): Promise<SessionPendingActionSetResultV1> {
     const requestedAction = PendingRequestedActionV1Schema.parse(params.requestedAction);
     if (params.initialInput !== undefined) {
         if (requestedAction.kind !== 'reset_start') throw new Error('Initial Pending input requires reset admission');
@@ -73,10 +76,11 @@ export async function updatePendingQueueV2RequestedAction(params: Readonly<{
             resolveAuthorizationHeaders: request => params.resolveAuthorizationHeaders({ method: 'POST', path: request.path, body: request.body }),
         });
         if (result.didWrite === null || result.terminal || result.suppressed) throw new Error('Invalid Pending reset admission acknowledgement');
-        return PendingResetStartSetResultV1Schema.parse({ didUpdate: result.didWrite, requestedAction });
+        return SessionPendingActionSetResultV1Schema.parse({ didUpdate: result.didWrite, requestedAction });
     }
     const path = `/v2/sessions/${encodeURIComponent(params.sessionId)}/pending/${encodeURIComponent(params.localId)}/action`;
-    const body = { requestedAction };
+    const body = { requestedAction,
+        ...(params.resumeWhenAvailable !== undefined ? { resumeWhenAvailable: params.resumeWhenAvailable } : {}) };
     const authorization = params.resolveAuthorizationHeaders({ method: 'PATCH', path, body });
     if (!authorization) throw Object.assign(new Error('admission_unavailable'), { code: 'admission_unavailable' });
     const response = await axios.patch<unknown>(`${resolveServerHttpBaseUrl()}${path}`, body, {
@@ -87,7 +91,7 @@ export async function updatePendingQueueV2RequestedAction(params: Readonly<{
     if (!data || typeof data !== 'object' || Reflect.get(data, 'ok') !== true) {
         throw new Error('Invalid Pending intent mutation acknowledgement');
     }
-    return PendingResetStartSetResultV1Schema.parse({ didUpdate: Reflect.get(data, 'didUpdate'), requestedAction: Reflect.get(data, 'requestedAction') });
+    return SessionPendingActionSetResultV1Schema.parse({ didUpdate: Reflect.get(data, 'didUpdate'), requestedAction: Reflect.get(data, 'requestedAction') });
 }
 /** Semantic withdrawal reuses ordinary pending deletion, including its delivery fence. */
 export async function withdrawPendingQueueV2Message(params: Readonly<{
@@ -297,6 +301,9 @@ export type PendingQueueWriteBody = Readonly<(
     deliveryMode?: 'continuation_if_no_queued_user_input';
     /** Host-derived only. Account/plugin authors never receive this value. */
     requestEqualityEvidenceV1?: SessionInputRequestEqualityEvidenceV1;
+    followSources?: SessionPendingEnqueueByMachineRequestV1['followSources'];
+    followRelations?: SessionPendingEnqueueByMachineRequestV1['followRelations'];
+    followDeliveryV1?: SessionPendingEnqueueByMachineRequestV1['followDeliveryV1'];
 }>>;
 
 type PendingQueueSocketMaterializeResult =
@@ -316,6 +323,7 @@ type PendingMaterializePayload = Readonly<{
     deliveryTiming?: PendingMaterializationDeliveryTiming;
     foregroundState?: PendingClaimForegroundState;
     expectedRuntimeActivityRevision?: number;
+    retainedContext?: RetainedPendingContextV1;
 }>;
 
 export type PendingQueueDeliveryBlockedReason = PendingDeliveryBlockedReason;
@@ -400,6 +408,9 @@ function readPendingMaterializePayload(payload: unknown): PendingMaterializePayl
         throw new Error('Invalid pending queue materialize payload');
     }
     const record = payload as Record<string, unknown>;
+    if (record.retainedContext !== undefined) return RetainedContextPendingMaterializeRequestV5Schema.parse(record);
+    // Incumbent revisions 2–4 sent no retained-context authority. Keep their
+    // established field projection; unfamiliar fields confer no proof meaning.
     if (typeof record.sid !== 'string') {
         throw new Error('Invalid pending queue materialize session id');
     }
@@ -1058,7 +1069,7 @@ export async function enqueuePendingQueueV2MessageViaHttp(params: {
     body: PendingQueueWriteBody;
     signal?: AbortSignal;
     resolveAuthorizationHeaders?: ResolvePendingQueueAuthorizationHeaders;
-}): Promise<Readonly<{ didWrite: boolean | null; terminal: boolean; suppressed: boolean }>> {
+}): Promise<Readonly<{ didWrite: boolean | null; terminal: boolean; suppressed: boolean; acceptedLocalId?: string }>> {
     return postPendingQueueMessageViaHttp({
         ...params,
         path: `/v2/sessions/${encodeURIComponent(params.sessionId)}/pending`,
@@ -1072,7 +1083,7 @@ export async function enqueuePendingExecutionRunMessageViaHttp(params: {
     body: SessionExecutionRunPendingEnqueueRequestV1;
     signal?: AbortSignal;
     resolveAuthorizationHeaders?: ResolvePendingQueueAuthorizationHeaders;
-}): Promise<Readonly<{ didWrite: boolean | null; terminal: boolean; suppressed: boolean }>> {
+}): Promise<Readonly<{ didWrite: boolean | null; terminal: boolean; suppressed: boolean; acceptedLocalId?: string }>> {
     const recipient = ParticipantExecutionRunRecipientRoutingIdentityV1Schema.parse(params.recipient);
     return postPendingQueueMessageViaHttp({
         ...params,
@@ -1087,7 +1098,7 @@ async function postPendingQueueMessageViaHttp(params: {
     body: PendingQueueWriteBody | SessionExecutionRunPendingEnqueueRequestV1;
     signal?: AbortSignal;
     resolveAuthorizationHeaders?: ResolvePendingQueueAuthorizationHeaders;
-}): Promise<Readonly<{ didWrite: boolean | null; terminal: boolean; suppressed: boolean }>> {
+}): Promise<Readonly<{ didWrite: boolean | null; terminal: boolean; suppressed: boolean; acceptedLocalId?: string }>> {
     const serverUrl = resolveServerHttpBaseUrl();
     const authorizationHeaders = params.resolveAuthorizationHeaders?.({
         method: 'POST', path: params.path, body: params.body,
@@ -1113,12 +1124,16 @@ async function postPendingQueueMessageViaHttp(params: {
         }
     })();
     const data = response?.data;
+    const acceptedLocalId = data && typeof data === 'object' && 'message' in data
+        && data.message && typeof data.message === 'object' && 'localId' in data.message
+        ? readPendingLocalId(data.message.localId) : null;
     return {
         didWrite: data && typeof data === 'object' && typeof (data as { didWrite?: unknown }).didWrite === 'boolean'
             ? (data as { didWrite: boolean }).didWrite
             : null,
         terminal: data && typeof data === 'object' && (data as { terminal?: unknown }).terminal === true,
         suppressed: data && typeof data === 'object' && (data as { suppressed?: unknown }).suppressed === true,
+        ...(acceptedLocalId ? { acceptedLocalId } : {}),
     };
 }
 
@@ -1127,6 +1142,7 @@ export async function resolveAcceptedPendingQueueV2Delivery(params: {
     sessionId: string;
     localId: string;
     acceptedDelivery?: SessionMessageAcceptedDeliveryContentV1;
+    acceptedTurn?: { kind: 'newTurn' | 'followUp' | 'steer'; turnId: string };
     signal?: AbortSignal;
 }): Promise<{ didResolve: boolean; pendingQueueState?: KnownPendingQueueState; message?: PendingQueueMaterializedMessage | null }> {
     const localId = readPendingLocalId(params.localId);
@@ -1141,6 +1157,7 @@ export async function resolveAcceptedPendingQueueV2Delivery(params: {
         payload: AcceptedPendingSettlementRequestV1Schema.parse({
             v: 1, sessionId: params.sessionId, localId,
             ...(params.acceptedDelivery === undefined ? {} : { acceptedDelivery: params.acceptedDelivery }),
+            ...(params.acceptedTurn === undefined ? {} : { acceptedTurn: params.acceptedTurn }),
         }),
     });
     const parsed = AcceptedPendingSettlementResponseV1Schema.safeParse(raw);
@@ -1282,6 +1299,7 @@ export async function blockPendingQueueV2Delivery(params: {
     sessionId: string;
     localId: string;
     reason: PendingQueueDeliveryBlockedReason;
+    signal?: AbortSignal;
 }): Promise<{
     pendingQueueState?: KnownPendingQueueState;
     usedLegacySteeringUnavailableFallback?: true;
@@ -1384,6 +1402,7 @@ async function tryMaterializeNextViaSocket(params: {
     deliveryTiming?: PendingMaterializationDeliveryTiming;
     foregroundState?: PendingClaimForegroundState;
     expectedRuntimeActivityRevision?: number;
+    retainedContext?: RetainedPendingContextV1;
 }): Promise<PendingQueueSocketMaterializeResult> {
     try {
         const rawAck = await emitSocketWithAck<Record<string, unknown>>({
@@ -1397,6 +1416,7 @@ async function tryMaterializeNextViaSocket(params: {
                 ...(params.deliveryStateOptIn === true ? { deliveryState: 'provider' } : {}),
                 ...(params.deliveryTiming ? { deliveryTiming: params.deliveryTiming } : {}),
                 ...(params.foregroundState ? { foregroundState: params.foregroundState } : {}),
+                ...(params.retainedContext ? { retainedContext: params.retainedContext } : {}),
                 ...(typeof params.expectedRuntimeActivityRevision === 'number'
                     ? { expectedRuntimeActivityRevision: params.expectedRuntimeActivityRevision }
                     : {}),
@@ -1554,6 +1574,7 @@ export async function materializeNextPendingQueueV2Message(params: {
     deliveryTiming?: PendingMaterializationDeliveryTiming;
     foregroundState?: PendingClaimForegroundState;
     expectedRuntimeActivityRevision?: number;
+    retainedContext?: RetainedPendingContextV1;
 }): Promise<PendingQueueMaterializeNextResult> {
     const requiresBoundSessionSocket = Boolean(params.deliveryStateOptIn);
     const socketRes = params.socket.connected
@@ -1566,6 +1587,7 @@ export async function materializeNextPendingQueueV2Message(params: {
             deliveryTiming: params.deliveryTiming,
             foregroundState: params.foregroundState,
             expectedRuntimeActivityRevision: params.expectedRuntimeActivityRevision,
+            retainedContext: params.retainedContext,
         })
         : null;
     let res: PendingQueueSocketMaterializeResult | PendingQueueHttpMaterializeResult;

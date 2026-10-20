@@ -2,11 +2,15 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   txSessionFindUnique,
+  createSessionAccessProjectionRelations,
   createSessionRouteTestBuilder,
   resetSessionRouteMocks,
   txSessionFindFirst,
   txSessionMessageFindFirst,
 } from './sessionRoutes.testkit';
+
+// Load the real route graph during suite setup, before timing request behavior.
+await createSessionRouteTestBuilder('POST', '/v1/sessions/:sessionId/messages/action-reference/resolve');
 
 describe('session Message Action reference resolution route', () => {
   const reference = {
@@ -18,6 +22,11 @@ describe('session Message Action reference resolution route', () => {
 
   beforeEach(() => {
     resetSessionRouteMocks();
+    txSessionFindUnique.mockResolvedValue({
+      ...createSessionAccessProjectionRelations(),
+      id: reference.sessionId,
+      accountId: 'u1',
+    });
     txSessionFindFirst.mockReset();
     txSessionMessageFindFirst.mockReset();
   });

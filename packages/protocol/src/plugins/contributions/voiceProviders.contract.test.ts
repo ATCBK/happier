@@ -1,4 +1,4 @@
-import * as z from 'zod/mini';
+import { zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -147,7 +147,7 @@ describe('canonical Voice provider declarations', () => {
       ] },
     });
     for (const target of ['draft-7', 'draft-2020-12'] as const) {
-      const manifest = z.toJSONSchema(PluginManifestV2Schema, { io: 'input', target, unrepresentable: 'any' });
+      const manifest = zodSchemaToJsonSchemaObject(PluginManifestV2Schema, { target, unrepresentable: 'any' });
       // The native dialect compiler resolves references and their refinement siblings.
       const validateManifest = compileProtocolJsonSchema(manifest, target === 'draft-7' ? 'draft-07' : target);
       const validManifest = manifestForSettings(reservedSttSettings);

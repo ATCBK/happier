@@ -4,7 +4,14 @@ import { insertForkDividersIntoTranscriptItems, type ForkDividerTranscriptItem }
 import { sync } from '@/sync/sync';
 import type { Message } from "@happier-dev/session-core/messages";
 import { buildTranscriptTurnsCached } from '@/components/sessions/transcript/turnGrouping/buildTranscriptTurns';
-import { groupWorkflowTranscriptTurns, readWorkflowTurnProvenance } from '@/components/sessions/transcript/turnGrouping/workflowTranscriptTurns';
+import {
+    foldWorkflowOriginRuns,
+    groupWorkflowTranscriptTurns,
+    readWorkflowOriginRunMembership,
+    readWorkflowTurnProvenance,
+} from '@/components/sessions/transcript/turnGrouping/workflowTranscriptTurns';
+import type { WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import type { SessionTurnV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 import type { ChatTranscriptListItem } from '@/components/sessions/transcript/chatListTypes';
 import type { ForkAwareMessageDescriptors } from '@/components/sessions/transcript/forkContext/buildForkAwareMessageDescriptors';
 import type { ForkedTranscriptSnapshot } from '@/sync/domains/sessionFork/forkedTranscriptSnapshot';
@@ -54,6 +61,10 @@ export function useTranscriptRootDerivedItems(params: Readonly<{
         action: Readonly<{ pluginId: string; localId: string }>,
     ) => boolean;
     sessionId: string;
+    /** The Session's turn facts; origin-input workflow turns fold into one row per run. */
+    sessionTurns: readonly SessionTurnV1[] | null;
+    /** The Session's origin Runs; a turn-end firing that wrote no turn folds where it fired. */
+    triggerRuns: readonly WorkflowRunSummaryV1[];
     toolCallsGroupStrategy: 'all_tools_in_turn' | 'consecutive_tools';
 }>) {
     const {
@@ -75,6 +86,8 @@ export function useTranscriptRootDerivedItems(params: Readonly<{
         dismissedPluginTranscriptActivityIds,
         isPluginTranscriptActivityActionAvailable,
         sessionId,
+        sessionTurns,
+        triggerRuns,
         toolCallsGroupStrategy,
     } = params;
     const syncTuning = sync.getSyncTuning();
@@ -132,6 +145,18 @@ export function useTranscriptRootDerivedItems(params: Readonly<{
         });
     }, [derivedItemsCacheMaxSessions, sessionId, turnsCache]);
 
+    const forkMetadataByMessageId = forkAwareMessageDescriptors?.metadataByMessageId;
+    const workflowOriginRunMembership = React.useMemo(() => readWorkflowOriginRunMembership({
+        sessionId,
+        sessionTurns,
+        triggerRuns,
+        messageIdsOldestFirst,
+        getMessageById: (id) => messagesById[id] ?? null,
+        isOwnMessage: forkMetadataByMessageId
+            ? (id) => (forkMetadataByMessageId[id]?.originSessionId ?? sessionId) === sessionId
+            : undefined,
+    }), [forkMetadataByMessageId, messageIdsOldestFirst, messagesById, sessionId, sessionTurns, triggerRuns]);
+
     const linearCache = React.useMemo(() => {
         if (groupingMode === 'turns') return null;
         return measureTranscriptDerivation('ui.sessions.transcript.derived.linearItems', () => ({
@@ -178,6 +203,11 @@ export function useTranscriptRootDerivedItems(params: Readonly<{
         });
     }, [derivedItemsCacheMaxSessions, groupingMode, linearCache, sessionId]);
 
+    const turnItems = React.useMemo(() => groupingMode !== 'turns' ? [] : foldWorkflowOriginRuns(
+        (turnsCache?.turns ?? []).map((turn) => ({ kind: 'turn' as const, id: turn.id, turn })),
+        workflowOriginRunMembership,
+    ) as ForkDividerTranscriptItem[], [groupingMode, turnsCache?.turns, workflowOriginRunMembership]);
+
     const groupedItems = React.useMemo<ChatTranscriptListItem[]>(() => {
         return measureTranscriptDerivation('ui.sessions.transcript.derived.groupedItems', () => ({
             actionDraftCount: actionDrafts.length,
@@ -196,7 +226,10 @@ export function useTranscriptRootDerivedItems(params: Readonly<{
                     pendingUserActionRequests,
                     actionDrafts,
                 });
-                const base = turnsCache ? groupWorkflowTranscriptTurns(linearItems, turnsCache.turns, (id) => messagesById[id] ?? null) : linearItems;
+                const base = foldWorkflowOriginRuns(
+                    turnsCache ? groupWorkflowTranscriptTurns(linearItems, turnsCache.turns, (id) => messagesById[id] ?? null) : linearItems,
+                    workflowOriginRunMembership,
+                );
                 const withForkDividers = !forkedTranscriptEnabled || !fork
                     ? base
                     : insertForkDividersIntoTranscriptItems({ items: base, fork, sourceWindowComplete: true });
@@ -230,8 +263,6 @@ export function useTranscriptRootDerivedItems(params: Readonly<{
                 includeCommittedMessages: false,
             });
 
-            const turns = turnsCache?.turns ?? [];
-            const turnItems: ForkDividerTranscriptItem[] = turns.map((t) => ({ kind: 'turn', id: t.id, turn: t }));
             const operationItems = appendExternalSessionOperationTranscriptItem(
                 [],
                 {
@@ -243,7 +274,8 @@ export function useTranscriptRootDerivedItems(params: Readonly<{
                     dismissed: externalSessionOperationDismissal,
                 },
             ) as ForkDividerTranscriptItem[];
-            const base: ForkDividerTranscriptItem[] = [...turnItems, ...trailing, ...operationItems];
+            const base: ForkDividerTranscriptItem[] = trailing.length === 0 && operationItems.length === 0
+                ? turnItems : [...turnItems, ...trailing, ...operationItems];
             const withForkDividers = !forkedTranscriptEnabled || !fork
                 ? base
                 : insertForkDividersIntoTranscriptItems({ items: base, fork, sourceWindowComplete: true }) as ChatTranscriptListItem[];
@@ -274,6 +306,8 @@ export function useTranscriptRootDerivedItems(params: Readonly<{
         isPluginTranscriptActivityActionAvailable,
         sessionId,
         turnsCache,
+        turnItems,
+        workflowOriginRunMembership,
     ]);
 
     return {

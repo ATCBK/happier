@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import ts from 'typescript';
 
 import { describe, expect, it } from 'vitest';
 
@@ -67,8 +68,28 @@ function stripComments(text: string): string {
 }
 
 function importSpecifiersOf(code: string): string[] {
-    return [...code.matchAll(/from\s+['"]([^'"]+)['"]|import\(\s*['"]([^'"]+)['"]\s*\)/gu)]
-        .map((match) => match[1] ?? match[2] ?? '');
+    const specifiers: string[] = [];
+    const source = ts.createSourceFile('boundary.tsx', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    function visit(node: ts.Node): void {
+        if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+            const clause = node.importClause;
+            const named = clause?.namedBindings;
+            const onlyNamedTypes = !clause?.name && named && ts.isNamedImports(named)
+                && named.elements.length > 0 && named.elements.every(element => element.isTypeOnly);
+            if (!clause?.isTypeOnly && !onlyNamedTypes) specifiers.push(node.moduleSpecifier.text);
+        } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+            const named = node.exportClause;
+            const onlyNamedTypes = named && ts.isNamedExports(named)
+                && named.elements.length > 0 && named.elements.every(element => element.isTypeOnly);
+            if (!node.isTypeOnly && !onlyNamedTypes) specifiers.push(node.moduleSpecifier.text);
+        } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword
+            && node.arguments[0] && ts.isStringLiteralLike(node.arguments[0])) {
+            specifiers.push(node.arguments[0].text);
+        }
+        ts.forEachChild(node, visit);
+    }
+    visit(source);
+    return specifiers;
 }
 
 function appSourceFilesOutsideOwner(): string[] {
@@ -82,7 +103,8 @@ describe('sync/runtime/browserIroh activation boundary', () => {
         const importers = appSourceFilesOutsideOwner()
             .filter((file) => {
                 const code = stripComments(readFileSync(file, 'utf8'));
-                return OWNER_IMPORT_MARKERS.some((marker) => code.includes(marker));
+                return OWNER_IMPORT_MARKERS.some((marker) => code.includes(marker))
+                    && importSpecifiersOf(code).some(specifier => OWNER_IMPORT_MARKERS.some(marker => specifier.includes(marker)));
             })
             .map((file) => relative(SOURCES_DIR, file))
             .sort();
@@ -97,19 +119,20 @@ describe('sync/runtime/browserIroh activation boundary', () => {
         const forbidden = appSourceFilesOutsideOwner()
             .flatMap((file) => {
                 const code = stripComments(readFileSync(file, 'utf8'));
+                if (!OWNER_IMPORT_MARKERS.some(marker => code.includes(marker))) return [];
                 const relativeFile = relative(SOURCES_DIR, file);
                 return importSpecifiersOf(code)
-                .filter((specifier) => OWNER_IMPORT_MARKERS.some((marker) => specifier.includes(marker)))
-                .filter((specifier) => !APPROVED_LAZY_CONSUMER_ENTRY_POINTS.some(
-                    (approved) => specifier.endsWith(approved),
-                ))
-                .filter((specifier) => !(
-                    relativeFile === 'sync/domains/transfers/runtime/transferRuntime/plumbing/machineCarrierHttpLease.ts'
-                    && specifier === '@/sync/runtime/browserIroh'
-                    && code.includes("import('@/sync/runtime/browserIroh')")
-                    && !code.includes("from '@/sync/runtime/browserIroh'")
-                ))
-                .map((specifier) => `${relativeFile} → ${specifier}`);
+                    .filter((specifier) => OWNER_IMPORT_MARKERS.some((marker) => specifier.includes(marker)))
+                    .filter((specifier) => !APPROVED_LAZY_CONSUMER_ENTRY_POINTS.some(
+                        (approved) => specifier.endsWith(approved),
+                    ))
+                    .filter((specifier) => !(
+                        relativeFile === 'sync/domains/transfers/runtime/transferRuntime/plumbing/machineCarrierHttpLease.ts'
+                        && specifier === '@/sync/runtime/browserIroh'
+                        && code.includes("import('@/sync/runtime/browserIroh')")
+                        && !code.includes("from '@/sync/runtime/browserIroh'")
+                    ))
+                    .map((specifier) => `${relativeFile} → ${specifier}`);
             });
 
         expect(forbidden).toEqual([]);

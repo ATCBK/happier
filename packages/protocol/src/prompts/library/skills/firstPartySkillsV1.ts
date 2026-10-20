@@ -1,9 +1,16 @@
 import type { PromptBundleEntryV1 } from '../promptBundleSchemas.js';
 import { encodeBase64 } from '../../../crypto/base64.js';
 import type { SkillRuleV1 } from '../../../reach/reachRuleV1.js';
+import type { ReadOnlySkillProvenanceV1 } from './skillLibraryItemV1.js';
 
-export type FirstPartySkillV1 = Readonly<{
+/** Host-owned content, projected afresh from the current built-in or plugin occurrence. */
+export type ReadOnlySkillV1 = Readonly<{
+  skillId: string; files: readonly PromptBundleEntryV1[]; provenance: ReadOnlySkillProvenanceV1;
+}>;
+
+export type FirstPartySkillV1 = ReadOnlySkillV1 & Readonly<{
   skillId: `happier:${string}`; name: string; description: string; files: readonly PromptBundleEntryV1[];
+  provenance: Readonly<{ kind: 'first_party' }>;
 }>;
 
 const happierGuide = `---
@@ -21,6 +28,7 @@ approval settings; a successful read does not authorize a write.
 /** Bundled content uses the same digest and materializer as Account skill bundles. */
 export const FIRST_PARTY_SKILLS_V1: readonly FirstPartySkillV1[] = [{
   skillId: 'happier:happier', name: 'happier', description: 'Use Happier from this session',
+  provenance: { kind: 'first_party' },
   files: [{ path: 'SKILL.md', contentKind: 'utf8', contentBase64: encodeBase64(new TextEncoder().encode(happierGuide), 'base64') }],
 }];
 

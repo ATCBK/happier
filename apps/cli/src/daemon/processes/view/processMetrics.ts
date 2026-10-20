@@ -21,7 +21,7 @@ export function createProcessMetrics() {
     }
     return {
         observe(snapshot: Extract<ProcessCensusSnapshot, { status: 'ok' }>, intervalMs: number,
-            owners: ReadonlyMap<string, readonly number[]> = new Map()): ReadonlyMap<number, ProcessMetrics> {
+            owners: ReadonlyMap<string, ReadonlyMap<number, string>> = new Map()): ReadonlyMap<number, ProcessMetrics> {
             const alive = new Set<string>();
             const result = new Map<number, ProcessMetrics>();
             for (const row of snapshot.rows) {
@@ -37,8 +37,11 @@ export function createProcessMetrics() {
                 result.set(row.pid, metric);
                 append(ref, { capturedAtMs: snapshot.capturedAtMs, memoryBytes: metric.memoryBytes, ...(cpuPercent === undefined ? {} : { cpuPercent }) }, intervalMs);
             }
-            for (const [key, pids] of owners) {
-                const members = [...new Set(pids)].map(pid => result.get(pid));
+            for (const [key, refs] of owners) {
+                const members = [...refs].map(([pid, ref]) => {
+                    const metric = result.get(pid);
+                    return metric?.ref === ref ? metric : undefined;
+                });
                 if (!members.length) continue;
                 const memoryBytes = members.some(member => !member || member.memoryBytes === null) ? null
                     : members.reduce((sum, member) => sum + member!.memoryBytes!, 0);

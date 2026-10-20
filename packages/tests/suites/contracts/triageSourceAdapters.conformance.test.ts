@@ -37,6 +37,10 @@ describe('Triage source adapter conformance', () => {
       if (first.result.kind !== 'page') throw new Error('expected a resumable first page');
       const next = await adapter.nextPage(first.result.continuation);
       expect(next.result.kind).not.toBe('failed');
+      expect(readConformanceEntryIds(next.result).length).toBeGreaterThan(0);
+      if (adapter.expectedNextPageEntryIds) {
+        expect(readConformanceEntryIds(next.result)).toEqual(adapter.expectedNextPageEntryIds);
+      }
       expect(next.requestWitness).not.toBe('');
       expect(next.requestWitness).not.toBe(first.requestWitness);
     });
@@ -46,16 +50,19 @@ describe('Triage source adapter conformance', () => {
       if (first.result.kind === 'failed') throw new Error('expected a readable first page');
       const present = first.result.observations.find((observation) => observation.kind === 'present');
       if (!present || present.kind !== 'present') throw new Error('expected a present list row');
-      const detail = await adapter.detail(present.localRef);
+      const detail = await adapter.detail(present.localRef, present.locator);
       expect(detail.kind).toBe('present');
       expect(detail.localRef).toEqual(present.localRef);
     });
 
     it('preserves a provider failure as a typed error arm, never empty success', async () => {
-      const result = await adapter.providerError();
+      const first = await adapter.firstPage();
+      if (first.result.kind === 'failed') throw new Error('expected a readable first page');
+      const present = first.result.observations.find((observation) => observation.kind === 'present');
+      if (!present || present.kind !== 'present') throw new Error('expected a present list row');
+      const result = await adapter.providerError(present.localRef, present.locator);
       expect(['failed', 'unresolved']).toContain(result.kind);
-      expect(result.failure.class).toBeTruthy();
-      expect(result.failure.code).toBeTruthy();
+      expect(result.failure).toMatchObject(adapter.expectedProviderFailure);
     });
   });
 });

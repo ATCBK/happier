@@ -3,7 +3,7 @@ import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { CapacityBar, StackedSeriesChart } from '@happier-dev/plugin-ui/presentation';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { Tooltip } from '@/components/ui/overlays/Tooltip';
 import { CapacityRing } from '@/components/ui/progress/CapacityRing';
 import { Text } from '@/components/ui/text/Text';
@@ -35,8 +35,12 @@ const RING_SIZE = { under: 16, inline: 14, cells: 16, tiles: 28, preview: 14, fa
 const RING_FIGURE_SIZE = 52;
 /** The lab's ring (`rw` V) draws its arc at about a tenth of its diameter, on a track one step up from a hairline. */
 const RING_FIGURE_STROKE = 5;
-/** The list column's name keeps its line: one instrument stands beside it (one in trouble first, else the first chosen). */
-const INLINE_CAPACITY = 1;
+/**
+ * The list column's row (lab `rm` R): every chosen instrument stands on the name's line as a small drawing without
+ * figures. Numbers are the one style with no drawing, so it keeps the name's line with a single figure (the metric in
+ * trouble first, else the first chosen).
+ */
+const INLINE_NUMBERS_CAPACITY = 1;
 
 export type MachineSummaryStripProps = Readonly<{
     availability: MachineResourceAvailability | null;
@@ -61,8 +65,9 @@ export const MachineSummaryStrip = React.memo(function MachineSummaryStrip(props
     if (props.layout === 'fact') return <MachineMemoryFact instruments={instruments} testID={props.testID} />;
     // Held in a const so the narrowing reaches the instruments drawn below.
     const layout = props.layout;
-    const shown = props.layout === 'inline' ? fitMachineSummaryMetrics(props.metrics, instruments, INLINE_CAPACITY) : props.metrics;
-    const stale = props.availability?.kind === 'reporting' && props.availability.freshness === 'stale';
+    const shown = props.layout === 'inline' && props.style === 'numbers' ? fitMachineSummaryMetrics(props.metrics, instruments, INLINE_NUMBERS_CAPACITY) : props.metrics;
+    // A failed watch or read keeps its values, one step dimmer: the freshness line says why (M-15).
+    const stale = props.availability?.kind === 'reporting' && (props.availability.freshness === 'stale' || props.availability.readStatus !== undefined);
     const accessibilityLabel = describeMachineSummary(instruments, shown);
     return (
         <View
@@ -124,7 +129,7 @@ const MachineSummaryInstrumentView = React.memo(function MachineSummaryInstrumen
     const tone = instrument?.tone ?? 'calm';
     const toneColor = resolveMachineResourceToneColor(tone, theme.colors);
     const inkColor = tone === 'calm' ? props.color : toneColor;
-    const showFigure = layout !== 'inline' && (props.style !== 'rings' || layout === 'tiles' || layout === 'cells');
+    const showFigure = (layout !== 'inline' || props.style === 'numbers') && (props.style !== 'rings' || layout === 'tiles' || layout === 'cells');
     const figure = instrument?.figure ?? (props.neverSampled ? '–' : null);
     if (layout === 'tiles' && props.style === 'rings' && props.metric !== 'network') {
         const ring = (
@@ -209,7 +214,7 @@ function renderInstrument(props: Readonly<{
 /** A level meter through the shared capacity owner: fills by used, coloured by tone. */
 function MachineSummaryMeter(props: Readonly<{ used: number | null; color: string; trackColor: string; width: number | undefined }>) {
     const { theme } = useUnistyles();
-    const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const pluginTheme = usePluginUiTheme(theme);
     return (
         <View style={props.width === undefined ? stylesheet.meterFill : { width: props.width }}>
             <CapacityBar theme={pluginTheme} label="" value={props.used} capacity={1} color={props.color}
@@ -224,7 +229,7 @@ const renderSummaryBucket: NonNullable<React.ComponentProps<typeof StackedSeries
 /** A 5-minute line through the shared chart owner, already scaled by the model (no min–max fit). */
 function MachineSummaryLine(props: Readonly<{ line: readonly (number | null)[]; color: string; width: number; height: number }>) {
     const { theme } = useUnistyles();
-    const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const pluginTheme = usePluginUiTheme(theme);
     const series = React.useMemo(() => [{ id: 'line', label: '', color: props.color,
         points: (props.line.length > 0 ? props.line : [0, 0]).map((y, index) => ({ id: String(index), x: index, y })) }], [props.color, props.line]);
     // No sample yet is not a reading of zero: the line keeps its room and draws nothing (never a flat 0 baseline).
@@ -247,12 +252,13 @@ const MachineMemoryFact = React.memo(function MachineMemoryFact(props: Readonly<
     const memory = props.instruments?.memory ?? null;
     if (!memory?.figure) return null;
     const calm = memory.tone === 'calm';
-    return (
-        <Text testID={props.testID} numberOfLines={1}
+    const body = (
+        <Text testID={props.testID} numberOfLines={1} accessible accessibilityLabel={memory.exact ?? undefined}
             style={[stylesheet.fact, { color: calm ? theme.colors.text.secondary : resolveMachineResourceToneColor(memory.tone, theme.colors) }]}>
             {calm ? t('machineSummary.memoryFreeFact', { free: memory.figure }) : memory.figure}
         </Text>
     );
+    return memory.exact ? <Tooltip label={memory.exact}>{body}</Tooltip> : body;
 });
 
 const stylesheet = StyleSheet.create((theme) => ({

@@ -56,8 +56,8 @@ const cleanup: Array<() => Promise<void> | void> = [];
 // The network dispatch boundary stores heterogeneous request handlers; each real route parses its own input.
 type TransportHandler = { invoke(data: unknown, context?: RpcHandlerContext): unknown }['invoke'];
 afterEach(async () => { for (const release of cleanup.splice(0).reverse()) await release(); });
-function context(actorAccountId = 'owner', role: 'use' | 'manage' = 'manage'): RpcHandlerContext {
-  return { signal: new AbortController().signal, machineAdmission: { ...identity, actorAccountId, role, encryptionMode: 'plain' },
+function context(actorAccountId = 'owner', role: 'use' | 'manage' = 'manage', admittedIdentity = identity): RpcHandlerContext {
+  return { signal: new AbortController().signal, machineAdmission: { ...admittedIdentity, actorAccountId, role, encryptionMode: 'plain' },
     verifyMachineAdmissionCurrent: async () => true, localActionContext: { surface: 'cli', authority: 'present_user' } };
 }
 function entry(id: string, patch: Partial<MachineGuardActivityEntryV1> = {}): MachineGuardActivityEntryV1 {
@@ -67,7 +67,8 @@ function entry(id: string, patch: Partial<MachineGuardActivityEntryV1> = {}): Ma
     wayBack: [{ label: 'review_processes', actionId: 'machines.guard.get', input: { machineId: 'machine' } },
       { label: 'resume', actionId: 'session.open', input: { sessionId: id } }], ...patch };
 }
-async function setup(useDefaultApiOwner = false, withCeilingOwner = false) {
+async function setup(useDefaultApiOwner = false, withCeilingOwner = false,
+  machineTerminalAction?: ActionExecutorDeps['machineTerminalAction'], initialTarget = identity) {
   const directory = await mkdtemp(join(tmpdir(), 'happier-guard-rpc-'));
   cleanup.push(() => rm(directory, { recursive: true, force: true }));
   // Native reader and Account metadata transport are system boundaries; all owners beneath them are real.
@@ -88,7 +89,7 @@ async function setup(useDefaultApiOwner = false, withCeilingOwner = false) {
   const runtime = createGuardRuntime({ vitals: sampler, readPolicy, subscribePolicy: policy.subscribe, subscribe: inventory.subscribe,
     readFacts: () => readFacts(), activity, stop: async () => ({ status: 'failed', reason: 'no_process' }), notice: async () => false,
     notifyEpisode: async () => {}, nowMs: () => now, onError: error => { throw error; } });
-  let currentTarget = identity;
+  let currentTarget = initialTarget;
   const guard = createGuardWatch({ policy, sampler, ownership, readFacts, readTarget: () => currentTarget, activityLog: activity, sessionState: runtime,
     readState: () => ({ v: 1, capabilities: { memoryPressure: { status: 'available' }, ceiling: { status: 'unavailable', reason: 'no_user_manager' },
       keepAwake: { modes: ['off', 'on', 'on_power'] } }, keepAwakeHolding: false }),
@@ -117,9 +118,11 @@ async function setup(useDefaultApiOwner = false, withCeilingOwner = false) {
     routes: { launcherRoutes: { ...feed, startTarget: createLocalServiceLauncherStartTarget({ feed, now: () => now }) } } });
   const browser = createBrowserDaemonRuntimeActionExecutor({ featureGate: browserGate, control: createBrowserDaemonControlRoutes({ broker }), fallback: services });
   const settings = ActionsSettingsV1Schema.parse({ v: 1, actions: { 'session.open': { approvalRequiredSurfaces: ['agent'] },
-    'browser.view.open': { approvalRequiredSurfaces: [] }, 'localServices.launcher.start': { approvalRequiredSurfaces: [] } } });
+    'browser.view.open': { approvalRequiredSurfaces: [] }, 'localServices.launcher.start': { approvalRequiredSurfaces: [] } },
+    approvalWaivedSurfaces: { 'localServices.launcher.start': ['ui'] } });
   let guardLocalAction: NonNullable<ActionExecutorDeps['machineGuardAction']>;
   const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+    ...(machineTerminalAction ? { machineTerminalAction } : {}),
     sessionOpen: async request => { opened.push(request.sessionId); return output; },
     // Session metadata RPC is the system boundary; the permission/grant admission below is real.
     sessionPermissionModeSet: async () => { opened.push('permission-change'); return { applied: true }; },
@@ -139,7 +142,7 @@ async function setup(useDefaultApiOwner = false, withCeilingOwner = false) {
   if (withCeilingOwner) {
     const tracked: TrackedSession = { pid: 42, happySessionId: 'session', startedBy: 'daemon', processStartTimeMs: 20 };
     const unit = createHappierLinuxScopeName('v1.0123456789ab.session.session')!;
-    const ceiling = createSessionMemoryCeiling({ capability: { status: 'available' }, activityLog: activity, readPolicy,
+    const ceiling = createSessionMemoryCeiling({ activeServerDir: directory, capability: { status: 'available' }, activityLog: activity, readPolicy,
       readSessions: async () => [{ tracked, root: { owner: { kind: 'session', sessionId: 'session' }, pid: 42,
         start: { startTimeMs: 20 }, live: true, ownerCreatedAtMs: 0,
         containment: { kind: 'linux_unit', prefix: `/user.slice/happier-jobs.slice/${unit}` } },
@@ -181,7 +184,7 @@ async function setup(useDefaultApiOwner = false, withCeilingOwner = false) {
   const client = createActionExecutor({ ...createUnavailableActionTransportDeps(), machineGuardAction: async args => executeMachineGuardAction({
     actionId: args.actionId, input: args.input, serverId: 'home', assertCurrent: async () => {},
     // Exact Machine RPC is the network boundary; receiving handlers and child Action owners remain real.
-    call: async request => handlers.get(request.method)!(request.input, { ...context(),
+    call: async request => handlers.get(request.method)!(request.input, { ...context('owner', 'manage', initialTarget),
       localActionContext: { surface: args.context.surface, authority: args.context.authority } }),
   }) });
   return { activity, routes, handlers, opened, client, executor, settings, ceilingWrites, setOutput: (value: unknown) => { output = value; },
@@ -262,16 +265,17 @@ describe('Machine guard current admission and original Action restoration', () =
   });
   it('restores the original UI-only Browser Action through CLI Undo without changing caller exposure', async () => {
     const f = await setup(true); f.setBrowserFailed(false);
+    const wayBack = [{ label: 'reopen', actionId: 'browser.view.open', input: { commandId: 'cli-reopen', browserSessionId: 'browser-session',
+      viewId: 'view', kind: 'openView', platform: 'desktop', target: { kind: 'externalUrl', targetId: 'page', url: 'https://example.test/' } } }] satisfies NonNullable<MachineGuardActivityEntryV1['wayBack']>;
     await f.activity.append(entry('cli-browser', { kind: 'closed_browser', subject: { kind: 'browser' },
-      wayBack: [{ label: 'reopen', actionId: 'browser.view.open', input: { commandId: 'cli-reopen', browserSessionId: 'browser-session',
-        viewId: 'view', kind: 'openView', platform: 'desktop', target: { kind: 'externalUrl', targetId: 'page', url: 'https://example.test/' } } }] }));
+      wayBack }));
     expect(await f.client.execute('machines.guard.activity.undo', { machineId: 'machine', entryId: 'cli-browser' },
       { surface: 'cli', authority: 'present_user', serverId: 'home' })).toMatchObject({ ok: true, result: { status: 'dispatched' } });
     expect((await f.activity.read('cli-browser'))?.undoneAt).toBe(now);
-    expect(await f.executor.execute('browser.view.open', (await f.activity.read('cli-browser'))!.wayBack![0]!.input,
+    expect(await f.executor.execute('browser.view.open', wayBack[0]!.input,
       { surface: 'cli', authority: 'present_user', serverId: 'home' })).toMatchObject({ ok: false, errorCode: 'action_disabled' });
     await f.activity.append(entry('retired-credential', { kind: 'closed_browser', subject: { kind: 'browser' },
-      wayBack: (await f.activity.read('cli-browser'))!.wayBack }));
+      wayBack }));
     f.setCredentialCurrent(false);
     // The raw core translates the CLI dependency's currentness exception to its canonical Action failure.
     expect(await f.client.execute('machines.guard.activity.undo', { machineId: 'machine', entryId: 'retired-credential' },
@@ -283,6 +287,38 @@ describe('Machine guard current admission and original Action restoration', () =
     expect(await f.executor.execute('machines.guard.activity.undo', { machineId: 'machine', entryId: 'retired-credential' }, mismatchedAccount))
       .toMatchObject({ ok: false, errorCode: 'project_requester_authority_unavailable' });
     expect((await f.activity.read('retired-credential'))?.undoneAt).toBeUndefined();
+  });
+  it('restores a portable closed-terminal receipt through the invoking Home and canonical child Action', async () => {
+    const terminal = await createIdleTerminalPolicyFixture(cleanup);
+    const terminalTarget = { ...identity, installationId: 'installation' };
+    const terminalEpoch = terminal.nowMs();
+    terminal.now(now - terminalEpoch - 120_000);
+    terminal.enable();
+    expect(terminal.terminals.ensure({ terminalKey: 'portable-prompt', cwd: '/project',
+      custody: { ...terminalTarget, requesterAccountId: 'owner', kind: 'machine', rootPath: '/project' } }).ok).toBe(true);
+    terminal.now(now - terminalEpoch); await (await terminal.readPlan()).run?.();
+    expect(terminal.terminals.list()).toEqual([]);
+    const receipt = (await terminal.activityLog.list({ range: 'today' })).entries.find(row => row.kind === 'closed_terminal');
+    if (!receipt) throw new Error('Expected closed-terminal Activity receipt');
+    expect(receipt.wayBack?.[0]?.input).not.toHaveProperty('serverId');
+    const terminalRequests: Array<Parameters<NonNullable<ActionExecutorDeps['machineTerminalAction']>>[0]> = [];
+    // Machine-terminal RPC is the network boundary; receipt storage, Guard and child Action admission remain real.
+    const f = await setup(true, false, async request => {
+      terminalRequests.push(request);
+      return { ok: true, terminalId: 'reopened-terminal', reused: false };
+    }, terminalTarget);
+    // The original Action's own Account policy permits CLI reopening; Undo's approval is not borrowed.
+    if (!f.settings.approvalWaivedSurfaces) throw new Error('Expected fixture approval waivers');
+    f.settings.approvalWaivedSurfaces['machines.terminal.open'] = ['cli'];
+    await f.activity.append(receipt);
+    expect(await f.client.execute('machines.guard.activity.undo', { machineId: identity.machineId, entryId: receipt.id },
+      { surface: 'cli', authority: 'present_user', serverId: identity.serverId }))
+      .toEqual({ ok: true, result: { ok: true, terminalId: 'reopened-terminal', reused: false } });
+    expect(terminalRequests).toMatchObject([{ actionId: 'machines.terminal.open',
+      input: { serverId: identity.serverId, machineId: identity.machineId, terminalKey: 'portable-prompt', cwd: '/project' },
+      context: { serverId: identity.serverId, runtimeAccountId: 'owner' },
+    }]);
+    expect((await f.activity.read(receipt.id))?.undoneAt).toBe(now);
   });
   it('retains child policy, approval, grant and exact target bounds without borrowing the outer Undo approval', async () => {
     const f = await setup(); f.setBrowserFailed(false);

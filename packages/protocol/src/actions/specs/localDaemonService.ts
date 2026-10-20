@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { SystemTaskResultSchema } from '../../system/tasks/spec.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
@@ -9,12 +9,12 @@ export const LOCAL_DAEMON_SERVICE_ACTION_IDS = [
   'machines.local.service.update', 'machines.local.service.disconnect',
 ] as const;
 export type LocalDaemonServiceActionId = typeof LOCAL_DAEMON_SERVICE_ACTION_IDS[number];
-export const LocalDaemonServiceInputSchema = lazyZodSchema(() => z.object({ serverId: z.string().trim().min(1) }).strict());
-export const LocalDaemonServiceAutostartInputSchema = lazyZodSchema(() => LocalDaemonServiceInputSchema.extend({ autostart: z.enum(['at-login', 'on-demand']) }).strict());
-export const LocalDaemonServiceOutputSchema = lazyZodSchema(() => z.object({ taskId: z.string().min(1), result: SystemTaskResultSchema }).strict());
+export const LocalDaemonServiceInputSchema = lazyZodSchema(() => z.strictObject({ serverId: z.string().check(z.trim(), z.minLength(1)) }));
+export const LocalDaemonServiceAutostartInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(LocalDaemonServiceInputSchema, { autostart: z.enum(['at-login', 'on-demand']) })));
+export const LocalDaemonServiceOutputSchema = lazyZodSchema(() => z.strictObject({ taskId: z.string().check(z.minLength(1)), result: SystemTaskResultSchema }));
 export const LocalDaemonServiceDisconnectOutputSchema = lazyZodSchema(() => z.discriminatedUnion('outcome', [
-  z.object({ outcome: z.enum(['removed', 'no_service']) }).strict(),
-  z.object({ outcome: z.literal('user_owned'), label: z.string().nullable() }).strict(),
+  z.strictObject({ outcome: z.enum(['removed', 'no_service']) }),
+  z.strictObject({ outcome: z.literal('user_owned'), label: z.nullable(z.string()) }),
 ]));
 export const LOCAL_DAEMON_SERVICE_INPUT_SCHEMAS = {
   'machines.local.service.status': LocalDaemonServiceInputSchema,

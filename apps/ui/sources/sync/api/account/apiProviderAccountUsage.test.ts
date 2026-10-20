@@ -54,16 +54,262 @@ function makeSnapshot(): ProviderAccountUsageSnapshotV1 {
 }
 
 async function loadApi() {
-    try {
-        return await import('./apiProviderAccountUsage');
-    } catch (error) {
-        expect.fail(`canonical provider account usage API is missing: ${String(error)}`);
-    }
+    return await import('./apiProviderAccountUsage');
 }
 
 describe('apiProviderAccountUsage', () => {
+    it.each(['plain', 'e2ee'] as const)('deduplicates concurrent %s backfill publication without holding independent reads', async accountMode => {
+        await activateTestHome();
+        const { ProviderAccountUsagePageProjectionWriteV1Schema } = await import('@happier-dev/protocol/connect/providerAccountUsageHistory');
+        const snapshot = makeSnapshot();
+        const source = { bindingKind: 'account' as const, ref: { service: { pluginId: 'example.usage', localId: 'usage' }, accountId: 'account' } };
+        const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
+        const sealed = sealProviderAccountUsageSnapshot({ snapshot, material, randomBytes: length => new Uint8Array(length).fill(9) });
+        const record = { content: accountMode === 'plain' ? { t: 'plain', v: snapshot }
+            : { t: 'encrypted', c: sealed.ciphertext, recoveryCreditDetails: sealed.recoveryCreditDetails },
+            metadata: { fetchedAt: 1, staleAfterMs: 2, status: 'ok' }, sources: [source] };
+        let persisted: ReturnType<typeof ProviderAccountUsagePageProjectionWriteV1Schema.parse> | null = null;
+        let writes = 0;
+        let failedHeads = 0;
+        const request = async (path: string, init?: RequestInit) => {
+            if (path.includes('/sources/resolve')) return Response.json({ source, recordId: snapshot.recordId,
+                providerAccountId: snapshot.recordKey.accountSubjectId, fetchedAt: 1, staleAfterMs: 2 });
+            if (path.includes('/record?')) return Response.json(record);
+            if (init?.method === 'HEAD') {
+                if (failedHeads > 0) { failedHeads--; return new Response(null, { status: 500 }); }
+                return new Response(null, { headers: {
+                    'x-happier-usage-projection-complete': String(persisted !== null), ...(persisted ? { etag: '"one"' } : {}),
+                } });
+            }
+            if (init?.method === 'PUT') {
+                writes++; persisted = ProviderAccountUsagePageProjectionWriteV1Schema.parse(JSON.parse(String(init.body)));
+                return Response.json({ success: true }, { headers: { etag: '"one"' } });
+            }
+            const query = JSON.parse(new URL(path, 'https://test.invalid').searchParams.get('query')!);
+            return Response.json(query.projection ? { projection: persisted, complete: persisted !== null }
+                : { entries: [{ id: 'accepted', observedAtMs: 1, record }], nextCursor: null });
+        };
+        const { getProviderAccountUsageQuota } = await loadApi();
+        const projectionDocuments: import('./apiProviderAccountUsage').ProviderAccountUsageProjectionDocuments = new Map();
+        const input = { source, projection: { range: { startAtMs: 0, endAtMs: 5 }, resolution: 'accepted_observations' as const } };
+        const options = { accountMode, material, request, nowMs: 1, includePendingWork: false, projectionDocuments };
+        const values = await Promise.all([getProviderAccountUsageQuota({ token: 'test-token' }, input, options),
+            getProviderAccountUsageQuota({ token: 'test-token' }, input, options)]);
+        expect(values.map(value => value.pageFacts?.resetWitness?.id)).toEqual(['accepted', 'accepted']);
+        expect(writes).toBe(1);
+        await getProviderAccountUsageQuota({ token: 'test-token' }, input, options);
+        expect(writes).toBe(1);
+        const narrow = await getProviderAccountUsageQuota({ token: 'test-token' }, { ...input,
+            projection: { ...input.projection, range: { startAtMs: 2, endAtMs: 5 } } }, options);
+        expect(narrow.pageFacts?.resetWitness).toBeNull();
+        failedHeads = 1;
+        const recovered = await Promise.allSettled([getProviderAccountUsageQuota({ token: 'test-token' }, input, options),
+            getProviderAccountUsageQuota({ token: 'test-token' }, input, options)]);
+        expect(recovered.map(value => value.status)).toEqual(['rejected', 'fulfilled']);
+    });
+    it.each(['plain', 'e2ee'] as const)('retains admitted %s page facts across unchanged ETags and independent facets', async accountMode => {
+        await activateTestHome();
+        const { buildProviderAccountUsagePageProjectionV1 } = await import('@happier-dev/protocol/connect/providerAccountUsagePageProjection');
+        const { sealProviderAccountUsagePageProjectionV1 } = await import('@happier-dev/protocol/connect/providerAccountUsagePageProjectionCrypto');
+        const snapshot = { ...makeSnapshot(), subscription: { status: 'subscribed' as const, renewal: 'on' as const,
+            observedAtMs: 1, staleAfterMs: 2 } };
+        const source = { ref: { service: { pluginId: 'example.usage', localId: 'usage' }, accountId: 'account' }, bindingKind: 'account' as const };
+        const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
+        const range = { startAtMs: 0, endAtMs: 5 };
+        let etag = '"one"';
+        let mode = accountMode;
+        let headStatus = 200;
+        let bodyReads = 0;
+        let includeCurrent = true;
+        const record = () => {
+            const sealed = sealProviderAccountUsageSnapshot({ snapshot, material, randomBytes: length => new Uint8Array(length).fill(9) });
+            return { content: mode === 'plain' ? { t: 'plain', v: snapshot } : { t: 'encrypted', c: sealed.ciphertext,
+                subscription: sealed.subscription, recoveryCreditDetails: sealed.recoveryCreditDetails },
+                metadata: { fetchedAt: 1, staleAfterMs: 2, status: 'ok' }, sources: [source] };
+        };
+        const request = async (path: string, init?: RequestInit) => {
+            if (path.includes('/history')) {
+                if (init?.method === 'HEAD') return new Response(null, { status: headStatus,
+                    headers: { etag, 'x-happier-usage-projection-complete': 'true' } });
+                bodyReads++;
+                const projection = buildProviderAccountUsagePageProjectionV1({ recordId: snapshot.recordId, range,
+                    history: { entries: [{ id: 'accepted', observedAtMs: 1, snapshot }], nextCursor: null } });
+                return Response.json({ projection: { recordId: snapshot.recordId, demand: { range, resolution: 'accepted_observations' },
+                    observationCount: 1, frontier: { id: 'accepted', observedAtMs: 1 },
+                    content: sealProviderAccountUsagePageProjectionV1({ projection, accountMode,
+                        material, randomBytes: length => new Uint8Array(length).fill(9) }) }, complete: true }, { headers: { etag } });
+            }
+            if (path.includes('/record?') && !includeCurrent) return new Response(null, { status: 404 });
+            return Response.json(path.includes('/sources/resolve') ? { source, recordId: snapshot.recordId,
+                providerAccountId: snapshot.recordKey.accountSubjectId, fetchedAt: 1, staleAfterMs: 2 } : record());
+        };
+        const { getProviderAccountUsageQuota } = await loadApi();
+        const projectionDocuments: import('./apiProviderAccountUsage').ProviderAccountUsageProjectionDocuments = new Map();
+        const options = { accountMode, material, request, projectionDocuments, nowMs: 1, includePendingWork: false };
+        const input = { source, projection: { range, resolution: 'accepted_observations' as const } };
+        const first = await getProviderAccountUsageQuota({ token: 'test-token' }, input, options);
+        expect(first.pageFacts?.resetWitness?.id).toBe('accepted');
+        headStatus = 304;
+        const second = await getProviderAccountUsageQuota({ token: 'test-token' }, input, options);
+        expect(bodyReads).toBe(1);
+        expect(second.pageFacts).toBe(first.pageFacts);
+        expect(second.unusedCapacity).toBe(first.unusedCapacity);
+        const targets = [{ id: 'target', scope: { kind: 'personal' as const }, utilizationFraction: 0.75 }];
+        const changedTargets = await getProviderAccountUsageQuota({ token: 'test-token' }, input, { ...options,
+            readPacingTargets: async () => targets });
+        expect(changedTargets.targets).toEqual(targets);
+        expect(changedTargets.pageFacts).toBe(first.pageFacts);
+        expect(changedTargets.unusedCapacity).toBe(first.unusedCapacity);
+        const enteredMonthlyPrice = { amount: 25, currency: 'USD', enteredAtMs: 1 };
+        const changedPrice = await getProviderAccountUsageQuota({ token: 'test-token' }, input, { ...options,
+            readEnteredMonthlyPrice: async () => enteredMonthlyPrice });
+        expect(changedPrice.current?.subscription?.enteredMonthlyPrice).toEqual(enteredMonthlyPrice);
+        expect(changedPrice.pageFacts).toBe(first.pageFacts);
+        expect(changedPrice.unusedCapacity).toBe(first.unusedCapacity);
+        const advancedClock = await getProviderAccountUsageQuota({ token: 'test-token' }, input, { ...options, nowMs: 2 });
+        expect(advancedClock.pageFacts).toBe(first.pageFacts);
+        const narrower = await getProviderAccountUsageQuota({ token: 'test-token' }, { ...input,
+            projection: { ...input.projection, range: { startAtMs: 2, endAtMs: 5 } } }, options);
+        expect(narrower.pageFacts?.resetWitness).toBeNull();
+        etag = '"two"'; headStatus = 200;
+        const replaced = await getProviderAccountUsageQuota({ token: 'test-token' }, input, options);
+        expect(bodyReads).toBe(2);
+        expect(replaced.pageFacts).not.toBe(first.pageFacts);
+        if (accountMode === 'e2ee') {
+            // With no current record, only the retained projection can enforce
+            // the material fence; a current-record decrypt must not mask it.
+            includeCurrent = false;
+            await expect(getProviderAccountUsageQuota({ token: 'test-token' }, input, { ...options,
+                material: { type: 'legacy', secret: new Uint8Array(32).fill(8) } }))
+                .rejects.toThrow('provider_account_usage_content_unavailable');
+            includeCurrent = true;
+        }
+        headStatus = 401;
+        await expect(getProviderAccountUsageQuota({ token: 'test-token' }, input, options)).rejects.toMatchObject({ code: 'denied' });
+        headStatus = 304;
+        mode = accountMode === 'plain' ? 'e2ee' : 'plain';
+        await expect(getProviderAccountUsageQuota({ token: 'test-token' }, input, { ...options, accountMode: mode }))
+            .rejects.toThrow('provider_account_usage_content_mode_mismatch');
+    });
+
+    it('derives pace and unused capacity once per read: later facets of the same read share its instant', async () => {
+        await activateTestHome();
+        const { buildProviderAccountUsagePageProjectionV1 } = await import('@happier-dev/protocol/connect/providerAccountUsagePageProjection');
+        const { sealProviderAccountUsagePageProjectionV1 } = await import('@happier-dev/protocol/connect/providerAccountUsagePageProjectionCrypto');
+        const snapshot = makeSnapshot();
+        const source = { ref: { service: { pluginId: 'example.usage', localId: 'usage' }, accountId: 'account' }, bindingKind: 'account' as const };
+        const range = { startAtMs: 0, endAtMs: 5 };
+        const request = async (path: string, init?: RequestInit) => {
+            if (path.includes('/history')) {
+                if (init?.method === 'HEAD') return new Response(null, { headers: { etag: '"one"', 'x-happier-usage-projection-complete': 'true' } });
+                const projection = buildProviderAccountUsagePageProjectionV1({ recordId: snapshot.recordId, range,
+                    history: { entries: [{ id: 'accepted', observedAtMs: 1, snapshot }], nextCursor: null } });
+                return Response.json({ projection: { recordId: snapshot.recordId, demand: { range, resolution: 'accepted_observations' },
+                    observationCount: 1, frontier: { id: 'accepted', observedAtMs: 1 },
+                    content: sealProviderAccountUsagePageProjectionV1({ projection, accountMode: 'plain',
+                        material: undefined, randomBytes: length => new Uint8Array(length).fill(9) }) }, complete: true }, { headers: { etag: '"one"' } });
+            }
+            return Response.json(path.includes('/sources/resolve') ? { source, recordId: snapshot.recordId,
+                providerAccountId: snapshot.recordKey.accountSubjectId, fetchedAt: 1, staleAfterMs: 2 }
+                : { content: { t: 'plain', v: snapshot }, metadata: { fetchedAt: 1, staleAfterMs: 2, status: 'ok' }, sources: [source] });
+        };
+        // The wall clock advances between any two reads, as it does live.
+        let clock = 1_000;
+        vi.spyOn(Date, 'now').mockImplementation(() => clock += 1_000);
+        const progress: ConnectedServiceQuotaGetResultV1[] = [];
+        const { getProviderAccountUsageQuota } = await loadApi();
+        const final = await getProviderAccountUsageQuota({ token: 'test-token' }, { source, projection: { range, resolution: 'accepted_observations' as const } }, {
+            accountMode: 'plain', request, projectionDocuments: new Map(), includePendingWork: false,
+            readPacingTargets: async () => [], readEnteredMonthlyPrice: async () => undefined,
+            readAllHistory: { onProgress: value => { progress.push(value); } },
+        });
+        const withFacts = progress.filter(value => value.pageFacts);
+        expect(withFacts.length).toBeGreaterThan(0);
+        expect(final.unusedCapacity).toBe(withFacts.at(-1)!.unusedCapacity);
+        expect(final.pace).toBe(withFacts.at(-1)!.pace);
+    });
+
+    it.each(['plain', 'e2ee'] as const)('rereads a %s projection conflict and never republishes unchanged idle reads', async accountMode => {
+        const { ProviderAccountUsagePageProjectionWriteV1Schema } = await import('@happier-dev/protocol/connect/providerAccountUsageHistory');
+        const snapshot = makeSnapshot();
+        const source = { ref: { service: { pluginId: 'example.usage', localId: 'usage' }, accountId: 'account' }, bindingKind: 'account' as const };
+        const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
+        const sealed = sealProviderAccountUsageSnapshot({ snapshot, material, randomBytes: length => new Uint8Array(length).fill(9) });
+        const record = { content: accountMode === 'plain' ? { t: 'plain', v: snapshot } : { t: 'encrypted', c: sealed.ciphertext, recoveryCreditDetails: sealed.recoveryCreditDetails },
+            metadata: { fetchedAt: 1, staleAfterMs: 2, status: 'ok' }, sources: [source] };
+        let persisted: ReturnType<typeof ProviderAccountUsagePageProjectionWriteV1Schema.parse> | null = null;
+        let puts = 0;
+        let projectionReads = 0;
+        let exactReads = 0;
+        let headStatus = 200;
+        let invalidateAfterHead = false;
+        const projectionBodyUrls: string[] = [];
+        const request = async (path: string, init?: RequestInit) => {
+            if (path.includes('/history')) {
+                if (init?.method === 'HEAD') return new Response(null, { status: headStatus, headers: {
+                    'x-happier-usage-projection-complete': persisted !== null ? 'true' : 'false',
+                    ...(persisted ? { etag: '"held-document"' } : {}),
+                } });
+                if (path.includes('/history/document?')) {
+                    projectionReads++;
+                    projectionBodyUrls.push(path);
+                    // A backdated accepted observation can invalidate the
+                    // stored prefix after HEAD admitted the previous one.
+                    if (invalidateAfterHead) { persisted = null; invalidateAfterHead = false; }
+                    return Response.json({ projection: persisted, complete: persisted !== null }, {
+                        headers: persisted ? { etag: '"held-document"' } : {},
+                    });
+                }
+                if (init?.method === 'PUT') {
+                    puts++;
+                    // Another tab committed this same accepted coverage while
+                    // this producer was backfilling. Its result is authoritative.
+                    persisted = ProviderAccountUsagePageProjectionWriteV1Schema.parse(JSON.parse(String(init.body)));
+                    return Response.json({ error: 'provider_account_usage_projection_conflict' }, { status: 409 });
+                }
+                const query = JSON.parse(new URL(path, 'https://test.invalid').searchParams.get('query')!);
+                if (query.projection) {
+                    projectionReads++;
+                    projectionBodyUrls.push(path);
+                    return Response.json({ projection: persisted, complete: persisted !== null });
+                }
+                exactReads++;
+                return Response.json({ entries: [{ id: 'accepted', observedAtMs: 1, record }], nextCursor: null });
+            }
+            return Response.json(path.includes('/sources/resolve') ? { source, recordId: snapshot.recordId,
+                providerAccountId: snapshot.recordKey.accountSubjectId, fetchedAt: 1, staleAfterMs: 2 } : record);
+        };
+        const { getProviderAccountUsageQuota } = await loadApi();
+        const input = { source, projection: { range: { startAtMs: 0, endAtMs: 5 }, resolution: 'accepted_observations' as const } };
+        const options = { accountMode, material, request, nowMs: 1, includePendingWork: false };
+        const first = await getProviderAccountUsageQuota({ token: 'test-token' }, input, options);
+        expect(first.pageFacts?.historyStatus).toBe('complete');
+        expect(projectionReads).toBe(2);
+        projectionBodyUrls.length = 0; // Compare stable URLs after the initial absent-document read.
+        for (let index = 0; index < 10; index++) expect(await getProviderAccountUsageQuota({ token: 'test-token' }, {
+            ...input, projection: { ...input.projection, range: { ...input.projection.range, endAtMs: 5 + index } },
+        }, options)).toEqual(first);
+        expect(new Set(projectionBodyUrls).size).toBe(1);
+        expect(puts).toBe(1);
+        expect(exactReads).toBe(1);
+        invalidateAfterHead = true;
+        expect((await getProviderAccountUsageQuota({ token: 'test-token' }, input, options)).pageFacts?.historyStatus).toBe('complete');
+        expect(exactReads).toBe(2);
+        expect(puts).toBe(2);
+        const bodyReadsBeforeDenial = projectionReads;
+        headStatus = 401;
+        await expect(getProviderAccountUsageQuota({ token: 'test-token' }, input, options)).rejects.toMatchObject({ code: 'denied' });
+        headStatus = 409;
+        await expect(getProviderAccountUsageQuota({ token: 'test-token' }, input, options)).rejects.toMatchObject({
+            code: 'provider_account_usage_content_mode_mismatch',
+        });
+        expect(projectionReads).toBe(bodyReadsBeforeDenial);
+    });
+
     it.each(['plain', 'e2ee'] as const)('backfills a protected %s page projection once and reuses it without replaying exact history', async accountMode => {
-        const { ProviderAccountUsagePageProjectionWriteV1Schema, getProviderAccountUsageQuotaHistoryV1 } = await import('@happier-dev/protocol/connect/providerAccountUsageHistory');
+        await activateTestHome();
+        const { ProviderAccountUsagePageProjectionWriteV1Schema } = await import('@happier-dev/protocol/connect/providerAccountUsagePageProjection');
+        const { openProviderAccountUsagePageProjectionV1 } = await import('@happier-dev/protocol/connect/providerAccountUsagePageProjectionCrypto');
         const { parseQualifiedConnectedAccountV4StructuredQueryValue } = await import('@happier-dev/protocol/connect/qualifiedConnectedAccountsV4QueryCodec');
         const { QualifiedProviderAccountUsageHistoryRequestV4Schema } = await import('@happier-dev/protocol/connect/providerAccountUsageHistory');
         const snapshot = makeSnapshot();
@@ -101,13 +347,30 @@ describe('apiProviderAccountUsage', () => {
             return Response.json(path.includes('/sources/resolve') ? { source, recordId: snapshot.recordId,
                 providerAccountId: snapshot.recordKey.accountSubjectId, fetchedAt: 1, staleAfterMs: 2 } : record);
         });
+        vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) =>
+            isServerFetchConnectivityProbeRequest(input) ? Response.json({ ok: true }) : request(String(input), init));
         const { getProviderAccountUsageQuota } = await loadApi();
         const input = { source, projection: { range: { startAtMs: 0, endAtMs: 5 }, resolution: 'accepted_observations' as const } };
-        const options = { accountMode, material, request, nowMs: 1, includePendingWork: false,
-            readAllHistory: { onProgress: () => {} } };
+        const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
+        const price = createDeferred<undefined>();
+        const progress: ConnectedServiceQuotaGetResultV1[] = [];
+        const options = { accountMode, material, nowMs: 1, includePendingWork: false,
+            readEnteredMonthlyPrice: () => price.promise,
+            readAllHistory: { onProgress: (value: ConnectedServiceQuotaGetResultV1) => {
+                progress.push(value);
+                if (value.pageFacts) price.resolve(undefined);
+            } } };
         const first = await getProviderAccountUsageQuota({ token: 'test-token' }, input, options);
+        const projected = progress.filter(value => value.pageFacts);
+        expect(projected.length).toBeGreaterThan(1);
+        // Price/Pending settlement and the terminal result do not add accepted
+        // observations. Their projection must reuse the already derived page facts.
+        for (const value of projected) expect(value.pageFacts).toBe(projected[0]!.pageFacts);
+        expect(first.pageFacts).toBe(progress.at(-1)?.pageFacts);
         expect(first.history).toBeUndefined();
-        expect(getProviderAccountUsageQuotaHistoryV1(first)).toEqual({ entries: observations.map(value => ({
+        expect(first.pageProjection).toBeUndefined();
+        expect(openProviderAccountUsagePageProjectionV1({ recordId: snapshot.recordId, accountMode, material,
+            content: persisted.value!.content }).history).toEqual({ entries: observations.map(value => ({
             id: `witness-${value.fetchedAtMs}`, observedAtMs: value.fetchedAtMs, snapshot: value,
         })), nextCursor: null });
         expect(persisted.value?.content.t).toBe(accountMode === 'plain' ? 'plain' : 'encrypted');
@@ -120,7 +383,9 @@ describe('apiProviderAccountUsage', () => {
         const extended = await getProviderAccountUsageQuota({ token: 'test-token' }, { ...input,
             projection: { ...input.projection, range: { startAtMs: 0, endAtMs: 6 } } }, options);
         expect(cursors.at(-1)).toEqual({ id: 'witness-4', observedAtMs: 4 });
-        expect(getProviderAccountUsageQuotaHistoryV1(extended)?.entries.map(entry => entry.id))
+        expect(extended.pageFacts?.historyStatus).toBe('complete');
+        expect(openProviderAccountUsagePageProjectionV1({ recordId: snapshot.recordId, accountMode, material,
+            content: persisted.value!.content }).history.entries.map(entry => entry.id))
             .toEqual(['witness-1', 'witness-2', 'witness-3', 'witness-4', 'witness-5']);
     });
     it.each(['plain', 'e2ee'] as const)('releases the event loop before publishing a large admitted %s history page', async accountMode => {

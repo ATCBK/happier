@@ -1,4 +1,6 @@
 import type { EntityDragItemV1 } from '../entityDragDrop.js';
+import { PluginUiLaunchInputV1Schema as canonicalPluginUiLaunchInputV1Schema } from '@happier-dev/protocol/plugins/ui/semanticCommands';
+import type { PluginUiJsonValueV1 } from './publicContract.js';
 import type { WidgetSizeV1 as ProtocolWidgetSizeV1, WidgetSizeFootprintV1 as ProtocolWidgetSizeFootprintV1 } from '@happier-dev/protocol/widgets';
 /** Declaration-only projections; Protocol owns supported sizes and footprint policy. */
 export type WidgetSizeV1 = ProtocolWidgetSizeV1;
@@ -22,7 +24,7 @@ import type {
     PluginActionInputById,
     PluginActionResultById,
     PluginInvocableActionId,
-} from '../actions/service.js';
+} from '../actions/actionTypeMap.generated.js';
 import { CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1 as canonicalCurrentUiContextBoundedIncompletenessV1 } from '@happier-dev/protocol/plugins/ui/currentUiContext';
 import { PLUGIN_UI_SUB_PATH_MAX_UTF8_BYTES_V1 as canonicalPluginUiSubPathMaxUtf8BytesV1, normalizePluginUiSubPathV1 as canonicalNormalizePluginUiSubPathV1, pluginUiTargetedContributionOperationKey as canonicalPluginUiTargetedContributionOperationKey, selectPluginUiTargetedContributionOperationV1 as canonicalSelectPluginUiTargetedContributionOperationV1, selectPluginUiTargetedContributionSurfaceV1 as canonicalSelectPluginUiTargetedContributionSurfaceV1, selectPluginUiTargetedContributionV1 as canonicalSelectPluginUiTargetedContributionV1, PluginUiPreparedReviewWorkspaceResultV1Schema as canonicalPluginUiPreparedReviewWorkspaceResultV1Schema } from '@happier-dev/protocol/plugins/ui/client';
 import { COMPOSER_MEDIA_CONTENT_CAPABILITY_V1 as canonicalComposerMediaContentCapabilityV1, MAX_COMPOSER_CONTENT_INSPECT_BYTES_V1 as canonicalMaxComposerContentInspectBytesV1, ComposerContentHandleV1Schema as canonicalComposerContentHandleV1Schema, ComposerContentInspectRequestV1Schema as canonicalComposerContentInspectRequestV1Schema, ComposerContentInspectWireResultV1Schema as canonicalComposerContentInspectWireResultV1Schema, ComposerContentPickMediaRequestV1Schema as canonicalComposerContentPickMediaRequestV1Schema } from '@happier-dev/protocol/runtime/input/composerContentV1';
@@ -72,7 +74,7 @@ import type { PluginUiHostReadReferenceV1 as ProtocolPluginUiHostReadReferenceV1
 /** Host reads share Resource lifecycle while retaining the Action's caller policy. */
 export type PluginUiHostReadReference = ProtocolPluginUiHostReadReferenceV1;
 export type PluginUiResourceReference = PluginReference | PluginUiHostReadReference;
-import type { InteractionSeverity } from '../interactions.js';
+import type { InteractionSeverity } from '../interactionContracts.js';
 import type {
     ComposerAttachmentAuthorValueV1,
     ComposerAttachmentUpdateV1,
@@ -206,6 +208,10 @@ export type {
     PluginUiTargetedContributionV1,
     PluginUiTargetedContributionsV1,
 } from './publicContract.js';
+
+/** The host's exact launch admission, including its encoded-byte boundary. */
+export const PluginUiLaunchInputV1Schema: PluginUiSchema<PluginUiJsonValueV1> =
+    canonicalPluginUiLaunchInputV1Schema;
 
 /** Canonical parsers for the Composer values accepted and returned by this Host API. */
 export const ComposerRefV1Schema: PluginUiSchema<ComposerRefV1> =
@@ -444,6 +450,8 @@ export type OpenConnectedAccountsRequest =
     | Readonly<{
         service: PluginUiContributionIdentityV1;
         accountId?: string;
+        /** Open host-owned selection for one declared consumer purpose. */
+        purpose?: Readonly<{ consumer: PluginUiContributionIdentityV1; purpose: string }>;
     }>;
 
 export interface PluginUiHostApi {
@@ -592,12 +600,22 @@ export interface PluginUiHostApi {
         options?: Readonly<{ severity?: InteractionSeverity; signal?: AbortSignal }>,
     ): Promise<void>;
     /**
+     * Admit a contributed Action before a caller-owned Account mutation. The host
+     * applies enablement and approval through its Action dispatcher, without
+     * requiring a daemon. False is a user decline; other refusals reject.
+     * Invoke the existing domain writer only after true, with the same signal.
+     * Unvalidated input retains the conservative conditional default.
+     * The admission is not a reusable grant or a stored token.
+     */
+    admitAction(action: PluginReference, input?: JsonValue, options?: PluginCancellationOptions): Promise<boolean>;
+    /**
      * Ordinary plugin-local confirmation, delegated to Happier's own interaction
      * owner (§3.4). Declining resolves `false`; it never throws to express the
      * user's answer.
-     * With `action`, a direct UI mutation uses that contributed Action's manifest
-     * default and the user's invoking-surface approval setting. A waiver resolves
-     * true without a dialog; an unavailable Action policy rejects without a write.
+     * With `action`, presentation uses that contributed Action's enabled state,
+     * manifest default and invoking-surface approval setting. A waiver resolves
+     * true without a dialog; unavailable or disabled policy rejects. Use
+     * `admitAction` before a caller-owned Account mutation.
      *
      * Withdrawing the question through `signal` is not an answer: the dialog is
      * dismissed, a late answer to it is inert, and the call rejects with a typed
@@ -633,6 +651,11 @@ export interface PluginUiHostApi {
     /** Read one exact Composer scope through the canonical document owner. */
     readComposer(
         ref: ComposerRefV1,
+        options?: PluginCancellationOptions,
+    ): Promise<ComposerReadResultV1>;
+    /** Optional callable support for Discussion scopes; all other scope operations require its advertisement. */
+    readDiscussionComposer(
+        ref: Extract<ComposerRefV1, { kind: 'discussion' }>,
         options?: PluginCancellationOptions,
     ): Promise<ComposerReadResultV1>;
     /**

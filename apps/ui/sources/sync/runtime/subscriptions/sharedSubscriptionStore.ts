@@ -16,15 +16,25 @@ export type SharedSubscriptionRefreshParams<TInput, TState, TSnapshotClient> = R
  * One parked watch answer.
  *
  * `changed` carries the daemon's new snapshot; `idle` means the daemon's park window elapsed with
- * nothing to report and the store re-arms; `unavailable` retires the watch for this entry until a
- * user-initiated refresh, fresh snapshot publication or foreground invalidation restarts it. There is deliberately no retry,
- * backoff or breaker here: the daemon owns the wait, so re-arming is rate-limited by its window,
- * and an unavailable watch degrades to the explicit refresh path rather than to a client timer.
+ * nothing to report. `retry` means the transport exhausted that watch's deadline without an
+ * answer. Both re-arm with the same cursor; the daemon window or transport deadline owns the
+ * cadence, without a client timer. `unavailable` retires the watch until a user refresh, fresh
+ * publication or foreground invalidation restarts it.
  */
 export type SharedSubscriptionWatchOutcome<TSnapshot> =
     | Readonly<{ status: 'changed'; snapshot: TSnapshot }>
     | Readonly<{ status: 'idle' }>
+    | Readonly<{ status: 'retry' }>
     | Readonly<{ status: 'unavailable' }>;
+
+/**
+ * Async transport preparation may finish after the watch client returns its reply promise.
+ * `dispatched` also resolves on pre-dispatch failure/cancellation so publication cannot hang.
+ */
+export type SharedSubscriptionWatchRequest<TSnapshot> = Readonly<{
+    dispatched: Promise<void>;
+    outcome: Promise<SharedSubscriptionWatchOutcome<TSnapshot>>;
+}>;
 
 export type SharedSubscriptionWatchParams<TInput, TState, TWatchClient> = Readonly<{
     input: TInput;
@@ -56,6 +66,8 @@ export type SharedSubscriptionStoreConfig<
     refresh: (params: SharedSubscriptionRefreshParams<TInput, TState, TSnapshotClient>) => Promise<TState>;
     failRefresh?: (state: TState, input: TInput, nowMs: () => number, error: unknown) => TState;
     applySnapshot: (state: TState, snapshot: TSnapshot) => TState;
+    /** Publish derived/sibling state only after the next watch has dispatched. */
+    onWatchSnapshot?: (input: TInput, snapshot: TSnapshot, previous: TState) => void;
     matchesPublish?: (entryInput: TInput, publishInput: TInput) => boolean;
     /**
      * Whether a published snapshot actually covers a matching entry's scope.
@@ -68,7 +80,7 @@ export type SharedSubscriptionStoreConfig<
      * rather than silently showing another scope's state. Omit it and every matching entry applies
      * the snapshot, which is right for a domain whose entries and publications share a scope.
      */
-    snapshotCoversEntry?: (entryInput: TInput, snapshot: TSnapshot) => boolean;
+    snapshotCoversEntry?: (entryInput: TInput, snapshot: TSnapshot, publishInput: TInput) => boolean;
     /**
      * Optional push half. While an entry has subscribers the store keeps exactly one watch
      * outstanding and re-arms it on every answer, so a domain that supplies this stays fresh
@@ -77,7 +89,7 @@ export type SharedSubscriptionStoreConfig<
     defaultWatchClient?: TWatchClient;
     watch?: (
         params: SharedSubscriptionWatchParams<TInput, TState, TWatchClient>,
-    ) => Promise<SharedSubscriptionWatchOutcome<TSnapshot>>;
+    ) => Promise<SharedSubscriptionWatchOutcome<TSnapshot>> | SharedSubscriptionWatchRequest<TSnapshot>;
 }>;
 
 export type SharedSubscriptionStore<
@@ -109,6 +121,7 @@ type SharedSubscriptionStoreEntry<TInput, TState, TSnapshotClient, TWatchClient>
     readonly listeners: Set<() => void>;
     refCount: number;
     inFlight: Promise<void> | null;
+    refreshRequested: boolean;
     readStarted: boolean;
     abortController: AbortController | null;
     watchAbortController: AbortController | null;
@@ -164,6 +177,7 @@ export function createSharedSubscriptionStore<
                 listeners: new Set(),
                 refCount: 0,
                 inFlight: null,
+                refreshRequested: false,
                 readStarted: false,
                 abortController: null,
                 watchAbortController: null,
@@ -192,6 +206,7 @@ export function createSharedSubscriptionStore<
     ): Promise<void> => {
         if (entry.inFlight) return entry.inFlight;
         if (config.shouldRefresh?.(entry.state) === false) return Promise.resolve();
+        entry.refreshRequested = false;
         entry.readStarted = true;
         const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
         entry.abortController = abortController;
@@ -218,6 +233,11 @@ export function createSharedSubscriptionStore<
             if (entry.abortController === abortController) {
                 entry.abortController = null;
             }
+            // A mutation or source update during this read must not be swallowed by
+            // single-flight sharing. Coalesce those invalidations into one subsequent read.
+            if (entry.refreshRequested && entry.refCount > 0 && !abortController?.signal.aborted) {
+                void runRefresh(entry);
+            }
         } })();
         entry.inFlight = promise;
         return promise;
@@ -227,24 +247,28 @@ export function createSharedSubscriptionStore<
     // re-arms the next one, so the cadence is the daemon's park window and there is no timer here.
     // An unavailable watch retires until invalidation or snapshot publication restores it.
     // Both user Refresh and the foreground trigger reuse these owners.
-    const runWatchLoop = (entry: Entry): void => {
+    const runWatchLoop = (entry: Entry): Promise<void> => {
         const watch = config.watch;
         if (!watch || entry.watching || entry.watchRetired || entry.refCount <= 0 || config.shouldWatch?.(entry.state) === false) {
-            return;
+            return Promise.resolve();
         }
         entry.watching = true;
         entry.watchRecoveryRequested = false;
         const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
         entry.watchAbortController = abortController;
+        let dispatched = Promise.resolve();
         void (async () => {
+            let publication: { snapshot: TSnapshot; previous: TState; changed: boolean } | undefined;
             try {
-                const outcome = await watch({
+                const request = watch({
                     input: entry.input,
                     state: entry.state,
                     watchClient: entry.watchClient,
                     nowMs: entry.nowMs,
                     ...(abortController ? { signal: abortController.signal } : {}),
                 });
+                if ('outcome' in request) dispatched = request.dispatched;
+                const outcome = await ('outcome' in request ? request.outcome : request);
                 if (abortController?.signal.aborted || entry.refCount <= 0) {
                     return;
                 }
@@ -252,7 +276,10 @@ export function createSharedSubscriptionStore<
                     entry.watchRetired = !entry.watchRecoveryRequested;
                 }
                 if (outcome.status === 'changed') {
-                    setState(entry, config.applySnapshot(entry.state, outcome.snapshot));
+                    const previous = entry.state;
+                    const next = config.applySnapshot(previous, outcome.snapshot);
+                    entry.state = next;
+                    publication = { snapshot: outcome.snapshot, previous, changed: previous !== next };
                 }
             } catch {
                 if (!abortController?.signal.aborted) entry.watchRetired = !entry.watchRecoveryRequested;
@@ -262,8 +289,17 @@ export function createSharedSubscriptionStore<
                     entry.watchAbortController = null;
                 }
             }
-            if (!abortController?.signal.aborted) runWatchLoop(entry);
+            if (!abortController?.signal.aborted) {
+                // Install the new cursor before re-arming, then let transport preparation reach
+                // dispatch before synchronous subscribers (including React) can occupy the thread.
+                await runWatchLoop(entry);
+                if (publication && !abortController?.signal.aborted && entry.refCount > 0) {
+                    config.onWatchSnapshot?.(entry.input, publication.snapshot, publication.previous);
+                    if (publication.changed) notify(entry);
+                }
+            }
         })();
+        return dispatched;
     };
 
     const stopWatch = (entry: Entry): void => {
@@ -300,6 +336,8 @@ export function createSharedSubscriptionStore<
             entry.listeners.add(listener);
             entry.refCount += 1;
             if (entry.refCount === 1) {
+                // New demand refreshes the snapshot and renews a previously retired watch.
+                entry.watchRetired = false;
                 const previousWasAborted = entry.abortController?.signal.aborted;
                 const refresh = runRefresh(entry);
                 if (config.watchAfterRefresh) {
@@ -331,8 +369,10 @@ export function createSharedSubscriptionStore<
             // An explicit invalidation also permits a new one-shot read of a retained entry.
             if (entry) entry.readStarted = false;
             if (entry && entry.refCount > 0) {
+                if (entry.inFlight) entry.refreshRequested = true;
                 const refresh = runRefresh(entry);
                 // A user-initiated refresh is also the recovery path for a retired watch.
+                if (entry.watching) entry.watchRecoveryRequested = true;
                 entry.watchRetired = false;
                 if (config.watchAfterRefresh) void refresh.then(() => runWatchLoop(entry));
                 else runWatchLoop(entry);
@@ -349,7 +389,8 @@ export function createSharedSubscriptionStore<
                 if (!matches) {
                     continue;
                 }
-                if (snapshotCoversEntry && !snapshotCoversEntry(entry.input, snapshot)) {
+                if (snapshotCoversEntry && !snapshotCoversEntry(entry.input, snapshot, input)) {
+                    if (entry.inFlight) entry.refreshRequested = true;
                     void runRefresh(entry);
                     continue;
                 }

@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
-import { buildSessionAwarenessListResultV1 } from '../sessions/awareness/action.js';
+import { createActionExecutor, type ActionExecutorContext, type ActionExecutorDeps } from './actionExecutor.js';
+import { buildSessionAwarenessListResultV1, markSessionListQueryResultV1 } from '../sessions/awareness/action.js';
+import { SessionSummarySchema } from '../sessions/control/listResult.js';
+import { SessionListQueryV1Schema } from '../sessions/listing/query.js';
+import { encodeV2SessionListCursorV1 } from '../sessions/listing/cursor.js';
 import { bindHomeDomainActionHttpRequestV1, readHomeDomainActionErrorV1 } from './homeDomainActionFamily.js';
 import { ActionIdSchema } from './actionIds.js';
 import { getActionSpec } from './actionSpecs.js';
@@ -10,6 +13,10 @@ import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
 import { AgentStartSessionCallerV1Schema, type AgentStartContextV1 } from '../account/settings/admitAgentStartV1.js';
 import { ActionsSettingsV1Schema } from './actionSettings.js';
 import { RpcError, RPC_ERROR_CODES } from '../rpc/errors.js';
+import { SessionGoalControlFailureV1Schema } from '../sessions/work/state/sessionWorkStateRpc.js';
+import { ActionExecuteFailureSchema } from './actionExecutionResult.js';
+import { listActionSpecsForCatalogSurface } from './actionCatalog.js';
+import { resolveSocketRpcSessionAuthorization } from '../rpc/socket.js';
 
 function createExecutor(overrides: Partial<ActionExecutorDeps> = {}) {
   return createActionExecutor({
@@ -50,6 +57,12 @@ function createExecutor(overrides: Partial<ActionExecutorDeps> = {}) {
   });
 }
 
+function archiveReportPage(ids: readonly string[]) {
+  return markSessionListQueryResultV1({ sessions: ids.map(id => SessionSummarySchema.parse({
+    id, manager: { sessionId: 's1' }, active: false, activeAt: 1, createdAt: 1, updatedAt: 1, encryption: null,
+  })), nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false });
+}
+
 const canonicalSessionSpawnInput = {
   creationKey: 'session-control-spawn',
   executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
@@ -61,6 +74,78 @@ const canonicalSessionSpawnInput = {
 } as const;
 
 describe('createActionExecutor (session control)', () => {
+  it('discovers control switching and applies Off, Ask and Allowed without changing the mode neighbour', async () => {
+    const id = ActionIdSchema.parse('session.control.switch');
+    for (const surface of ['ui', 'agent', 'mcp', 'cli'] as const) {
+      expect(listActionSpecsForCatalogSurface({ surface }).map(spec => spec.id)).toContain(id);
+    }
+    const requests: unknown[] = [];
+    const executor = createExecutor({
+      isActionApprovalRequired: undefined,
+      sessionControlSwitch: async request => { requests.push(request); return { switched: true }; },
+    });
+    const input = { sessionId: 's1', to: 'remote' };
+    for (const surface of ['ui', 'agent', 'mcp'] as const) {
+      const off = normalizeActionsSettingsV1({ v: 1, actions: { [id]: { disabledSurfaces: [surface] } } });
+      expect(await executor.execute(id, input, { surface, defaultSessionId: 's1', actionsSettings: off }))
+        .toMatchObject({ ok: false, errorCode: 'action_disabled' });
+      const ask = normalizeActionsSettingsV1({ v: 1, actions: { [id]: { approvalRequiredSurfaces: [surface] } } });
+      expect(isApprovalRequiredByActionsSettings(id, ask, { surface })).toBe(true);
+      expect(await executor.prepare(id, input, { surface, defaultSessionId: 's1', actionsSettings: ask }))
+        .toMatchObject({ kind: 'settled', result: { ok: false, errorCode: 'approvals_not_supported' } });
+      expect(requests).toEqual([]);
+    }
+    const allowed = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [id]: ['agent'] } });
+    expect(await executor.execute(id, input, { surface: 'agent', defaultSessionId: 's1', actionsSettings: allowed }))
+      .toEqual({ ok: true, result: { switched: true } });
+    expect(requests).toHaveLength(1);
+    expect(await executor.execute('session.mode.set', { sessionId: 's1', modeId: 'default' }, { surface: 'agent', defaultSessionId: 's1' }))
+      .toMatchObject({ ok: true });
+    expect(await createExecutor().execute(id, input, { surface: 'agent', defaultSessionId: 's1' }))
+      .toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+    expect(getActionSpec(id).inputSchema.safeParse({ ...input, authority: 'present_user' }).success).toBe(false);
+    expect(resolveSocketRpcSessionAuthorization('s1:switch')).toMatchObject({
+      authority: 'submitAgentInput', actionId: id, routeToSessionOwnerDaemon: true,
+    });
+  });
+  it('dispatches canonical question authoring and withdrawal to the current Session owner', async () => {
+    const actionId = ActionIdSchema.parse('session.needs_you.raise');
+    const requests: unknown[] = [];
+    const executor = createExecutor({ sessionNeedsYouRaise: async request => {
+      requests.push(request);
+      return { ok: true, requestId: 'question-one', ...('mode' in request.input ? { mode: request.input.mode } : { withdrawn: true }) };
+    } });
+    const context = { surface: 'agent', authority: 'account_automation', defaultSessionId: 'worker',
+      actionCaller: { kind: 'session', sessionId: 'worker', starterDepth: 0, turnDepth: 1 },
+      actionRequestId: 'raise-one', sessionInputSource: { sourceSessionId: 'worker', sourceTurnId: 'turn-one' } } as const;
+    const create = { type: 'decision', questions: [{ id: 'branch', prompt: 'Which branch?', type: 'text' }],
+      mode: 'continue', assumption: 'Using dev', lasting: false };
+    expect(await executor.execute(actionId, create, context)).toEqual({ ok: true, result: { ok: true, requestId: 'question-one', mode: 'continue' } });
+    expect(await executor.execute(actionId, { requestId: 'question-one', withdraw: 'No longer needed' }, context))
+      .toEqual({ ok: true, result: { ok: true, requestId: 'question-one', withdrawn: true } });
+    expect(requests).toEqual([
+      expect.objectContaining({ sessionId: 'worker', input: create, context: expect.objectContaining({ actionCaller: context.actionCaller }) }),
+      expect.objectContaining({ sessionId: 'worker', input: { requestId: 'question-one', withdraw: 'No longer needed' } }),
+    ]);
+  });
+  it('publishes runtime refresh and dispatches its guarded Session owner outcome', async () => {
+    for (const surface of ['ui', 'cli', 'agent', 'mcp'] as const) {
+      expect(listActionSpecsForCatalogSurface({ surface }).map(spec => spec.id)).toContain('session.runtime.refresh');
+    }
+    const id = ActionIdSchema.parse('session.runtime.refresh');
+    expect(getActionSpec(id)).toMatchObject({ executionPlacement: 'session', safety: 'safe' });
+    const sessionRuntimeRefresh = vi.fn(async () => ({ ok: true, status: 'already_current', sessionId: 's1' }));
+    const executor = createExecutor({ sessionRuntimeRefresh });
+    const input = { sessionId: 's1', machineId: 'm1', serverId: 'home' };
+    expect(await executor.execute(id, input, { surface: 'cli', serverId: 'home' }))
+      .toEqual({ ok: true, result: { ok: true, status: 'already_current', sessionId: 's1' } });
+    expect(sessionRuntimeRefresh).toHaveBeenCalledWith(expect.objectContaining(input));
+    sessionRuntimeRefresh.mockResolvedValueOnce({ ok: false, status: 'busy', sessionId: 's1' });
+    expect(await executor.execute(id, input, { surface: 'cli', serverId: 'home' }))
+      .toEqual({ ok: true, result: { ok: false, status: 'busy', sessionId: 's1' } });
+    expect(await executor.execute(id, { ...input, mode: 'force_current_cli' }, { surface: 'cli' }))
+      .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+  });
   it('refuses automation tool visibility even when Action approval is waived', async () => {
     const writes: unknown[] = [];
     const executor = createExecutor({
@@ -185,6 +270,66 @@ describe('createActionExecutor (session control)', () => {
     }
     outcome = 'deleted';
     expect(await executor.execute('session.pending.withdraw', { sessionId: 'session', localId: 'pending' }, { surface: 'cli' })).toMatchObject({ ok: false, errorCode: 'invalid_action_output' });
+  });
+  it('publishes same-input Pending intent/rearm on every caller surface without admitting reset holds through that Action', () => {
+    const id = ActionIdSchema.parse('session.pending.action.set');
+    const spec = getActionSpec(id);
+    for (const surface of ['ui', 'agent', 'mcp', 'cli', 'rpc', 'voice'] as const) {
+      expect(listActionSpecsForCatalogSurface({ surface }).map(row => row.id)).toContain(id);
+      expect(isApprovalRequiredByActionsSettings(id, normalizeActionsSettingsV1({ v: 1 }), { surface })).toBe(true);
+    }
+    expect(spec).toMatchObject({ executionPlacement: 'account', bindings: { mcpToolName: 'session_pending_action_set' },
+      cli: { commands: [{ path: ['session', 'pending', 'action', 'set'] }] } });
+    const input = { sessionId: 'session', localId: 'pending', requestedAction: { v: 1, kind: 'enqueue' }, resumeWhenAvailable: true };
+    expect(spec.inputSchema.safeParse(input).success).toBe(true);
+    expect(spec.inputSchema.safeParse({ ...input, targetExecutionRunId: 'run' }).success).toBe(false);
+    const held = getActionSpec('session.pending.resetStart.set').inputSchema.parse({ sessionId: 'session', localId: 'pending', reset: {
+      source: { bindingKind: 'account', ref: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'default' } },
+      recordId: 'paug_v1_abcdefghijklmnop', meterId: 'session', witness: { id: 'accepted', observedAtMs: 10 },
+    } });
+    expect(spec.inputSchema.safeParse({ ...input, requestedAction: { v: 1, kind: 'reset_start', reset: held.reset } }).success).toBe(false);
+    expect(spec.outputSchema?.safeParse({ didUpdate: true, requestedAction: input.requestedAction, nativeStart: true }).success).toBe(false);
+  });
+  it('admits uncertain Pending recovery through configurable danger Actions and strict results', async () => {
+    const effects: string[] = [];
+    const executor = createExecutor({
+      sessionPendingMarkHandled: async () => { effects.push('handled'); return { ok: true }; },
+      sessionPendingDismiss: async () => { effects.push('dismiss'); return { ok: true }; },
+      sessionPendingSendAsNew: async () => { effects.push('new'); return { newLocalId: 'replacement' }; },
+    });
+    for (const [name, suffix, output] of [
+      ['session.pending.markHandled', 'handled', { ok: true }],
+      ['session.pending.dismiss', 'dismiss', { ok: true }],
+      ['session.pending.sendAsNew', 'send-as-new', { newLocalId: 'replacement' }],
+    ] as const) {
+      expect(ActionIdSchema.safeParse(name).success).toBe(true);
+      const id = ActionIdSchema.parse(name);
+      expect(getActionSpec(id)).toMatchObject({ safety: 'danger', executionPlacement: 'account',
+        serverTransport: { method: 'POST', path: `/v2/sessions/:sessionId/pending/:localId/delivery/${suffix}` } });
+      for (const surface of ['ui', 'voice', 'agent', 'mcp', 'cli', 'rpc', 'api', 'plugin'] as const) {
+        expect(isApprovalRequiredByActionsSettings(id, normalizeActionsSettingsV1({ v: 1 }), { surface })).toBe(true);
+        expect(isApprovalRequiredByActionsSettings(id, normalizeActionsSettingsV1({ v: 1,
+          approvalWaivedSurfaces: { [id]: [surface] } }), { surface })).toBe(false);
+      }
+      expect(await executor.execute(id, { sessionId: 'session', localId: 'pending', serverId: 'home' }, { surface: 'cli' }))
+        .toEqual({ ok: true, result: output });
+      expect(getActionSpec(id).outputSchema?.safeParse({ ...output, injectedAuthority: true }).success).toBe(false);
+    }
+    expect(effects).toEqual(['handled', 'dismiss', 'new']);
+    const markHandled = ActionIdSchema.parse('session.pending.markHandled');
+    expect(await executor.execute(markHandled, { sessionId: 'session', localId: 'pending', targetExecutionRunId: 'run' }, { surface: 'cli' }))
+      .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    expect(effects).toHaveLength(3);
+    const targeted = createExecutor({ sessionPendingSendAsNew: async input => {
+      expect(input).toMatchObject({ sessionId: 'session', localId: 'pending', targetExecutionRunId: 'run' });
+      return { newLocalId: 'replacement' };
+    } });
+    expect(await targeted.execute(ActionIdSchema.parse('session.pending.sendAsNew'),
+      { sessionId: 'session', localId: 'pending', targetExecutionRunId: 'run' }, { surface: 'cli' }))
+      .toMatchObject({ ok: true, result: { newLocalId: 'replacement' } });
+    const invalid = createExecutor({ sessionPendingMarkHandled: async () => ({ ok: true, injectedAuthority: true }) });
+    expect(await invalid.execute(markHandled, { sessionId: 'session', localId: 'pending' }, { surface: 'cli' }))
+      .toMatchObject({ ok: false, errorCode: 'invalid_action_output' });
   });
   it('exposes view preferences only to people and admits only the strict Bot input shape', async () => {
     // Metadata writes are the host boundary; keep the approval policy real.
@@ -355,14 +500,11 @@ describe('createActionExecutor (session control)', () => {
   });
 
   it('fails discoverable workspace Actions with typed unsupported when this host has no mounted workspace', async () => {
-    for (const surface of ['agent', 'mcp'] as const) {
+    for (const surface of ['agent', 'mcp', 'cli'] as const) {
       await expect(createExecutor().execute('workspace.tabs.list', {}, { surface })).resolves.toMatchObject({
         ok: false, errorCode: 'unsupported_action',
       });
     }
-    await expect(createExecutor().execute('workspace.tabs.list', {}, { surface: 'cli' })).resolves.toMatchObject({
-      ok: false, errorCode: 'action_disabled', details: { reason: 'unsupported_surface', surface: 'cli' },
-    });
   });
   it('admits tab reorder on the advertised client surfaces and rejects it without a mounted workspace', async () => {
     // The mounted workspace port is the host boundary; canonical Action parsing remains real.
@@ -370,16 +512,14 @@ describe('createActionExecutor (session control)', () => {
       expect(request).toMatchObject({ actionId: 'workspace.tabs.reorder', input: { tabId: 'tab-1', index: 1 } });
       return { ok: true };
     };
-    for (const surface of ['ui', 'voice', 'agent', 'mcp'] as const) {
+    for (const surface of ['ui', 'voice', 'agent', 'mcp', 'cli'] as const) {
       await expect(createExecutor({ workspaceAction }).execute('workspace.tabs.reorder', { tabId: 'tab-1', index: 1 }, { surface }))
         .resolves.toEqual({ ok: true, result: { ok: true } });
     }
     await expect(createExecutor().execute('workspace.tabs.reorder', { tabId: 'tab-1', index: 1 }, { surface: 'agent' }))
       .resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
     await expect(createExecutor().execute('workspace.tabs.reorder', { tabId: 'tab-1', index: 1 }, { surface: 'cli' }))
-      .resolves.toMatchObject({ ok: false, errorCode: 'action_disabled', details: { reason: 'unsupported_surface' } });
-    await expect(createExecutor({ workspaceAction }).execute('workspace.tabs.reorder', { tabId: 'tab-1', index: 1 }, { surface: 'cli' }))
-      .resolves.toMatchObject({ ok: false, errorCode: 'action_disabled', details: { reason: 'unsupported_surface' } });
+      .resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
   });
   it('preserves the explicitly selected workspace tab when opening a qualified session', async () => {
     const sessionOpen = vi.fn(async () => ({ ok: true, status: 'opened' }));
@@ -640,6 +780,7 @@ describe('createActionExecutor (session control)', () => {
       ok: false,
       errorCode: 'unsupported_action',
       error: 'unsupported_action:session.message.send',
+      details: { cause: 'current_session_only' },
     });
     expect(sessionSendMessage).not.toHaveBeenCalled();
   });
@@ -1294,7 +1435,7 @@ describe('createActionExecutor (session control)', () => {
     );
 
     expect(res).toEqual({ ok: true, result: { ok: true, stopped: true } });
-    expect(sessionStop).toHaveBeenCalledWith({ sessionId: 's1', serverId: 'server-a' });
+    expect(sessionStop).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1', serverId: 'server-a' }));
   });
 
   it('preserves structured session.stop outcomes as top-level action success', async () => {
@@ -1571,8 +1712,162 @@ describe('createActionExecutor (session control)', () => {
       { surface: 'cli', defaultSessionId: null },
     );
 
-    expect(res).toEqual({ ok: true, result: { ok: true } });
-    expect(sessionArchiveSet).toHaveBeenCalledWith({ sessionId: 's1', archived: true, serverId: 'server-a' });
+    expect(res).toEqual({ ok: true, result: { success: true, sessionId: 's1' } });
+    expect(sessionArchiveSet).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1', archived: true, serverId: 'server-a' }));
+  });
+
+  it('archives the current direct reports through child Action admission and returns partial outcomes', async () => {
+    const effects: string[] = [];
+    const executor = createExecutor({
+      sessionArchiveSet: async ({ sessionId }) => {
+        effects.push(sessionId);
+        return sessionId === 'denied'
+          ? { ok: false, errorCode: 'permission_denied', error: 'permission_denied' }
+          : { ok: true, sessionId, archivedAt: 7 };
+      },
+      sessionList: async ({ query, serverId }) => {
+        expect(SessionListQueryV1Schema.parse(query)).toMatchObject({ underSessionId: 's1', storage: 'active', includeInactive: true });
+        expect(serverId).toBe('home-a');
+        return markSessionListQueryResultV1({
+          nextCursor: query?.cursor ? null : encodeV2SessionListCursorV1('history'), hasNext: !query?.cursor,
+          attentionNextCursor: null, attentionHasNext: false,
+          sessions: (query?.cursor ? [ ['first', 's1'], ['last', 's1'], ['grandchild', 'first'], ['foreign', 's1'] ]
+            : [ ['first', 's1'], ['denied', 's1'], ['history', 's1'] ]).map(([id, manager]) => SessionSummarySchema.parse({
+              id, manager: { sessionId: manager }, title: id, active: false, activeAt: 1,
+              createdAt: 1, updatedAt: 1, encryption: null,
+              ...(id === 'history' ? { archivedAt: 4 } : {}),
+              ...(id === 'foreign' ? { serverId: 'home-b' } : {}),
+            })),
+        });
+      },
+    });
+    const result = await executor.execute('session.archive', { sessionId: 's1', alsoArchiveReports: true },
+      { surface: 'cli', serverId: 'home-a' });
+    expect(effects).toEqual(['s1', 'first', 'denied', 'last']);
+    expect(result).toEqual({ ok: true, result: { success: true, sessionId: 's1', archivedAt: 7, reports: [
+      { sessionId: 'first', title: 'first', status: 'archived' },
+      { sessionId: 'denied', title: 'denied', status: 'failed', errorCode: 'permission_denied', error: 'permission_denied' },
+      { sessionId: 'last', title: 'last', status: 'archived' },
+    ] } });
+    if (result.ok) expect(getActionSpec('session.archive').outputSchema.parse(result.result)).toEqual(result.result);
+  });
+
+  it('does not discover reports by default or cascade after the parent is refused', async () => {
+    let reads = 0;
+    const effects: string[] = [];
+    const executor = createExecutor({
+      sessionList: async () => { reads++; throw new Error('discovery must not run'); },
+      sessionArchiveSet: async ({ sessionId }) => {
+        effects.push(sessionId);
+        if (sessionId === 'deferred') return { kind: 'approval_request_created', actionId: 'session.archive', artifactId: 'parent-approval' };
+        return sessionId === 'refused' ? { ok: false, errorCode: 'permission_denied', error: 'permission_denied' } : { ok: true };
+      },
+    });
+    expect(await executor.execute('session.archive', { sessionId: 's1' }, { surface: 'cli' }))
+      .toEqual({ ok: true, result: { success: true, sessionId: 's1' } });
+    expect(await executor.execute('session.archive', { sessionId: 's1', alsoArchiveReports: false }, { surface: 'cli' }))
+      .toEqual({ ok: true, result: { success: true, sessionId: 's1' } });
+    expect(await executor.execute('session.archive', { sessionId: 's1', alsoArchiveReports: 'true' }, { surface: 'cli' }))
+      .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    expect(await executor.execute('session.archive', { sessionId: 'refused', alsoArchiveReports: true }, { surface: 'cli' }))
+      .toMatchObject({ ok: false, errorCode: 'permission_denied' });
+    expect(await executor.execute('session.archive', { sessionId: 'deferred', alsoArchiveReports: true }, { surface: 'cli' }))
+      .toEqual({ ok: true, result: { kind: 'approval_request_created', actionId: 'session.archive', artifactId: 'parent-approval' } });
+    expect(reads).toBe(0);
+    expect(effects).toEqual(['s1', 's1', 'refused', 'deferred']);
+  });
+
+  it('does not reuse lead approval for reports and continues after a report awaits approval', async () => {
+    const effects: string[] = [];
+    const approvals: string[] = [];
+    const executor = createExecutor({
+      sessionList: async () => archiveReportPage(['pending', 'last']),
+      sessionArchiveSet: async ({ sessionId }) => { effects.push(sessionId); return { ok: true }; },
+      isActionApprovalRequired: (id, _context, input) => id === 'session.archive'
+        && typeof input === 'object' && input !== null && 'sessionId' in input && input.sessionId === 'pending',
+      approvalsCreate: async ({ request }) => { approvals.push(request.actionId); return { artifactId: 'approval-one' }; },
+    });
+    const result = await executor.execute('session.archive', { sessionId: 's1', alsoArchiveReports: true },
+      { surface: 'cli', serverId: 'home-a', authority: 'present_user', bypassApprovals: true, actionRequestId: 'archive-lead' });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { reports: [
+      { sessionId: 'pending', status: 'approval_pending', artifactId: 'approval-one' },
+      { sessionId: 'last', status: 'archived' },
+    ] } });
+    expect(effects).toEqual(['s1', 'last']);
+    expect(approvals).toEqual(['session.archive']);
+    if (result.ok) expect(getActionSpec('session.archive').outputSchema.parse(result.result)).toEqual(result.result);
+  });
+
+  it.each(['unavailable', 'withheld'] as const)('preserves the archived lead and earlier report outcomes when discovery is %s', async failure => {
+    const executor = createExecutor({ sessionArchiveSet: async () => ({ ok: true }),
+      sessionList: async ({ query }) => {
+        if (query?.cursor) return failure === 'unavailable'
+          ? { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' }
+          : { ...archiveReportPage([]), metadataUpgradeRequiredCount: 1 };
+        return { ...archiveReportPage(['first']), hasNext: true, nextCursor: encodeV2SessionListCursorV1('first') };
+      },
+    });
+    const result = await executor.execute('session.archive', { sessionId: 's1', alsoArchiveReports: true }, { surface: 'cli' });
+    expect(result).toMatchObject({ ok: true, result: { success: true, sessionId: 's1',
+      reports: [{ sessionId: 'first', status: 'archived' }],
+      reportsError: failure === 'unavailable' ? { errorCode: 'target_unavailable', error: 'target_unavailable' }
+        : { errorCode: 'session_metadata_upgrade_required', error: 'session_metadata_upgrade_required' },
+    } });
+    if (result.ok) expect(getActionSpec('session.archive').outputSchema.parse(result.result)).toEqual(result.result);
+  });
+
+  it('stops active reports through ordinary Stop admission and keeps an unconfirmed stop unarchived', async () => {
+    const effects: string[] = [];
+    const page = archiveReportPage(['running', 'uncertain', 'last']);
+    const executor = createExecutor({
+      sessionList: async () => ({ ...page, sessions: page.sessions.map(row => ({ ...row, active: row.id !== 'last' })) }),
+      sessionArchiveSet: async ({ sessionId }) => { effects.push(`archive:${sessionId}`); return { ok: true }; },
+      sessionStop: async ({ sessionId }) => { effects.push(`stop:${sessionId}`); return { sessionId, stopped: sessionId === 'running' }; },
+    });
+    const result = await executor.execute('session.archive', { sessionId: 's1', alsoArchiveReports: true }, { surface: 'cli', serverId: 'home-a' });
+    expect(effects).toEqual(['archive:s1', 'stop:running', 'archive:running', 'stop:uncertain', 'archive:last']);
+    expect(result).toMatchObject({ ok: true, result: { reports: [
+      { sessionId: 'running', status: 'archived' },
+      { sessionId: 'uncertain', status: 'failed', errorCode: 'session_stop_unconfirmed' },
+      { sessionId: 'last', status: 'archived' },
+    ] } });
+    if (result.ok) expect(getActionSpec('session.archive').outputSchema.parse(result.result)).toEqual(result.result);
+  });
+
+  it('does not turn direct-report discovery into current-Session-only mutation authority', async () => {
+    const effects: string[] = [];
+    const executor = createExecutor({ sessionList: async () => archiveReportPage(['child']),
+      sessionArchiveSet: async ({ sessionId }) => { effects.push(sessionId); return { ok: true }; },
+    });
+    const result = await executor.execute('session.archive', { sessionId: 's1', alsoArchiveReports: true }, {
+      surface: 'mcp', serverId: 'home-a', defaultSessionId: 's1', sessionListAccess: 'current_session',
+      actionsSettings: normalizeActionsSettingsV1({ v: 1, actions: { 'session.archive': { disabledSurfaces: [] } } }),
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { reports: [
+      { sessionId: 'child', status: 'failed', errorCode: 'unsupported_action' },
+    ] } });
+    expect(effects).toEqual(['s1']);
+  });
+
+  it('keeps thrown report failures partial and stops discovery after caller cancellation', async () => {
+    const controller = new AbortController();
+    const effects: string[] = [];
+    const executor = createExecutor({ sessionList: async () => archiveReportPage(['throws', 'last', 'unattempted']),
+      sessionArchiveSet: async ({ sessionId }) => {
+        effects.push(sessionId);
+        if (sessionId === 'throws') throw new Error('HTTP transport failed');
+        if (sessionId === 'last') controller.abort();
+        return { ok: true };
+      },
+    });
+    const result = await executor.execute('session.archive', { sessionId: 's1', alsoArchiveReports: true },
+      { surface: 'cli', signal: controller.signal });
+    expect(effects).toEqual(['s1', 'throws', 'last']);
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { success: true,
+      reports: [{ sessionId: 'throws', status: 'failed' }, { sessionId: 'last', status: 'archived' }],
+      reportsError: { errorCode: 'cancelled' },
+    } });
+    if (result.ok) expect(getActionSpec('session.archive').outputSchema.parse(result.result)).toEqual(result.result);
   });
 
   it('executes session.unarchive via deps.sessionArchiveSet', async () => {
@@ -1589,24 +1884,27 @@ describe('createActionExecutor (session control)', () => {
     );
 
     expect(res).toEqual({ ok: true, result: { ok: true } });
-    expect(sessionArchiveSet).toHaveBeenCalledWith({ sessionId: 's1', archived: false, serverId: 'server-a' });
+    expect(sessionArchiveSet).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1', archived: false, serverId: 'server-a' }));
   });
 
-  it('executes session.status.get via deps.sessionStatusGet', async () => {
-    const sessionStatusGet = vi.fn(async () => ({ ok: true }));
+  it.each(['cli', 'voice'] as const)('reads coordinator host status through the existing owner on %s', async (surface) => {
+    const status = { ok: true as const, session: { id: 's1', createdAt: 1, updatedAt: 1,
+      active: true, activeAt: 1, encryptionMode: 'plain' as const, encryption: null } };
+    const sessionStatusGet = vi.fn(async () => status);
     const executor = createExecutor({
       sessionStatusGet,
       resolveServerIdForSessionId: (sessionId) => sessionId === 's1' ? 'server-a' : null,
     });
 
     const res = await executor.execute(
-      'session.status.get' as any,
-      { sessionId: 's1', live: true },
-      { surface: 'cli', defaultSessionId: null },
+      'session.status.get',
+      { sessionId: 's1', live: true, readiness: true },
+      { surface, defaultSessionId: null },
     );
 
-    expect(res).toEqual({ ok: true, result: { ok: true } });
-    expect(sessionStatusGet).toHaveBeenCalledWith({ sessionId: 's1', live: true, serverId: 'server-a' });
+    expect(res).toEqual({ ok: true, result: status });
+    expect(sessionStatusGet).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1', live: true, readiness: true,
+      serverId: 'server-a', context: expect.objectContaining({ surface }) }));
   });
 
   it('routes deprecated session.history.get to deps.sessionEventsGet', async () => {
@@ -1630,7 +1928,11 @@ describe('createActionExecutor (session control)', () => {
       includeMeta: false,
       includeStructuredPayload: false,
       serverId: 'server-a',
-    });
+    }, expect.objectContaining({
+      actionId: 'session.history.get',
+      input: { sessionId: 's1', limit: 25, format: 'compact', includeMeta: false, includeStructuredPayload: false },
+      context: expect.objectContaining({ surface: 'cli', defaultSessionId: null }),
+    }));
   });
 
   it('executes session.transcript.get via deps.sessionTranscriptGet', async () => {
@@ -1793,7 +2095,11 @@ describe('createActionExecutor (session control)', () => {
       roles: ['event'],
       includeRaw: true,
       serverId: 'server-a',
-    });
+    }, expect.objectContaining({
+      actionId: 'session.events.get',
+      input: { sessionId: 's1', limit: 10, format: 'raw', roles: ['event'], includeRaw: true },
+      context: expect.objectContaining({ surface: 'cli', defaultSessionId: null }),
+    }));
   });
 
   it('routes deprecated session.messages.recent.get to deps.sessionTranscriptGet', async () => {
@@ -1914,6 +2220,32 @@ describe('createActionExecutor (session control)', () => {
       sessionId: 's1',
       tokenBudget: null,
     });
+  });
+
+  it('preserves closed Goal failure evidence from an external runtime through the public Action envelope', async () => {
+    const goalControlFailure = SessionGoalControlFailureV1Schema.parse({ phase: 'missing_matching_publication' });
+    const executor = createExecutor({ sessionGoalSet: async () => ({
+      ok: false, errorCode: 'session_goal_control_work_state_unavailable',
+      error: 'session_goal_control_work_state_unavailable', goalControlFailure,
+      vendorError: 'private native details',
+    }) });
+    const result = await executor.execute('session.goal.set', { sessionId: 's1', objective: 'External native goal' }, { surface: 'cli' });
+    expect(ActionExecuteFailureSchema.parse(result)).toEqual({
+      ok: false, errorCode: 'session_goal_control_work_state_unavailable',
+      error: 'session_goal_control_work_state_unavailable', goalControlFailure,
+    });
+  });
+
+  it.each([
+    { phase: 'unknown_vendor_phase' },
+    { phase: 'missing_matching_publication', nativeError: 'private native details' },
+  ])('omits malformed or content-bearing Goal diagnostics without hiding the refusal: %j', async goalControlFailure => {
+    const executor = createExecutor({ sessionGoalSet: async () => ({
+      ok: false, errorCode: 'session_goal_control_work_state_unavailable',
+      error: 'session_goal_control_work_state_unavailable', goalControlFailure,
+    }) });
+    expect(await executor.execute('session.goal.set', { sessionId: 's1', objective: 'External native goal' }, { surface: 'cli' }))
+      .toEqual({ ok: false, errorCode: 'session_goal_control_work_state_unavailable', error: 'session_goal_control_work_state_unavailable' });
   });
 
   it('executes vendor plugin and skill catalog list actions through protocol deps', async () => {
@@ -2428,7 +2760,7 @@ describe('createActionExecutor (session control)', () => {
         cursor: 0,
         maxEvents: 128,
       },
-      { serverId: 'server-a' },
+      { serverId: 'server-a', surface: 'rpc' },
     );
   });
 
@@ -2670,15 +3002,82 @@ describe('createActionExecutor (session control)', () => {
     expect(sessionUserActionAnswer).not.toHaveBeenCalled();
   });
 
-  it('requires human consent for a plugin action answer even when the approval hint is false', async () => {
+  it('passes Session answers and pass-up to the question owner and preserves its authority refusal', async () => {
+    const requests: Parameters<NonNullable<ActionExecutorDeps['sessionUserActionAnswer']>>[0][] = [];
+    // The Session RPC adapter is the boundary; manager policy is deliberately
+    // absent here because the receiving question owner alone decides it.
+    const executor = createExecutor({
+      sessionUserActionAnswer: async request => { requests.push(request); return { ok: false, errorCode: 'present_user_required' }; },
+      isActionApprovalRequired: () => true,
+    });
+    const caller = { kind: 'session', sessionId: 'manager', starterDepth: 0, turnDepth: 1 } as const;
+    for (const response of [{ answers: [{ question: 'Continue?', values: ['Yes'] }] }, { disposition: 'pass_up' }]) {
+      const result = await executor.execute('session.user_action.answer', { sessionId: 'worker', requestId: 'q1', ...response }, {
+        surface: 'agent', authority: 'account_automation', actionCaller: caller, sessionListAccess: 'current_session',
+        defaultSessionId: 'manager', actionRequestId: 'answer-1',
+        sessionInputSource: { sourceSessionId: 'manager', sourceTurnId: 'turn-1' },
+      });
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    }
+    const pluginCaller = { kind: 'plugin', pluginId: 'example', initiatingCaller: caller } as const;
+    const origin = { v: 1 as const, caller, sourceTurnId: 'turn-1', requestId: 'answer-plugin', callerPermissionMode: null };
+    expect(await executor.execute('session.user_action.answer', { sessionId: 'worker', requestId: 'q1', disposition: 'pass_up' }, {
+      surface: 'plugin', authority: 'account_automation', actionCaller: pluginCaller, sessionListAccess: 'current_session',
+      defaultSessionId: 'manager', readSessionActionRpcOrigin: () => origin,
+    })).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(await executor.execute('session.user_action.answer', { sessionId: 'worker', requestId: 'q1', disposition: 'pass_up' }, {
+      surface: 'agent', authority: 'account_automation', actionCaller: caller, sessionListAccess: 'current_session',
+      defaultSessionId: 'worker', actionRequestId: 'answer-internal', bypassApprovals: true,
+      sessionInputSource: { sourceSessionId: 'manager', sourceTurnId: 'turn-1', via: 'action' },
+    })).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(requests).toHaveLength(4);
+    expect(requests[0]?.context?.actionCaller).toEqual(caller);
+    expect(requests[1]).toMatchObject({ sessionId: 'worker', requestId: 'q1', disposition: 'pass_up' });
+    expect(requests[2]?.context?.actionCaller).toEqual(pluginCaller);
+  });
+
+  it('does not delegate answers from descriptive, missing or bypassed Session proof', async () => {
+    const sessionUserActionAnswer = vi.fn(async () => ({ ok: true }));
+    const executor = createExecutor({ sessionUserActionAnswer, isActionApprovalRequired: () => false });
+    const caller = { kind: 'session', sessionId: 'manager', starterDepth: 0, turnDepth: 1 } as const;
+    const context: ActionExecutorContext = { surface: 'agent', authority: 'account_automation', actionCaller: caller,
+      defaultSessionId: 'manager', actionRequestId: 'answer-1',
+      sessionInputSource: { sourceSessionId: 'manager', sourceTurnId: 'turn-1', via: 'action' } };
+    for (const invalid of [
+      { ...context, sessionInputSource: undefined },
+      { ...context, sessionInputSource: { sourceSessionId: 'stranger', sourceTurnId: 'turn-1', via: 'action' as const } },
+      { ...context, actionRequestId: undefined },
+      { ...context, actionCaller: { kind: 'plugin' as const, pluginId: 'example', initiatingCaller: caller } },
+      { ...context, actionCaller: { kind: 'plugin' as const, pluginId: 'example', initiatingCaller: caller },
+        readSessionActionRpcOrigin: () => null },
+      { ...context, sessionInputSource: undefined, bypassApprovals: true },
+    ]) {
+      expect(await executor.execute('session.user_action.answer', { requestId: 'q1', disposition: 'pass_up' }, invalid))
+        .toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    }
+    expect(await executor.execute('session.user_action.answer', { requestId: 'q1', disposition: 'pass_up' },
+      { ...context, signal: AbortSignal.abort() })).toMatchObject({ ok: false, errorCode: 'cancelled' });
+    expect(sessionUserActionAnswer).not.toHaveBeenCalled();
+  });
+
+  it('requests human consent for a plugin action answer through the default approval policy', async () => {
     const sessionUserActionAnswer = vi.fn(async () => ({ ok: true }));
     const approvalsCreate = vi.fn<NonNullable<ActionExecutorDeps['approvalsCreate']>>(async () => ({ artifactId: 'human-answer-approval' }));
-    const executor = createExecutor({ sessionUserActionAnswer, approvalsCreate });
+    const approvalPolicy: NonNullable<ActionExecutorDeps['isActionApprovalRequired']> = (id, context, input) =>
+      isApprovalRequiredByActionsSettings(id, context.actionsSettings ?? normalizeActionsSettingsV1({ v: 1 }),
+        context, undefined, undefined, input);
+    const executor = createExecutor({ sessionUserActionAnswer, approvalsCreate, isActionApprovalRequired: approvalPolicy });
     const input = { requestId: 'request-1', decision: 'approve' };
-    expect(await createExecutor({ sessionUserActionAnswer }).execute('session.user_action.answer', input, {
+    expect(await createExecutor({ sessionUserActionAnswer, isActionApprovalRequired: approvalPolicy }).execute('session.user_action.answer', input, {
       surface: 'plugin', authority: 'account_automation', defaultSessionId: 's1',
       actionCaller: { kind: 'plugin', pluginId: 'acme.test' },
     })).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+    expect(await executor.execute('session.user_action.answer', input, {
+      surface: 'plugin', authority: 'account_automation', defaultSessionId: 's1',
+      actionCaller: { kind: 'plugin', pluginId: 'acme.test' },
+      actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'session.user_action.answer': ['plugin'] } }),
+    })).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(approvalsCreate).not.toHaveBeenCalled();
     const result = await executor.execute('session.user_action.answer', input, {
       surface: 'plugin', authority: 'account_automation', serverId: 'home-1', defaultSessionId: 's1',
       actionRequestId: 'plugin-answer-request-1',
@@ -2706,5 +3105,50 @@ describe('createActionExecutor (session control)', () => {
     );
 
     expect(res).toEqual({ ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.user_action.answer' });
+  });
+
+  it('discovers current-Session controls for Agent and MCP and honors Off, Ask and Allowed independently', async () => {
+    const { resolveSocketRpcSessionAuthorization } = await import('../rpc/socket.js');
+    for (const id of ['session.permission.remote.grants.list', 'session.permission.remote.grants.revoke'] as const) {
+      expect(resolveSocketRpcSessionAuthorization(id)).toMatchObject({ actionId: id, routeToSessionOwnerDaemon: true });
+    }
+    const requests = [
+      { id: 'session.permission.remote.grants.list', input: { sessionId: 's1' } },
+      { id: 'session.permission.remote.grants.revoke', input: { sessionId: 's1', turnId: 'turn', requestId: 'request', grantId: 'grant' } },
+      { id: 'session.config_option.set', input: { sessionId: 's1', configId: 'effort', valueId: 'high' } },
+      { id: 'session.connected_services_auth.set', input: { sessionId: 's1', machineId: 'machine', agentId: 'external-agent', bindings: { v: 2, bindingsByServiceId: {} } } },
+    ] as const;
+    let effects = 0;
+    const executor = createExecutor({
+      isActionApprovalRequired: undefined,
+      sessionPermissionRemoteAction: async args => {
+        effects++;
+        return args.actionId === 'session.permission.remote.grants.list' ? { grants: [], nextCursor: null }
+          : { status: 'revoked', grantId: 'grant' };
+      },
+      clientActionExecute: async () => { effects++; return { ok: true, result: { ok: true } }; },
+    });
+    for (const surface of ['agent', 'mcp'] as const) {
+      const discovered = listActionSpecsForCatalogSurface({ surface }).map(spec => spec.id);
+      const context = { surface, defaultSessionId: 's1' };
+      for (const { id, input } of requests) {
+        expect(discovered, id).toContain(id);
+        const before = effects;
+        const off = normalizeActionsSettingsV1({ v: 1, actions: { [id]: { disabledSurfaces: [surface] } } });
+        expect(await executor.execute(id, input, { ...context, actionsSettings: off }))
+          .toMatchObject({ ok: false, errorCode: 'action_disabled' });
+        const ask = normalizeActionsSettingsV1({ v: 1, actions: { [id]: { approvalRequiredSurfaces: [surface] } } });
+        expect(isApprovalRequiredByActionsSettings(id, ask, { surface }, undefined, undefined, input)).toBe(true);
+        const prepared = await executor.prepare(id, input, { ...context, actionsSettings: ask });
+        expect(prepared.kind).toBe('settled');
+        expect(effects).toBe(before);
+        const allowed = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [id]: [surface] } });
+        const result = await executor.execute(id, input, { ...context, actionsSettings: allowed });
+        expect(result, `${id}:${JSON.stringify(result)}`).toMatchObject({ ok: true });
+        expect(effects).toBe(before + 1);
+        expect(await executor.execute('session.mode.set', { sessionId: 's1', modeId: 'default' }, { ...context, actionsSettings: off }))
+          .toMatchObject({ ok: true });
+      }
+    }
   });
 });

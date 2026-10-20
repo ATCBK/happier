@@ -2,7 +2,7 @@ import { extractShellCommand, stripShellCommandPreludeForDisplay } from '@happie
 import type { Metadata } from '@happier-dev/session-core/state';
 import type { ToolCall } from "@happier-dev/session-core/messages";
 import { resolvePath } from '@/utils/path/pathUtils';
-import * as z from 'zod';
+import * as z from 'zod/mini';
 import { t } from '@/text';
 import { ICON_TERMINAL } from '../icons';
 import type { KnownToolDefinition } from '../_types';
@@ -28,15 +28,15 @@ export const providerShellTools = {
         minimal: true,
         hideDefaultError: true,
         isMutable: true,
-        input: z.object({
-            command: z.array(z.string()).describe('The command array to execute'),
-            cwd: z.string().optional().describe('Current working directory'),
-            parsed_cmd: z.array(z.object({
-                type: z.string().describe('Type of parsed command (read, write, bash, etc.)'),
-                cmd: z.string().optional().describe('The command string'),
-                name: z.string().optional().describe('File name or resource name')
-            }).passthrough()).optional().describe('Parsed command information')
-        }).partial().passthrough(),
+        input: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.partial(z.object({
+            command: z.array(z.string()).check(z.describe('The command array to execute')),
+            cwd: z.optional(z.string()).check(z.describe('Current working directory')),
+            parsed_cmd: z.optional(z.array(z.looseObject({
+                type: z.string().check(z.describe('Type of parsed command (read, write, bash, etc.)')),
+                cmd: z.optional(z.string()).check(z.describe('The command string')),
+                name: z.optional(z.string()).check(z.describe('File name or resource name'))
+            }))).check(z.describe('Parsed command information'))
+        }))),
         extractSubtitle: (opts: { metadata: Metadata | null, tool: ToolCall }) => {
             // For single read commands, show the actual command
             if (opts.tool.input?.parsed_cmd &&
@@ -95,10 +95,10 @@ export const providerShellTools = {
         minimal: true,
         hideDefaultError: true,
         isMutable: true,
-        input: z.object({
-            command: z.array(z.string()).describe('The command array to execute'),
-            cwd: z.string().optional().describe('Current working directory')
-        }).partial().passthrough(),
+        input: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.partial(z.object({
+            command: z.array(z.string()).check(z.describe('The command array to execute')),
+            cwd: z.optional(z.string()).check(z.describe('Current working directory'))
+        }))),
         extractSubtitle: (opts: { metadata: Metadata | null, tool: ToolCall }) => {
             if (opts.tool.input?.command && Array.isArray(opts.tool.input.command)) {
                 let cmdArray = opts.tool.input.command;
@@ -116,7 +116,7 @@ export const providerShellTools = {
         icon: ICON_TERMINAL,
         minimal: true,
         isMutable: true,
-        input: z.object({}).partial().passthrough()
+        input: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.partial(z.object({})))
     },
     'execute': {
         title: (opts: { metadata: Metadata | null, tool: ToolCall }) => {
@@ -152,7 +152,7 @@ export const providerShellTools = {
         },
         icon: ICON_TERMINAL,
         isMutable: true,
-        input: z.object({}).partial().passthrough(),
+        input: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.partial(z.object({}))),
         extractSubtitle: (opts: { metadata: Metadata | null, tool: ToolCall }) => {
             const shellBridge = extractHappierToolsShellBridgeCommand(opts.tool.input);
             if (shellBridge) return getHappierToolsShellBridgeDisplay(shellBridge).subtitle;

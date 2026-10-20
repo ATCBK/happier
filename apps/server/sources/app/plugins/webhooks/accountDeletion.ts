@@ -22,7 +22,7 @@ export async function cleanupPluginWebhooksForAccountDeletionTxV1(
     params: Readonly<{ accountId: string; now?: Date }>,
 ): Promise<PluginWebhookAccountDeletionCleanupResultV1> {
     const now = params.now ?? new Date();
-    await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId);
+    await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId, "exclusive");
 
     const endpoints = await tx.pluginWebhookEndpoint.findMany({
         where: { accountId: params.accountId },

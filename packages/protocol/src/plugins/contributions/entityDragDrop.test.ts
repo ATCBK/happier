@@ -7,6 +7,23 @@ const client = { artifactId: 'entity-runtime', exportName: 'activate' };
 const source = { id: 'issue', title: 'Issue', referenceSchema: { type: 'object', properties: { issueId: { type: 'string' } }, required: ['issueId'], additionalProperties: false }, client, platforms: ['web'] };
 const target = { id: 'review', title: 'Review', acceptedKinds: ['session', 'plugin:com.acme.entities/issue'], actions: [{ kind: 'host', actionId: 'session.open' }, { kind: 'plugin', action: 'review' }], client, platforms: ['web'] };
 
+describe('live work item declaration admission', () => {
+  it('admits one source-owned resolver and derives its exact client registration right', () => {
+    const parsed = PluginContributesV2Schema.safeParse({ workItems: [{ id: 'work-items', client, platforms: ['web'] }] });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(derivePluginClientContributionRegistrationRights(parsed.data, { ...client, platform: 'web' })).toContainEqual({
+      family: 'workItems', localId: 'work-items', target: { realm: 'client', ...client, platforms: ['web'] },
+    });
+    expect(PluginContributesV2Schema.safeParse({ workItems: [{ id: 'other', client, platforms: ['web'] }] }).success).toBe(false);
+    const family = PLUGIN_CONTRIBUTION_CATALOG_V2.find(entry => entry.manifestKey === 'workItems');
+    expect(family?.extractReferences({ id: 'work-items', client, platforms: ['web'], transitionAction: 'transition' })).toContainEqual({
+      targetFamily: 'actions', reference: 'transition', path: ['transitionAction'],
+    });
+    expect(PluginContributesV2Schema.safeParse({ workItems: [{ id: 'work-items', client, platforms: ['web'], transitionAction: { pluginId: 'foreign.plugin', localId: 'transition' } }] }).success).toBe(false);
+  });
+});
+
 describe('declared entity drag/drop contributions', () => {
   it('admits an exact local composer attachment selection through the canonical catalog', () => {
     const descriptor = { ...source, composerAttachment: 'entry' };
@@ -44,11 +61,11 @@ describe('declared entity drag/drop contributions', () => {
     for (const declaration of [{ ...source, id: 'Invalid' }, { ...source, referenceSchema: { $ref: 'https://example.com/schema' } }, { ...source, callback: 'foreign' }]) {
       expect(PluginContributesV2Schema.safeParse({ dragSources: [declaration] }).success).toBe(false);
     }
-    for (const declaration of [{ ...target, acceptedKinds: ['plugin:invalid/issue'] }, { ...target, acceptedKinds: ['plugin'] }, { ...target, actions: [{ kind: 'host', actionId: 'session.handoff.commit' }] }, { ...target, actions: [{ kind: 'host', actionId: 'session.canvas.tabs.unknown' }] }]) {
+    for (const declaration of [{ ...target, acceptedKinds: ['plugin:invalid/issue'] }, { ...target, acceptedKinds: ['plugin'] }, { ...target, actions: [{ kind: 'host', actionId: 'session.handoff.commit' }] }, { ...target, actions: [{ kind: 'host', actionId: 'workspace.tabs.unknown' }] }]) {
       expect(PluginContributesV2Schema.safeParse({ dropTargets: [declaration] }).success).toBe(false);
     }
     expect(PluginContributesV2Schema.safeParse({ dropTargets: [{ ...target,
-      actions: [{ kind: 'host', actionId: 'session.canvas.tabs.open' }],
+      actions: [{ kind: 'host', actionId: 'workspace.tabs.open' }],
     }] }).success).toBe(true);
   });
 

@@ -1090,6 +1090,16 @@ describe('active Account Collection direct client', () => {
         });
     });
 
+    it('preserves a typed app update refusal from exact Collection reader admission', async () => {
+        const harness = await loadClient({ responseForDataPath: () => new Response(JSON.stringify({
+            error: 'collection_update_required',
+        }), { status: 409, headers: { 'Content-Type': 'application/json' } }) });
+        const ref = { pluginId: contract.pluginId, collectionId: contract.collectionId,
+            schemaVersion: contract.schemaVersion, contractDigest: contract.contractDigest };
+        expect(await harness.createActivePluginCollectionClientForContractRef({ ref, accountLifetime: harness.accountLifetime }))
+            .toEqual({ status: 'rejected', code: 'collection_update_required' });
+    });
+
     it('does not let a consumer select an undeclared collection index', async () => {
         const harness = await loadClient();
         const collection = harness.createActivePluginCollectionClient({ contract });

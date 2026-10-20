@@ -91,7 +91,8 @@ describe('ACP catalog mutations', () => {
     it('admits closed authored fields and keeps retained runtime and inert status metadata when editing', () => {
         expect(AcpBackendAuthoringInputV1Schema.safeParse({ ...existing, arbitraryWriterState: true }).success).toBe(false);
         const retained = { ...existing,
-            runtime: { stderrRules: { suppress: [{ includes: ['error handling notification', '_kiro.dev/', 'method not found'] }] } },
+            runtime: { stderrRules: { suppress: [{ includes: ['error handling notification', '_kiro.dev/', 'method not found'] }] },
+                permissionModeMapping: { 'read-only': 'ask', plan: 'plan' } },
             compatibility: { source: 'acp-catalog-v2' as const, authStatus: { statusCommand: ['kiro-cli', 'whoami', '--format', 'json'], parser: 'kiroWhoamiJson' as const } },
         };
         const result = applyAcpBackendUpsertV1({ settings: { v: 2, backends: [retained] },

@@ -4,7 +4,7 @@ import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm } from 'nod
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolvePersonalHomeRuntimeLayout } from '@happier-dev/cli-common/firstPartyRuntime/server';
+import { resolvePersonalHomeRuntimeLayout } from '@happier-dev/cli-common/firstPartyRuntime/personalHome/layout';
 
 import { getServerLightDataDirFromEnvOrDefault } from '../stack/dirs.mjs';
 import { hasTrustedStackRuntimeLifecycle, withStackRuntimeStartClaim } from '../stack/runtime_state.mjs';

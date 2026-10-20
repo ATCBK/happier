@@ -3,6 +3,7 @@ import { resolveEffectivePermissionMode } from '@happier-dev/protocol/actions/pe
 import type { EffectivePermissionModeFailureReason, SessionInputCausalPermissionAuthorityV1 } from '@happier-dev/protocol';
 import { SessionInputCausalPermissionAuthorityV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import type { AcpPermissionCallContext } from '@/agent/acp/permissions/acpPermissionHandler';
+import { parseAgentPermissionIntentV1Alias } from '@happier-dev/protocol/runtime/permissionIntentV1';
 
 export type CausalPermissionModeResolution =
   | Readonly<{
@@ -55,11 +56,19 @@ export function resolveCausalPermissionMode(params: Readonly<{
   if (!resolved.ok) {
     return { ok: false, reason: resolved.reason };
   }
+  const currentCaller = context && Object.hasOwn(context, 'callerPermissionMode')
+    ? resolveEffectivePermissionMode({
+        currentMode: context.callerPermissionMode,
+        admittedPermissionCeiling: parseAgentPermissionIntentV1Alias(resolved.effectiveMode),
+        supportedModes: params.supportedModes,
+      })
+    : resolved;
+  if (!currentCaller.ok) return { ok: false, reason: currentCaller.reason };
 
   return {
     ok: true,
     authority: 'admittedSessionInputV1',
-    effectiveMode: resolved.effectiveMode,
+    effectiveMode: currentCaller.effectiveMode,
     ...(authority.sourceAuthority ? { sourceAuthority: authority.sourceAuthority } : {}),
   };
 }

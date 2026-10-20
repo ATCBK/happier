@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { ProviderContributionV1Schema } from '@happier-dev/protocol';
+import { createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 import {
   ConnectedAccountRequestAuthError,
   type ConnectedAccountRequestAuthService,
@@ -94,21 +95,28 @@ function harness(
     refreshAfterAuthFailure,
   };
   const redacted: string[] = [];
+  // Catalog observation uses explicit operation bindings. These persistent-store,
+  // UI selection and credential boundaries must never be needed for native OAuth.
+  const outsideObservation = async (): Promise<never> => { throw new Error('outside catalog observation'); };
+  const bindingOwner = createConnectedAccountPurposeBindingOwner({
+    store: { read: outsideObservation, update: outsideObservation, subscribe: () => ({ dispose() {} }) },
+    selectTarget: outsideObservation,
+    resolveTarget: outsideObservation,
+    materializeAccount: outsideObservation,
+    projectTargetAccounts: outsideObservation,
+    assertTargetAccountMaterializable: outsideObservation,
+  });
   const observation = createAgentProviderCatalogObservationService({
-    activatePurposeBindings: ({ subject, bindings }) => {
+    activatePurposeBindings: ({ subject, bindings, ...rest }) => {
       if (subject.kind !== 'agent_catalog_observation') {
         throw new Error('agent catalog observation test received an unexpected binding subject');
       }
       const binding = bindings[0];
-      let active = true;
       if (binding?.target.kind === 'account') selectedAccountId = binding.target.account.accountId;
-      return {
-        subjectId: 'observation-subject',
-        isCurrent: () => active && current && subject.isCurrent(),
-        resolvePurposeBinding: () => binding ?? null,
-        listPurposeBindings: () => bindings,
-        dispose: () => { active = false; },
-      };
+      return bindingOwner.activatePurposeBindings({
+        ...rest, bindings,
+        subject: { ...subject, isCurrent: () => current && subject.isCurrent() },
+      });
     },
     requestAuth,
     createRedactionLease: () => ({
@@ -175,6 +183,21 @@ describe('Agent Provider catalog observation', () => {
     });
     expect(requests).toEqual([expect.objectContaining({ authorization: 'Bearer native-oauth-token' })]);
     expect(h.requestAuth.lookupRequestAuth).not.toHaveBeenCalled();
+  });
+
+  it('refuses a native catalog purpose belonging to another consumer before transport', async () => {
+    const transport = vi.fn<ProviderProbeTransport>(async () => response(200, ['native-only']));
+    const h = harness(transport);
+    await expect(h.observation.observeNative({
+      ...input(),
+      consumer: { pluginId: 'external.agent', localId: 'assistant' },
+      service,
+      credential: {
+        accessToken: 'native-oauth-token',
+        credentialFingerprint: `sha256:${'b'.repeat(64)}`,
+      },
+    })).resolves.toMatchObject({ source: 'static', refreshError: true });
+    expect(transport).not.toHaveBeenCalled();
   });
 
   it('uses only the selected account bearer and authoritative membership, including successful empty', async () => {

@@ -46,6 +46,8 @@ export type PluginSearchItemV1 = Readonly<{
 export type PluginSearchResultV1 = Readonly<{
   items: readonly PluginSearchItemV1[];
   truncated: boolean;
+  /** A known acquisition failure; omitted for an ordinary successful result. */
+  failure?: Readonly<{ code: 'root_not_found' | 'unavailable' | 'auth_required' }>;
 }>;
 
 /**

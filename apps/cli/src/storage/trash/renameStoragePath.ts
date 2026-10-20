@@ -1,12 +1,12 @@
 import { spawn } from 'node:child_process';
 
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { resolveProcessCustodySupportExecutable } from '@/subprocess/supervision/processCustody';
 
 const resultSchema = z.discriminatedUnion('status', [
-    z.object({ v: z.literal(1), status: z.literal('renamed') }).strict(),
-    z.object({ v: z.literal(1), status: z.literal('failed'), code: z.enum(['destination_occupied', 'storage_rename_failed', 'changed_since_review']), message: z.string() }).strict(),
+    z.strictObject({ v: z.literal(1), status: z.literal('renamed') }),
+    z.strictObject({ v: z.literal(1), status: z.literal('failed'), code: z.enum(['destination_occupied', 'storage_rename_failed', 'changed_since_review']), message: z.string() }),
 ]);
 
 function cancelled(): Error {

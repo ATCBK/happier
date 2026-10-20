@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { SkillListItemV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import { SkillListItemV1Schema, type SkillUnavailableItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -23,8 +23,11 @@ function skill(skillId: string, name: string, description: string | null = null)
 
 const lint = skill('lint-id', 'lint', 'Runs the linter before every commit.');
 const review = skill('review-id', 'review', 'Reviews a diff.');
-const library = (items = [lint, review], status: 'ready' | 'loading' | 'unavailable' = 'ready') =>
-    ({ status, items, unavailableItems: [], retry: vi.fn() });
+const library = (
+    items = [lint, review],
+    status: 'ready' | 'loading' | 'unavailable' = 'ready',
+    unavailableItems: readonly SkillUnavailableItemV1[] = [],
+) => ({ status, items, unavailableItems, retry: vi.fn() });
 
 // The section's graph is large; load it while collecting, outside any test deadline.
 const { ProfileSkillSeedsSection } = await import('./ProfileSkillSeedsSection');
@@ -52,13 +55,28 @@ describe('ProfileSkillSeedsSection', () => {
         expect(onChange).toHaveBeenLastCalledWith([]);
     });
 
-    it('keeps a seeded skill that left the library visible as "Not in your library" and removable', async () => {
+    it('keeps a seeded skill that left the library visible, described as not in the library, and removable', async () => {
         const onChange = vi.fn();
         const screen = await renderScreen(inPage(<ProfileSkillSeedsSection seeds={['gone-id', 'lint-id']} library={library()} onChange={onChange} />));
-        expect(rowTitle(screen, 'gone-id')).toBe(t('capabilities.profileSeeds.missing'));
+        const gone = screen.findAllByTestId('profile-skill-seeds:row:gone-id').find(node => typeof node.props.title === 'string');
+        expect(gone?.props.title).toBe(t('capabilities.profileSeeds.pending'));
+        expect(gone?.props.description).toBe(t('capabilities.profileSeeds.missing'));
         expect(rowTitle(screen, 'lint-id')).toBe('lint');
         await act(async () => screen.pressByTestId('profile-skill-seeds:row:gone-id:remove'));
         expect(onChange).toHaveBeenLastCalledWith(['lint-id']);
+    });
+
+    it('names a seeded skill the library knows but cannot open, instead of calling it missing, and leaves it removable', async () => {
+        const onChange = vi.fn();
+        const unreadable: SkillUnavailableItemV1 = { skillId: 'brand-id', title: 'brand-voice', reason: 'skill_content_unavailable' };
+        const screen = await renderScreen(inPage(
+            <ProfileSkillSeedsSection seeds={['brand-id']} library={library([lint], 'ready', [unreadable])} onChange={onChange} />,
+        ));
+        const row = screen.findAllByTestId('profile-skill-seeds:row:brand-id').find(node => typeof node.props.title === 'string');
+        expect(row?.props.title).toBe('brand-voice');
+        expect(row?.props.description).toBe(t('capabilities.profileSeeds.unreadableItem'));
+        await act(async () => screen.pressByTestId('profile-skill-seeds:row:brand-id:remove'));
+        expect(onChange).toHaveBeenLastCalledWith([]);
     });
 
     it('explains an empty Profile with Add, and an empty library with a way to Skills and no Add', async () => {

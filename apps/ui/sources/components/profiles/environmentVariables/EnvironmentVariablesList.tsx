@@ -1,7 +1,6 @@
 import React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { Typography } from '@/constants/Typography';
 import { EnvironmentVariableCard } from './EnvironmentVariableCard';
 import type { ProfileDocumentation } from '@/sync/domains/profiles/profileUtils';
 import { InlineAddExpander } from '@/components/ui/forms/InlineAddExpander';
@@ -12,7 +11,9 @@ import { parseEnvVarTemplate } from '@/utils/profiles/envVarTemplate';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Item } from '@/components/ui/lists/Item';
 import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
-import { Text, TextInput } from '@/components/ui/text/Text';
+import type { TextInput } from '@/components/ui/text/Text';
+import { FieldItem } from '@/components/ui/forms/FieldItem';
+import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 
 
 export interface EnvironmentVariablesListProps {
@@ -53,7 +54,7 @@ export function EnvironmentVariablesList({
     onPickDefaultSecretForSourceVar,
     allowSourceRequirements = true,
 }: EnvironmentVariablesListProps) {
-    const { theme } = useUnistyles();
+    useUnistyles();
     const styles = stylesheet;
 
     const extractVarRefsFromValue = React.useCallback((value: string): string[] => {
@@ -307,6 +308,8 @@ export function EnvironmentVariablesList({
                     // With no variables yet, the add row is the section's action: the plus glyph in the
                     // leading column, as every other "add" row (Add launch profile, Add model).
                     triggerTestID="profile-environment-add"
+                    saveTestID="profile-environment-add-save"
+                    cancelTestID="profile-environment-add-cancel"
                     onCancel={resetAddDraft}
                     onSave={handleAddVariable}
                     saveDisabled={!newVarName.trim()}
@@ -314,35 +317,29 @@ export function EnvironmentVariablesList({
                     saveLabel={t('common.save')}
                     autoFocusRef={nameInputRef}
                 >
-                    <Text style={styles.fieldLabel}>
-                        {t('secrets.fields.name')}
-                    </Text>
-                    <View style={styles.addInputRow}>
-                        <TextInput
-                            ref={nameInputRef}
-                            style={styles.addTextInput}
-                            placeholder={t('profiles.environmentVariables.namePlaceholder')}
-                            placeholderTextColor={theme.colors.input.placeholder}
-                            value={newVarName}
-                            onChangeText={(text) => setNewVarName(text.toUpperCase())}
-                            autoCapitalize="characters"
-                            autoCorrect={false}
-                        />
-                    </View>
-
-                    <Text style={styles.fieldLabel}>
-                        {t('secrets.fields.value')}
-                    </Text>
-                    <View style={[styles.addInputRow, styles.addInputRowLast]}>
-                        <TextInput
-                            style={styles.addTextInput}
-                            placeholder={t('profiles.environmentVariables.valuePlaceholder')}
-                            placeholderTextColor={theme.colors.input.placeholder}
-                            value={newVarValue}
-                            onChangeText={setNewVarValue}
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                        />
+                    <View style={styles.addFields}>
+                        <FieldItem label={t('secrets.fields.name')}>
+                            <FieldTextInput
+                                ref={nameInputRef}
+                                testID="profile-environment-add-name"
+                                accessibilityLabel={t('secrets.fields.name')}
+                                placeholder={t('profiles.environmentVariables.namePlaceholder')}
+                                value={newVarName}
+                                onChangeText={(text) => setNewVarName(text.toUpperCase())}
+                                autoCapitalize="characters"
+                                monospace
+                            />
+                        </FieldItem>
+                        <FieldItem label={t('secrets.fields.value')}>
+                            <FieldTextInput
+                                testID="profile-environment-add-value"
+                                accessibilityLabel={t('secrets.fields.value')}
+                                placeholder={t('profiles.environmentVariables.valuePlaceholder')}
+                                value={newVarValue}
+                                onChangeText={setNewVarValue}
+                                monospace
+                            />
+                        </FieldItem>
                     </View>
                 </InlineAddExpander>
             </ItemGroup>
@@ -352,27 +349,7 @@ export function EnvironmentVariablesList({
 
 
 const stylesheet = StyleSheet.create((theme) => ({
-    fieldLabel: {
-        ...Typography.variant('body', 'semiBold'),
-        color: theme.colors.text.secondary,
-        marginBottom: theme.space.s8,
-    },
-    addInputRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: theme.colors.input.background,
-        borderRadius: 10,
-        paddingHorizontal: theme.space.s12,
-        paddingVertical: theme.space.s8,
-        marginBottom: theme.space.s8,
-    },
-    addInputRowLast: {
-        marginBottom: theme.space.s12,
-    },
-    addTextInput: {
-        flex: 1,
-        fontSize: 16,
-        color: theme.colors.input.text,
-        ...Typography.default('regular'),
+    addFields: {
+        gap: theme.space.s12,
     },
 }));

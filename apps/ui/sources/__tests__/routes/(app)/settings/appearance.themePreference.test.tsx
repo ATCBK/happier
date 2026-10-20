@@ -3,11 +3,12 @@ import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
 
-import { renderScreen, renderSettingsView, standardCleanup } from '@/dev/testkit';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { localSettingsParse } from '@/sync/domains/settings/localSettings';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { BUILT_IN_THEME_PROFILES } from '@/theme/profiles/builtInThemeProfiles';
-import { installSessionSettingsEntryModuleMocks, resetSessionSettingsEntryState, sessionSettingsEntryState } from './sessionSettingsEntryTestHelpers';
+import { initializeAuthRouteRuntimeForTests } from '@/dev/testkit/harness/authRouteRuntimeHarness';
+import { renderSessionSettingsEntryView as renderSettingsView, resetSessionSettingsEntryState, sessionSettingsEntryState } from './sessionSettingsEntryTestHelpers';
 
 const testGlobal = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean };
 testGlobal.IS_REACT_ACT_ENVIRONMENT = true;
@@ -45,39 +46,45 @@ async function renderAppearance(element: React.ReactElement, options?: Parameter
     return renderSettingsView(element, options);
 }
 
-installSessionSettingsEntryModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            Appearance: { getColorScheme: () => 'light' },
-        });
-    },
-    unistyles: async () => {
-        const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-        return createUnistylesMock({
-            theme: {
-                colors: {
-                    accent: { blue: '#00f', orange: '#f90', indigo: '#6366f1' },
-                    status: { connecting: '#09f' },
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+await vi.hoisted(async () => {
+    const { installSessionSettingsEntryModuleMocks } = await import('./sessionSettingsEntryTestHelpers');
+    installSessionSettingsEntryModuleMocks({
+        reactNative: async () => {
+            const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+            const viewport = { width: 1200, height: 900, scale: 1, fontScale: 1 };
+            return createReactNativeWebMock({
+                Appearance: { getColorScheme: () => 'light' },
+                Dimensions: { get: () => viewport },
+                useWindowDimensions: () => viewport,
+            });
+        },
+        unistyles: async () => {
+            const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+            return createUnistylesMock({
+                theme: {
+                    colors: {
+                        accent: { blue: '#00f', orange: '#f90', indigo: '#6366f1' },
+                        status: { connecting: '#09f' },
+                    },
                 },
-            },
-            runtime: {
-                setAdaptiveThemes: shared.setAdaptiveThemes,
-                setTheme: shared.setTheme,
-                setRootViewBackgroundColor: shared.setRootViewBackgroundColor,
-            },
-        });
-    },
-    textModule: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return {
-            ...createTextModuleMock(),
-            getLanguageNativeName: () => 'English',
-            SUPPORTED_LANGUAGES: { en: true },
-        };
-    },
-    storageModule: (importOriginal) => importOriginal<typeof import('@/sync/domains/state/storage')>(),
-    useDeviceType: 'desktop',
+                runtime: {
+                    setAdaptiveThemes: shared.setAdaptiveThemes,
+                    setTheme: shared.setTheme,
+                    setRootViewBackgroundColor: shared.setRootViewBackgroundColor,
+                },
+            });
+        },
+        textModule: async () => {
+            const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+            return {
+                ...createTextModuleMock(),
+                getLanguageNativeName: () => 'English',
+                SUPPORTED_LANGUAGES: { en: true },
+            };
+        },
+    });
 });
 
 vi.mock('expo-localization', () => ({ getLocales: () => [{ languageTag: 'en-US' }] }));
@@ -86,6 +93,7 @@ vi.mock('expo-system-ui', () => ({ setBackgroundColorAsync: shared.setSystemBack
 
 const { storage } = await import('@/sync/domains/state/storageStore');
 const initialStorage = storage.getState();
+await initializeAuthRouteRuntimeForTests();
 
 // Resolve the real route graph during collection; cold transforms are not the reveal contract.
 const { APPEARANCE_SETTINGS } = await import('@/components/settings/appearance/appearanceSettings');
@@ -102,7 +110,6 @@ afterEach(() => {
     transitionDom = undefined;
     storage.setState(initialStorage, true);
     resetSessionSettingsEntryState();
-    Reflect.deleteProperty(globalThis, 'document');
     shared.settingsState.themePreference = 'light';
     shared.settingsState.themeProfiles = { activeProfileIds: { light: null, dark: null }, profiles: [] };
     shared.setAdaptiveThemes.mockClear();
@@ -173,12 +180,14 @@ describe('Appearance settings theme preference', () => {
         });
 
         await act(async () => {
-            findThemeModeTiles(screen).props.onChange('dark');
+            await findThemeModeTiles(screen).props.onChange('dark');
         });
 
-        expect(storage.getState().localSettings.themePreference).toBe('dark');
-        expect(shared.setTheme).toHaveBeenCalledWith('dark');
-        expect(shared.setStatusBarStyle).toHaveBeenCalledWith('light', true);
+        await vi.waitFor(() => {
+            expect(storage.getState().localSettings.themePreference).toBe('dark');
+            expect(shared.setTheme).toHaveBeenCalledWith('dark');
+            expect(shared.setStatusBarStyle).toHaveBeenCalledWith('light', true);
+        });
     });
 
     it('wraps web theme changes in a view transition', async () => {
@@ -200,14 +209,14 @@ describe('Appearance settings theme preference', () => {
         });
 
         await act(async () => {
-            findThemeModeTiles(screen).props.onChange('dark');
+            await findThemeModeTiles(screen).props.onChange('dark');
         });
 
-        expect(shared.startViewTransition).toHaveBeenCalledOnce();
-        expect(shared.documentElementAnimate).toHaveBeenCalledWith(
+        await vi.waitFor(() => expect(shared.startViewTransition).toHaveBeenCalledOnce());
+        await vi.waitFor(() => expect(shared.documentElementAnimate).toHaveBeenCalledWith(
             { clipPath: ['inset(0 0 100% 0)', 'inset(0)'] },
             expect.objectContaining({ pseudoElement: '::view-transition-new(root)' }),
-        );
+        ));
     });
 
     it('switching mode keeps the theme already assigned to that mode', async () => {
@@ -219,12 +228,14 @@ describe('Appearance settings theme preference', () => {
         });
 
         await act(async () => {
-            findThemeModeTiles(screen).props.onChange('dark');
+            await findThemeModeTiles(screen).props.onChange('dark');
         });
 
-        const { themeProfiles, themePreference } = storage.getState().localSettings;
-        expect(themePreference).toBe('dark');
-        expect(themeProfiles.activeProfileIds).toEqual({ light: null, dark: 'premiumDark' });
+        await vi.waitFor(() => {
+            const { themeProfiles, themePreference } = storage.getState().localSettings;
+            expect(themePreference).toBe('dark');
+            expect(themeProfiles.activeProfileIds).toEqual({ light: null, dark: 'premiumDark' });
+        });
     });
 
     it('opens theme profile management from the theme group', async () => {

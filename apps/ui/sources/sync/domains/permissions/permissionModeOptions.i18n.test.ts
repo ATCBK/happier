@@ -17,5 +17,10 @@ describe('permissionModeOptions i18n descriptions', () => {
 
         expect(codex.every((opt) => opt.description.startsWith('tx:'))).toBe(true);
         expect(claude.every((opt) => opt.description.startsWith('tx:'))).toBe(true);
+        // The description is its own key, never the option's label key.
+        for (const opt of [...codex, ...claude]) {
+            expect(opt.description).not.toBe(opt.label);
+            expect(opt.description).toMatch(/Description$/);
+        }
     });
 });

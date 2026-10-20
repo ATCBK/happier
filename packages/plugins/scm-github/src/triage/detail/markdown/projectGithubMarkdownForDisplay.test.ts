@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { projectGithubMarkdownForDisplay } from './projectGithubMarkdownForDisplay.js';
+import { githubMarkdownDisplayText, projectGithubMarkdownForDisplay } from './projectGithubMarkdownForDisplay.js';
 
 const ASSET = 'https://github.com/user-attachments/assets/01234567-89ab-cdef-0123-456789abcdef';
 const VIDEO = 'https://media.example.test/demo.mp4';
@@ -8,6 +8,34 @@ const VIDEO_SOURCE = 'https://media.example.test/demo.webm';
 const VIDEO_BLOCK = `<video controls>\n  <source src="${VIDEO_SOURCE}">\n</video>`;
 
 describe('GitHub Markdown display projection', () => {
+  it.each([4, 8, 100])('recognizes video blocks with %i blank lines without hiding the source', (blankLines) => {
+    const block = `<video controls>\n${'\n'.repeat(blankLines)}  <source src="${VIDEO_SOURCE}">\n</video>`;
+    expect(projectGithubMarkdownForDisplay(block)).toEqual([
+      { kind: 'attachment', media: 'video', url: VIDEO_SOURCE },
+    ]);
+  });
+
+  it('keeps useful video links for malformed and unclosed blocks without swallowing later blocks or code', () => {
+    const fenced = `\`\`\`html\n${VIDEO_BLOCK}\n\`\`\``;
+    const input = [
+      `<video src="${VIDEO}">`,
+      `<video><source src="${VIDEO_SOURCE}"></video> trailing prose`,
+      ...Array.from({ length: 1000 }, () => `<video src="${VIDEO}">`),
+      fenced,
+      VIDEO_BLOCK,
+      `<video src="${VIDEO}">`,
+    ].join('\n');
+    const projected = projectGithubMarkdownForDisplay(input);
+    const markdown = projected.filter((segment) => segment.kind === 'markdown').map((segment) => segment.value).join('');
+    expect(markdown).toContain(`[${VIDEO}](${VIDEO})`);
+    expect(markdown).toContain(`[${VIDEO_SOURCE}](${VIDEO_SOURCE}) trailing prose`);
+    expect(markdown).toContain(fenced);
+    expect(projected.filter((segment) => segment.kind === 'attachment')).toEqual([
+      { kind: 'attachment', media: 'video', url: VIDEO_SOURCE },
+    ]);
+    expect(markdown.match(/\[https:\/\/media\.example\.test\/demo\.mp4\]/g)).toHaveLength(1002);
+  });
+
   it('projects supported GitHub attachments only outside fenced and indented code', () => {
     const backticks = `\`\`\`md\n${ASSET}\n${VIDEO_BLOCK}\n\`\`\`\n`;
     const tildes = `~~~~html\n${VIDEO}\n${VIDEO_BLOCK}\n~~~~\n`;
@@ -52,5 +80,37 @@ describe('GitHub Markdown display projection', () => {
     expect(projectGithubMarkdownForDisplay(input)).toEqual([
       { kind: 'markdown', value: input },
     ]);
+  });
+
+  it('never shows raw HTML: comments vanish, links and images become text, code stays exact', () => {
+    // Live 2026-10-16: a review bot's comment showed `<!-- … -->` and `<a href><picture>` tags literally.
+    const input = [
+      '<!-- auto-generated comment: summarize by bot -->',
+      '<!-- review_stack_entry_start',
+      'multi line note -->',
+      '<a href="https://app.example.test/stack/pull/535?scope=abc"><picture><source media="(prefers-color-scheme: dark)" srcset="https://x.test/d.svg"><img src="https://x.test/l.svg" alt="Review in Change Stack" height="32"></picture></a>',
+      'Line one<br>line two and <b>bold</b> plus <https://example.test/auto>.',
+      'Inline code keeps `<div class="x">` exact.',
+      '```html',
+      '<!-- kept -->',
+      '<a href="https://keep.test">kept</a>',
+      '```',
+      '    <!-- indented code kept -->',
+      'After',
+    ].join('\n');
+
+    const text = githubMarkdownDisplayText(input);
+
+    expect(text).not.toContain('auto-generated');
+    expect(text).not.toContain('multi line note');
+    expect(text).not.toContain('<picture>');
+    expect(text).toContain('[Review in Change Stack](https://app.example.test/stack/pull/535?scope=abc)');
+    expect(text).toContain('Line one line two and bold plus <https://example.test/auto>.');
+    expect(text).toContain('`<div class="x">`');
+    expect(text).toContain('<!-- kept -->\n<a href="https://keep.test">kept</a>');
+    expect(text).toContain('    <!-- indented code kept -->');
+    expect(text).toContain('After');
+    expect(projectGithubMarkdownForDisplay(input).every((segment) => segment.kind !== 'markdown'
+      || !segment.value.includes('review_stack_entry_start'))).toBe(true);
   });
 });

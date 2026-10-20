@@ -9,6 +9,22 @@ import { deriveSessionLinkEntryTag } from '../corpus/identity/tags.js';
 
 export type TriageSessionLinksReaderV1 = Pick<CorpusCollectionHandleV1, 'query' | 'identityTag'>;
 
+/** Resolve a current relationship without assuming its immutable storage identity. */
+export async function findTriageEntrySessionLinkV1(
+  collection: TriageSessionLinksReaderV1,
+  input: Readonly<{ entryRef: TriageEntryRefV1; sessionId: string }>,
+  options?: PluginCancellationOptions,
+): Promise<CorpusSessionLinkRowV1 | null> {
+  let cursor: string | undefined;
+  do {
+    const page = await readTriageSessionLinksPageV1(collection, { relation: { entryRef: input.entryRef }, cursor }, options);
+    const link = page.links.find((row) => row.sessionId === input.sessionId);
+    if (link !== undefined) return link;
+    cursor = page.nextCursor;
+  } while (cursor !== undefined);
+  return null;
+}
+
 /** The existing link indexes, one Collection page and one decoding boundary. */
 export async function readTriageSessionLinksPageV1(
   collection: TriageSessionLinksReaderV1,

@@ -106,6 +106,11 @@ function actionGranted(grant: ApiTokenGrantV1, actionId: string, contributedQual
     || grant.actions.families.some((family) => (ACTION_ID_FAMILIES_V1[family] as readonly string[]).includes(actionId));
 }
 
+/** Whether the grant lets a token call this Action at all (operand restrictions are checked separately). */
+export function isApiTokenGrantActionAllowedV1(grant: ApiTokenGrantV1, actionId: string): boolean {
+  return actionGranted(grant, actionId);
+}
+
 export function isApiTokenGrantTargetMemberV1(grant: ApiTokenGrantV1, target?: ExternalActionTargetV1 | null, targetMachineId?: string | null): boolean {
   if (grant.targets === null) return true;
   if (!target) return false;
@@ -130,6 +135,8 @@ export function evaluateApiTokenGrantV1(input: Readonly<{
   contributedActionAdmission?: 'pre_open';
   spawnInput?: unknown;
   automationId?: unknown;
+  /** Host-only opaque ingress/currentness; decoded execution and the native effect recheck the operand. */
+  automationAdmission?: 'pre_open';
   target?: ExternalActionTargetV1 | null;
   targetMachineId?: string | null;
 }>): { ok: true } | { ok: false; reason: 'action_not_granted' | 'target_required' | 'target_not_granted' | 'create_not_granted' | 'automation_not_granted' } {
@@ -137,6 +144,7 @@ export function evaluateApiTokenGrantV1(input: Readonly<{
   if (!actionGranted(grant, actionId, input.contributedQualifiedId, input.contributedActionAdmission)) return { ok: false, reason: 'action_not_granted' };
   if (DISCOVERY_IDS.has(actionId)) return { ok: true };
   if (actionId === 'workflow.trigger.run_now' && grant.automationIds != null
+    && !(input.automationAdmission === 'pre_open' && input.automationId === undefined)
     && (typeof input.automationId !== 'string' || !grant.automationIds.includes(input.automationId))) {
     return { ok: false, reason: 'automation_not_granted' };
   }

@@ -158,9 +158,9 @@ async function fetchJson(params: Readonly<{
 }>): Promise<Readonly<{ ok: boolean; status: number; body: unknown }>> {
   const timeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0
     ? params.timeoutMs
-    : VOICE_STT_TUNNEL_FETCH_TIMEOUT_MS;
-  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    : null;
+  const controller = timeoutMs !== null && typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeoutId = controller && timeoutMs !== null ? setTimeout(() => controller.abort(), timeoutMs) : null;
   const externalSignal = params.signal ?? null;
   const abort = controller && externalSignal ? () => controller.abort() : null;
   if (controller && externalSignal && abort) {
@@ -171,9 +171,10 @@ async function fetchJson(params: Readonly<{
     }
   }
   try {
+    const signal = controller?.signal ?? externalSignal;
     const response = await fetch(params.url, {
       ...params.init,
-      ...(controller ? { signal: controller.signal } : {}),
+      ...(signal ? { signal } : {}),
     });
     return {
       ok: response.ok,
@@ -197,13 +198,11 @@ async function requestTcpTunnelRouteGrantV2(input: Readonly<{
   authority: VoiceMediaApplicationAuthorityV1;
   endpointFingerprint: string;
   ephemeralPublicKeyBase64Url: string;
-  timeoutMs?: number;
   signal?: AbortSignal | null;
 }>): Promise<OperationResult<SignedDirectRouteGrantV2>> {
   try {
     const response = await fetchJson({
       url: joinBaseAndPath(input.server.serverUrl, '/v1/machines/peer/mediation/route-grants'),
-      timeoutMs: input.timeoutMs,
       signal: input.signal,
       init: {
         method: 'POST',
@@ -246,13 +245,11 @@ async function requestTcpTunnelRelayAuthorization(input: Readonly<{
   destination: PeerTcpTunnelDestinationV1;
   maxDurationMs?: number;
   maxTotalBytes?: number;
-  timeoutMs?: number;
   signal?: AbortSignal | null;
 }>): Promise<OperationResult<PeerTcpTunnelRelayAuthorizationV2>> {
   try {
     const response = await fetchJson({
       url: joinBaseAndPath(input.server.serverUrl, '/v1/machines/peer/mediation/route-grants'),
-      timeoutMs: input.timeoutMs,
       signal: input.signal,
       init: {
         method: 'POST',
@@ -333,7 +330,6 @@ async function prepareDirectTunnelRouteV2(params: TunnelAttemptParams & Readonly
       authority: params.input.authority,
       endpointFingerprint: params.endpoint.endpointFingerprint,
       ephemeralPublicKeyBase64Url: proofHandle.publicKeyBase64Url,
-      timeoutMs: VOICE_STT_TUNNEL_FETCH_TIMEOUT_MS,
       signal: params.input.signal,
     });
     if (!grant.ok) return null;
@@ -431,6 +427,7 @@ function createSelection(input: Readonly<{
     }),
     transport: {
       maxPcm16ChunkBytes: tunnelTransport.maxPcm16ChunkBytes,
+      measureInFlightChunkBytes: tunnelTransport.measureInFlightChunkBytes,
       start: async (payload) => {
         let response: Awaited<ReturnType<typeof tunnelTransport.start>>;
         try {
@@ -607,7 +604,8 @@ async function tryOpenServerRelayTunnel(
     destination: params.destination,
     maxDurationMs: voiceRelayDecision.caps.maxDurationMs,
     maxTotalBytes: voiceRelayDecision.caps.maxTotalBytes,
-    timeoutMs: VOICE_STT_TUNNEL_FETCH_TIMEOUT_MS,
+    // Grant preparation belongs to the captured Voice attempt. A separate
+    // phase timer can discard valid admission before that attempt ends.
     signal: params.input.signal,
   });
   if (!relayAuthorization.ok) {

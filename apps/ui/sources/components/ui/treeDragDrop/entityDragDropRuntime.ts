@@ -299,6 +299,7 @@ export function createEntityDragDropRuntime(options: Readonly<{
             return isRefusedPointerFeedback() && sourceFeedback?.sourceId === sourceId ? sourceFeedback.description : null;
         },
         getSourceBounds: sourceId => sourceFeedback?.sourceId === sourceId ? sourceFeedback.bounds : null,
+        getTargetClearBounds: targetId => targets.get(targetId)?.getClearBounds?.() ?? null,
         registerTarget: target => {
             const wasSelected = snapshot.targetId === target.id;
             targets.set(target.id, target);

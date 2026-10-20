@@ -61,6 +61,7 @@ const BACKUP_SUFFIX = '.backup';
 const INTENT_SUFFIX = '.promote-intent';
 const RESUME_PLAN_FILE = '.resume-plan.json';
 const DOWNLOAD_SUFFIX = '.download';
+const DOWNLOADS_SUFFIX = '.downloads';
 type ExpoModelPackOperationLease = Readonly<{
   key: string;
   token: symbol;
@@ -68,6 +69,29 @@ type ExpoModelPackOperationLease = Readonly<{
 }>;
 
 const activeOperationTokens = new Map<string, symbol>();
+
+/** Payload retained for retry/discard; host metadata is not downloaded model data. */
+export function getExpoModelPackPartialBytes(opts: { fs: InstallerFs; packId: string }): number {
+  const scratch = getPackSiblingDir(opts.fs, opts.packId, SCRATCH_SUFFIX);
+  if (!scratch.exists) return 0;
+  const count = (directory: ExpoFsDirectory, root: boolean): number => {
+    let total = 0;
+    for (const entry of directory.list()) {
+      if (root && (entry.name === RESUME_PLAN_FILE || entry.name === 'pack.json')) continue;
+      if ('list' in entry) {
+        total += count(entry, false);
+      } else {
+        const size = entry.size;
+        if (typeof size !== 'number' || !Number.isFinite(size) || size < 0) {
+          throw new Error('model_pack_partial_size_unavailable');
+        }
+        total += size;
+      }
+    }
+    return total;
+  };
+  return count(scratch, true);
+}
 
 function installKeyFor(fs: InstallerFs, packId: string): string {
   return getPackRootDir(fs, packId).uri;
@@ -104,16 +128,16 @@ function assertOperationAvailable(
 
 function tryDelete(node: Pick<ExpoFsFile | ExpoFsDirectory, 'exists' | 'delete'>): void {
   try {
-    if (node.exists && node.delete) node.delete({ idempotent: true });
-  } catch {
-    // ignore
+    if (node.exists && node.delete) node.delete();
+  } catch (error) {
+    console.warn('model_pack_file_cleanup_failed', error);
   }
 }
 
 function deleteRequired(node: Pick<ExpoFsFile | ExpoFsDirectory, 'exists' | 'delete'>): void {
   if (!node.exists) return;
   if (!node.delete) throw new Error('model_pack_scratch_cleanup_unavailable');
-  node.delete({ idempotent: true });
+  node.delete();
   if (node.exists) throw new Error('model_pack_scratch_cleanup_failed');
 }
 
@@ -205,8 +229,10 @@ function createDownloadOpener(
 ): (request: ModelPackDownloadRequest) => Promise<ModelPackDownloadStream> {
   return async (request) => {
     if (!request.packId) throw new Error('model_pack_download_packid_missing');
-    // The existing pack lease and serial file loop give this sibling one producer.
-    const temporaryFile = getPackSiblingFile(fs, request.packId, DOWNLOAD_SUFFIX);
+    // The pack lease owns directory cleanup; each concurrent transfer owns one native file.
+    const temporaryDir = getPackSiblingDir(fs, request.packId, DOWNLOADS_SUFFIX);
+    tryMkdir(temporaryDir);
+    const temporaryFile = new fs.File(temporaryDir, randomUUID());
     let chunks: ReturnType<typeof readFileChunks> | undefined;
     let closed = false;
     const close = async () => {
@@ -319,6 +345,15 @@ export function createExpoModelPackInstallerHost(opts: {
       }
 
       return {
+        copyInstalledFile: async (filePath) => {
+          const source = stagedFile(fs, getPackRootDir(fs, packId), filePath);
+          if (!source.exists) return false;
+          const target = stagedFile(fs, freshScratchDir(), filePath);
+          // Expo copy does not overwrite an empty file retained after a failed append.
+          deleteRequired(target);
+          source.copy(target);
+          return true;
+        },
         partialByteLength: async (filePath) => {
           const file = stagedFile(fs, freshScratchDir(), filePath);
           if (!file.exists) return 0;
@@ -327,7 +362,8 @@ export function createExpoModelPackInstallerHost(opts: {
           if (typeof file.size === 'number' && file.size >= 0) return file.size;
           try {
             return await streamFile(file, () => undefined);
-          } catch {
+          } catch (error) {
+            console.warn('model_pack_partial_read_failed', error);
             return 0;
           }
         },
@@ -338,7 +374,7 @@ export function createExpoModelPackInstallerHost(opts: {
         },
         resetPartial: async (filePath) => {
           const file = stagedFile(fs, freshScratchDir(), filePath);
-          tryDelete(file);
+          deleteRequired(file);
         },
         appendDownloadedChunk: async (filePath, chunk) => {
           // LB-L1: append in place — no read-back / concat / full rewrite.
@@ -369,9 +405,9 @@ export function createExpoModelPackInstallerHost(opts: {
                 : null)
             : declaredPriorInstall;
           if (liveDir.exists && freshBackupDir().exists && !freshIntentFile().exists) {
-            tryDelete(freshBackupDir());
+            deleteRequired(freshBackupDir());
           }
-          tryDelete(freshResumePlanFile());
+          deleteRequired(freshResumePlanFile());
           // Durable promote-intent marker, written BEFORE the swap window opens so
           // a crash between the two moves is recoverable on boot (X-M1).
           const intent = freshIntentFile();
@@ -443,8 +479,8 @@ export function createExpoModelPackInstallerHost(opts: {
               // before this promotion can complete, so only a later load can
               // publish an engine for the successor bytes.
               await invalidateLivePackRuntime();
+              deleteRequired(freshIntentFile());
               promotionSettled = true;
-              tryDelete(freshIntentFile());
               tryDelete(freshBackupDir());
             },
             rollback: async () => {
@@ -479,7 +515,10 @@ export function createExpoModelPackInstallerHost(opts: {
           if (promoted) {
             tryDelete(freshScratchDir());
           }
-          try { deleteRequired(getPackSiblingFile(fs, packId, DOWNLOAD_SUFFIX)); } finally { lease.release(); }
+          try {
+            deleteRequired(getPackSiblingDir(fs, packId, DOWNLOADS_SUFFIX));
+            deleteRequired(getPackSiblingFile(fs, packId, DOWNLOAD_SUFFIX));
+          } finally { lease.release(); }
         },
       };
     },
@@ -514,6 +553,7 @@ async function reconcileExpoModelPackPromotionOwned(opts: {
 }, lease?: ExpoModelPackOperationLease): Promise<boolean> {
   const { fs, packId } = opts;
   assertOperationAvailable(fs, packId, lease);
+  deleteRequired(getPackSiblingDir(fs, packId, DOWNLOADS_SUFFIX));
   deleteRequired(getPackSiblingFile(fs, packId, DOWNLOAD_SUFFIX));
   const intentFile = getPackSiblingFile(fs, packId, INTENT_SUFFIX);
   const liveDir = getPackRootDir(fs, packId);

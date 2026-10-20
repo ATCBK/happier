@@ -49,9 +49,13 @@ export async function digest(algorithm: DigestAlgorithm, data: Uint8Array): Prom
         algorithm === 'SHA-256'
             ? ExpoCrypto.CryptoDigestAlgorithm.SHA256
             : ExpoCrypto.CryptoDigestAlgorithm.SHA512;
-    // `expo-crypto` expects `BufferSource` (ArrayBuffer-backed views). Some TS libs model `Uint8Array`
-    // as possibly backed by `SharedArrayBuffer`, so copy to a plain `ArrayBuffer`-backed view.
-    const safeData = new Uint8Array(data);
+    // WebCrypto snapshots an ordinary BufferSource at invocation, including its
+    // exact subview bounds. Avoid a second whole-Resource copy before that
+    // platform snapshot. Native custody and shared-memory isolation still need
+    // their own ArrayBuffer-backed copy.
+    const safeData = isWebRuntime() && data.buffer instanceof ArrayBuffer
+        ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+        : new Uint8Array(data);
     try {
         const out = await ExpoCrypto.digest(expoAlgo, safeData);
         return new Uint8Array(out);

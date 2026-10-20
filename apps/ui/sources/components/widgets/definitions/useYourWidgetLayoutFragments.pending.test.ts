@@ -33,7 +33,8 @@ describe('saved-group pending management', () => {
         connection = await restoreServerAccountForTest({ serverUrl: 'https://fragments-pending.test', accountId: 'account-a', request: homes.request });
         installHomeGovernanceBoundaries(homes);
         storage.setState({ profileScope: account, settingsScope: account });
-        if (intent === 'duplicate') await homes.requireUiApproval(serverId, 'widgets.fragment.duplicate');
+        await homes.requireUiApproval(serverId, intent === 'rename' ? 'widgets.fragment.update'
+            : intent === 'delete' ? 'widgets.fragment.delete' : 'widgets.fragment.duplicate');
         expect(await createDefaultActionExecutor().execute('widgets.fragment.create', { account, artifactId: 'saved', fragment: {
             name: 'Release checks', inputs: { fields: [] }, inputSchema: { type: 'object' },
             group: { width: 'full', frameStyle: 'card', dividers: 'hairline', children: [{ kind: 'widget',
@@ -43,8 +44,10 @@ describe('saved-group pending management', () => {
         const hook = await renderHook(() => useYourWidgetLayoutFragments(account));
         await vi.waitFor(() => expect(hook.getCurrent().fragments).toHaveLength(1));
         modal.prompt.mockResolvedValue('Release room');
+        const onPress = hook.getCurrent().actionsFor(hook.getCurrent().fragments[0]!).find(action => action.id === intent)?.onPress;
+        if (!onPress) throw new Error(`Expected the saved group to offer ${intent}`);
         await act(async () => {
-            hook.getCurrent().actionsFor(hook.getCurrent().fragments[0]!).find(action => action.id === intent)!.onPress();
+            onPress();
             await flushHookEffects({ cycles: 2 });
         });
         await vi.waitFor(() => expect(homes.artifacts(serverId).list()).toHaveLength(2));

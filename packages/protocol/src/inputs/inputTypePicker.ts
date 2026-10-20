@@ -30,15 +30,19 @@ export async function invokeInputTypePicker(request: Readonly<{
   if (!field.inputType) return { status: 'error', reasonCode: 'input_type_unavailable' };
   try {
     if ('hostType' in field.inputType) {
-      if (field.inputType.hostType !== 'usageQuery') return { status: 'error', reasonCode: 'input_type_picker_unavailable' };
+      if (field.inputType.hostType !== 'usageQuery' && field.inputType.hostType !== 'agentParticipant') return { status: 'error', reasonCode: 'input_type_picker_unavailable' };
       if (!host.openHostPicker) return { status: 'error', reasonCode: 'input_type_picker_unavailable' };
       const constraint = readInputFieldOptionsConstraint(field);
       const options = constraint.kind === 'static' ? constraint.options : constraint.kind === 'dynamic' ? await host.resolveOptions(field) : undefined;
       if (signal.aborted) return { status: 'cancelled' };
       if (options && 'errorCode' in options) return { status: 'error', reasonCode: options.errorCode };
       const reference = field.inputType;
+      const usageField = reference.hostType === 'usageQuery' ? reference.field : undefined;
+      const fields = reference.hostType === 'usageQuery'
+        ? usageField ? USAGE_QUERY_INPUT_FIELDS.filter(candidate => candidate.path === usageField) : USAGE_QUERY_INPUT_FIELDS
+        : [];
       const answer = await host.openHostPicker({ reference,
-        fields: reference.field ? USAGE_QUERY_INPUT_FIELDS.filter(candidate => candidate.path === reference.field) : USAGE_QUERY_INPUT_FIELDS,
+        fields,
         ...(request.value === undefined ? {} : { value: request.value }), signal });
       if (signal.aborted) return { status: 'cancelled' };
       const settled = PluginUiEphemeralInputSettlementV1Schema.safeParse(answer);

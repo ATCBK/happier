@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { extend } from "zod/mini";
 import { AutomationAccountCurrentnessWitnessV1Schema } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
 import { EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES } from '@happier-dev/protocol/actions/externalActionLimits';
@@ -7,6 +7,8 @@ import { WorkflowInvocationLifecycleV1Schema, WorkflowRunDirectOriginV1Schema, W
 import { WorkflowRunListRequestV1Schema, WorkflowRunSummariesRequestV1Schema, WorkflowRunWaitConditionsV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
 import { WorkflowDefinitionIdV1Schema, WorkflowInvocationRecordIdSchema } from '@happier-dev/protocol/workflows/workflowIdsV1';
 import { WorkflowRunRecipientCensusInputV1Schema, WorkflowRunRecipientKeyEnvelopeCommitInputV1Schema, WorkflowRunRecipientKeyEnvelopesV1Schema } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
+import { WorkflowRunOnCompleteV1Schema } from '@happier-dev/protocol/workflows/workflowDestinationsV1';
+import { readSessionAccessAuthenticationFromRequest } from '@/app/session/access/sessionAccessAuthentication';
 
 import {
     admitWorkflowRun,
@@ -36,7 +38,7 @@ import {
     WorkflowRunServiceError,
 } from "@/app/workflows/workflowRunService";
 import { WorkflowStoredContentError } from "@/app/workflows/runs/storedContent";
-import { inTx, isTransactionAcquisitionUnavailableError, isTransactionDeadlineExceededError } from "@/storage/inTx";
+import { inTx, isTransactionAcquisitionUnavailableError, isTransactionConflictExhaustedError, isTransactionDeadlineExceededError } from "@/storage/inTx";
 import { getActivePrismaRuntime } from "@/storage/prisma";
 import { log } from "@/utils/logging/log";
 import { readWorkflowRunRecipientCensusInTx, commitWorkflowRunRecipientKeyEnvelopesInTx, WorkflowRunAccessError } from "@/app/workflows/workflowRunAccess";
@@ -51,55 +53,55 @@ import {
 } from "./automationWorkerPublisher";
 
 const PATH = "/v3/automations/runs/workflow-storage";
-const PageByteLimitSchema = z.number().int().positive().max(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES).safe();
+const PageByteLimitSchema = z.number().check(z.int(), z.positive(), z.maximum(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES), z.int());
 const InvocationContentWriteShape = {
-    publisherMachineId: z.string().min(1).optional(), runId: z.string().min(1), invocationId: z.string().min(1),
-    invocationAttempt: z.string().regex(/^(0|[1-9][0-9]*)$/),
-    expectedContentRevision: z.string().regex(/^(0|[1-9][0-9]*)$/),
-    accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema, contentEnvelope: z.string().min(1),
+    publisherMachineId: z.optional(z.string().check(z.minLength(1))), runId: z.string().check(z.minLength(1)), invocationId: z.string().check(z.minLength(1)),
+    invocationAttempt: z.string().check(z.regex(/^(0|[1-9][0-9]*)$/)),
+    expectedContentRevision: z.string().check(z.regex(/^(0|[1-9][0-9]*)$/)),
+    accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema, contentEnvelope: z.string().check(z.minLength(1)),
 };
-const InvocationFactOperationSchema = z.object({
-    operation: z.literal("invocations.fact"), publisherMachineId: z.string().min(1), runId: z.string().min(1),
-    parentAttempt: z.number().int().nonnegative().safe().optional(),
-    expectedRevision: z.number().int().nonnegative().safe().optional(),
-    accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema, invocationId: z.string().min(1),
-    invocationAttempt: z.string().regex(/^(0|[1-9][0-9]*)$/),
-    expectedContentRevision: z.string().regex(/^(0|[1-9][0-9]*)$/),
+const InvocationFactOperationSchema = z.strictObject({
+    operation: z.literal("invocations.fact"), publisherMachineId: z.string().check(z.minLength(1)), runId: z.string().check(z.minLength(1)),
+    parentAttempt: z.optional(z.number().check(z.int(), z.nonnegative(), z.int())),
+    expectedRevision: z.optional(z.number().check(z.int(), z.nonnegative(), z.int())),
+    accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema, invocationId: z.string().check(z.minLength(1)),
+    invocationAttempt: z.string().check(z.regex(/^(0|[1-9][0-9]*)$/)),
+    expectedContentRevision: z.string().check(z.regex(/^(0|[1-9][0-9]*)$/)),
     expectedLifecycle: WorkflowInvocationLifecycleV1Schema, lifecycle: WorkflowInvocationLifecycleV1Schema,
-    contentEnvelope: z.string().min(1), resolution: z.enum(["observed_terminal_execution", "root_list_progress"]).optional(),
-}).strict().superRefine((value, context) => {
+    contentEnvelope: z.string().check(z.minLength(1)), resolution: z.optional(z.enum(["observed_terminal_execution", "root_list_progress"])),
+}).check(z.superRefine((value, context) => {
     const observation = value.expectedRevision !== undefined;
     if (observation
         ? value.parentAttempt !== undefined || value.resolution === undefined
         : value.parentAttempt === undefined || value.resolution === "root_list_progress") {
         context.addIssue({ code: "custom", message: "Invocation facts require one exact worker attempt or terminal observation revision" });
     }
-});
+}));
 const OperationSchema = z.discriminatedUnion("operation", [
-    extend(WorkflowRunRecipientCensusInputV1Schema, { operation: z.literal("run-key.census"), publisherMachineId: z.string().min(1).optional() }),
-    extend(WorkflowRunRecipientKeyEnvelopeCommitInputV1Schema, { operation: z.literal("run-key.commit"), publisherMachineId: z.string().min(1).optional() }),
-    z.object({ operation: z.literal("admit"), publisherMachineId: z.string().min(1), runId: z.string().min(1), origin: WorkflowRunDirectOriginV1Schema, machineId: z.string().min(1), sourceArtifactId: z.optional(z.nullable(WorkflowDefinitionIdV1Schema)), visibleTeamId: z.string().min(1).nullable().optional(), recipientKeyEnvelopes: z.optional(WorkflowRunRecipientKeyEnvelopesV1Schema), accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema, acceptedEnvelope: z.string().min(1), resultDelivery: z.object({ kind: z.literal("originating_session") }).strict().optional() }).strict(),
-    z.object({ operation: z.literal("initialize"), publisherMachineId: z.string().min(1), runId: z.string().min(1), parentAttempt: z.number().int().nonnegative().safe(), expectedRevision: z.number().int().nonnegative(), accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema, checkpointEnvelope: z.string().min(1), rootInvocation: z.object({ id: z.string().min(1), contentEnvelope: z.string().min(1) }).strict() }).strict(),
-    z.object({ operation: z.literal("accepted-snapshot.resolve"), publisherMachineId: z.string().min(1), runId: z.string().min(1), automationId: z.string().min(1), originSessionId: z.string().min(1).optional(), resultDelivery: z.object({ kind: z.literal("originating_session") }).strict().optional(), sourceArtifactId: z.optional(z.nullable(WorkflowDefinitionIdV1Schema)), visibleTeamId: z.string().min(1).nullable().optional(), recipientKeyEnvelopes: z.optional(WorkflowRunRecipientKeyEnvelopesV1Schema), expectedAttempt: z.number().int().nonnegative(), expectedRevision: z.number().int().nonnegative(), accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema, definitionEnvelope: z.string().min(1), acceptedEnvelope: z.string().min(1) }).strict(),
-    z.object({ operation: z.literal("get"), publisherMachineId: z.string().min(1).optional(), runId: z.string().min(1) }).strict(),
-    z.object({ operation: z.literal("wait"), publisherMachineId: z.string().min(1).optional(), runId: z.string().min(1), conditions: z.optional(WorkflowRunWaitConditionsV1Schema), timeoutSeconds: z.literal(0).optional(), afterRevision: z.number().int().nonnegative().safe().optional() }).strict(),
-    z.object({ operation: z.enum(["pause", "resume", "cancel"]), publisherMachineId: z.string().min(1).optional(), runId: z.string().min(1), expectedRevision: z.number().int().nonnegative() }).strict(),
-    z.object({ operation: z.literal("list"), publisherMachineId: z.string().min(1).optional(), request: WorkflowRunListRequestV1Schema, pageByteLimit: PageByteLimitSchema }).strict(),
-    z.object({ operation: z.literal("summaries"), publisherMachineId: z.string().min(1).optional(), request: WorkflowRunSummariesRequestV1Schema, pageByteLimit: PageByteLimitSchema }).strict(),
-    z.object({ operation: z.literal("delivery.pull"), publisherMachineId: z.string().min(1).optional(), originSessionId: z.string().min(1), cursor: z.string().optional(), limit: z.number().int().positive().safe().optional(), pageByteLimit: PageByteLimitSchema }).strict(),
-    z.object({ operation: z.literal("delivery.ack"), publisherMachineId: z.string().min(1).optional(), runId: z.string().min(1), revision: z.number().int().nonnegative().safe() }).strict(),
-    z.object({ operation: z.literal("origin-input.withdrawn"), publisherMachineId: z.string().min(1).optional(), originSessionId: z.string().min(1), runId: z.string().min(1), invocationRecordId: z.string().min(1), expectedRevision: z.number().int().nonnegative().safe(), accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema }).strict(),
-    z.object({ operation: z.literal("recovery.list"), publisherMachineId: z.string().min(1), cursor: z.string().optional(), limit: z.number().int().positive().safe().optional(), pageByteLimit: PageByteLimitSchema }).strict(),
-    z.object({ operation: z.literal("invocations.list"), publisherMachineId: z.string().min(1).optional(), runId: z.string().min(1), cursor: z.string().optional(), limit: z.number().int().positive().optional(), parentRecordId: z.string().optional(), lifecycles: z.array(WorkflowInvocationLifecycleV1Schema).min(1).optional(), progressEnvelopes: z.literal(true).optional(), pageByteLimit: PageByteLimitSchema }).strict(),
-    z.object({ operation: z.literal("invocations.admit"), publisherMachineId: z.string().min(1), runId: z.string().min(1), parentAttempt: z.number().int().nonnegative().safe(), expectedRevision: z.number().int().nonnegative(), accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema, checkpointEnvelope: z.string().min(1), invocations: z.array(z.object({ id: WorkflowInvocationRecordIdSchema, sequence: z.string().regex(/^(0|[1-9][0-9]*)$/), parentRecordId: z.string().min(1), memberOrdinal: z.string().regex(/^(0|[1-9][0-9]*)$/), lifecycle: z.enum(["pending", "waiting_for_capacity"]).optional(), contentEnvelope: z.string().min(1), replaces: z.object({ id: WorkflowInvocationRecordIdSchema, attempt: z.string().regex(/^(0|[1-9][0-9]*)$/), contentRevision: z.string().regex(/^(0|[1-9][0-9]*)$/) }).strict().optional() }).strict()).min(1) }).strict(),
-    z.object({ operation: z.literal("invocations.get"), publisherMachineId: z.string().min(1).optional(), runId: z.string().min(1), invocationId: z.string().min(1) }).strict(),
-    z.object({ operation: z.literal("invocations.current"), publisherMachineId: z.string().min(1).optional(), runId: z.string().min(1), parentRecordId: z.string().min(1), memberOrdinal: z.string().regex(/^(0|[1-9][0-9]*)$/) }).strict(),
+    extend(WorkflowRunRecipientCensusInputV1Schema, { operation: z.literal("run-key.census"), publisherMachineId: z.optional(z.string().check(z.minLength(1))) }),
+    extend(WorkflowRunRecipientKeyEnvelopeCommitInputV1Schema, { operation: z.literal("run-key.commit"), publisherMachineId: z.optional(z.string().check(z.minLength(1))) }),
+    z.strictObject({ operation: z.literal("admit"), publisherMachineId: z.string().check(z.minLength(1)), runId: z.string().check(z.minLength(1)), origin: WorkflowRunDirectOriginV1Schema, machineId: z.string().check(z.minLength(1)), sourceArtifactId: z.optional(z.nullable(WorkflowDefinitionIdV1Schema)), visibleTeamId: z.optional(z.nullable(z.string().check(z.minLength(1)))), recipientKeyEnvelopes: z.optional(WorkflowRunRecipientKeyEnvelopesV1Schema), accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema, acceptedEnvelope: z.string().check(z.minLength(1)), resultDelivery: z.optional(WorkflowRunOnCompleteV1Schema), discussionTargetSessionIds: z.optional(z.array(z.string().check(z.minLength(1)))) }),
+    z.strictObject({ operation: z.literal("initialize"), publisherMachineId: z.string().check(z.minLength(1)), runId: z.string().check(z.minLength(1)), parentAttempt: z.number().check(z.int(), z.nonnegative(), z.int()), expectedRevision: z.number().check(z.int(), z.nonnegative()), accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema, checkpointEnvelope: z.string().check(z.minLength(1)), rootInvocation: z.strictObject({ id: z.string().check(z.minLength(1)), contentEnvelope: z.string().check(z.minLength(1)) }) }),
+    z.strictObject({ operation: z.literal("accepted-snapshot.resolve"), publisherMachineId: z.string().check(z.minLength(1)), runId: z.string().check(z.minLength(1)), automationId: z.string().check(z.minLength(1)), originSessionId: z.optional(z.string().check(z.minLength(1))), resultDelivery: z.optional(z.strictObject({ kind: z.literal("originating_session") })), sourceArtifactId: z.optional(z.nullable(WorkflowDefinitionIdV1Schema)), visibleTeamId: z.optional(z.nullable(z.string().check(z.minLength(1)))), recipientKeyEnvelopes: z.optional(WorkflowRunRecipientKeyEnvelopesV1Schema), expectedAttempt: z.number().check(z.int(), z.nonnegative()), expectedRevision: z.number().check(z.int(), z.nonnegative()), accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema, definitionEnvelope: z.string().check(z.minLength(1)), acceptedEnvelope: z.string().check(z.minLength(1)) }),
+    z.strictObject({ operation: z.literal("get"), publisherMachineId: z.optional(z.string().check(z.minLength(1))), runId: z.string().check(z.minLength(1)) }),
+    z.strictObject({ operation: z.literal("wait"), publisherMachineId: z.optional(z.string().check(z.minLength(1))), runId: z.string().check(z.minLength(1)), conditions: z.optional(WorkflowRunWaitConditionsV1Schema), timeoutSeconds: z.optional(z.literal(0)), afterRevision: z.optional(z.number().check(z.int(), z.nonnegative(), z.int())) }),
+    z.strictObject({ operation: z.enum(["pause", "resume", "cancel"]), publisherMachineId: z.optional(z.string().check(z.minLength(1))), runId: z.string().check(z.minLength(1)), expectedRevision: z.number().check(z.int(), z.nonnegative()) }),
+    z.strictObject({ operation: z.literal("list"), publisherMachineId: z.optional(z.string().check(z.minLength(1))), request: WorkflowRunListRequestV1Schema, pageByteLimit: PageByteLimitSchema }),
+    z.strictObject({ operation: z.literal("summaries"), publisherMachineId: z.optional(z.string().check(z.minLength(1))), request: WorkflowRunSummariesRequestV1Schema, pageByteLimit: PageByteLimitSchema }),
+    z.strictObject({ operation: z.literal("delivery.pull"), publisherMachineId: z.optional(z.string().check(z.minLength(1))), originSessionId: z.string().check(z.minLength(1)), cursor: z.optional(z.string()), limit: z.optional(z.number().check(z.int(), z.positive(), z.int())), pageByteLimit: PageByteLimitSchema }),
+    z.strictObject({ operation: z.literal("delivery.ack"), publisherMachineId: z.optional(z.string().check(z.minLength(1))), runId: z.string().check(z.minLength(1)), revision: z.number().check(z.int(), z.nonnegative(), z.int()) }),
+    z.strictObject({ operation: z.literal("origin-input.withdrawn"), publisherMachineId: z.optional(z.string().check(z.minLength(1))), originSessionId: z.string().check(z.minLength(1)), runId: z.string().check(z.minLength(1)), invocationRecordId: z.string().check(z.minLength(1)), expectedRevision: z.number().check(z.int(), z.nonnegative(), z.int()), accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema }),
+    z.strictObject({ operation: z.literal("recovery.list"), publisherMachineId: z.string().check(z.minLength(1)), cursor: z.optional(z.string()), limit: z.optional(z.number().check(z.int(), z.positive(), z.int())), pageByteLimit: PageByteLimitSchema }),
+    z.strictObject({ operation: z.literal("invocations.list"), publisherMachineId: z.optional(z.string().check(z.minLength(1))), runId: z.string().check(z.minLength(1)), cursor: z.optional(z.string()), limit: z.optional(z.number().check(z.int(), z.positive())), parentRecordId: z.optional(z.string()), lifecycles: z.optional(z.array(WorkflowInvocationLifecycleV1Schema).check(z.minLength(1))), progressEnvelopes: z.optional(z.literal(true)), pageByteLimit: PageByteLimitSchema }),
+    z.strictObject({ operation: z.literal("invocations.admit"), publisherMachineId: z.string().check(z.minLength(1)), runId: z.string().check(z.minLength(1)), parentAttempt: z.number().check(z.int(), z.nonnegative(), z.int()), expectedRevision: z.number().check(z.int(), z.nonnegative()), accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema, checkpointEnvelope: z.string().check(z.minLength(1)), invocations: z.array(z.strictObject({ id: WorkflowInvocationRecordIdSchema, sequence: z.string().check(z.regex(/^(0|[1-9][0-9]*)$/)), parentRecordId: z.string().check(z.minLength(1)), memberOrdinal: z.string().check(z.regex(/^(0|[1-9][0-9]*)$/)), lifecycle: z.optional(z.enum(["pending", "waiting_for_capacity"])), contentEnvelope: z.string().check(z.minLength(1)), replaces: z.optional(z.strictObject({ id: WorkflowInvocationRecordIdSchema, attempt: z.string().check(z.regex(/^(0|[1-9][0-9]*)$/)), contentRevision: z.string().check(z.regex(/^(0|[1-9][0-9]*)$/)) })) })).check(z.minLength(1)) }),
+    z.strictObject({ operation: z.literal("invocations.get"), publisherMachineId: z.optional(z.string().check(z.minLength(1))), runId: z.string().check(z.minLength(1)), invocationId: z.string().check(z.minLength(1)) }),
+    z.strictObject({ operation: z.literal("invocations.current"), publisherMachineId: z.optional(z.string().check(z.minLength(1))), runId: z.string().check(z.minLength(1)), parentRecordId: z.string().check(z.minLength(1)), memberOrdinal: z.string().check(z.regex(/^(0|[1-9][0-9]*)$/)) }),
     InvocationFactOperationSchema,
-    z.object({ operation: z.literal("invocations.publish_draft"), ...InvocationContentWriteShape }).strict(),
-    z.object({ operation: z.literal("invocations.complete_review"), ...InvocationContentWriteShape, mode: z.enum(["use_result", "generate"]) }).strict(),
-    z.object({ operation: z.literal("transition"), publisherMachineId: z.string().min(1), runId: z.string().min(1), parentAttempt: z.number().int().nonnegative().safe(), expectedRevision: z.number().int().nonnegative(), accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema, state: WorkflowRunStateV1Schema, checkpointEnvelope: z.string().min(1), resultEnvelope: z.string().nullable().optional(), custodyState: z.enum(["pending", "settled"]).optional(), invocationTransitions: z.array(z.object({ id: z.string().min(1), expectedLifecycle: WorkflowInvocationLifecycleV1Schema, lifecycle: WorkflowInvocationLifecycleV1Schema, expectedContentRevision: z.string().regex(/^(0|[1-9][0-9]*)$/) }).strict()).optional() }).strict(),
-    z.object({ operation: z.literal("invocations.recover"), publisherMachineId: z.string().min(1), runId: z.string().min(1), expectedRevision: z.number().int().nonnegative(), accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema, checkpointEnvelope: z.string().min(1), recoveries: z.array(z.object({ invocationId: z.string().min(1), newInvocationId: WorkflowInvocationRecordIdSchema, contentEnvelope: z.string().min(1) }).strict()).min(1) }).strict(),
-    z.object({ operation: z.literal("delete"), publisherMachineId: z.string().min(1).optional(), runId: z.string().min(1), expectedRevision: z.number().int().nonnegative() }).strict(),
+    z.strictObject({ operation: z.literal("invocations.publish_draft"), ...InvocationContentWriteShape }),
+    z.strictObject({ operation: z.literal("invocations.complete_review"), ...InvocationContentWriteShape, mode: z.enum(["use_result", "generate"]) }),
+    z.strictObject({ operation: z.literal("transition"), publisherMachineId: z.string().check(z.minLength(1)), runId: z.string().check(z.minLength(1)), parentAttempt: z.number().check(z.int(), z.nonnegative(), z.int()), expectedRevision: z.number().check(z.int(), z.nonnegative()), accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema, state: WorkflowRunStateV1Schema, checkpointEnvelope: z.string().check(z.minLength(1)), resultEnvelope: z.optional(z.nullable(z.string())), custodyState: z.optional(z.enum(["pending", "settled"])), invocationTransitions: z.optional(z.array(z.strictObject({ id: z.string().check(z.minLength(1)), expectedLifecycle: WorkflowInvocationLifecycleV1Schema, lifecycle: WorkflowInvocationLifecycleV1Schema, expectedContentRevision: z.string().check(z.regex(/^(0|[1-9][0-9]*)$/)) }))) }),
+    z.strictObject({ operation: z.literal("invocations.recover"), publisherMachineId: z.string().check(z.minLength(1)), runId: z.string().check(z.minLength(1)), expectedRevision: z.number().check(z.int(), z.nonnegative()), accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema, checkpointEnvelope: z.string().check(z.minLength(1)), recoveries: z.array(z.strictObject({ invocationId: z.string().check(z.minLength(1)), newInvocationId: WorkflowInvocationRecordIdSchema, contentEnvelope: z.string().check(z.minLength(1)) })).check(z.minLength(1)) }),
+    z.strictObject({ operation: z.literal("delete"), publisherMachineId: z.optional(z.string().check(z.minLength(1))), runId: z.string().check(z.minLength(1)), expectedRevision: z.number().check(z.int(), z.nonnegative()) }),
 ]);
 
 export function registerWorkflowRunStorageRoutes(
@@ -134,9 +136,9 @@ export function registerWorkflowRunStorageRoutes(
             // Carry only server-verified credential facts; the strict body cannot supply Team authority.
             const authentication = request.authAuthority ? readTeamOperationAuthenticationFromRequest(request) : undefined;
             switch (body.operation) {
-                case "run-key.census": return await inTx(tx => readWorkflowRunRecipientCensusInTx(tx, { ...body, actorAccountId: request.userId, authentication }));
-                case "run-key.commit": return await inTx(tx => commitWorkflowRunRecipientKeyEnvelopesInTx(tx, { ...body, actorAccountId: request.userId }));
-                case "admit": return await admitWorkflowRun({ accountId: request.userId, runId: body.runId, origin: body.origin, machineId: body.machineId, sourceArtifactId: body.sourceArtifactId, visibleTeamId: body.visibleTeamId, authentication, recipientKeyEnvelopes: body.recipientKeyEnvelopes, accountCurrentness: body.accountCurrentness, acceptedEnvelope: body.acceptedEnvelope, ...(body.resultDelivery ? { resultDelivery: body.resultDelivery } : {}) });
+                case "run-key.census": return await inTx(tx => readWorkflowRunRecipientCensusInTx(tx, { ...body, actorAccountId: request.userId, authentication }), { transactionClass: "workflow-run-key-census" });
+                case "run-key.commit": return await inTx(tx => commitWorkflowRunRecipientKeyEnvelopesInTx(tx, { ...body, actorAccountId: request.userId }), { transactionClass: "workflow-run-key-commit" });
+                case "admit": return await admitWorkflowRun({ accountId: request.userId, runId: body.runId, origin: body.origin, machineId: body.machineId, sourceArtifactId: body.sourceArtifactId, visibleTeamId: body.visibleTeamId, authentication, recipientKeyEnvelopes: body.recipientKeyEnvelopes, accountCurrentness: body.accountCurrentness, acceptedEnvelope: body.acceptedEnvelope, ...(body.resultDelivery ? { resultDelivery: body.resultDelivery } : {}), ...(body.discussionTargetSessionIds ? { discussionTargetSessionIds: body.discussionTargetSessionIds } : {}), ...(body.origin.discussion ? { discussionAuthentication: readSessionAccessAuthenticationFromRequest(request) } : {}) });
                 case "initialize": return await initializeWorkflowRunExecution({ accountId: request.userId, runId: body.runId, machineId: body.publisherMachineId, parentAttempt: body.parentAttempt, expectedRevision: body.expectedRevision, accountCurrentness: body.accountCurrentness, checkpointEnvelope: body.checkpointEnvelope, rootInvocation: body.rootInvocation });
                 case "accepted-snapshot.resolve": return await resolveAutomationWorkflowAcceptedSnapshot({ accountId: request.userId, runId: body.runId, automationId: body.automationId, machineId: body.publisherMachineId, originSessionId: body.originSessionId, resultDelivery: body.resultDelivery, sourceArtifactId: body.sourceArtifactId, visibleTeamId: body.visibleTeamId, authentication, recipientKeyEnvelopes: body.recipientKeyEnvelopes, expectedAttempt: body.expectedAttempt, expectedRevision: body.expectedRevision, accountCurrentness: body.accountCurrentness, definitionEnvelope: body.definitionEnvelope, acceptedEnvelope: body.acceptedEnvelope });
                 case "get": return await getWorkflowRun({ accountId: request.userId, runId: body.runId });
@@ -200,6 +202,7 @@ export function registerWorkflowRunStorageRoutes(
                 || error instanceof prisma.PrismaClientInitializationError
                 || error instanceof prisma.PrismaClientRustPanicError
                 || isTransactionAcquisitionUnavailableError(error)
+                || isTransactionConflictExhaustedError(error)
                 || isTransactionDeadlineExceededError(error)) {
                 // Keep operational failures distinct from unreadable private content.
                 // Unexpected application errors still reach the global error owner.

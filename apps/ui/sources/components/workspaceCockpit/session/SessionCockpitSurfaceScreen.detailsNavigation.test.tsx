@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeAll, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, expect, it, onTestFinished, vi } from 'vitest';
 import { resolveHref } from 'expo-router/build/link/href';
 import { flushHookEffects, invokeTestInstanceHandler, standardCleanup } from '@/dev/testkit';
 import {
@@ -31,6 +31,9 @@ vi.doMock('expo-router', async () => {
             replace: (href: unknown) => {
                 if (!isRouteHref(href)) throw new Error('Expected an Expo string or structured href');
                 route.href = resolveHref(href);
+                if (typeof window !== 'undefined' && new URL(route.href, window.location.href).href !== window.location.href) {
+                    window.history.replaceState(window.history.state, '', route.href);
+                }
                 route.params = { id: 's1', ...Object.fromEntries(new URL(route.href, 'https://happier.test').searchParams) };
                 // Replacing an Expo route replaces its params; setParams overlays
                 // from the departing route must not survive in this boundary.
@@ -412,4 +415,91 @@ it('presents a Computer window tab on the phone Details surface through the Sess
     // surface binds nothing and the phone shows a blank page.
     expect(slots.getPortalSnapshot().some(entry => entry.slotId.endsWith(':viewer:computer') && entry.visible)).toBe(true);
     await screen.unmount();
+});
+
+it('selects Chat from a retained Computer Details destination without replacing its workspace identity', async () => {
+    const { Platform } = await import('react-native');
+    const platform = Platform.OS;
+    Object.assign(Platform, { OS: 'web' });
+    onTestFinished(() => { Object.assign(Platform, { OS: platform }); });
+    fixture = await createSessionFilesViewFixture({ rootPath: '/tmp/repo', rpc: () => undefined,
+        request: async url => new URL(String(url)).pathname === '/v1/kv/bulk'
+            ? Response.json({ values: [] }) : Response.json({}, { status: 404 }),
+    });
+    fixture.storage.getState().applySettingsLocal({ mobileWorkspaceExperienceV1: 'cockpit' });
+    fixture.storage.setState({ isDataReady: true, localSettings: {
+        ...fixture.storage.getState().localSettings, workspaceLayoutV1: {},
+    } });
+    const { createComputerScreenDetailsTab } = await import('@/components/computer/computerScreenDetailsTab');
+    const { buildActiveDetailsRouteParams } = await import('@/components/sessions/panes/url/sessionPaneUrlState');
+    const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
+    const { createSessionPaneScopeId } = await import('@/components/sessions/panes/sessionPaneScopeId');
+    const { SessionDestinationBody } = await import('@/components/sessions/shell/SessionDestinationBody');
+    const { SessionDetailsDestinationBody } = await import('@/components/sessions/shell/SessionDetailsDestinationBody');
+    const { WorkspaceDestinationBody } = await import('@/components/appShell/workspace/WorkspaceDestinationBody');
+    const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+    const { WorkspaceProvider } = await import('@/components/appShell/workspace/WorkspaceProvider');
+    const { hrefForDestinationRef, resolveCompactAppDestinations } = await import('@/components/appShell/destinations/compactAppDestinationCatalog');
+    const { SessionCockpitChromeRegistryProvider } = await import('./SessionCockpitChromeRegistry');
+    const { MobileBottomChromeHost } = await import('@/components/navigation/mobile/chrome/MobileBottomChromeHost');
+    const { MainAppTabStateProvider } = await import('@/components/navigation/mobile/chrome/MainAppTabStateProvider');
+    route.params = { id: 's1', serverId: fixture.home.id, mobileSurface: 'chat' };
+    route.href = `/session/s1?${new URLSearchParams(route.params)}`;
+    const { installBrowserRuntimeForTests } = await import('@/dev/testkit/harness/browserRuntimeHarness');
+    const browser = await installBrowserRuntimeForTests({ url: `https://route.test${route.href}` });
+    onTestFinished(() => browser.restore());
+    const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+        externalSessions: false, inbox: false, workflows: false, friends: false,
+    } });
+    let workspace!: WorkspaceNavigationContextValue;
+    let pane!: ReturnType<typeof useAppPaneScope>;
+    let instanceKey = '';
+    const selectedTab = () => workspace.state.tabs[workspace.state.groups[workspace.state.focusedGroupId].activeTabId];
+    function Probe() {
+        pane = useAppPaneScope(createSessionPaneScopeId('s1', fixture.home.id, instanceKey));
+        return null;
+    }
+    const screen = await fixture.render(<MainAppTabStateProvider><SessionCockpitChromeRegistryProvider>
+        <WorkspaceProvider enabled catalog={catalog}>{navigation => {
+            workspace = navigation;
+            const selected = selectedTab();
+            instanceKey = selected.id;
+            const href = hrefForDestinationRef(catalog, selected.target)!;
+            const pathname = new URL(href, 'https://route.test').pathname;
+            return <DestinationInstanceHost tabId={selected.id} ref={selected.target} pathname={pathname} focused visible phone
+                navigation={navigation.navigationForTab(selected.id)}>
+                <Probe /><WorkspaceDestinationBody target={selected.target} pathname={pathname}
+                    renderSession={() => <SessionDestinationBody />} renderSessionDetails={() => <SessionDetailsDestinationBody />} />
+            </DestinationInstanceHost>;
+        }}</WorkspaceProvider><MobileBottomChromeHost />
+    </SessionCockpitChromeRegistryProvider></MainAppTabStateProvider>);
+    const measure = async () => act(async () => {
+        for (const host of screen.tree.findAll(node => typeof node.type === 'string' && typeof node.props.onLayout === 'function')) {
+            invokeTestInstanceHandler(host, 'onLayout', { nativeEvent: { layout: { x: 0, y: 0, width: 390, height: 844 } } });
+        }
+    });
+    try {
+        await measure();
+        await flushHookEffects({ cycles: 20 });
+        const originalId = selectedTab().id;
+        const tab = createComputerScreenDetailsTab({ machineId: 'machine-1', title: 'Computer' });
+        await act(async () => {
+            pane.openDetailsTab(tab, { intent: 'pinned' });
+            const navigation = workspace.navigationForTab(originalId);
+            if (!navigation.setParams) throw new Error('Expected workspace navigation to support route params');
+            navigation.setParams(buildActiveDetailsRouteParams([tab], tab.key));
+        });
+        await act(async () => { workspace.openHref(`/session/s1/details?${new URLSearchParams({
+            serverId: fixture.home.id, ...buildActiveDetailsRouteParams([tab], tab.key),
+        })}`, { tabId: originalId }); });
+        await measure();
+        await flushHookEffects({ cycles: 20 });
+        expect(selectedTab()).toMatchObject({ id: originalId, target: { kind: 'sessionDetails' } });
+        await screen.pressByTestIdAsync('session-cockpit-tab-chat');
+        await measure();
+        await flushHookEffects({ cycles: 20 });
+        expect(selectedTab()).toMatchObject({ id: originalId, target: { kind: 'session', params: { mobileSurface: 'chat' } } });
+        expect(screen.findHostByTestId('session-cockpit-scene:chat')).not.toBeNull();
+        expect(screen.findHostByTestId('session-details-screen')).toBeNull();
+    } finally { await screen.unmount(); Object.assign(Platform, { OS: platform }); }
 });

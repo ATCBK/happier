@@ -1,7 +1,7 @@
 import { AgentProviderBindingLaunchMaterializationV1Schema, PROVIDER_BINDING_MATERIALIZATION_LIMITS_V1 } from '@happier-dev/protocol/providers/materialization/v1';
 import { SessionProviderBindingMetadataV1Schema } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
 import type { AgentProviderBindingLaunchMaterializationV1, SessionProviderBindingMetadataV1 } from '@happier-dev/protocol';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const HAPPIER_PROVIDER_BINDING_LAUNCH_MATERIALIZATION_V1_ENV_KEY =
     'HAPPIER_PROVIDER_BINDING_LAUNCH_MATERIALIZATION_V1';
@@ -14,11 +14,11 @@ export type ProviderBindingLaunchHandoffV1 = Readonly<{
     sessionBindingMetadata: SessionProviderBindingMetadataV1;
 }>;
 
-const ProviderBindingLaunchHandoffV1Schema: z.ZodType<ProviderBindingLaunchHandoffV1> = z.object({
+const ProviderBindingLaunchHandoffV1Schema: z.ZodMiniType<ProviderBindingLaunchHandoffV1> = z.strictObject({
     v: z.literal(1),
     materialization: AgentProviderBindingLaunchMaterializationV1Schema,
     sessionBindingMetadata: SessionProviderBindingMetadataV1Schema,
-}).strict();
+});
 
 export function serializeProviderBindingLaunchHandoffForEnv(
     input: AgentProviderBindingLaunchMaterializationV1,

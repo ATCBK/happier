@@ -27,12 +27,30 @@ development defaults, not a claim about released builds.
 
 In development, deep search can also search attached memory and instruction
 documents through the existing `memory.search` Action. Explicit `corpora` selects
-documents, Sessions, or both; omitting it preserves Session results. Document
+documents, Sessions, or both; omitting it for global/Session scope preserves Session results. Document
 search includes the complete stored memory index, every topic, and archived or
 expired facts—not just the short index loaded into a prompt. Each query checks
 current attachment membership, read access, and document revision before returning
 snippets. Unavailable context reports unavailable document coverage, not a complete
 search with zero matches.
+
+Development Action callers can restrict memory search to a Project by its
+Home-qualified identity, including a Project with saved memory and no Sessions.
+This searches that Project's current attachments and matching Session evidence
+on the selected machine. It requires a daemon that explicitly supports Project
+search; an older daemon reports unsupported instead of searching everywhere.
+Project queries include documents and Sessions by default; other scopes keep
+their transcript-only default when no corpus is selected.
+Unreadable Project membership or native conversations without a proven Project
+association produce partial or unavailable coverage, rather than a false
+complete result. Project search does not include unrelated Account or Profile
+attachments.
+
+An unsupported peer returns `memory_project_scope_unsupported`, not an empty
+Project result or an automatic search of everything. Update Happier on the
+selected machine before retrying. Choosing a broader search is a separate
+explicit choice. The Project Memory page is still being integrated; the scope
+described here is the development Action contract.
 
 In the development memory-document summary, **Always remembered** counts facts
 selected by a fresh preparation for the open Session, after its switches, inherited

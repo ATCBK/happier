@@ -25,7 +25,7 @@ describe("acquireAccountEncryptionTransitionFenceInTx", () => {
         } as unknown as Tx;
 
         await expect(
-            acquireAccountEncryptionTransitionFenceInTx(tx, "missing-account"),
+            acquireAccountEncryptionTransitionFenceInTx(tx, "missing-account", "content"),
         ).resolves.toEqual({ status: "account_not_found" });
         expect(accountFindUnique).not.toHaveBeenCalled();
     });
@@ -44,7 +44,7 @@ describe("acquireAccountEncryptionTransitionFenceInTx", () => {
         } as unknown as Tx;
 
         await expect(
-            acquireAccountEncryptionTransitionFenceInTx(tx, "account-1"),
+            acquireAccountEncryptionTransitionFenceInTx(tx, "account-1", "content"),
         ).rejects.toBe(lockFailure);
     });
 });

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rename, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ExecService } from '@happier-dev/plugin-sdk/exec';
+import { ExternalSessionCandidateV1Schema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
 
 type AppServerThread = { id: string; updatedAt: number; cwd?: string };
 
@@ -20,7 +21,7 @@ const appServerProbe = vi.hoisted(() => ({
   failCursor: null as string | null,
   loadedIds: new Set<string>(),
   transports: [] as unknown[],
-  onCreate: null as (() => void) | null,
+  onCreate: null as ((params: Readonly<{ transport?: unknown; signal?: AbortSignal }>) => void | Promise<void>) | null,
 }));
 
 const rolloutFsProbe = vi.hoisted(() => ({
@@ -36,9 +37,9 @@ vi.mock('../../../runtime/appServer/client.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../runtime/appServer/client.js')>();
   return {
     ...actual,
-    createCodexNativeAppServerClient: async (params: Readonly<{ transport?: unknown }>) => {
+    createCodexNativeAppServerClient: async (params: Readonly<{ transport?: unknown; signal?: AbortSignal }>) => {
       appServerProbe.transports.push(params.transport);
-      appServerProbe.onCreate?.();
+      await appServerProbe.onCreate?.(params);
       return ({
       launchFeatures: {
         realtimeConversationAdvertised: false,
@@ -96,6 +97,71 @@ import { pageCodexExternalSessionTranscript } from './transcriptSource.js';
 import { createCodexExternalSessionsContribution } from './contribution.js';
 
 describe('Codex candidate conversation search', () => {
+  it.each([
+    { callerBudgetMs: 30_000, returnsNativePages: true },
+    { callerBudgetMs: 2_000, returnsNativePages: false },
+    { callerBudgetMs: undefined, returnsNativePages: false },
+  ])('respects the owning budget for a slow proxy-to-stdio listing (caller budget=$callerBudgetMs)', async ({ callerBudgetMs, returnsNativePages }) => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-content-native-caller-budget-'));
+    const controller = new AbortController();
+    try {
+      vi.useFakeTimers();
+      const startedAtMs = Date.now();
+      let markStdioStarted!: () => void;
+      const stdioStarted = new Promise<void>((resolve) => { markStdioStarted = resolve; });
+      appServerProbe.threads = [{ id: 'native-only', updatedAt: 2_000_000_000 }];
+      appServerProbe.onCreate = async ({ transport, signal }) => {
+        if (transport) throw new Error('App-server proxy socket is absent');
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 4_000);
+          signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+          markStdioStarted();
+        });
+      };
+      const source = { kind: 'codexHome' as const, home: 'user' as const, homePath: root };
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: root } });
+      const pending = contribution.listCandidates({
+        source, searchMode: 'full', searchTerm: 'native', maxItems: 10,
+        ...(callerBudgetMs === undefined ? {} : {
+          searchTarget: 'content', searchTerm: 'native budget needle', deadlineAtMs: startedAtMs + callerBudgetMs,
+        }),
+        maxSerializedBytes: 1024 * 1024, exec: {} as ExecService,
+        ripgrep: { run: async () => { throw new Error('An empty rollout corpus needs no ripgrep process'); } },
+        signal: controller.signal,
+      });
+      await stdioStarted;
+      await vi.advanceTimersByTimeAsync(returnsNativePages ? 4_000 : callerBudgetMs ?? 3_000);
+      const result = await pending;
+      expect(appServerProbe.transports).toEqual([{ kind: 'daemonProxy' }, undefined]);
+      if (callerBudgetMs === undefined) {
+        expect(result).toMatchObject({ ok: true, value: { candidates: [], searchIncomplete: true } });
+        expect(Date.now() - startedAtMs).toBe(3_000);
+        expect(appServerProbe.calls).toEqual([]);
+      } else if (returnsNativePages) {
+        expect(result).toMatchObject({ ok: true });
+        if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+        const candidates = result.value.candidates.map((candidate) => ExternalSessionCandidateV1Schema.parse({
+          ...candidate, agentId: 'codex', source,
+        }));
+        expect(candidates.map((candidate) => candidate.remoteSessionId)).toEqual(['native-only']);
+        expect(result.value).toMatchObject({ nextCursor: null, contentCoverage: 'partial' });
+        expect(appServerProbe.calls).toEqual([{ archived: false, cursor: null }, { archived: true, cursor: null }]);
+        expect(Date.now() - startedAtMs).toBe(4_000);
+        expect(Date.now()).toBeLessThan(startedAtMs + callerBudgetMs);
+      } else {
+        expect(result).toMatchObject({ ok: false, code: 'timeout', retryable: true });
+        expect(Date.now() - startedAtMs).toBe(callerBudgetMs);
+        expect(appServerProbe.calls).toEqual([]);
+      }
+    } finally {
+      controller.abort();
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+      appServerProbe.onCreate = null;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('shares canonical root-family discovery across the content page so every hit fits the host deadline', async () => {
     const root = await mkdtemp(join(tmpdir(), 'codex-content-family-work-'));
     try {
@@ -221,7 +287,160 @@ describe('Codex candidate conversation search', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
-  it('defers a native probe that cannot fit its existing budget, preserving both sources for continuation', async () => {
+  it.each([false, true])('resumes root-family preparation without re-opening its completed prefix (nested=%s)', async (nested) => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-content-family-resume-'));
+    try {
+      const day = join(root, 'sessions', '2026', '07', '23');
+      await mkdir(day, { recursive: true });
+      const target = 'ffffffff-1111-1111-1111-111111111111';
+      const unrelated = new Set<string>();
+      for (let index = 0; index < 12; index += 1) {
+        const directory = nested ? join(day, index < 6 ? 'a' : 'a.jsonl') : day;
+        await mkdir(directory, { recursive: true });
+        const path = join(directory, `rollout-2026-07-23T00-00-${String(index).padStart(2, '0')}-aaaaaaaa-1111-1111-1111-${String(index).padStart(12, '0')}.jsonl`);
+        unrelated.add(path);
+        await writeFile(path, JSON.stringify({ type: 'session_meta', payload: { id: `unrelated-${index}` } }) + '\n');
+      }
+      await writeFile(join(day, `rollout-2026-07-23T23-00-00-${target}.jsonl`), [
+        { type: 'session_meta', payload: { id: target } },
+        { type: 'event_msg', payload: { type: 'agent_message', message: 'harbor family resume' } },
+      ].map(row => JSON.stringify(row)).join('\n') + '\n');
+      let nowMs = 1000;
+      vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+      const opens = new Map<string, number>();
+      rolloutFsProbe.onOpen = path => {
+        if (typeof path !== 'string' || !unrelated.has(path)) return;
+        opens.set(path, (opens.get(path) ?? 0) + 1);
+        nowMs += 1000;
+      };
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: root } });
+      let cursor: string | undefined;
+      let hit: string | undefined;
+      for (let page = 0; page < unrelated.size + 1 && !hit; page += 1) {
+        const deadlineAtMs = nowMs + 5000;
+        const result = await contribution.listCandidates({
+          source: { kind: 'codexHome', home: 'user', homePath: root },
+          searchTarget: 'content', searchTerm: 'harbor', maxItems: 1,
+          maxSerializedBytes: 1024 * 1024, exec: {} as ExecService,
+          signal: new AbortController().signal, deadlineAtMs, cursor,
+          ripgrep: { run: async ({ paths }) => ({ stdout: paths.join('\0') + '\0', stderr: '', exitCode: 0 }) },
+        });
+        if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+        expect(nowMs).toBeLessThan(deadlineAtMs);
+        hit = result.value.candidates[0]?.remoteSessionId;
+        if (!hit) {
+          expect(result.value.contentCoverage).toBe('partial');
+          expect(result.value.nextCursor).toBeTruthy();
+          expect(result.value.nextCursor).not.toBe(cursor);
+          cursor = result.value.nextCursor!;
+        }
+      }
+      expect(hit).toBe(target);
+      expect([...opens.values()]).toEqual(Array.from({ length: unrelated.size }, () => 1));
+    } finally {
+      rolloutFsProbe.onOpen = null;
+      vi.restoreAllMocks();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects replacement of a retained root-family member before returning a resumed hit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-content-family-replacement-'));
+    try {
+      const day = join(root, 'sessions', '2026', '07', '23');
+      await mkdir(day, { recursive: true });
+      const target = 'ffffffff-1111-1111-1111-111111111111';
+      const childDirectory = join(day, 'a');
+      await mkdir(childDirectory);
+      const childPath = join(childDirectory, 'rollout-child.jsonl');
+      const childText = JSON.stringify({ type: 'session_meta', payload: { id: 'child', session_id: target } }) + '\n';
+      await writeFile(childPath, childText);
+      await writeFile(join(day, `rollout-2026-07-23T23-00-00-${target}.jsonl`), [
+        { type: 'session_meta', payload: { id: target } },
+        { type: 'event_msg', payload: { type: 'agent_message', message: 'harbor replacement' } },
+      ].map(row => JSON.stringify(row)).join('\n') + '\n');
+      const slowPath = join(childDirectory, 'rollout-unrelated.jsonl');
+      await writeFile(slowPath, JSON.stringify({ type: 'session_meta', payload: { id: 'unrelated' } }) + '\n');
+      let nowMs = 1000;
+      vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+      rolloutFsProbe.onOpen = path => { if (path === slowPath) nowMs += 3000; };
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: root } });
+      const request = { source: { kind: 'codexHome' as const, home: 'user' as const, homePath: root },
+        searchTarget: 'content' as const, searchTerm: 'harbor', maxItems: 1,
+        maxSerializedBytes: 1024 * 1024, exec: {} as ExecService, signal: new AbortController().signal,
+        ripgrep: { run: async ({ paths }: { paths: readonly string[] }) => ({ stdout: paths.join('\0') + '\0', stderr: '', exitCode: 0 }) } };
+      const first = await contribution.listCandidates({ ...request, deadlineAtMs: nowMs + 5000 });
+      if (!first.ok) throw new Error(`${first.code}: ${first.message}`);
+      expect(first.value).toMatchObject({ candidates: [], nextCursor: expect.any(String), contentCoverage: 'partial' });
+      await rename(childPath, `${childPath}.old`);
+      await writeFile(childPath, childText);
+      rolloutFsProbe.onOpen = null;
+      const resumed = await contribution.listCandidates({ ...request, cursor: first.value.nextCursor!, deadlineAtMs: nowMs + 5000 });
+      expect(resumed).toMatchObject({ ok: false, code: 'source_invalid' });
+    } finally {
+      rolloutFsProbe.onOpen = null;
+      vi.restoreAllMocks();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('finishes content continuation while the active day gains a newer rollout between every page', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-content-live-day-'));
+    try {
+      const dayDir = join(root, 'sessions', '2026', '07', '23');
+      await mkdir(dayDir, { recursive: true });
+      const writeRollout = async (hour: string, id: string) => {
+        await writeFile(join(dayDir, `rollout-2026-07-23T${hour}-00-00-${id}.jsonl`), [
+          { type: 'session_meta', payload: { id, cwd: '/repo' } },
+          { type: 'event_msg', payload: { type: 'agent_message', message: 'harbor continuation needle' } },
+        ].map((row) => JSON.stringify(row)).join('\n') + '\n');
+      };
+      const ids = [
+        '11111111-1111-1111-1111-111111111111',
+        '22222222-2222-2222-2222-222222222222',
+        '33333333-3333-3333-3333-333333333333',
+      ];
+      for (const [index, id] of ids.entries()) await writeRollout(`0${index + 7}`, id);
+      appServerProbe.threads = [];
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: root } });
+      const request = {
+        source: { kind: 'codexHome' as const, home: 'user' as const, homePath: root },
+        searchTarget: 'content' as const, searchTerm: 'harbor', maxItems: 1,
+        maxSerializedBytes: 1024 * 1024, exec: {} as ExecService,
+        ripgrep: { run: async ({ args, paths, signal }: { args: readonly string[]; paths: readonly string[]; signal?: AbortSignal }) => {
+          const launcher = fileURLToPath(new URL('../../../../../../../../apps/cli/scripts/ripgrep_launcher.cjs', import.meta.url));
+          const result = await promisify(execFile)(process.execPath, [launcher, JSON.stringify([...args, '--', ...paths])], { signal });
+          return { ...result, exitCode: 0 };
+        } },
+        signal: new AbortController().signal,
+      };
+      const observed: string[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < ids.length; page += 1) {
+        const result = await contribution.listCandidates({ ...request, deadlineAtMs: Date.now() + 30_000,
+          ...(cursor ? { cursor } : {}) });
+        if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+        expect(result.value.candidates).toHaveLength(1);
+        expect(result.value.candidates[0]?.match?.snippet).toBe('harbor continuation needle');
+        observed.push(...result.value.candidates.map(({ remoteSessionId }) => remoteSessionId));
+        if (page < ids.length - 1) {
+          expect(result.value.nextCursor).toBeTruthy();
+          expect(result.value.nextCursor).not.toBe(cursor);
+          cursor = result.value.nextCursor!;
+          await writeRollout(`${10 + page}`, `aaaaaaaa-1111-1111-1111-${String(page).padStart(12, '0')}`);
+          await utimes(dayDir, new Date(`2026-07-${24 + page}`), new Date(`2026-07-${24 + page}`));
+        } else {
+          expect(result.value.nextCursor).toBeNull();
+          expect(result.value.contentCoverage).toBe('complete');
+        }
+      }
+      expect(observed).toEqual([...ids].reverse());
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('resumes both native sources after preparation consumes the first page budget', async () => {
     const root = await mkdtemp(join(tmpdir(), 'codex-content-native-deadline-'));
     try {
       const sessions = join(root, 'sessions', '2026', '07', '23');
@@ -266,6 +485,87 @@ describe('Codex candidate conversation search', () => {
       appServerProbe.onCreate = null;
       rolloutFsProbe.onStat = null;
       vi.restoreAllMocks();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it.each([false, true])('reports a retryable native failure instead of an unchanged cursor with nonempty rollout=%s', async (withRollout) => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-content-native-unavailable-'));
+    try {
+      const id = 'eeeeeeee-1111-1111-1111-111111111111';
+      if (withRollout) {
+        const sessions = join(root, 'sessions', '2026', '07', '23');
+        await mkdir(sessions, { recursive: true });
+        await writeFile(join(sessions, `rollout-2026-07-23T10-00-00-${id}.jsonl`), [
+          { type: 'session_meta', payload: { id } },
+          { type: 'event_msg', payload: { type: 'agent_message', message: 'native budget needle' } },
+        ].map((record) => JSON.stringify(record)).join('\n') + '\n');
+      }
+      appServerProbe.threads = [];
+      appServerProbe.onCreate = () => { throw new Error('Native provider is unavailable'); };
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: root } });
+      const request = { source: { kind: 'codexHome' as const, home: 'user' as const, homePath: root },
+        searchTarget: 'content' as const, searchTerm: 'native budget needle', maxItems: 1,
+        maxSerializedBytes: 1024 * 1024, exec: {} as ExecService,
+        ripgrep: { run: async ({ paths }: { paths: readonly string[] }) => ({ stdout: `${paths.join('\0')}\0`, stderr: '', exitCode: 0 }) },
+        signal: new AbortController().signal, deadlineAtMs: Date.now() + 30_000 };
+      let cursor: string | undefined;
+      const hits: string[] = [];
+      let failure: Awaited<ReturnType<typeof contribution.listCandidates>> | undefined;
+      for (let page = 0; page < 3; page += 1) {
+        const result = await contribution.listCandidates({ ...request, ...(cursor ? { cursor } : {}) });
+        if (!result.ok) { failure = result; break; }
+        hits.push(...result.value.candidates.map(candidate => candidate.remoteSessionId));
+        expect(result.value.contentCoverage).toBe('partial');
+        expect(result.value.nextCursor).toBeTruthy();
+        expect(result.value.nextCursor).not.toBe(cursor);
+        cursor = result.value.nextCursor!;
+      }
+      expect(failure).toMatchObject({ ok: false, code: 'agent_unavailable', retryable: true });
+      expect(hits).toEqual(withRollout ? [id] : []);
+      appServerProbe.onCreate = null;
+      const recovered = await contribution.listCandidates({ ...request, ...(cursor ? { cursor } : {}) });
+      if (!recovered.ok) throw new Error(`${recovered.code}: ${recovered.message}`);
+      const candidates = recovered.value.candidates.map((candidate) => ExternalSessionCandidateV1Schema.parse({
+        ...candidate, agentId: 'codex', source: request.source,
+      }));
+      // Recovery resumes the unserved native stream, without replaying the
+      // rollout hit that survived its earlier failure.
+      expect(candidates).toEqual([]);
+      expect(recovered.value).toMatchObject({ nextCursor: null, contentCoverage: 'complete' });
+    } finally {
+      appServerProbe.onCreate = null;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it('finishes remaining rollout hits when already-completed native streams become unavailable', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-content-native-complete-'));
+    try {
+      const sessions = join(root, 'sessions', '2026', '07', '23');
+      await mkdir(sessions, { recursive: true });
+      const ids = ['eeeeeeee-1111-1111-1111-111111111111', 'ffffffff-1111-1111-1111-111111111111'];
+      await Promise.all(ids.map((id, index) => writeFile(join(sessions, `rollout-2026-07-23T10-00-0${index}-${id}.jsonl`), [
+        { type: 'session_meta', payload: { id } },
+        { type: 'event_msg', payload: { type: 'agent_message', message: 'native complete needle' } },
+      ].map((record) => JSON.stringify(record)).join('\n') + '\n')));
+      appServerProbe.threads = [];
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: root } });
+      const request = { source: { kind: 'codexHome' as const, home: 'user' as const, homePath: root },
+        searchTarget: 'content' as const, searchTerm: 'native complete needle', maxItems: 1,
+        maxSerializedBytes: 1024 * 1024, exec: {} as ExecService,
+        ripgrep: { run: async ({ paths }: { paths: readonly string[] }) => ({ stdout: `${paths.join('\0')}\0`, stderr: '', exitCode: 0 }) },
+        signal: new AbortController().signal, deadlineAtMs: Date.now() + 30_000 };
+      const first = await contribution.listCandidates(request);
+      if (!first.ok || !first.value.nextCursor) throw new Error('Expected the first rollout hit and continuation');
+      appServerProbe.onCreate = () => { throw new Error('Native provider is unavailable'); };
+      const second = await contribution.listCandidates({ ...request, cursor: first.value.nextCursor });
+      if (!second.ok) throw new Error(`${second.code}: ${second.message}`);
+      const candidates = [...first.value.candidates, ...second.value.candidates].map((candidate) => ExternalSessionCandidateV1Schema.parse({
+        ...candidate, agentId: 'codex', source: request.source,
+      }));
+      expect(candidates.map((candidate) => candidate.remoteSessionId)).toEqual([...ids].reverse());
+      expect(second.value).toMatchObject({ nextCursor: null, contentCoverage: 'complete' });
+    } finally {
+      appServerProbe.onCreate = null;
       await rm(root, { recursive: true, force: true });
     }
   });
@@ -346,6 +646,41 @@ describe('Codex candidate conversation search', () => {
         env: {}, exec: {} as ExecService, searchTarget: 'content', searchTerm: 'İstanbul', ripgrep, limit: 10 });
       expect(page.candidates[0]?.match).toMatchObject({ snippet: 'İstanbul', messageIndex: 0 });
       expect(page.contentCoverage).toBe('complete');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+  it.each(['append', 'rewrite', 'replace'] as const)('keeps a captured native transcript searchable across %s with truthful coverage', async (change) => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-content-changing-native-'));
+    try {
+      const sessions = join(root, 'sessions', '2026', '07', '23');
+      await mkdir(sessions, { recursive: true });
+      const id = 'abababab-1111-1111-1111-111111111111';
+      const file = join(sessions, `rollout-2026-07-23T10-00-00-${id}.jsonl`);
+      const text = [
+        { type: 'session_meta', payload: { id } },
+        { type: 'event_msg', payload: { type: 'agent_message', message: 'harbor needle in the captured history' } },
+      ].map(record => JSON.stringify(record)).join('\n') + '\n';
+      await writeFile(file, text);
+      appServerProbe.threads = [];
+      let changed = false;
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: root } });
+      const page = await contribution.listCandidates({
+        source: { kind: 'codexHome', home: 'user', homePath: root },
+        searchTarget: 'content', searchTerm: 'harbor needle', maxItems: 10,
+        signal: new AbortController().signal, exec: {} as ExecService,
+        ripgrep: { async run({ paths }) {
+          if (!changed) {
+            changed = true;
+            if (change === 'append') await appendFile(file, JSON.stringify({ type: 'event_msg', payload: { type: 'agent_message', message: 'a newer native reply' } }) + '\n');
+            else if (change === 'rewrite') await writeFile(file, text.replace('harbor needle', 'edited needle'));
+            else { await rename(file, `${file}.old`); await writeFile(file, text); }
+          }
+          return { stdout: paths.join('\0') + '\0', stderr: '', exitCode: 0 };
+        } },
+      });
+      if (change === 'append') {
+        expect(page).toMatchObject({ ok: true, value: { candidates: [{ remoteSessionId: id,
+          match: { snippet: 'harbor needle in the captured history', messageIndex: 0 } }], contentCoverage: 'partial' } });
+      } else expect(page).toMatchObject({ ok: false, code: 'source_invalid' });
     } finally { await rm(root, { recursive: true, force: true }); }
   });
   it('re-matches decoded rollout text, excludes tool metadata, and identifies native-only gaps', async () => {

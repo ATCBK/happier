@@ -229,9 +229,10 @@ const {
     };
 });
 
-vi.mock('@/configuration', () => ({
-    configuration: configurationMock,
-}));
+vi.mock('@/configuration', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/configuration')>();
+    return { ...actual, configuration: { ...actual.configuration, ...configurationMock } };
+});
 
 vi.mock('@/ui/logger', () => ({
     logger: {
@@ -268,7 +269,6 @@ vi.mock('./rpc/RpcHandlerManager', () => ({
 vi.mock('./changes', () => ({ fetchChanges: vi.fn() }));
 vi.mock('@/persistence', () => ({ readAccountChangesCursor: vi.fn(async () => 0), writeAccountChangesCursor: vi.fn(async () => {}) }));
 vi.mock('./client/loopbackUrl', () => ({ resolveLoopbackHttpUrl: (value: string) => value }));
-vi.mock('@/utils/time', () => ({ backoff: async <T>(fn: () => Promise<T>) => await fn() }));
 vi.mock('@/api/connection/createLoopbackReadinessProbe', () => ({
     createLoopbackReadinessProbe: createLoopbackReadinessProbeMock,
 }));

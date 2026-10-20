@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { UsageRecapExportResultSchema, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { standardCleanup } from '@/dev/testkit';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -20,9 +21,10 @@ const accounting: UsageAnalyticsQueryResponse = { v: 1, totals: { eventCount: 1,
   breakdowns: { model: [{ key: 'private-id', label: 'Private Model', eventCount: 1,
     tokens: { input: 10, output: 2, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 12 }, cost: { reportedUsd: 99, estimatedUsd: 0, currency: 'USD' } }] } };
 async function context(denied = false, route?: Parameters<typeof serveAccountHomes>[0]['route']) {
+  const sessionBatch = createSessionReadBatchHttpBoundary(async request => (await route?.(request)) ?? (request.path === '/v2/usage/query'
+    ? denied ? new Response('denied', { status: 403 }) : Response.json(accounting) : undefined));
   home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://recap-export.test', accountId: 'account-a' }],
-    route: request => route?.(request) ?? (request.path === '/v2/usage/query'
-      ? denied ? new Response('denied', { status: 403 }) : Response.json(accounting) : undefined) });
+    route: sessionBatch.handle });
   const focused = home.homes.a!;
   publishAppliedActiveServerSnapshot({ serverId: focused.id, serverUrl: focused.serverUrl, generation: 0 });
   return { surface: 'ui' as const, actionCaller: { kind: 'host' as const }, serverId: focused.id, expectedAccountId: 'account-a' };

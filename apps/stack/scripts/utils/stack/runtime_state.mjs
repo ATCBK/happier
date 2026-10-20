@@ -23,6 +23,14 @@ export async function readStackRuntimeStateFile(statePath) {
   return parsed && typeof parsed === 'object' ? parsed : null;
 }
 
+export async function readActiveStackRuntimeStateFile(statePath, { stackName }) {
+  const recorded = await readStackRuntimeStateFile(statePath);
+  const ownerPid = Number(recorded?.ownerPid);
+  return String(recorded?.stackName ?? '').trim() === stackName
+    && Number.isFinite(ownerPid) && ownerPid > 1 && isPidAlive(ownerPid)
+    ? recorded : null;
+}
+
 const STACK_SERVER_LIFECYCLE_PHASES = new Set([
   'idle',
   'planned',

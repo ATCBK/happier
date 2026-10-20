@@ -85,16 +85,20 @@ describe('visible session-list retained attention through real state', () => {
         previousState = storage.getState();
         await loadSyncSingletonForTests();
         serverId = await home.addHome({ name: 'Retained attention Home', serverUrl: 'https://retained-attention.test', accountId: 'u1' });
-        const http = createHomeHubArtifactHttpBoundary('u1');
-        account = await restoreServerAccountForTest({ serverUrl: 'https://retained-attention.test', accountId: 'u1', request: http.request });
-        expect(account.home.id).toBe(serverId);
-        await storage.getState().activateSettingsScope({ serverId, accountId: 'u1' });
-        storage.getState().applySettingsLocal({
+        const settings = {
             sessionListOrderingModeV1: 'custom', sessionListAttentionPromotionModeV1: 'global',
             sessionListAttentionStandingDefaultV1: false, sessionListWorkingPlacementModeV1: 'off',
             sessionListSectionModeV1: 'single', sessionListActiveGroupingV1: 'date',
             sessionListInactiveGroupingV1: 'date', hideInactiveSessions: false, sessionFolderViewModeV1: 'off',
-        });
+        } as const;
+        const http = createHomeHubArtifactHttpBoundary('u1');
+        account = await restoreServerAccountForTest({ serverUrl: 'https://retained-attention.test', accountId: 'u1', request: async (input, init) => {
+            if (new URL(String(input)).pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: settings }, version: 1 });
+            return http.request(input, init);
+        } });
+        expect(account.home.id).toBe(serverId);
+        await storage.getState().activateSettingsScope({ serverId, accountId: 'u1' });
+        storage.getState().applySettingsLocal(settings);
         storage.getState().applySessionOrganizationSnapshot(serverId, SessionOrganizationSnapshotSchema.parse({
             schemaVersion: 1, version: 1, pins: [], folders: [], folderAssignments: [], tags: [],
             tagAssignments: [], orderEntries: [], labels: [],

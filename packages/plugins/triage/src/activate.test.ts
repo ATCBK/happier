@@ -89,7 +89,7 @@ describe('Triage activation', () => {
       expect(disabled.status).toBe('applied');
       const after = await read();
       expect(after.actions.find(action => action.actionId === 'explain-pr')?.enabled).toBe(false);
-      const ui = await createDirectTriageActionsTransport(kv.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).read();
+      const ui = await createDirectTriageActionsTransport(kv.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1), { admitAction: async () => true }).read();
       expect(ui).toEqual(after);
       expect(planTriageOfferedActionsV1(readTriageActionsProjectionV1(ui).value.actions, 'pullRequest')
         .some(action => action.actionId === 'explain-pr')).toBe(false);
@@ -110,7 +110,7 @@ describe('Triage activation', () => {
       expect(kv.read(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).toBeUndefined();
       const absent = await read();
       expect(absent).toMatchObject({ availability: 'absent', actions: initial.actions, revision: reset.revision });
-      expect(await createDirectTriageActionsTransport(kv.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).read()).toEqual(absent);
+      expect(await createDirectTriageActionsTransport(kv.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1), { admitAction: async () => true }).read()).toEqual(absent);
     });
   });
 
@@ -208,7 +208,7 @@ describe('Triage activation', () => {
         { surface: 'agent', sessionId: 'triage-audit-session' }));
       expect(result.configuredSources).toEqual([{
         source: configured.instance.source, sourceInstanceId: configured.instance.sourceInstanceId,
-        configurationRevision: 1, available: false,
+        configurationRevision: 1, available: false, displayLabel: configured.locator?.displayLabel,
       }]);
       expect(result.window.rows).toEqual([]);
       expect(result.window.coverage).toBe('partial');
@@ -243,7 +243,7 @@ describe('Triage activation', () => {
       expect(pinned.pins[0]).not.toHaveProperty('markTag');
 
       await expect(plugin.invokeAction(TRIAGE_SET_ENTRY_PINNED_ACTION_LOCAL_ID_V1,
-        { v: 1, pinned: false, entryRef, displayAtMark }, options)).rejects.toMatchObject({ code: 'plugin_action_input_invalid' });
+        { v: 1, pinned: false, entryRef, displayAtMark }, options)).rejects.toMatchObject({ code: 'plugin_action_input_schema_invalid' });
       expect(TriageListPinnedEntriesResultV1Schema.parse(await plugin.invokeAction(TRIAGE_LIST_PINNED_ENTRIES_ACTION_LOCAL_ID_V1,
         { v: 1, limit: 1 }, options)).pins).toEqual(pinned.pins);
       expect(TriageSetEntryPinnedResultV1Schema.parse(await plugin.invokeAction(TRIAGE_SET_ENTRY_PINNED_ACTION_LOCAL_ID_V1,

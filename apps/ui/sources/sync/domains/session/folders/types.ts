@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import {
     SessionFolderV1Schema,
     SessionFolderWorkspaceRefV1Schema,
@@ -70,12 +70,12 @@ export function selectAvailableSessionFolders(
 export const SessionFolderViewModeV1Schema = z.enum(['off', 'tree']);
 export type SessionFolderViewModeV1 = z.infer<typeof SessionFolderViewModeV1Schema>;
 
-export const SessionListFocusedFolderV1Schema = z.object({
-    serverId: z.string().min(1),
+export const SessionListFocusedFolderV1Schema = z.catch(z.nullable(z.object({
+    serverId: z.string().check(z.minLength(1)),
     workspace: SessionFolderWorkspaceRefV1StoredSchema,
-    renderWorkspaceKey: z.string().min(1).optional(),
-    folderId: z.string().min(1),
-}).nullable().catch(null);
+    renderWorkspaceKey: z.optional(z.string().check(z.minLength(1))),
+    folderId: z.string().check(z.minLength(1)),
+})), null);
 
 export type SessionListFocusedFolderV1 = z.infer<typeof SessionListFocusedFolderV1Schema>;
 

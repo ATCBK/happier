@@ -23,7 +23,7 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> | null {
  * never raise the selected member's capabilities by being considered here.
  */
 export function readSelectedPluginUiResourceCapability(
-    selectedSurface: PluginUiPhysicalSurfacePlacementProjection | null | undefined,
+    selectedSurface: (Pick<PluginUiPhysicalSurfacePlacementProjection, 'renderer'> & Readonly<{ runtime?: unknown }>) | null | undefined,
 ): PluginUiResourceBindingCapabilityV1 {
     const runtime = asRecord(selectedSurface?.runtime);
     const parsed = PluginUiResourceBindingCapabilityV1Schema.safeParse(

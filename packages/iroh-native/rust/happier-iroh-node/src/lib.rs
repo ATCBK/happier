@@ -14,10 +14,10 @@
 //! typed export per C ABI operation). Request/response JSON validation and
 //! typing live in the TypeScript module (`src/nodeNative.ts`).
 //!
-//! Operations run on the libuv worker pool via `napi::Task` because the C ABI
-//! is synchronous by contract (it enters the shared tokio runtime
-//! internally); the JS thread is never blocked, and the addon adds no second
-//! runtime.
+//! The synchronous C ABI runs on the existing native runtime's blocking pool.
+//! Pending network operations must not occupy libuv's filesystem/DNS workers:
+//! those workers also serve daemon logging, heartbeat and request admission.
+//! Deferred promises return results on the JS thread without a second runtime.
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
@@ -42,70 +42,81 @@ use happier_iroh_native::{
     happier_iroh_native_test_force_relay_only_json, happier_iroh_native_test_observed_path,
     happier_iroh_native_test_relay_url, happier_iroh_native_test_restore_automatic_json,
 };
-use napi::bindgen_prelude::{AsyncTask, Promise};
+use napi::bindgen_prelude::{Promise, PromiseRaw};
 use napi::threadsafe_function::ThreadsafeFunction;
-use napi::{Env, Error, Result, Status, Task};
+use napi::{Env, Error, JsValue, Result, Status};
 use napi_derive::napi;
-
-/// One synchronous C ABI call executed on the libuv worker pool. The C ABI
-/// owns the process tokio runtime internally; this task adds none.
-#[doc(hidden)]
-pub struct JsonOpTask {
-    operation: extern "C" fn(*const c_char) -> *mut c_char,
-    request: CString,
-}
 
 type HandshakeProviderFunction = ThreadsafeFunction<(), Promise<String>, (), Status, false>;
 
-#[doc(hidden)]
-pub struct StartMachineHttpTunnelTask {
+fn start_machine_http_tunnel_operation(
     request: String,
     handshake_provider: Option<std::sync::Arc<HandshakeProviderFunction>>,
+) -> Result<String> {
+    if let Some(callback) = &handshake_provider {
+        let callback = std::sync::Arc::clone(callback);
+        let provider: MachineHandshakeProvider = std::sync::Arc::new(move || {
+            let callback = std::sync::Arc::clone(&callback);
+            Box::pin(async move {
+                let promise = callback
+                    .call_async_catch(())
+                    .await
+                    .map_err(|_| IrohError::Cancelled)?;
+                promise.await.map_err(|_| IrohError::Cancelled)
+            })
+        });
+        return Ok(start_machine_http_tunnel_with_handshake_provider_json(
+            &request,
+            provider,
+        )
+        .to_string());
+    }
+    let request = CString::new(request)
+        .map_err(|_| Error::from_reason("Iroh lifecycle request must not contain NUL bytes"))?;
+    invoke_json_op(happier_iroh_native_start_machine_http_tunnel_json, &request)
 }
 
-impl Task for StartMachineHttpTunnelTask {
-    type Output = String;
-    type JsValue = String;
+fn run_lifecycle_operation(
+    env: &Env,
+    operation: impl FnOnce() -> Result<String> + Send + 'static,
+) -> Result<PromiseRaw<'_, String>> {
+    let (deferred, promise) = env.create_deferred::<String, _>()?;
+    happier_iroh_native::spawn_lifecycle_operation(move || match operation() {
+        Ok(response) => deferred.resolve(move |_| Ok(response)),
+        Err(error) => deferred.reject(error),
+    });
+    Ok(PromiseRaw::new(env.raw(), promise.raw()))
+}
 
-    fn compute(&mut self) -> Result<Self::Output> {
-        if let Some(callback) = &self.handshake_provider {
-            let callback = std::sync::Arc::clone(callback);
-            let provider: MachineHandshakeProvider = std::sync::Arc::new(move || {
-                let callback = std::sync::Arc::clone(&callback);
-                Box::pin(async move {
-                    let promise = callback
-                        .call_async_catch(())
-                        .await
-                        .map_err(|_| IrohError::Cancelled)?;
-                    promise.await.map_err(|_| IrohError::Cancelled)
-                })
-            });
-            return Ok(start_machine_http_tunnel_with_handshake_provider_json(
-                &self.request,
-                provider,
-            )
-            .to_string());
+/// Release glibc-retained free pages without blocking the JS thread. Other
+/// allocators/platforms have no corresponding operation here.
+#[napi]
+pub fn trim_process_allocator() -> napi::bindgen_prelude::AsyncTask<TrimProcessAllocator> {
+    napi::bindgen_prelude::AsyncTask::new(TrimProcessAllocator)
+}
+
+// Unlike long network lifecycle waits, this short allocator operation uses
+// NAPI's existing worker pool. Standard-only daemons must not initialize the
+// CPU-sized Iroh runtime just to release allocator residency.
+pub struct TrimProcessAllocator;
+
+impl napi::Task for TrimProcessAllocator {
+    type Output = bool;
+    type JsValue = bool;
+
+    fn compute(&mut self) -> Result<bool> {
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        {
+            // SAFETY: glibc documents malloc_trim as MT-Safe. Zero retains only
+            // the allocator's minimum trailing space; no caller-owned data is freed.
+            Ok(unsafe { libc::malloc_trim(0) } != 0)
         }
-        let request = CString::new(self.request.as_str())
-            .map_err(|_| Error::from_reason("Iroh lifecycle request must not contain NUL bytes"))?;
-        invoke_json_op(happier_iroh_native_start_machine_http_tunnel_json, &request)
+        #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+        Ok(false)
     }
 
-    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
-        Ok(output)
-    }
-}
-
-impl Task for JsonOpTask {
-    type Output = String;
-    type JsValue = String;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        invoke_json_op(self.operation, &self.request)
-    }
-
-    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
-        Ok(output)
+    fn resolve(&mut self, _env: Env, released: bool) -> Result<bool> {
+        Ok(released)
     }
 }
 
@@ -129,12 +140,13 @@ fn invoke_json_op(
 }
 
 fn json_op(
+    env: &Env,
     operation: extern "C" fn(*const c_char) -> *mut c_char,
     request: String,
-) -> Result<AsyncTask<JsonOpTask>> {
+) -> Result<PromiseRaw<'_, String>> {
     let request = CString::new(request)
         .map_err(|_| Error::from_reason("Iroh lifecycle request must not contain NUL bytes"))?;
-    Ok(AsyncTask::new(JsonOpTask { operation, request }))
+    run_lifecycle_operation(env, move || invoke_json_op(operation, &request))
 }
 
 /// Availability/status metadata for the loaded addon. Synchronous by contract
@@ -189,8 +201,9 @@ pub fn get_availability() -> IrohNodeAvailability {
 // cannot reach the topology override or the local relay it runs.
 #[cfg(feature = "test-relay-fixture")]
 #[napi]
-pub fn force_direct_only() -> Result<AsyncTask<JsonOpTask>> {
+pub fn force_direct_only(env: &Env) -> Result<PromiseRaw<'_, String>> {
     json_op(
+        env,
         happier_iroh_native_test_force_direct_only_json,
         "{}".to_owned(),
     )
@@ -198,8 +211,9 @@ pub fn force_direct_only() -> Result<AsyncTask<JsonOpTask>> {
 
 #[cfg(feature = "test-relay-fixture")]
 #[napi]
-pub fn force_relay_only(relay_url: Option<String>) -> Result<AsyncTask<JsonOpTask>> {
+pub fn force_relay_only(env: &Env, relay_url: Option<String>) -> Result<PromiseRaw<'_, String>> {
     json_op(
+        env,
         happier_iroh_native_test_force_relay_only_json,
         serde_json::json!({ "relayUrl": relay_url }).to_string(),
     )
@@ -207,8 +221,9 @@ pub fn force_relay_only(relay_url: Option<String>) -> Result<AsyncTask<JsonOpTas
 
 #[cfg(feature = "test-relay-fixture")]
 #[napi]
-pub fn restore_automatic() -> Result<AsyncTask<JsonOpTask>> {
+pub fn restore_automatic(env: &Env) -> Result<PromiseRaw<'_, String>> {
     json_op(
+        env,
         happier_iroh_native_test_restore_automatic_json,
         "{}".to_owned(),
     )
@@ -233,98 +248,98 @@ pub fn get_test_relay_url() -> Option<String> {
 /// Create or reuse the shared process endpoint. Wraps
 /// `happier_iroh_native_create_endpoint_json`.
 #[napi]
-pub fn create_endpoint(request: String) -> Result<AsyncTask<JsonOpTask>> {
-    json_op(happier_iroh_native_create_endpoint_json, request)
+pub fn create_endpoint(env: &Env, request: String) -> Result<PromiseRaw<'_, String>> {
+    json_op(env, happier_iroh_native_create_endpoint_json, request)
 }
 
 /// Start (or reuse) the fixed-loopback Home acceptor on an endpoint. Wraps
 /// `happier_iroh_native_start_home_acceptor_json`.
 #[napi]
-pub fn start_home_acceptor(request: String) -> Result<AsyncTask<JsonOpTask>> {
-    json_op(happier_iroh_native_start_home_acceptor_json, request)
+pub fn start_home_acceptor(env: &Env, request: String) -> Result<PromiseRaw<'_, String>> {
+    json_op(env, happier_iroh_native_start_home_acceptor_json, request)
 }
 
 /// Stop the endpoint's Home acceptor. Wraps
 /// `happier_iroh_native_stop_home_acceptor_json`.
 #[napi]
-pub fn stop_home_acceptor(request: String) -> Result<AsyncTask<JsonOpTask>> {
-    json_op(happier_iroh_native_stop_home_acceptor_json, request)
+pub fn stop_home_acceptor(env: &Env, request: String) -> Result<PromiseRaw<'_, String>> {
+    json_op(env, happier_iroh_native_stop_home_acceptor_json, request)
 }
 
 /// Ensure one Home tunnel lease on an endpoint. Wraps
 /// `happier_iroh_native_ensure_home_tunnel_json`.
 #[napi]
-pub fn ensure_home_tunnel(request: String) -> Result<AsyncTask<JsonOpTask>> {
-    json_op(happier_iroh_native_ensure_home_tunnel_json, request)
+pub fn ensure_home_tunnel(env: &Env, request: String) -> Result<PromiseRaw<'_, String>> {
+    json_op(env, happier_iroh_native_ensure_home_tunnel_json, request)
 }
 
 /// Release one tunnel lease; sibling leases and the shared endpoint stay up.
 /// Wraps `happier_iroh_native_release_home_tunnel_json`.
 #[napi]
-pub fn release_home_tunnel(request: String) -> Result<AsyncTask<JsonOpTask>> {
-    json_op(happier_iroh_native_release_home_tunnel_json, request)
+pub fn release_home_tunnel(env: &Env, request: String) -> Result<PromiseRaw<'_, String>> {
+    json_op(env, happier_iroh_native_release_home_tunnel_json, request)
 }
 
 /// Shut down an endpoint together with its acceptor and bound leases. Wraps
 /// `happier_iroh_native_shutdown_endpoint_json`.
 #[napi]
-pub fn shutdown_endpoint(request: String) -> Result<AsyncTask<JsonOpTask>> {
+pub fn shutdown_endpoint(env: &Env, request: String) -> Result<PromiseRaw<'_, String>> {
     // Close the canonical native owner's admission on the JavaScript call
-    // thread before libuv queues the blocking cleanup task. Otherwise a full
-    // worker pool of pending starts can prevent shutdown from ever reaching
-    // the cancellation boundary that settles those starts.
+    // thread before queuing cleanup, so every already-admitted start observes
+    // cancellation before shutdown joins its custody.
     let _ = begin_endpoint_shutdown_json(&request);
-    json_op(happier_iroh_native_shutdown_endpoint_json, request)
+    json_op(env, happier_iroh_native_shutdown_endpoint_json, request)
 }
 
 /// Endpoint status/metadata. Wraps
 /// `happier_iroh_native_get_endpoint_status_json`.
 #[napi]
-pub fn get_endpoint_status(request: String) -> Result<AsyncTask<JsonOpTask>> {
-    json_op(happier_iroh_native_get_endpoint_status_json, request)
+pub fn get_endpoint_status(env: &Env, request: String) -> Result<PromiseRaw<'_, String>> {
+    json_op(env, happier_iroh_native_get_endpoint_status_json, request)
 }
 
 /// Tunnel lease status/metadata. Wraps
 /// `happier_iroh_native_get_tunnel_status_json`.
 #[napi]
-pub fn get_tunnel_status(request: String) -> Result<AsyncTask<JsonOpTask>> {
-    json_op(happier_iroh_native_get_tunnel_status_json, request)
+pub fn get_tunnel_status(env: &Env, request: String) -> Result<PromiseRaw<'_, String>> {
+    json_op(env, happier_iroh_native_get_tunnel_status_json, request)
 }
 
 #[napi]
-pub fn start_machine_acceptor(request: String) -> Result<AsyncTask<JsonOpTask>> {
-    json_op(happier_iroh_native_start_machine_acceptor_json, request)
+pub fn start_machine_acceptor(env: &Env, request: String) -> Result<PromiseRaw<'_, String>> {
+    json_op(env, happier_iroh_native_start_machine_acceptor_json, request)
 }
 #[napi]
-pub fn stop_machine_acceptor(request: String) -> Result<AsyncTask<JsonOpTask>> {
-    json_op(happier_iroh_native_stop_machine_acceptor_json, request)
+pub fn stop_machine_acceptor(env: &Env, request: String) -> Result<PromiseRaw<'_, String>> {
+    json_op(env, happier_iroh_native_stop_machine_acceptor_json, request)
 }
 #[napi]
-pub fn get_machine_acceptor_status(request: String) -> Result<AsyncTask<JsonOpTask>> {
+pub fn get_machine_acceptor_status(env: &Env, request: String) -> Result<PromiseRaw<'_, String>> {
     json_op(
+        env,
         happier_iroh_native_get_machine_acceptor_status_json,
         request,
     )
 }
 #[napi]
-pub fn start_machine_tunnel(request: String) -> Result<AsyncTask<JsonOpTask>> {
-    json_op(happier_iroh_native_start_machine_tunnel_json, request)
+pub fn start_machine_tunnel(env: &Env, request: String) -> Result<PromiseRaw<'_, String>> {
+    json_op(env, happier_iroh_native_start_machine_tunnel_json, request)
 }
 #[napi]
 pub fn start_machine_http_tunnel(
+    env: &Env,
     request: String,
     handshake_provider: Option<std::sync::Arc<HandshakeProviderFunction>>,
-) -> Result<AsyncTask<StartMachineHttpTunnelTask>> {
-    Ok(AsyncTask::new(StartMachineHttpTunnelTask {
-        request,
-        handshake_provider,
-    }))
+) -> Result<PromiseRaw<'_, String>> {
+    run_lifecycle_operation(env, move || {
+        start_machine_http_tunnel_operation(request, handshake_provider)
+    })
 }
 #[napi]
-pub fn stop_machine_tunnel(request: String) -> Result<AsyncTask<JsonOpTask>> {
-    json_op(happier_iroh_native_stop_machine_tunnel_json, request)
+pub fn stop_machine_tunnel(env: &Env, request: String) -> Result<PromiseRaw<'_, String>> {
+    json_op(env, happier_iroh_native_stop_machine_tunnel_json, request)
 }
 #[napi]
-pub fn get_machine_tunnel_status(request: String) -> Result<AsyncTask<JsonOpTask>> {
-    json_op(happier_iroh_native_get_machine_tunnel_status_json, request)
+pub fn get_machine_tunnel_status(env: &Env, request: String) -> Result<PromiseRaw<'_, String>> {
+    json_op(env, happier_iroh_native_get_machine_tunnel_status_json, request)
 }

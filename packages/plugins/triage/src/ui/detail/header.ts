@@ -167,7 +167,9 @@ export function projectTriageDetailHeaderV1(
     lifecyclePresentation: present?.snapshot.state.presentation ?? null,
     connectionLabel: input.connectionLabel,
     sourcePluginId: row.entryRef.source.pluginId,
-    addressLabel: present?.locator.displayPath ?? present?.snapshot.scopeLabel ?? null,
+    // A source may address an entry by its own title (a personal task): saying it twice is not an address.
+    addressLabel: (present?.locator.displayPath !== undefined && present.locator.displayPath !== present.snapshot.title
+      ? present.locator.displayPath : undefined) ?? present?.snapshot.scopeLabel ?? null,
     authorLabel: display.authorLabel,
     markFacts: Object.freeze({
       lifecyclePresentation: display.lifecyclePresentation,

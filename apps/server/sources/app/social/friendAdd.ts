@@ -55,7 +55,7 @@ export async function friendAdd(ctx: Context, uid: string): Promise<UserProfile 
     // unconditional tuple writes. A unique relationship key is not a guard
     // for reciprocal request/accept/remove decisions.
     return await inTx(async (tx) => {
-
+        await acquireAccountChangePublicationLocksInTx(tx, [ctx.uid, uid], { includeSingleAccount: true });
         // Read current user objects
         const currentUser = await tx.account.findUnique({
             where: { id: ctx.uid },
@@ -111,7 +111,6 @@ export async function friendAdd(ctx: Context, uid: string): Promise<UserProfile 
             await relationshipSet(tx, currentUser.id, targetUser.id, RelationshipStatus.friend);
 
             // Send friendship established notifications to both users
-            await acquireAccountChangePublicationLocksInTx(tx, [currentUser.id, targetUser.id]);
             await sendFriendshipEstablishedNotification(tx, currentUser.id, targetUser.id);
 
             await markAccountsChanged(tx, { accountIds: [currentUser.id, targetUser.id], kind: 'friends', entityId: 'self' });
@@ -133,7 +132,6 @@ export async function friendAdd(ctx: Context, uid: string): Promise<UserProfile 
             }
 
             // Send friend request notification to the receiver
-            await acquireAccountChangePublicationLocksInTx(tx, [currentUser.id, targetUser.id]);
             await sendFriendRequestNotification(tx, targetUser.id, currentUser.id);
 
             await markAccountsChanged(tx, { accountIds: [currentUser.id, targetUser.id], kind: 'friends', entityId: 'self' });

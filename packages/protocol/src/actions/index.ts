@@ -1,10 +1,12 @@
 export * from './invocationAuthority.js';
+export * from './actionRequestAttributionV1.js';
 export * from './specs/machineResources.js';
 export * from './specs/storage.js';
 export * from './clientDispatchV1.js';
 export type { AccountHomeContinuationInputV1, AccountHomeContinuationOperationV1 } from './accountHomeContinuationV1.js';
 export { isSessionStateFieldActionId } from './sessionStateFieldActions.js';
 export * from './anchoredListOrderV1.js';
+export * from './internalTaskActions.js';
 export { ComposerTransactionApplyInputV1Schema, ComposerAttachmentsPickInputV1Schema, ComposerAttachmentsPickResultV1Schema,
   RepositoryUploadPickInputV1Schema, RepositoryUploadPickResultV1Schema,
   type ComposerTransactionApplyInputV1, type ComposerAttachmentsPickInputV1,
@@ -19,7 +21,6 @@ export { SessionOrganizationMoveInputSchema, SessionOrganizationMoveOutputSchema
   type SessionOrganizationMoveInput, type SessionOrganizationMoveOutput, type SessionOrganizationPinSetInput } from './sessionOrganizationMoveAction.js';
 export { UiFindInputSchema } from './findActionSpecs.js';
 export { WORKSPACE_ACTION_IDS, WORKSPACE_ACTION_INPUT_SCHEMAS, WORKSPACE_ACTION_OUTPUT_SCHEMAS, isWorkspaceActionId, type WorkspaceActionId, type WorkspaceTabsListOutput, type WorkspaceClosedTabsListOutput } from './workspaceActionFamily.js';
-export { SESSION_CANVAS_ACTION_IDS, SESSION_CANVAS_ACTION_INPUT_SCHEMAS, SESSION_CANVAS_ACTION_OUTPUT_SCHEMAS, isSessionCanvasActionId, type SessionCanvasActionId, type SessionCanvasActionOutcome } from './sessionCanvasActionFamily.js';
 export * from './scopeActionFamily.js';
 export * from './diagnosticsActionFamily.js';
 export * from './specs/homeHub.js';
@@ -139,11 +140,11 @@ export {
 } from './sessionAccessActionFamily.js';
 export { getActionRequiredServerFeatureId } from './actionRequiredServerFeature.js';
 export {
-  bindSessionDiscussionActionHttpRequestV1,
-  isSessionDiscussionActionIdV1,
-  sessionDiscussionActionInputSchemaV1,
-  sessionDiscussionActionOutputSchemaV1,
-} from './sessionDiscussionActionFamily.js';
+  bindDiscussionActionHttpRequestV1,
+  isDiscussionActionIdV1,
+  discussionActionInputSchemaV1,
+  discussionActionOutputSchemaV1,
+} from './discussionActionFamily.js';
 export {
   HOME_DOMAIN_ACTION_IDS_V1,
   HomeDomainActionIdV1Schema,
@@ -438,6 +439,7 @@ export {
 
 export { resolveActionSessionListAccessFailure } from './executor/sessionListAccess.js';
 export {
+  classifyApprovalExecutionOriginCurrentness,
   createActionExecutor,
   type ActionAutomationRunCaller,
   type ActionCaller,
@@ -587,13 +589,13 @@ export {
   type SessionListCliInput,
 } from './specs/sessionListCli.js';
 export {
-  SessionDiscussionCreateCliInputSchema,
-  SessionDiscussionPostCliInputSchema,
-  bindSessionDiscussionCreateCliInput,
-  bindSessionDiscussionPostCliInput,
-  type SessionDiscussionCreateCliInput,
-  type SessionDiscussionPostCliInput,
-} from './specs/sessionDiscussionCli.js';
+  DiscussionCreateCliInputSchema,
+  DiscussionPostCliInputSchema,
+  bindDiscussionCreateCliInput,
+  bindDiscussionPostCliInput,
+  type DiscussionCreateCliInput,
+  type DiscussionPostCliInput,
+} from './specs/discussionCli.js';
 export {
   defaultExecutionRunClass,
   defaultExecutionRunIoMode,
@@ -634,3 +636,5 @@ export { PendingReorderInputV1Schema, TodoReorderInputV1Schema, ListReorderOutpu
 export { MACHINE_TERMINAL_ACTION_IDS, MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS, MACHINE_TERMINAL_ACTION_OUTPUT_SCHEMAS, isMachineTerminalActionId } from './specs/machineTerminal.js';
 export type { MachineTerminalActionId, MachineTerminalActionInput } from './specs/machineTerminal.js';
 export * from './settings/automationSettingsDeclarationAction.js';
+export * from './actionPolicyActionFamily.js';
+export * from './actionAudiencePolicy.js';

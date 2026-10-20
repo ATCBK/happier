@@ -1,7 +1,120 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
+import { defineStoredReadProjection } from '../../json/storedReadSchema.js';
 
 import { isSessionPersonallyTrackedForViewerV1 } from '../personal/tracking.js';
+import { TurnIdSchema } from '../idsV1.js';
+import { SessionFollowFrontierV1Schema, type SessionFollowFrontierV1 } from './sessionFollowFrontierV1.js';
+import { FOLLOW_EVENT_KINDS_V1, FollowPolicyV1Schema, resolveFollowDeliveryV1, resolveLegacySessionFollowPolicyV1, type FollowEventV1, type FollowPolicyV1 } from './sessionFollowPolicyV1.js';
+import { normalizeSessionListFilterV1 } from '../listFilter/sessionListFilterV1.js';
+import type { SessionFollowRuleDefinitionV1 } from './sessionFollowRuleV1.js';
+import { FollowSourceRefV1Schema } from './sessionDeliveryMuteV1.js';
+
+/** A convenience intent, independent of the persistent Follow and Voice choices. */
+export const PersonalFollowOnceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('turn_finished'), sourceTurnId: TurnIdSchema }),
+  z.strictObject({ kind: z.literal('first_needs_you') }),
+]));
+export type PersonalFollowOnceV1 = z.infer<typeof PersonalFollowOnceV1Schema>;
+
+/** Original source identity only; the content and resolution stay at the source. */
+export const PersonalFollowOnceOccurrenceV1Schema = lazyZodSchema(() => z.strictObject({
+  event: z.enum(['ready', 'failed', 'cancelled', 'permission_required', 'user_action_required', 'message']),
+  turnId: z.optional(TurnIdSchema),
+  requestId: z.optional(z.string().check(z.minLength(1))),
+  agentStateVersion: z.number().check(z.int(), z.minimum(0)),
+  transcriptSeq: z.optional(z.number().check(z.int(), z.minimum(0))),
+}));
+export type PersonalFollowOnceOccurrenceV1 = z.infer<typeof PersonalFollowOnceOccurrenceV1Schema>;
+
+export const PersistedPersonalFollowOnceV1Schema = lazyZodSchema(() => z.discriminatedUnion('state', [
+  z.strictObject({ v: z.literal(1), state: z.literal('armed'), once: PersonalFollowOnceV1Schema, baseline: SessionFollowFrontierV1Schema }),
+  z.strictObject({ v: z.literal(1), state: z.literal('fulfilled'), once: PersonalFollowOnceV1Schema, baseline: SessionFollowFrontierV1Schema,
+    occurrence: PersonalFollowOnceOccurrenceV1Schema }),
+]));
+export type PersistedPersonalFollowOnceV1 = z.infer<typeof PersistedPersonalFollowOnceV1Schema>;
+
+// These are exact intent/source identities, not presentation fields that a
+// retained document reader may discard while recovering a supported shape.
+defineStoredReadProjection(PersonalFollowOnceV1Schema, () => PersonalFollowOnceV1Schema);
+defineStoredReadProjection(PersonalFollowOnceOccurrenceV1Schema, () => PersonalFollowOnceOccurrenceV1Schema);
+defineStoredReadProjection(PersistedPersonalFollowOnceV1Schema, () => PersistedPersonalFollowOnceV1Schema);
+
+export function parsePersistedPersonalFollowOnceV1(value: string | null | undefined): PersistedPersonalFollowOnceV1 | null {
+  if (!value) return null;
+  try { return PersistedPersonalFollowOnceV1Schema.safeParse(JSON.parse(value)).data ?? null; }
+  catch { return null; }
+}
+
+/** The shared stored-row boundary; malformed custody never creates interest. */
+export function projectPersonalFollowCustodyV1(row: Readonly<{ followPolicy?: string | null; notifyOnce?: string | null }>): Readonly<{
+  policy?: FollowPolicyV1; once?: PersonalFollowOnceV1 | null; onceAfterAgentStateVersion?: number; onceDelivery?: PersonalFollowOnceOccurrenceV1;
+}> {
+  let policy: FollowPolicyV1 | undefined;
+  if (row.followPolicy !== undefined && row.followPolicy !== null) {
+    policy = { preset: 'custom', events: {} };
+    try { policy = FollowPolicyV1Schema.safeParse(JSON.parse(row.followPolicy)).data ?? policy; } catch { /* Invalid stored policy fails closed. */ }
+  }
+  const once = parsePersistedPersonalFollowOnceV1(row.notifyOnce);
+  return {
+    ...(policy ? { policy } : {}),
+    ...(row.notifyOnce === undefined ? {} : { once: once?.state === 'armed' ? once.once : null }),
+    ...(once?.state === 'armed' ? { onceAfterAgentStateVersion: once.baseline.agentStateVersion } : {}),
+    ...(once?.state === 'fulfilled' ? { onceDelivery: once.occurrence } : {}),
+  };
+}
+
+/**
+ * Effective personal Voice interest. An explicit policy owns every event,
+ * including Custom-off; the boolean is only the policy-absent legacy ingress.
+ * Selection is independent of readiness and private delivery progress.
+ */
+export function resolveAccountFollowVoiceSelectionV1(input: Readonly<{
+  policy?: FollowPolicyV1;
+  includeInVoice?: boolean;
+}>): Readonly<{ policy?: FollowPolicyV1 }> | null {
+  const policy = input.policy;
+  if (!policy) return input.includeInVoice === true ? {} : null;
+  const selected = FOLLOW_EVENT_KINDS_V1.some(kind => {
+    const events: FollowEventV1[] = kind === 'needs_you'
+      ? [{ kind, type: 'decision' }, { kind, type: 'approval' }, { kind, type: 'blocked' }] : [{ kind }];
+    return events.some(event => resolveFollowDeliveryV1({ policies: [policy], event }).person.voice);
+  });
+  return selected ? { policy } : null;
+}
+
+export function matchesPersonalFollowOnceOccurrenceV1(input: Readonly<{
+  once: PersonalFollowOnceV1;
+  baseline: Pick<SessionFollowFrontierV1, 'agentStateVersion'>;
+  occurrence: PersonalFollowOnceOccurrenceV1;
+}>): boolean {
+  const { once, occurrence, baseline } = input;
+  if (once.kind === 'turn_finished') {
+    return occurrence.turnId === once.sourceTurnId
+      && ['ready', 'failed', 'cancelled'].includes(occurrence.event);
+  }
+  return (occurrence.event === 'permission_required' || occurrence.event === 'user_action_required')
+    && Boolean(occurrence.requestId)
+    && occurrence.agentStateVersion > baseline.agentStateVersion;
+}
+
+/**
+ * Accepted one-shot attention is an exception for exactly this source reference,
+ * never ongoing tracking. A question needs its real request owner's live-id
+ * evidence; pending counts or a newer encrypted state version are insufficient.
+ */
+export function resolvePersonalFollowOnceAttentionV1(input: Readonly<{
+  delivery: PersonalFollowOnceOccurrenceV1 | null | undefined;
+  currentRequestIds?: readonly string[];
+}>): 'ready_after_read' | 'failed' | 'permission_required' | 'user_action_required' | null {
+  const delivery = input.delivery;
+  if (!delivery) return null;
+  if (delivery.event === 'ready' || delivery.event === 'cancelled') return delivery.turnId ? 'ready_after_read' : null;
+  if (delivery.event === 'failed') return delivery.turnId ? 'failed' : null;
+  if ((delivery.event === 'permission_required' || delivery.event === 'user_action_required')
+    && delivery.requestId && input.currentRequestIds?.includes(delivery.requestId)) return delivery.event;
+  return null;
+}
 
 /**
  * The one Follow notification vocabulary. It is closed on purpose: schemas,
@@ -24,10 +137,28 @@ export type SessionFollowNotificationLevel = z.infer<typeof SessionFollowNotific
 export const AccountSessionFollowV1Schema = lazyZodSchema(() => z.strictObject({
     sessionId: z.string().check(z.trim(), z.minLength(1)),
     following: z.boolean(),
+    persistent: z.optional(z.boolean()),
     notificationLevel: SessionFollowNotificationLevelSchema,
     includeInVoice: z.boolean(),
+    policy: z.optional(FollowPolicyV1Schema),
+    once: z.optional(z.nullable(PersonalFollowOnceV1Schema)),
+    onceAfterAgentStateVersion: z.optional(z.number().check(z.int(), z.minimum(0))),
+    onceDelivery: z.optional(PersonalFollowOnceOccurrenceV1Schema),
   }));
 export type AccountSessionFollowV1 = z.infer<typeof AccountSessionFollowV1Schema>;
+
+/** Private policy for an admitted source whose original is not a Session. */
+export const OtherAccountFollowV1Schema = lazyZodSchema(() => z.strictObject({
+  source: FollowSourceRefV1Schema,
+  following: z.boolean(),
+  persistent: z.boolean(),
+  policy: FollowPolicyV1Schema,
+}).check(z.refine(row => row.source.kind !== 'session' && row.source.kind !== 'rule')));
+export type OtherAccountFollowV1 = z.infer<typeof OtherAccountFollowV1Schema>;
+export const AccountFollowRelationV1Schema = lazyZodSchema(() => z.union([
+  AccountSessionFollowV1Schema, OtherAccountFollowV1Schema,
+]));
+export type AccountFollowRelationV1 = z.infer<typeof AccountFollowRelationV1Schema>;
 
 /**
  * The server-resolved Follow capability. Reading a Session and reading the
@@ -42,16 +173,27 @@ export type AccountSessionFollowCapabilitiesV1 = z.infer<
   typeof AccountSessionFollowCapabilitiesV1Schema
 >;
 
-/**
- * The four Account-level auto-follow defaults. They are a bounded operational
- * policy the Home must be able to apply while the recipient has no connected
- * device, not a mirror of the encrypted Account notification settings.
- */
+/** Operational event choices for future creations, never private rule definitions. */
+export const SessionFollowCreationPoliciesV1Schema = lazyZodSchema(() => z.strictObject({
+  managerPolicy: FollowPolicyV1Schema,
+  runReportPolicy: FollowPolicyV1Schema,
+  discussionReceivePolicy: FollowPolicyV1Schema,
+}));
+export type SessionFollowCreationPoliciesV1 = z.infer<typeof SessionFollowCreationPoliciesV1Schema>;
+export const DEFAULT_SESSION_FOLLOW_CREATION_POLICIES_V1: SessionFollowCreationPoliciesV1 = Object.freeze({
+  managerPolicy: { preset: 'important' }, runReportPolicy: { preset: 'important' }, discussionReceivePolicy: { preset: 'quiet' },
+} satisfies SessionFollowCreationPoliciesV1);
+export const SESSION_FOLLOW_CREATION_PREFERENCES_ACCOUNT_KEY_V1 = '@happier/account/session-follow-creation-preferences/v1' as const;
+
+/** Relationship defaults and prospective creation policy share the existing preferences Action. */
 export const SessionAutoFollowPreferencesV1Schema = lazyZodSchema(() => z.strictObject({
     assigned: z.boolean(),
     direct: z.boolean(),
     team: z.boolean(),
     group: z.boolean(),
+    managerPolicy: z.optional(FollowPolicyV1Schema),
+    runReportPolicy: z.optional(FollowPolicyV1Schema),
+    discussionReceivePolicy: z.optional(FollowPolicyV1Schema),
   }));
 export type SessionAutoFollowPreferencesV1 = z.infer<typeof SessionAutoFollowPreferencesV1Schema>;
 
@@ -64,7 +206,7 @@ export const DEFAULT_SESSION_AUTO_FOLLOW_PREFERENCES_V1: SessionAutoFollowPrefer
   });
 
 /**
- * The qualifying relationship transitions that may create an automatic Follow.
+ * The relationship facts used by the canonical default-rule normalizer.
  * They map one-to-one onto the four Account preferences above.
  */
 export const SESSION_AUTO_FOLLOW_TRIGGERS_V1 = Object.freeze([
@@ -74,6 +216,45 @@ export const SESSION_AUTO_FOLLOW_TRIGGERS_V1 = Object.freeze([
   'group',
 ] as const);
 export type SessionAutoFollowTriggerV1 = typeof SESSION_AUTO_FOLLOW_TRIGGERS_V1[number];
+
+/** Complete current relationships for this requester, never another Account's preferences. */
+export const SessionFollowDefaultRelationshipsV1Schema = lazyZodSchema(() => z.strictObject({
+  assigned: z.boolean(), direct: z.boolean(), team: z.boolean(), group: z.boolean(),
+}));
+export type SessionFollowDefaultRelationshipsV1 = z.infer<typeof SessionFollowDefaultRelationshipsV1Schema>;
+
+/** Reuses the access owner's complete applicable grants, not its bounded display explanations. */
+export function projectSessionFollowDefaultRelationshipsV1(input: Readonly<{
+  responsibleForMe: boolean; relationshipKinds: readonly ('direct' | 'team' | 'group')[];
+}>): SessionFollowDefaultRelationshipsV1 {
+  return { assigned: input.responsibleForMe, direct: input.relationshipKinds.includes('direct'),
+    team: input.relationshipKinds.includes('team'), group: input.relationshipKinds.includes('group') };
+}
+
+export type SessionFollowDefaultRuleV1 = Readonly<{
+  key: SessionAutoFollowTriggerV1; receiver: Readonly<{ kind: 'account' }>; definition: SessionFollowRuleDefinitionV1;
+}>;
+
+/** Built-in personal rules share the authored rule representation, without stored identities or enrollment. */
+export function normalizeSessionFollowDefaultRulesV1(input: Readonly<{
+  serverId: string; preferences: SessionAutoFollowPreferencesV1;
+  relationships: Partial<Readonly<SessionFollowDefaultRelationshipsV1>>;
+  hasPersistentFollow?: boolean;
+}>): Readonly<{ rules: readonly SessionFollowDefaultRuleV1[]; pendingKeys: readonly SessionAutoFollowTriggerV1[] }> {
+  const rules: SessionFollowDefaultRuleV1[] = [];
+  const pendingKeys: SessionAutoFollowTriggerV1[] = [];
+  if (input.hasPersistentFollow === true) return { rules, pendingKeys };
+  const filter = normalizeSessionListFilterV1({ homeServerIds: [input.serverId], show: 'sessions',
+    scope: 'all_accessible', startedBy: ['you', 'triggers', 'agents'] });
+  for (const key of SESSION_AUTO_FOLLOW_TRIGGERS_V1) {
+    if (!input.preferences[key]) continue;
+    if (input.relationships[key] === false) continue;
+    if (input.hasPersistentFollow === undefined || input.relationships[key] === undefined) { pendingKeys.push(key); continue; }
+    if (input.relationships[key]) rules.push({ key, receiver: { kind: 'account' },
+      definition: { v: 1, enabled: true, filter, policy: { preset: 'important' } } });
+  }
+  return { rules, pendingKeys };
+}
 
 /**
  * The narrow Follow adapter consumed by the viewer-relevance owner (09B's
@@ -89,12 +270,18 @@ export type SessionAutoFollowTriggerV1 = typeof SESSION_AUTO_FOLLOW_TRIGGERS_V1[
 export const SessionFollowFactsV1Schema = lazyZodSchema(() => z.strictObject({
     follows: z.boolean(),
     notificationLevel: z.nullable(SessionFollowNotificationLevelSchema),
+    /** Current requester-qualified complete relationships; older projections remain unavailable. */
+    defaultRelationships: z.optional(SessionFollowDefaultRelationshipsV1Schema),
     /**
      * Synchronized Account Follow authority for Voice eligibility. Optional on
      * read so cached/released viewer projections remain parseable; current Home
      * projections always supply it and absence fails closed.
      */
     includeInVoice: z.optional(z.boolean()),
+    policy: z.optional(FollowPolicyV1Schema),
+    once: z.optional(z.nullable(PersonalFollowOnceV1Schema)),
+    onceAfterAgentStateVersion: z.optional(z.number().check(z.int(), z.minimum(0))),
+    onceDelivery: z.optional(PersonalFollowOnceOccurrenceV1Schema),
   }));
 export type SessionFollowFactsV1 = z.infer<typeof SessionFollowFactsV1Schema>;
 
@@ -110,27 +297,45 @@ export const ABSENT_SESSION_FOLLOW_FACTS_V1: SessionFollowFactsV1 = Object.freez
  * reinterpreted as an active choice.
  */
 export function projectSessionFollowFactsV1(
-  row: Readonly<{ following: boolean; notificationLevel: unknown; includeInVoice?: boolean }> | null | undefined,
+  row: Readonly<{ following: boolean; notificationLevel: unknown; includeInVoice?: boolean;
+    followPolicy?: string | null; notifyOnce?: string | null; hasPersistentFollow?: boolean; persistent?: boolean;
+    policy?: z.infer<typeof FollowPolicyV1Schema>; once?: PersonalFollowOnceV1 | null; onceAfterAgentStateVersion?: number; onceDelivery?: PersonalFollowOnceOccurrenceV1 }> | null | undefined,
 ): SessionFollowFactsV1 {
   if (!row) return ABSENT_SESSION_FOLLOW_FACTS_V1;
+  const custody = projectPersonalFollowCustodyV1(row);
+  if (row.hasPersistentFollow === false || row.persistent === false) return { ...ABSENT_SESSION_FOLLOW_FACTS_V1, ...custody,
+    ...(row.once === undefined ? {} : { once: row.once }),
+    ...(row.onceAfterAgentStateVersion === undefined ? {} : { onceAfterAgentStateVersion: row.onceAfterAgentStateVersion }),
+    ...(row.onceDelivery === undefined ? {} : { onceDelivery: row.onceDelivery }) };
   const level = SessionFollowNotificationLevelSchema.safeParse(row.notificationLevel);
   if (!row.following || !level.success) return {
     follows: false,
     notificationLevel: 'none',
     ...(row.includeInVoice === undefined ? {} : { includeInVoice: false }),
+    ...(row.once === undefined ? {} : { once: row.once }),
+    ...(row.onceAfterAgentStateVersion === undefined ? {} : { onceAfterAgentStateVersion: row.onceAfterAgentStateVersion }),
+    ...(row.onceDelivery === undefined ? {} : { onceDelivery: row.onceDelivery }),
+    ...custody,
   };
   return {
     follows: true,
     notificationLevel: level.data,
-    ...(row.includeInVoice === undefined ? {} : { includeInVoice: row.includeInVoice }),
+    ...(row.includeInVoice === undefined && row.policy === undefined && custody.policy === undefined ? {} : {
+      includeInVoice: resolveAccountFollowVoiceSelectionV1({ includeInVoice: row.includeInVoice, policy: custody.policy ?? row.policy }) !== null,
+    }),
+    ...(row.policy === undefined ? {} : { policy: row.policy }),
+    ...(row.once === undefined ? {} : { once: row.once }),
+    ...(row.onceAfterAgentStateVersion === undefined ? {} : { onceAfterAgentStateVersion: row.onceAfterAgentStateVersion }),
+    ...(row.onceDelivery === undefined ? {} : { onceDelivery: row.onceDelivery }),
+    ...custody,
   };
 }
 
 /**
  * The one effective-notification resolver: an explicit per-Session preference
  * wins, otherwise a Session owner keeps the existing Important default, and a
- * non-owner without a Follow row receives nothing. Responsibility has no second
- * implicit fallback — its default becomes a real Follow row.
+ * non-owner without a Follow row receives nothing through this stored-choice
+ * resolver. Relationship defaults are separately normalized as admitted rules.
  */
 export function resolveEffectiveSessionFollowNotificationLevelV1(params: Readonly<{
   facts: SessionFollowFactsV1;
@@ -138,6 +343,12 @@ export function resolveEffectiveSessionFollowNotificationLevelV1(params: Readonl
 }>): SessionFollowNotificationLevel {
   if (params.facts.notificationLevel !== null) return params.facts.notificationLevel;
   return params.isSessionOwner ? 'important' : 'none';
+}
+
+export function resolveEffectiveAccountFollowPolicyV1(params: Readonly<{
+  facts: SessionFollowFactsV1; isSessionOwner: boolean;
+}>): FollowPolicyV1 | null {
+  return params.facts.policy ?? resolveLegacySessionFollowPolicyV1(resolveEffectiveSessionFollowNotificationLevelV1(params));
 }
 
 /**
@@ -151,16 +362,6 @@ export const EXPLICIT_SESSION_UNFOLLOW_STATE_V1 = Object.freeze({
   includeInVoice: false as const,
 });
 
-/**
- * The state written when a Follow becomes active without an explicit user
- * choice (the automatic assignment/access path).
- */
-export const AUTOMATIC_SESSION_FOLLOW_STATE_V1 = Object.freeze({
-  following: true as const,
-  notificationLevel: 'important' as const,
-  includeInVoice: false as const,
-});
-
 export type AccountSessionFollowEditorStateV1 = Readonly<{
   /** Owner-or-active-Follow. An owner cannot untrack their own Session. */
   tracked: boolean;
@@ -168,6 +369,7 @@ export type AccountSessionFollowEditorStateV1 = Readonly<{
   suppressed: boolean;
   notificationLevel: SessionFollowNotificationLevel;
   includeInVoice: boolean;
+  policy: FollowPolicyV1 | null;
 }>;
 
 /**
@@ -186,11 +388,12 @@ export function projectAccountSessionFollowEditorStateV1(params: Readonly<{
   const facts = projectSessionFollowFactsV1(params.follow);
   return {
     tracked: isSessionPersonallyTrackedForViewerV1({ isSessionOwner: params.isSessionOwner, followFacts: facts }),
-    suppressed: params.follow?.following === false,
+    suppressed: params.follow?.following === false && params.follow.persistent !== false,
     notificationLevel: resolveEffectiveSessionFollowNotificationLevelV1({
       facts,
       isSessionOwner: params.isSessionOwner,
     }),
-    includeInVoice: params.follow?.following === true && params.follow.includeInVoice,
+    includeInVoice: facts.follows && facts.includeInVoice === true,
+    policy: resolveEffectiveAccountFollowPolicyV1({ facts, isSessionOwner: params.isSessionOwner }),
   };
 }

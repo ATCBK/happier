@@ -133,6 +133,34 @@ describe('uploadSessionAttachment', () => {
         ]);
     });
 
+    it('refuses an already cancelled upload before opening a native source or reaching the transport', async () => {
+        const transport = createSessionTransport();
+        const controller = new AbortController();
+        controller.abort();
+        const result = await sessionAttachmentsUploadFile({
+            sessionId: 's1', transferContext: transport.transferContext, signal: controller.signal,
+            file: { kind: 'native', uri: 'file:///tmp/hello.txt', name: 'hello.txt', sizeBytes: 5 },
+            messageLocalId: 'm1', config,
+        });
+        expect(result).toMatchObject({ success: false });
+        expect(nativeOpenSpy).not.toHaveBeenCalled();
+        expect(transport.call).not.toHaveBeenCalled();
+    });
+
+    it('stops after cancellation between chunks and closes the native source without finalizing', async () => {
+        const transport = createSessionTransport();
+        const controller = new AbortController();
+        const result = await sessionAttachmentsUploadFile({
+            sessionId: 's1', transferContext: transport.transferContext, signal: controller.signal,
+            file: { kind: 'native', uri: 'file:///tmp/hello.txt', name: 'hello.txt', sizeBytes: 5 },
+            messageLocalId: 'm1', config, onProgress: () => controller.abort(),
+        });
+        expect(result).toMatchObject({ success: false });
+        expect(transport.uploadedBytes).toHaveLength(2);
+        expect(transport.finalize).not.toHaveBeenCalled();
+        expect(nativeCloseSpy).toHaveBeenCalledTimes(1);
+    });
+
     it('uploads a native file through the canonical attachment upload init and closes the native handle', async () => {
         const transport = createSessionTransport();
         const result = await sessionAttachmentsUploadFile({

@@ -22,6 +22,7 @@ import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import { seedAndOpenProjectDraft } from '../activation/projectOpenDraftSeed';
 import { useNavigateToProjectOpen } from '../activation/projectOpenPresentation';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 
 export type WorkspaceSourceControlBranchMenuProps = Readonly<{
     serverId?: string | null;
@@ -224,6 +225,7 @@ export function WorkspaceSourceControlBranchMenu(props: WorkspaceSourceControlBr
             response = await attemptCheckout(true);
         }
 
+        if (isScmActionNotRun(response)) return;
         if (!response.success) {
             Modal.alert(t('common.error'), response.error || t('files.branchMenu.switch.failed'));
             return;
@@ -261,6 +263,7 @@ export function WorkspaceSourceControlBranchMenu(props: WorkspaceSourceControlBr
             machineId: props.machineId,
             path: props.rootPath,
         });
+        if (isScmActionNotRun(response)) return;
         if (!response.success) {
             Modal.alert(t('common.error'), response.stderr || t('files.branchMenu.worktrees.pruneFailed'));
             return;
@@ -277,6 +280,7 @@ export function WorkspaceSourceControlBranchMenu(props: WorkspaceSourceControlBr
             path: props.rootPath,
             worktreePath,
         });
+        if (isScmActionNotRun(response)) return;
         if (!response.success) {
             Modal.alert(t('common.error'), response.stderr || t('files.branchMenu.worktrees.removeFailed'));
             return;

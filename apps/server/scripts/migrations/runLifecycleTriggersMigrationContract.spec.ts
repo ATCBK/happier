@@ -8,6 +8,7 @@ import type { SqliteMigrationExecutor } from '../../sources/flavors/light/sqlite
 
 const directory = join(import.meta.dirname, '../../prisma/sqlite/migrations');
 const target = '20261002090000_add_run_lifecycle_triggers';
+const scopeCapture = '20261015100000_capture_automation_run_scope';
 
 // The moving 0.2 queue writer has no execution-input column. Start at its
 // actual schema frontier, then keep those rows through every later CHECK copy.
@@ -109,6 +110,13 @@ it('preserves populated Automation rows, opaque content, assignments and incumbe
         expect(() => database.exec("UPDATE AutomationTrigger SET definitionEnvelope=NULL WHERE id='scoped-ciFailed'")).toThrow(/CHECK constraint failed/);
         expect(() => database.exec("UPDATE AutomationTrigger SET sourceRunId='mixed-source' WHERE id='scoped-ciFailed'")).toThrow(/CHECK constraint failed/);
         expect(() => database.exec("UPDATE AutomationRun SET causeTriggerKind='schedule' WHERE id='scoped-prComment-plain'")).toThrow(/CHECK constraint failed/);
+        const beforeScopeCapture = snapshots.map(snapshot => ({ ...snapshot, rows: database.prepare(snapshot.select).all() }));
+        database.exec(readFileSync(join(directory, scopeCapture, 'migration.sql'), 'utf8'));
+        expect(database.prepare('SELECT automationScopeCaptured, automationScopeSessionId, resultEnvelope FROM AutomationRun WHERE id=\'run\'').get())
+            .toEqual({ automationScopeCaptured: 0, automationScopeSessionId: null, resultEnvelope: 'opaque-result-bytes' });
+        for (const snapshot of beforeScopeCapture) expect(database.prepare(snapshot.select).all(), snapshot.table).toEqual(snapshot.rows);
+        expect(database.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+        expect(database.prepare('PRAGMA integrity_check').get()?.integrity_check).toBe('ok');
     } finally { database.close(); }
 });
 
@@ -168,5 +176,11 @@ it('preserves actual PostgreSQL direct and Automation cause arms when expanding 
         await expect(database.exec(`UPDATE "AutomationTrigger" SET "definitionEnvelope"=NULL WHERE "id"='scoped-ciFailed'`)).rejects.toMatchObject({ code: '23514' });
         await expect(database.exec(`UPDATE "AutomationTrigger" SET "sourceRunId"='mixed-source' WHERE "id"='scoped-ciFailed'`)).rejects.toMatchObject({ code: '23514' });
         await expect(database.exec(`UPDATE "AutomationRun" SET "causeTriggerKind"='schedule' WHERE "id"='scoped-prComment-plain'`)).rejects.toMatchObject({ code: '23514' });
+        const beforeScopeCapture = [];
+        for (const snapshot of snapshots) beforeScopeCapture.push({ ...snapshot, rows: (await database.query(snapshot.select)).rows });
+        await database.exec(readFileSync(join(postgresDirectory, scopeCapture, 'migration.sql'), 'utf8'));
+        expect((await database.query(`SELECT "automationScopeCaptured", "automationScopeSessionId", "resultEnvelope" FROM "AutomationRun" WHERE "id"='run'`)).rows)
+            .toEqual([{ automationScopeCaptured: false, automationScopeSessionId: null, resultEnvelope: 'opaque-result-bytes' }]);
+        for (const snapshot of beforeScopeCapture) expect((await database.query(snapshot.select)).rows, snapshot.table).toEqual(snapshot.rows);
     } finally { await database.close(); }
 });

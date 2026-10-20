@@ -1,6 +1,5 @@
 import * as React from 'react';
 import { RefreshControl } from 'react-native';
-import type { StyleProp, ViewStyle } from 'react-native';
 import { useHappierCollectionLayout } from '@happier-dev/plugin-ui/presentation';
 
 import { Redirect, Stack, useLocalSearchParams, useRouter } from '@/components/appShell/workspace/destinationRoute';
@@ -17,11 +16,8 @@ import { MachineProjectWorkSection } from '@/components/projects/workers/Machine
 import { MachineAlertsPage } from '@/components/machines/vitals/MachineAlertsPage';
 import { MachineDirectConnectionSection } from '@/components/settings/connections/DirectConnectionSettings';
 import { machinePageHref } from '@/components/settings/machines/collection/machineCollectionModel';
-import { NavigationInlineBackButton } from '@/components/settings/shell/SettingsModalFloatingControls';
 import { MachineSharingSection } from '@/components/sharing/machines/MachineSharingSection';
 import { MachineWorkSummaryReader } from '@/components/sharing/machines/MachineWorkSummaryReader';
-import { NavigationBackChromeProvider } from '@/components/ui/layout/NavigationBackChrome';
-import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -30,45 +26,33 @@ import type { Machine } from '@/sync/domains/state/storageTypes';
 import { useActiveServerAccountScope } from '@/sync/store/hooks';
 import { t } from '@/text';
 import { usePreferredLanguage } from '@/text/usePreferredLanguage';
-import { useDeviceType } from '@/utils/platform/responsive';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { runRefreshDiagnosticAction } from '@/utils/system/userInteractionDiagnostics';
 
+import { MachineTabSubHead } from './MachineTabSubHead';
+import { useNavigationTitleChromeShowsTitle } from '@/components/ui/layout/navigationTitleChrome';
 import { useMachinesDoor } from './machinesDoor';
 import { isMachineSubPageId, MACHINE_SUB_PAGE_TITLE_KEYS, type MachineSubPageId } from './machineSubPages';
 import { useMachinePageTarget, type MachinePageTarget } from './useMachinePageTarget';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 
-/** Where a sub-page's back returns: its machine's page, in the same door. */
-const MachineSubPageBackContext = React.createContext<string | null>(null);
-
-/** The rail door's back on a sub-page's title line (Settings gives its own back to its pages). */
-const MachineSubPageBackControl = React.memo(function MachineSubPageBackControl(props: Readonly<{ style: StyleProp<ViewStyle> }>) {
-    const router = useRouter();
-    const href = React.useContext(MachineSubPageBackContext);
-    const goBack = React.useCallback(() => {
-        if (!href) return;
-        const result = runGuardedNavigation(() => router.dismissTo(href as never));
-        if (result !== true) fireAndForget(result, { tag: 'MachineSubPage.back' });
-    }, [href, router]);
-    if (!href) return null;
-    return <NavigationInlineBackButton onPress={goBack} style={props.style} />;
-});
-
 /**
- * A page "This machine" pushes in the detail pane (lab `DD`), in both doors: the sub-page's title with
- * the back arrow on its line (the phone keeps the native header's), then the section that owns it —
- * moved here from the machine page, not rewritten. Each keeps the reload it had in the page's refresh.
+ * A page "This machine" pushes in the detail pane (lab `DD`), in both doors, with the one head every page a machine
+ * pushes uses (`MachineTabSubHead`, FA1 #9): the way back named for the machine, the page's name, in the machine
+ * page's own wide column. Then the section that owns it, moved here from
+ * the machine page, not rewritten. Each keeps the reload it had in the page's refresh.
  */
 export function MachineSubPageScreen() {
     const language = usePreferredLanguage();
     const target = useMachinePageTarget();
     const door = useMachinesDoor();
+    const router = useRouter();
     const params = useLocalSearchParams<{ page?: string }>();
     const page = params.page;
     const hostedInCollection = useHappierCollectionLayout() !== null;
-    const phone = useDeviceType() === 'phone';
+    // Under a phone's title chrome the head keeps the shorter top inset; its crumb stays (the chrome draws no back of its own here).
+    const underChrome = useNavigationTitleChromeShowsTitle();
     const [refreshKey, bumpRefreshKey] = React.useReducer((value: number) => value + 1, 0);
     const [isRefreshing, setIsRefreshing] = React.useState(false);
     const { execute: refreshInventory } = useMountedActionExecution(target.serverId);
@@ -91,19 +75,26 @@ export function MachineSubPageScreen() {
     } as const), [language, hostedInCollection, target.machine, target.machineName]);
 
     const pageHref = target.machineId ? machinePageHref({ door, target: { machineId: target.machineId, serverId: target.serverId || undefined } }) : null;
+    const goBack = React.useCallback(() => {
+        if (!pageHref) return;
+        const result = runGuardedNavigation(() => router.dismissTo(pageHref as never));
+        if (result !== true) fireAndForget(result, { tag: 'MachineSubPage.back' });
+    }, [pageHref, router]);
     if (!isMachineSubPageId(page)) return pageHref ? <Redirect href={pageHref as never} /> : null;
 
     const content = (
-        <ItemList refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />} keyboardShouldPersistTaps="handled">
-            <PageHeader
+        <ItemList pageColumn="wide" refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />} keyboardShouldPersistTaps="handled">
+            <MachineTabSubHead
                 testID={`machine-sub-page-header-${page}`}
-                alwaysShowTitle
+                placement="page"
+                underNativeChrome={underChrome}
                 title={t(MACHINE_SUB_PAGE_TITLE_KEYS[page])}
-                // Sharing's page is its one section (lab m-share A): the header says what it does, the section repeats nothing.
+                back={!pageHref ? null : { label: target.machine ? target.machineName : t('machine.back'), onPress: goBack, testID: `machine-sub-page-back-${page}` }}
+                // Sharing's page is its one section (lab m-share A): the head says what it does, the section repeats nothing.
                 // Someone the machine is shared with reads what they can do here, not what adding people does.
-                description={!target.machine ? undefined : page === 'sharing'
-                    ? t(target.machine.isShared ? 'machines.sharing.recipientDescription' : 'machines.sharing.description', { machine: target.machineName })
-                    : target.machineName}
+                description={target.machine && page === 'sharing'
+                    ? t(target.machine.isShared ? 'machines.sharing.recipientDescription' : 'machines.sharing.description', { machine: target.machineSentenceName })
+                    : null}
             />
             {target.machine ? (
                 <MachineSubPageBody page={page} target={target} machine={target.machine} refreshKey={refreshKey} />
@@ -117,19 +108,13 @@ export function MachineSubPageScreen() {
         </ItemList>
     );
 
-    const withBack = door === 'rail' && !phone ? (
-        <MachineSubPageBackContext.Provider value={pageHref}>
-            <NavigationBackChromeProvider control={MachineSubPageBackControl}>{content}</NavigationBackChromeProvider>
-        </MachineSubPageBackContext.Provider>
-    ) : content;
-
     return (
         <>
             <Stack.Screen options={screenOptions} />
             {page === 'agents' ? (
                 // An agent's own sign-in opens in this page's bottom pane (lab agent-setup T1).
-                <AgentSignInPaneHost scopeId={`machine:${target.machineId}`} main={withBack} />
-            ) : withBack}
+                <AgentSignInPaneHost scopeId={`machine:${target.machineId}`} main={content} />
+            ) : content}
         </>
     );
 }
@@ -147,20 +132,21 @@ function MachineSubPageBody(props: Readonly<{
         case 'sharing':
             return activeAccountScope && areServerProfileIdentifiersEquivalent(activeAccountScope.serverId, serverId) ? (
                 <>
-                    <MachineSharingSection machineId={machine.id} machineName={target.machineName} scope={activeAccountScope} online={target.online} />
+                    <MachineSharingSection machineId={machine.id} machineName={target.machineSentenceName} scope={activeAccountScope} online={target.online} />
                     {/* Who else works here is read by the machine for its owner and managers only (D8). */}
                     {!machine.isShared || machine.access?.role === 'manage' ? (
-                        <MachineWorkSummaryReader machineId={machine.id} machineName={target.machineName} scope={activeAccountScope}
+                        <MachineWorkSummaryReader machineId={machine.id} machineName={target.machineSentenceName} scope={activeAccountScope}
                             online={target.online} refreshKey={props.refreshKey} />
                     ) : null}
                 </>
             ) : null;
         case 'agents':
-            return <MachineAgentsSection serverId={serverId} machineId={machine.id} machineName={target.machineName} />;
+            // The page's header is already "Agents": the section does not repeat it.
+            return <MachineAgentsSection serverId={serverId} machineId={machine.id} machineName={target.machineSentenceName} titled={false} />;
         case 'terminal':
             return <MachineTerminalPageBody machine={machine} serverId={serverId} isServerSwitching={target.isServerSwitching} refreshKey={props.refreshKey} />;
         case 'connection':
-            return <MachineDirectConnectionSection serverId={serverId} machineId={machine.id} machineName={target.machineName} />;
+            return <MachineDirectConnectionSection serverId={serverId} machineId={machine.id} machineName={target.machineSentenceName} />;
         case 'installables':
             return <MachineInstallablesSection machineId={machine.id} serverId={serverId} />;
         case 'doctor':
@@ -171,7 +157,7 @@ function MachineSubPageBody(props: Readonly<{
             // The owners the Overview used to inline, unchanged and in their order (plan 10 MPG-8).
             return (
                 <>
-                    <MachineProjectWorkSection serverId={serverId} machineId={machine.id} machineName={target.machineName} />
+                    <MachineProjectWorkSection serverId={serverId} machineId={machine.id} machineName={target.machineSentenceName} />
                     <MachineRunsSection machine={machine} serverId={serverId} online={target.online}
                         isServerSwitching={target.isServerSwitching} refreshKey={props.refreshKey} />
                     <MachineRecentSessionsSection machineId={machine.id} serverId={serverId} />
@@ -179,7 +165,7 @@ function MachineSubPageBody(props: Readonly<{
                 </>
             );
         case 'alerts':
-            return <MachineAlertsPage serverId={serverId} machine={machine} machineName={target.machineName} />;
+            return <MachineAlertsPage serverId={serverId} machine={machine} machineName={target.machineSentenceName} />;
     }
 }
 

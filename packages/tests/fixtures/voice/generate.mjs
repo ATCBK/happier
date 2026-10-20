@@ -149,10 +149,69 @@ async function writeFixture(spec, samples) {
     durationMs: Math.round((samples.length / spec.sampleRate) * 1000),
     sha256: createHash('sha256').update(bytes).digest('hex'),
     expectedTranscriptSubstrings: spec.expectedTranscriptSubstrings,
+    expectedTranscript: spec.expectedTranscript,
+    acceptanceGates: spec.acceptanceGates ?? ['transport', 'energy', 'pcm-format'],
     timelineMs: spec.timelineMs,
     scenarios: spec.scenarios,
     provenance: spec.provenance,
   };
+}
+
+async function importNaturalFixture(sourcePath) {
+  const sourceSha256 = 'fd3c84146d8b357efc7f0d21de86de770721fc5ddac7e6577688dbf3cdabff5b';
+  if (createHash('sha256').update(await readFile(sourcePath)).digest('hex') !== sourceSha256) {
+    throw new Error('natural fixture requires the pinned LibriSpeech 61-70968-0000 FLAC');
+  }
+  const tempDir = await mkdtemp(join(tmpdir(), 'happier-voice-natural-fixture-'));
+  try {
+    const decodedPath = join(tempDir, 'natural.wav');
+    await execFileAsync(ffmpegCommand, [
+      '-hide_banner', '-loglevel', 'error', '-y', '-i', sourcePath,
+      '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', '-map_metadata', '-1', decodedPath,
+    ]);
+    const speech = decodePcm16MonoWav(await readFile(decodedPath)).samples;
+    const samples = concatenateSamples([speech, silenceSamples(900, 16_000)]);
+    const expectedTranscript = 'He began a confused complaint against the wizard who had vanished behind the curtain on the left';
+    const fixture = await writeFixture({
+      id: 'natural-librispeech-61-70968-0000-16k',
+      file: 'natural-librispeech-61-70968-0000.16k.wav',
+      sourceText: expectedTranscript,
+      expectedTranscript,
+      expectedTranscriptSubstrings: [],
+      language: 'en-US',
+      sampleRate: 16_000,
+      acceptanceGates: ['recognition-accuracy', 'pcm-format'],
+      scenarios: ['daemon-stt-batch', 'streaming-stt'],
+      timelineMs: [
+        { kind: 'speech', start: 0, end: Math.round(speech.length / 16) },
+        { kind: 'silence', start: Math.round(speech.length / 16), end: Math.round(samples.length / 16) },
+      ],
+      provenance: {
+        generator: 'packages/tests/fixtures/voice/generate.mjs --natural-source=<FLAC>',
+        speechEngine: 'human recording',
+        normalizer: 'lossless FLAC decode; direct PCM16 mono WAV encoder',
+        license: 'CC-BY-4.0',
+        attribution: 'LibriSpeech (c) 2014 by Vassil Panayotov; LibriVox audiobook recording, speaker 61, utterance 61-70968-0000.',
+        sourceVersion: 'SLR12 test-clean',
+        sourceUrl: 'https://www.openslr.org/resources/12/test-clean.tar.gz',
+        sourceArchiveSha256: '39fde525e59672dc6d1551919b1478f724438a95aa55f874b576be21967e6c23',
+        sourceFile: 'LibriSpeech/test-clean/61/70968/61-70968-0000.flac',
+        sourceFileSha256: sourceSha256,
+        outputLicenseEvidence: 'https://www.openslr.org/12/',
+        adaptation: 'Lossless FLAC to PCM16 mono 16 kHz; appended 900 ms zero-valued silence; no gain, rate, or speech editing.',
+      },
+    }, samples);
+    const manifestPath = join(fixtureRoot, 'manifest.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    manifest.fixtures = manifest.fixtures.filter(entry => entry.id !== fixture.id).map(entry => ({
+      ...entry,
+      acceptanceGates: entry.acceptanceGates ?? ['transport', 'energy', 'pcm-format'],
+    }));
+    manifest.fixtures.push(fixture);
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 }
 
 async function main() {
@@ -332,6 +391,9 @@ async function main() {
     for (const spec of specs) {
       fixtures.push(await writeFixture(spec, samplesById.get(spec.id)));
     }
+    // Human recordings are imported from their pinned sources, never resynthesized.
+    const existingManifest = JSON.parse(await readFile(join(fixtureRoot, 'manifest.json'), 'utf8'));
+    fixtures.push(...existingManifest.fixtures.filter(fixture => fixture.provenance.speechEngine === 'human recording'));
     await writeFile(
       join(fixtureRoot, 'manifest.json'),
       `${JSON.stringify({ schemaVersion: 1, fixtures }, null, 2)}\n`,
@@ -342,4 +404,9 @@ async function main() {
   }
 }
 
-await main();
+const naturalSource = process.argv.find(argument => argument.startsWith('--natural-source='))?.slice('--natural-source='.length);
+if (naturalSource) {
+  await importNaturalFixture(naturalSource);
+} else {
+  await main();
+}

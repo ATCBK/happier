@@ -5,7 +5,7 @@ import type { MachineDisplayCacheEntryV1 } from '@/sync/domains/state/warmCacheP
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { isPersistentMachine } from '@happier-dev/protocol/machines/machineKind';
 import { areServerProfileIdentifiersEquivalent, type ServerProfile } from '@/sync/domains/server/serverProfiles';
-import { readLiveMachineInventoryRows, resolveServerScopedMachineInventory } from './resolveServerScopedMachines';
+import { readLiveMachineInventoryRows, readMachineInventoryRowReadiness, resolveServerScopedMachineInventory } from './resolveServerScopedMachines';
 import { isMachineSelectableForFleet } from './administration/fleetUnion';
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -26,6 +26,7 @@ export type ServerMachineInventorySnapshotV1 =
         profileId: string;
         serverIdentityId: string;
         serverName: string;
+        /** `live` rows come from the live machine store (list read or refresh in flight); `stale` rows are warm-cache or follow a failed read. */
         observation: 'live' | 'stale';
         /**
          * This Home's machine list has been read and is current, so a machine absent from it has
@@ -36,6 +37,8 @@ export type ServerMachineInventorySnapshotV1 =
         inventoryStatus?: MachineInventoryStatus;
         /** Ephemeral fresh-admission facts, not authority for a later invocation. */
         executionEligibleMachineIds?: readonly string[];
+        /** Online rows still opening content, including after a list read settles. */
+        executionPendingMachineIds?: readonly string[];
         machines: readonly MachineDisplayRenderable[];
     }>
     | Readonly<{
@@ -133,12 +136,16 @@ function resolveRawMachineList(params: Readonly<{
         machineListByServerId: params.machineListByServerId,
         machineListStatusByServerId: params.machineListStatusByServerId,
     });
-    const settled = status === 'idle' && machines !== null;
+    const inventoryStatus = status ?? 'loading';
     return {
         machines,
-        observation: settled ? 'live' : 'stale',
-        settled,
-        inventoryStatus: status ?? 'loading',
+        // Observation answers "are these the live store rows, whose presence is a self-expiring current fact"
+        // (a warm-cache row never is). Whether the list has been read lives in `settled`/`inventoryStatus`,
+        // so a refresh in flight over retained rows does not make an Online machine unselectable. A failed or
+        // signed-out read leaves the retained rows stale.
+        observation: machines !== null && (inventoryStatus === 'idle' || inventoryStatus === 'loading') ? 'live' : 'stale',
+        settled: inventoryStatus === 'idle' && machines !== null,
+        inventoryStatus,
     };
 }
 
@@ -232,6 +239,10 @@ export function resolveAllProfileMachineInventorySnapshots(params: Readonly<{
                     isMachineSelectableForFleet(accountScope, machine, params.nowMs)
                     && liveRows.has(machine)
                 )).map((machine) => machine.id)),
+                executionPendingMachineIds: Object.freeze(raw.observation === 'live' ? raw.machines.filter((machine) => (
+                    isMachineSelectableForFleet(accountScope, machine, params.nowMs)
+                    && readMachineInventoryRowReadiness(machine) === 'pending'
+                )).map((machine) => machine.id) : []),
                 machines: Object.freeze(raw.machines
                     .filter(isPersistentMachine)
                     .map(buildMachineDisplayRenderableFromMachine)

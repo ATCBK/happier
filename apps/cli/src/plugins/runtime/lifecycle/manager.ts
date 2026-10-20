@@ -279,6 +279,11 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
             const registry = await activatePluginRuntimeRegistry({
                 ...params,
                 pluginIds: Object.freeze([pluginId]),
+                // A retained component owns this plugin only. Carrying peer
+                // occurrence ids would resurrect them after replacement/removal.
+                occurrenceIdsByPluginId: params.occurrenceIdsByPluginId
+                    ? new Map([...params.occurrenceIdsByPluginId].filter(([id]) => id === pluginId))
+                    : undefined,
                 retainedRegistries: undefined,
                 adoptActivationComponent: undefined,
                 activationComponentMode: true,

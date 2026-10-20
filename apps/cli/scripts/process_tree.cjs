@@ -63,13 +63,12 @@ function createProcessTreeOwner({ readProcessCensus, indexCensus, descendantsOf,
             capturedTargets: rows.map(member => ({ pid: member.pid, start: member.start })) };
     }
     async function terminateTargets(input, options = {}) {
-        let containmentRefused = false;
+        let signalAuthorityRefused = false;
         const read = async () => {
             const table = await census(input.containment);
             if (table && input.authorizeSnapshot) {
                 try { table.authorityRefused = !await input.authorizeSnapshot(table.snapshot); }
                 catch { table.authorityRefused = true; }
-                containmentRefused ||= table.authorityRefused;
             }
             return table;
         };
@@ -77,7 +76,7 @@ function createProcessTreeOwner({ readProcessCensus, indexCensus, descendantsOf,
             if (!input.authorizeSignal) return true;
             let current = false;
             try { current = await input.authorizeSignal(); } catch {}
-            containmentRefused ||= !current;
+            signalAuthorityRefused ||= !current;
             return current;
         };
         // Preserve the existing listener and ordinary-tree budgets at their canonical owner.
@@ -182,14 +181,29 @@ function createProcessTreeOwner({ readProcessCensus, indexCensus, descendantsOf,
             if (!table) { verificationUnavailable = true; return false; }
             addMembers(table);
             for (const expected of captured.values()) {
-                if (outcomes.has(expected.pid)) continue;
+                const previous = outcomes.get(expected.pid);
+                if (previous && (previous.outcome !== 'refused' || previous.reason !== 'containment_authority_changed')) continue;
+                // Loss of signal authority is not liveness evidence. Keep observing
+                // within the existing grace, without signaling a refused member again.
+                if (previous) {
+                    const row = table.index.byPid.get(expected.pid);
+                    if (!table.authorityRefused && (row ? row.state === 'zombie' && sameStart(expected.start, row.start)
+                        : !table.snapshot.partial?.some(item => item.pid === expected.pid))) {
+                        outcomes.set(expected.pid, { pid: expected.pid, outcome: 'ended',
+                            ...(expected.memory ? { freedBytes: expected.memory.bytes } : {}) });
+                    }
+                    continue;
+                }
                 const reason = refusal(table, expected);
                 if (reason) outcomes.set(expected.pid, { pid: expected.pid, outcome: 'refused', reason });
                 else if (!present(table.index.byPid.get(expected.pid))) outcomes.set(expected.pid, {
                     pid: expected.pid, outcome: 'ended', ...(expected.memory ? { freedBytes: expected.memory.bytes } : {}),
                 });
             }
-            return [...captured.keys()].every(pid => outcomes.has(pid));
+            return [...captured.keys()].every(pid => {
+                const outcome = outcomes.get(pid);
+                return outcome && !(outcome.outcome === 'refused' && outcome.reason === 'containment_authority_changed');
+            });
         }
         const nativeJobKill = input.policy === 'kill' && (platform ?? process.platform) === 'win32'
             && input.containment?.kind === 'windows_job';
@@ -240,11 +254,12 @@ function createProcessTreeOwner({ readProcessCensus, indexCensus, descendantsOf,
                 // Procfs may lose status/start while a signalled generation exits.
                 // Never signal that unreadable row; the existing final full census
                 // can still prove this previously authorized identity is now absent.
-                if (!verificationUnavailable && !containmentRefused && final && !final.authorityRefused
+                if (!verificationUnavailable && !signalAuthorityRefused && final && !final.authorityRefused
                     && previous.outcome === 'refused'
-                    && (previous.reason === 'principal_unavailable' || previous.reason === 'identity_unavailable')
-                    && !final.index.byPid.has(expected.pid)
-                    && !final.snapshot.partial?.some(item => item.pid === expected.pid)) {
+                    && ['principal_unavailable', 'identity_unavailable', 'containment_authority_changed'].includes(previous.reason)
+                    && (final.index.byPid.has(expected.pid)
+                        ? final.index.byPid.get(expected.pid).state === 'zombie' && sameStart(expected.start, final.index.byPid.get(expected.pid).start)
+                        : !final.snapshot.partial?.some(item => item.pid === expected.pid))) {
                     outcomes.set(expected.pid, { pid: expected.pid, outcome: 'ended',
                         ...(expected.memory ? { freedBytes: expected.memory.bytes } : {}) });
                 }
@@ -260,7 +275,7 @@ function createProcessTreeOwner({ readProcessCensus, indexCensus, descendantsOf,
         }
         const resultOutcomes = [...outcomes.values()];
         return { status: verificationUnavailable ? 'unavailable'
-            : containmentRefused || resultOutcomes.some(row => row.outcome === 'refused' || row.outcome === 'survived') ? 'incomplete' : 'complete', outcomes: resultOutcomes,
+            : signalAuthorityRefused || final?.authorityRefused || resultOutcomes.some(row => row.outcome === 'refused' || row.outcome === 'survived') ? 'incomplete' : 'complete', outcomes: resultOutcomes,
             ...(input.captureDescendants ? { capturedTargets: [...continuation.values()] } : {}) };
     }
     async function terminateProcessTree(proc, options) {

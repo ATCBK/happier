@@ -12,6 +12,11 @@ describe('buildChangedFilesOutlineTree', () => {
         expect(nodes.filter(node => node.type === 'file').map(node => [node.name, node.path]))
             .toEqual([['name ', ' leading /line\nbreak /name '], [' ', ' ']]);
     });
+    it('orders numbered folders naturally', () => {
+        const tree = buildChangedFilesOutlineTree(['group-10/a.ts', 'group-2/a.ts', 'group-1/a.ts']
+            .map((fullPath) => ({ fullPath, fileName: 'a.ts' })) as any);
+        expect(tree.map((n) => n.name)).toEqual(['group-1', 'group-2', 'group-10']);
+    });
     it('builds a directory-first, case-insensitive sorted outline tree', () => {
         const files = [
             { fullPath: 'src/zeta.ts', fileName: 'zeta.ts' },

@@ -1,7 +1,7 @@
-import { View, type ViewStyle } from 'react-native';
+import { View } from 'react-native';
 
 import type { HappierUiTheme } from '../../environment/types.js';
-import type { HappierStyleProp } from '../portableTypes.js';
+import type { HappierPortableStyle, HappierStyleProp } from '../portableTypes.js';
 
 /** The mark's outer diameter and its two ring weights (lab `.fm-rd`). */
 export const HAPPIER_RADIO_MARK_METRICS = Object.freeze({
@@ -23,7 +23,7 @@ export function resolveHappierRadioMarkStyle(input: Readonly<{
   /** The centre: the surface the mark stands on. */
   surface: string;
   disabled?: boolean;
-}>): ViewStyle {
+}>): HappierPortableStyle {
   const { size, ringWidth, selectedRingWidth } = HAPPIER_RADIO_MARK_METRICS;
   return {
     width: size,

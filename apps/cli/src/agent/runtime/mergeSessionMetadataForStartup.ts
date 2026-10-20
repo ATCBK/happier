@@ -395,7 +395,7 @@ export function mergeSessionMetadataForStartup(opts: {
 
     if (mode === 'attach') {
         // Tool policy belongs to the retained Session, never runner defaults.
-        for (const key of ['allowedTools', 'unlistedTools'] as const) {
+        for (const key of ['allowedTools', 'unlistedTools', 'workspaceWrites'] as const) {
             if (opts.current[key] === undefined) delete merged[key];
             else Object.assign(merged, { [key]: opts.current[key] });
         }

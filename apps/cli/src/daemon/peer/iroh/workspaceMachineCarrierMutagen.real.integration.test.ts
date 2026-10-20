@@ -1,19 +1,25 @@
 import {
-  AccountSettingsSchema,
   computeWorkspaceSyncPolicyDigest,
   createDirectRouteGrantSigningInputV2,
   WorkspaceSyncTargetBootstrapPrepareV1Schema,
   WorkspaceSyncTargetBootstrapReleaseV1Schema,
-  type AccountSettingsMutationResult,
+  WorkspaceSyncTargetConflictRecoverV1Schema,
+  WorkspaceSyncStatusV1Schema,
   type DirectRouteGrantRequestV2,
 } from '@happier-dev/protocol';
+import { parseProjectAccountSnapshotV1, type ProjectAccountSnapshotV1 } from '@happier-dev/protocol/projects/projectAccountSnapshotV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { MachinePublishedRowV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { createIrohNodeNativeModule, loadIrohNodeNativeAddon } from '@happier-dev/iroh-native/node';
 import { createIrohTestControllerFromNativeAddon } from '@happier-dev/iroh-native/test-controller';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { createReadStream } from 'node:fs';
 import { access, mkdir, mkdtemp, open, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { createServer } from 'node:http';
 import tweetnacl from 'tweetnacl';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -26,15 +32,17 @@ import {
   type ProductionDaemonWorkspaceSyncRuntime,
 } from '@/daemon/startup/createProductionDaemonWorkspaceSyncRuntime';
 import { createTrackedSessionHandoffCoordinator } from '@/daemon/actionOperations/createTrackedSessionHandoffCoordinator';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import {
   launchWorkspaceSyncLocalAgent,
   spawnWorkspaceSyncSidecar,
 } from '@/daemon/startup/workspaceSyncNativeProcessLaunchers';
-import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import type { ActiveProjectAccountRowsSnapshot, ProjectAccountSnapshotMutation, ProjectAccountRowsSnapshotListener } from '@/workspaces/projectAccountRows';
 import { createWorkspaceRootOwnershipManager } from '@/workspaces/sync/workspaceSyncRootOwnership';
 import { createWorkspaceSyncTargetAuthority } from '@/workspaces/sync/workspaceSyncTargetAuthority';
 import { createWorkspaceSyncPeerIdentityValidator } from '@/workspaces/sync/transport/workspaceSyncPeerIdentity';
 import { createWorkspaceSyncRelationshipOwner } from '@/workspaces/sync/workspaceSyncRelationshipOwner';
+import { materializeWorkspaceSyncForOpen } from '@/workspaces/sync/workspaceSyncHandoffAdapter';
 import type { WorkspaceSyncOwnedLocalAgent } from '@/workspaces/sync/workspaceSyncController';
 import type {
   FiniteTransferMachineTunnel,
@@ -195,16 +203,16 @@ const contentPolicyInput = Object.freeze({
   extraIncludePatterns: [] as const,
 });
 
-function settingsSnapshot(
-  settings: ActiveAccountSettingsSnapshot['settings'],
-  settingsVersion: number,
-): ActiveAccountSettingsSnapshot {
+function projectSnapshot(
+  snapshot: ProjectAccountSnapshotV1,
+  graphRevision: number,
+): ActiveProjectAccountRowsSnapshot {
   return {
     source: 'network',
-    settings,
-    settingsVersion,
+    ...snapshot,
+    graphRevision,
+    organizations: [], rows: [],
     loadedAtMs: 1,
-    settingsSecretsReadKeys: [],
     scopeKey: relationshipId,
   };
 }
@@ -226,7 +234,7 @@ function createGrantMint(
         : request.scope.kind;
     const payload = {
       ...binding,
-      grantId: `grant-${options.corruptSignature ? 'invalid' : 'valid'}-${grantScopeId}`,
+      grantId: `grant-${options.corruptSignature ? 'invalid' : 'valid'}-${grantScopeId}-${randomUUID()}`,
       accountId,
       iat: 1_000,
       exp: 301_000,
@@ -275,13 +283,71 @@ async function waitFor(
   }
 }
 
+// The process boundary matters: shutdownEndpoint sends a QUIC close, whereas
+// namespace retirement can terminate the host before that close is delivered.
+// Only the native JSON ABI crosses IPC; the production decoder stays real.
+async function startNativePeerProcess(addonPath: string, topology: 'direct' | 'relay', relayUrl: string | null) {
+  const child = spawn(process.execPath, ['-e', String.raw`
+    const addon = require(process.argv[1]);
+    process.on('message', async ({ id, method, request }) => {
+      try { process.send({ id, result: await addon[method](request) }); }
+      catch (error) { process.send({ id, error: error.message }); }
+    });
+    (async () => {
+      if (process.argv[2] === 'direct') await addon.forceDirectOnly();
+      else await addon.forceRelayOnly(process.argv[3]);
+      process.send({ ready: true });
+    })().catch(error => { console.error(error); process.exit(1); });
+  `, addonPath, topology, relayUrl ?? ''], { stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+  const pending = new Map<number, { resolve(value: string): void; reject(error: Error): void }>();
+  let nextId = 0;
+  child.on('message', (message: { id?: number; result?: string; error?: string }) => {
+    if (message.id === undefined) return;
+    const request = pending.get(message.id);
+    pending.delete(message.id);
+    if (message.error) request?.reject(new Error(message.error));
+    else if (typeof message.result === 'string') request?.resolve(message.result);
+    else request?.reject(new Error('Invalid native peer IPC response'));
+  });
+  child.on('exit', () => {
+    for (const request of pending.values()) request.reject(new Error('Native peer process exited'));
+    pending.clear();
+  });
+  await Promise.race([
+    once(child, 'message'),
+    once(child, 'exit').then(() => { throw new Error('Native peer process exited before ready'); }),
+  ]);
+  const localAddon = loadIrohNodeNativeAddon(addonPath);
+  // Narrowly isolated IPC fixture for the genuine out-of-process native boundary.
+  const proxy = Object.fromEntries(Object.keys(localAddon).map(method => [method,
+    method === 'getAvailability' ? () => localAddon.getAvailability() : (request: string) => new Promise<string>((resolve, reject) => {
+      const id = ++nextId;
+      pending.set(id, { resolve, reject });
+      child.send({ id, method, request });
+    }),
+  ])) as ReturnType<typeof loadIrohNodeNativeAddon>;
+  return {
+    native: createIrohNodeNativeModule(proxy),
+    async kill() {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      const exited = once(child, 'exit');
+      child.kill('SIGKILL');
+      await exited;
+    },
+  };
+}
+
 describe('production handoff -> Mutagen manager -> broker -> controller -> native machine/1 -> rooted agent', () => {
   it.each([
-    { topology: 'direct' as const, expectedPath: 'direct' as const },
-    { topology: 'relay' as const, expectedPath: 'relay' as const },
+    { topology: 'direct' as const, expectedPath: 'direct' as const, retirement: 'endpoint' as const },
+    { topology: 'relay' as const, expectedPath: 'relay' as const, retirement: 'endpoint' as const },
+    { topology: 'direct' as const, expectedPath: 'direct' as const, retirement: 'process' as const },
+    { topology: 'relay' as const, expectedPath: 'relay' as const, retirement: 'process' as const },
+    { topology: 'direct' as const, expectedPath: 'direct' as const, retirement: 'process_offline' as const },
   ])(
-    'creates one bidirectional relationship over $topology, cancels it, and rejects invalid grants without fallback',
-    async ({ topology, expectedPath }) => {
+    'syncs over $topology, recovers a replacement peer $retirement, cancels, and rejects invalid grants',
+    async ({ topology, expectedPath, retirement }) => {
+      const outOfProcess = retirement !== 'endpoint';
       if (runPerformanceAcceptance
         && (!Number.isSafeInteger(performanceFileSizeBytes) || performanceFileSizeBytes < performanceDeltaBytes)) {
         throw new Error(`Invalid HAPPIER_WORKSPACE_SYNC_PERFORMANCE_FILE_BYTES=${performanceFileSizeBytes}`);
@@ -293,21 +359,23 @@ describe('production handoff -> Mutagen manager -> broker -> controller -> nativ
       const targetHome = join(fixtureRoot, 't');
       const sourceRoot = join(fixtureRoot, 'a');
       const targetRoot = join(fixtureRoot, 'b');
-      let currentSettings = AccountSettingsSchema.parse({
-        workspaceRefsV1: [],
-        workspaceSyncRelationshipsV1: [],
+      const secondSourceRoot = join(fixtureRoot, 'a2');
+      const secondTargetRoot = join(fixtureRoot, 'b2');
+      const secondRelationshipId = `${relationshipId}-second`;
+      let currentProject = parseProjectAccountSnapshotV1({
+        workspaceRefs: [],
+        relationships: [],
       });
-      let currentSettingsVersion = 1;
-      const settingsListeners = new Set<(
-        previous: ActiveAccountSettingsSnapshot | null,
-        next: ActiveAccountSettingsSnapshot | null,
-      ) => void>();
-      const getSettingsSnapshot = () => settingsSnapshot(currentSettings, currentSettingsVersion);
+      let currentProjectRevision = 1;
+      const projectListeners = new Set<ProjectAccountRowsSnapshotListener>();
+      const getProjectSnapshot = () => projectSnapshot(currentProject, currentProjectRevision);
       await Promise.all([
         mkdir(sourceHome, { recursive: true }),
         mkdir(targetHome, { recursive: true }),
         mkdir(sourceRoot, { recursive: true }),
         mkdir(targetRoot, { recursive: true }),
+        mkdir(secondSourceRoot, { recursive: true }),
+        mkdir(secondTargetRoot, { recursive: true }),
       ]);
       const performanceSourcePath = join(sourceRoot, 'performance.bin');
       const performanceTargetPath = join(targetRoot, 'performance.bin');
@@ -345,10 +413,10 @@ describe('production handoff -> Mutagen manager -> broker -> controller -> nativ
       const callMachineRpc = vi.fn(async () => {
         throw new Error('The composed target ingress must remain on the authenticated machine carrier');
       });
-      const targetAuthority = createWorkspaceSyncTargetAuthority({
+      const createTargetAuthority = () => createWorkspaceSyncTargetAuthority({
         localServerId: 'server-1',
         localMachineId: targetMachineId,
-        getSettingsSnapshot,
+        getProjectSnapshot,
         callMachineRpc,
         bootstrap: {
           materializationDirectory: join(targetHome, 'daemon', 'workspace-sync', 'bootstrap'),
@@ -361,66 +429,103 @@ describe('production handoff -> Mutagen manager -> broker -> controller -> nativ
             args: ['synchronizer', '--external', '--root', request.canonicalRoot],
             dataDirectory: targetAgentDataDirectory,
             ...(request.signal ? { signal: request.signal } : {}),
+            ...(request.signal ? { signal: request.signal } : {}),
           });
           targetAgentStreams.push(agent);
           return agent;
         },
       });
+      let targetAuthority = createTargetAuthority();
+      let peerProcess: Awaited<ReturnType<typeof startNativePeerProcess>> | null = null;
       let sourceIroh: Awaited<ReturnType<typeof createDaemonMachineIrohRuntime>> | null = null;
       let targetIroh: Awaited<ReturnType<typeof createDaemonMachineIrohRuntime>> | null = null;
       let admission: Awaited<ReturnType<typeof startPeerMediationLoopbackServer>> | null = null;
       let sourceWorkspaceRuntime: ProductionDaemonWorkspaceSyncRuntime | null = null;
+      // Home is an HTTP boundary. Keep child-Machine resolution and row decoding real:
+      // both fixture Machines are ordinary native Machines, with no child projection.
+      const home = createServer((request, response) => {
+        response.setHeader('Content-Type', 'application/json');
+        if (request.url === '/v1/account/encryption') {
+          response.end(JSON.stringify({ mode: 'plain', updatedAt: 1 }));
+          return;
+        }
+        const machineId = request.url?.split('/v1/machines/')[1];
+        if (request.method === 'GET' && (machineId === sourceMachineId || machineId === targetMachineId)) {
+          response.end(JSON.stringify({ machine: MachinePublishedRowV1Schema.parse({
+            id: machineId,
+            metadata: null,
+            metadataVersion: 0,
+            daemonState: null,
+            daemonStateVersion: 0,
+            dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+            storageMode: 'plain',
+            active: true,
+          }) }));
+          return;
+        }
+        response.statusCode = 404;
+        response.end(JSON.stringify({ error: 'unknown_fixture_route' }));
+      });
       try {
+        await new Promise<void>((resolveListen) => home.listen(0, '127.0.0.1', resolveListen));
+        const homeAddress = home.address();
+        if (!homeAddress || typeof homeAddress === 'string') throw new Error('Missing fixture Home address');
+        const homeUrl = `http://127.0.0.1:${homeAddress.port}`;
         sourceIroh = await createDaemonMachineIrohRuntime({
           happyHomeDir: sourceHome,
           relayConfig: { relayPolicy: 'disabled', relayUrls: [] },
           native,
         });
+        if (outOfProcess) peerProcess = await startNativePeerProcess(addonPath, topology, testController.getTestRelayUrl());
         targetIroh = await createDaemonMachineIrohRuntime({
           happyHomeDir: targetHome,
           relayConfig: { relayPolicy: 'disabled', relayUrls: [] },
-          native,
+          native: peerProcess?.native ?? native,
         });
         expect(sourceIroh.available).toBe(true);
         expect(targetIroh.available).toBe(true);
         if (!sourceIroh.available || !targetIroh.available) return;
 
-        admission = await startPeerMediationLoopbackServer({
-          nowMs: () => nowMs,
-          expected: {
-            accountId,
-            machineId: targetMachineId,
-            flowKind: 'machine_rpc',
-            routeKind: 'loopback_direct',
-            endpointFingerprint: targetIroh.endpoint.endpointId,
-          },
-          trustRoots,
-          endpointExpiresAt: 301_000,
-          irohMachineAdmission: {
-            localEndpointId: targetIroh.endpoint.endpointId,
-            role: 'acceptor',
-            allowedFlows: ['workspace_sync'],
-            resolveApplicationTarget: async ({ handshake }) => {
-              if (handshake.flow !== 'workspace_sync' || handshake.initiator.kind !== 'machine') return null;
-              const ingress = await targetAuthority.acquireWorkspaceSyncMachineIngress({
-                operationId: handshake.operationId,
-                sourceMachineId: handshake.initiator.machineId,
-                targetMachineId: handshake.target.machineId,
-              }).catch((error: unknown) => {
-                throw Object.assign(new Error(
-                  `Target rooted-agent ingress failed: ${error instanceof Error ? error.message : String(error)}`,
-                ), { code: 'peer_unavailable' });
-              });
-              return {
-                port: ingress.port,
-                localCapability: ingress.localCapability,
-              };
+        const startTargetAdmission = async (peer: typeof targetIroh) => {
+          if (!peer?.available) throw new Error('Target Iroh endpoint is unavailable');
+          const currentAdmission = await startPeerMediationLoopbackServer({
+            nowMs: () => nowMs,
+            expected: {
+              accountId,
+              machineId: targetMachineId,
+              flowKind: 'machine_rpc',
+              routeKind: 'loopback_direct',
+              endpointFingerprint: peer.endpoint.endpointId,
             },
-          },
-        });
-        await targetIroh.startAttemptAcceptor({
-          admissionPort: Number(new URL(admission.url).port),
-        });
+            trustRoots,
+            endpointExpiresAt: 301_000,
+            irohMachineAdmission: {
+              localEndpointId: peer.endpoint.endpointId,
+              role: 'acceptor',
+              allowedFlows: ['workspace_sync'],
+              resolveApplicationTarget: async ({ handshake, signal }) => {
+                if (handshake.flow !== 'workspace_sync' || handshake.initiator.kind !== 'machine') return null;
+                const ingress = await targetAuthority.acquireWorkspaceSyncMachineIngress({
+                  operationId: handshake.operationId,
+                  sourceMachineId: handshake.initiator.machineId,
+                  targetMachineId: handshake.target.machineId,
+                  signal,
+                }).catch((error: unknown) => {
+                  throw Object.assign(new Error(
+                    `Target rooted-agent ingress failed: ${error instanceof Error ? error.message : String(error)}`,
+                  ), { code: 'peer_unavailable' });
+                });
+                return {
+                  port: ingress.port,
+                  localCapability: ingress.localCapability,
+                };
+              },
+            },
+          });
+          await peer.startAttemptAcceptor({ admissionPort: Number(new URL(currentAdmission.url).port) });
+          return currentAdmission;
+        };
+        admission = await startTargetAdmission(targetIroh);
 
         const targetMachine = {
           id: targetMachineId,
@@ -463,20 +568,17 @@ describe('production handoff -> Mutagen manager -> broker -> controller -> nativ
           return tunnel;
         }
 
-        const publishSettings = (settings: ActiveAccountSettingsSnapshot['settings']): void => {
-          const previous = getSettingsSnapshot();
-          currentSettings = AccountSettingsSchema.parse(settings);
-          currentSettingsVersion += 1;
-          const next = getSettingsSnapshot();
-          for (const listener of settingsListeners) listener(previous, next);
+        const publishProject = (snapshot: ProjectAccountSnapshotV1): void => {
+          const previous = getProjectSnapshot();
+          currentProject = parseProjectAccountSnapshotV1(snapshot);
+          currentProjectRevision += 1;
+          const next = getProjectSnapshot();
+          for (const listener of projectListeners) listener(previous, next);
         };
-        const mutateSettings = async (
-          mutate: (settings: Readonly<Record<string, unknown>>) => Readonly<Record<string, unknown>> | Promise<Readonly<Record<string, unknown>>>,
-          signal?: AbortSignal,
-        ): Promise<AccountSettingsMutationResult> => {
+        const mutateProjectSnapshot: ProjectAccountSnapshotMutation = async (mutate, signal) => {
           signal?.throwIfAborted();
-          publishSettings(AccountSettingsSchema.parse(await mutate(currentSettings)));
-          return { status: 'applied', version: currentSettingsVersion, settings: currentSettings };
+          publishProject(parseProjectAccountSnapshotV1(await mutate(currentProject)));
+          return { status: 'applied', version: currentProjectRevision, snapshot: currentProject };
         };
         const productionCallMachineRpc: ProductionDaemonWorkspaceSyncFactories['callMachineRpc'] = async (request) => {
           if (request.machineId !== targetMachineId) throw new Error(`Unexpected workspace-sync RPC target ${request.machineId}`);
@@ -489,6 +591,12 @@ describe('production handoff -> Mutagen manager -> broker -> controller -> nativ
           if (request.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_BOOTSTRAP_RELEASE) {
             return await targetAuthority.releaseBootstrapHere(
               WorkspaceSyncTargetBootstrapReleaseV1Schema.parse(request.request),
+              request.signal,
+            );
+          }
+          if (request.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_CONFLICT_RECOVER) {
+            return await targetAuthority.recoverConflictResolutionHere(
+              WorkspaceSyncTargetConflictRecoverV1Schema.parse(request.request),
               request.signal,
             );
           }
@@ -521,34 +629,30 @@ describe('production handoff -> Mutagen manager -> broker -> controller -> nativ
           createPeerIdentityValidator: () => createWorkspaceSyncPeerIdentityValidator({
             resolveExecutable: () => binaries.custody,
           }),
-          getSettingsSnapshot,
-          subscribeSettingsSnapshot: (listener) => {
-            settingsListeners.add(listener);
-            return () => settingsListeners.delete(listener);
+          getProjectSnapshot,
+          subscribeProjectSnapshot: (listener) => {
+            projectListeners.add(listener);
+            return () => { projectListeners.delete(listener); };
           },
           callMachineRpc: productionCallMachineRpc,
           inspectLegacyState: async ({ activeServerDir }) => ({
             status: 'absent' as const,
             path: join(activeServerDir, 'workspace-replication'),
           }),
-          refreshSettings: async () => ({
-            ...getSettingsSnapshot(),
-            rawSettings: currentSettings,
-            whenRefreshed: null,
-          }),
+          refreshProjectRows: async () => getProjectSnapshot(),
           createRelationshipOwner: (options) => createWorkspaceSyncRelationshipOwner({
             ...options,
-            mutateSettings,
-            readSettings: async () => currentSettings,
+            mutateProjectSnapshot,
+            readProjectSnapshot: async () => currentProject,
             createId: (() => {
-              const ids = [sourceWorkspaceRefId, targetWorkspaceRefId];
+              const ids = [sourceWorkspaceRefId, targetWorkspaceRefId, `${sourceWorkspaceRefId}-second`, `${targetWorkspaceRefId}-second`];
               return () => ids.shift() ?? `workspace-ref-${ids.length}`;
             })(),
-            deriveRelationshipId: () => relationshipId,
+            deriveRelationshipId: (operationId) => operationId === 'action-second-relationship' ? secondRelationshipId : relationshipId,
             nowMs: () => nowMs,
           }),
         };
-        sourceWorkspaceRuntime = await createProductionDaemonWorkspaceSyncRuntime({
+        sourceWorkspaceRuntime = await runWithServerHttpBaseUrl(homeUrl, async () => await createProductionDaemonWorkspaceSyncRuntime({
           happyHomeDir: sourceHome,
           activeServerDir: join(sourceHome, 'servers', 'server-1'),
           activeServerId: 'server-1',
@@ -556,7 +660,7 @@ describe('production handoff -> Mutagen manager -> broker -> controller -> nativ
           releaseChannel: 'publicdev',
           credentials: { token: 'test-token', encryption: null },
           openMachineCarrierTunnel,
-        }, productionFactories);
+        }, productionFactories));
 
         const alphaPayload = `alpha-to-beta-${topology}-non-empty\n`;
         await writeFile(join(sourceRoot, 'alpha-to-beta.txt'), alphaPayload);
@@ -655,7 +759,7 @@ describe('production handoff -> Mutagen manager -> broker -> controller -> nativ
         expect(handoffResult.result).toMatchObject({
           workspace: { kind: 'relationship', relationshipId, created: true },
         });
-        expect(currentSettings.workspaceSyncRelationshipsV1).toEqual([
+        expect(currentProject.relationships).toEqual([
           expect.objectContaining({ relationshipId, mode: 'keep_both_in_sync', enabled: true }),
         ]);
 
@@ -706,6 +810,89 @@ describe('production handoff -> Mutagen manager -> broker -> controller -> nativ
           `${topology} beta-to-alpha Mutagen bytes`,
         );
 
+        await writeFile(join(secondSourceRoot, 'initial.txt'), 'second relationship before restart\n');
+        await materializeWorkspaceSyncForOpen(sourceWorkspaceRuntime.handoffAdapter, {
+          operationId: 'action-second-relationship',
+          accountServerId: 'server-1',
+          sourceMachineId,
+          targetMachineId,
+          sourceRootPath: secondSourceRoot,
+          targetRootPath: secondTargetRoot,
+          action: {
+            kind: 'create_relationship',
+            mode: 'keep_both_in_sync',
+            contentPolicy: { ...contentPolicyInput, policyDigest: computeWorkspaceSyncPolicyDigest(contentPolicyInput) },
+            flushBeforeCommit: true,
+          },
+        });
+        await waitForContents(join(secondTargetRoot, 'initial.txt'), 'second relationship before restart\n', 'second relationship initial bytes');
+
+        const retiredEndpointId = targetIroh.endpoint.endpointId;
+        const streamsBeforeRestart = targetAgentStreams.length;
+        if (peerProcess) await peerProcess.kill();
+        else await targetIroh.shutdown();
+        targetIroh = null;
+        await admission.stop();
+        admission = null;
+        await targetAuthority.releaseAllRetainedBootstraps();
+        targetAuthority = createTargetAuthority();
+        const restartPeer = async () => {
+          if (outOfProcess) peerProcess = await startNativePeerProcess(addonPath, topology, testController.getTestRelayUrl());
+          targetIroh = await createDaemonMachineIrohRuntime({
+            happyHomeDir: outOfProcess ? targetHome : join(fixtureRoot, 't2'),
+            relayConfig: { relayPolicy: 'disabled', relayUrls: [] },
+            native: peerProcess?.native ?? native,
+          });
+          if (!targetIroh.available) throw new Error('Replacement Iroh endpoint is unavailable');
+          if (outOfProcess) expect(targetIroh.endpoint.endpointId).toBe(retiredEndpointId);
+          else expect(targetIroh.endpoint.endpointId).not.toBe(retiredEndpointId);
+          admission = await startTargetAdmission(targetIroh);
+          targetMachine.operationProtocolCapabilities.irohMachineEndpoint = { protocolVersions: [1], ...targetIroh.endpoint };
+          targetMachine.operationProtocolCapabilitiesRevision += 1;
+        };
+        if (retirement !== 'process_offline') await restartPeer();
+        const afterRestartPayload = `after-restart-${topology}\n`;
+        await writeFile(join(sourceRoot, 'after-restart.txt'), afterRestartPayload);
+        const flushOutcome = sourceWorkspaceRuntime.workspaceSync.controller.flush(relationshipId).then(
+          () => ({ kind: 'flushed' as const }),
+          (error: unknown) => ({ kind: 'failed' as const, error }),
+        );
+        let deadline: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const outcome = await Promise.race([
+            flushOutcome,
+            new Promise<never>((_resolveDeadline, rejectDeadline) => {
+              deadline = setTimeout(() => rejectDeadline(new Error('Flush remained pending after peer restart')), outOfProcess ? 60_000 : 10_000);
+            }),
+          ]);
+          if (outcome.kind === 'failed') expect(outcome.error).toMatchObject({ code: 'engine_unavailable' });
+          if (retirement === 'process_offline') expect(outcome.kind).toBe('failed');
+        } finally {
+          clearTimeout(deadline);
+        }
+        if (retirement === 'process_offline') await restartPeer();
+        await writeFile(join(secondSourceRoot, 'after-restart.txt'), afterRestartPayload);
+        // A transport refusal can leave normal engine recovery active. Model
+        // one explicit user retry and require both sessions to flush cleanly.
+        for (const id of [relationshipId, secondRelationshipId]) {
+          let raw: unknown;
+          try {
+            raw = await sourceWorkspaceRuntime.workspaceSync.controller.flush(id);
+          } catch (error) {
+            expect(error).toMatchObject({ code: 'engine_unavailable' });
+            raw = await sourceWorkspaceRuntime.workspaceSync.controller.flush(id);
+          }
+          const flushed = WorkspaceSyncStatusV1Schema.parse(raw);
+          expect(flushed).toMatchObject({
+            relationshipId: id,
+            state: 'watching',
+          });
+          expect(flushed.lastCleanSyncAtMs).not.toBeNull();
+        }
+        await waitForContents(join(targetRoot, 'after-restart.txt'), afterRestartPayload, `${topology} replacement endpoint bytes`);
+        await waitForContents(join(secondTargetRoot, 'after-restart.txt'), afterRestartPayload, `${topology} second relationship replacement bytes`);
+        expect(targetAgentStreams.length).toBeGreaterThan(streamsBeforeRestart);
+
         const status = await sourceWorkspaceRuntime.workspaceSync.controller.get(relationshipId);
         expect(status).toMatchObject({
           relationshipId,
@@ -738,6 +925,7 @@ describe('production handoff -> Mutagen manager -> broker -> controller -> nativ
         expect(callMachineRpc).not.toHaveBeenCalled();
 
         await sourceWorkspaceRuntime.workspaceSync.controller.terminate(relationshipId);
+        await sourceWorkspaceRuntime.workspaceSync.controller.terminate(secondRelationshipId);
         await expect(sourceWorkspaceRuntime.workspaceSync.controller.get(relationshipId)).resolves.toBeNull();
         await waitFor(
           () => targetAgentStreams.every((agent) => agent.stream.destroyed),
@@ -749,8 +937,10 @@ describe('production handoff -> Mutagen manager -> broker -> controller -> nativ
         await sourceWorkspaceRuntime?.stop().catch(() => undefined);
         await sourceIroh?.shutdown().catch(() => undefined);
         await targetIroh?.shutdown().catch(() => undefined);
+        await peerProcess?.kill();
         await admission?.stop().catch(() => undefined);
         await targetAuthority.releaseAllRetainedBootstraps().catch(() => undefined);
+        await new Promise<void>((resolveClose, rejectClose) => home.close((error) => error ? rejectClose(error) : resolveClose()));
         await rm(fixtureRoot, { recursive: true, force: true });
         await testController.restoreAutomatic();
       }

@@ -14,6 +14,7 @@ import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverSc
 import {
     isRpcMethodNotAvailableError,
     isRpcMethodNotFoundError,
+    readRpcErrorCode,
 } from '@/sync/runtime/rpcErrors';
 import {
     parseDaemonContributionRegistryProjectionDescribeResponse,
@@ -183,9 +184,9 @@ export function mapMachinePluginUiResourceTransportFailure(
 }
 
 function classifyMachinePluginTransportError(error: unknown): MachinePluginTransportReason {
-    const code = error && typeof error === 'object'
+    const code = readRpcErrorCode(error) ?? (error && typeof error === 'object'
         ? (error as Readonly<{ code?: unknown }>).code
-        : undefined;
+        : undefined);
     if (code === 'MACHINE_RPC_ABORTED' || code === 'SOCKET_RPC_ABORTED') return 'aborted';
     if (code === 'MACHINE_RPC_TIMEOUT') return 'timeout';
     return 'error';
@@ -207,7 +208,21 @@ function pluginRpcOperationOptions(opts: Readonly<{ timeoutMs?: number | null; s
  * a timeout, a caller epoch — enters it, so every reader of the same question
  * shares one request.
  */
-const projectionReadInflightByKey = new Map<string, Promise<unknown>>();
+type SharedProjectionRead<T> = {
+    request: Promise<T>;
+    controller: AbortController;
+    readers: number;
+    pending: boolean;
+    abandon(): void;
+};
+const projectionReadInflightByKey = new Map<string, SharedProjectionRead<unknown>>();
+
+function createSharedProjectionRead<T>(read: (signal: AbortSignal) => Promise<T>, abandon: () => void): SharedProjectionRead<T> {
+    const controller = new AbortController();
+    const entry = { request: read(controller.signal), controller, readers: 0, pending: true, abandon };
+    void entry.request.then(() => { entry.pending = false; }, () => { entry.pending = false; });
+    return entry;
+}
 
 /**
  * The Account a read is for. Every handle of one Account shares its reads; a
@@ -220,42 +235,54 @@ function shareProjectionRead<T>(
     scope: MachineContributionRegistryProjectionScope,
     payload: unknown,
     account: ProjectionReadAccount | null | undefined,
-    read: () => Promise<T>,
-): Promise<T> {
+    read: (signal: AbortSignal) => Promise<T>,
+): SharedProjectionRead<T> {
     const key = JSON.stringify([
         machineContributionRegistryProjectionScopeKey(scope),
         getMachineContributionRegistryProjectionRevision(scope),
         account ? serverAccountScopeKeySuffix(account.scope) : null,
         payload,
     ]);
-    const incumbent = projectionReadInflightByKey.get(key) as Promise<T> | undefined;
+    const incumbent = projectionReadInflightByKey.get(key) as SharedProjectionRead<T> | undefined;
     if (incumbent) return incumbent;
-    const request = read();
+    const forget = () => {
+        if (projectionReadInflightByKey.get(key) === request) projectionReadInflightByKey.delete(key);
+    };
+    const request = createSharedProjectionRead(read, forget);
     projectionReadInflightByKey.set(key, request);
-    void request.then(() => {
-        if (projectionReadInflightByKey.get(key) === request) {
-            projectionReadInflightByKey.delete(key);
-        }
-    });
+    void request.request.then(forget, forget);
     return request;
 }
 
-/** A caller that leaves stops waiting; the shared read keeps serving the others. */
+/** The last departing reader retires the shared transport and allows a fresh attempt. */
 async function waitForSharedRead<T>(
-    request: Promise<T>,
+    entry: SharedProjectionRead<T>,
     signal: AbortSignal | undefined,
     aborted: () => T,
 ): Promise<T> {
-    if (!signal) return await request;
-    if (signal.aborted) return aborted();
-    return await new Promise((resolve) => {
-        const onAbort = () => resolve(aborted());
-        signal.addEventListener('abort', onAbort, { once: true });
-        void request.then((result) => {
-            signal.removeEventListener('abort', onAbort);
-            resolve(result);
+    entry.readers++;
+    let onAbort: (() => void) | undefined;
+    let released = false;
+    const release = () => {
+        if (released) return;
+        released = true;
+        if (--entry.readers === 0 && entry.pending) {
+            entry.abandon();
+            entry.controller.abort();
+        }
+    };
+    try {
+        if (!signal) return await entry.request;
+        if (signal.aborted) return aborted();
+        return await new Promise<T>((resolve, reject) => {
+            onAbort = () => { release(); resolve(aborted()); };
+            signal.addEventListener('abort', onAbort, { once: true });
+            void entry.request.then(resolve, reject);
         });
-    });
+    } finally {
+        if (onAbort) signal?.removeEventListener('abort', onAbort);
+        release();
+    }
 }
 
 async function readProjectionClientContext(machineId: string) {
@@ -303,7 +330,7 @@ export async function machineContributionRegistryProjectionDescribe(
         machineId: payload.machineId,
         serverId: opts?.serverId ?? null,
     } satisfies MachineContributionRegistryProjectionScope;
-    const request = shareProjectionRead(scope, payload, opts?.accountLifetime, async (): Promise<MachineContributionRegistryProjectionDescribeResult> => {
+    const request = shareProjectionRead(scope, payload, opts?.accountLifetime, async (signal): Promise<MachineContributionRegistryProjectionDescribeResult> => {
         try {
             const response = await machineRpcWithServerScope<unknown, typeof payload>({
                 machineId: payload.machineId,
@@ -314,6 +341,7 @@ export async function machineContributionRegistryProjectionDescribe(
                 // Projection work has no operation deadline, like capability
                 // detection. Connection/setup admission keeps its RPC budget.
                 operationTimeoutMs: null,
+                signal,
             });
             if (isRpcMethodNotFoundResult(response)) {
                 return { supported: false, reason: 'not-supported' };
@@ -367,14 +395,16 @@ export async function machinePluginUiTargetedContributionsRead(
         machineId: payload.machineId,
         serverId: opts.serverId ?? null,
     } satisfies MachineContributionRegistryProjectionScope;
-    const request = shareProjectionRead(scope, payload, opts.accountLifetime, async (): Promise<MachinePluginUiTargetedContributionsReadResult> => {
+    const request = shareProjectionRead(scope, payload, opts.accountLifetime, async (signal): Promise<MachinePluginUiTargetedContributionsReadResult> => {
         try {
             const response = await machineRpcWithServerScope<unknown, typeof payload>({
                 machineId: payload.machineId,
                 serverId: opts.serverId,
+                accountId: opts.accountLifetime?.scope.accountId,
                 method: RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ,
                 payload,
                 operationTimeoutMs: null,
+                signal,
             });
             if (isRpcMethodNotFoundResult(response)) {
                 return { supported: false, reason: 'not-supported' };
@@ -764,6 +794,7 @@ export async function machinePluginStructuredMessageActionExecute(
                 : { selectedActionInputCarrier: opts.selectedActionInputCarrier }),
             ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
             ...(opts.messageActionReference ? { messageActionReference: opts.messageActionReference } : {}),
+            ...(opts.resolveClientMessageContext ? { resolveClientMessageContext: true } : {}),
             executionSurface: opts.executionSurface,
             ...(opts.invocation ? { invocation: opts.invocation } : {}),
             ...(opts.presentUserIntent ? { presentUserIntent: opts.presentUserIntent } : {}),
@@ -841,7 +872,7 @@ export async function machinePluginActionFormConnectedAccountOptionsResolve(
  */
 const actionSchemaReadsByKey = new Map<string, Readonly<{
     occurrenceId: string;
-    request: Promise<MachinePluginActionSchemasReadResult>;
+    request: SharedProjectionRead<MachinePluginActionSchemasReadResult>;
 }>>();
 
 /** Forgets every shared in-flight projection read and memoised Action schema. */
@@ -875,7 +906,7 @@ export async function machinePluginActionSchemasRead(
     const incumbent = actionSchemaReadsByKey.get(key);
     let request = incumbent?.occurrenceId === payload.expectedOccurrenceId ? incumbent.request : null;
     if (!request) {
-        const issued = (async (): Promise<MachinePluginActionSchemasReadResult> => {
+        const issued = createSharedProjectionRead(async (signal): Promise<MachinePluginActionSchemasReadResult> => {
             try {
                 const response = await machineRpcWithServerScope<unknown, typeof payload>({
                     machineId,
@@ -883,6 +914,7 @@ export async function machinePluginActionSchemasRead(
                     method: RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ,
                     payload,
                     operationTimeoutMs: null,
+                    signal,
                 });
                 if (isRpcMethodNotFoundResult(response)) return { supported: false, reason: 'not-supported' };
                 const parsed = DaemonPluginActionSchemasReadResponseSchema.safeParse(response);
@@ -892,10 +924,12 @@ export async function machinePluginActionSchemasRead(
             } catch (error) {
                 return { supported: false, reason: classifyMachinePluginTransportError(error) };
             }
-        })();
+        }, () => {
+            if (actionSchemaReadsByKey.get(key) === entry) actionSchemaReadsByKey.delete(key);
+        });
         const entry = Object.freeze({ occurrenceId: payload.expectedOccurrenceId, request: issued });
         actionSchemaReadsByKey.set(key, entry);
-        void issued.then((result) => {
+        void issued.request.then((result) => {
             if ((!result.supported || !result.result.ok) && actionSchemaReadsByKey.get(key) === entry) {
                 actionSchemaReadsByKey.delete(key);
             }

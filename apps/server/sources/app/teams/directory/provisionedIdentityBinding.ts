@@ -1,4 +1,5 @@
 import type { Tx } from "@/storage/inTx";
+import { acquireTeamMutationAccountAdmissionInTx } from "../memberships/sessionAccessEffects";
 
 import { applyReadyDirectorySourceFactsForAccountInTx } from "./directoryProjectionRepository";
 import { isDirectorySourceCompletedEvidenceAllowedInTx } from "./directorySourcePolicy";
@@ -180,6 +181,7 @@ export async function bindDirectoryProvisionedIdentitiesInTx(
         match: DirectoryProvisionedIdentityMatch;
     }>,
 ): Promise<DirectoryProvisionedBindResult> {
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.accountId], affectedAccountIds: [input.accountId], membershipChange: { kind: "teamMembership", teamId: input.teamId } });
     const candidates = await readDirectoryProvisionedIdentityCandidatesInTx(tx, input);
 
     const ambiguousSourceIds = new Set(

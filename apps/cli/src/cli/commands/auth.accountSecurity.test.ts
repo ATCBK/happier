@@ -152,12 +152,14 @@ describe('trusted interactive CLI Account Security vertical', () => {
   });
 
   it('reads Account security through the shared present_user Action without exposing credential material', async () => {
+    const { publishServerHttpRuntimeOrigin } = await import('@/api/client/serverHttpBaseUrl');
+    const release = publishServerHttpRuntimeOrigin('http://runtime.account.test', 'iroh');
     const app = fastify();
     app.get('/v1/account/security', async (request) => {
       expect(request.headers.authorization).toBe('Bearer interactive');
       return { v: 1, terminalPresentUserPolicy: 'allowed', encryptionMode: 'plain', nativeEmail: 'ada@example.test', password: { status: 'enrolled', revision: 3 } };
     });
-    const restore = installAxiosFastifyAdapter({ app, origin: 'http://account.test' });
+    const restore = installAxiosFastifyAdapter({ app, origin: 'http://runtime.account.test' });
     const output = captureConsoleText();
     try {
       const { writeCredentialsTokenOnly } = await import('@/persistence');
@@ -172,6 +174,7 @@ describe('trusted interactive CLI Account Security vertical', () => {
     } finally {
       output.restore();
       restore();
+      release();
       await app.close();
     }
   });

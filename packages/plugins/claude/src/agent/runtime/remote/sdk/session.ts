@@ -14,7 +14,7 @@ import { HappierStructuredInputV1Schema } from '@happier-dev/plugin-sdk/sessions
 import type { AgentSessionInputFilesService } from '@happier-dev/plugin-sdk/agents/runtime';
 import { createClaudeMcpUsageWitness } from './mcpUsage.js';
 import { createClaudeSkillUsageWitness } from './skillUsage.js';
-import { parseMcpToolWireNameV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
+import { parseMcpToolWireNameV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { buildClaudeMcpConfigArgs, materializeClaudeMcpConfigArgsForSpawn } from '../../../mcp/materializeConfigArgs.js';
 import {
     redactBugReportSensitiveText,
@@ -22,6 +22,7 @@ import {
     type JsonValue,
 } from '@happier-dev/plugin-sdk';
 import type { SessionWorkStateV1 } from '@happier-dev/plugin-sdk/sessions/work-state';
+import type { SessionGoalControlFailureV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { createClaudeRuntimeActivityPublisher } from '../../shared/runtimeActivityPublisher.js';
 import {
     readClaudePendingLocalId,
@@ -56,6 +57,7 @@ import type {
 } from '../../../sdk/types.js';
 import { createClaudeTaskNotificationToolResultProjector, readClaudeTaskLifecycleEnvelope } from '../../../transcripts/taskNotification.js';
 import { readClaudeNativePeerMessageText } from '../../../transcripts/nativeSemanticProjection.js';
+import { buildClaudeJsonlProviderFactLocalIdFromParts } from '../../../transcripts/providerFactIdentity.js';
 import { recordClaudeRuntimeProviderAccountUsageSnapshot } from '../../accountUsage.js';
 import { buildClaudeLiveContextUsageSnapshot } from '../../../usage/liveContextSnapshot.js';
 import { buildClaudeAssistantUsageObservation } from '../../../usage/buildAssistantObservation.js';
@@ -96,6 +98,8 @@ import {
     type ClaudeAgentSdkGoalStatusTail,
 } from './goalStatusTail.js';
 import {
+    extractTextDeltaFromStreamEvent,
+    extractTextStartFromStreamEvent,
     extractToolResultBlocksFromSdkMessage,
     extractToolUseBlocksFromSdkMessage,
     hasClaudeAgentSdkDefinitiveSubagentRuntimeAuthFailureEvidence,
@@ -127,6 +131,7 @@ import { buildClaudePluginDirArgs } from '../../pluginDirArgs.js';
 import { buildClaudeEffortCliArgs } from '../../reasoningEffort.js';
 import { buildClaudePermissionModeArgs, mapToClaudePermissionMode } from '../../permissionMode.js';
 import { materializeClaudeStartupInstructions } from '../../startupInstructions.js';
+import { prepareClaudeTerminalConfigHome } from '../../terminal/configHome.js';
 import { createClaudeAgentSdkResumeIdentityOwner } from './resumeIdentity.js';
 import type { ClaudeUnifiedTerminalContext } from '../../terminal/unified/turnOperations.js';
 import {
@@ -256,7 +261,7 @@ function readRefreshedAccessToken(value: unknown): string | null {
     return readString(value.result.accessToken);
 }
 
-function createDeferred(): Readonly<{
+function createDeferred(publishTurnTerminal = true): Readonly<{
     promise: Promise<void>;
     resolve(): void;
     reject(error: Error): void;
@@ -268,7 +273,8 @@ function createDeferred(): Readonly<{
 }> {
     let resolvePromise: (() => void) | null = null;
     let rejectPromise: ((error: Error) => void) | null = null;
-    let terminalPublished = false;
+    // Native controls have a transport completion, but do not own a host turn.
+    let terminalPublished = !publishTurnTerminal;
     const promise = new Promise<void>((resolve, reject) => {
         resolvePromise = resolve;
         rejectPromise = reject;
@@ -461,13 +467,15 @@ const readUltracodeFromRuntimeConfigUpdate = readClaudeRuntimeConfigUltracodeUpd
 function resolvePromptInput(
     prompt: SDKUserMessage['message']['content'],
     _policy: ClaudeAgentSdkToolPermissionPolicy | null,
+    uuid: string,
 ): AsyncIterable<SDKUserMessage> {
-    return createPromptStream(prompt);
+    return createPromptStream(prompt, uuid);
 }
 
-async function* createPromptStream(prompt: SDKUserMessage['message']['content']): AsyncIterable<SDKUserMessage> {
+async function* createPromptStream(prompt: SDKUserMessage['message']['content'], uuid: string): AsyncIterable<SDKUserMessage> {
     yield {
         type: 'user',
+        uuid,
         message: {
             role: 'user',
             content: prompt,
@@ -525,6 +533,19 @@ function mapSdkRuntimeEvent(params: Readonly<{
     turnId: string | null;
     providerFailure?: ClaudeProviderFailureEvidence | null;
 }>): ProviderEventMessage | null {
+    const text = extractTextDeltaFromStreamEvent(params.message)
+        ?? extractTextStartFromStreamEvent(params.message);
+    if (text) {
+        return ClaudeProviderEventSchema.parse({
+            sessionId: params.sessionId,
+            emittedAtMs: Date.now(),
+            kind: 'message-delta',
+            ...(readSdkSidechainId(params.message) ? { sidechainId: readSdkSidechainId(params.message) } : {}),
+            ...(params.turnId && !isReplayClaudeAgentSdkMessage(params.message) && !readSdkSidechainId(params.message)
+                ? { turnId: params.turnId } : {}),
+            delta: { text },
+        });
+    }
     if (params.message.type === 'assistant') {
         return ClaudeProviderEventSchema.parse({
             sessionId: params.sessionId,
@@ -580,6 +601,17 @@ function mapSdkTranscriptEvent(params: Readonly<{
     const text = readClaudeNativePeerMessageText(params.message)
         ?? (isSdkAssistantMessage(params.message) ? readAssistantText(params.message) : null);
     if (!text) return null;
+    const record = params.message as Readonly<Record<string, unknown>>;
+    // Main-chain native text is also observed by ordered JSONL follow. Both
+    // readers must publish the same fact identity. SDK-only error diagnostics
+    // and child messages do not have that main-chain text projection.
+    const sourceLocalId = record.isSidechain !== true && !readSdkSidechainId(params.message)
+        && record.isApiErrorMessage !== true
+        ? buildClaudeJsonlProviderFactLocalIdFromParts({
+            type: params.message.type,
+            id: readString(record.uuid) ?? '',
+        })
+        : null;
     return ClaudeProviderEventSchema.parse({
         sessionId: params.sessionId,
         emittedAtMs: Date.now(),
@@ -589,7 +621,7 @@ function mapSdkTranscriptEvent(params: Readonly<{
             ? { turnId: params.turnId } : {}),
         ...(readSdkSidechainId(params.message) ? { sidechainId: readSdkSidechainId(params.message) } : {}),
         agentId: 'claude',
-        localId: `claude-sdk-${readMessageId(params.message, `assistant-${params.sequence}`)}`,
+        localId: sourceLocalId ?? `claude-sdk-${readMessageId(params.message, `assistant-${params.sequence}`)}`,
         body: {
             type: 'message',
             message: text,
@@ -745,10 +777,12 @@ export type ClaudeAgentSdkTurnOperationsParams = Readonly<{
      */
     enableSessionResumability?: boolean;
     /** Native AgentRuntime work-state projection; omitting it preserves the legacy metadata owner. */
-    publishGoalWorkState?: (snapshot: SessionWorkStateV1) => void;
+    publishGoalWorkState?: (snapshot: SessionWorkStateV1) => void | Promise<void>;
 }>;
 
 export type ClaudeAgentSdkNativeOperations = ClaudeRuntimeTurnOperations & Readonly<{
+    setGoal?: ReturnType<typeof createClaudeUnifiedGoalRuntime>['setGoal'];
+    clearGoal?: ReturnType<typeof createClaudeUnifiedGoalRuntime>['clearGoal'];
     refreshSkills: NonNullable<AgentSessionRuntime['refreshSkills']>;
     observeSourceTranscript: NonNullable<AgentSessionRuntime['observeSourceTranscript']>;
     subscribeCanonicalAgentSessionEvents: ReturnType<typeof createClaudeRuntimeActivityPublisher>['subscribe'];
@@ -799,7 +833,7 @@ export function createClaudeAgentSdkTurnOperations(
     let currentTurnId: string | null = null;
     let currentPermissionMode = params.permissionMode;
     let permissionModeUpdate = Promise.resolve();
-    let currentWorkspaceWrites = params.workspaceWrites;
+    let currentWorkspaceWrites = params.workspaceWrites ?? 'allow';
     let currentModelId: string | null = readString(params.initialModelId);
     let currentProviderModel = params.providerModel;
     let currentFallbackModel: string | null = null;
@@ -808,7 +842,10 @@ export function createClaudeAgentSdkTurnOperations(
     let currentUltracode = supportsEffort && params.initialUltracode === true;
     let contextUsageRefreshPromise: Promise<boolean> | null = null;
     const toolPermissionPolicy = params.toolPermissionPolicy ?? null;
-    const permissionHooksEnabled = toolPermissionPolicy === null || params.unlistedTools === 'deny';
+    // Claude Code's non-interactive SDK omits interaction tools such as AskUserQuestion unless
+    // the process has a native permission host. Ordinary Sessions therefore use the SDK callback;
+    // confined launches retain the hook bridge because its PreToolUse owner enforces scoped rules.
+    const permissionHooksEnabled = params.unlistedTools === 'deny';
     const sessionWorkStateEnabled = params.enableSessionWorkState === true;
     const happierSessionId = readString(params.happierSessionId);
     let promotedTranscriptPath: string | null = null;
@@ -873,21 +910,84 @@ export function createClaudeAgentSdkTurnOperations(
     // Centralized native `/goal` runtime. The SOURCE observes the live SDK stream (system-init
     // `slash_commands` => `/goal` capability) AND the file-only `goal_status` attachments via the
     // narrow JSONL tail below; the effector injects a literal `/goal …` user turn.
+    const goalControlObservations = new Set<(snapshot: SessionWorkStateV1, publication: Promise<void>, afterGoalCommandAdmission: boolean) => void>();
     const goalRuntime = sessionWorkStateEnabled
         ? createClaudeUnifiedGoalRuntime({
             backendId: 'claude',
             agentId: 'claude',
             getCurrentClaudeSessionId: () => providerSessionId,
             ...(params.publishGoalWorkState
-                ? { publishWorkStateSnapshot: params.publishGoalWorkState }
+                ? { publishWorkStateSnapshot: (snapshot: SessionWorkStateV1, afterGoalCommandAdmission = false) => {
+                    const publication = Promise.resolve().then(() => params.publishGoalWorkState!(snapshot));
+                    for (const observe of goalControlObservations) observe(snapshot, publication, afterGoalCommandAdmission);
+                    return publication;
+                } }
                 : {}),
-            injectGoalCommand: async (message) => { await operations.sendProviderTurnPrompt(message); },
+            injectGoalCommand: async (message) => {
+                const outcome = await operations.sendProviderTurnPrompt(message, undefined, false);
+                if (outcome.kind !== 'accepted') {
+                    throw new Error('Claude SDK did not accept the native Goal command');
+                }
+            },
             logError: (message, error) => { params.ctx.logger.debug(`[ClaudeAgentSdk] ${message}`, { error }); },
         })
         : null;
     let goalStatusTail: ClaudeAgentSdkGoalStatusTail | null = null;
+    let goalStatusTranscriptPath: string | null = null;
     const retiringGoalStatusTails = new Set<Promise<void>>();
     let lastEffectiveModelEvidenceKey: string | null = null;
+
+    async function settleGoalControl(
+        effect: () => Promise<unknown>,
+        matches: (snapshot: SessionWorkStateV1) => boolean,
+        waitForNativeCompletion = false,
+    ): Promise<unknown> {
+        // Let the transport's existing busy refusal decide without retiring the
+        // in-flight command's observation boundary.
+        if (turnInFlight) return await effect();
+        goalRuntime?.source.beginGoalCommandObservation(null);
+        let observed = false;
+        let confirm!: () => void;
+        let refuse!: (error: unknown) => void;
+        class SettlementError extends Error {
+            constructor(readonly phase: SessionGoalControlFailureV1['phase'], cause: unknown) {
+                super('session_goal_control_work_state_unavailable', { cause });
+            }
+        }
+        const inPhase = async <T>(phase: SessionGoalControlFailureV1['phase'], run: () => Promise<T>): Promise<T> => {
+            try { return await run(); } catch (cause) { throw new SettlementError(phase, cause); }
+        };
+        const acknowledgement = new Promise<void>((resolve, reject) => { confirm = resolve; refuse = reject; });
+        // Native file evidence may arrive while the transport is still admitting
+        // the command; retain its exact host publication receipt for this caller.
+        acknowledgement.catch(() => undefined);
+        const observe = (snapshot: SessionWorkStateV1, publication: Promise<void>, afterGoalCommandAdmission: boolean) => {
+            if (observed || (!waitForNativeCompletion && !afterGoalCommandAdmission) || !matches(snapshot)) return;
+            observed = true;
+            void publication.then(confirm, cause => refuse(new SettlementError('host_publication_rejected', cause)));
+        };
+        goalControlObservations.add(observe);
+        // Confirm the native Goal publication, even while Claude continues its
+        // resulting work. Native completion is only a failure/drain boundary.
+        try {
+            const result = await inPhase('native_effect', effect);
+            if (isRecord(result) && result.ok === false) return { ...result,
+                goalControlFailure: { phase: 'native_effect' } satisfies SessionGoalControlFailureV1 };
+            const completion = inPhase('provider_completion', () => operations.waitForProviderTurnCompletion()).then(async () => {
+                if (!observed) await inPhase('tail_drain', async () => { await goalStatusTail?.drainNow(); });
+                if (!observed) throw new SettlementError('missing_matching_publication', new Error('Native Goal state was not published'));
+                await acknowledgement;
+            });
+            await (waitForNativeCompletion ? completion : Promise.race([acknowledgement, completion]));
+            return result;
+        } catch (cause) {
+            return { ok: false, errorCode: 'session_goal_control_work_state_unavailable', error: 'session_goal_control_work_state_unavailable',
+                goalControlFailure: { phase: cause instanceof SettlementError ? cause.phase : 'native_effect' } satisfies SessionGoalControlFailureV1 };
+        } finally {
+            goalControlObservations.delete(observe);
+            goalRuntime?.source.beginGoalCommandObservation(null);
+        }
+    }
 
     function publishEffectiveModel(evidence: ClaudeEffectiveModelEvidence): void {
         const modelId = readString(evidence.modelId);
@@ -914,11 +1014,13 @@ export function createClaudeAgentSdkTurnOperations(
     }
 
     // Narrow side-follow of the persisted transcript JSONL for the file-only `goal_status`
-    // attachments (not present on the live SDK stream). The path is admitted only after the
-    // authenticated SessionStart candidate has exact accepted-prompt materialization proof.
-    function ensureGoalStatusTail(): void {
-        if (!goalRuntime || goalStatusTail) return;
-        const transcriptPath = promotedTranscriptPath ?? (
+    // attachments (not present on the live SDK stream). Native Goal reads consume
+    // the identity owner's authenticated current SessionStart candidate. Resume
+    // publication still requires its separate accepted-prompt proof: /goal is
+    // persisted as command markup and cannot supply an exact person-prompt match.
+    function ensureGoalStatusTail(candidatePath?: string): void {
+        if (!goalRuntime) return;
+        const transcriptPath = candidatePath ?? promotedTranscriptPath ?? (
             params.enableSessionResumability !== true && providerSessionId
                 ? join(
                     getClaudeProjectPath(
@@ -930,11 +1032,16 @@ export function createClaudeAgentSdkTurnOperations(
                 : null
         );
         if (!transcriptPath) return;
+        if (goalStatusTail && goalStatusTranscriptPath === transcriptPath) return;
+        if (goalStatusTail) void retireGoalStatusTail(goalStatusTail);
+        goalStatusTranscriptPath = transcriptPath;
         const goalSource = goalRuntime.source;
+        goalSource.resetGoalCommandObservation();
         goalStatusTail = createClaudeAgentSdkGoalStatusTail({
             ctx: sessionContext!,
             transcriptPath,
             observeGoalStatusRow: (row) => goalSource.observeTranscriptMessage(row),
+            resetGoalCommandObservation: () => goalSource.resetGoalCommandObservation(),
         });
     }
 
@@ -944,38 +1051,35 @@ export function createClaudeAgentSdkTurnOperations(
             expectedInitialProviderSessionId: params.initialProviderSessionId,
             onProviderSessionId: observeProviderSessionId,
             onTranscriptCandidateActivated: ({ transcriptPath }) => {
-                if (promotedTranscriptPath === null || promotedTranscriptPath === transcriptPath) return;
-                resumableProviderSessionId = null;
-                pendingResumeProviderSessionId = null;
-                clearPromotedTranscriptForRekey();
-                // The previously proven transcript is no longer the live one, so
-                // retract the published proof. Leaving it would let a resume use
-                // a proof that no longer matches this id.
-                if (providerSessionId) publishProviderSessionId(providerSessionId, true);
+                if (promotedTranscriptPath !== null && promotedTranscriptPath !== transcriptPath) {
+                    resumableProviderSessionId = null;
+                    pendingResumeProviderSessionId = null;
+                    clearPromotedTranscriptForRekey();
+                    // Retract only the old resume proof; the new authenticated
+                    // candidate can already supply its own native Goal evidence.
+                    if (providerSessionId) publishProviderSessionId(providerSessionId, true);
+                }
+                ensureGoalStatusTail(transcriptPath);
             },
             onTranscriptPromoted: async ({ providerSessionId: provenProviderSessionId, transcriptPath, isCurrent }) => {
                 if (!isCurrent() || providerSessionId !== provenProviderSessionId) return;
-                // A fresh SessionStart precedes creation of Claude's JSONL file. The
-                // existing exact accepted-prompt proof supplies the first materialized
-                // transcript; acquiring source history inside that hook would fail before
-                // Claude can write it. Resumed histories still bind at SessionStart.
+                if (params.enableSessionResumability === true && promotedTranscriptPath !== transcriptPath) {
+                    ensureGoalStatusTail(transcriptPath);
+                }
+                if (!isCurrent() || providerSessionId !== provenProviderSessionId) return;
+                if (params.enableSessionResumability === true) {
+                    resumableProviderSessionId = provenProviderSessionId;
+                    pendingResumeProviderSessionId = null;
+                    promotedTranscriptPath = transcriptPath;
+                    // The accepted native prompt proves this matched identity. Publish
+                    // it before follow admission, whose hosted reader consumes it.
+                    publishProviderSessionId(provenProviderSessionId);
+                }
+                // A fresh SessionStart precedes creation of Claude's JSONL file.
+                // This accepted-prompt proof supplies the materialized transcript.
                 await bindOrderedSourceHistory(provenProviderSessionId, {}, true);
                 if (!isCurrent() || providerSessionId !== provenProviderSessionId) return;
                 if (params.enableSessionResumability !== true) return;
-                resumableProviderSessionId = provenProviderSessionId;
-                pendingResumeProviderSessionId = null;
-                if (promotedTranscriptPath !== transcriptPath) {
-                    const previousGoalStatusTail = goalStatusTail;
-                    goalStatusTail = null;
-                    if (previousGoalStatusTail) {
-                        await retireGoalStatusTail(previousGoalStatusTail);
-                    }
-                }
-                if (!isCurrent() || providerSessionId !== provenProviderSessionId) return;
-                promotedTranscriptPath = transcriptPath;
-                // Promote the provisional identity together with its matched
-                // transcript only after this generation proves native continuity.
-                publishProviderSessionId(provenProviderSessionId);
                 ensureGoalStatusTail();
             },
         })
@@ -1028,6 +1132,12 @@ export function createClaudeAgentSdkTurnOperations(
                 replay: currentBinding.replay });
             if (runtimeDisposed || orderedSourceBinding !== currentBinding) { await handle.dispose(); return; }
             currentBinding.handle = handle;
+            const noteSourceLost = (): void => {
+                if (runtimeDisposed || orderedSourceBinding !== currentBinding || currentBinding.handle !== handle) return;
+                providerActivityLedger.noteObservationLost();
+                reconcileProviderTaskRuntimeActivityForCurrentQuery('source-follow-lost');
+            };
+            void handle.failure?.then(noteSourceLost, noteSourceLost);
             for (const receipt of pendingNativeStarts.splice(0)) {
                 if (receipt.providerSessionId !== nativeSessionId) continue;
                 observeNativeWorkflowHook(nativeSessionId, receipt.payload, receipt.observedAt, true);
@@ -1038,9 +1148,7 @@ export function createClaudeAgentSdkTurnOperations(
         currentBinding.acquisition = acquisition;
         try { await acquisition; }
         catch (error) {
-            pendingNativeStarts.length = 0;
             params.ctx.logger.warn('[ClaudeAgentSdk] ordered source transcript baseline failed', { error });
-            providerActivityLedger.noteObservationLost();
             reconcileProviderTaskRuntimeActivityForCurrentQuery('source-baseline-failed');
             throw error;
         } finally { currentBinding.acquisition = null; }
@@ -1399,7 +1507,8 @@ export function createClaudeAgentSdkTurnOperations(
             }));
         }
         publishResultUsage(turn.message, observedAtMs);
-        if (params.publishTranscriptMessages === true && !turn.publishedTranscriptText) {
+        if ((params.publishTranscriptMessages === true || params.publishSdkMessages === true)
+            && !turn.publishedTranscriptText) {
             const resultTranscriptEvent = mapResultTranscriptEvent({
                 message: turn.message,
                 sessionId: readString(params.happierSessionId) ?? providerSessionId ?? 'claude-agent-sdk',
@@ -1474,6 +1583,7 @@ export function createClaudeAgentSdkTurnOperations(
         promotedTranscriptPath = null;
         const previousGoalStatusTail = goalStatusTail;
         goalStatusTail = null;
+        goalStatusTranscriptPath = null;
         if (previousGoalStatusTail) void retireGoalStatusTail(previousGoalStatusTail);
     }
 
@@ -1784,7 +1894,8 @@ export function createClaudeAgentSdkTurnOperations(
                 const isSuccessfulResultMessage = isSdkResultMessage(message)
                     && message.subtype === 'success'
                     && message.is_error !== true;
-                if (params.publishSdkMessages === true && !isSdkResultMessage(message)) {
+                if (!isSdkResultMessage(message) && (params.publishSdkMessages === true
+                    || (params.publishTranscriptMessages === true && message.type === 'stream_event'))) {
                     const runtimeEvent = mapSdkRuntimeEvent({
                         message,
                         sessionId: providerSessionId ?? readString(params.happierSessionId) ?? 'claude-agent-sdk',
@@ -1793,8 +1904,7 @@ export function createClaudeAgentSdkTurnOperations(
                     });
                     publishRuntimeEvent(runtimeEvent);
                 }
-                if (params.publishTranscriptMessages === true
-                    || (params.publishSdkMessages === true && readClaudeNativePeerMessageText(message) !== null)) {
+                if (params.publishTranscriptMessages === true || params.publishSdkMessages === true) {
                     const transcriptEvent = mapSdkTranscriptEvent({
                         message,
                         sessionId: readString(params.happierSessionId) ?? providerSessionId ?? 'claude-agent-sdk',
@@ -1976,6 +2086,7 @@ export function createClaudeAgentSdkTurnOperations(
                         activeCompletion = null;
                         turnInFlight = false;
                     }
+                    providerActivityLedger.completeQueryObservation(turnQuery);
                     reconcileProviderTaskRuntimeActivityForCurrentQuery('result-error');
                     publishTerminal(mapSdkRuntimeEvent({
                         message,
@@ -2037,21 +2148,38 @@ export function createClaudeAgentSdkTurnOperations(
     }
 
     let onPromptDeliveryOutcome: ClaudeProviderPromptDeliveryOutcomeCallback | null = null;
+    async function reserveHostPromptEcho(): Promise<string> {
+        // Claude stream-json preserves the supplied UUID in its native user row.
+        // Reserve it before transport: ordered source catch-up can start as soon
+        // as Claude admits this prompt, including host-only WorkerUpdate context.
+        const uuid = randomUUID();
+        const localId = buildClaudeJsonlProviderFactLocalIdFromParts({ type: 'user', id: uuid });
+        if (localId) await sessionContext?.agentRuntime.transcripts.markSourceFactConsumed?.({ localId, reason: 'host_prompt_echo' });
+        return uuid;
+    }
     let terminalStartupInstructions: ReturnType<typeof materializeClaudeStartupInstructions> | undefined;
     let terminalMcpConfig: ReturnType<typeof materializeClaudeMcpConfigArgsForSpawn> | undefined;
     const readCurrentResumeProviderSessionId = () => params.enableSessionResumability === true
         ? resumableProviderSessionId ?? pendingResumeProviderSessionId
         : providerSessionId ?? pendingResumeProviderSessionId;
-    const operations: ClaudeRuntimeTurnOperations & Readonly<{
-        refreshSkills: NonNullable<AgentSessionRuntime['refreshSkills']>;
+    const operations: ClaudeAgentSdkNativeOperations & Readonly<{
+        sendProviderTurnPrompt(
+            prompt: string,
+            meta?: Parameters<ClaudeRuntimeTurnOperations['sendProviderTurnPrompt']>[1],
+            publishTurnTerminal?: boolean,
+        ): Promise<ClaudeRuntimePromptSubmissionOutcome>;
         prepareTerminalPresentation: NonNullable<AgentSessionRuntime['prepareTerminalPresentation']>;
         observeTerminalExecution: NonNullable<AgentSessionRuntime['observeTerminalExecution']>;
-        observeSourceTranscript: NonNullable<AgentSessionRuntime['observeSourceTranscript']>;
-        subscribeCanonicalAgentSessionEvents: typeof runtimeActivityPublisher.subscribe;
-        subscribeEffectiveModel: ClaudeEffectiveModelEvidenceSubscription;
-        subscribeUsageObservation: ClaudeUsageObservationSubscription;
-        setOnPromptDeliveryOutcome(handler: ClaudeProviderPromptDeliveryOutcomeCallback | null): void;
     }> = {
+        ...(goalRuntime ? {
+            setGoal: (objective: string | undefined, options?: Readonly<{ status?: string; tokenBudget?: number | null }>) =>
+                settleGoalControl(() => goalRuntime.setGoal(objective, options), snapshot =>
+                    snapshot.items.some(item => item.kind === 'goal' && item.status === 'active' && item.title === objective?.trim())),
+            clearGoal: () => settleGoalControl(() => goalRuntime.clearGoal(), snapshot =>
+                // Clear has no native goal_status: its command completion is the
+                // native ACK, while the source owns removal of the published item.
+                !snapshot.items.some(item => item.kind === 'goal'), true),
+        } : {}),
         async refreshSkills(request, options) {
             if (runtimeDisposed) throw new Error('Claude Agent SDK runtime is disposed.');
             options?.signal?.throwIfAborted();
@@ -2072,6 +2200,7 @@ export function createClaudeAgentSdkTurnOperations(
             }
             const hookPluginDir = hooks?.pluginDir ?? null;
             try {
+                await prepareClaudeTerminalConfigHome(params.launchEnv);
                 const resumeId = readCurrentResumeProviderSessionId();
                 terminalStartupInstructions ??= params.startupInstructions
                     ? materializeClaudeStartupInstructions(params.startupInstructions) : undefined;
@@ -2182,7 +2311,7 @@ export function createClaudeAgentSdkTurnOperations(
             if (requestedResumeId && providerSessionId === null) pendingResumeProviderSessionId = requestedResumeId;
             return providerSessionId;
         },
-        async sendProviderTurnPrompt(prompt, meta) {
+        async sendProviderTurnPrompt(prompt, meta, publishTurnTerminal: boolean = true) {
             if (runtimeDisposed) {
                 return {
                     kind: 'rejected_before_effect',
@@ -2196,14 +2325,14 @@ export function createClaudeAgentSdkTurnOperations(
                 };
             }
             turnInFlight = true;
-            const submittedTurnId = currentTurnId;
+            const submittedTurnId = publishTurnTerminal ? currentTurnId : null;
             const submission = { cancelled: false };
             pendingSubmission = submission;
             try {
                 lastTurnCompletionFailure = null;
                 const promptContent = await resolvePromptContent(prompt, meta?.structuredInput, params.ctx.agentRuntime.inputFiles);
                 reconcileProviderTaskRuntimeActivityForCurrentQuery('new-turn');
-                const completion = createDeferred();
+                const completion = createDeferred(publishTurnTerminal);
                 completion.promise.catch(() => undefined);
                 const hookPluginDir = await ensureSessionHookPluginDir();
                 if (submission.cancelled) {
@@ -2285,9 +2414,14 @@ export function createClaudeAgentSdkTurnOperations(
                 if (runtimeDisposed) {
                     throw new Error('Claude Agent SDK runtime is disposed.');
                 }
+                const nativeUserMessageId = await reserveHostPromptEcho();
+                if (!publishTurnTerminal) goalRuntime?.source.beginGoalCommandObservation(nativeUserMessageId);
+                if (submission.cancelled || runtimeDisposed) {
+                    throw new Error('Claude Agent SDK turn was cancelled before provider submission.');
+                }
                 const interruptedQuery = retainedInterruptedQuery;
                 if (interruptedQuery) {
-                    const transportOutcome = await interruptedQuery.sendUserMessage(prompt);
+                    const transportOutcome = await interruptedQuery.sendUserMessage(promptContent, nativeUserMessageId);
                     const outcome: ClaudeRuntimePromptSubmissionOutcome = transportOutcome.kind === 'accepted'
                         ? transportOutcome
                         : {
@@ -2329,7 +2463,7 @@ export function createClaudeAgentSdkTurnOperations(
                     ? denySettingsArgs[denySettingsArgs.indexOf('--settings') + 1]
                     : Object.keys(launchSettings).length > 0 ? JSON.stringify(launchSettings) : undefined;
                 const turnQuery = createOwnedQuery({
-                    prompt: resolvePromptInput(promptContent, toolPermissionPolicy),
+                    prompt: resolvePromptInput(promptContent, toolPermissionPolicy, nativeUserMessageId),
                     options: {
                         cwd: params.directory,
                         env: params.launchEnv,
@@ -2348,6 +2482,8 @@ export function createClaudeAgentSdkTurnOperations(
                         ...(currentEffort ? { effort: currentEffort } : {}),
                         ...(resumeProviderSessionId ? { resume: resumeProviderSessionId } : {}),
                         extraArgs: [
+                            ...(params.publishTranscriptMessages === true || params.publishSdkMessages === true
+                                ? ['--include-partial-messages'] : []),
                             ...(params.supportsSystemPromptSnapshotOff === true ? ['--system-prompt-snapshot', 'off'] : []),
                             // Execution-run policy remains owned by Happier's admitted mode and
                             // canCallTool. Pin the Claude process away from any ambient bypass mode.
@@ -2361,9 +2497,7 @@ export function createClaudeAgentSdkTurnOperations(
                         ...(settingsJson ? { settingsJson } : {}),
                         ...(toolPermissionPolicy === 'read_only'
                             ? {}
-                            : toolPermissionPolicy !== null || !hookPluginDir
-                                // Execution policies are SDK-owned. Ordinary sessions use the
-                                // provider-native hook unless no session id exists to host it.
+                            : params.unlistedTools !== 'deny' || !hookPluginDir
                                 ? { canCallTool: resolvePermission }
                                 : {}),
                         ...(getClaudeSdkOAuthToken ? { getOAuthToken: getClaudeSdkOAuthToken } : {}),
@@ -2435,7 +2569,11 @@ export function createClaudeAgentSdkTurnOperations(
                 if (!(error instanceof ClaudeBrowserImageUnavailableError)) throw error;
                 return { kind: 'rejected_before_effect', code: error.code, reason: error.message };
             }
-            const outcome = await turnQuery.sendUserMessage(content);
+            const uuid = await reserveHostPromptEcho();
+            if (runtimeDisposed || !turnInFlight || activeQuery !== turnQuery) {
+                return { kind: 'rejected_before_effect', reason: 'Claude Agent SDK turn settled before steer submission.' };
+            }
+            const outcome = await turnQuery.sendUserMessage(content, uuid);
             if (outcome.kind === 'accepted') return outcome;
             return {
                 kind: outcome.kind,
@@ -2540,7 +2678,7 @@ export function createClaudeAgentSdkTurnOperations(
                 : update.providerBinding.model;
             const permissionMode = readString(update.permissionMode);
             if (permissionMode) {
-                const updatePermissionMode = permissionModeUpdate.then(async () => {
+                const updatePermissionMode = permissionModeUpdate.then(async (): ReturnType<ClaudeRuntimeTurnOperations['updateProviderConfiguration']> => {
                     if (toolPermissionPolicy === null) {
                         const liveQueries = new Set([
                             activeQuery,

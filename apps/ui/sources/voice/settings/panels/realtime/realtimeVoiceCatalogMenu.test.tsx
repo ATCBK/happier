@@ -1,3 +1,4 @@
+import type * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook, standardCleanup } from '@/dev/testkit';
@@ -16,21 +17,26 @@ vi.mock('socket.io-client', async original =>
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+const audio = vi.hoisted(() => ({ play: vi.fn(), remove: vi.fn() }));
+// OS playback is the boundary; catalog declarations and Action admission remain real.
+vi.mock('expo-audio', () => ({ AudioModule: { setAudioModeAsync: async () => {} },
+  createAudioPlayer: () => ({ play: audio.play, remove: audio.remove,
+    addListener: () => ({ remove: () => {} }) }) }));
 const { installDisconnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
-const { useRealtimeVoiceCatalog } = await import('./realtimeVoiceCatalogMenu');
+const { useRealtimeVoiceCatalog, useRealtimeCatalogMenuItems, useRealtimeCatalogPreview } = await import('./realtimeVoiceCatalogMenu');
 const { createBundledConversationUi } = await import('@/voice/credentials/bundledConversationClient');
 const { createDefaultVoiceProviderRegistry } = await import('@/voice/registry/defaultRegistry');
 const { readDeclaredVoiceSettingsCatalog } = await import('./voiceCatalog');
-const { getPreferredLanguage, setPreferredLanguageFromSettings } = await import('@/text');
+const { getPreferredLanguage, preloadTranslationsForSettings, setPreferredLanguageFromSettings, t, tLoose } = await import('@/text');
 const initialLanguage = getPreferredLanguage();
 const initialStorage = storage.getState();
 
 let runtime: ReturnType<typeof createElevenLabsSettingsRuntimeTestHarness>;
 let account: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
-let client: NonNullable<ReturnType<typeof createBundledConversationUi>>['client'];
 beforeEach(async () => {
+  await preloadTranslationsForSettings('en');
   setPreferredLanguageFromSettings('en');
   account = await createVoiceSettingsAccountTestHarness(settingsParse({
     voice: { providerId: 'happier.voice.elevenlabs/realtime-elevenlabs' },
@@ -50,19 +56,94 @@ beforeEach(async () => {
   await runtime.register();
   const ui = createBundledConversationUi(runtime.registration.providerId);
   if (!ui?.client) throw new Error('Shipped provider catalog client missing');
-  client = ui.client;
 });
 afterEach(async () => { standardCleanup(); await runtime.dispose(); await account.dispose(); storage.setState(initialStorage, true); });
 afterAll(() => { setPreferredLanguageFromSettings(initialLanguage); });
 
 describe('the shared realtime voice catalog', () => {
+  it('admits explicit catalog open and retry through Settings Actions before contacting the provider', async () => {
+    const picker = await renderHook(() => useRealtimeVoiceCatalog({ providerId: runtime.entry.providerId, catalogAvailable: true, credentialUsable: true,
+      targetKey: 'admitted-catalog-open' }));
+    account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: { v: 1,
+      actions: { 'settings.invoke': { enabled: false } } } }));
+    await act(async () => picker.getCurrent().requestCatalog());
+    await vi.waitFor(() => expect(picker.getCurrent().catalog.phase).not.toBe('loading'));
+    expect(runtime.fetch).not.toHaveBeenCalled();
+    expect(picker.getCurrent().catalog.phase).toBe('error');
+    account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: { v: 1,
+      actions: { 'settings.invoke': { enabled: true } } } }));
+    await act(async () => picker.getCurrent().requestCatalog());
+    await vi.waitFor(() => expect(picker.getCurrent().catalog.phase).toBe('ready'));
+    expect(picker.getCurrent().lastKnownRows?.[0]?.name).toBe('Happier voice');
+  });
+  it('honors Settings Action admission for picker Preview and Stop while cleanup always releases playback', async () => {
+    vi.stubGlobal('navigator', { userActivation: { isActive: true } });
+    const providerId = runtime.entry.providerId;
+    const row = { id: 'voice-catalog-preview', name: 'Sage', previewUrl: 'https://preview.example.test/sage.mp3' };
+    runtime.fetch.mockImplementation(async () => runtime.response({ voices: [
+      { voice_id: row.id, name: row.name, preview_url: row.previewUrl },
+    ] }));
+    audio.play.mockClear(); audio.remove.mockClear();
+    const picker = await renderHook(() => useRealtimeCatalogPreview(providerId));
+    account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: { v: 1,
+      actions: { 'settings.invoke': { enabled: false } } } }));
+    await act(async () => picker.getCurrent().playPreview(row));
+    expect(audio.play).not.toHaveBeenCalled();
+    account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: { v: 1,
+      actions: { 'settings.invoke': { enabled: true } }, approvalWaivedSurfaces: { 'settings.invoke': ['ui'] } } }));
+    await act(async () => picker.getCurrent().playPreview(row));
+    await vi.waitFor(() => expect(audio.play).toHaveBeenCalledOnce());
+    expect(picker.getCurrent().previewingId).toBe(row.id);
+    account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: { v: 1,
+      actions: { 'settings.invoke': { enabled: false } } } }));
+    await act(async () => picker.getCurrent().stopPreview());
+    expect(audio.remove).not.toHaveBeenCalled();
+    await picker.unmount();
+    expect(audio.remove).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
+  });
+  it('says one sentence and offers one Retry when the catalog cannot load, instead of a bare text row', async () => {
+    const onRetry = vi.fn();
+    const items = await renderHook(() => useRealtimeCatalogMenuItems({
+      catalog: { phase: 'error' }, credentialUsable: true, credentialUnavailableDetail: '', previewingId: null,
+      onPreview: () => {}, onRetry,
+    }));
+    const [failed, ...rest] = items.getCurrent().statusRows;
+    expect(rest).toEqual([]);
+    expect(failed).toMatchObject({ id: '__retry__', title: tLoose('settingsVoice.realtimeProviders.catalog.loadFailed') });
+    const retry = failed!.rightElement as React.ReactElement<{ title: string; onPress: (event?: { stopPropagation?: () => void }) => void }>;
+    expect(retry.props.title).toBe(t('common.retry'));
+    const stopPropagation = vi.fn();
+    retry.props.onPress({ stopPropagation });
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(stopPropagation).toHaveBeenCalledTimes(1);
+  });
+
+  it('leads a voice row with its preview control and keeps the right edge for the in-use mark', async () => {
+    const rows = [{ id: 'af_maple', name: 'Maple', subtitle: 'American English · female' }, { id: 'af_sol', name: 'Sol' }];
+    const render = (inUseId: string | null) => renderHook(() => useRealtimeCatalogMenuItems({
+      catalog: { phase: 'ready', rows }, credentialUsable: true, credentialUnavailableDetail: '', previewingId: null,
+      onPreview: () => {}, canPreview: true, inUseId,
+    }));
+    const idle = (await render(null)).getCurrent().catalogRows;
+    // Every voice has the same leading control: no empty leading column, nothing competing on the right.
+    expect(idle.map((row) => row.icon != null)).toEqual([true, true]);
+    expect(idle.map((row) => row.rightElement)).toEqual([undefined, undefined]);
+    expect(idle[0]).toMatchObject({ title: 'Maple', subtitle: 'American English · female' });
+    const inUse = (await render('af_sol')).getCurrent().catalogRows;
+    expect(inUse[1]!.rightElement).toBeDefined();
+    expect(inUse[0]!.rightElement).toBeUndefined();
+    expect(inUse[1]!.icon).toBeDefined();
+  });
+
   it('uses a provider-declared static catalog without contacting the catalog transport', async () => {
     const entry = createDefaultVoiceProviderRegistry().list().find(candidate => 'declaration' in candidate && candidate.declaration?.id === 'realtime-openai');
     if (!entry || !('declaration' in entry) || !entry.declaration) throw new Error('OpenAI Voice declaration missing');
     const rows = readDeclaredVoiceSettingsCatalog(entry.declaration);
     if (!rows?.length) throw new Error('Provider-declared voice options missing');
     runtime.fetch.mockRejectedValue(new Error('static catalog must not request transport'));
-    const params = { client, credentialUsable: true, targetKey: 'declared-static-catalog', declaredRows: rows };
+    account.replaceSettings(settingsParse({ ...account.settings, voice: { ...account.settings.voice, providerId: entry.providerId } }));
+    const params = { providerId: entry.providerId, catalogAvailable: true, credentialUsable: true, targetKey: 'declared-static-catalog', declaredRows: rows };
     const picker = await renderHook(() => useRealtimeVoiceCatalog(params));
     expect(picker.getCurrent().catalog).toEqual({ phase: 'ready', rows });
     await act(async () => picker.getCurrent().requestCatalog());
@@ -71,7 +152,7 @@ describe('the shared realtime voice catalog', () => {
 
   it('retains names for a closed picker across remounts without fetching, scoped to its target', async () => {
     runtime.fetch.mockImplementation(async () => runtime.response({ voices: [{ voice_id: 'voice-catalog-1', name: 'Sage' }] }));
-    const params = { client, credentialUsable: true, targetKey: 'retained-catalog-target' };
+    const params = { providerId: runtime.entry.providerId, catalogAvailable: true, credentialUsable: true, targetKey: 'retained-catalog-target' };
     const picker = await renderHook(() => useRealtimeVoiceCatalog(params));
     expect(runtime.fetch).not.toHaveBeenCalled();
     await act(async () => picker.getCurrent().requestCatalog());
@@ -81,7 +162,7 @@ describe('the shared realtime voice catalog', () => {
     const closed = await renderHook((targetKey: string) => useRealtimeVoiceCatalog({ ...params, targetKey }), {
       initialProps: params.targetKey,
     });
-    expect(closed.getCurrent().lastKnownRows).toEqual([{ id: 'voice-catalog-1', name: 'Sage', previewUrl: null }]);
+    expect(closed.getCurrent().lastKnownRows).toEqual([{ id: 'voice-catalog-1', name: 'Sage', previewAvailable: false }]);
     const voiceRequests = () => runtime.fetch.mock.calls.filter(([request, init]) =>
       init?.method === 'GET' && new URL(request instanceof Request ? request.url : String(request)).pathname === '/v1/voices');
     expect(voiceRequests()).toHaveLength(1);
@@ -92,7 +173,7 @@ describe('the shared realtime voice catalog', () => {
 
   it('updates a closed reader through the same owner and keeps the known name after a failed refresh', async () => {
     runtime.fetch.mockImplementation(async () => runtime.response({ voices: [{ voice_id: 'voice-catalog-2', name: 'Marin' }] }));
-    const params = { client, credentialUsable: true, targetKey: 'shared-catalog-target' };
+    const params = { providerId: runtime.entry.providerId, catalogAvailable: true, credentialUsable: true, targetKey: 'shared-catalog-target' };
     const closed = await renderHook(() => useRealtimeVoiceCatalog(params));
     const picker = await renderHook(() => useRealtimeVoiceCatalog(params));
     await act(async () => picker.getCurrent().requestCatalog());

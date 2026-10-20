@@ -1,4 +1,5 @@
 import { z } from 'zod/mini';
+import { zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
 import * as mini from 'zod/mini';
 import { lazyDefinition, lazyZodSchema } from '../../lazyZodSchema.js';
 import { asProtocolZod } from '../actions/internalProtocolZodAdapter.js';
@@ -224,7 +225,7 @@ export type MachineProvisionersListResultV1 = z.infer<typeof MachineProvisioners
 /** A declaration-neutral projection of the existing validator, not a second parser. */
 function projectRoleSchema<T>(schema: z.core.$ZodType<T>): ProtocolComposableSchema<T, T> {
   return lazyDefinition(() => createProtocolComposableSchema<T, T>(
-    { ...z.toJSONSchema(schema, { target: 'draft-7', io: 'input' }) },
+    zodSchemaToJsonSchemaObject(schema, { target: 'draft-7' }),
     value => {
       const result = z.safeParse(schema, value);
       return result.success ? { success: true, data: result.data } : { success: false,

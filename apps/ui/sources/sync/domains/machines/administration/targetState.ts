@@ -1,18 +1,15 @@
-import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { MachineAdministrationTargetV1Schema } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
 
 import { resolveFleetMachineAvailability } from './fleetUnion';
-import { resolveServerScopedMachines } from '@/sync/domains/machines/resolveServerScopedMachines';
 import type { Machine } from '@/sync/domains/state/storageTypes';
-import type { ServerProfile } from '@/sync/domains/server/serverProfiles';
-import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
+import { formatMachineDisplayNameParts, resolveMachineDisplayNameParts } from '@/utils/sessions/machineDisplayNames';
 import type {
     ServerMachineInventorySnapshotV1,
 } from '@/sync/domains/machines/machineInventorySnapshots';
 import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
 
 import type { MachineAdministrationCandidateV1 } from './targetSelection';
-import { createServerAccountScope, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 /**
  * One Administration candidate together with the device-local routing row
@@ -63,20 +60,22 @@ export function buildMachineAdministrationCandidateInventoryRowsFromSnapshots(pa
     const rows: MachineAdministrationCandidateInventoryRowV1<MachineDisplayRenderable>[] = [];
     for (const snapshot of params.snapshots) {
         if (snapshot.kind !== 'resolved') continue;
-        const displayNames = resolveMachineDisplayNames(snapshot.machines);
+        const displayNameParts = resolveMachineDisplayNameParts(snapshot.machines);
         for (const machine of snapshot.machines) {
             const parsedTarget = MachineAdministrationTargetV1Schema.safeParse({
                 serverIdentityId: snapshot.serverIdentityId,
                 machineId: machine.id,
             });
             if (!parsedTarget.success) continue;
+            const machineNameParts = displayNameParts.get(machine.id)!;
             const availability = resolveFleetMachineAvailability(createServerAccountScope(snapshot.serverIdentityId, snapshot.accountId), machine, params.nowMs);
             const replacementTarget = availability === 'replaced'
                 ? buildReplacementTarget(snapshot.serverIdentityId, machine)
                 : undefined;
             const candidate: MachineAdministrationCandidateV1 = Object.freeze({
                 target: Object.freeze(parsedTarget.data),
-                displayName: displayNames.get(machine.id)!,
+                displayName: formatMachineDisplayNameParts(machineNameParts),
+                displayNameParts: machineNameParts,
                 serverLabel: snapshot.serverName,
                 availability,
                 observation: snapshot.observation,
@@ -92,99 +91,6 @@ export function buildMachineAdministrationCandidateInventoryRowsFromSnapshots(pa
         }
     }
     return Object.freeze(rows.sort(compareInventoryRows));
-}
-
-/**
- * Projects currently hydrated raw machine records into portable Administration
- * candidates. It deliberately does not select a target and does not promote a
- * device-local profile without canonical server identity.
- *
- * The caller must supply the raw inventory, not the launch/visible-machine
- * projection, so revoked and replaced rows remain available as tombstones.
- */
-export function buildMachineAdministrationCandidateInventoryRows(params: Readonly<{
-    profiles: readonly ServerProfile[];
-    activeServerId: string;
-    activeMachineRecords: readonly Machine[];
-    machineRecordListsByServerId: Readonly<Record<string, readonly Machine[] | null | undefined>>;
-    machineListStatusByServerId?: Readonly<Record<string, 'idle' | 'loading' | 'signedOut' | 'error' | undefined>>;
-    accountScopesByServerId?: ReadonlyMap<string, ServerAccountScope>;
-    nowMs?: number;
-}>): readonly MachineAdministrationCandidateInventoryRowV1<Machine>[] {
-    const rowsByTarget = new Map<string, MachineAdministrationCandidateInventoryRowV1<Machine>>();
-    const profileClaimsByIdentity = new Map<string, Set<string>>();
-    for (const profile of params.profiles) {
-        const claimedIdentities = [profile.serverIdentityId, ...(profile.legacyServerIds ?? [])]
-            .filter((identity): identity is string => (
-                typeof identity === 'string'
-                && MachineAdministrationTargetV1Schema.shape.serverIdentityId.safeParse(identity).success
-            ));
-        for (const identity of claimedIdentities) {
-            const profileIds = profileClaimsByIdentity.get(identity) ?? new Set<string>();
-            profileIds.add(profile.id);
-            profileClaimsByIdentity.set(identity, profileIds);
-        }
-    }
-
-    for (const profile of params.profiles) {
-        const serverIdentityId = profile.serverIdentityId ?? '';
-        if (!MachineAdministrationTargetV1Schema.shape.serverIdentityId.safeParse(serverIdentityId).success) {
-            continue;
-        }
-        if (profileClaimsByIdentity.get(serverIdentityId)?.size !== 1) continue;
-        const machines = resolveServerScopedMachines({
-            serverId: profile.id,
-            serverIdAliases: [serverIdentityId, ...(profile.legacyServerIds ?? [])],
-            activeServerId: params.activeServerId,
-            activeMachines: params.activeMachineRecords,
-            machineListByServerId: params.machineRecordListsByServerId,
-            machineListStatusByServerId: params.machineListStatusByServerId,
-        }) ?? [];
-
-        const displayNames = resolveMachineDisplayNames(machines);
-        for (const machine of machines) {
-            const target = MachineAdministrationTargetV1Schema.parse({
-                serverIdentityId,
-                machineId: machine.id,
-            });
-            const availability = resolveFleetMachineAvailability(params.accountScopesByServerId?.get(serverIdentityId), machine, params.nowMs);
-            const replacementTarget = availability === 'replaced'
-                ? buildReplacementTarget(serverIdentityId, machine)
-                : undefined;
-            const candidate: MachineAdministrationCandidateV1 = Object.freeze({
-                target: Object.freeze(target),
-                displayName: displayNames.get(machine.id)!,
-                serverLabel: resolveHomeDisplayLabel(profile, profile.id),
-                availability,
-                observation: 'live',
-                observedAt: Number.isFinite(machine.updatedAt) ? machine.updatedAt : null,
-                ...(replacementTarget ? { replacementTarget } : {}),
-            });
-            const key = `${serverIdentityId}\u0000${machine.id}`;
-            if (!rowsByTarget.has(key)) {
-                rowsByTarget.set(key, Object.freeze({
-                    candidate,
-                    serverId: profile.id,
-                    serverName: candidate.serverLabel,
-                    machine,
-                }));
-            }
-        }
-    }
-
-    return Object.freeze([...rowsByTarget.values()].sort(compareInventoryRows));
-}
-
-export function buildMachineAdministrationCandidates(params: Readonly<{
-    profiles: readonly ServerProfile[];
-    activeServerId: string;
-    activeMachineRecords: readonly Machine[];
-    machineRecordListsByServerId: Readonly<Record<string, readonly Machine[] | null | undefined>>;
-    machineListStatusByServerId?: Readonly<Record<string, 'idle' | 'loading' | 'signedOut' | 'error' | undefined>>;
-    accountScopesByServerId?: ReadonlyMap<string, ServerAccountScope>;
-    nowMs?: number;
-}>): readonly MachineAdministrationCandidateV1[] {
-    return Object.freeze(buildMachineAdministrationCandidateInventoryRows(params).map((row) => row.candidate));
 }
 
 export function buildMachineAdministrationCandidatesFromSnapshots(params: Readonly<{

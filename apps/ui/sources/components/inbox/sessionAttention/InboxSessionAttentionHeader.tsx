@@ -19,6 +19,8 @@ export const InboxSessionAttentionHeader = React.memo(function InboxSessionAtten
     machineLabel: string | null;
     pathLabel: string | null;
     onOpenSession: () => void;
+    /** The row's own state, age and menu, so a row that carries requests reads like its sheet-mates. */
+    row?: Pick<React.ComponentProps<typeof InboxWorkRow>, 'status' | 'time' | 'narrow' | 'trailingAccessory'>;
 }>) {
     const { theme } = useUnistyles();
 
@@ -27,6 +29,7 @@ export const InboxSessionAttentionHeader = React.memo(function InboxSessionAtten
             title={props.sessionTitle} facts={[props.machineLabel, props.pathLabel]}
             accessibilityLabel={t('inbox.openSession', { session: props.sessionTitle })}
             onPress={props.onOpenSession}
+            {...props.row}
             mark={props.identityDisplay !== 'none' ? (
                 <SessionListIdentity
                     session={props.session}

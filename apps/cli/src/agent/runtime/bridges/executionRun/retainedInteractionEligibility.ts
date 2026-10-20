@@ -10,6 +10,7 @@ import type { AgentSessionCapabilities } from '@/plugins/projection/registry/age
  */
 export type ExecutionRunSessionAdapterSelection =
     | 'retained_agent_session'
+    | 'retained_agent_conversation'
     | 'finite_agent_session'
     | 'native_execution_run';
 
@@ -24,6 +25,8 @@ export type ExecutionRunSessionAdapterInput = Readonly<{
     hasParentSessionCustody: boolean;
     /** True when the selected Agent runtime exposes a Session runtime at all. */
     agentExposesSessionRuntime: boolean;
+    /** The selected generation exposes the optional detached multi-turn facet. */
+    agentExposesDetachedConversation: boolean;
     /** The selected Agent generation's declared Session capabilities, if any. */
     sessionCapabilities: AgentSessionCapabilities | null;
     intent: string | null | undefined;
@@ -49,14 +52,22 @@ export function selectExecutionRunSessionAdapter(
 ): ExecutionRunSessionAdapterSelection {
     if (!input.agentExposesSessionRuntime) return 'native_execution_run';
     const capabilities = input.sessionCapabilities;
+    // Bounded jobs can need a profile's structured-output repair turn or a
+    // live intervention after their first native turn. The host's bounded
+    // loop owns completion/disposal; native turn completion must not retire
+    // the Session before that loop settles. This retains no cross-run state.
+    const needsSessionTurns = normalize(input.runClass) === 'long_lived'
+        || (normalize(input.runClass) === 'bounded' && input.scope === 'session_owned');
     const retainable = capabilities !== null
-        && normalize(input.runClass) === 'long_lived'
-        && normalize(input.retentionPolicy) === 'resumable'
+        && needsSessionTurns
         && capabilities.open.includes('create')
         && capabilities.delivery.includes('newTurn');
     if (!retainable) return 'finite_agent_session';
+    if (input.scope === 'detached' && !input.agentExposesDetachedConversation) {
+        return 'finite_agent_session';
+    }
     if (input.scope === 'session_owned' && !input.hasParentSessionCustody) {
         return 'finite_agent_session';
     }
-    return 'retained_agent_session';
+    return input.scope === 'detached' ? 'retained_agent_conversation' : 'retained_agent_session';
 }

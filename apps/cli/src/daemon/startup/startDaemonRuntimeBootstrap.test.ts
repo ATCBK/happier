@@ -78,6 +78,7 @@ function createQualifiedV4RuntimeFixture() {
   return {
     qualifiedConnectedAccountEstablishedRuntimeOwner: {
       invokeWithReceipt: vi.fn(),
+      readQuotaSourceSnapshot: vi.fn(async () => null),
     },
     resolveQualifiedConnectedAccountPeerClass: () => 'advertised_v4' as const,
     listScheduledQualifiedConnectedAccounts: async () => [],

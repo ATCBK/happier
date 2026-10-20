@@ -8,7 +8,7 @@ import { createTransferPathAllowanceRegistry } from '@/transfers/targets/createT
 import { verifySessionStructuredImageInput, sessionMediaToStructuredImageInput } from '@/session/attachments/resolveTrustedSessionAttachmentLocalImagePaths';
 import { createSessionImageMediaWriter } from './createSessionImageMediaWriter';
 
-const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=', 'base64');
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=', 'base64');
 
 describe('createSessionImageMediaWriter', () => {
     it('persists native pixels in the selected Session artifact bucket and returns a verifiable generic reference', async () => {

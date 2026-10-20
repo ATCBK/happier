@@ -1,4 +1,4 @@
-import { forwardRef, type ReactNode } from 'react';
+import { forwardRef, type ReactNode, type Ref } from 'react';
 import { View } from 'react-native';
 
 import type { HappierStyleProp } from '../portableTypes.js';
@@ -46,7 +46,7 @@ export type HappierDragGripProps = Readonly<{
   style?: HappierStyleProp;
 }>;
 
-export const HappierDragGrip = forwardRef<View, HappierDragGripProps>(function HappierDragGrip(props, ref) {
+export const HappierDragGrip = forwardRef<unknown, HappierDragGripProps>(function HappierDragGrip(props, ref) {
   const metrics = GRIP_METRICS[props.density ?? 'pointer'];
   const slop = Math.max(0, Math.ceil(((props.minimumTargetSize ?? metrics.box) - metrics.box) / 2));
   const active = props.active === true;
@@ -55,7 +55,8 @@ export const HappierDragGrip = forwardRef<View, HappierDragGripProps>(function H
   const visible = props.revealed !== false || active || focused || props.density === 'touch';
   return (
     <View
-      ref={ref}
+      // The native renderer owns the instance; the public ref is deliberately opaque.
+      ref={ref as Ref<View>}
       testID={props.testID}
       accessible={props.accessibilityLabel !== undefined}
       accessibilityLabel={props.accessibilityLabel}
@@ -85,13 +86,14 @@ export const HappierDragGrip = forwardRef<View, HappierDragGripProps>(function H
 /** The interactive grip, shared by core, native plugins and hosted sources. */
 export type HappierDragGripTriggerProps = Omit<HappierDragGripProps, 'interaction'> & Pick<HappierPressableProps,
   'onPress' | 'onKeyDown' | 'onFocusChange' | 'accessibilityHint' | 'accessibilityActions' | 'onAccessibilityAction'
-  | 'controlRef' | 'expanded' | 'disabled'>;
+  | 'controlRef' | 'expanded' | 'disabled' | 'tabIndex'>;
 
 export function HappierDragGripTrigger(props: HappierDragGripTriggerProps) {
   return <HappierPressable
     testID={props.testID} accessibilityLabel={props.accessibilityLabel} accessibilityHint={props.accessibilityHint}
     accessibilityActions={props.accessibilityActions} onAccessibilityAction={props.onAccessibilityAction}
     controlRef={props.controlRef} expanded={props.expanded} disabled={props.disabled} hasPopup="menu"
+    tabIndex={props.tabIndex}
     onPress={props.onPress} onKeyDown={props.onKeyDown} onFocusChange={props.onFocusChange}
     style={({ pressed }) => [props.style, {
       borderRadius: GRIP_METRICS[props.density ?? 'pointer'].radius,

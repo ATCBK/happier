@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { AcpConfigOptionOverridesV1Schema } from '@happier-dev/protocol/sessions/metadata/overrides';
 import { BackendTargetRefV2InputSchema } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { ExecutionRunIntentSchema } from '@happier-dev/protocol/execution/runs/runPrimitives';
@@ -11,45 +11,45 @@ import {
   defaultRunClassForExecutionRunIntent,
 } from '@/session/services/executionRunStartDefaults';
 
-export const changeTitleToolInputSchema = z.object({
-  title: z.string().min(1),
-}).passthrough();
+export const changeTitleToolInputSchema = z.looseObject({
+  title: z.string().check(z.minLength(1)),
+});
 
-export const actionExecuteToolInputSchema = z.object({
-  actionId: z.string().min(1),
-  input: z.unknown().optional(),
-}).passthrough();
+export const actionExecuteToolInputSchema = z.looseObject({
+  actionId: z.string().check(z.minLength(1)),
+  input: z.optional(z.unknown()),
+});
 
-export const executionRunStartToolInputSchema = z.object({
-  sessionId: z.string().min(1).optional(),
+export const executionRunStartToolInputSchema = z.looseObject({
+  sessionId: z.optional(z.string().check(z.minLength(1))),
   intent: ExecutionRunIntentSchema,
-  backendTarget: BackendTargetRefV2InputSchema.optional(),
-  backendId: z.string().min(1).optional(),
-  instructions: z.string().optional(),
-  display: z.unknown().optional(),
-  intentInput: z.unknown().optional(),
-  initialContextMode: z.enum(['bootstrap', 'first_turn']).optional(),
-  resumeHandle: z.unknown().optional(),
-  replay: z.unknown().optional(),
-  permissionMode: z.string().min(1).optional(),
-  retentionPolicy: z.enum(['ephemeral', 'resumable']).optional(),
-  runClass: z.enum(['bounded', 'long_lived']).optional(),
-  ioMode: z.enum(['request_response', 'streaming']).optional(),
-  connectedServices: z.unknown().optional(),
-  modelId: z.string().min(1).optional(),
-  sessionConfigOptionOverrides: AcpConfigOptionOverridesV1Schema.optional(),
-  configOptions: z.record(z.string(), SpawnConfigOptionValueSchema).optional(),
-}).passthrough().superRefine((value, ctx) => {
+  backendTarget: z.optional(BackendTargetRefV2InputSchema),
+  backendId: z.optional(z.string().check(z.minLength(1))),
+  instructions: z.optional(z.string()),
+  display: z.optional(z.unknown()),
+  intentInput: z.optional(z.unknown()),
+  initialContextMode: z.optional(z.enum(['bootstrap', 'first_turn'])),
+  resumeHandle: z.optional(z.unknown()),
+  replay: z.optional(z.unknown()),
+  permissionMode: z.optional(z.string().check(z.minLength(1))),
+  retentionPolicy: z.optional(z.enum(['ephemeral', 'resumable'])),
+  runClass: z.optional(z.enum(['bounded', 'long_lived'])),
+  ioMode: z.optional(z.enum(['request_response', 'streaming'])),
+  connectedServices: z.optional(z.unknown()),
+  modelId: z.optional(z.string().check(z.minLength(1))),
+  sessionConfigOptionOverrides: z.optional(AcpConfigOptionOverridesV1Schema),
+  configOptions: z.optional(z.record(z.string(), SpawnConfigOptionValueSchema)),
+}).check(z.superRefine((value, ctx) => {
   const hasBackendTarget = typeof value.backendTarget !== 'undefined';
   const backendId = typeof value.backendId === 'string' ? value.backendId.trim() : '';
   if (!hasBackendTarget && !backendId) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['backendTarget'],
       message: 'backendTarget is required (or provide legacy backendId)',
     });
   }
-});
+}));
 
 export function normalizeExecutionRunStartToolInput(params: Readonly<{
   sessionId: string;

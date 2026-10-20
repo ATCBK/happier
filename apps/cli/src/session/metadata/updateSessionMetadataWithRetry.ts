@@ -24,9 +24,11 @@ import type { SessionTeamCredentialBindingMetadataPatchV1 } from '@happier-dev/p
 
 import type { AgentState, Metadata } from '@/api/types';
 import { deriveActivitySummaryFromAgentState } from '@/api/session/deriveActivitySummaryFromAgentState';
+import { SessionActionConfirmationsV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionActionConfirmationsV1';
 import type { StoredCredentials } from '@/persistence';
 import { requireAccountEncryptionCredentials } from '@/api/client/encryptionKey';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
+import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
 import {
   decryptStoredSessionPayload,
   encryptStoredSessionPayload,
@@ -84,9 +86,13 @@ function resolveLegacyMaxAttempts(value: number | undefined): number {
 }
 
 function isAmbiguousTupleCommitError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
-  const code = (error as { code?: unknown }).code;
-  return code === 'ECONNABORTED' || code === 'ECONNRESET' || code === 'ETIMEDOUT';
+  const failure = classifyServerEndpointError(error);
+  // An HTTP failure can follow a committed tuple, just like a lost response.
+  // The tuple owner reconciles exact results and replays only an unchanged
+  // source within its existing budget and publisher-currentness checks.
+  // Explicit 409 responses are handled by the tuple protocol above; an
+  // unexpected conflict envelope must retain its protocol failure.
+  return failure.retryable && failure.kind !== 'generation_conflict';
 }
 
 export type SessionMetadataEnvelopeTupleSnapshot =
@@ -664,6 +670,7 @@ async function updateLegacyMetadataWithHttpRetry(params: Readonly<{
     await verifySessionMetadataMutationCurrentness(params.currentness);
     const result = await patchSessionMetadata({
       token: params.token,
+      ...(params.currentness?.signal ? { signal: params.currentness.signal } : {}),
       ...(params.resolveAuthorizationHeaders
         ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders }
         : {}),
@@ -798,6 +805,7 @@ export async function updateSessionMetadataEnvelopeTupleWithRetry(
     }
     let accountEncryptionCurrentness = owner?.accountEncryptionCurrentness;
     let activitySummaryV1: SessionMetadataOwnerPatchV1['activitySummaryV1'];
+    let sharedActionConfirmationSummaryV1: SessionMetadataOwnerPatchV1['sharedActionConfirmationSummaryV1'];
     const mutation = params.mutation;
     const mutationWithSummary: SessionMetadataEnvelopeTupleMutation = mutation.kind === 'agentState'
       ? {
@@ -809,11 +817,28 @@ export async function updateSessionMetadataEnvelopeTupleWithRetry(
               pendingPermissionRequestCount: summary.pendingPermissionRequestCount,
               pendingUserActionRequestCount: summary.pendingUserActionRequestCount,
               pendingRequestNewestCreatedAt: summary.pendingRequestNewestCreatedAt,
+              ...(summary.newUserActionRequiredOccurrences.length ? {
+                newUserActionRequiredOccurrences: [...summary.newUserActionRequiredOccurrences],
+              } : {}),
             };
             return next;
           },
         }
-      : mutation;
+      : mutation.kind === 'metadata' ? {
+          ...mutation,
+          update: async (previous: Metadata) => {
+            const next = await mutation.update(previous);
+            if (previous.actionConfirmationsV1 !== undefined || next.actionConfirmationsV1 !== undefined) {
+              const confirmations = next.actionConfirmationsV1 === undefined
+                ? null : SessionActionConfirmationsV1Schema.parse(next.actionConfirmationsV1);
+              const summary = deriveActivitySummaryFromAgentState(confirmations);
+              sharedActionConfirmationSummaryV1 = {
+                pendingPermissionRequestCount: summary.pendingPermissionRequestCount,
+              };
+            }
+            return next;
+          },
+        } : mutation;
     const updated = await updateSessionMetadataTupleWithRetry<
       Metadata,
       AgentState
@@ -890,9 +915,14 @@ export async function updateSessionMetadataEnvelopeTupleWithRetry(
         if (activitySummaryV1 && (transportPatch.mode === 'owner' || transportPatch.mode === 'owner_migration')) {
           transportPatch = { ...transportPatch, activitySummaryV1 };
         }
+        if (sharedActionConfirmationSummaryV1 && (transportPatch.mode === 'owner'
+          || transportPatch.mode === 'owner_migration' || transportPatch.mode === 'shared_editor')) {
+          transportPatch = { ...transportPatch, sharedActionConfirmationSummaryV1 };
+        }
         await verifySessionMetadataMutationCurrentness(params.currentness);
         const result = await patchSessionMetadataEnvelopeTuple({
           token: params.token,
+          ...(params.currentness?.signal ? { signal: params.currentness.signal } : {}),
           ...(params.resolveAuthorizationHeaders
             ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders }
             : {}),
@@ -948,6 +978,7 @@ export async function updateSessionMetadataEnvelopeTupleWithRetry(
         if (!owner) {
           const sharedRaw = await fetchSessionByIdCompat({
             token: params.token,
+            ...(params.currentness?.signal ? { signal: params.currentness.signal } : {}),
             ...(params.resolveAuthorizationHeaders
               ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders }
               : {}),
@@ -984,6 +1015,7 @@ export async function updateSessionMetadataEnvelopeTupleWithRetry(
           await Promise.all([
             fetchSessionByIdCompat({
               token: params.token,
+              ...(params.currentness?.signal ? { signal: params.currentness.signal } : {}),
               ...(params.resolveAuthorizationHeaders
                 ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders }
                 : {}),
@@ -992,6 +1024,7 @@ export async function updateSessionMetadataEnvelopeTupleWithRetry(
             }),
             fetchAccountEncryptionCurrentness({
               token: params.token,
+              ...(params.currentness?.signal ? { signal: params.currentness.signal } : {}),
               ...(params.resolveAuthorizationHeaders
                 ? {
                     authorizationHeaders: params.resolveAuthorizationHeaders({
@@ -1127,6 +1160,7 @@ export async function updateSessionMetadataWithRetry(params: Readonly<{
   const accountEncryptionCurrentness = params.accountEncryptionCurrentness
     ?? await fetchAccountEncryptionCurrentness({
       token: params.token,
+      ...(params.currentness?.signal ? { signal: params.currentness.signal } : {}),
       ...(params.resolveAuthorizationHeaders
         ? {
             authorizationHeaders: params.resolveAuthorizationHeaders({

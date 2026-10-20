@@ -93,6 +93,8 @@ describe('Composer protocol surface', () => {
   it('owns exact Composer reference equality and presentation keys for every arm', () => {
     const refs = [
       { kind: 'session', sessionId: 'session-1' },
+      { kind: 'discussion', discussionId: 'discussion-1' },
+      { kind: 'discussion', discussionId: 'discussion-2' },
       { kind: 'newSession', instanceId: 'instance-1' },
       { kind: 'pendingMessage', sessionId: 'session-1', localId: 'pending-1' },
       { kind: 'participantMessage', sessionId: 'session-1', instanceId: 'instance-1' },
@@ -167,6 +169,15 @@ describe('Composer protocol surface', () => {
     expect(ComposerRefV1Schema.safeParse({ kind: 'sideChat', sessionId: 'session-1' }).success).toBe(false);
     expect(ComposerRefV1Schema.safeParse({ kind: 'session', sessionId: ' session-1 ' }).success).toBe(false);
     expect(ComposerScopeKindV1Schema.parse('workflowAuthoring')).toBe('workflowAuthoring');
+    expect(ComposerScopeKindV1Schema.parse('discussion')).toBe('discussion');
+    expect(ComposerRefV1Schema.parse({ kind: 'discussion', discussionId: 'discussion-1' }))
+      .toEqual({ kind: 'discussion', discussionId: 'discussion-1' });
+    for (const ref of [
+      { kind: 'discussion', discussionId: ' discussion-1 ' },
+      { kind: 'discussion', discussionId: '' },
+      { kind: 'discussion', discussionId: 'discussion-1', serverId: 'another-home' },
+      { kind: 'discussion', discussionId: 'discussion-1', producer: { sessionId: 'session-1' } },
+    ]) expect(ComposerRefV1Schema.safeParse(ref).success).toBe(false);
   });
 
   it('uses the canonical workflow block identity grammar without imposing the live-instance bound', () => {
@@ -211,7 +222,7 @@ describe('Composer protocol surface', () => {
     }
 
     const projected = launchInput.jsonSchema.properties?.originComposer;
-    expect(projected?.anyOf?.length).toBe(6);
+    expect(projected?.anyOf?.length).toBe(7);
     expect(projected?.anyOf?.[0]?.properties?.sessionId?.type).toBe('string');
   });
 

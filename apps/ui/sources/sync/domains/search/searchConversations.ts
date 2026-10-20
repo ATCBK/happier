@@ -1,7 +1,8 @@
-import { isMemorySessionSearchHitV1, isMemoryExternalTranscriptSearchHitV1, type MemorySearchQueryV1, type MemorySearchResultHitV1 } from '@happier-dev/protocol/memory/memorySearch';
-import type { ExternalSessionCandidateV1, ExternalSessionsSource } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
+import { isMemorySessionSearchHitV1, isMemoryExternalTranscriptSearchHitV1, type MemoryDocumentSearchCoverageV1, type MemorySearchQueryV1, type MemorySearchResultHitV1 } from '@happier-dev/protocol/memory/memorySearch';
+import type { ExternalSessionCandidateV1, ExternalSessionsCandidatesListResponse, ExternalSessionsSource } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
 import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError } from '@happier-dev/protocol/rpcErrors';
 import type { MemoryIndexSourceStatusV1 } from '@happier-dev/protocol/memory/memoryStatus';
+import type { ConversationSearchSourceFailureV1 } from '@happier-dev/protocol/actions/actionSpecs';
 import { fetchDaemonMemorySettings } from '../memory/fetchDaemonMemorySettings';
 import { fetchDaemonMemoryStatus } from '../memory/fetchDaemonMemoryStatus';
 import { searchDaemonMemory } from '../memory/searchDaemonMemory';
@@ -9,16 +10,19 @@ import { searchHomeMemory } from '../memory/searchHomeMemory';
 import { isDaemonMemorySearchUsable } from '../memory/isDaemonMemorySearchUsable';
 import { normalizeMemorySearchSessionId } from '../memory/applyMemorySearchSessionEligibility';
 import { runTasksWithLimit } from '@/sync/runtime/orchestration/runTasksWithLimit';
+import { mergeConversationSearchHits } from './mergeConversationSearchHits';
+export { mergeConversationSearchHits } from './mergeConversationSearchHits';
 
 export type ConversationSearchMachine = Readonly<{ id: string; online: boolean }>;
 export type ConversationSearchSource = Readonly<{ agentId: string; sourceKey: string; source: ExternalSessionsSource; contentSearch: boolean; key?: string; label?: string; detail?: string }>;
 export type ConversationSearchHit =
     | Readonly<{ machineId: string | null; mode: 'indexed'; hit: MemorySearchResultHitV1 }>
     | Readonly<{ machineId: string; mode: 'standard'; agentId: string; sourceKey: string; source: ExternalSessionsSource; candidate: ExternalSessionCandidateV1 }>;
-export type ConversationSearchMachineStatus = Readonly<{ machineId: string; status: 'ok' | 'offline' | 'outdated' | 'partial' | 'disabled-by-settings'; standardSearchEnabled: boolean; documents?: 'ready' | 'pending' | 'unavailable' }>;
+export type ConversationSearchMachineStatus = Readonly<{ machineId: string; status: 'ok' | 'offline' | 'outdated' | 'partial' | 'disabled-by-settings'; standardSearchEnabled: boolean; documents?: MemoryDocumentSearchCoverageV1['state'] }>;
 export type ConversationSearchResult = Readonly<{
     hits: readonly ConversationSearchHit[];
     machines: readonly ConversationSearchMachineStatus[];
+    failures?: readonly ConversationSearchSourceFailureV1[];
     sources?: readonly (ConversationSearchSource & Readonly<{ machineId: string; indexReady?: boolean }>)[];
     homeStatus?: 'ok' | 'partial' | 'unavailable';
     /** Cursor identity stays with its producing machine/source; never sent to a different index. */
@@ -36,9 +40,10 @@ export function hasConversationSearchScanFallback(result: ConversationSearchResu
     )) ?? false;
 }
 
-function hitTime(row: ConversationSearchHit): number {
-    return row.mode === 'standard' ? row.candidate.updatedAtMs
-        : 'createdAtToMs' in row.hit && typeof row.hit.createdAtToMs === 'number' ? row.hit.createdAtToMs : 0;
+/** The machine answered and Search on demand is off there, so no scan can run on it. */
+export function isConversationSearchOnDemandOff(result: ConversationSearchResult | null, machineId: string | null | undefined): boolean {
+    const machine = result?.machines.find(value => value.machineId === machineId);
+    return machine !== undefined && machine.status !== 'offline' && machine.status !== 'outdated' && !machine.standardSearchEnabled;
 }
 
 function indexedRows(machineId: string | null, hits: readonly MemorySearchResultHitV1[]): ConversationSearchHit[] {
@@ -62,34 +67,6 @@ function readQualifiedCursor(cursor: string | undefined): NonNullable<Conversati
         ...('sourceKey' in value && typeof value.sourceKey === 'string' ? { sourceKey: value.sourceKey } : {}) };
 }
 
-/** Scores are local to each index. Session identity is shared by Home and daemon. */
-export function mergeConversationSearchHits(rows: readonly ConversationSearchHit[]): ConversationSearchHit[] {
-    const sorted = [...rows].sort((a, b) => hitTime(b) - hitTime(a));
-    const sessions = new Set<string>();
-    const native = new Set<string>();
-    return sorted.filter(row => {
-        if (row.mode === 'indexed' && isMemorySessionSearchHitV1(row.hit)) {
-            const id = row.hit.sessionId.trim();
-            if (!id || sessions.has(id)) return false;
-            sessions.add(id);
-        } else if (row.mode === 'indexed' && isMemoryExternalTranscriptSearchHitV1(row.hit)) {
-            const id = JSON.stringify([row.machineId, row.hit.source.agentId, row.hit.source.sourceKey, row.hit.source.nativeSessionId, row.hit.sourceItemId]);
-            if (native.has(id)) return false;
-            native.add(id);
-        } else if (row.mode === 'standard') {
-            if (row.candidate.linkedSessionId) {
-                const sessionId = row.candidate.linkedSessionId.trim();
-                if (sessions.has(sessionId)) return false;
-                sessions.add(sessionId);
-            }
-            const id = JSON.stringify([row.machineId, row.agentId, row.sourceKey, row.candidate.remoteSessionId, row.candidate.match?.sourceItemId]);
-            if (native.has(id)) return false;
-            native.add(id);
-        }
-        return true;
-    });
-}
-
 export async function searchConversations(input: Readonly<{
     serverId: string;
     accountId: string;
@@ -106,6 +83,8 @@ export async function searchConversations(input: Readonly<{
     /** Source materialization is shared with the History browser's projection owner. */
     readSources?: (machineId: string) => Promise<readonly ConversationSearchSource[]>;
     continuation?: NonNullable<ConversationSearchResult['continuations']>[number];
+    /** Reuses the page owner for a failed first page, without inventing a cursor. */
+    retrySource?: Pick<ConversationSearchSourceFailureV1, 'machineId' | 'agentId' | 'sourceKey'>;
     /** Account adapter authorizes before deduplication, so an invalid newer hit cannot hide a valid one. */
     authorize?: (rows: readonly ConversationSearchHit[]) => Promise<readonly ConversationSearchHit[]>;
     onSources?: (sources: NonNullable<ConversationSearchResult['sources']>) => void;
@@ -113,7 +92,7 @@ export async function searchConversations(input: Readonly<{
     onProgress?: (result: ConversationSearchResult) => void;
 }>): Promise<ConversationSearchResult> {
     input.signal?.throwIfAborted();
-    const mode = input.mode ?? 'indexed';
+    const mode = input.retrySource ? 'standard' : input.mode ?? 'indexed';
     // Resolve the one transport adapter before starting concurrent machine work.
     // Indexed typing never loads the standard scanner's dependency corridor.
     const listCandidates = mode === 'indexed' ? null
@@ -130,6 +109,7 @@ export async function searchConversations(input: Readonly<{
     const continuations: NonNullable<ConversationSearchResult['continuations']>[number][] = [];
     const sourcesResult: NonNullable<ConversationSearchResult['sources']>[number][] = [];
     const resetSources: NonNullable<ConversationSearchResult['resetSources']>[number][] = [];
+    const failures: ConversationSearchSourceFailureV1[] = [];
     const completedStandardSources: NonNullable<ConversationSearchResult['completedStandardSources']>[number][] = [];
     const machineStatuses = new Map<string, ConversationSearchMachineStatus>();
     let homeStatus: ConversationSearchResult['homeStatus'];
@@ -142,13 +122,13 @@ export async function searchConversations(input: Readonly<{
                 && source.agentId === hit.source.agentId && source.sourceKey === hit.source.sourceKey);
         });
         const remainingContinuations = pendingContinuation ? [pendingContinuation, ...continuations] : continuations;
-        const result = { machines,
+        const result = { machines, ...(failures.length ? { failures: [...failures] } : {}),
             ...(homeStatus ? { homeStatus } : {}), ...(sourcesResult.length ? { sources: [...sourcesResult] } : {}),
             ...(remainingContinuations.length ? { continuations: [...remainingContinuations] } : {}), ...(resetSources.length ? { resetSources: [...resetSources] } : {}),
             ...(completedStandardSources.length ? { completedStandardSources: [...completedStandardSources] } : {}) };
         const authorized = input.authorize ? await input.authorize(currentHits) : currentHits;
         input.signal?.throwIfAborted();
-        return { ...result, hits: mergeConversationSearchHits(authorized) };
+        return { ...result, hits: mergeConversationSearchHits(authorized, sourcesResult) };
     };
     // Authorization is asynchronous. Publish in order so a slower visibility
     // read cannot replace a newer page with an older snapshot.
@@ -231,8 +211,17 @@ export async function searchConversations(input: Readonly<{
                 if (indexed && query.query.trim()) {
                     const corpora = (query.corpora ?? ['sessions', 'external_transcripts']).filter(corpus =>
                         (corpus !== 'sessions' || !input.homeSessions) && (corpus !== 'external_transcripts' || settings.conversationSearch.indexExternal.enabled));
+                    // Document admission reads current attachments before disclosure. It
+                    // must not hold already indexed conversations behind that separate IO.
+                    const separateDocuments = corpora.includes('documents') && corpora.some(corpus => corpus !== 'documents');
+                    const documentSearch = separateDocuments && !continuation && !cursor
+                        ? searchDaemonMemory({ ...query, ...target, corpora: ['documents'], cursor: undefined }).catch(() => null)
+                        : null;
+                    if (documentSearch) documents = 'pending';
                     if (corpora.length > 0) {
-                        const result = await searchDaemonMemory({ ...query, ...target, corpora, cursor: continuation?.cursor ?? cursor }).catch(() => {
+                        const result = await searchDaemonMemory({ ...query, ...target,
+                            corpora: separateDocuments ? corpora.filter(corpus => corpus !== 'documents') : corpora,
+                            cursor: continuation?.cursor ?? cursor }).catch(() => {
                             input.signal?.throwIfAborted();
                             indexReadFailed = true;
                             return null;
@@ -247,11 +236,20 @@ export async function searchConversations(input: Readonly<{
                                 : indexSources.some(source => source.source.type === 'external_transcript' && source.state !== 'ready')))) machineStatus = 'partial';
                             if (corpora.includes('sessions') && indexSources?.some(source => source.source.type === 'happier_session' && source.state !== 'ready')) machineStatus = 'partial';
                             hits.push(...indexedRows(machine.id, result.hits));
-                            documents = result.documents?.state ?? 'unavailable';
+                            if (!separateDocuments) documents = result.documents?.state ?? 'unavailable';
                             if (result.nextCursor) continuations.push({ machineId: machine.id, cursor: result.nextCursor });
                             if (result.hasMore || queuePending > 0) machineStatus = 'partial';
                         } else machineStatus = result?.errorCode === 'memory_disabled' ? 'disabled-by-settings'
                             : result?.errorCode === 'memory_index_missing' ? 'outdated' : 'partial';
+                    }
+                    if (documentSearch) {
+                        machineStatuses.set(machine.id, { machineId: machine.id, status: 'partial', standardSearchEnabled, documents: 'pending' });
+                        await publish();
+                        const result = await documentSearch;
+                        input.signal?.throwIfAborted();
+                        documents = result?.ok ? result.documents?.state ?? 'unavailable' : 'unavailable';
+                        if (result?.ok) hits.push(...indexedRows(machine.id, result.hits));
+                        if (documents !== 'ready') machineStatus = 'partial';
                     }
                 }
             }
@@ -263,7 +261,7 @@ export async function searchConversations(input: Readonly<{
             }));
             sourcesResult.push(...projectedSources);
             input.onSources?.([...sourcesResult]);
-            machineStatuses.set(machine.id, { machineId: machine.id, status: 'partial', standardSearchEnabled });
+            machineStatuses.set(machine.id, { machineId: machine.id, status: 'partial', standardSearchEnabled, ...(documents ? { documents } : {}) });
             await publish();
             if (sourcesUnavailable || (nativeIndexedUsable && projectedSources.some(source => !source.indexReady))) machineStatus = 'partial';
             // Only an explicit caller (Action or activated scan surface) selects auto/standard.
@@ -273,6 +271,7 @@ export async function searchConversations(input: Readonly<{
                 input.signal?.throwIfAborted();
                 if (!nativeIndexedUsable) machineStatus = sources.length ? 'ok' : 'outdated';
                 for (const source of projectedSources) {
+                    if (input.retrySource && (source.agentId !== input.retrySource.agentId || source.sourceKey !== input.retrySource.sourceKey)) continue;
                     if (continuation && continuation.sourceKey !== undefined && continuation.sourceKey !== source.sourceKey) continue;
                     if (continuation && continuation.sourceKey === undefined) continue;
                     input.signal?.throwIfAborted();
@@ -288,16 +287,34 @@ export async function searchConversations(input: Readonly<{
                         source: source.source, searchTerm: query.query, searchTarget: 'content',
                         ...(input.includeThreads ? { includeThreads: true } : {}),
                     } as const;
-                    let result = await listCandidates({ ...request,
-                        ...(continuation ? { cursor: continuation.cursor } : {}) }, target);
-                    input.signal?.throwIfAborted();
-                    if (continuation && result.ok && result.cursorReset) {
-                        pendingContinuation = undefined;
-                        resetSources.push({ machineId: machine.id, sourceKey: source.sourceKey });
-                        result = await listCandidates(request, target);
+                    let result: ExternalSessionsCandidatesListResponse;
+                    try {
+                        result = await listCandidates({ ...request,
+                            ...(continuation ? { cursor: continuation.cursor } : {}) }, target);
+                        input.signal?.throwIfAborted();
+                        if (continuation && result.ok && result.cursorReset) {
+                            pendingContinuation = undefined;
+                            resetSources.push({ machineId: machine.id, sourceKey: source.sourceKey });
+                            result = await listCandidates(request, target);
+                        }
+                    } catch (error) {
+                        input.signal?.throwIfAborted();
+                        machineStatus = isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error) ? 'outdated' : 'partial';
+                        // No native failure envelope arrived. Preserve a retryable
+                        // operation failure without inventing an Agent diagnosis.
+                        if (machineStatus !== 'outdated') failures.push({ machineId: machine.id, agentId: source.agentId, sourceKey: source.sourceKey,
+                            errorCode: 'internal_error', retryable: true });
+                        await publish();
+                        continue;
                     }
                     input.signal?.throwIfAborted();
-                    if (!result.ok) { machineStatus = 'partial'; continue; }
+                    if (!result.ok) {
+                        machineStatus = 'partial';
+                        failures.push({ machineId: machine.id, agentId: source.agentId, sourceKey: source.sourceKey,
+                            errorCode: result.errorCode, retryable: result.retryable !== false });
+                        await publish();
+                        continue;
+                    }
                     pendingContinuation = undefined;
                     if (result.contentCoverage === 'complete' && !result.nextCursor && !result.preparation && !result.searchIncomplete) {
                         completedStandardSources.push({ machineId: machine.id, agentId: source.agentId, sourceKey: source.sourceKey });
@@ -316,7 +333,8 @@ export async function searchConversations(input: Readonly<{
                 status: isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error) ? 'outdated' : 'partial', standardSearchEnabled };
         }
     };
-    const machineWork = runTasksWithLimit(input.machines.filter(machine => !continuation || continuation.machineId === machine.id).map(machine => async () => {
+    const machineWork = runTasksWithLimit(input.machines.filter(machine => (!continuation || continuation.machineId === machine.id)
+        && (!input.retrySource || input.retrySource.machineId === machine.id)).map(machine => async () => {
         const status = await searchMachine(machine);
         machineStatuses.set(machine.id, status);
         await publish();

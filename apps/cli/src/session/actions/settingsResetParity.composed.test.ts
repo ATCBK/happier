@@ -60,7 +60,11 @@ describe('public Settings reset parity', () => {
     if (result.ok) SettingsDeclarationActionOutputSchemasV1['settings.reset'].parse(result.result);
     expect(host.readStoredSettings()).toEqual({ favoriteMachines: ['unrelated'] });
     expect(await app.execute('settings.reset', { anchor, expected: { value: true } }, context))
+      .toEqual(result);
+    expect(host.readStoredSettings()).toEqual({ favoriteMachines: ['unrelated'] });
+    expect(await app.execute('settings.reset', { anchor, expected: { value: false } }, context))
       .toMatchObject({ ok: false, errorCode: 'account_settings_mutation_conflict' });
+    expect(host.readStoredSettings()).toEqual({ favoriteMachines: ['unrelated'] });
   });
   const values = {
     explainChanges: false, summaryModel: '', outputLanguage: 'fr', prepareAfterTurn: true,

@@ -3,6 +3,8 @@ import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSes
 import { voiceConversationBindingResolver } from '@/voice/binding/VoiceConversationBindingResolver';
 import { resolveVoiceOperationalSessionId } from '@/voice/binding/resolveVoiceOperationalSessionId';
 import type { VoiceSessionBinding } from '@/voice/binding/voiceConversationBindingTypes';
+import { getVoiceConversationRuntimeSnapshot } from '@/voice/runtime/machine/voiceConversationRuntimeStore';
+import { deriveLocalVoiceSessionSnapshot } from '@/voice/runtime/machine/deriveLocalVoiceSessionSnapshot';
 
 export type ActiveLocalVoiceAgentBinding = Readonly<{
   binding: VoiceSessionBinding | null;
@@ -25,7 +27,11 @@ export function resolveActiveLocalVoiceAgentBinding(): ActiveLocalVoiceAgentBind
   const controlSessionId = binding.controlSessionId;
   const boundSessionId = resolveVoiceOperationalSessionId(binding, controlSessionId);
 
-  if (localVoiceRuntimeController.isAgentActive(controlSessionId)) {
+  const capture = deriveLocalVoiceSessionSnapshot('local_conversation', 'local', getVoiceConversationRuntimeSnapshot());
+  // A connected, lazily initialized Voice Agent accepts explicit text just as
+  // it accepts the first spoken turn. Prewarming is not an admission prerequisite.
+  if (localVoiceRuntimeController.isAgentActive(controlSessionId)
+    || (capture.status === 'connected' && capture.sessionId === controlSessionId)) {
     const announcementSessionId = binding?.conversationSessionId?.trim() || boundSessionId;
     return {
       binding,

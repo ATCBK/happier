@@ -3,7 +3,7 @@ import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { CapacityBar, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { formatMachineBytes } from '@/components/machines/vitals/machineVitalsPresentation';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
@@ -25,7 +25,7 @@ const BAR_WIDTH = 64;
  */
 export function StorageSizeBar(props: Readonly<{ label: string; bytes: number; largest: number; hatched: boolean; compact: boolean; color?: string }>) {
     const { theme } = useUnistyles();
-    const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const pluginTheme = usePluginUiTheme(theme);
     return (
         <CapacityBar theme={pluginTheme} label={props.label} value={props.bytes} capacity={Math.max(1, props.largest)}
             size="inline" height={props.compact ? undefined : theme.space.s6} showCaption={false}

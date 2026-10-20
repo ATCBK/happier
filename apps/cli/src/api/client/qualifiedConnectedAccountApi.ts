@@ -1,6 +1,13 @@
+import * as z from 'zod/mini';
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import axios from "axios";
-import { QualifiedProviderAccountUsageHistoryRequestV4Schema, QualifiedProviderAccountUsageHistoryResponseV4Schema } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
+import { classifyActionTransportFailure } from './classifyServerEndpointError';
+import { classifyHomeDomainHttpMutationFailureV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
+import { QualifiedProviderAccountUsageHistoryRequestV4Schema, QualifiedProviderAccountUsageHistoryResponseV4Schema, openProviderAccountUsageRecordV4 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
+import { openSealedProviderAccountUsageSnapshot } from '@happier-dev/protocol/connect/accountUsage';
+import { serializeProviderAccountUsageSnapshotMaterialV1 } from '@happier-dev/protocol/connect/account-usage-primitives';
+import { mergeProviderAccountSubscription } from '@happier-dev/protocol/connect/accountSubscription';
+import type { AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { QualifiedConnectedAccountCredentialDeleteResponseV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import type { ManagedResourceDependencyV1 } from '@happier-dev/protocol';
 import { BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID } from '@happier-dev/protocol/connect/generatedBuiltInLegacyConnectedAccountCompatibility';
@@ -10,7 +17,7 @@ import { QualifiedConnectedAccountRefSchema } from '@happier-dev/protocol/connec
 import { encodeQualifiedConnectedAccountV4StructuredQueryValue } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4QueryCodec';
 import type { BuiltInLegacyConnectedAccountOperation, BuiltInLegacyConnectedServiceId, QualifiedConnectedAccountConfigurationTargetV4, QualifiedConnectedAccountGroupRef, QualifiedConnectedAccountRef, QualifiedConnectedAccountServiceRef, QualifiedConnectedServiceUsageSourceV4, ProviderAccountUsageRecordId } from '@happier-dev/protocol';
 
-import { HttpStatusError } from "@/api/client/httpStatusError";
+import { HttpStatusError, readHttpStatus } from "@/api/client/httpStatusError";
 import type {
     CliServerFeaturesSnapshot,
 } from "@/features/serverFeaturesClient";
@@ -753,7 +760,7 @@ export async function deleteQualifiedConnectedAccountCredentialV4(
     });
     if (deletion.reviewOnly !== undefined) query.set('reviewOnly', String(deletion.reviewOnly));
     if (deletion.emergencyRevoke !== undefined) query.set('emergencyRevoke', String(deletion.emergencyRevoke));
-    if (deletion.managedResourceDispositions !== undefined) query.set('managedResourceDispositions', encodeQualifiedConnectedAccountV4StructuredQueryValue(QualifiedConnectedAccountCredentialDeleteV4Schema.shape.managedResourceDispositions.unwrap(), deletion.managedResourceDispositions));
+    if (deletion.managedResourceDispositions !== undefined) query.set('managedResourceDispositions', encodeQualifiedConnectedAccountV4StructuredQueryValue(QualifiedConnectedAccountCredentialDeleteV4Schema.shape.managedResourceDispositions._zod.def.innerType, deletion.managedResourceDispositions));
     const response = await axios.delete(
         `${resolveServerHttpBaseUrl()}/v4/connect/qualified/credential?${query.toString()}`,
         {
@@ -761,7 +768,20 @@ export async function deleteQualifiedConnectedAccountCredentialV4(
             timeout: resolveConnectedServicesServerApiTimeoutMs(),
             validateStatus: status => status === 200 || status === 409,
         },
-    );
+    ).catch((cause: unknown) => {
+        const status = readHttpStatus(cause);
+        const response = cause && typeof cause === 'object' && 'response' in cause ? cause.response : null;
+        const data = response && typeof response === 'object' && 'data' in response ? response.data : null;
+        if (status === 503 && data && typeof data === 'object' && 'error' in data
+            && data.error === 'database_transaction_conflict_exhausted') {
+            throw Object.assign(new Error('Connected Account deletion rolled back'), { code: data.error, cause });
+        }
+        // Review is read-only; only the effectful DELETE can lose a committed acknowledgement.
+        if (deletion.reviewOnly || status !== null && status < 500) throw cause;
+        throw Object.assign(new Error('Connected Account deletion transport failed'), {
+            code: classifyHomeDomainHttpMutationFailureV1({ error: cause, issued: true, aborted: false }), cause,
+        });
+    });
     if (response.status === 409) throwQualifiedConnectedAccountCredentialConflict(response.data);
     if (response.status !== 200) {
         throw new Error(
@@ -897,6 +917,8 @@ export async function writeQualifiedProviderAccountUsageV4(
     params: Readonly<{
         token: string;
         write: unknown;
+        /** Local opening material only; never part of the HTTP write. */
+        material?: AccountScopedCryptoMaterial;
     }>,
 ) {
     const write = QualifiedProviderAccountUsageWriteV4Schema.parse(
@@ -909,7 +931,30 @@ export async function writeQualifiedProviderAccountUsageV4(
             headers: requestHeaders(params.token),
             timeout: resolveConnectedServicesServerApiTimeoutMs(),
         },
-    );
+    ).catch(async (error: unknown) => {
+        const response = error && typeof error === 'object' && 'response' in error ? error.response : null;
+        const data = response && typeof response === 'object' && 'data' in response ? response.data : null;
+        const conflictExhausted = readHttpStatus(error) === 503
+            && data && typeof data === 'object' && 'error' in data && data.error === 'database_transaction_conflict_exhausted';
+        const acknowledgementLost = classifyActionTransportFailure(error, {
+            mutation: true, requestIssued: true, cancelled: false,
+        }) === 'outcome_unknown';
+        if (!conflictExhausted && !acknowledgementLost) throw error;
+        // All daemon producers share this writer. Re-read after confirmed
+        // rollback exhaustion or a lost acknowledgement, under the same Home.
+        // A failed reconciliation must preserve the original write failure.
+        const record = await readQualifiedProviderAccountUsageRecordV4({ token: params.token, recordId: write.recordId }).catch(() => null);
+        if (!record || !record.sources.some(source => JSON.stringify(source) === JSON.stringify(write.source))) throw error;
+        const snapshot = write.snapshot ?? (write.sealedPayload && params.material
+            ? openSealedProviderAccountUsageSnapshot({ material: params.material, sealed: write.sealedPayload }) : null);
+        if (!snapshot) throw error;
+        const current = openProviderAccountUsageRecordV4({ recordId: write.recordId, record,
+            accountMode: write.payloadMode === 'plain_json_v1' ? 'plain' : 'e2ee', material: params.material });
+        if (!current || record.metadata.status !== write.status || current.fetchedAtMs < (write.fetchedAt ?? snapshot.fetchedAtMs)
+            || serializeProviderAccountUsageSnapshotMaterialV1(current) !== serializeProviderAccountUsageSnapshotMaterialV1(snapshot)
+            || JSON.stringify(mergeProviderAccountSubscription(current.subscription, snapshot.subscription)) !== JSON.stringify(current.subscription)) throw error;
+        return { status: 200, data: { success: true, source: { status: 'linked' } } };
+    });
     if (response.status !== 200) {
         throw new Error(
             `Qualified provider-account usage write returned ${response.status}`,

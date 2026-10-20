@@ -8,11 +8,11 @@ import {
     sessionScmRemotePush,
     sessionScmRepositoryRemoveIndexLock,
 } from '@/sync/ops';
-import { storage } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storageStore';
 import { scmStatusSync } from '@/scm/scmStatusSync';
 import { evaluateScmOperationPreflight } from '@/scm/core/operationPolicy';
 import type { ScmCommitStrategy } from '@/scm/settings/commitStrategy';
-import type { ScmPushRejectPolicy, ScmRemoteConfirmPolicy } from '@/scm/settings/preferences';
+import type { ScmPushRejectPolicy } from '@/scm/settings/preferences';
 import { executeScmRemoteOperation, type ScmRemoteOperationKind } from '@/scm/operations/executeScmRemoteOperation';
 import { withSessionProjectScmOperationLock } from '@/scm/operations/withOperationLock';
 import { reportSessionScmOperation } from '@/scm/operations/reporting';
@@ -36,7 +36,6 @@ export function useScmRemoteOperations(input: {
     scmSnapshot: ScmWorkingSnapshot | null;
     scmWriteEnabled: boolean;
     scmCommitStrategy: ScmCommitStrategy;
-    scmRemoteConfirmPolicy: ScmRemoteConfirmPolicy;
     scmPushRejectPolicy: ScmPushRejectPolicy;
     refreshScmData: () => Promise<void>;
     loadCommitHistory: (opts?: { reset?: boolean }) => Promise<void>;
@@ -48,7 +47,6 @@ export function useScmRemoteOperations(input: {
         scmSnapshot,
         scmWriteEnabled,
         scmCommitStrategy,
-        scmRemoteConfirmPolicy,
         scmPushRejectPolicy,
         refreshScmData,
         loadCommitHistory,
@@ -107,7 +105,6 @@ export function useScmRemoteOperations(input: {
             scmSnapshot,
             scmWriteEnabled,
             scmCommitStrategy,
-            scmRemoteConfirmPolicy,
             scmPushRejectPolicy,
             surface,
             tracking,
@@ -121,26 +118,27 @@ export function useScmRemoteOperations(input: {
                     state: storage.getState(),
                     sessionId, serverId,
                     operation,
+                    deferRunning: true,
                     run,
                 });
                 return lockResult.started ? { started: true } : lockResult;
             },
-            executeRemoteOperation: async (operation, remoteTarget) => {
+            executeRemoteOperation: async (operation, remoteTarget, call) => {
                 return operation === 'fetch'
-                    ? await sessionScmRemoteFetch(sessionId, { remote: remoteTarget.remote }, serverId)
+                    ? await sessionScmRemoteFetch(sessionId, { remote: remoteTarget.remote }, serverId, call)
                     : operation === 'pull'
                         ? await sessionScmRemotePull(sessionId, {
                             remote: remoteTarget.remote,
                             branch: remoteTarget.branch ?? undefined,
                             ...(options?.policy?.dirtyPolicy ? { dirtyPolicy: options.policy.dirtyPolicy } : {}),
                             ...(options?.policy?.reconcile ? { reconcile: options.policy.reconcile } : {}),
-                        }, serverId)
+                        }, serverId, call)
                         : await sessionScmRemotePush(sessionId, {
                             remote: remoteTarget.remote,
                             branch: remoteTarget.branch ?? undefined,
                             ...(options?.policy?.pushMode ? { pushMode: options.policy.pushMode } : {}),
                             ...(options?.policy?.expectedRemoteOid ? { expectedRemoteOid: options.policy.expectedRemoteOid } : {}),
-                        }, serverId);
+                        }, serverId, call);
             },
             removeIndexLock: (request) => sessionScmRepositoryRemoveIndexLock(sessionId, request, serverId),
             reportOperation: ({ operation, status, detail, rawError, errorCode, outcome }) => {
@@ -181,7 +179,6 @@ export function useScmRemoteOperations(input: {
         refreshScmData,
         scmCommitStrategy,
         scmPushRejectPolicy,
-        scmRemoteConfirmPolicy,
         scmSnapshot,
         scmWriteEnabled,
         sessionId, serverId,

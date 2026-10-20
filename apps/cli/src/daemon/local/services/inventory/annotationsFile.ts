@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { configuration } from '@/configuration';
 import { logger } from '@/ui/logger';
@@ -12,29 +12,29 @@ import type { LocalServiceInventoryAnnotationStore } from './registry';
 export const LOCAL_SERVICE_INVENTORY_ANNOTATIONS_FILE = 'local-service-inventory-annotations-v1.json';
 
 const StoredLabelSchema = z.object({
-    id: z.string().min(1),
-    text: z.string().min(1),
+    id: z.string().check(z.minLength(1)),
+    text: z.string().check(z.minLength(1)),
     source: z.enum(['user', 'plugin']),
-    updatedAt: z.number().int().nonnegative(),
-}).strip();
+    updatedAt: z.number().check(z.int(), z.nonnegative()),
+});
 
 const ForgottenSuppressionSchema = z.object({
-    forgottenAt: z.number().int().nonnegative(),
+    forgottenAt: z.number().check(z.int(), z.nonnegative()),
     runIdentity: z.union([
         z.object({
             kind: z.literal('process'),
-            pid: z.number().int(),
-            processStartTimeMs: z.number().int().nonnegative().nullable(),
-        }).strip(),
-        z.object({ kind: z.literal('unattributed') }).strip(),
+            pid: z.number().check(z.int()),
+            processStartTimeMs: z.nullable(z.number().check(z.int(), z.nonnegative())),
+        }),
+        z.object({ kind: z.literal('unattributed') }),
     ]),
-}).strip();
+});
 
 const AnnotationsSchema = z.object({
     v: z.literal(1),
-    labelsByFallbackKey: z.array(z.tuple([z.string().min(1), z.array(StoredLabelSchema)])),
-    forgottenFallbackKeys: z.array(z.tuple([z.string().min(1), ForgottenSuppressionSchema])),
-}).strip();
+    labelsByFallbackKey: z.array(z.tuple([z.string().check(z.minLength(1)), z.array(StoredLabelSchema)])),
+    forgottenFallbackKeys: z.array(z.tuple([z.string().check(z.minLength(1)), ForgottenSuppressionSchema])),
+});
 
 export function resolveLocalServiceInventoryAnnotationsPath(happyHomeDir?: string): string {
     return join(happyHomeDir ?? configuration.happyHomeDir, LOCAL_SERVICE_INVENTORY_ANNOTATIONS_FILE);

@@ -104,7 +104,7 @@ describe('resolveRunnerMcpMaterialV1', () => {
     });
   });
 
-  it('returns a source-specific refusal for a selected machine-scoped server', () => {
+  it('materializes an explicit include independently of another Machine default', () => {
     const settings = McpServersSettingsV1Schema.parse({
       servers: [{ id: 'local', name: 'local', transport: 'stdio', stdio: { command: 'tool', args: [] }, env: {}, createdAt: 1, updatedAt: 2 }],
       bindings: [{ id: 'machine', serverId: 'local', enabled: true, target: { t: 'machine', machineId: 'm1' }, createdAt: 3, updatedAt: 4 }],
@@ -113,7 +113,8 @@ describe('resolveRunnerMcpMaterialV1', () => {
       settings,
       capabilitySelection: { mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: ['local'], forceExcludeServerIds: [] } },
       resolveSavedSecret: () => null,
-    })).toEqual({ ok: false, reason: 'machine_scoped', serverId: 'local', valuePath: null });
+    })).toMatchObject({ ok: true, material: { servers: [{ serverId: 'local', serverRevision: 2,
+      bindingId: null, bindingRevision: null, config: settings.servers[0] }] } });
   });
 
   it('does not reinterpret a removed selected server as a portability failure', () => {
@@ -125,7 +126,7 @@ describe('resolveRunnerMcpMaterialV1', () => {
     })).toEqual({ ok: false, reason: 'server_unavailable', serverId: 'removed', valuePath: null });
   });
 
-  it('names a selected server whose binding was removed', () => {
+  it('materializes an explicit include after its default binding was removed', () => {
     const settings = McpServersSettingsV1Schema.parse({
       servers: [{ id: 'unbound', name: 'unbound', transport: 'stdio', stdio: { command: 'tool', args: [] }, env: {}, createdAt: 1, updatedAt: 2 }],
       bindings: [],
@@ -134,7 +135,8 @@ describe('resolveRunnerMcpMaterialV1', () => {
       settings,
       capabilitySelection: { mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: ['unbound'], forceExcludeServerIds: [] } },
       resolveSavedSecret: () => null,
-    })).toEqual({ ok: false, reason: 'binding_unavailable', serverId: 'unbound', valuePath: null });
+    })).toMatchObject({ ok: true, material: { servers: [{ serverId: 'unbound', serverRevision: 2,
+      bindingId: null, bindingRevision: null, config: settings.servers[0] }] } });
   });
 
   it('rejects a reviewed server whose bound identity revision was substituted', () => {

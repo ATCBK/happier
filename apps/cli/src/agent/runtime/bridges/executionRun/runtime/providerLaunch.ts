@@ -6,6 +6,7 @@ import type { BackendTargetRefV2Input, ConnectedServiceBindingsV2, ProviderBound
 import type { AgentSessionProviderBinding } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
+import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { readLeasedAgentProviderRequirements } from '@/plugins/runtime/providerBindings/adapter';
 import { prepareDirectProviderLaunch, type DirectManagedProviderEndpointPreparer } from '@/providers/lifecycle/prepareDirectLaunch';
 import { prepareProviderLaunch } from '@/providers/lifecycle/prepareLaunch';
@@ -20,7 +21,8 @@ import { createExecutionRunCodedError } from '../errors';
 
 type Cleanup = (() => void | Promise<void>) | null;
 
-type ExecutionRunProviderSelectionInput = Readonly<{
+export type ExecutionRunProviderSelectionInput = Readonly<{
+    signal?: AbortSignal;
     selection: ProviderBoundModelRef;
     backendTarget: BackendTargetRefV2Input;
     machineId?: string;
@@ -30,15 +32,34 @@ type ExecutionRunProviderSelectionInput = Readonly<{
     featureEnabled: boolean;
     happyHomeDir: string;
     accountSettingsSnapshot?: ActiveAccountSettingsSnapshot | null;
+    readAccountSettingsSnapshot?: () => ActiveAccountSettingsSnapshot | null;
     resolveManagedPurposeBindingIntent?: ResolveManagedProviderPurposeBindingIntent;
     readModelProjection?: ProviderRuntimeModelProjectionReader;
+    /** Borrowed from this Run's pinned daemon snapshot; its owner releases it. */
+    runtimeRegistryLease?: PluginRuntimeRegistryLease;
+}>;
+
+/** Only the caller's exact choice crosses the existing snapshot service seam. */
+export type ExecutionRunProviderLaunchRequest = Readonly<{
+    selection: ProviderBoundModelRef;
+    backendTarget: BackendTargetRefV2Input;
+    agentId: string;
+    runId: string;
+    controllerOccurrenceId?: string;
+    connectedServices?: ConnectedServiceBindingsV2 | null;
+    expectedAccountSettingsScopeKey: string;
+}>;
+
+export type ExecutionRunProviderLaunchServices = Readonly<{
+    admitInheritedSelection(input: ExecutionRunProviderLaunchRequest, signal?: AbortSignal): Promise<void>;
+    prepareLaunch(input: ExecutionRunProviderLaunchRequest, signal?: AbortSignal): Promise<PreparedExecutionRunProviderLaunch>;
 }>;
 
 /** Authorizes a rematched child choice without materializing credentials or launching a runtime. */
 export async function admitExecutionRunInheritedProviderSelection(input: ExecutionRunProviderSelectionInput): Promise<void> {
     if (input.selection.providerConnectionId === null) return;
     validateExecutionRunProviderSelectionInput(input);
-    const lease = await acquireAuthoritativePluginRuntimeRegistryLease({ happyHomeDir: input.happyHomeDir });
+    const lease = input.runtimeRegistryLease ?? await acquireAuthoritativePluginRuntimeRegistryLease({ happyHomeDir: input.happyHomeDir });
     try {
         const prepared = await prepareProviderLaunch(createExecutionRunProviderPreparation(input, lease));
         if (!prepared.ok) throw inheritedProviderRefusal(prepared.error);
@@ -50,7 +71,7 @@ export async function admitExecutionRunInheritedProviderSelection(input: Executi
         }
         await prepared.attempt.cleanupOnFailure();
     } finally {
-        await lease.release();
+        if (!input.runtimeRegistryLease) await lease.release();
     }
 }
 
@@ -60,7 +81,8 @@ export type PreparedExecutionRunProviderLaunch = Readonly<{
     connectedServices?: ConnectedServiceBindingsV2 | null;
     providerBinding?: AgentSessionProviderBinding;
     sanitizeDiagnosticText: (value: string) => string;
-    revalidateBeforeCommit: () => Promise<Readonly<
+    additionalRedactionValues: readonly string[];
+    revalidateBeforeCommit: (signal?: AbortSignal) => Promise<Readonly<
         { ok: true } | { ok: false; error: ProviderErrorV1 }
     >>;
     cleanupOnExit: Cleanup;
@@ -84,7 +106,7 @@ export type ExecutionRunTeamCredentialProviderBindingPreparer = (input: Readonly
 }> | null>;
 
 function refusal(error: ProviderErrorV1): Error & { code: string } {
-    return Object.assign(new Error(error.code), { code: error.code });
+    return Object.assign(new Error(error.code), { code: error.code, details: { providerError: error } });
 }
 
 function inheritedProviderRefusal(error: ProviderErrorV1): Error {
@@ -135,10 +157,11 @@ function createExecutionRunProviderPreparation(
         },
         createAuthorizationAttempt: async ({ selection, machineId, agentTargetKey, agentId }) =>
             createRuntimeProviderSpawnAuthorizationAttempt({
+                signal: input.signal,
                 selection, machineId, agentTargetKey, agentId, lease,
                 // Each child is authorized against its owning Account, never
                 // the process-global Account of another active Session.
-                getAccountSettingsSnapshot: () => input.accountSettingsSnapshot ?? null,
+                getAccountSettingsSnapshot: input.readAccountSettingsSnapshot ?? (() => input.accountSettingsSnapshot ?? null),
                 runtimeStateStore: createProviderRuntimeStateStore({ happyHomeDir: input.happyHomeDir, machineId }),
                 materializationBaseDir: join(input.happyHomeDir, 'providers', 'materialized'),
                 scope: { kind: 'execution_run', executionRunId: input.runId },
@@ -152,6 +175,7 @@ const nativeLaunch = Object.freeze({
     environment: Object.freeze({}),
     unsetEnvKeys: Object.freeze([]),
     sanitizeDiagnosticText: (value: string) => value,
+    additionalRedactionValues: Object.freeze([]),
     revalidateBeforeCommit: async () => Object.freeze({ ok: true as const }),
     cleanupOnExit: null,
 });
@@ -162,6 +186,7 @@ const nativeLaunch = Object.freeze({
  * runtime creation; only the resulting bounded SDK inputs live for the run.
  */
 export async function prepareExecutionRunProviderLaunch(input: Readonly<{
+    signal?: AbortSignal;
     selection?: ProviderBoundModelRef;
     teamCredentialModel?: TeamCredentialProviderModelSelectionV1;
     backendTarget: BackendTargetRefV2Input;
@@ -172,11 +197,13 @@ export async function prepareExecutionRunProviderLaunch(input: Readonly<{
     featureEnabled: boolean;
     happyHomeDir: string;
     accountSettingsSnapshot?: ActiveAccountSettingsSnapshot | null;
+    readAccountSettingsSnapshot?: () => ActiveAccountSettingsSnapshot | null;
     prepareTeamCredentialProviderBinding?: ExecutionRunTeamCredentialProviderBindingPreparer;
     resolveManagedPurposeBindingIntent?: ResolveManagedProviderPurposeBindingIntent;
     readModelProjection?: ProviderRuntimeModelProjectionReader;
     prepareManagedEndpoint?: DirectManagedProviderEndpointPreparer;
     retainCleanup?: (cleanup: ProviderLaunchCleanup) => void;
+    runtimeRegistryLease?: PluginRuntimeRegistryLease;
 }>): Promise<PreparedExecutionRunProviderLaunch> {
     if (!input.selection && input.prepareTeamCredentialProviderBinding) {
         const teamBinding = await input.prepareTeamCredentialProviderBinding({
@@ -203,6 +230,7 @@ export async function prepareExecutionRunProviderLaunch(input: Readonly<{
                     : {}),
                 providerBinding: teamBinding.providerBinding,
                 sanitizeDiagnosticText: redaction.redact,
+                additionalRedactionValues: redaction.values(),
                 revalidateBeforeCommit: async () => Object.freeze({ ok: true as const }),
                 cleanupOnExit: async () => {
                     try { await teamBinding.cleanup(); } finally { redaction.close(); }
@@ -228,15 +256,16 @@ export async function prepareExecutionRunProviderLaunch(input: Readonly<{
     const providerInput = { ...input, selection: input.selection };
     validateExecutionRunProviderSelectionInput(providerInput);
 
-    const lease = await acquireAuthoritativePluginRuntimeRegistryLease({
+    const lease = input.runtimeRegistryLease ?? await acquireAuthoritativePluginRuntimeRegistryLease({
         happyHomeDir: input.happyHomeDir,
     });
     const { resolvePrerequisites, createAuthorizationAttempt, ...launchInput } = createExecutionRunProviderPreparation(providerInput, lease);
     const direct = await prepareDirectProviderLaunch({
+        signal: input.signal,
         ...launchInput,
         scope: { kind: 'execution_run', executionRunId: input.runId },
     }, {
-        initialResources: [{
+        initialResources: input.runtimeRegistryLease ? [] : [{
             onFailure: lease.release,
             onExit: lease.release,
         }],
@@ -289,6 +318,7 @@ export async function prepareExecutionRunProviderLaunch(input: Readonly<{
             : {}),
         providerBinding: projectedProviderBinding,
         sanitizeDiagnosticText: direct.sanitizeDiagnosticText,
+        additionalRedactionValues: direct.additionalRedactionValues,
         revalidateBeforeCommit: direct.revalidateBeforeCommit,
         cleanupOnExit: direct.cleanupOnExit,
     });

@@ -1,11 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { TrackedSession } from '@/daemon/types';
 import { resolveSessionRunnerRuntimeState } from './resolveRuntimeState';
+import { restartSessionRunnerOnCurrentRuntime } from '../plannedRunnerRestart/restartSessionRunnerOnCurrentRuntime';
+import { requestPlannedRunnerRestart } from '../plannedRunnerRestart/requestPlannedRunnerRestart';
+import { requestConnectedServiceSessionRestartSignal } from '../connectedServices/sessionAuthSwitch/requestConnectedServiceSessionRestartSignal';
 
 describe('resolveSessionRunnerRuntimeState', () => {
-  it('does not call identical mutable roots current because their generation is unattested', () => {
-    const state = resolveSessionRunnerRuntimeState({
+  it('keeps unattested freshness unknown while preflight and explicit refresh agree on eligibility', async () => {
+    const input = {
       sessionId: 'sess-1',
       tracked: {
         happySessionId: 'sess-1',
@@ -21,18 +24,34 @@ describe('resolveSessionRunnerRuntimeState', () => {
         },
       } as TrackedSession,
       currentIdentity: {
-        status: 'known',
-        source: 'launch_spec',
+        status: 'known' as const,
+        source: 'launch_spec' as const,
         comparableId: 'path:/work/apps/cli',
         entrypointVersion: null,
       },
       observedAtMs: 100,
-    });
+    };
+    const state = resolveSessionRunnerRuntimeState(input);
 
     expect(state.versionState).toBe('unknown');
     expect(state.plannedRestart).toMatchObject({
-      eligible: false,
-      disabledReason: 'runner_generation_unattested',
+      eligible: true,
+      disabledReason: null,
     });
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const requestRestart: Parameters<typeof restartSessionRunnerOnCurrentRuntime>[0]['requestRestart'] = async request =>
+      await requestPlannedRunnerRestart({ ...request, deferral: { kind: 'none' },
+        restartRequestedPids: new Set(), pidToTrackedSession: new Map([[input.tracked.pid, input.tracked]]),
+        isProcessSafeToSignal: async () => true,
+        requestSignal: signal => requestConnectedServiceSessionRestartSignal({ pid: input.tracked.pid, delayMs: 0,
+          shouldSignal: signal.shouldSignal, onSignalFailure: signal.onSignalFailure }) });
+    try {
+      await expect(restartSessionRunnerOnCurrentRuntime({ ...input, requestRestart,
+        request: { sessionId: input.sessionId, mode: 'force_current_cli', reason: 'ui_stale_runner_banner',
+          expectedRunnerPid: input.tracked.pid, expectedProcessCommandHash: input.tracked.processCommandHash } })).resolves.toMatchObject({ ok: true, status: 'restarted' });
+      expect(kill).toHaveBeenCalledWith(input.tracked.pid, 'SIGTERM');
+      await expect(restartSessionRunnerOnCurrentRuntime({ ...input, requestRestart,
+        request: { sessionId: input.sessionId, mode: 'if_stale', reason: 'ui_stale_runner_banner' } })).resolves.toMatchObject({ ok: false, status: 'version_unknown', reasonCode: 'runner_generation_unattested' });
+    } finally { kill.mockRestore(); }
   });
 });

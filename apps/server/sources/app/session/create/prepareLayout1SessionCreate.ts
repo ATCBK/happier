@@ -3,7 +3,7 @@ import { isSessionEncryptionModeAllowedByStoragePolicy, resolveEffectiveDefaultA
 import { SessionSharedMetadataV1Schema, validateSessionOwnerMetadataEnvelopeForAccountModeV1, type SessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { type SessionInitialAccessMaterializedV1 } from '@happier-dev/protocol/sessions/access/sessionInitialAccessDraftV1';
 import { SessionCreateOriginFieldsV1Schema, type SessionCreateOriginFieldsV1 } from '@happier-dev/protocol/sessions/creation/sessionCreateOriginV1';
-import { SessionReportsToV1Schema, type SessionReportsToV1, type SessionReportsToSetResultV1 } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
+import { SessionManagerV1Schema, type SessionManagerV1, type SessionManagerSetResultV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { SessionInitialTriggerAdmissionV1Schema, type SessionInitialTriggerAdmissionV1 } from '@happier-dev/protocol/sessions/creation/sessionInitialTriggerAdmissionV1';
 import type { SessionAccessGrantErrorCode } from "@/app/session/access/sessionAccessGrantService";
 import type { SessionTeamCredentialBindingIntentListV1 } from '@happier-dev/protocol/teams/credentials/sessionBindingIntentV1';
@@ -42,7 +42,7 @@ export type SessionOrganizationPlacementInput = Readonly<{
 export type Layout1SessionCreateRejection =
     | Readonly<{ reason: "invalid-params" }>
     | Readonly<{ reason: "session-origin-forbidden" }>
-    | Readonly<{ reason: "session-reports-to-invalid"; result: Extract<SessionReportsToSetResultV1, { ok: false }> }>
+    | Readonly<{ reason: "session-manager-invalid"; result: Extract<SessionManagerSetResultV1, { ok: false }> }>
     | Readonly<{ reason: "account-disabled" }>
     | Readonly<{ reason: "encryption-mode-not-allowed"; code: EncryptionPolicyRejectionCode }>
     | Readonly<{ reason: "privacy-upgrade-required" }>
@@ -64,7 +64,7 @@ export type FreshBoundLayout1SessionCreateRejection =
     | Readonly<{ reason: "session-tag-taken" }>;
 
 export type Layout1SessionCreateRequest = Readonly<SessionCreateOriginFieldsV1 & {
-    reportsTo?: SessionReportsToV1;
+    manager?: SessionManagerV1;
     accountId: string;
     tag: string;
     /** Shared metadata as stored: canonical JSON for plain, ciphertext for E2EE. */
@@ -86,7 +86,7 @@ export type Layout1SessionCreateRequest = Readonly<SessionCreateOriginFieldsV1 &
 }>;
 
 export type PreparedLayout1SessionCreate = Readonly<SessionCreateOriginFieldsV1 & {
-    reportsTo?: SessionReportsToV1;
+    manager?: SessionManagerV1;
     accountId: string;
     tag: string;
     metadata: string;
@@ -203,14 +203,19 @@ export function prepareLayout1SessionCreate(
         originKind: request.originKind,
         originSessionId: request.originSessionId,
         originRunId: request.originRunId,
+        discussionParticipant: request.discussionParticipant,
+        discussionParticipantLaunch: request.discussionParticipantLaunch,
         workDepth: request.workDepth,
     });
     if (!origin.success) return { ok: false, rejection: { reason: "invalid-params" } };
-    const reportsTo = z.optional(SessionReportsToV1Schema).safeParse(request.reportsTo);
-    if (!reportsTo.success) return { ok: false, rejection: { reason: "invalid-params" } };
+    const manager = z.optional(SessionManagerV1Schema).safeParse(request.manager);
+    if (!manager.success) return { ok: false, rejection: { reason: "invalid-params" } };
     const initialTriggers = z.optional(z.array(SessionInitialTriggerAdmissionV1Schema)).safeParse(request.initialTriggers);
     if (!initialTriggers.success) {
         return { ok: false, rejection: { reason: "session-initial-trigger-invalid", code: "invalid_input" } };
+    }
+    if (origin.data.discussionParticipant && initialTriggers.data?.length) {
+        return { ok: false, rejection: { reason: "invalid-params" } };
     }
     const modeRejection = admitRequestedSessionEncryptionMode({
         storagePolicy: request.storagePolicy,
@@ -245,7 +250,7 @@ export function prepareLayout1SessionCreate(
         ok: true,
         prepared: {
             ...origin.data,
-            ...(reportsTo.data ? { reportsTo: reportsTo.data } : {}),
+            ...(manager.data ? { manager: manager.data } : {}),
             accountId: request.accountId,
             tag: request.tag,
             metadata: request.metadata,

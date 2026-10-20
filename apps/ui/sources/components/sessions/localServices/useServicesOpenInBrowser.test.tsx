@@ -27,11 +27,6 @@ vi.mock('@react-navigation/native', async importOriginal => ({
     ...await importOriginal<typeof import('@react-navigation/native')>(),
     ...(await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock(),
 }));
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOriginal => {
-    const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
-    return { ...original, createFrontDoorActionExecute:
-        (await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary')).createFrontDoorActionExecuteForVitest(original) };
-});
 
 const openableTarget: LocalServiceLaunchTargetV1 = {
     id: 'preview:open-feed',
@@ -125,7 +120,9 @@ describe('useServicesOpenInBrowser', () => {
         fixture = await createPlainArtifactHomeFixture('https://services-browser.test', {
             serverFeatures: features,
             handleRequest: async path => path === '/v2/account/settings' ? Response.json({ version: 1,
-                content: { t: 'plain', v: { actionsSettingsV1: { v: 1, actions: { 'browser.workspace.open': actionPolicy } } } } }) : null,
+                content: { t: 'plain', v: { actionsSettingsV1: { v: 1, actions: { 'browser.workspace.open': actionPolicy },
+                    approvalWaivedSurfaces: { 'browser.workspace.open': ['ui'] },
+                } } } }) : null,
         });
         const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
         primeServerFeaturesSnapshot({ serverId: fixture.home.id, snapshot: { status: 'ready', features } });
@@ -217,7 +214,7 @@ describe('useServicesOpenInBrowser', () => {
         await act(async () => {
             expect(await decideApprovalAsInbox(fixture!.home.id, approval!.id, decision)).toMatchObject({ ok: true });
         });
-        expect(readLocalServiceActionOutcome(await pendingOpen!)).toMatchObject({ kind: decision === 'approve' ? 'succeeded' : 'failed' });
+        expect(readLocalServiceActionOutcome(await pendingOpen!)).toMatchObject({ kind: decision === 'approve' ? 'succeeded' : 'cancelled' });
         expect(screen.tree.findByType('HookProbe' as never).props.detailsTabKinds).toEqual(decision === 'approve' ? ['browser-view'] : []);
         expect(onAfterOpen).toHaveBeenCalledTimes(decision === 'approve' ? 1 : 0);
         expect(onAfterDetailsOpen).toHaveBeenCalledTimes(decision === 'approve' ? 1 : 0);

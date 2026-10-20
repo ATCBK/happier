@@ -2,6 +2,7 @@ import { isSubAgentTranscriptToolName } from '@happier-dev/protocol/tools/v2';
 
 import { resolveToolTranscriptSidechainId } from '@/components/tools/shell/views/resolveToolTranscriptSidechainId';
 import type { ToolCallMessage } from "@happier-dev/session-core/messages";
+import { readReviewToolRunId } from '@/components/sessions/reviews/messages/projectReviewToolMessage';
 
 /**
  * Pure render decisions for one grouped tool-call row.
@@ -27,6 +28,8 @@ export function shouldRenderGroupedToolCallWithMessageView(
     if (chromeMode === 'cards') {
         return true;
     }
+    // Reviews keep their structured-result renderer mounted before its sidechain arrives.
+    if (readReviewToolRunId(message) !== null) return true;
     const hasStructuredMeta = Boolean(message.meta?.happier);
     if (hasStructuredMeta) return true;
 
@@ -49,6 +52,8 @@ export function resolveGroupedPreviewSidechainIds(params: Readonly<{
 
     const sidechainIds = new Set<string>();
     for (const message of params.previewMessages) {
+        // The review result row owns its demanded sidechain in every chrome mode.
+        if (readReviewToolRunId(message) !== null) continue;
         const toolName = typeof message.tool?.name === 'string' ? message.tool.name : '';
         if (!isSubAgentTranscriptToolName(toolName)) continue;
         const sidechainId = resolveToolTranscriptSidechainId({

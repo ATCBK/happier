@@ -1,5 +1,6 @@
 import {
   buildAgentRequestSemanticSummary,
+  requiresFullFormForRemoteUserAction,
   summarizeToolInputForNotification,
   type AgentRequestKind,
 } from './agentRequestSummary.js';
@@ -31,7 +32,8 @@ export function buildAgentRequestNotificationContent(params: Readonly<{
     toolName: params.toolName,
     toolInput: params.toolInput,
   });
-  const toolDetails = params.includeMessageText === false ? null : typeof params.toolDetails === 'string' && params.toolDetails.trim()
+  const fullFormRequired = params.kind === 'user_action' && requiresFullFormForRemoteUserAction(summary.questions);
+  const toolDetails = params.includeMessageText === false ? null : !fullFormRequired && typeof params.toolDetails === 'string' && params.toolDetails.trim()
     ? params.toolDetails.trim()
     : summarizeToolInputForNotification(params.toolName, params.toolInput);
   const body = params.kind === 'user_action'

@@ -1,5 +1,6 @@
 import * as React from 'react';
-import type { PluginDeclarativeDataNodeV1, PluginDeclarativeDocumentV1 } from '@happier-dev/protocol';
+import type { PluginDeclarativeDataNodeV1 } from '@happier-dev/protocol/plugins/contributions/ui/declarativeDataV1';
+import type { projectWidgetSnapshotPreviewV1 } from '@happier-dev/protocol/widgets';
 
 /**
  * What a mounted declarative widget is showing right now, for Post a snapshot: its document and the
@@ -7,7 +8,7 @@ import type { PluginDeclarativeDataNodeV1, PluginDeclarativeDocumentV1 } from '@
  * refreshing, stale or failed — a snapshot posts current numbers or nothing.
  */
 export type WidgetSnapshotCapture = Readonly<{
-    document: PluginDeclarativeDocumentV1;
+    document: Parameters<typeof projectWidgetSnapshotPreviewV1>[0]['document'];
     frozenByPath: ReadonlyMap<string, PluginDeclarativeDataNodeV1>;
     /** The read identities shown, for the snapshot's provenance. */
     digests: readonly string[];
@@ -61,6 +62,34 @@ export function createWidgetSnapshotCaptureSlot(): WidgetSnapshotCaptureSlot {
 }
 
 export const WidgetSnapshotCaptureContext = React.createContext<WidgetSnapshotCaptureSlot | null>(null);
+
+/** One registration owner for authored and installed declarative render trees. */
+export function useDeclarativeWidgetSnapshotCapture(
+    read: WidgetSnapshotCaptureSource['read'] | null,
+    subscribe?: WidgetSnapshotCaptureSource['subscribe'],
+): void {
+    const slot = React.useContext(WidgetSnapshotCaptureContext);
+    const reader = React.useRef(read);
+    const changed = React.useRef<(() => void) | null>(null);
+    const available = read !== null;
+    // A new shown value updates the same mounted source. Unregistering it on
+    // every render would briefly remove Post snapshot from its parent menu.
+    React.useLayoutEffect(() => {
+        reader.current = read;
+        changed.current?.();
+    }, [read]);
+    React.useEffect(() => {
+        if (!slot || !available) return;
+        return slot.register({
+            read: () => reader.current?.() ?? null,
+            subscribe: listener => {
+                changed.current = listener;
+                const stop = subscribe?.(listener);
+                return () => { stop?.(); changed.current = null; };
+            },
+        });
+    }, [slot, available, subscribe]);
+}
 
 export function useWidgetSnapshotCaptureAvailable(slot: WidgetSnapshotCaptureSlot): boolean {
     return React.useSyncExternalStore(slot.subscribe, slot.isAvailable, slot.isAvailable);

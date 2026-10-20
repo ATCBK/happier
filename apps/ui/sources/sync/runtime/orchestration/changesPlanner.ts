@@ -81,6 +81,7 @@ export const CHANGE_CHECKPOINT_COVERAGE = {
     account: { plannerOwner: 'account', snapshotDomain: 'account-settings-profile' },
     automation: { plannerOwner: 'automations', snapshotDomain: 'automations' },
     artifact: { plannerOwner: 'artifacts', snapshotDomain: 'artifacts' },
+    discussion: { plannerOwner: 'discussions', snapshotDomain: 'discussions-level-triggered' },
     feed: { plannerOwner: 'feed', snapshotDomain: 'feed' },
     friends: { plannerOwner: 'friends', snapshotDomain: 'friends' },
     friend_request: { plannerOwner: 'friends', snapshotDomain: 'friends' },
@@ -768,7 +769,8 @@ export function plannedChangesAffectProfileCatalog(planned: PlannedChangeActions
 export function plannedChangesAffectUsageQuery(planned: PlannedChangeActions): boolean {
     const workflowEntityIds = new Set(planned.workflowRunIdsToRefresh.map(runId => `workflow-run:${runId}`));
     return planned.changes.some(change => {
-        if (change.kind === 'machine') return false;
+        if (['machine', 'machinePool', 'artifact', 'feed', 'friends', 'friend_request', 'friend_accepted',
+            'pet', 'automation', 'kv', 'pluginDomain', 'savedSecretResource'].includes(change.kind)) return false;
         if (change.kind === 'account' && (workflowEntityIds.has(change.entityId) || getChangeSessionDraftHint(change))) return false;
         // Session evidence, allowances, settings and unknown changes retain
         // their incumbent freshness/admission path, including on mixed pages.

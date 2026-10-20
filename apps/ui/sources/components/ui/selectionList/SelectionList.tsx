@@ -19,6 +19,7 @@ import { SelectionListAnimatedHeight } from './SelectionListAnimatedHeight';
 import { SelectionListBody } from './SelectionListBody';
 import { SelectionListFooter } from './SelectionListFooter';
 import { SelectionListInputAttentionContext } from './SelectionListInputAttentionContext';
+import { SelectionListPointerFocusContext } from './SelectionListPointerFocusContext';
 import { SelectionListOptionTabBehaviorContext } from './SelectionListOptionTabBehaviorContext';
 import { createSelectionListKeyPressHandler } from './SelectionListKeyboardInput';
 import { SelectionListMeasureHost } from './SelectionListMeasureHost';
@@ -576,6 +577,42 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
         inputMode,
     });
     const focusedOptionId = focus.focusedOptionId;
+    const highlightedOptionRef = React.useRef<SelectionListOption | undefined>(undefined);
+    highlightedOptionRef.current = focusedOptionId === null ? undefined : findOptionById(focusedOptionId);
+    React.useEffect(() => {
+        if (focus.hasExplicitRowFocus) highlightedOptionRef.current?.onHighlight?.();
+    }, [currentStep.id, focus.hasExplicitRowFocus, focusedOptionId]);
+
+    // One highlighted row: the row under the pointer takes the roving focus, so the list never paints a
+    // hover row beside a keyboard row. Only a real pointer movement does it: rows sliding under a resting
+    // pointer (the list scrolling to the keyboard's row) fire hover-in too, and must not steal the focus
+    // back, so a hover-in waits for the next mouse move. The list does not scroll to a pointer-focused row
+    // (it would slide away from under the pointer); the next key press scrolls to the keyboard's row again.
+    const pointerFocusedOptionIdRef = React.useRef<string | null>(null);
+    const scrollFollowOptionIdRef = React.useRef<string | null>(null);
+    const pointerMovedRef = React.useRef(false);
+    const pointerHoveredOptionIdRef = React.useRef<string | null>(null);
+    const applyPointerFocus = React.useCallback((optionId: string) => {
+        if (optionId === focus.focusedOptionId) return;
+        const index = virtualizedOptionSource
+            ? virtualizedOptionSource.findOptionIndexById(optionId)
+            : flatVisibleOptionIds.indexOf(optionId);
+        if (index < 0) return;
+        pointerFocusedOptionIdRef.current = optionId;
+        focus.setFocusedIndex(index);
+    }, [focus, flatVisibleOptionIds, virtualizedOptionSource]);
+    const focusOptionFromPointer = React.useCallback((optionId: string | null) => {
+        pointerHoveredOptionIdRef.current = optionId;
+        if (optionId !== null && pointerMovedRef.current) applyPointerFocus(optionId);
+    }, [applyPointerFocus]);
+    const handlePointerMove = React.useCallback(() => {
+        pointerMovedRef.current = true;
+        const hovered = pointerHoveredOptionIdRef.current;
+        if (hovered !== null) applyPointerFocus(hovered);
+    }, [applyPointerFocus]);
+    if (focusedOptionId === null || focusedOptionId !== pointerFocusedOptionIdRef.current) {
+        scrollFollowOptionIdRef.current = focusedOptionId;
+    }
 
     // Phase 2.3 autocomplete + Phase 2.5 advanced keyboard nav.
     const dynamicSectionIds = React.useMemo(() => new Set(dynamicSections.map((s) => s.id)), [dynamicSections]);
@@ -814,8 +851,8 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
         resolveArrowTarget,
     });
 
-    const handleKeyPress = React.useMemo(
-        () => createSelectionListKeyPressHandler({
+    const handleKeyPress = React.useMemo(() => {
+        const onKeyPress = createSelectionListKeyPressHandler({
             keyboard,
             isComposing,
             focusedOptionId,
@@ -823,9 +860,13 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
             canPopStep: stack.canPop,
             inputValue,
             onRequestClose: props.onRequestClose,
-        }),
-        [keyboard, isComposing, focusedOptionId, handleActivate, stack.canPop, inputValue, props.onRequestClose],
-    );
+        });
+        return (event: Parameters<typeof onKeyPress>[0]) => {
+            pointerFocusedOptionIdRef.current = null;
+            pointerMovedRef.current = false;
+            onKeyPress(event);
+        };
+    }, [keyboard, isComposing, focusedOptionId, handleActivate, stack.canPop, inputValue, props.onRequestClose]);
 
     const handlePushStep = React.useCallback(
         (step: SelectionListStep) => {
@@ -1140,6 +1181,7 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
         <SelectionListBody
             mode="measure"
             step={currentStep}
+            emptyQuery={filterQuery}
             rootTestID={resolvedTestId}
             selectedOptionIds={selectedOptionIds}
             multiselectable={selection.kind === 'multiple'}
@@ -1260,6 +1302,8 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
         <SelectionListBody
             surface={surface}
             step={currentStep}
+            emptyQuery={filterQuery}
+            onClearInput={handleClearInput}
             rootTestID={resolvedTestId}
             selectedOptionIds={selectedOptionIds}
             multiselectable={selection.kind === 'multiple'}
@@ -1267,7 +1311,7 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
             virtualizedOptionSource={virtualizedOptionSource}
             focusedOptionId={focusedOptionId}
             focusedOptionIndex={virtualizedOptionSource === undefined ? undefined : focus.focusedIndex}
-            scrollTargetOptionId={props.activeScrollOptionId ?? focusedOptionId ?? selectedOptionId}
+            scrollTargetOptionId={props.activeScrollOptionId ?? scrollFollowOptionIdRef.current ?? selectedOptionId}
             listboxId={listboxId}
             accessibilityLabel={props.listAccessibilityLabel}
             onSelect={props.onSelect}
@@ -1358,6 +1402,7 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
         <SelectionListDetailPaneContext.Provider value={detailPaneActive}>
         <ListPresentationProvider value="grouped">
         <SelectionListInputAttentionContext.Provider value={requestInputAttention}>
+        <SelectionListPointerFocusContext.Provider value={focusOptionFromPointer}>
         <SelectionListOptionTabBehaviorContext.Provider value={showSearchHeader ? 'input-owned' : 'roving'}>
         <View
             testID={resolvedTestId}
@@ -1365,6 +1410,7 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
             pointerEvents={measuredPopoverHeight.hidden ? 'none' : undefined}
             onLayout={handleContainerLayout}
             {...headerlessKeyHandler}
+            {...(IS_WEB ? ({ onMouseMove: handlePointerMove } as Record<string, unknown>) : {})}
         >
             {renderMeasureHost ? (
                 <SelectionListMeasureHost
@@ -1396,6 +1442,7 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
             {seatInputAtBottom ? searchHeaderZone : null}
         </View>
         </SelectionListOptionTabBehaviorContext.Provider>
+        </SelectionListPointerFocusContext.Provider>
         </SelectionListInputAttentionContext.Provider>
         </ListPresentationProvider>
         </SelectionListDetailPaneContext.Provider>

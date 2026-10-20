@@ -1152,6 +1152,7 @@ name = "happier-iroh-node"
 version = "0.0.0"
 dependencies = [
  "happier-iroh-native",
+ "libc",
  "napi",
  "napi-build",
  "napi-derive",

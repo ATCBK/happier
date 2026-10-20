@@ -3,6 +3,8 @@ import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { buildManagedPnpmEnvironment, ensureManagedPnpmCommand, managedPnpmBinPath } from '@/packagedRuntime/managedTools/pnpm/managedPnpm';
@@ -22,6 +24,63 @@ async function fileBytes(root: string): Promise<number> {
 }
 
 describe('prepublication author store', () => {
+  it('installs satisfying public runtime dependencies and peers from the real materialized closure', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-author-public-closure-'));
+    const projectRoot = join(root, 'author');
+    try {
+      await mkdir(projectRoot);
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'author-fixture', version: '1.0.0',
+        dependencies: { '@happier-dev/triage-sources': '>=0.0.0 <1.0.0' },
+      }));
+      // Physical package distribution is the external boundary. The selector,
+      // materializer, transient overrides and managed pnpm all execute for real.
+      const manifests = [
+        { name: '@happier-dev/plugin-sdk', source: 'export const installed = true;\n' },
+        { name: '@happier-dev/plugin-ui', peerDependencies: { '@happier-dev/plugin-sdk': '>=0.0.0 <1.0.0' },
+          source: 'export { installed } from "@happier-dev/plugin-sdk";\n' },
+        { name: '@happier-dev/triage-sources', dependencies: { '@happier-dev/plugin-ui': '0.0.0' },
+          source: 'export { installed } from "@happier-dev/plugin-ui";\n' },
+        { name: '@happier-dev/channels-protocol', source: 'export const installed = true;\n' },
+      ];
+      const bundles = [];
+      for (const { source, ...manifest } of manifests) {
+        const srcDir = join(root, 'packages', ...manifest.name.split('/'));
+        await mkdir(join(srcDir, 'dist'), { recursive: true });
+        await writeFile(join(srcDir, 'package.json'), JSON.stringify({
+          ...manifest, version: '0.0.0', type: 'module', main: 'dist/index.js', types: 'dist/index.d.ts',
+          files: ['dist'], happier: { publicSdkRelease: { posture: 'developer_preview' } },
+        }));
+        await writeFile(join(srcDir, 'dist/index.js'), source);
+        await writeFile(join(srcDir, 'dist/index.d.ts'), 'export declare const installed: true;\n');
+        bundles.push({ packageName: manifest.name, srcDir, destDir: join(root, 'unused', ...manifest.name.split('/')) });
+      }
+      const result = await runManagedPluginPnpm({ projectRoot, args: ['install', '--ignore-scripts', '--offline'] }, {
+        ensureManagedPnpmCommand, managedPnpmBinPath, buildManagedPnpmEnvironment,
+        processEnv: process.env,
+        materializeBundledPrepublicationPackages: (packageNames) => materializePrepublicationAuthorWorkspacePackages({
+          projectRoot, packageNames, bundles,
+        }),
+        spawn: async (input) => {
+          const invocation = resolvePluginAuthorToolchainSpawnInvocation(input);
+          const result = await execFileAsync(invocation.command, [...invocation.args], {
+            cwd: invocation.cwd, env: invocation.env, windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+          });
+          return { exitCode: 0, signal: null, stdout: result.stdout, stderr: result.stderr };
+        },
+      });
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+      const authorRequire = createRequire(join(projectRoot, 'package.json'));
+      // Follow Node's actual entrypoint resolution through pnpm's physical
+      // package graph, including the UI dependency and its SDK peer import.
+      expect((await import(pathToFileURL(authorRequire.resolve('@happier-dev/triage-sources')).href)).installed).toBe(true);
+      expect(() => authorRequire.resolve('@happier-dev/channels-protocol')).toThrow();
+      await expect(lstat(join(projectRoot, 'pnpm-workspace.yaml'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 120_000);
+
   it('reuses unchanged SDK content and prunes superseded content through real managed pnpm', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-author-store-'));
     const projectRoot = join(root, 'author');

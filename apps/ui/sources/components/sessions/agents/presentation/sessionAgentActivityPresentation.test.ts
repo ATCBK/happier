@@ -53,6 +53,16 @@ function subagent(overrides: Partial<SessionSubagent> = {}): SessionSubagent {
 }
 
 describe('resolveSessionAgentActivityPresentation', () => {
+    it('names native and execution-run Agents through the Agent catalog', () => {
+        for (const child of [
+            subagent({ kind: 'subagent_sidechain', display: { title: 'Inspect files', providerLabel: 'codex' } }),
+            subagent({ display: { title: 'Inspect files' }, runRef: { runId: 'run_1', backendId: 'codex' } }),
+        ]) {
+            const presentation = resolveSessionAgentActivityPresentation({ entry: entry(), subagent: child });
+            expect(presentation.facts).toContain('Codex');
+            expect(presentation.facts).not.toContain('codex');
+        }
+    });
     it('uses the shared session worker mark for session-like agents without a brand mark', () => {
         for (const kind of ['subagent', 'workflow_agent'] as const) {
             expect(resolveSessionAgentActivityPresentation({ entry: entry({ kind }) }).iconName)

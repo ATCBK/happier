@@ -8,10 +8,10 @@ import { ProjectSourcesReadOutputV1Schema, type ProjectSourceV1 } from '@happier
 import type { WidgetSurfaceContext, WidgetSurfaceContextSlot } from '@/components/widgets/surface/widgetSurfaceSetup';
 import { widgetProvidedContext } from '@/components/widgets/surface/widgetSurfaceSetup';
 import { readProjectWidgetAreaContextV1 } from '@/sync/domains/widgets/projectWidgetAreaContext';
-import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { ProjectAttachedDashboardSelection } from '@/components/projects/detail/projectRouteState';
-import { captureActiveServerAccountScopeLifetime, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
+import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import { useProjectSource } from '@/components/projects/sources/useProjectSources';
 import { executeWidgetEntityMovement, widgetMovementRefused } from '@/sync/ops/actions/widgetEntityMovement';
@@ -27,14 +27,18 @@ export type ProjectWidgetAreaValue = Readonly<{ value: JsonValue; label: string;
 /**
  * What a Project's widgets follow (lab `dashboards` P1, Q4): repository-wide inputs follow
  * "This project" (its portable source); checkout-local inputs follow "This checkout", the page's
- * checkout chip. A slot the page cannot fill yet is never followed, so its input is asked for.
+ * checkout chip. Usage's plural projects slot follows the admitted Project identity independently
+ * of either Source or checkout availability. A slot the page cannot fill yet asks for its input.
  */
 export function projectWidgetAreaContext(input: Readonly<{
     project: ProjectWidgetAreaValue | null;
+    projects?: ProjectWidgetAreaValue | null;
     checkout: ProjectWidgetAreaValue | null;
 }>): WidgetSurfaceContext {
     const slot = (label: string, value: ProjectWidgetAreaValue | null): WidgetSurfaceContextSlot => ({ label, value });
-    return { slots: { project: slot(t('widgetAdd.thisProject'), input.project), checkout: slot(t('widgetAdd.thisCheckout'), input.checkout) } };
+    return { slots: { project: slot(t('widgetAdd.thisProject'), input.project),
+        projects: slot(t('widgetAdd.thisProject'), input.projects ?? null),
+        checkout: slot(t('widgetAdd.thisCheckout'), input.checkout) } };
 }
 
 export type ProjectWidgetAreaBindingInput = Readonly<{
@@ -72,8 +76,8 @@ function hasDashboardAttachment(source: ProjectSourceV1 | null | undefined, sele
 
 /** One captured Project layout binding; the Action and Artifact owners retain all access policy. */
 export function useProjectWidgetAreaBinding(props: ProjectWidgetAreaBindingInput): ProjectWidgetAreaBinding {
-    const viewer = useActiveServerAccountScope();
-    const lifetime = React.useMemo(() => captureActiveServerAccountScopeLifetime(), [viewer?.serverId, viewer?.accountId]);
+    const lifetime = useActiveServerAccountScopeLifetime();
+    const viewer = lifetime?.scope ?? null;
     const demand = React.useMemo(() => readProjectWidgetAreaContextV1({ serverId: props.serverId, projectRef: props.projectRef, activeCheckout: props.activeCheckout }),
         [props.activeCheckout, props.projectRef, props.serverId]);
     const sourceRead = useProjectSource(lifetime?.isCurrent() && selectActiveServerAccountScopeForServer(viewer, props.serverId) ? lifetime : null,
@@ -91,9 +95,11 @@ export function useProjectWidgetAreaBinding(props: ProjectWidgetAreaBindingInput
     const layoutId = locallySelected ? selection.layoutId : props.layoutId;
     const context = React.useMemo(() => {
         const project = read.providedContext.project?.[0];
+        const projects = read.providedContext.projects?.[0];
         const checkout = read.providedContext.checkout?.[0];
         return projectWidgetAreaContext({
             project: project === undefined ? null : { value: project, label: props.projectName },
+            projects: projects === undefined ? null : { value: projects, label: props.projectName },
             checkout: checkout === undefined ? null : { value: checkout, label: props.activeCheckoutLabel ?? props.projectName },
         });
     }, [props.activeCheckoutLabel, props.projectName, read]);

@@ -30,6 +30,24 @@ const { createCliApprovalsArtifactStore } = await importCliModule<{
     createCliApprovalsArtifactStore: (options: unknown) => Pick<ActionExecutorDeps,
         'approvalsCreate' | 'approvalsGet' | 'approvalsUpdate'>;
 }>('../../../../../cli/src/session/actions/approvals/artifactStore');
+const { createCliActionExecutorFromCredentials } = await importCliModule<{
+    createCliActionExecutorFromCredentials: (options: unknown) => {
+        execute: ReturnType<typeof createActionExecutor>['execute'];
+        resolveSessionTarget: (id: string) => Promise<{ ok: true; sessionId: string }>;
+    };
+}>('../../../../../cli/src/session/actions/createCliActionExecutorFromCredentials');
+const { listCompiledActionCliCommands } = await importCliModule<{
+    listCompiledActionCliCommands: () => readonly { actionId: string; path: readonly string[] }[];
+}>('../../../../../cli/src/cli/actions/compiledCommands');
+const { runCompiledActionCliCommand } = await importCliModule<{
+    runCompiledActionCliCommand: (options: unknown) => Promise<void>;
+}>('../../../../../cli/src/cli/actions/executeCommand');
+const { createActionSettingsProvider } = await importCliModule<{
+    createActionSettingsProvider: () => unknown;
+}>('../../../../../cli/src/settings/actionsSettingsProvider');
+const { captureConsoleJsonOutput } = await importCliModule<{
+    captureConsoleJsonOutput: () => { json: () => unknown; restore: () => void };
+}>('../../../../../cli/src/testkit/logger/captureOutput');
 
 const recoveryActions = ['session.pending.markHandled', 'session.pending.dismiss', 'session.pending.sendAsNew'] as const;
 
@@ -50,6 +68,56 @@ describe('Pending recovery Actions through registered CLI wiring, HTTP and SQLit
 
     afterAll(async () => {
         try { await app?.close(); } finally { await harness?.close(); }
+    });
+
+    it('withdraws queued input from an archived Session through the CLI Action', async () => {
+        harness.resetEnv();
+        const machineKey = new Uint8Array(32).fill(8);
+        const encryption = { type: 'dataKey' as const, machineKey,
+            publicKey: tweetnacl.box.keyPair.fromSecretKey(machineKey).publicKey };
+        const owner = await db.account.create({ data: createSignedAccountContentBinding(encryption.publicKey) });
+        const token = await auth.createToken(owner.id, undefined, { kind: 'account', authority: 'present_user' });
+        const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: '{}' } });
+        const localId = randomUUID();
+        expect(await enqueuePendingMessage({ actorUserId: owner.id, sessionId: session.id, localId,
+            authentication: createPresentUserSessionAccessAuthentication(), ciphertext: 'queued-protected-input',
+            requestedAction: { v: 1, kind: 'enqueue' } })).toMatchObject({ ok: true });
+        await db.session.update({ where: { id: session.id }, data: { active: false, archivedAt: new Date() } });
+
+        await runWithServerHttpBaseUrl(origin, async () => {
+            const credentials = { token, encryption };
+            const store = createCliApprovalsArtifactStore({ credentials, serverId: origin });
+            const deps = createCliActionDeps({ token, credentials, sessionId: session.id,
+                serverId: origin, serverHttpBaseUrl: origin });
+            const executor = createActionExecutor({ ...deps, ...store });
+            const input = { sessionId: session.id, localId, serverId: origin };
+            const context: ActionExecutorContext = { surface: 'cli', authority: 'account_automation',
+                serverId: origin, runtimeAccountId: owner.id, actionRequestId: randomUUID(), actionCaller: { kind: 'host' } };
+            const command = listCompiledActionCliCommands().find(row => row.actionId === 'session.pending.withdraw');
+            if (!command) throw new Error('Expected generated withdrawal command');
+            const previousExitCode = process.exitCode;
+            const output = captureConsoleJsonOutput();
+            try {
+                await runCompiledActionCliCommand({ command,
+                    argv: [...command.path, '--input-json', JSON.stringify(input), '--json'],
+                    deps: { readCredentialsFn: async () => credentials,
+                        createExecutorFn: (options: Readonly<Record<string, unknown>>) => createCliActionExecutorFromCredentials({ ...options,
+                            serverIdentityId: 'srv_pending_withdrawal', actionsSettingsProvider: createActionSettingsProvider(),
+                        }) },
+                });
+                expect(output.json()).toMatchObject({ ok: true, data: { kind: 'approval_request_created' } });
+            } finally { output.restore(); process.exitCode = previousExitCode; }
+            expect(await db.sessionPendingMessage.count({ where: { sessionId: session.id, localId } })).toBe(1);
+            const result = await executor.execute('session.pending.withdraw', input, { ...context,
+                actionsSettings: normalizeActionsSettingsV1({ v: 1,
+                    approvalWaivedSurfaces: { 'session.pending.withdraw': ['cli'] } }) });
+            expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { outcome: 'removed' } });
+            if (!result.ok) throw new Error('Expected queued withdrawal');
+            getActionSpec('session.pending.withdraw').outputSchema!.parse(result.result);
+            expect(await db.sessionPendingMessage.count({ where: { sessionId: session.id, localId } })).toBe(0);
+            expect(await db.session.findUniqueOrThrow({ where: { id: session.id }, select: { pendingCount: true } }))
+                .toEqual({ pendingCount: 0 });
+        });
     });
 
     it.each(recoveryActions)('requires approval and preserves the owning recovery transition (%s)', async actionId => {

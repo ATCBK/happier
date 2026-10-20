@@ -4,7 +4,7 @@ import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema
 import { buildRecoveryCreditConsumeIdempotencyKey } from '@happier-dev/protocol/connect/recoveryCreditConsumeIdempotencyKey';
 import { buildQualifiedPluginContributionKey, parseQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { ConnectedServiceIdSchema, readBuiltInLegacyConnectedAccountServiceKeyIngress } from '@happier-dev/protocol/connect/connected-service-bindings';
-import { ConnectedServiceCredentialRevisionV1Schema, ConnectedServiceUsageSourceV1Schema, isConnectedServiceCredentialHealthStatusUsable } from '@happier-dev/protocol/connect/connected-service-schemas';
+import { ConnectedServiceCredentialRevisionV1Schema, ConnectedServiceUsageSourceV1Schema, isConnectedServiceCredentialHealthStatusUsable, isConnectedServiceQuotaRecoveryCreditAvailable } from '@happier-dev/protocol/connect/connected-service-schemas';
 import { isConnectedServiceQuotaObservationFresh } from '@happier-dev/protocol/connect/quotaObservationTime';
 import { mergeProviderAccountSubscription } from '@happier-dev/protocol/connect/accountSubscription';
 import { openConnectedServiceQuotaSnapshotCiphertext } from '@happier-dev/protocol/connect/connectedServiceCipher';
@@ -2249,8 +2249,7 @@ export class ConnectedServiceQuotasCoordinator {
       });
       controller.signal.throwIfAborted();
       if (!observed.result || !observed.basis.isCurrent()) return unavailable('unavailable');
-      const credit = observed.result.credits.filter((candidate) => candidate.status === 'available'
-        && (candidate.expiresAtMs === undefined || candidate.expiresAtMs > this.now())
+      const credit = observed.result.credits.filter((candidate) => isConnectedServiceQuotaRecoveryCreditAvailable(candidate, this.now())
         && (!input.consumeRequest?.providerCreditId
           || candidate.providerCreditId === input.consumeRequest.providerCreditId))
         .sort((left, right) => (left.expiresAtMs ?? Infinity) - (right.expiresAtMs ?? Infinity)
@@ -4075,6 +4074,7 @@ export class ConnectedServiceQuotasCoordinator {
         await writeProviderAccountUsage({
           token: this.credentials.token,
           write: payload,
+          ...(input.accountMode === 'e2ee' ? { material: requireQuotaCredentialOpenMaterial(this.resolveCredentialOpenMaterial()) } : {}),
         });
         return { status: 'written' };
       },
@@ -4397,11 +4397,35 @@ export class ConnectedServiceQuotasCoordinator {
     const snapshot = subscription
       ? { ...input.snapshot, subscription }
       : input.snapshot;
+    const keyPrefix = `${this.buildQualifiedQuotaPersistenceKey(input.profile.ref)}\u0000`;
     const materialFingerprint =
       computeProviderAccountUsageSnapshotFingerprint(
         snapshot,
         this.quotaSnapshotFingerprintKey,
       );
+    const key = `${keyPrefix}${JSON.stringify([input.accountMode, snapshot.recordId,
+      input.basis.credentialRevision, expectedConfigurationRevision])}`;
+    const status = snapshot.state === 'error_last_known_good'
+      ? 'error' as const
+      : snapshot.state === 'not_loaded'
+        || snapshot.meters.length > 0 && snapshot.meters.every(meter => meter.status === 'unavailable')
+      ? 'unavailable' as const
+      : 'ok' as const;
+    const materialState: QuotaPersistenceMaterialState = {
+      // History's material fingerprint deliberately excludes independent
+      // subscription facets. Local publication also fences its exact basis.
+      fingerprint: JSON.stringify([materialFingerprint, snapshot.subscription ?? null]),
+      fetchedAt: snapshot.fetchedAtMs,
+      staleAfterMs: snapshot.staleAfterMs,
+      status,
+    };
+    const decision = shouldPersistQuotaSnapshot({
+      previous: this.quotaPersistenceStateByKey.get(key) ?? null,
+      next: materialState,
+      nowMs: this.now(),
+      minFreshnessMs: this.quotaPersistenceMinFreshnessMs,
+    });
+    if (!decision.persist) return decision.reason === 'unchanged_fresh';
     const write = {
       source: {
         ref: input.profile.ref,
@@ -4414,16 +4438,7 @@ export class ConnectedServiceQuotasCoordinator {
       payloadMode: input.accountMode === 'plain'
         ? 'plain_json_v1' as const
         : 'sealed_account_scoped_v1' as const,
-      status: snapshot.state === 'error_last_known_good'
-        ? 'error' as const
-        : snapshot.state === 'not_loaded'
-        ? 'unavailable' as const
-        : snapshot.meters.length > 0
-        && snapshot.meters.every(
-          (meter) => meter.status === 'unavailable',
-        )
-        ? 'unavailable' as const
-        : 'ok' as const,
+      status,
       ...(input.accountMode === 'plain'
         ? { snapshot }
         : {
@@ -4460,6 +4475,7 @@ export class ConnectedServiceQuotasCoordinator {
         await writeProviderAccountUsage({
           token: this.credentials.token,
           write: payload,
+          ...(input.accountMode === 'e2ee' ? { material: requireQuotaCredentialOpenMaterial(this.resolveCredentialOpenMaterial()) } : {}),
         });
         if (!await input.basis.isCurrent()) {
           throw new Error(
@@ -4469,7 +4485,24 @@ export class ConnectedServiceQuotasCoordinator {
         return { status: 'written' as const };
       },
     });
-    return outcome.status === 'written';
+    if (outcome.status === 'written') {
+      for (const previousKey of this.quotaPersistenceStateByKey.keys()) {
+        if (previousKey.startsWith(keyPrefix) && previousKey !== key) this.quotaPersistenceStateByKey.delete(previousKey);
+      }
+      this.quotaPersistenceStateByKey.set(key, materialState);
+      return true;
+    }
+    if (outcome.status === 'suppressed') return false;
+    throw new InBandQuotaPersistenceRetryError(outcome.status === 'failed'
+      ? { reason: outcome.classification.kind, retryable: outcome.classification.retryable,
+          retryAfterMs: outcome.classification.retryAfterMs }
+      : { reason: outcome.reason, retryable: true, retryAfterMs: outcome.retryAfterMs });
+  }
+
+  private buildQualifiedQuotaPersistenceKey(ref: QualifiedConnectedAccountRef): string {
+    this.refreshQuotaPersistenceAccountScope();
+    return JSON.stringify(['qualified', this.quotaPersistenceServerScope,
+      accountScopeFingerprintMaterial(this.quotaPersistenceAccountScope), qualifiedAccountQuotaKey(ref)]);
   }
 
   private buildUnloadedQualifiedAccountQuotaSnapshot(profile: QualifiedConnectedAccountProfileV4) {
@@ -4518,6 +4551,17 @@ export class ConnectedServiceQuotasCoordinator {
     const snapshot = response ? openQualifiedConnectedAccountQuotaResponseV4({
       response, expectedRef: profile.ref, material,
     }) : null;
+    const keyPrefix = `${this.buildQualifiedQuotaPersistenceKey(profile.ref)}\u0000`;
+    for (const [key, previous] of this.quotaPersistenceStateByKey) {
+      if (!key.startsWith(keyPrefix)) continue;
+      if (!response || response.metadata.fetchedAt !== previous.fetchedAt
+        || response.metadata.staleAfterMs !== previous.staleAfterMs || response.metadata.status !== previous.status) {
+        this.quotaPersistenceStateByKey.delete(key);
+      } else {
+        this.quotaPersistenceStateByKey.set(key, { ...previous,
+          refreshRequestedAt: response.metadata.refreshRequestedAt });
+      }
+    }
     return { response, snapshot };
   }
 
@@ -4546,17 +4590,37 @@ export class ConnectedServiceQuotasCoordinator {
     const lastKnown = previousSnapshot?.recordId === empty.recordId ? previousSnapshot : empty;
     let admittedBasis: Pick<QualifiedConnectedAccountEstablishedInvocationBasis,
       'credentialRevision' | 'credentialConfigurationRevision' | 'isCurrent'> | undefined;
+    // A containing reset/probe owns its signal and budget. Standalone polling only
+    // acquires a deadline when the existing fetch-timeout option was configured.
+    const fetchTimeoutMs = input.signal ? null : this.fetchTimeoutMs;
+    const controller = fetchTimeoutMs === null ? null : new AbortController();
+    const signal = input.signal ?? controller?.signal;
+    const timeoutHandle = fetchTimeoutMs === null ? undefined : setTimeout(() => {
+      controller?.abort(new Error('Connected-service quota fetch timed out'));
+    }, fetchTimeoutMs);
+    timeoutHandle?.unref?.();
+    let abortListener: (() => void) | undefined;
     try {
-      const invocation = await runtime.establishedRuntimeOwner.invokeWithReceipt({
+      signal?.throwIfAborted();
+      const aborted = new Promise<never>((_resolve, reject) => {
+        if (!signal) return;
+        abortListener = () => reject(signal.reason ?? new Error('Connected-service quota fetch was aborted'));
+        signal.addEventListener('abort', abortListener, { once: true });
+        if (signal.aborted) abortListener();
+      });
+      const pending = runtime.establishedRuntimeOwner.invokeWithReceipt({
         account: input.profile.ref, operation: { kind: 'quota' as const },
-        expectedCredentialRevision: input.expectedCredentialRevision, signal: input.signal,
+        expectedCredentialRevision: input.expectedCredentialRevision, signal,
         beforeInvoke: async (basis) => {
+          signal?.throwIfAborted();
           if (!previousSnapshot && !await this.persistQualifiedConnectedAccountQuota({
             accountMode: input.accountMode, profile: input.profile, snapshot: empty, basis,
           })) throw new Error('Qualified quota source could not be initialized');
           admittedBasis = basis;
         },
       });
+      const invocation = await (signal ? Promise.race([pending, aborted]) : pending);
+      signal?.throwIfAborted();
       if (invocation.result && invocation.basis.isCurrent()) this.failureStateByBindingKey.delete(key);
       return invocation;
     } catch (error) {
@@ -4582,6 +4646,9 @@ export class ConnectedServiceQuotasCoordinator {
         // Keep the original provider failure and its existing retry lifecycle if Home is unreachable.
       }
       throw error;
+    } finally {
+      clearTimeout(timeoutHandle);
+      if (abortListener) signal?.removeEventListener('abort', abortListener);
     }
   }
 
@@ -4956,8 +5023,9 @@ export class ConnectedServiceQuotasCoordinator {
         });
         this.failureStateByBindingKey.delete(key);
       } catch (error) {
-        if ((this.failureStateByBindingKey.get(key)?.nextAllowedAt ?? 0) <= input.now) {
-          this.applyFailureBackoff({ now: input.now, key, error });
+        const failedAt = this.now();
+        if ((this.failureStateByBindingKey.get(key)?.nextAllowedAt ?? 0) <= failedAt) {
+          this.applyFailureBackoff({ now: failedAt, key, error });
         }
       } finally {
         const deadline = this.failureStateByBindingKey.get(key)?.nextAllowedAt ?? nextProbeAt;

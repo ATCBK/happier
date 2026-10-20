@@ -2,6 +2,7 @@ import { WorkspaceTabsV1StoredSchema } from '@happier-dev/protocol/workspace/wor
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { applyWorkspaceTabIntents, emptyWorkspaceTabs, type SharedWorkspaceTabs, type WorkspaceTabIntent } from './workspaceSyncedTabs';
 import { workspaceDestinationAdmissionIdentity } from './workspaceDestinationPolicy';
+import type { DestinationRef } from '../destinations/compactAppDestinationCatalog';
 
 export type WorkspaceTabsTransport = Readonly<{
     read: () => Promise<Readonly<{ value: unknown | null; version: number; tombstone?: true }>>;
@@ -31,6 +32,7 @@ export function createWorkspaceTabsSync(input: Readonly<{
     onStatus?: (snapshot: WorkspaceTabsSyncSnapshot) => void;
     enroll?: () => readonly WorkspaceTabIntent[];
     normalizeRecord?: (record: SharedWorkspaceTabs) => SharedWorkspaceTabs;
+    destinationIdentity?: (target: DestinationRef) => string;
 }>) {
     let stopped = false;
     let record: SharedWorkspaceTabs | null = null;
@@ -42,13 +44,14 @@ export function createWorkspaceTabsSync(input: Readonly<{
     let queue: Promise<void> = Promise.resolve();
     const current = () => !stopped && (input.shouldContinue?.() ?? true);
     const normalize = (value: SharedWorkspaceTabs) => input.normalizeRecord?.(value) ?? value;
+    const destinationIdentity = input.destinationIdentity ?? workspaceDestinationAdmissionIdentity;
     const rememberNormalizedAliases = (before: SharedWorkspaceTabs, after: SharedWorkspaceTabs) => {
         // A currently retained identity is an alias root, including one restored by a peer.
         for (const id of after.order) tabAliases.delete(id);
         for (const id of before.order) {
             if (after.tabsById[id]) continue;
-            const destinationKey = workspaceDestinationAdmissionIdentity(before.tabsById[id].target);
-            const incumbent = after.order.find(kept => workspaceDestinationAdmissionIdentity(after.tabsById[kept].target) === destinationKey);
+            const destinationKey = destinationIdentity(before.tabsById[id].target);
+            const incumbent = after.order.find(kept => destinationIdentity(after.tabsById[kept].target) === destinationKey);
             if (incumbent) tabAliases.set(id, { id: incumbent, destinationKey });
         }
     };
@@ -67,7 +70,7 @@ export function createWorkspaceTabsSync(input: Readonly<{
         }
         // A peer can close or retarget the winner; neither retires the original operation.
         const winner = record?.tabsById[id];
-        return winner && (destinationKey === undefined || workspaceDestinationAdmissionIdentity(winner.target) === destinationKey) ? id : original;
+        return winner && (destinationKey === undefined || destinationIdentity(winner.target) === destinationKey) ? id : original;
     };
     const rebasePendingIntent = (intent: WorkspaceTabIntent): WorkspaceTabIntent => {
         if (intent.type === 'open') {
@@ -98,7 +101,7 @@ export function createWorkspaceTabsSync(input: Readonly<{
         for (const id of local.order) {
             const sharedId = resolvePendingId(id);
             if (sharedId !== id && value.tabsById[sharedId]
-                && workspaceDestinationAdmissionIdentity(local.tabsById[id].target) === workspaceDestinationAdmissionIdentity(value.tabsById[sharedId].target)) {
+                && destinationIdentity(local.tabsById[id].target) === destinationIdentity(value.tabsById[sharedId].target)) {
                 localIds.set(sharedId, id);
             }
         }

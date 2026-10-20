@@ -21,6 +21,7 @@ import { teamMutationFailureLabel } from '../teamMutationPresentation';
 import type { ConnectedServiceRegistrySnapshot } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { resolveQualifiedConnectedServiceMarkId } from '@/components/settings/connectedServices/model/resolveQualifiedConnectedServiceMarkId';
 import { resolveAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 /** Member keys are Account identities; their titles consume the Members presentation rule. */
 export function usageBreakdownPresentation(
@@ -481,7 +482,7 @@ export function credentialFailureMessage(failure: HomeDomainFailure<string>): st
  * the approval not been required.
  */
 export function credentialApprovalFailureMessage(code: string): string {
-    if (code === 'approval_rejected' || code === 'approval_canceled') {
+    if (isActionApprovalDeclinedErrorCode(code)) {
         return t('teams.credentials.approvalDeclined');
     }
     return credentialFailureMessage({ kind: 'unknown', retryable: false, code });

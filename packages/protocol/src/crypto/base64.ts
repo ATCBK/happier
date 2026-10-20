@@ -6,15 +6,22 @@ export function readCanonicalPaddedBase64DecodedLength(input: string): number | 
   if (input.length % 4 !== 0) return null;
   const paddingLength = input.endsWith('==') ? 2 : input.endsWith('=') ? 1 : 0;
   const paddingStart = input.length - paddingLength;
-  // Scan the complete alphabet in the native string engine, without decoding or
-  // a per-character JavaScript loop. Any extra/interior '=' remains invalid.
-  if (/[^A-Za-z0-9+/]/.test(input.slice(0, paddingStart))) return null;
+  // Validate in place: this hot ingress check must not copy the ciphertext or
+  // run the complete payload through the RegExp engine before decoding it.
+  let last = 0;
+  for (let index = 0; index < paddingStart; index += 1) {
+    const code = input.charCodeAt(index);
+    if (code >= 65 && code <= 90) last = code - 65;
+    else if (code >= 97 && code <= 122) last = code - 71;
+    else if (code >= 48 && code <= 57) last = code + 4;
+    else if (code === 43) last = 62;
+    else if (code === 47) last = 63;
+    else return null;
+  }
   // Padded encodings have unused low bits in their last alphabet character.
   // Reject alternate spellings of the same bytes at the canonical boundary.
   if (paddingLength > 0) {
-    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-    const last = alphabet.indexOf(input[paddingStart - 1]);
-    if (last < 0 || (last & (paddingLength === 2 ? 15 : 3)) !== 0) return null;
+    if (paddingStart === 0 || (last & (paddingLength === 2 ? 15 : 3)) !== 0) return null;
   }
   return (input.length / 4) * 3 - paddingLength;
 }

@@ -23,7 +23,8 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({ i
     const keyboardDismissOnTapHandlers = useKeyboardDismissOnTap();
     const { theme } = useUnistyles();
     const materialColor = useHappierMaterialColorResolver();
-    // The reading column yields to a settled floating viewer on snap, never while it is dragged.
+    // The reading column and the centred placeholder yield to a settled floating viewer on snap,
+    // never while it is dragged.
     const readingInset = useSessionViewerReadingInset();
     // The shell's measured bottom band (bar plus a docked phone Island) overlays content.
     // Lift the composer above it here, not through an in-flow chrome-host reservation.
@@ -60,11 +61,11 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({ i
                 <ScrollView
                     testID="agent-content-placeholder-layer"
                     style={{
-                        bottom: 0,
-                        left: 0,
+                        bottom: readingInset.centred.bottom,
+                        left: readingInset.centred.left,
                         minWidth: 0,
                         position: 'absolute',
-                        right: 0,
+                        right: readingInset.centred.right,
                         top: safeArea.top + headerHeight,
                     }}
                     contentContainerStyle={{ alignItems: 'center', justifyContent: 'center', flex: 1 }}

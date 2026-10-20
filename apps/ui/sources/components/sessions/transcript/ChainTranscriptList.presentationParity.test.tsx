@@ -45,8 +45,9 @@ vi.mock('@/sync/sync', () => ({
 installTranscriptCommonModuleMocks({
     storage: async () => {
         const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
         return createStorageModuleStub({
-            useSetting: (key: string) => settings[key] ?? false,
+            useSetting: (key: string) => settings[key] ?? Reflect.get(settingsDefaults, key),
             useSessionForkSupportSource: () => null,
             useSessionMessagesById: () => ({}),
             useSessionMessagesReducerState: () => null,
@@ -59,9 +60,10 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     useFeatureEnabled: () => false,
 }));
 
-vi.mock('@legendapp/list/react-native', async () => {
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@legendapp/list/react-native')>();
     const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
-    return createCapturingLegendListMock().module;
+    return createCapturingLegendListMock({ original }).module;
 });
 
 vi.mock('@/components/sessions/transcript/MessageView', async () => {

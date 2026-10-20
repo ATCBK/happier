@@ -47,6 +47,9 @@ import { isMachineRpcTimeoutError } from '@/sync/runtime/orchestration/serverSco
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { stopSessionViaDaemonMachineRpc } from './sessionStopStrategy';
+import { runWithHomeCredentialRequestSignal } from '@/sync/runtime/orchestration/serverScopedRpc/serverAccountScopeRequestGuard';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import {
     MACHINE_ENCRYPT_RAW_ATTRIBUTION_EVENTS,
     measureMachineEncryptRawAttribution,
@@ -673,6 +676,7 @@ export async function machineResolveSpawnSessionByNonce(params: Readonly<{
     spawnNonce: string;
     serverId?: string | null;
     timeoutMs?: number;
+    signal?: AbortSignal;
 }>): Promise<MachineResolveSpawnSessionByNonceResult> {
     const spawnNonce = params.spawnNonce.trim();
     if (!spawnNonce) return { status: 'not_found' };
@@ -684,6 +688,7 @@ export async function machineResolveSpawnSessionByNonce(params: Readonly<{
             payload: { spawnNonce },
             serverId: params.serverId ?? null,
             timeoutMs: params.timeoutMs,
+            ...(params.signal ? { signal: params.signal } : {}),
         });
         try {
             return normalizeSpawnSessionNonceResolution(
@@ -731,6 +736,7 @@ export async function machineResolveSpawnSessionByNonceUntilSettled(params: Read
     serverId?: string | null;
     timeoutMs?: number;
     pollIntervalMs?: number;
+    signal?: AbortSignal;
 }>): Promise<MachineResolveSpawnSessionByNonceResult> {
     const timeoutMs = normalizeMachineSpawnNonceRecoveryDuration(
         params.timeoutMs,
@@ -743,6 +749,7 @@ export async function machineResolveSpawnSessionByNonceUntilSettled(params: Read
     let lastResolutionWasTransportError = false;
     const settled = await settleSpawnSessionNonce({
         spawnNonce: params.spawnNonce,
+        signal: params.signal,
         resolve: async (_spawnNonce, remainingTimeoutMs) => {
             const result = await machineResolveSpawnSessionByNonce({
                 ...params,
@@ -772,13 +779,14 @@ export async function machineResolveSpawnSessionByNonceUntilSettled(params: Read
  */
 export async function machineStopDaemon(
     machineId: string,
-    options?: Readonly<{ serverId?: string | null }>,
+    options?: Readonly<{ serverId?: string | null; signal?: AbortSignal }>,
 ): Promise<{ message: string }> {
     return await machineRpcWithServerScope<{ message: string }, {}>({
         machineId,
         method: RPC_METHODS.STOP_DAEMON,
         payload: {},
         serverId: options?.serverId ?? null,
+        ...(options?.signal ? { signal: options.signal } : {}),
     });
 }
 
@@ -799,27 +807,51 @@ export type MachineBashRequest =
 export async function machineStopSession(
     machineId: string,
     sessionId: string,
-    options?: Readonly<{ serverId?: string | null }>,
+    options?: Readonly<{
+        serverId?: string | null;
+        /** The Account captured by the original fallback confirmation. */
+        scope?: ServerAccountScope;
+        /** Withdraws the observer; after issuance only credential retirement cancels the physical wait. */
+        signal?: AbortSignal;
+    }>,
 ): Promise<MachineStopSessionResult> {
-    const result = await stopSessionViaDaemonMachineRpc({
-        machineId,
-        sessionId,
-        serverId: options?.serverId,
+    const serverId = options?.scope?.serverId ?? options?.serverId ?? getActiveServerSnapshot().serverId;
+    if (!serverId) return { ok: false, error: 'action_home_not_found', errorCode: 'action_home_not_found' };
+    const observer = options?.signal;
+    const withdrawn = (): MachineStopSessionResult => ({ ok: false,
+        error: 'Session Stop observation was withdrawn', errorCode: 'MACHINE_RPC_ABORTED' });
+    if (observer?.aborted) return withdrawn();
+    const beforeIssuance = new AbortController();
+    let issued = false;
+    const withdrawBeforeIssuance = () => { if (!issued) beforeIssuance.abort(); };
+    observer?.addEventListener('abort', withdrawBeforeIssuance, { once: true });
+    // A mounted observer may leave, but an issued physical Stop remains in the
+    // original Account's custody. Never cancel/replay it just because a view unmounts.
+    const operation = runWithHomeCredentialRequestSignal(serverId, async (credentialSignal): Promise<MachineStopSessionResult> => {
+        const cancellation = mergeAbortSignals([credentialSignal, beforeIssuance.signal]);
+        try {
+            const result = await stopSessionViaDaemonMachineRpc({
+                machineId, sessionId, serverId,
+                ...(options?.scope ? { accountId: options.scope.accountId } : {}),
+                signal: cancellation.signal,
+                onIssued: () => {
+                    issued = true;
+                    observer?.removeEventListener('abort', withdrawBeforeIssuance);
+                },
+            });
+            if (result.type === 'stopped') return { ok: true, status: 'stopped' };
+            if (result.type === 'requested') return { ok: true, status: 'requested' };
+            return { ok: false, error: result.message, ...(result.errorCode ? { errorCode: result.errorCode } : {}) };
+        } finally { cancellation.dispose(); }
+    }).finally(() => observer?.removeEventListener('abort', withdrawBeforeIssuance));
+    if (!observer) return await operation;
+    return await new Promise<MachineStopSessionResult>((resolve, reject) => {
+        const withdraw = () => { observer.removeEventListener('abort', withdraw); resolve(withdrawn()); };
+        observer.addEventListener('abort', withdraw, { once: true });
+        operation.then(result => { observer.removeEventListener('abort', withdraw); resolve(result); },
+            error => { observer.removeEventListener('abort', withdraw); reject(error); });
+        if (observer.aborted) withdraw();
     });
-    if (result.type === 'stopped') {
-        return { ok: true, status: 'stopped' };
-    }
-    if (result.type === 'requested') {
-        return { ok: true, status: 'requested' };
-    }
-    if (result.errorCode) {
-        return {
-            ok: false,
-            error: result.message,
-            errorCode: result.errorCode,
-        };
-    }
-    return { ok: false, error: result.message };
 }
 
 /**
@@ -829,7 +861,7 @@ export async function machineBash(
     machineId: string,
     command: MachineBashRequest,
     cwd: string,
-    options?: { serverId?: string | null }
+    options?: { serverId?: string | null; signal?: AbortSignal }
 ): Promise<{
     success: boolean;
     stdout: string;
@@ -852,6 +884,7 @@ export async function machineBash(
             method: 'bash',
             payload,
             serverId: options?.serverId,
+            ...(options?.signal ? { signal: options.signal } : {}),
         });
         return result;
     } catch (error) {
@@ -860,30 +893,6 @@ export async function machineBash(
             stdout: '',
             stderr: error instanceof Error ? error.message : 'Unknown error',
             exitCode: -1
-        };
-    }
-}
-
-export async function machineCreateDirectory(
-    machineId: string,
-    path: string,
-    options?: { serverId?: string | null },
-): Promise<
-    | { success: true }
-    | { success: false; error: string; errorCode?: string }
-> {
-    try {
-        return await machineRpcWithServerScope<{ success: true } | { success: false; error: string }, { path: string }>({
-            machineId,
-            method: RPC_METHODS.CREATE_DIRECTORY,
-            payload: { path },
-            serverId: options?.serverId,
-        });
-    } catch (error) {
-        return {
-            success: false,
-            error: error instanceof Error ? error.message : 'Unknown error',
-            errorCode: readRpcErrorCode(error),
         };
     }
 }
@@ -935,7 +944,7 @@ export type BugReportLogTailResult =
 export async function machinePreviewEnv(
     machineId: string,
     params: PreviewEnvRequest,
-    options?: { serverId?: string | null },
+    options?: { serverId?: string | null; signal?: AbortSignal },
 ): Promise<MachinePreviewEnvResult> {
     try {
         const result = await machineRpcWithServerScope<unknown, PreviewEnvRequest>({
@@ -943,6 +952,7 @@ export async function machinePreviewEnv(
             method: RPC_METHODS.PREVIEW_ENV,
             payload: params,
             serverId: options?.serverId,
+            ...(options?.signal ? { signal: options.signal } : {}),
         });
 
         // Older daemons (or errors) return an encrypted `{ error: ... }` payload.
@@ -1022,7 +1032,7 @@ export async function machinePreviewEnv(
 
 export async function machineCollectBugReportDiagnostics(
     machineId: string,
-    options?: { timeoutMs?: number; serverId?: string | null },
+    options?: { timeoutMs?: number; serverId?: string | null; signal?: AbortSignal },
 ): Promise<BugReportCollectDiagnosticsResult | null> {
     try {
         return await machineRpcWithServerScope<BugReportCollectDiagnosticsResult, {}>({
@@ -1030,6 +1040,7 @@ export async function machineCollectBugReportDiagnostics(
             method: RPC_METHODS.BUGREPORT_COLLECT_DIAGNOSTICS,
             payload: {},
             serverId: options?.serverId ?? null,
+            ...(options?.signal ? { signal: options.signal } : {}),
             timeoutMs: options?.timeoutMs,
         });
     } catch {
@@ -1040,7 +1051,7 @@ export async function machineCollectBugReportDiagnostics(
 export async function machineGetBugReportLogTail(
     machineId: string,
     params?: { path?: string; maxBytes?: number },
-    options?: { timeoutMs?: number },
+    options?: { timeoutMs?: number; signal?: AbortSignal },
 ): Promise<BugReportLogTailResult> {
     try {
         return await machineRpcWithServerScope<BugReportLogTailResult, { path?: string; maxBytes?: number }>({
@@ -1051,6 +1062,7 @@ export async function machineGetBugReportLogTail(
                 maxBytes: params?.maxBytes,
             },
             timeoutMs: options?.timeoutMs,
+            ...(options?.signal ? { signal: options.signal } : {}),
         });
     } catch (error) {
         return {
@@ -1067,17 +1079,19 @@ export type MachineReadSessionLogTailResult =
 export async function machineReadSessionLogTail(
     machineId: string,
     params: { path: string; maxBytes?: number },
-    options?: { timeoutMs?: number },
+    options?: { timeoutMs?: number; serverId?: string | null; signal?: AbortSignal },
 ): Promise<MachineReadSessionLogTailResult> {
     try {
         return await machineRpcWithServerScope<MachineReadSessionLogTailResult, { path: string; maxBytes?: number }>({
             machineId,
             method: RPC_METHODS.DAEMON_SESSION_LOG_TAIL,
+            serverId: options?.serverId,
             payload: {
                 path: params.path,
                 maxBytes: params.maxBytes,
             },
             timeoutMs: options?.timeoutMs,
+            ...(options?.signal ? { signal: options.signal } : {}),
         });
     } catch (error) {
         return {

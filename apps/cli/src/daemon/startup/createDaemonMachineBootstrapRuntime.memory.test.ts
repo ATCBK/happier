@@ -12,6 +12,7 @@ function createBaseRuntimeParams(
   return {
     // Test fixture boundary: the real Memory worker does not invoke the API client during startup.
     api: { machineSyncClient: vi.fn() } as never,
+    controlPort: 0,
     credentials: { token: 'token-only', encryption: null },
     runtimeId: 'runtime_1',
     publicReleaseChannel: 'dev' as const,
@@ -19,6 +20,7 @@ function createBaseRuntimeParams(
     serviceLabel: undefined,
     transferRuntimeStatePublisher: null,
     spawnSession: vi.fn(),
+    spawnSessionForInternalResume: vi.fn(),
     stopSession: vi.fn(),
     awaitAgentSessionOpen: vi.fn(),
     isSessionAlreadyRunning: vi.fn(),

@@ -1,6 +1,6 @@
 import type { PluginContributionIdentity } from '@happier-dev/plugin-sdk/manifest';
 
-import type { SurfaceFilterSelectionV1, TriageListFacetCensusV1 } from '../../projection/listWindow.js';
+import { triageFacetScopeKeyV1, type SurfaceFilterSelectionV1, type TriageListFacetCensusV1 } from '../../projection/listWindow.js';
 import type { TriageListWindowSnapshotV1 } from '../../projection/listWindowStore.js';
 import { sameTriageFilterValueV1, type TriageFilterFacetValueV1 } from '../state/surface.js';
 import type { TriageTextResolverV1 } from '../shell/windowState.js';
@@ -159,6 +159,7 @@ function planCensusFacet<TFacet extends 'types' | 'scopes'>(
   facetLabelKey: string,
   facetLabelFallback: string,
   readValueName: (value: SurfaceFilterSelectionV1[TFacet][number]) => string,
+  readValueLabel: (value: SurfaceFilterSelectionV1[TFacet][number]) => string,
   input: Readonly<{
     configuredSources: TriageListWindowSnapshotV1['configuredSources'];
     facetCensus?: TriageListFacetCensusV1;
@@ -187,10 +188,11 @@ function planCensusFacet<TFacet extends 'types' | 'scopes'>(
     facet,
     label: text(facetLabelKey, facetLabelFallback),
     options: Object.freeze(values.map((value) => {
-      const name = readValueName(value);
+      // The key names the protocol identity; only the label is for reading.
+      const label = readValueLabel(value);
       return Object.freeze({
-        key: `${facet}:${JSON.stringify([value.source.pluginId, value.source.localId, name])}`,
-        label: qualify ? `${name} — ${sourceLabel(value.source, input.configuredSources)}` : name,
+        key: `${facet}:${JSON.stringify([value.source.pluginId, value.source.localId, readValueName(value)])}`,
+        label: qualify ? `${label} — ${sourceLabel(value.source, input.configuredSources)}` : label,
         selected: selectedIn(input.filters, { facet, value } as TriageFilterFacetValueV1),
         selection: { facet, value } as TriageFilterFacetValueV1,
       });
@@ -226,6 +228,8 @@ export function planTriageFilterFacetsV1(
     configuredSources: TriageListWindowSnapshotV1['configuredSources'];
     facetCensus?: TriageListFacetCensusV1;
     filters: SurfaceFilterSelectionV1;
+    /** A kind's declared display name, from its source's descriptor; the kind id when the source declares none. */
+    readKindName?: (source: PluginContributionIdentity, kindId: string) => string | undefined;
   }>,
   text: TriageTextResolverV1 = ENGLISH_TEXT,
 ): readonly TriageFilterFacetPlanV1[] {
@@ -236,6 +240,7 @@ export function planTriageFilterFacetsV1(
       'plugins.triage.surface.filters.type',
       'Type',
       (value) => value.kindId,
+      (value) => input.readKindName?.(value.source, value.kindId) ?? value.kindId,
       input,
       text,
     ),
@@ -244,6 +249,8 @@ export function planTriageFilterFacetsV1(
       'plugins.triage.surface.filters.scope',
       'Scope',
       (value) => value.collisionScope,
+      (value) => input.facetCensus?.scopeNames[triageFacetScopeKeyV1(value.source, value.collisionScope)]
+        ?? value.collisionScope,
       input,
       text,
     ),

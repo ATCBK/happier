@@ -92,10 +92,24 @@ on demand; it is not an author-maintained second declaration.
 
 ## Authority and identity
 
+In 0.3 development source, the optional `executionTarget.autoPick` boolean defaults
+to `true`. Declare `executionTarget: { autoPick: false }` only when the plugin's
+work depends on a particular Machine: a sole eligible Machine is selected
+automatically, while several ask. Omission lets Happier choose among compatible
+Machines on this Home. An explicit user pin never falls back. See
+[Choose where a plugin runs](/plugins/api/actions-tools-commands#choose-where-a-plugin-runs)
+for ordering and Action access. `executionTarget.default: 'installation'` remains
+an optional source preference; neither field grants execution authority.
+
 - Authors declare a plugin id and contribution-local ids.
 - Happier owns structured `{ pluginId, localId }` identity.
 - Use `<pluginId>/<localId>` only at global CLI, wire, and display boundaries.
 - Do not dot-concatenate the two ids or repeat the plugin id inside a local id.
+
+Contribution-local ids share one namespace across a plugin's contribution
+families. For example, a Resource named `notes` and an Action named `notes`
+collide; use distinct ids such as `notes` and `save-note`. Nested ids, such as
+Settings field ids, follow their owning family's rules.
 
 `entrypoints.daemon` names the compiled, self-contained installed module.
 `entrypoints.development` names the TypeScript source module selected by

@@ -21,6 +21,8 @@ import { RunnerActivationCreateRequestV1Schema } from '../../ephemeralRunner/act
 import { TemporaryComputerWorkspaceV1Schema } from './temporaryComputerWorkspaceV1.js';
 import { SessionInitialTriggerV1Schema } from '../../workflows/triggers/workflowTriggerActionsV1.js';
 import { SessionAuthoringSelectionFieldsV1 } from './selectionFieldsV1.js';
+import { SessionIdentityAdditionsV1Schema } from '../identity/sessionBotV1.js';
+import { SessionPromptStackV1Schema } from '../context/sessionContextV1.js';
 
 type SessionAuthoringJsonPrimitive = null | string | number | boolean;
 export interface SessionAuthoringJsonObject {
@@ -141,6 +143,30 @@ const LIVE_ONLY_CONTEXTS = [
 ] as const;
 
 export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
+  sessionName: {
+    schema: z.optional(z.nullable(z.string())),
+    description: 'Authored title for a new Session; an empty title leaves naming automatic.',
+    storageClass: 'template', draftStorage: 'sync', contexts: ['newSession'],
+    defaultSurface: 'hidden', defaultEditabilityByContext: { newSession: 'editable' },
+  },
+  initialSessionFacts: {
+    schema: z.optional(z.nullable(z.lazy(() => SessionIdentityAdditionsV1Schema))),
+    description: 'Creation identity facts retained with the ordinary new-Session draft.',
+    storageClass: 'template', draftStorage: 'sync', contexts: ['newSession'],
+    defaultSurface: 'hidden', defaultEditabilityByContext: { newSession: 'inherited' },
+  },
+  memoryEnabled: {
+    schema: z.optional(z.nullable(z.boolean())),
+    description: 'Explicit creation-time Session memory choice; omission keeps the creation default.',
+    storageClass: 'template', draftStorage: 'sync', contexts: ['newSession'],
+    defaultSurface: 'hidden', defaultEditabilityByContext: { newSession: 'editable' },
+  },
+  promptStack: {
+    schema: z.optional(z.nullable(z.lazy(() => SessionPromptStackV1Schema))),
+    description: 'Qualified Session context references retained before creation.',
+    storageClass: 'template', draftStorage: 'sync', contexts: ['newSession'],
+    defaultSurface: 'hidden', defaultEditabilityByContext: { newSession: 'editable' },
+  },
   initialTriggers: {
     schema: z.optional(z.array(z.lazy(() => SessionInitialTriggerV1Schema))),
     description: 'Session-scoped triggers admitted atomically with a newly authored Session.',

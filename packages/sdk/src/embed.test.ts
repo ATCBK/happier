@@ -134,12 +134,13 @@ describe('SDK embed helpers', () => {
   it('reuses the spawn owner and its retry identity with all grant bounds', async () => {
     const spawns: Array<Record<string, unknown>> = [];
     const model = { agentTargetKey: grant.create.agentTargetKey, providerConnectionId: null, modelId: 'model-safe' };
+    const nativeDefault = { ...model, modelId: 'default' };
     const otherAgentModel = {
       agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'codex-default',
     };
     let refuseInitialInput = false;
     vi.stubGlobal('fetch', vi.fn(async (url: URL, options: RequestInit) => {
-      if (url.pathname.endsWith('/self')) return json({ ...self, grant: { ...grant, models: [otherAgentModel, model] },
+      if (url.pathname.endsWith('/self')) return json({ ...self, grant: { ...grant, models: [otherAgentModel, nativeDefault, model] },
         embedConfig: { ...config, newChat: { enabled: false } } });
       const body = JSON.parse(String(options.body)) as Record<string, unknown>;
       const actionId = url.pathname.split('/').at(-1);
@@ -175,6 +176,25 @@ describe('SDK embed helpers', () => {
       await expect(client.embed.createSession(input, { requestId: 'another-lead' })).rejects.toMatchObject({
         name: 'HappierSessionInitialInputError', session: { id: 'session-1' },
         result: { initialInput: { status: 'rejected', code: 'session_input_archived' } } });
+    } finally { await client.close(); }
+  });
+
+  it('surfaces a typed spawn failure with the caller request identity', async () => {
+    const launchError = { kind: 'launch_error' as const, code: 'agent_signed_out',
+      message: 'Sign in to the Agent on the target Machine. If using Connected Accounts, select a Connected Account profile for this Session or recipe, or configure an Account default profile before retrying.' };
+    vi.stubGlobal('fetch', vi.fn(async (url: URL, options: RequestInit) => {
+      if (url.pathname.endsWith('/self')) return json(self);
+      const body = JSON.parse(String(options.body)) as { requestId: string };
+      return json({ v: 1, actionId: 'session.spawn_new', requestId: body.requestId, execution: { ok: true,
+        result: { type: 'error', code: 'agent_signed_out', agentId: 'claude', retryable: false, launchError } } });
+    }));
+    const client = connect({ endpoint: 'https://happier.example', token: TOKEN });
+    try {
+      const failure = await client.embed.createSession({}, { requestId: 'lead-creation-failed' })
+        .then(() => null, (error: unknown) => error);
+      expect(failure).toMatchObject({ name: 'HappierSessionSpawnError', requestId: 'lead-creation-failed',
+        result: { type: 'error', code: 'agent_signed_out', launchError } });
+      expect((failure as Error).message).toContain('requestId=lead-creation-failed');
     } finally { await client.close(); }
   });
 

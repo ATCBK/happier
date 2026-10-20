@@ -3,7 +3,7 @@ import { View } from 'react-native';
 
 import { SessionView } from '@/components/sessions/shell/SessionViewHost';
 import type { SessionViewEmbeddedPresentation } from '@/components/sessions/shell/embedded/embeddedSessionPresentation';
-import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
+import { useHydrateSession } from '@/hooks/session/useHydrateSessionForRoute';
 
 /**
  * One Session, embedded in another surface's pane (ORC §3.8 "Peek", O12; lab `session-D`).
@@ -51,7 +51,7 @@ function ActiveSessionInPane(props: Readonly<{
     presentation: SessionViewEmbeddedPresentation;
 }>) {
     const hydrationOptions = React.useMemo(() => props.serverId ? { serverId: props.serverId } : undefined, [props.serverId]);
-    const routeHydrationState = useHydrateSessionForRoute(props.sessionId, 'SessionInPane.hydrate', hydrationOptions);
+    const routeHydrationState = useHydrateSession(props.sessionId, 'SessionInPane.hydrate', hydrationOptions);
     return (
         <View testID={`session-in-pane:${props.sessionId}`} style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
             <SessionView

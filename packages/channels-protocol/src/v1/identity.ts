@@ -35,9 +35,11 @@ export const ConversationConnectionIdV1ProtocolSchema = ConversationChannelRelat
 /**
  * @internal Relative-only witness of one exact Account Collection row revision.
  *
- * Every Channels connection, binding, obligation, frontier, and delivery-custody
- * row is an Account Collection row, so a revision a caller presents or a result
- * reports is that row's `PluginCollectionRow.revision`. Its ceiling therefore
+ * Binding, obligation, frontier, and delivery-custody revision witnesses name
+ * that row's `PluginCollectionRow.revision`. Connection management instead
+ * projects its logical configuration revision, initialized by migration from
+ * the physical row revision and advanced only by semantic connection changes.
+ * It cannot advance faster than the physical row. Their ceiling therefore
  * belongs to the Collection owner's persisted `Int` column, not to a Channels
  * policy number: admitting a wider value would let a caller name an exact-CAS
  * revision only the SQLite provider can ever reproduce.

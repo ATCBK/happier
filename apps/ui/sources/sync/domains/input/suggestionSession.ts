@@ -1,10 +1,13 @@
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { readSessionListRenderableSharedMetadata } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
 import { isUserFacingSession } from '@/sync/domains/session/listing/isUserFacingSession';
 import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
-import { storage } from '@/sync/domains/state/storage';
+import { selectSessionDisplayNameSource, storage } from '@/sync/domains/state/storage';
 import { resolveServerIdForSessionIdFromLocalState } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
 import { formatSessionPath } from '@/utils/sessions/formatPathRelativeToHome';
-import { getSessionName } from '@/utils/sessions/sessionUtils';
+import { getSessionName, getSessionWorkContextParts } from '@/utils/sessions/sessionUtils';
+import { sessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
+import { t } from '@/text';
 
 /**
  * The `@session` picker's candidate source (D-7).
@@ -38,6 +41,30 @@ export type ComposerSessionSuggestionItem = Readonly<{
     updatedAt: number;
     active: boolean;
 }>;
+
+export type ComposerSessionSuggestionDisplay = Omit<ComposerSessionSuggestionItem, 'updatedAt' | 'active'>;
+
+/**
+ * Display facts for an already-admitted exact-Home reference. This does not discover or admit
+ * candidates: a Discussion's current roster may include a hidden model Session or a Session
+ * absent from this device's cache. Missing display facts leave that membership intact.
+ */
+export function readComposerSessionSuggestionDisplay(address: Readonly<{
+    sessionId: string; serverId: string;
+}>): ComposerSessionSuggestionDisplay | null {
+    const source = selectSessionDisplayNameSource(storage.getState(), address.sessionId, address.serverId);
+    if (!source) return null;
+    const context = getSessionWorkContextParts(source, address.serverId);
+    return {
+        id: address.sessionId,
+        title: sessionDisplayTitle(source) ?? t('session.untitled'),
+        workspaceLabel: context.locationLabel,
+        agentLabel: context.agentLabel,
+        agentId: context.agentId,
+        machineId: context.machineId,
+        serverId: address.serverId,
+    };
+}
 
 /**
  * The current server resolver owns the ways a session acquires its scope. The
@@ -97,7 +124,8 @@ function projectSession(
         // Layout-specific identity interpretation belongs to the shared Session
         // presentation reader. In particular, layout-v1 reads only the strict
         // shared Agent presentation envelope rather than owner-only flavor data.
-        agentId: readSessionPresentationAgentId(session),
+        agentId: readSessionPresentationAgentId({ metadataLayoutVersion: session.metadataLayoutVersion,
+            metadata: readSessionListRenderableSharedMetadata(session) }),
         machineId: normalizeTrimmed(metadata?.machineId),
         serverId,
         updatedAt: typeof session.updatedAt === 'number' ? session.updatedAt : 0,

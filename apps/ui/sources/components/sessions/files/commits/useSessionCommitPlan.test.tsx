@@ -7,7 +7,6 @@ import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { SessionScmReviewComparison } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import { buildScmDiffSummaryModelProfiles } from '@/settings/scmDiffSummary/models';
 import { SCM_DIFF_SUMMARY_SETTING_KEYS } from '@/settings/scmDiffSummary/settings';
-import { AgentModelsProbeObservationSchema } from '@happier-dev/protocol/capabilities';
 import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { ScmDiffSummaryResultDeleteResponseSchema, ScmDiffSummaryResultEditInputSchema, ScmDiffSummaryResultResponseSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
@@ -36,8 +35,6 @@ vi.mock('react-native-unistyles', async () => {
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: false }).module);
 const OFFERED_MODELS = [{ id: 'commit-plan-fixture-model', name: 'Offered fixture model',
     capabilities: { structuredOutput: 'supported' as const } }];
-const MODEL_OBSERVATION = AgentModelsProbeObservationSchema.parse({ availableModels: OFFERED_MODELS,
-    supportsFreeform: false, source: 'dynamic' });
 async function remote(method: string, payload?: unknown): Promise<unknown> {
     if ((method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_EDIT || method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_DELETE
         || method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_UNDO) && boundary.discard) return boundary.discard(method, payload);
@@ -45,7 +42,6 @@ async function remote(method: string, payload?: unknown): Promise<unknown> {
         'tool.executionRuns': { ok: true, checkedAt: 1,
             data: { backends: { codex: { available: true, intents: ['scm_diff_summary'] } } } },
     } };
-    if (method === RPC_METHODS.CAPABILITIES_INVOKE) return { ok: true, result: MODEL_OBSERVATION };
     if (method === SESSION_RPC_METHODS.EXECUTION_RUN_LIST) return { runs: [] };
     if (method === SESSION_RPC_METHODS.EXECUTION_RUN_GET) return ExecutionRunGetResponseSchema.parse({
         run: { runId: boundary.saved?.output.runId, callId: 'generator-call', sidechainId: 'generator-sidechain',
@@ -90,9 +86,7 @@ const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
 const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
 const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
 const { getStorage } = await import('@/sync/domains/state/storage');
-const { buildDynamicModelProbeCacheKey } = await import('@/sync/domains/models/dynamicModelProbeCacheKey');
-const { resetDynamicModelProbeCacheForTests } = await import('@/sync/domains/models/dynamicModelProbeCache');
-const { discoverMachineModels } = await import('@/sync/ops/modelDiscovery');
+const { createScmDiffSummaryModelCatalogHttpBoundary } = await import('@/dev/testkit/harness/scmDiffSummaryModelCatalogBoundary');
 const { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } = await import('@happier-dev/protocol/acp/catalog/catalogRowsV1');
 const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
 await loadSyncSingletonForTests();
@@ -111,7 +105,7 @@ const { buildTriggerTarget } = await import('@/components/workflows/triggers/ses
 const { SPECIMEN_COMPARISON } = await import('@/components/dev/changes/walkthroughSpecimenFixture');
 const initialStorage = getStorage().getState();
 
-beforeEach(async () => { await homes.reset(); resetDynamicModelProbeCacheForTests(); });
+beforeEach(async () => { await homes.reset(); });
 afterEach(async () => {
     standardCleanup();
     vi.useRealTimers();
@@ -124,7 +118,7 @@ afterEach(async () => {
 
 async function addHome(name: string) {
     const id = await homes.addHome({ name, serverUrl: `https://${name}.example.test`,
-        accountId: 'commit-plan-account', accountEncryptionMode: 'plain', currentAccount: true });
+        serverIdentityId: `srv_${name.replaceAll('-', '_')}`, accountId: 'commit-plan-account', accountEncryptionMode: 'plain', currentAccount: true });
     homes.answer(id, ACP_CATALOG_ROWS_ROUTE_V1, { body: AcpCatalogRowReadResponseV1Schema.parse({ status: 'absent' }) });
     return { id };
 }
@@ -188,31 +182,22 @@ async function mountProposal(sessionId: string, saved = savedResult(1, 'unknown'
     return { latest, screen, visibility, home };
 }
 
-async function mountWorkspaceProposal(saved = savedResult(1, 'unknown'), renderProposal = false, renderWhilePending = false) {
+async function mountWorkspaceProposal(saved = savedResult(1, 'unknown'), renderProposal = false, renderWhilePending = false, machineKnown = true) {
     boundary.sessionId = '';
     boundary.saved = saved;
     const home = await addHome('workspace-commit-plan');
     const machine = createMachineFixture({ id: 'machine:workspace-commit-plan', activeAt: Date.now() });
     const backendTarget = { kind: 'backend', backendId: 'codex' } as const;
     const profile = buildScmDiffSummaryModelProfiles({ backendTarget, models: OFFERED_MODELS })[0];
-    const targetKey = profile?.modelSelector?.backendTargetKey;
-    if (!profile || !targetKey) throw new Error('The offered fixture model must name its backend target.');
+    if (!profile) throw new Error('The offered fixture model must name its backend target.');
+    // The executing Machine's catalog is the only source of offered Summary models.
+    (await createScmDiffSummaryModelCatalogHttpBoundary({ serverUrl: 'https://workspace-commit-plan.example.test',
+        serverIdentityId: 'srv_workspace_commit_plan', accountId: 'commit-plan-account', machineId: machine.id,
+        targets: [{ backendTarget, models: OFFERED_MODELS }] })).installOn(homes, home.id);
     getStorage().setState({ profileScope: { serverId: home.id, accountId: 'commit-plan-account' },
-        sessions: {}, machines: { [machine.id]: machine }, machineListByServerId: { [home.id]: [machine] },
+        sessions: {}, machines: machineKnown ? { [machine.id]: machine } : {}, machineListByServerId: { [home.id]: machineKnown ? [machine] : [] },
         settings: { ...initialStorage.settings, experiments: true, featureToggles: { 'execution.runs': true },
             [SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride]: profile.catalogId } });
-    if (renderProposal) {
-        // Observe the remote catalog through the real discovery/cache owner before reopening the saved view.
-        const cacheKey = buildDynamicModelProbeCacheKey({ machineId: machine.id, targetKey,
-            serverId: home.id, providerConnectionId: null });
-        if (!cacheKey) throw new Error('The fixture Machine must have a model discovery key.');
-        const observed = await discoverMachineModels({ cacheKey, machineId: machine.id, serverId: home.id,
-            agentType: 'codex', backendTarget, capabilityParams: {} });
-        expect(observed?.kind, JSON.stringify({ observed,
-            rpcMethods: boundary.requests.map(request => request.method),
-            homePaths: homes.requests.map(request => request.path),
-        })).toBe('success');
-    }
     const latest: { current: ReturnType<typeof useSessionCommitPlan> | null } = { current: null };
     const target: {
         setRoot: React.Dispatch<React.SetStateAction<string>> | null;
@@ -259,7 +244,8 @@ describe('proposal discard Action policy', () => {
         boundary.discard = async (method, input) => {
             if (method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_DELETE) {
                 boundary.listSaved = false;
-                return ScmDiffSummaryResultDeleteResponseSchema.parse({ success: true, resultId: saved.resultId });
+                return ScmDiffSummaryResultDeleteResponseSchema.parse({ success: true, resultId: saved.resultId,
+                    comparisonId: saved.output.comparison!.id });
             }
             if (method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_EDIT) {
                 const parsed = ScmDiffSummaryResultEditInputSchema.parse(input);
@@ -310,6 +296,28 @@ describe('proposal discard Action policy', () => {
 });
 
 describe('exact workspace commit plans', () => {
+    it('restores the exact workspace proposal before its machine presence hydrates', async () => {
+        const saved = savedResult(1, 'complete');
+        const { latest, screen } = await mountWorkspaceProposal(saved, false, false, false);
+        expect(latest.current?.binding.machineReachable).toBe(false);
+        await vi.waitFor(() => expect(latest.current?.binding.viewModel?.resultId, proposalDiagnostic(latest.current)).toBe(saved.resultId));
+        expect(latest.current?.phase).toBe('ready');
+        await screen.unmount();
+    });
+    it('keeps the saved read explicitly restoring instead of advertising an empty proposal', async () => {
+        const read = createDeferred<unknown>();
+        boundary.read = () => read.promise;
+        const saved = savedResult(1, 'complete');
+        const { latest, screen } = await mountWorkspaceProposal(saved);
+        await vi.waitFor(() => expect(boundary.requests.some(request => request.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ)).toBe(true));
+        expect(latest.current?.binding.restoreState).toBe('restoring');
+        expect(latest.current?.phase).toBe('restoring');
+        await act(async () => { read.resolve({ success: true, result: saved }); });
+        await vi.waitFor(() => expect(latest.current?.phase).toBe('ready'));
+        expect(latest.current?.proposal?.outcome?.kind).toBe('complete');
+        await screen.unmount();
+    });
+
     it('keeps a previous saved proposal readable without treating its refresh as completion of a new admission', async () => {
         const initial = savedResult(1, 'complete');
         const saved = ScmDiffSummaryResultSchema.parse({ ...initial, application: undefined,
@@ -338,6 +346,8 @@ describe('exact workspace commit plans', () => {
         expect(latest.current?.error).toBeNull();
         expect(latest.current?.isGenerating).toBe(false);
         expect(screen.findByTestId('commit-group:g1')).toBeTruthy();
+        expect(Boolean(screen.findByTestId('commit-proposal-notice-failed-reason'))).toBe(false);
+        expect(screen.getTextContent()).not.toContain('Retry failed.');
     });
 
     it('shows a generation failure retained in a successfully admitted saved result', async () => {

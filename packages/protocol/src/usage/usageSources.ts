@@ -28,6 +28,8 @@ export const UsageSourceV1Schema = lazyZodSchema(() => z.strictObject({
   captureKind: z.optional(z.literal('from_logs')),
   externalSessionSource: z.optional(ExternalSessionsSourceSchema),
   root: z.strictObject({ kind: z.enum(['default', 'configured', 'materialized', 'override']), path: z.nullable(id) }),
+  /** Discovery metadata only: files already enumerated by the source, never sessions or token estimates. */
+  discoveredFileCount: z.optional(z.number().check(z.int(), z.nonnegative())),
   consent: z.enum(['enabled', 'disabled']),
   status: z.enum(['found', 'reading', 'ready', 'stopped', 'unavailable', 'error', 'unsupported']),
   coverage: z.enum(['unknown', 'partial', 'complete', 'unsupported']),
@@ -35,6 +37,29 @@ export const UsageSourceV1Schema = lazyZodSchema(() => z.strictObject({
   errorCode: z.optional(id),
 }));
 export type UsageSourceV1 = z.infer<typeof UsageSourceV1Schema>;
+
+/** Missing is an Agent inventory fact only when no other usable or retained root was discovered. */
+export function isUsageSourceMissing(source: Pick<UsageSourceV1, 'root' | 'consent' | 'pendingCount' | 'asOfMs' | 'status'>): boolean {
+  return source.root.path === null && source.consent === 'disabled' && source.pendingCount === 0 && source.asOfMs === null
+    && (source.status === 'unavailable' || source.status === 'unsupported' || source.status === 'error');
+}
+
+/** Discovery presentation only; capture custody and per-root consent/history are never removed. */
+export function selectUsageSourceDiscoveryInventory(sources: readonly UsageSourceV1[]): readonly UsageSourceV1[] {
+  // An untouched host-materialized runtime home is not a user's source to add. Keep it once consented or captured.
+  const visible = sources.filter(source => !(source.root.kind === 'materialized' && source.status === 'found'
+    && source.consent === 'disabled' && source.pendingCount === 0 && source.asOfMs === null));
+  const agentKey = (source: UsageSourceV1) => JSON.stringify([source.serverId, source.machineId, source.agent.pluginId, source.agent.localId]);
+  const present = new Set(visible.filter(source => !isUsageSourceMissing(source)).map(agentKey));
+  const missing = new Set<string>();
+  return visible.filter(source => {
+    if (!isUsageSourceMissing(source)) return true;
+    const key = agentKey(source);
+    if (present.has(key) || missing.has(key)) return false;
+    missing.add(key);
+    return true;
+  });
+}
 
 /** Exact accounting selections never match an Agent, capture path, or source-root key. */
 export function matchesUsageSourceAccountingScope(source: Pick<UsageSourceV1, 'accountingSources' | 'captureKind'>,

@@ -190,7 +190,7 @@ describe('Home atmosphere settings declarations', () => {
     it('discovers and edits every Home control while rebasing nested edits over sibling changes', async () => {
         const owner = createOwner(undefined, false, true, settingsDefaults, undefined, settings => ({
             ...settings, homeAtmosphere: { ...settings.homeAtmosphere, moments: { ...settings.homeAtmosphere.moments, welcome: false } },
-        }));
+        }), undefined, undefined, undefined, {});
         const choices = [
             ['atmosphereSource', 'picture'], ['atmospherePlanetPlacement', 'rise'], ['atmospherePlanetStyle', 'rich'],
             ['atmospherePlanetDigits', false], ['atmospherePictureRef', { kind: 'builtin', id: 'calm-sea' }],
@@ -211,9 +211,15 @@ describe('Home atmosphere settings declarations', () => {
             picture: { ref: { kind: 'builtin', id: 'calm-sea' }, layout: 'wallpaper' }, behindSessions: true,
             moments: { send: false, loading: true },
         });
+        expect(await owner.action({ actionId: 'settings.reset', input: {
+            anchor: 'appearance.atmospherePlanetDigits', expected: { value: false },
+        } })).toEqual({ anchor: 'appearance.atmospherePlanetDigits', value: true });
+        expect(await owner.action({ actionId: 'settings.reset', input: {
+            anchor: 'appearance.atmospherePlanetDigits', expected: { value: false },
+        } })).toMatchObject({ errorCode: 'account_settings_mutation_conflict' });
         expect(await owner.action({ actionId: 'settings.reset', input: { anchor: 'appearance.atmospherePlanetStyle' } }))
             .toEqual({ anchor: 'appearance.atmospherePlanetStyle', value: 'balanced' });
-        expect(owner.account().homeAtmosphere.planet).toEqual({ placement: 'rise', style: 'balanced', digits: false });
+        expect(owner.account().homeAtmosphere.planet).toEqual({ placement: 'rise', style: 'balanced', digits: true });
     });
 
     it('stores only per-picture differences and resets through the same canonical mutation', async () => {
@@ -422,6 +428,7 @@ function createOwner(host: { os: 'web' | 'ios'; desktop: boolean } = { os: 'web'
     lifetime?: Readonly<{ isCurrent(): boolean; onReadAccount?(): void }>,
     featureSnapshot?: ServerFeaturesSnapshot, atmosphereServices?: SettingsMutationServices) {
     let account = { ...initialAccount };
+    let rawAccount: Record<string, unknown> = { ...initialAccount };
     let local = { ...localSettingsDefaults };
     const openedInteractions: string[] = [];
     const readScmDiffSummaryCatalog: ReturnType<typeof createScmDiffSummarySettingsCatalogReader> = async (settings, storedValue) => {
@@ -451,13 +458,19 @@ function createOwner(host: { os: 'web' | 'ios'; desktop: boolean } = { os: 'web'
             isCurrent: captured.accountLifetime.isCurrent };
         } },
         readAccountSettings: async () => { lifetime?.onReadAccount?.(); return account; },
-        writeAccountSettings: async (delta) => { account = applySettings(account, delta); },
-        mutateAccountSettings: async (mutate) => { account = settingsParse(mutate(rebase ? rebase(account) : account)); },
+        writeAccountSettings: async (delta) => { rawAccount = { ...rawAccount, ...delta }; account = applySettings(account, delta); },
+        mutateAccountSettings: async (mutate, options) => {
+            const before = rawAccount;
+            rawAccount = mutate(rebase ? rebase(account) : account);
+            account = settingsParse(rawAccount);
+            if (options?.observeOutcome) return { status: 'applied' as const, settingsVersion: 2, value: undefined,
+                ...(options.capture ? { captured: options.capture({ before, applied: rawAccount, beforeVersion: 1 }) } : {}) };
+        },
         readLocalSettings: () => local,
         writeLocalSettings: (delta) => { local = applyLocalSettings(local, delta); },
         automationSettings,
     });
-    return { action, account: () => account, local: () => local, openedInteractions };
+    return { action, account: () => account, rawAccount: () => rawAccount, local: () => local, openedInteractions };
 }
 
 describe('Voice public privacy policy destination', () => {
@@ -661,6 +674,77 @@ describe('Instructions Agent edits policy declaration', () => {
         })).toMatchObject({ ok: true });
         expect(owner.account().actionsSettingsV1.approvalWaivedSurfaces?.['prompt_doc.update']).toEqual(['agent']);
         expect(requests.get('policy-approval')?.status).toBe('executed');
+    });
+});
+
+describe('exact Action audience policy', () => {
+    it('changes and resets one audience through the current Account writer without re-enabling a globally Off Action', async () => {
+        const policy = ActionsSettingsV1Schema.parse({ v: 1, actions: {
+            'prompt_doc.update': { enabled: false, disabledSurfaces: ['agent', 'cli'], approvalRequiredSurfaces: ['mcp'],
+                disabledPlacements: ['command_palette'], toolExposureModes: { agent: 'discoverable_only' } },
+            'future.action': { enabled: false, futurePreference: 'retained' },
+        } });
+        const owner = createOwner(undefined, true, true, { ...settingsDefaults, actionsSettingsV1: policy }, undefined, settings => ({ ...settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            ...settings.actionsSettingsV1, actions: { ...settings.actionsSettingsV1.actions,
+                'future.action': policy.actions['future.action'],
+                'prompt_doc.create': { disabledSurfaces: ['mcp'] } },
+        }) }));
+        const executor = throughActionExecutor(owner.action, () => owner.account().actionsSettingsV1);
+        const target = { actionId: 'prompt_doc.update', audience: 'agent' } as const;
+        const context = { surface: 'ui', authority: 'present_user' } as const;
+        for (const mode of ['allowed', 'ask_first', 'off', 'default'] as const) {
+            const result = await executor.execute('actions.policy.set', { ...target, mode }, context);
+            expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { ...target, mode, actionEnabled: false, enabled: false } });
+            expect(await executor.execute('actions.policy.get', target, context))
+                .toMatchObject({ ok: true, result: { ...target, mode, actionEnabled: false, enabled: false } });
+            const policy = ActionsSettingsV1Schema.parse(owner.rawAccount().actionsSettingsV1);
+            expect(policy.actions['prompt_doc.update']).toMatchObject({ enabled: false,
+                disabledPlacements: ['command_palette'], approvalRequiredSurfaces: mode === 'ask_first' ? ['mcp', 'agent'] : ['mcp'],
+                toolExposureModes: { agent: 'discoverable_only' } });
+            expect(policy.actions['prompt_doc.update'].disabledSurfaces).toEqual(mode === 'off' ? ['cli', 'agent'] : ['cli']);
+            expect(policy.actions['prompt_doc.create'].disabledSurfaces).toEqual(['mcp']);
+            expect(policy.actions['future.action']).toMatchObject({ enabled: false, futurePreference: 'retained' });
+        }
+        expect(owner.account().actionsSettingsV1.approvalWaivedSurfaces?.['prompt_doc.update']).toBeUndefined();
+        expect(await executor.execute('actions.policy.set', { ...target, mode: 'allowed', actionsSettingsV1: { v: 1, actions: {} } }, context))
+            .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+        expect(await executor.execute('actions.policy.set', { ...target, mode: 'allowed' }, context)).toMatchObject({ ok: true });
+        expect(await executor.execute('actions.policy.reset', target, context))
+            .toMatchObject({ ok: true, result: { ...target, mode: 'default', actionEnabled: false, enabled: false } });
+        expect(owner.account().actionsSettingsV1.approvalWaivedSurfaces?.['prompt_doc.update']).toBeUndefined();
+        expect(owner.account().actionsSettingsV1.actions['prompt_doc.update'].approvalRequiredSurfaces).toEqual(['mcp']);
+    });
+
+    it('keeps exact Agent/MCP policy requests inert until a human approves and refuses self-approval even with a waiver', async () => {
+        for (const surface of ['agent', 'mcp'] as const) {
+            const owner = createOwner(undefined, true);
+            const requests = new Map<string, ApprovalRequest>();
+            const executor = throughActionExecutor(owner.action, () => owner.account().actionsSettingsV1, {
+                approvalsCreate: async ({ request }) => { requests.set('audience-policy', request); return { artifactId: 'audience-policy' }; },
+                approvalsGet: async ({ artifactId }) => requests.get(artifactId) ?? null,
+                approvalsUpdate: async ({ artifactId, request }) => { requests.set(artifactId, request); return { ok: true }; },
+                isApprovalExecutionOriginCurrent: async () => true,
+            });
+            const input = { actionId: 'prompt_doc.update', audience: 'mcp', mode: 'allowed' } as const;
+            const context = { surface, serverId: 'home-a', defaultSessionId: 'worker', actionRequestId: `audience-${surface}` };
+            expect(await executor.execute('actions.policy.set', input, context)).toMatchObject({ ok: true });
+            expect(requests.get('audience-policy')).toMatchObject({ status: 'open', actionId: 'actions.policy.set', actionArgs: input });
+            expect(owner.account().actionsSettingsV1.approvalWaivedSurfaces?.['prompt_doc.update']).toBeUndefined();
+            expect(await executor.execute('approval.request.decide', { artifactId: 'audience-policy', decision: 'approve' }, context))
+                .toMatchObject({ ok: false });
+            expect(await executor.execute('approval.request.decide', { artifactId: 'audience-policy', decision: 'approve' }, {
+                surface: 'ui', authority: 'present_user', serverId: 'home-a',
+            })).toMatchObject({ ok: true });
+            expect(owner.account().actionsSettingsV1.approvalWaivedSurfaces?.['prompt_doc.update']).toEqual(['mcp']);
+            expect(requests.get('audience-policy')?.status).toBe('executed');
+            const waived = createOwner(undefined, true, true, settingsParse({ actionsSettingsV1: { v: 1,
+                approvalWaivedSurfaces: { 'actions.policy.set': [surface] },
+            } }));
+            expect(await throughActionExecutor(waived.action, () => waived.account().actionsSettingsV1)
+                .execute('actions.policy.set', input, { surface, actionsSettings: waived.account().actionsSettingsV1 }))
+                .toMatchObject({ ok: false, errorCode: 'present_user_required' });
+            expect(waived.account().actionsSettingsV1.approvalWaivedSurfaces?.['prompt_doc.update']).toBeUndefined();
+        }
     });
 });
 
@@ -1218,6 +1302,18 @@ describe('declared settings owner', () => {
         const preview = discovered.items.find(item => item.anchor.includes(providerId) && item.anchor.endsWith('.preview'));
         const stop = discovered.items.find(item => item.anchor.includes(providerId) && item.anchor.endsWith('.stopPreview'));
         if (!preview || !stop) throw new Error('Missing declared catalog operations');
+        const list = discovered.items.find(item => item.anchor.includes(providerId) && item.anchor.endsWith('.listCatalog'));
+        const retry = discovered.items.find(item => item.anchor.includes(providerId) && item.anchor.endsWith('.retryCatalog'));
+        expect(list, 'Agent catalog inspection must be declared').toBeDefined();
+        expect(retry, 'Agent catalog retry must be declared').toBeDefined();
+        for (const operation of [list!, retry!]) {
+            expect(operation.operation).toMatchObject({ requiresHumanInteraction: false, requiresApproval: false });
+            const result = await executor.execute('settings.invoke', { anchor: operation.anchor }, { surface: 'agent', authority: 'account_automation' });
+            expect(result).toEqual({ ok: true, result: { anchor: operation.anchor, status: 'completed', value: { rows: [
+                { id: 'voice_a', name: 'Voice A', previewAvailable: true },
+            ] } } });
+            expect(catalogAudio.play).not.toHaveBeenCalled();
+        }
         const ctx = { surface: 'ui' as const, authority: 'present_user' as const };
         expect(await executor.execute('settings.invoke', { anchor: preview.anchor, input: { kind: 'voice_preview', voiceId: 'voice_a' } }, ctx))
             .toEqual({ ok: true, result: { anchor: preview.anchor, status: 'completed', value: { voiceId: 'voice_a', started: true } } });
@@ -1234,6 +1330,35 @@ describe('declared settings owner', () => {
         const { readRealtimeCatalogPreview } = await import('@/voice/settings/panels/realtime/catalogPreview');
         expect(readRealtimeCatalogPreview()).toBeNull();
         expect(owner.openedInteractions).toEqual([]);
+    });
+    it('lists and retries a speech-engine voice catalog through its selected daemon without playback', async () => {
+        const before = storage.getState();
+        onTestFinished(() => { storage.setState(before, true); settingsMachineRpc.mockReset(); });
+        const providerId = 'happier.voice.google/google-cloud-tts';
+        const account = applySettings(settingsDefaults, normalizeVoiceSettingsLocalDelta({ voice: { ...settingsDefaults.voice,
+            providerId: 'local_conversation', executionMachine: { mode: 'fixed', machineId: 'voice-catalog-machine' },
+            providers: { local_conversation: { schemaVersion: 1, config: { tts: { provider: providerId } } } },
+        } }, settingsDefaults));
+        storage.setState({ settings: account, machines: { 'voice-catalog-machine': createMachineFixture({ id: 'voice-catalog-machine', activeAt: Date.now() }) } });
+        await installVoiceMachineFixture(storage.getState().machines);
+        // The machine fixture activates the profile lifetime; the Settings owner also
+        // requires the matching loaded Account settings scope, as the mounted app does.
+        storage.setState({ settings: account, settingsScope: storage.getState().profileScope });
+        const owner = createOwner(undefined, true, true, account);
+        const executor = throughActionExecutor(owner.action);
+        const discovered = await owner.action({ actionId: 'settings.list', input: { pageId: 'voiceConversations' } });
+        if (!('items' in discovered) || !discovered.items) throw new Error('Missing settings discovery');
+        const operations = ['listCatalog', 'retryCatalog'].map(operation => discovered.items!.find(item =>
+            item.anchor.includes(providerId) && item.anchor.endsWith(`.${operation}`)));
+        expect(operations.every(Boolean), 'Speech catalog operations must use the declared voices field').toBe(true);
+        settingsMachineRpc.mockResolvedValue({ ok: true, items: [{ id: 'en-US-Studio-O', name: 'Studio O' }] });
+        for (const operation of operations) {
+            const result = await executor.execute('settings.invoke', { anchor: operation!.anchor }, { surface: 'agent', authority: 'account_automation' });
+            expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'completed', value: {
+                rows: [{ id: 'en-US-Studio-O', name: 'Studio O' }],
+            } } });
+        }
+        expect(settingsMachineRpc.mock.calls.every(([request]) => request.method === 'daemon.voice.speech.catalog')).toBe(true);
     });
     it('executes model installation from the real Action front door through the selected daemon owner', async () => {
         const before = storage.getState();
@@ -1653,7 +1778,9 @@ describe('declared settings owner', () => {
         expect(rebased.account()['scm.diffSummary.prefetch']).toBe(false);
     });
     it('changes material presets, surface modes, shared blur/tint and toolbar visibility through existing settings Actions', async () => {
-        const owner = createOwner({ os: 'web', desktop: true });
+        const owner = createOwner({ os: 'web', desktop: true }, false, true, settingsParse({
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['agent'] } },
+        }));
         expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.glassPreset', value: 'everywhere' } }))
             .toEqual({ anchor: 'appearance.glassPreset', value: 'everywhere' });
         for (const group of ['Chrome', 'Sidebar', 'Window', 'Elements', 'Floating']) {
@@ -1668,8 +1795,16 @@ describe('declared settings owner', () => {
         await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.glassIntensity', value: 'light' } });
         expect(owner.account().glassSurfaceMaterials).toMatchObject({ chrome: { blur: 'light' },
             sidebar: { blur: 'light' }, content: { blur: 'light' }, card: { blur: 'strong' }, floating: { blur: 'strong' } });
-        expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.glassTint', value: 'strong' } }))
-            .toEqual({ anchor: 'appearance.glassTint', value: 'strong' });
+        const executor = throughActionExecutor(owner.action, () => owner.account().actionsSettingsV1);
+        const context = { surface: 'agent', authority: 'account_automation' } as const;
+        expect(await executor.execute('settings.set', { anchor: 'appearance.glassTint', value: 35 }, context))
+            .toEqual({ ok: true, result: { anchor: 'appearance.glassTint', value: 35 } });
+        expect(owner.account().glassTintIntensity).toBe(35);
+        for (const value of [-1, 101, 35.5, 'strong']) {
+            expect(await executor.execute('settings.set', { anchor: 'appearance.glassTint', value }, context))
+                .toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
+            expect(owner.account().glassTintIntensity).toBe(35);
+        }
         expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.glassPreset', value: 'custom' } }))
             .toMatchObject({ errorCode: 'invalid_setting_value' });
         await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.themeToggle', value: false } });

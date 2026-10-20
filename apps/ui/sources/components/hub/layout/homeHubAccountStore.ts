@@ -6,6 +6,8 @@ export type HomeHubReadState = Readonly<{
     status: 'loading' | 'ready' | 'error';
     hasSnapshot: boolean;
     isWriting: boolean;
+    /** Queue-owned outstanding intents, including the currently executing write. */
+    pendingIntents: readonly HomeHubLayoutIntent[];
     errorCode?: string;
     failedIntent?: HomeHubLayoutIntent;
 }>;
@@ -27,7 +29,7 @@ export function createHomeHubAccountStore(input: Readonly<{
     isCurrent(): boolean;
     execute(intent: HomeHubLayoutIntent): Promise<HomeHubLayoutValue>;
 }>) {
-    let state: HomeHubReadState = { layout: HOME_HUB_DEFAULT_LAYOUT, status: 'loading', hasSnapshot: false, isWriting: false };
+    let state: HomeHubReadState = { layout: HOME_HUB_DEFAULT_LAYOUT, status: 'loading', hasSnapshot: false, isWriting: false, pendingIntents: [] };
     let writes = 0;
     let refreshing: Promise<void> | null = null;
     let tail: Promise<void> = Promise.resolve();
@@ -47,14 +49,16 @@ export function createHomeHubAccountStore(input: Readonly<{
         const before = writes;
         refreshing = reader.read().then(layout => {
             if (before === writes) set({ layout, status: state.failedIntent ? 'error' : 'ready', hasSnapshot: true,
-                isWriting: state.isWriting,
+                isWriting: state.isWriting, pendingIntents: state.pendingIntents,
                 ...(state.failedIntent ? { failedIntent: state.failedIntent, errorCode: state.errorCode } : {}) });
         }, error => { if (before === writes) set({ ...state, status: 'error', errorCode: errorCode(error) }); })
             .finally(() => { refreshing = null; });
         return refreshing;
     };
     const dispatch = (intent: HomeHubLayoutIntent, options?: Readonly<{ rethrow?: boolean }>) => {
-        if (input.isCurrent()) set({ ...state, isWriting: true });
+        // Each invocation has its own queue entry even when two callers submit the same intent object.
+        const queuedIntent = { ...intent };
+        if (input.isCurrent()) set({ ...state, isWriting: true, pendingIntents: [...state.pendingIntents, queuedIntent] });
         const operation = tail.then(async () => {
             if (!input.isCurrent()) {
                 if (options?.rethrow) throw new HomeHubMutationErrorV1('home_hub_scope_retired');
@@ -62,17 +66,17 @@ export function createHomeHubAccountStore(input: Readonly<{
             }
             writes++;
             try {
-                const layout = await input.execute(intent);
-                set({ layout, status: 'ready', hasSnapshot: true, isWriting: state.isWriting });
+                const layout = await input.execute(queuedIntent);
+                set({ layout, status: 'ready', hasSnapshot: true, isWriting: state.isWriting, pendingIntents: state.pendingIntents });
             } catch (error) {
                 if (error instanceof HomeHubAcknowledgedProjectionReadError) {
                     // The invoker keeps its actual ACK. Recovery rereads the projection,
                     // never replays the mutation whose receipt was already validated.
                     set({ layout: state.layout, status: 'error', hasSnapshot: state.hasSnapshot,
-                        isWriting: state.isWriting, errorCode: errorCode(error) });
+                        isWriting: state.isWriting, pendingIntents: state.pendingIntents, errorCode: errorCode(error) });
                     return;
                 }
-                set({ ...state, status: 'error', failedIntent: intent, errorCode: errorCode(error) });
+                set({ ...state, status: 'error', failedIntent: queuedIntent, errorCode: errorCode(error) });
                 if (options?.rethrow) throw error;
             }
         });
@@ -80,8 +84,8 @@ export function createHomeHubAccountStore(input: Readonly<{
         const queuedCompletion = operation.catch(() => {});
         tail = queuedCompletion;
         void operation.finally(() => {
-            // A previous ACK cannot re-enable controls while a neighboring write still owns the tail.
-            if (tail === queuedCompletion) set({ ...state, isWriting: false });
+            const pendingIntents = state.pendingIntents.filter(entry => entry !== queuedIntent);
+            set({ ...state, pendingIntents, isWriting: pendingIntents.length > 0 });
         }).catch(() => {});
         return operation;
     };
@@ -92,7 +96,7 @@ export function createHomeHubAccountStore(input: Readonly<{
         retire() {
             // Retirement publishes no new Account content; it only ends this old queue's busy presentation.
             if (!state.isWriting) return;
-            state = { ...state, isWriting: false };
+            state = { ...state, isWriting: false, pendingIntents: [] };
             for (const listener of listeners) listener();
         },
         retry: (options?: Readonly<{ rethrow?: boolean }>) => state.failedIntent ? dispatch(state.failedIntent, options) : refresh(),
@@ -100,7 +104,7 @@ export function createHomeHubAccountStore(input: Readonly<{
             if (!state.failedIntent) return;
             // Discard only the rejected intent. The acknowledged layout and Artifact writer stay intact.
             set({ layout: state.layout, status: state.hasSnapshot ? 'ready' : 'loading', hasSnapshot: state.hasSnapshot,
-                isWriting: state.isWriting });
+                isWriting: state.isWriting, pendingIntents: state.pendingIntents });
         },
     };
 }

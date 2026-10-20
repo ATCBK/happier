@@ -11,7 +11,7 @@ import {
   createVoiceRecordSchema,
   withVoiceSchemaField,
 } from '@happier-dev/plugin-sdk/voice';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type {
   RealtimeVoiceProviderProtocol,
   VoiceRealtimeCanonicalEvent,
@@ -21,7 +21,7 @@ import type {
   VoiceTurnControlAction,
 } from '@happier-dev/plugin-sdk/voice/client';
 
-const OpenAiIdSchema = z.string().min(1);
+const OpenAiIdSchema = z.string().check(z.minLength(1));
 // Generated JSON Schema is metadata, not a live tool argument/result payload.
 const OpenAiToolParametersSchema = createVoiceRecordSchema(z.json());
 // Ingress contract: OpenAI server events are an upstream-owned, additively
@@ -49,7 +49,7 @@ const OpenAiSpeechStoppedEventSchema = z.object({
 const OpenAiOutputAudioBufferStartedEventSchema = z.object({
   type: z.literal('output_audio_buffer.started'),
   event_id: OpenAiIdSchema,
-  response_id: OpenAiIdSchema.optional(),
+  response_id: z.optional(OpenAiIdSchema),
 });
 const OpenAiOutputAudioBufferStoppedEventSchema = z.object({
   type: z.literal('output_audio_buffer.stopped'),
@@ -63,7 +63,7 @@ const OpenAiInputTranscriptionDeltaEventSchema = z.object({
   type: z.literal('conversation.item.input_audio_transcription.delta'),
   event_id: OpenAiIdSchema,
   item_id: OpenAiIdSchema,
-  delta: z.string().optional(),
+  delta: z.optional(z.string()),
 });
 const OpenAiInputTranscriptionCompletedEventSchema = z.object({
   type: z.literal('conversation.item.input_audio_transcription.completed'),
@@ -74,19 +74,19 @@ const OpenAiInputTranscriptionCompletedEventSchema = z.object({
 const OpenAiOutputTranscriptDeltaEventSchema = z.object({
   type: z.literal('response.output_audio_transcript.delta'),
   event_id: OpenAiIdSchema,
-  response_id: OpenAiIdSchema.optional(),
+  response_id: z.optional(OpenAiIdSchema),
   item_id: OpenAiIdSchema,
   delta: z.string(),
 });
 const OpenAiOutputTranscriptDoneEventSchema = z.object({
   type: z.literal('response.output_audio_transcript.done'),
   event_id: OpenAiIdSchema,
-  response_id: OpenAiIdSchema.optional(),
+  response_id: z.optional(OpenAiIdSchema),
   item_id: OpenAiIdSchema,
   transcript: z.string(),
 });
 const OpenAiProviderErrorSchema = z.object({
-  code: z.string().nullable().optional(),
+  code: z.optional(z.nullable(z.string())),
 });
 const OpenAiInputTranscriptionFailedEventSchema = z.object({
   type: z.literal('conversation.item.input_audio_transcription.failed'),
@@ -103,7 +103,7 @@ const OpenAiErrorEventSchema = z.object({
 const OpenAiResponseFunctionCallSchema = z.object({
   type: z.literal('function_call'),
   arguments: z.string(),
-  name: z.string().min(1),
+  name: z.string().check(z.minLength(1)),
   call_id: OpenAiIdSchema,
 });
 const OpenAiResponseBaseSchema = z.object({
@@ -113,9 +113,9 @@ const OpenAiResponseBaseSchema = z.object({
   // keeps this optional, so the parser still accepts missing status while the
   // effect path fails closed. Output lifecycle is carried independently by
   // output-audio-buffer events.
-  status: z.string().optional(),
-  status_details: z.object({ error: OpenAiProviderErrorSchema.optional() }).nullable().optional(),
-  output: z.unknown().optional(),
+  status: z.optional(z.string()),
+  status_details: z.optional(z.nullable(z.object({ error: z.optional(OpenAiProviderErrorSchema) }))),
+  output: z.optional(z.unknown()),
 });
 const OpenAiResponseSchema = withVoiceSchemaField(
   OpenAiResponseBaseSchema,
@@ -125,7 +125,7 @@ const OpenAiResponseSchema = withVoiceSchemaField(
 const OpenAiResponseDoneEventBaseSchema = z.object({
   type: z.literal('response.done'),
   event_id: OpenAiIdSchema,
-  response: z.unknown().nonoptional(),
+  response: z.nonoptional(z.unknown()),
 });
 const OpenAiResponseDoneEventSchema = withVoiceSchemaField(
   OpenAiResponseDoneEventBaseSchema,
@@ -198,84 +198,84 @@ function projectOpenAiProviderError(
   };
 }
 
-const OpenAiFunctionToolBaseSchema = z.object({
+const OpenAiFunctionToolBaseSchema = z.strictObject({
   type: z.literal('function'),
-  name: z.string().min(1),
-  description: z.string().min(1),
-  parameters: z.unknown().nonoptional(),
-}).strict();
+  name: z.string().check(z.minLength(1)),
+  description: z.string().check(z.minLength(1)),
+  parameters: z.nonoptional(z.unknown()),
+});
 const OpenAiFunctionToolSchema = withVoiceSchemaField(
   OpenAiFunctionToolBaseSchema,
   'parameters',
   OpenAiToolParametersSchema,
 );
-const OpenAiSessionBaseSchema = z.object({
+const OpenAiSessionBaseSchema = z.strictObject({
   type: z.literal('realtime'),
   tools: z.array(z.unknown()),
   tool_choice: z.literal('auto'),
-}).strict();
+});
 const OpenAiSessionSchema = withVoiceSchemaField(
   OpenAiSessionBaseSchema,
   'tools',
-  OpenAiFunctionToolSchema.array(),
+  z.array(OpenAiFunctionToolSchema),
 );
-const OpenAiSessionUpdateBaseSchema = z.object({
+const OpenAiSessionUpdateBaseSchema = z.strictObject({
   type: z.literal('session.update'),
-  event_id: OpenAiIdSchema.optional(),
-  session: z.unknown().nonoptional(),
-}).strict();
-const OpenAiFunctionCallOutputItemSchema = z.object({
+  event_id: z.optional(OpenAiIdSchema),
+  session: z.nonoptional(z.unknown()),
+});
+const OpenAiFunctionCallOutputItemSchema = z.strictObject({
   type: z.literal('function_call_output'),
   call_id: OpenAiIdSchema,
   output: z.string(),
-}).strict();
-const OpenAiInputTextContentSchema = z.object({
+});
+const OpenAiInputTextContentSchema = z.strictObject({
   type: z.literal('input_text'),
-  text: z.string().min(1),
-}).strict();
+  text: z.string().check(z.minLength(1)),
+});
 const OpenAiMessageItemSchema = z.discriminatedUnion('role', [
-  z.object({
+  z.strictObject({
     type: z.literal('message'),
     role: z.literal('system'),
-    content: z.array(OpenAiInputTextContentSchema).min(1),
-  }).strict(),
-  z.object({
+    content: z.array(OpenAiInputTextContentSchema).check(z.minLength(1)),
+  }),
+  z.strictObject({
     type: z.literal('message'),
     role: z.literal('user'),
-    content: z.array(OpenAiInputTextContentSchema).min(1),
-  }).strict(),
+    content: z.array(OpenAiInputTextContentSchema).check(z.minLength(1)),
+  }),
 ]);
-const OpenAiConversationItemCreateEventSchema = z.object({
+const OpenAiConversationItemCreateEventSchema = z.strictObject({
   type: z.literal('conversation.item.create'),
-  event_id: OpenAiIdSchema.optional(),
-  previous_item_id: OpenAiIdSchema.optional(),
+  event_id: z.optional(OpenAiIdSchema),
+  previous_item_id: z.optional(OpenAiIdSchema),
   item: z.union([
     OpenAiFunctionCallOutputItemSchema,
     OpenAiMessageItemSchema,
   ]),
-}).strict();
-const OpenAiResponseCancelEventSchema = z.object({
+});
+const OpenAiResponseCancelEventSchema = z.strictObject({
   type: z.literal('response.cancel'),
-  event_id: OpenAiIdSchema.optional(),
-  response_id: OpenAiIdSchema.optional(),
-}).strict();
-const OpenAiInputAudioBufferClearEventSchema = z.object({
+  event_id: z.optional(OpenAiIdSchema),
+  response_id: z.optional(OpenAiIdSchema),
+});
+const OpenAiInputAudioBufferClearEventSchema = z.strictObject({
   type: z.literal('input_audio_buffer.clear'),
-  event_id: OpenAiIdSchema.optional(),
-}).strict();
-const OpenAiInputAudioBufferCommitEventSchema = z.object({
+  event_id: z.optional(OpenAiIdSchema),
+});
+const OpenAiInputAudioBufferCommitEventSchema = z.strictObject({
   type: z.literal('input_audio_buffer.commit'),
-  event_id: OpenAiIdSchema.optional(),
-}).strict();
-const OpenAiOutputAudioBufferClearEventSchema = z.object({
+  event_id: z.optional(OpenAiIdSchema),
+});
+const OpenAiOutputAudioBufferClearEventSchema = z.strictObject({
   type: z.literal('output_audio_buffer.clear'),
-  event_id: OpenAiIdSchema.optional(),
-}).strict();
-const OpenAiResponseCreateEventBaseSchema = z.object({
+  event_id: z.optional(OpenAiIdSchema),
+});
+const OpenAiResponseCreateEventBaseSchema = z.strictObject({
   type: z.literal('response.create'),
-  event_id: OpenAiIdSchema.optional(),
-  response: z.unknown().optional(),
-}).strict();
+  event_id: z.optional(OpenAiIdSchema),
+  response: z.optional(z.unknown()),
+});
 const OpenAiClientEventBaseSchema = z.discriminatedUnion('type', [
   OpenAiSessionUpdateBaseSchema,
   OpenAiConversationItemCreateEventSchema,

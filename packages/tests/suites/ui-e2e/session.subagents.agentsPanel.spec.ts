@@ -4,12 +4,11 @@ import { join, resolve } from 'node:path';
 
 import { startServerLight, type StartedServer } from '../../src/testkit/process/serverLight';
 import { startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
-import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
+import { type StartedDaemon } from '../../src/testkit/daemon/daemon';
+import { authenticateAndStartDaemon } from '../../src/testkit/uiE2e/authenticateAndStartDaemon';
 import { createRunDirs } from '../../src/testkit/runDir';
-import { startCliAuthLoginForTerminalConnect, type StartedCliTerminalConnect } from '../../src/testkit/uiE2e/cliTerminalConnect';
-import { acknowledgeTerminalConnectSuccessIfPresent } from '../../src/testkit/uiE2e/acknowledgeTerminalConnectSuccessIfPresent';
 import { fakeClaudeFixturePath, waitForFakeClaudeInvocation } from '../../src/testkit/fakeClaude';
-import { createAccountAndReachConnectMachineState, gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
+import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { spawnSessionFromDaemon } from '../../src/testkit/uiE2e/spawnSessionFromDaemon';
 import { setUiFeatureToggle } from '../../src/testkit/uiE2e/setUiFeatureToggle';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
@@ -63,6 +62,8 @@ test.describe('ui e2e: session subagents agents panel', () => {
         EXPO_PUBLIC_HAPPY_SERVER_URL: server.baseUrl,
         EXPO_PUBLIC_HAPPY_STORAGE_SCOPE: `e2e-${run.runId}`,
         HAPPIER_E2E_UI_WEB_SCRIPT_FETCH_TIMEOUT_MS: process.env.HAPPIER_E2E_UI_WEB_SCRIPT_FETCH_TIMEOUT_MS ?? '420000',
+        // Observe actual browser chunk requests from the current source development server.
+        HAPPIER_E2E_UI_WEB_MODE: 'metro',
       },
     });
 
@@ -81,60 +82,30 @@ test.describe('ui e2e: session subagents agents panel', () => {
     if (!server || !uiBaseUrl) throw new Error('missing server/ui fixtures');
 
     const browserDiagnostics = collectBrowserDiagnostics({ page });
+    await page.clock.install();
+    const subagentDetailsRequests: string[] = [];
+    page.on('request', (request) => {
+      if (request.resourceType() === 'script' && new URL(request.url()).pathname.includes('SessionSubagentDetailsView')) {
+        subagentDetailsRequests.push(request.url());
+      }
+    });
 
     await page.setViewportSize({ width: 1440, height: 900 });
-    await gotoDomContentLoadedWithRetries(page, uiBaseUrl, 420_000);
-    await waitForInitialAppUi({ page, browserDiagnostics });
-
-    const createAccountByTestId = page.getByTestId('welcome-create-account');
-    const createAccountByRole = page.getByRole('button', { name: 'Create account' });
-    const createAccount =
-      (await createAccountByTestId.count()) ? createAccountByTestId
-        : (await createAccountByRole.count()) ? createAccountByRole
-          : null;
-    if (createAccount) {
-      await createAccountAndReachConnectMachineState({ page });
-    }
-
     const testDir = resolve(join(suiteDir, 't1-agents-panel'));
     await mkdir(testDir, { recursive: true });
 
-    const cliLogin: StartedCliTerminalConnect = await startCliAuthLoginForTerminalConnect({
-      testDir,
-      cliHomeDir,
-      serverUrl: server.baseUrl,
-      webappUrl: uiBaseUrl,
-      env: {
-        ...process.env,
-        HOME: cliHomeDir,
-        CI: '1',
-        HAPPIER_DISABLE_CAFFEINATE: '1',
-        HAPPIER_VARIANT: 'dev',
-      },
-    });
-
-    await page.goto(cliLogin.connectUrl, { waitUntil: 'domcontentloaded' });
-    await expect(page.getByTestId('terminal-connect-approve')).toHaveCount(1, { timeout: 60_000 });
-    await page.getByTestId('terminal-connect-approve').click();
-    await cliLogin.waitForSuccess();
-    await acknowledgeTerminalConnectSuccessIfPresent(page);
-    await cliLogin.stop().catch(() => {});
-    await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/`, 180_000);
-    await waitForInitialAppUi({ page, browserDiagnostics });
-    await setUiFeatureToggle({
-      page,
-      baseUrl: uiBaseUrl,
-      featureId: 'execution.runs',
-      enabled: true,
-    });
-    await waitForInitialAppUi({ page, browserDiagnostics });
-
     const fakeClaudePath = fakeClaudeFixturePath();
     const fakeClaudeLog = resolve(join(testDir, 'fake-claude.jsonl'));
-    daemon = await startTestDaemon({
+    daemon = await authenticateAndStartDaemon({
+      page,
+      cliHomeDir,
+      serverUrl: server.baseUrl,
+      uiBaseUrl,
+      initialUiGotoTimeoutMs: 420_000,
+      initialUiReadyTimeoutMs: 420_000,
+      daemonStartupTimeoutMs: 180_000,
       testDir,
-      happyHomeDir: cliHomeDir,
-      env: {
+      extraEnv: {
         ...process.env,
         HOME: cliHomeDir,
         CI: '1',
@@ -151,6 +122,18 @@ test.describe('ui e2e: session subagents agents panel', () => {
       },
     });
 
+    await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/`, 180_000);
+    await waitForInitialAppUi({ page, browserDiagnostics });
+    await setUiFeatureToggle({
+      page,
+      baseUrl: uiBaseUrl,
+      featureId: 'execution.runs',
+      enabled: true,
+      // This fresh fixture context owns its bootstrap and authenticated scopes.
+      applyToAllScopes: true,
+    });
+    await waitForInitialAppUi({ page, browserDiagnostics });
+
     const sessionWorkspaceDir = resolve(join(testDir, 'session-workspace'));
     await mkdir(sessionWorkspaceDir, { recursive: true });
     const sessionId = await spawnSessionFromDaemon({
@@ -161,6 +144,10 @@ test.describe('ui e2e: session subagents agents panel', () => {
 
     await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/session/${sessionId}`, 120_000);
     await expect(page.getByTestId('session-composer-input')).toHaveCount(1, { timeout: 180_000 });
+
+    // Cover the observed 3-second speculative-load window through the browser clock.
+    await page.clock.runFor(3_001);
+    expect(subagentDetailsRequests, 'closed details must not request their chunk').toEqual([]);
 
     const rightSidebarToggle = page.getByTestId('session-header-right-sidebar-button');
     await expect(rightSidebarToggle).toHaveCount(1, { timeout: 60_000 });
@@ -186,6 +173,12 @@ test.describe('ui e2e: session subagents agents panel', () => {
 
     const executionRunRows = page.locator('[data-testid^="session-subagent-row:execution_run:"]');
 
-    await expect(executionRunRows.first()).toBeVisible({ timeout: 180_000 });
+    const executionRunRow = executionRunRows.first();
+    await expect(executionRunRow).toBeVisible({ timeout: 180_000 });
+    expect(subagentDetailsRequests).toEqual([]);
+    await executionRunRow.click();
+    await expect(page.getByTestId('session-subagent-overview')).toBeVisible({ timeout: 180_000 });
+    await expect(page.getByTestId('session-subagent-details-loading')).toHaveCount(0);
+    expect(subagentDetailsRequests.length, 'opening details must request the actual demand-loaded chunk').toBeGreaterThan(0);
   });
 });

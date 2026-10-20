@@ -25,6 +25,7 @@ export type BrowserDiagnosticsActionInputById = {
         viewId: string;
     };
     readonly "browser.diagnostics.eval": {
+        browserSessionId: string;
         v: 1;
         evalRequestId: string;
         viewId: string;
@@ -36,6 +37,7 @@ export type BrowserDiagnosticsActionInputById = {
         timeoutMs?: number | undefined;
     };
     readonly "browser.diagnostics.getProperties": {
+        browserSessionId: string;
         v: 1;
         propertyRequestId: string;
         viewId: string;
@@ -46,6 +48,7 @@ export type BrowserDiagnosticsActionInputById = {
         diagnosticsInteractionEnabled: true;
     };
     readonly "browser.diagnostics.releaseObjectGroup": {
+        browserSessionId: string;
         v: 1;
         releaseRequestId: string;
         viewId: string;
@@ -55,21 +58,23 @@ export type BrowserDiagnosticsActionInputById = {
         diagnosticsInteractionEnabled: true;
     };
     readonly "browser.diagnostics.elementPicker.start": {
+        browserSessionId: string;
+        action: 'start';
         v: 1;
         pickerRequestId: string;
         viewId: string;
         navigationGeneration: number;
         tier: 'cdp' | 'injectedPage';
-        action: 'start' | 'cancel';
         diagnosticsInteractionEnabled: true;
     };
     readonly "browser.diagnostics.elementPicker.cancel": {
+        browserSessionId: string;
+        action: 'cancel';
         v: 1;
         pickerRequestId: string;
         viewId: string;
         navigationGeneration: number;
         tier: 'cdp' | 'injectedPage';
-        action: 'start' | 'cancel';
         diagnosticsInteractionEnabled: true;
     };
 };

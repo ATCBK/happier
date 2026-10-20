@@ -7,12 +7,12 @@ import {
   type VoiceAccountOperationService,
 } from '@happier-dev/plugin-sdk/voice';
 import type { VoiceProviderCatalogItem } from '@happier-dev/plugin-sdk/voice/speech';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 const DEFAULT_API_BASE_URL = 'https://api.x.ai/v1';
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MIN_CLIENT_AUTH_FRESHNESS_MS = 1_000;
-const AudienceSchema = z.object({ platform: z.enum(['web', 'native']) }).strict();
+const AudienceSchema = z.strictObject({ platform: z.enum(['web', 'native']) });
 
 function providerError(
   code: 'invalid_parameters' | 'credential_unavailable' | 'provider_response_invalid',

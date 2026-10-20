@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createSensitiveDiagnosticTextRedactor } from '@happier-dev/protocol/bugs/reports/redaction';
 import { logger } from '@/ui/logger';
+import { observeCurrentConnectedServiceMaterializationPhase as observeMaterializationPhase } from '@/daemon/connectedServices/materialize/materializationPhase';
 import { ConnectedServiceQuotaRecoveryCreditsV1Schema, ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
 import type { ConnectedServiceQuotaRecoveryCreditsV1, ConnectedServiceQuotaRecoveryCreditDetailsByIdV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 
@@ -17,9 +18,6 @@ import {
 
 import type { PluginNetworkAddressResolver } from '@/plugins/runtime/fetch/originLocality';
 import { createPluginInvocationPresentation } from '@/plugins/runtime/invocation/services/interactions';
-import {
-    withPluginInvocationServiceBindingAvailability,
-} from '@/plugins/runtime/invocation/services/unavailable';
 import type {
     PluginInvocationServicesSeed,
     PluginInvocationServiceBinding,
@@ -78,8 +76,14 @@ type AuthenticationInvocationContext =
     | (InvocationContext<HostConnectedAccountAuthenticationContext, ConnectedAccountHostRuntimeLease> & { owner: 'host' })
     | (InvocationContext<PluginConnectedAccountAuthenticationContext, ConnectedAccountPluginRuntimeLease> & { owner: 'plugin' });
 type EstablishedInvocationContext =
-    | (InvocationContext<HostConnectedAccountReadContext, ConnectedAccountHostRuntimeLease> & { owner: 'host' })
-    | (InvocationContext<PluginConnectedAccountReadContext, ConnectedAccountPluginRuntimeLease> & { owner: 'plugin' });
+    | (InvocationContext<HostConnectedAccountReadContext, ConnectedAccountHostRuntimeLease> & {
+        owner: 'host';
+        assertFieldReadCurrent(): Promise<void>;
+    })
+    | (InvocationContext<PluginConnectedAccountReadContext, ConnectedAccountPluginRuntimeLease> & {
+        owner: 'plugin';
+        assertFieldReadCurrent(): Promise<void>;
+    });
 
 /**
  * The typed invocation boundary, rather than a recursive runtime wrapper,
@@ -92,11 +96,11 @@ async function invokeCurrentConnectedAccountCallback<TResult>(
     assertCurrent: (phase: ConnectedAccountCallbackCurrentnessPhase) => Promise<void>,
     callback: () => MaybePromise<TResult>,
 ): Promise<TResult> {
-    await assertCurrent('beforeCallback');
+    await observeMaterializationPhase('runtime_callback_before', () => assertCurrent('beforeCallback'));
     try {
-        return await callback();
+        return await observeMaterializationPhase('runtime_callback', callback);
     } finally {
-        await assertCurrent('afterCallback');
+        await observeMaterializationPhase('runtime_callback_after', () => assertCurrent('afterCallback'));
     }
 }
 
@@ -158,6 +162,48 @@ export type ConnectedAccountRuntimeEstablishedInvocation<
     isCredentialRevisionCurrent(): MaybePromise<boolean>;
     signal?: AbortSignal;
 }>;
+
+async function assertEstablishedAuthorityCurrent(
+    input: ConnectedAccountRuntimeEstablishedInvocation,
+    lease: ConnectedAccountRuntimeLease,
+    signal: AbortSignal,
+): Promise<void> {
+    signal.throwIfAborted();
+    if (!lease.isCurrent()) throw staleConnectedAccountProducerResult(input.operation.kind);
+    // Both observations are independent read-only authorities. Preserve each
+    // fence without adding their network latency to the same credential read.
+    const [configurationCurrent, credentialCurrent] = await Promise.all([
+        observeMaterializationPhase('runtime_configuration_currentness', () => input.isConfigurationCurrent(input.context.configuration)),
+        observeMaterializationPhase('runtime_credential_currentness', () => input.isCredentialRevisionCurrent()),
+    ]);
+    signal.throwIfAborted();
+    if (!lease.isCurrent() || !configurationCurrent || !credentialCurrent) {
+        throw staleConnectedAccountProducerResult(input.operation.kind);
+    }
+}
+
+async function assertEstablishedFieldReadCurrent(
+    input: ConnectedAccountRuntimeEstablishedInvocation,
+    lease: ConnectedAccountRuntimeLease,
+    signal: AbortSignal,
+    assertCurrent: () => Promise<void>,
+): Promise<void> {
+    if (
+        input.operation.kind !== 'materialize'
+        && input.operation.kind !== 'refresh'
+        && input.operation.kind !== 'status'
+    ) {
+        return await assertCurrent();
+    }
+    // Materialization, status and refresh consume the invocation's immutable
+    // credential snapshot; refresh writes only to a staged local store. Callback
+    // admission and settlement own remote revision checks, while each field still
+    // obeys cancellation, occurrence retirement and observed config revocation.
+    signal.throwIfAborted();
+    if (!lease.isCurrent() || input.configurationRevocationSignal?.(input.context.configuration)?.aborted) {
+        throw staleConnectedAccountProducerResult(input.operation.kind);
+    }
+}
 
 export type ConnectedAccountRuntimeEstablishedResult<
     TOperation extends ConnectedAccountRuntimeEstablishedOperation,
@@ -234,15 +280,6 @@ function resolveHostAccessEntries(
         ...entry,
         status: policy.hostAccess[index]!.status,
     })));
-}
-
-function removeUnqualifiedProducerNetworkAuthority(
-    binding: PluginInvocationServiceBinding,
-): PluginInvocationServiceBinding {
-    return withPluginInvocationServiceBindingAvailability(
-        binding,
-        { serviceId: 'http', availability: 'unavailable' },
-    );
 }
 
 function authenticationUnavailable(code: string): Readonly<{
@@ -393,9 +430,9 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
                 lease.ref,
                 plugin.hostAccessRequests,
             );
-            let serviceBinding = hasQualifiedProducerNetworkAuthority
-                ? policy.serviceBinding
-                : removeUnqualifiedProducerNetworkAuthority(policy.serviceBinding);
+            // Literal origins already belong to the canonical HostAccess binding.
+            // Only configured origins need additional account-scoped resolution.
+            let serviceBinding = policy.serviceBinding;
             if (hasQualifiedProducerNetworkAuthority) {
                 const configurationRevocationSignal = input.configurationRevocationSignal?.(
                     input.context.configuration,
@@ -514,32 +551,31 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
             throw new Error('Connected-account established context does not match its exact service target');
         }
 
-        const lease = await params.resolveRuntime(input.target.account.service);
+        const lease = await observeMaterializationPhase('runtime_registry', () => params.resolveRuntime(input.target.account.service));
         if (lease?.owner === 'host') {
             if (!sameService(lease.ref, input.target.account.service)) throw new Error('Connected-account established runtime is unavailable');
             const lifetime = createPluginInvocationLifetime(input.signal);
             const redaction = hostRedaction(lifetime);
-            const assertCurrent = async () => {
-                if (lifetime.signal.aborted) throw lifetime.signal.reason ?? new Error('Connected-account operation was aborted');
-                if (!lease.isCurrent() || !await input.isConfigurationCurrent(input.context.configuration) || !await input.isCredentialRevisionCurrent()) {
-                    throw staleConnectedAccountProducerResult(input.operation.kind);
-                }
-            };
+            const assertCurrent = () => assertEstablishedAuthorityCurrent(input, lease, lifetime.signal);
+            const assertFieldReadCurrent = () => assertEstablishedFieldReadCurrent(input, lease, lifetime.signal, assertCurrent);
             try {
                 await assertCurrent();
                 const context: HostConnectedAccountReadContext = Object.freeze({
                     ...input.context,
                     signal: lifetime.signal, invokedAtMs: lifetime.invokedAtMs,
-                    configuration: guardConfiguration(input.context.configuration, assertCurrent, redaction.registerRawForRedaction),
+                    configuration: guardConfiguration(input.context.configuration, assertFieldReadCurrent, redaction.registerRawForRedaction),
                     credentials: Object.freeze({ async get(key: string, options?: Readonly<{ signal?: AbortSignal }>) {
-                        await assertCurrent();
+                        await assertFieldReadCurrent();
                         const value = await input.context.credentials.get(key, options);
-                        await assertCurrent();
+                        await assertFieldReadCurrent();
                         if (value !== null) redaction.registerRawForRedaction(value);
                         return value;
                     } }),
                 });
-                return Object.freeze({ owner: 'host', lease, context, ...redaction, assertCurrent, lifetime });
+                return Object.freeze({
+                    owner: 'host', lease, context, ...redaction,
+                    assertCurrent, assertFieldReadCurrent, lifetime,
+                });
             } catch (error) {
                 await lifetime.complete();
                 throw error;
@@ -568,22 +604,8 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
         });
         const assertCurrent = async (
             _phase: ConnectedAccountCallbackCurrentnessPhase = 'afterCallback',
-        ): Promise<void> => {
-            if (signal.aborted) {
-                throw signal.reason instanceof Error
-                    ? signal.reason
-                    : new Error('Connected-account established operation was aborted');
-            }
-            if (
-                !lease.isCurrent()
-                || !await input.isConfigurationCurrent(input.context.configuration)
-                || !await input.isCredentialRevisionCurrent()
-            ) {
-                throw staleConnectedAccountProducerResult(
-                    input.operation.kind,
-                );
-            }
-        };
+        ): Promise<void> => await assertEstablishedAuthorityCurrent(input, lease, signal);
+        const assertFieldReadCurrent = () => assertEstablishedFieldReadCurrent(input, lease, signal, assertCurrent);
         try {
             await assertCurrent();
             const policy = params.resolveHostPolicy({
@@ -600,9 +622,7 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
                 lease.ref,
                 plugin.hostAccessRequests,
             );
-            let serviceBinding = hasQualifiedProducerNetworkAuthority
-                ? policy.serviceBinding
-                : removeUnqualifiedProducerNetworkAuthority(policy.serviceBinding);
+            let serviceBinding = policy.serviceBinding;
             if (hasQualifiedProducerNetworkAuthority) {
                 const configurationRevocationSignal = input.configurationRevocationSignal?.(
                     input.context.configuration,
@@ -634,9 +654,9 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
             const services = params.createServices(seed, serviceBinding);
             const credentials: ConnectedAccountCredentialReader = Object.freeze({
                 async get(key: string, options?: Readonly<{ signal?: AbortSignal }>) {
-                    await assertCurrent();
+                    await assertFieldReadCurrent();
                     const value = await input.context.credentials.get(key, options);
-                    await assertCurrent();
+                    await assertFieldReadCurrent();
                     if (value !== null) params.registerRawForRedaction(seed, value);
                     return value;
                 },
@@ -644,9 +664,9 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
             const configuration: PluginConnectedAccountRuntimeConfiguration = Object.freeze({
                 ...input.context.configuration,
                 async getSecret(fieldId, options) {
-                    await assertCurrent();
+                    await assertFieldReadCurrent();
                     const value = await input.context.configuration.getSecret(fieldId, options);
-                    await assertCurrent();
+                    await assertFieldReadCurrent();
                     if (value !== null) params.registerRawForRedaction(seed, value);
                     return value;
                 },
@@ -667,7 +687,8 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
                 configuration,
                 credentials,
             });
-            return Object.freeze({ owner: 'plugin', lease, context, assertCurrent, lifetime,
+            return Object.freeze({
+                owner: 'plugin', lease, context, assertCurrent, assertFieldReadCurrent, lifetime,
                 registerRawForRedaction: (value: string) => params.registerRawForRedaction(seed, value),
                 ...(params.redactDiagnosticText ? { redactDiagnosticText: (value: string) => params.redactDiagnosticText!(seed, value) } : {}),
             });
@@ -818,6 +839,7 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
         input: ConnectedAccountRuntimeEstablishedInvocation,
         registerRawForRedaction: (value: string) => void,
         assertCurrent: () => Promise<void>,
+        assertFieldReadCurrent: () => Promise<void>,
     ) {
         const options = input.signal ? { signal: input.signal } : undefined;
         const operation = input.operation;
@@ -856,7 +878,7 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
                         }),
                         stagedCredentials: guardStagedCredentials(
                             operation.stagedCredentials,
-                            assertCurrent,
+                            assertFieldReadCurrent,
                             (value) => registerRawForRedaction(value),
                         ),
                     }), options),
@@ -976,10 +998,12 @@ export function createConnectedAccountHostRuntimeInvoker(params: Readonly<{
                     ? await invokeEstablishedRuntime(
                         invocation.lease.runtime, invocation.lease.descriptor, invocation.context,
                         input, invocation.registerRawForRedaction, invocation.assertCurrent,
+                        invocation.assertFieldReadCurrent,
                     )
                     : await invokeEstablishedRuntime(
                         invocation.lease.runtime, invocation.lease.descriptor, invocation.context,
                         input, invocation.registerRawForRedaction, invocation.assertCurrent,
+                        invocation.assertFieldReadCurrent,
                     );
                 const snapshot = snapshotConnectedAccountEstablishedResult(input.operation, result, {
                     quotaLeafUnavailable,

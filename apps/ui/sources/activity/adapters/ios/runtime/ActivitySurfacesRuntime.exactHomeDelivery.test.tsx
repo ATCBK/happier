@@ -3,22 +3,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { settingsParse } from '@/sync/domains/settings/settings';
 
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionFixture, createSessionOwnerViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { storage } from '@/sync/domains/state/storage';
+import { createHomeGovernanceHarness, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { setActiveServerId } from '@/sync/domains/server/serverProfiles';
 import { localSettingsParse } from '@/sync/domains/settings/localSettings';
 import type { StorageState } from '@/sync/store/types';
-import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
-import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { ActivitySurfaceSnapshot } from '@/activity/presentation/activitySurfaceSnapshot';
 
 import type { LiveActivitySnapshot } from '../liveActivities/buildLiveActivitySnapshots';
+import { ActivityPersonalSessionMembershipProvider } from '@/activity/source/activityPersonalSessionMembership';
+import { useActivityAttentionSource } from '@/activity/source/useActivityAttentionSource';
 
 vi.hoisted(async () => {
     const { mkdirSync, realpathSync } = await import('node:fs');
@@ -124,8 +126,23 @@ vi.mock('expo-constants', () => ({
 }));
 
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
-vi.mock('expo-widgets', () => ({ addUserInteractionListener: () => ({ remove: vi.fn() }) }));
+vi.mock('expo-widgets', async (importOriginal) => {
+    const { createExpoWidgetsModuleMock } = await import('@/dev/testkit/mocks/expoWidgets');
+    return createExpoWidgetsModuleMock({
+        importOriginal,
+        addUserInteractionListener: () => ({ remove: vi.fn() }),
+        widgets: {
+            HappierFocusWidget: { updateSnapshot: focusWidgetUpdateSnapshot },
+            HappierSessionsWidget: { updateSnapshot: sessionsWidgetUpdateSnapshot },
+        },
+        liveActivities: {
+            HappierFocusLiveActivity: { start: liveActivityStart, getInstances: liveActivityGetInstances },
+        },
+    });
+});
 
 vi.mock('expo-modules-core', () => ({
     requireNativeModule: () => ({}),
@@ -159,27 +176,22 @@ function seedActivityState(activeServerId = HOME_A): void {
     });
 }
 
-vi.mock('./iosActivityWidgetModules', () => ({
-    HappierFocusWidget: { updateSnapshot: focusWidgetUpdateSnapshot },
-    HappierSessionsWidget: { updateSnapshot: sessionsWidgetUpdateSnapshot },
-    HappierFocusLiveActivity: { start: liveActivityStart, getInstances: liveActivityGetInstances },
-}));
-
 function createAttentionSession(serverId: string, sessionId: string, title: string): Session {
-    return createSessionFixture({
+    const observedAt = Date.now();
+    const session = createSessionFixture({
         id: sessionId,
         serverId,
         active: true,
-        updatedAt: 2_000,
+        updatedAt: observedAt,
         seq: 4,
         pendingVersion: 1,
         pendingPermissionRequestCount: 1,
-        pendingRequestObservedAt: 1_900,
+        pendingRequestObservedAt: observedAt,
         agentStateVersion: 1,
         agentState: {
             controlledByUser: null,
             requests: {
-                'permission-1': { tool: 'Bash', kind: 'permission', arguments: {}, createdAt: 1_900 },
+                'permission-1': { tool: 'Bash', kind: 'permission', arguments: {}, createdAt: observedAt },
             },
         },
         metadata: {
@@ -190,6 +202,7 @@ function createAttentionSession(serverId: string, sessionId: string, title: stri
             machineId: 'machine-1',
         },
     } as Partial<Session>);
+    return { ...session, viewer: createSessionOwnerViewerFixture(session) };
 }
 
 async function persistHomeAccountSettings(
@@ -229,29 +242,52 @@ async function flushActivitySurfacesRuntime(): Promise<void> {
 
 async function renderActivitySurfacesRuntime() {
     const { ActivitySurfacesRuntime } = await import('./ActivitySurfacesRuntime');
-    const rendered = await renderScreen(<ActivitySurfacesRuntime />);
+    let deliveryInputsReady = false;
+    function ObserveDeliveryInputs() {
+        const source = useActivityAttentionSource();
+        deliveryInputsReady = sessionRowsState.value.every(({ serverId }) =>
+            source.accountDeliveryMutesByServerId?.[serverId] != null && source.audienceScopes?.has(serverId));
+        return <ActivitySurfacesRuntime />;
+    }
+    const rendered = await renderScreen(<ActivityPersonalSessionMembershipProvider enabled={false}>
+        <ObserveDeliveryInputs />
+    </ActivityPersonalSessionMembershipProvider>);
+    await waitForHomeGovernance(() => expect(deliveryInputsReady).toBe(true));
     await flushActivitySurfacesRuntime();
     return rendered;
 }
 
+// Preserve the real widget module while keeping its cold layout compilation
+// outside the per-case reconciliation observation window.
+await import('./iosActivityWidgetModules');
+const homes = createHomeGovernanceHarness();
+await loadSyncSingletonForTests();
+
 describe('ActivitySurfacesRuntime exact-Home Account delivery', () => {
     beforeEach(async () => {
+        await homes.reset();
         resetServerFeaturesClientForTests();
-        setRuntimeFetch(async (input) => {
-            const path = new URL(String(input)).pathname;
-            if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
-            if (path === '/v1/auth/ping') return Response.json({});
-            throw new Error(`Unexpected Activity Home request: ${path}`);
-        });
         for (const serverId of [HOME_A, HOME_B, HOME_UNRESOLVED]) {
-            await upsertServerProfile({ serverUrl: `https://${serverId}`, name: serverId });
+            await homes.addHome({ serverUrl: `https://${serverId}`, name: serverId,
+                accountId: `account-${serverId}`, currentAccount: true, active: serverId === HOME_A });
+            homes.answer(serverId, '/v2/account/session-delivery-mutes', { body: { scopes: [] } });
         }
         await setActiveServerId(HOME_A);
-        // Secure credential storage is the external boundary. Account decoding,
-        // exact-Home binding, persistence and delivery admission remain real.
-        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async (url) => ({
-            token: createAccountTokenForTests(`account-${new URL(url).hostname}`),
-        }));
+        installSessionActionRpcBoundary(() => ({ ok: true }));
+        const credentials = await TokenStorage.getCredentialsForServerUrl(`https://${HOME_A}`, { serverId: HOME_A });
+        if (!credentials) throw new Error('Expected stored Activity Home credentials');
+        const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
+        storage.setState({ isDataReady: false });
+        await restoreConnectionToActiveServer(credentials);
+        storage.getState().activateProfileScope({ serverId: HOME_A, accountId: `account-${HOME_A}` });
+        await waitForHomeGovernance(() => expect(storage.getState().isDataReady).toBe(true));
+        await homes.selectHomes([HOME_A, HOME_B, HOME_UNRESOLVED]);
+        const { startConcurrentSessionCacheSync, isConcurrentOrdinarySessionListHome } = await import('@/sync/runtime/orchestration/concurrentSessionCache');
+        startConcurrentSessionCacheSync();
+        await waitForHomeGovernance(() => {
+            expect(isConcurrentOrdinarySessionListHome(HOME_B)).toBe(true);
+            expect(isConcurrentOrdinarySessionListHome(HOME_UNRESOLVED)).toBe(true);
+        });
         sessionRowsState.value = [
             { serverId: HOME_A, session: createAttentionSession(HOME_A, SHARED_SESSION_ID, 'Home A work') },
             { serverId: HOME_B, session: createAttentionSession(HOME_B, SHARED_SESSION_ID, 'Home B work') },
@@ -262,8 +298,13 @@ describe('ActivitySurfacesRuntime exact-Home Account delivery', () => {
         seedActivityState();
     });
 
-    afterEach(() => {
+    afterEach(async () => {
         standardCleanup();
+        const { stopConcurrentSessionCacheSync } = await import('@/sync/runtime/orchestration/concurrentSessionCache');
+        stopConcurrentSessionCacheSync();
+        const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+        await disconnectActiveServerConnection();
+        await homes.reset();
         vi.restoreAllMocks();
         focusWidgetUpdateSnapshot.mockClear();
         sessionsWidgetUpdateSnapshot.mockClear();
@@ -317,6 +358,7 @@ describe('ActivitySurfacesRuntime exact-Home Account delivery', () => {
 
         await renderActivitySurfacesRuntime();
         const beforeSwitch = liveActivityStartAddresses();
+        const widgetsBeforeSwitch = widgetAddresses();
 
         standardCleanup();
         liveActivityStart.mockClear();
@@ -324,12 +366,22 @@ describe('ActivitySurfacesRuntime exact-Home Account delivery', () => {
         liveActivityInstances.length = 0;
         focusWidgetUpdateSnapshot.mockClear();
         await setActiveServerId(HOME_B);
+        const { switchConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
+        await switchConnectionToActiveServer();
+        storage.getState().activateProfileScope({ serverId: HOME_B, accountId: `account-${HOME_B}` });
+        await waitForHomeGovernance(() => expect(storage.getState().isDataReady).toBe(true));
+        const { isConcurrentOrdinarySessionListHome } = await import('@/sync/runtime/orchestration/concurrentSessionCache');
+        await waitForHomeGovernance(() => {
+            expect(isConcurrentOrdinarySessionListHome(HOME_A)).toBe(true);
+            expect(isConcurrentOrdinarySessionListHome(HOME_UNRESOLVED)).toBe(true);
+        });
         seedActivityState(HOME_B);
         await renderActivitySurfacesRuntime();
 
         expect(beforeSwitch).toEqual([`${HOME_B}/${SHARED_SESSION_ID}`]);
         expect(liveActivityStartAddresses()).toEqual([`${HOME_B}/${SHARED_SESSION_ID}`]);
-        expect(widgetAddresses()).toEqual([`${HOME_B}/${SHARED_SESSION_ID}`]);
+        expect(widgetsBeforeSwitch).toEqual([`${HOME_A}/${SHARED_SESSION_ID}`, `${HOME_B}/${SHARED_SESSION_ID}`]);
+        expect(widgetAddresses()).toEqual(widgetsBeforeSwitch);
     });
 
     it('reconciles immediately when the other Home rewrites its persisted Account policy', async () => {

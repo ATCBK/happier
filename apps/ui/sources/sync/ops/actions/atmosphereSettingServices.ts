@@ -2,17 +2,19 @@ import type { SettingsMutationServices } from '@/components/settings/catalog/set
 import { createUiProjectAccountRowsClient } from '@/sync/api/projects/projectAccountRowsClient';
 import { callGuardedMachineRpcWithPolicy } from '@/sync/runtime/orchestration/serverScopedRpc/guardedMachineRpc';
 import { throwIfAborted } from '@/utils/runtime/abortSignals';
+import { withActionAccountRequestSignal, type LazyActionAccountContext } from './actionAccountContext';
 
 /** Settings adapters retain the invocation's exact Account; filesystem admission remains daemon-owned. */
-export function createAtmosphereSettingServices(account: Parameters<typeof createUiProjectAccountRowsClient>[0]): Pick<SettingsMutationServices, 'projectAccountRows' | 'readAtmospherePictureFile'> {
+export function createAtmosphereSettingServices(account: Parameters<typeof createUiProjectAccountRowsClient>[0]
+    & Partial<Pick<LazyActionAccountContext, 'accountLifetime' | 'invocationSignal'>>): Pick<SettingsMutationServices, 'projectAccountRows' | 'readAtmospherePictureFile'> {
     return {
         projectAccountRows: createUiProjectAccountRowsClient(account),
         readAtmospherePictureFile: async (input, signal) => {
             throwIfAborted(signal); account.assertCurrent();
-            const result = await callGuardedMachineRpcWithPolicy<unknown, Readonly<{ path: string }>>({
+            const result = await withActionAccountRequestSignal(account, signal, ownedSignal => callGuardedMachineRpcWithPolicy<unknown, Readonly<{ path: string }>>({
                 machineId: input.machineId, serverId: account.serverId, accountId: account.accountId,
-                method: 'readFile', payload: { path: input.path }, signal,
-            });
+                method: 'readFile', payload: { path: input.path }, signal: ownedSignal,
+            }));
             account.assertCurrent();
             if (result && typeof result === 'object' && 'success' in result) {
                 if (result.success === true && 'content' in result && typeof result.content === 'string') return { success: true, content: result.content };

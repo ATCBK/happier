@@ -7,12 +7,13 @@ import type { Tx } from "@/storage/inTx";
 import {
     markAccountChangesForSessionAccounts,
     type SessionAccountChangeCursor,
+    type SessionAccountChangePublication,
 } from "./markAccountChangesForSessionAccounts";
-import { invalidateSessionFollowDestinationsForSourceChangeInTx } from "@/app/session/follow/sessionFollowEdgeService";
-import { invalidateSessionReportsToForSourceChangeInTx, resolveSessionReportsToSourceChangeRecipientsInTx } from "@/app/session/relations/sessionReportsToService";
+import { invalidateSessionFollowDestinationsForSourceChangeInTx, resolveSessionFollowSourceChangeRecipientsInTx } from "@/app/session/follow/sessionFollowEdgeService";
 import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
 
 export type SessionRecipientCursor = SessionAccountChangeCursor;
+export type SessionRecipientPublication = SessionAccountChangePublication;
 
 /**
  * Transcript-publication-aware fanout. It keeps its own publication filter and
@@ -31,7 +32,7 @@ export async function markSessionProjectionRecipientsChanged(params: {
     hint?: unknown;
     recipientAccountIds?: readonly string[];
     hintForRecipient?: (accountId: string) => unknown;
-}): Promise<SessionRecipientCursor[]> {
+}): Promise<SessionRecipientPublication[]> {
     const publication = await loadSessionTranscriptPublication(params.tx, params.sessionId);
     const recipientAccountIds = params.recipientAccountIds
         ?? await resolveCurrentSessionRecipientAccountIdsInTx(params.tx, {
@@ -45,12 +46,12 @@ export async function markSessionProjectionRecipientsChanged(params: {
             accountId,
         ),
     ]));
-    const reportsToRecipients = await resolveSessionReportsToSourceChangeRecipientsInTx(params.tx, { sessionId: params.sessionId });
-    // The source and its lead may have different audiences. Fence their union
+    const destinationRecipients = await resolveSessionFollowSourceChangeRecipientsInTx(params.tx, { sourceSessionId: params.sessionId });
+    // The source and its destinations may have different audiences. Fence their union
     // once before any cursor, rather than discovering a lower Account id later.
     await acquireAccountChangePublicationLocksInTx(params.tx, [
         ...[...hints].filter(([, hint]) => hint.kind === "publish").map(([accountId]) => accountId),
-        ...[...reportsToRecipients.values()].flat(),
+        ...[...destinationRecipients.values()].flat(),
     ]);
     const cursors = await markAccountChangesForSessionAccounts({
         tx: params.tx,
@@ -65,7 +66,7 @@ export async function markSessionProjectionRecipientsChanged(params: {
     });
     await invalidateSessionFollowDestinationsForSourceChangeInTx(params.tx, {
         sourceSessionId: params.sessionId,
+        recipientsBySession: destinationRecipients,
     });
-    await invalidateSessionReportsToForSourceChangeInTx(params.tx, { sessionId: params.sessionId, recipientsBySession: reportsToRecipients });
     return cursors;
 }

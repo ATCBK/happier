@@ -1,6 +1,9 @@
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
-import type { ActionExecuteResult, ActionOperationDomainRefV1, ActionOperationSnapshotV1, ActionOperationDeclarationV1 } from '@happier-dev/protocol/actions';
+import { ManagedMachineActionInputSchemasV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
+import type { ActionExecuteResult, ActionExecutorDeps, ActionOperationDomainRefV1, ActionOperationSnapshotV1, ActionOperationDeclarationV1 } from '@happier-dev/protocol/actions';
+import type { RpcActionExecutorContext } from '@/rpc/handlers/_actionDispatchAdapter';
+import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
 
 import { createActionOperationRpcHandlers, resolveActionOperationScope, type ActionOperationRpcContext } from './actionOperationRpcHandlers';
 import { createActionOperationRunner } from './actionOperationRunner';
@@ -9,6 +12,7 @@ import type { ActionOperationDomainOwner, ActionOperationProgressUpdate } from '
 import { RequesterWorkAttributionV1Schema, type RequesterWorkAttributionV1 } from '@/daemon/lifecycle/requesterWorkAttribution';
 import { RpcError, RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
 import type { LiveWorkProducerV1 } from '@/daemon/lifecycle/managedActivity';
+import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 
 export type RequesterMachineOperationCleanupInput = Readonly<{
   serverId: string;
@@ -36,6 +40,13 @@ function readInitialDomainRef(
   input: unknown,
   requestId: string | undefined,
 ): ActionOperationDomainRefV1 | undefined {
+  if (actionId === 'machines.managed.power.set' || actionId === 'machines.managed.delete' || actionId === 'machines.managed.rebuild') {
+    // The Home-scoped operation concerns this guest even when controller admission
+    // fails before the native owner can publish its admitted/enriched reference.
+    const parsed = ManagedMachineActionInputSchemasV1[actionId].safeParse(input);
+    if (!parsed.success) return undefined;
+    return { kind: 'managedMachine', id: 'managedMachineId' in parsed.data ? parsed.data.managedMachineId : parsed.data.managedId };
+  }
   if (!requestId) return undefined;
   if (actionId === 'session.spawn_new') return { kind: 'spawnAttempt' as const, id: requestId };
   if (actionId !== 'session.fork') return undefined;
@@ -80,8 +91,47 @@ export function createHostActionOperationRuntime(deps: Readonly<{
     ...(deps.generateOperationId ? { generateOperationId: deps.generateOperationId } : {}),
   });
   let owner: ActionOperationDomainOwner | null = null;
+  const attachedOwners = new Set<ActionOperationDomainOwner>();
+  const rebuildOwner = () => {
+    const attached = [...attachedOwners];
+    if (attached.length === 0) { owner = null; return; }
+    const candidates = (scope: Parameters<ActionOperationDomainOwner['get']>[0], id: string) => {
+      const retained = store.get(scope, id);
+      return retained ? attached.filter(item => item.actionIds.includes(retained.actionId)) : attached;
+    };
+    const find = async (scope: Parameters<ActionOperationDomainOwner['get']>[0], id: string) => {
+      for (const item of candidates(scope, id)) {
+        const snapshot = await item.get(scope, id);
+        if (owner !== composite) return null;
+        if (snapshot) return { item, snapshot };
+      }
+      return null;
+    };
+    // An immutable attachment view preserves the existing stale-reader guard.
+    const composite: ActionOperationDomainOwner = {
+      actionIds: [...new Set(attached.flatMap(item => item.actionIds))],
+      async list(scope) { return (await Promise.all(attached.map(item => item.list(scope)))).flat(); },
+      async get(scope, id) { return (await find(scope, id))?.snapshot ?? null; },
+      async cancel(scope, id) { return (await find(scope, id))?.item.cancel(scope, id) ?? null; },
+      async refreshSetupReview(scope, id) { await (await find(scope, id))?.item.refreshSetupReview?.(scope, id); },
+      async decideSetupReview(scope, id, workspace, phase, decision) {
+        return (await find(scope, id))?.item.decideSetupReview?.(scope, id, workspace, phase, decision) ?? null;
+      },
+      async waitForTerminal(scope, id, signal, options) {
+        const found = await find(scope, id);
+        return found?.item.waitForTerminal ? await found.item.waitForTerminal(scope, id, signal, options) : found?.snapshot ?? null;
+      },
+      subscribe(input) {
+        const unsubscribe = attached.map(item => item.subscribe(input));
+        return () => { for (const detach of unsubscribe) detach(); };
+      },
+    };
+    owner = composite;
+  };
   const acceptedAttribution = (scope: Readonly<{ accountId: string; machineId: string }>, context?: ActionOperationRpcContext) =>
-    (deps.custodyBinding?.serverId ?? deps.serverId) && context?.machineAdmission
+    !context?.machineAdmission && context?.requesterSessionBootstrap
+      ? RequesterWorkAttributionV1Schema.parse(context.requesterSessionBootstrap.attribution)
+      : (deps.custodyBinding?.serverId ?? deps.serverId) && context?.machineAdmission
       ? RequesterWorkAttributionV1Schema.parse({ serverId: deps.custodyBinding?.serverId ?? deps.serverId, accountId: scope.accountId,
         machineId: scope.machineId, installationId: context.machineAdmission.installationId })
       : undefined;
@@ -96,6 +146,11 @@ export function createHostActionOperationRuntime(deps: Readonly<{
 
   const resolveObservedScope = async (context?: ActionOperationRpcContext, sessionId?: string) => {
     const admission = context?.machineAdmission;
+    const session = !admission ? context?.requesterSessionBootstrap : undefined;
+    if (session && (!deps.custodyBinding || session.attribution.installationId !== deps.custodyBinding.installationId
+      || !await isServerProfileHomeIdentity(deps.custodyBinding.serverId, session.attribution.serverId))) {
+      throw new RpcError(RPC_ERROR_MESSAGES.FORBIDDEN, RPC_ERROR_CODES.FORBIDDEN);
+    }
     if (admission && ((!deps.custodyBinding && admission.actorAccountId !== admission.custodianAccountId)
       || (deps.custodyBinding && admission.installationId !== deps.custodyBinding.installationId))) {
       throw new RpcError(RPC_ERROR_MESSAGES.FORBIDDEN, RPC_ERROR_CODES.FORBIDDEN);
@@ -110,6 +165,7 @@ export function createHostActionOperationRuntime(deps: Readonly<{
     sessionId?: string;
     /** Already admitted receiving-host context, never a public Action input. */
     rpcContext?: ActionOperationRpcContext;
+    onOperation?: (operation: ActionOperationSnapshotV1) => void;
     execute: (context: Readonly<{
       actionRequestId?: string;
       resumeActionRequest?: true;
@@ -148,6 +204,7 @@ export function createHostActionOperationRuntime(deps: Readonly<{
       ...(attribution ? { requesterWorkAttributionV1: attribution } : {}),
       ...(requestId ? { requestId } : {}),
       input: request.input,
+      ...(request.onOperation ? { onOperation: request.onOperation } : {}),
       ...(domainRef ? { domainRef } : {}),
       cancellation: request.actionId === 'projects.script.run' || request.actionId === 'projects.compute.exec' || request.actionId === 'projects.prepare'
         || request.actionId === 'machines.managed.power.set' || request.actionId === 'machines.managed.delete'
@@ -168,6 +225,10 @@ export function createHostActionOperationRuntime(deps: Readonly<{
         ...(operationAcceptance ? { operationAcceptance } : {}),
       }),
     });
+  };
+
+  const runActionOperation: NonNullable<ActionExecutorDeps['runActionOperation']> = async request => {
+    return runHostActionOperation(observeExecution, request);
   };
 
   const observePluginExecution = async (request: Readonly<{
@@ -210,22 +271,38 @@ export function createHostActionOperationRuntime(deps: Readonly<{
   };
 
   const attachOwner = (next: ActionOperationDomainOwner): (() => void) => {
-    if (owner) throw new Error('action_operation_domain_owner_already_attached');
-    owner = next;
+    if (attachedOwners.has(next)) throw new Error('action_operation_domain_owner_already_attached');
+    attachedOwners.add(next);
+    rebuildOwner();
     const unsubscribe = next.subscribe({
       resolveScope: async () => {
         const accountId = await deps.resolveAccountId();
         return accountId ? { accountId, machineId: deps.machineId } : null;
       },
-      publishSnapshot: store.project,
+      publishSnapshot: snapshot => { if (attachedOwners.has(next)) store.project(snapshot); },
     });
     return () => {
       unsubscribe();
-      if (owner === next) {
-        owner = null;
-        store.removeOwnerProjections(next.actionIds);
+      if (attachedOwners.delete(next)) {
+        rebuildOwner();
+        store.removeOwnerProjections(next.actionIds.filter(id => !owner?.actionIds.includes(id)));
       }
     };
+  };
+  const decideSetupReview: typeof runner.decideSetupReview = async (scope, id, workspace, phase, decision) => {
+    const current = owner;
+    const retained = store.get(scope, id);
+    if (current && (!retained || current.actionIds.includes(retained.actionId))) {
+      const projected = await current.get(scope, id);
+      if (current !== owner) return null;
+      if (projected) {
+        const result = await current.decideSetupReview?.(scope, id, workspace, phase, decision) ?? null;
+        if (current !== owner) return null;
+        if (result) store.project(result);
+        return result;
+      }
+    }
+    return await runner.decideSetupReview(scope, id, workspace, phase, decision);
   };
   const activity: LiveWorkProducerV1 = Object.freeze({ read: store.readLiveWork, subscribe: store.subscribe });
   const cleanupRequesterMachineOperations = async (input: RequesterMachineOperationCleanupInput): Promise<Readonly<{ kind: 'settled' | 'incomplete' }>> => {
@@ -252,10 +329,36 @@ export function createHostActionOperationRuntime(deps: Readonly<{
       return { kind: incomplete ? 'incomplete' : 'settled' };
     } catch { return { kind: 'incomplete' }; }
   };
-  return Object.freeze({ store, runner, handlers, observeExecution, observePluginExecution, attachOwner, activity,
+  return Object.freeze({ store, runner, handlers, observeExecution, runActionOperation, observePluginExecution, attachOwner, activity,
+    decideSetupReview,
     retireProjectFiniteOperations: runner.retireProjectFiniteOperations,
     cleanupRequesterMachineOperations,
     waitForProjectTerminalAttachment: runner.waitForProjectTerminalAttachment });
 }
 
 export type HostActionOperationRuntime = ReturnType<typeof createHostActionOperationRuntime>;
+
+/** All receiving hosts adapt admitted effects to the same runner and requester lifetime. */
+export async function runHostActionOperation(
+  observeExecution: HostActionOperationRuntime['observeExecution'],
+  request: Parameters<NonNullable<ActionExecutorDeps['runActionOperation']>>[0],
+  rpcContext?: ActionOperationRpcContext,
+): Promise<ActionExecuteResult> {
+  const context: RpcActionExecutorContext = request.context;
+  // Every native Open route converges on registerProjectOpenRpcHandlers. Its
+  // receiving-host observer owns the operation even when a Machine relay
+  // cannot carry this private context; observing here would join itself.
+  if (request.actionId === 'projects.open') return request.execute(context);
+  if (context.operationAcceptance?.actionId === request.actionId) return request.execute(context);
+  return observeExecution({ actionId: request.actionId, input: request.input, rpcContext: rpcContext ?? context,
+    ...(context.actionRequestId ? { actionRequestId: context.actionRequestId } : {}),
+    ...(context.defaultSessionId ? { sessionId: context.defaultSessionId } : {}),
+    execute: async operation => {
+      // Acceptance may return before transfer/process settlement. Retain the
+      // original requester's private ports until the effect actually finishes.
+      const release = readRequesterAccountActionContext(context.externalActionExecutionAuthorization)?.retain();
+      try { return await request.execute({ ...context, ...operation }); }
+      finally { await release?.(); }
+    },
+  });
+}

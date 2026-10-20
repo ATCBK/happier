@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import Module, { createRequire } from 'node:module';
 import path from 'node:path';
 import test from 'node:test';
-import { performance } from 'node:perf_hooks';
 import { JSDOM } from 'jsdom';
 
 const require = createRequire(import.meta.url);
@@ -11,30 +10,45 @@ function createCssState(t, { ssr = '' } = {}) {
     const dom = new JSDOM(`<!doctype html><html><head>${ssr}</head><body></body></html>`);
     const previous = { window: globalThis.window, document: globalThis.document, screen: globalThis.screen };
     const originalLoad = Module._load;
+    const packageDir = path.dirname(require.resolve('react-native-unistyles/package.json'));
+    const clearPackageGraph = () => {
+        for (const filename of Object.keys(require.cache)) {
+            if (filename.startsWith(`${packageDir}${path.sep}`)) delete require.cache[filename];
+        }
+    };
     t.after(() => {
         Module._load = originalLoad;
+        clearPackageGraph();
         Object.assign(globalThis, previous);
         dom.window.close();
     });
     Object.assign(globalThis, { window: dom.window, document: dom.window.document, screen: dom.window.screen });
     dom.window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
-    // JSDOM lacks innerText's browser stylesheet update; retain that DOM boundary's semantics.
+    let wholeStylesheetBytes = 0;
+    // JSDOM lacks the browser's style.innerText setter. Preserve its parsing
+    // semantics at this DOM boundary while observing the actual text submitted.
     Object.defineProperty(dom.window.HTMLStyleElement.prototype, 'innerText', {
         get() { return this.textContent; },
-        set(value) { this.textContent = value; },
+        set(value) {
+            if (this.id === 'unistyles-web') wholeStylesheetBytes += Buffer.byteLength(String(value), 'utf8');
+            this.textContent = value;
+        },
     });
     // Same OS/platform boundary as the installed orientation test; all Unistyles logic is real.
     Module._load = function (request, parent, isMain) {
         if (request === 'react-native') return { StyleSheet: { compose() {}, flatten() {}, hairlineWidth: 1 } };
         return originalLoad.call(this, request, parent, isMain);
     };
-    const packageDir = path.dirname(require.resolve('react-native-unistyles/package.json'));
-    // Enter through the package's normal web entry to initialize its cyclic service graph.
+    // Initialize the real registry and its cyclic services against this DOM.
+    clearPackageGraph();
     require(path.join(packageDir, 'lib/commonjs/web/index.js'));
-    const { CSSState } = require(path.join(packageDir, 'lib/commonjs/web/css/state.js'));
     const { services } = require(path.join(packageDir, 'lib/commonjs/web/services.js'));
-    const css = new CSSState(services);
-    return { css, dom, sheet: () => document.getElementById('unistyles-web').sheet };
+    return {
+        css: services.registry.css,
+        dom,
+        sheet: () => dom.window.document.getElementById('unistyles-web').sheet,
+        wholeStylesheetBytes: () => wholeStylesheetBytes,
+    };
 }
 
 function styleRules(container, media = '') {
@@ -44,29 +58,22 @@ function styleRules(container, media = '') {
         : [{ rule, media }]);
 }
 
-test('style registration and removal update only affected rules without serializing the stylesheet', (t) => {
-    const { css, sheet } = createCssState(t);
-    let serializations = 0;
-    let serializedBytes = 0;
-    const original = css.getStyles;
-    css.getStyles = () => {
-        serializations += 1;
-        const text = original();
-        serializedBytes += text.length;
-        return text;
-    };
-    const start = performance.now();
+test('style registration and removal preserve unrelated live rules without resubmitting stylesheet text', (t) => {
+    const { css, sheet, wholeStylesheetBytes } = createCssState(t);
     css.add('retained', { color: 'red', padding: 2 });
     const retained = styleRules(sheet).find(({ rule }) => rule.selectorText === '.retained').rule;
-    for (let i = 0; i < 500; i += 1) css.add(`row_${i}`, { width: i + 1, opacity: 0.5 });
-    for (let i = 0; i < 500; i += 1) css.remove(`row_${i}`);
-    if (process.env.HAPPIER_MEASURE_UI_STARTUP_COST === '1') {
-        console.log(JSON.stringify({ workload: '500 additions/removals', ms: performance.now() - start, serializations, serializedBytes }));
+    const beforeBytes = wholeStylesheetBytes();
+    for (let index = 0; index < 8; index += 1) {
+        const hash = `temporary_${index}`;
+        css.add(hash, { width: index + 1, opacity: 0.5 });
+        css.remove(hash);
     }
-    assert.equal(serializations, 0, 'registration churn must not serialize unrelated styles');
-    assert.equal(styleRules(sheet).find(({ rule }) => rule.selectorText === '.retained').rule, retained);
-    assert.equal(styleRules(sheet).length, 1);
-    assert.equal(retained.style.getPropertyValue('padding'), '2px');
+    const remaining = styleRules(sheet);
+    assert.deepEqual(remaining.map(({ rule }) => rule.selectorText), ['.retained']);
+    assert.equal(remaining[0].rule.style.color, 'red');
+    assert.equal(remaining[0].rule.style.getPropertyValue('padding'), '2px');
+    assert.equal(wholeStylesheetBytes() - beforeBytes, 0, 'unrelated registration churn must not resubmit stylesheet text');
+    assert.equal(remaining[0].rule, retained, 'the unchanged retained CSSRule must remain live');
 });
 
 test('incremental styles preserve media order, pseudo selectors, child selectors and replacements', (t) => {
@@ -118,10 +125,38 @@ test('SSR hydration, theme recreation and reset keep the authoritative maps and 
     assert.equal(styleRules(sheet).find(({ rule }) => rule.selectorText === '.after').rule.style.color, 'var(--colors-foreground)');
     css.addTheme('light', { colors: { foreground: 'blue' } });
     css.recreate();
-    assert.equal(styleRules(sheet).find(({ rule }) => rule.selectorText === ':root.light').rule.style.getPropertyValue('--colors-foreground'), 'blue');
+    assert.equal(styleRules(sheet).find(({ rule }) => rule.selectorText.includes(':root.light')).rule.style.getPropertyValue('--colors-foreground'), 'blue');
     css.reset();
     css.add('reset', { color: 'green' });
     const classes = styleRules(sheet).map(({ rule }) => rule.selectorText).filter(selector => selector.startsWith('.'));
     assert.deepEqual(classes, ['.reset']);
     assert.equal(css.getStyles().includes('.hydrated'), false);
+});
+
+// Upgrade regression: 3.5.3 emits zero-specificity child selectors for pointerEvents.
+test('pointer-event child rules stay valid and are removed with their owning style', (t) => {
+    const { css, sheet } = createCssState(t);
+    css.add('retained', { color: 'red' });
+    const retained = styleRules(sheet).find(({ rule }) => rule.selectorText === '.retained').rule;
+    css.add('overlay', { pointerEvents: 'box-none' });
+    let rules = styleRules(sheet);
+    assert.equal(rules.find(({ rule }) => rule.selectorText === '.overlay').rule.style.getPropertyValue('pointer-events'), 'none');
+    assert.equal(rules.find(({ rule }) => rule.selectorText === ':where(.overlay)>*').rule.style.getPropertyValue('pointer-events'), 'auto');
+    css.add('overlay', { pointerEvents: 'box-only' });
+    rules = styleRules(sheet);
+    assert.equal(rules.find(({ rule }) => rule.selectorText === '.overlay').rule.style.getPropertyValue('pointer-events'), 'auto');
+    assert.equal(rules.find(({ rule }) => rule.selectorText === ':where(.overlay)>*').rule.style.getPropertyValue('pointer-events'), 'none');
+    css.remove('overlay');
+    rules = styleRules(sheet);
+    assert.equal(rules.some(({ rule }) => rule.selectorText.includes('overlay')), false);
+    assert.equal(rules.find(({ rule }) => rule.selectorText === '.retained').rule, retained);
+});
+
+test('incremental CSS keeps upstream scoped-theme and reset variable selectors', (t) => {
+    const { css, sheet } = createCssState(t);
+    css.addTheme('light', { colors: { foreground: 'red' } });
+    css.recreate();
+    const themes = styleRules(sheet).filter(({ rule }) => rule.style?.getPropertyValue('--colors-foreground') === 'red');
+    assert.equal(themes.some(({ rule }) => rule.selectorText.includes('[data-unistyles-theme="light"]')), true);
+    assert.equal(themes.some(({ rule }) => rule.selectorText.includes('[data-unistyles-reset]')), true);
 });

@@ -1,4 +1,5 @@
 import { randomBytes as nodeRandomBytes } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { QualifiedConnectedAccountCredentialMetadataV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
 
@@ -46,6 +47,7 @@ import type { ConnectedAccountSourceCustodyV1 } from '@happier-dev/protocol/conn
 import type { TeamCredentialDirectMaterialPayloadV1 } from '@happier-dev/protocol/teams';
 
 import type { ConnectedAccountDaemonPersistence } from './ConnectedAccountDaemonRuntime';
+import { observeCurrentConnectedServiceMaterializationPhase as observeMaterializationPhase } from './materialize/materializationPhase';
 
 type MaybePromise<T> = T | Promise<T>;
 type ConnectedAccountCredentialReader =
@@ -421,7 +423,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
       'acquireRuntimeRegistry' | 'isRuntimeRegistryCurrent'
     >;
     credentials: StoredCredentials;
-    isAccountRuntimeCurrent?: () => Promise<boolean>;
+    isAccountRuntimeCurrent?: (signal?: AbortSignal) => Promise<boolean>;
     runAccountOperation?: <T>(operation: () => Promise<T>) => Promise<T>;
     getAccountEncryptionMode(signal?: AbortSignal): Promise<ConnectedServiceAccountEncryptionMode>;
     readCredential?: CredentialSnapshotReader;
@@ -434,9 +436,38 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
     randomBytes?: (length: number) => Uint8Array;
   }>,
 ): QualifiedConnectedAccountEstablishedRuntimeOwner {
+  // Materialization and read-only status consume one admitted snapshot. Nested field/revision reads
+  // consume that invocation's authority; they do not admit another operation.
+  // This is invocation custody, never a process-wide or time-based cache.
+  const materialization = new AsyncLocalStorage<{ open: boolean; signal?: AbortSignal }>();
+  async function verifyAccountRuntimeCurrent(signal?: AbortSignal): Promise<boolean> {
+    return !params.isAccountRuntimeCurrent || await observeMaterializationPhase(
+      'established_account_currentness', () => params.isAccountRuntimeCurrent!(signal),
+    );
+  }
+  async function isAccountRuntimeCurrent(): Promise<boolean> {
+    const cycle = materialization.getStore();
+    return cycle ? cycle.open && !cycle.signal?.aborted : verifyAccountRuntimeCurrent();
+  }
   async function assertAccountRuntimeCurrent(): Promise<void> {
-    if (params.isAccountRuntimeCurrent && !await params.isAccountRuntimeCurrent()) {
+    if (!await isAccountRuntimeCurrent()) {
       throw new Error('connected_account_runtime_not_current');
+    }
+  }
+  async function runMaterialization<T>(read: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    assertNotAborted(signal);
+    if (!await verifyAccountRuntimeCurrent(signal)) throw new Error('connected_account_runtime_not_current');
+    const cycle = { open: true, signal };
+    try {
+      const result = await materialization.run(cycle, () => runCurrentAccountRead(read));
+      // Retained readers must not borrow a completed cycle's authority. Recheck
+      // Home/Machine/Session authority before publishing any prepared result.
+      cycle.open = false;
+      assertNotAborted(signal);
+      if (!await verifyAccountRuntimeCurrent(signal)) throw new Error('connected_account_runtime_not_current');
+      return result;
+    } finally {
+      cycle.open = false;
     }
   }
   async function runCurrentAccountRead<T>(read: () => Promise<T>): Promise<T> {
@@ -445,12 +476,21 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
     await assertAccountRuntimeCurrent();
     return result;
   }
+  function runIndependentAccountRead<T>(read: () => Promise<T>): Promise<T> {
+    // A reentrant public operation is a new admission, even when a plugin
+    // invokes it from inside an admitted materialization callback.
+    return materialization.exit(() => runCurrentAccountRead(read));
+  }
   const credentialSnapshotReader =
     params.readCredential ?? readQualifiedConnectedAccountCredentialV4;
-  const readCredential: CredentialSnapshotReader = (input) => runCurrentAccountRead(() => credentialSnapshotReader(input));
+  const readCredential: CredentialSnapshotReader = (input) => observeMaterializationPhase(
+    'established_credential_read', () => runCurrentAccountRead(() => credentialSnapshotReader(input)),
+  );
   const configurationSnapshotReader =
     params.readConfiguration ?? readQualifiedConnectedAccountConfigurationV4;
-  const readConfiguration: ConfigurationSnapshotReader = (input) => runCurrentAccountRead(() => configurationSnapshotReader(input));
+  const readConfiguration: ConfigurationSnapshotReader = (input) => observeMaterializationPhase(
+    'established_configuration_read', () => runCurrentAccountRead(() => configurationSnapshotReader(input)),
+  );
   const material = resolveCryptoMaterial(params.credentials);
   const randomBytes =
     params.randomBytes
@@ -638,34 +678,36 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
       async isCurrent(): Promise<boolean> {
         if (input.signal?.aborted) return false;
         try {
-          const latest = await readExactSnapshots(input.account, input.signal);
-          if (
-            latest.credential.credentialRevision
-              !== snapshots.credential.credentialRevision
-            || latest.credential.configurationRevision
-              !== snapshots.credential.configurationRevision
-            || latest.credential.authenticationModeId !== authenticationModeId
-          ) {
-            return false;
-          }
-          const latestConfiguration = await resolveConfiguration(latest);
-          if (JSON.stringify(latestConfiguration) !== JSON.stringify(resolvedConfiguration)) {
-            return false;
-          }
-          const latestRegistryLease = await params.reloadController.acquireRuntimeRegistry();
-          try {
-            const latestContribution = latestRegistryLease.registry.connectedAccountContributions?.describe(
-              input.account.service,
-            );
-            return Boolean(
-              latestContribution
-              && latestContribution.occurrenceId === contributionContractVersion
-              && latestContribution.isCurrent()
-              && params.reloadController.isRuntimeRegistryCurrent(latestRegistryLease.registry),
-            );
-          } finally {
-            await latestRegistryLease.release();
-          }
+          return await runMaterialization(async () => {
+            const latest = await readExactSnapshots(input.account, input.signal);
+            if (
+              latest.credential.credentialRevision
+                !== snapshots.credential.credentialRevision
+              || latest.credential.configurationRevision
+                !== snapshots.credential.configurationRevision
+              || latest.credential.authenticationModeId !== authenticationModeId
+            ) {
+              return false;
+            }
+            const latestConfiguration = await resolveConfiguration(latest);
+            if (JSON.stringify(latestConfiguration) !== JSON.stringify(resolvedConfiguration)) {
+              return false;
+            }
+            const latestRegistryLease = await params.reloadController.acquireRuntimeRegistry();
+            try {
+              const latestContribution = latestRegistryLease.registry.connectedAccountContributions?.describe(
+                input.account.service,
+              );
+              return Boolean(
+                latestContribution
+                && latestContribution.occurrenceId === contributionContractVersion
+                && latestContribution.isCurrent()
+                && params.reloadController.isRuntimeRegistryCurrent(latestRegistryLease.registry),
+              );
+            } finally {
+              await latestRegistryLease.release();
+            }
+          }, input.signal);
         } catch {
           return false;
         }
@@ -692,11 +734,12 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
     basis: QualifiedConnectedAccountEstablishedInvocationBasis;
   }>> {
       assertNotAborted(input.signal);
-      const accountMode = await runCurrentAccountRead(() => params.getAccountEncryptionMode(input.signal));
+      const accountMode = await observeMaterializationPhase('established_account_mode',
+        () => runCurrentAccountRead(() => params.getAccountEncryptionMode(input.signal)));
       if (accountMode === 'unknown') {
         throw new Error('Connected-account account encryption mode is unavailable');
       }
-      const initial = await readExactSnapshots(input.account, input.signal);
+      const initial = await observeMaterializationPhase('established_snapshots', () => readExactSnapshots(input.account, input.signal));
       if (input.expectedConfigurationRevision !== undefined
         && initial.credential.configurationRevision !== input.expectedConfigurationRevision) {
         throw new Error('Connected-account configuration revision is no longer current');
@@ -729,14 +772,13 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
           envelope: initial.credential.content,
         }),
       });
-      const lease = await params.reloadController.acquireRuntimeRegistry();
+      const lease = await observeMaterializationPhase('established_registry', () => params.reloadController.acquireRuntimeRegistry());
       try {
         if (!params.reloadController.isRuntimeRegistryCurrent(lease.registry)) {
           throw new Error('Connected-account runtime registry is no longer current');
         }
-        const runtimeLease = await lease.registry.resolveConnectedAccountRuntime?.(
-          input.account.service,
-        );
+        const runtimeLease = await observeMaterializationPhase('established_runtime_resolution', () =>
+          lease.registry.resolveConnectedAccountRuntime?.(input.account.service));
         const invoker = lease.registry.connectedAccountRuntimeInvoker;
         if (
           !runtimeLease
@@ -779,7 +821,8 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
           input.account,
           mode,
         );
-        const initialConfigurationRecord: ConnectedAccountConfigurationRecord | null =
+        const initialConfigurationRecord: ConnectedAccountConfigurationRecord | null = await observeMaterializationPhase(
+          'established_configuration_record', async () =>
           exactConfigurationTarget.kind === 'account'
             ? initial.configuration
             ? parseConnectedAccountConfigurationRecordContent(
@@ -795,7 +838,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
               : null
             : descriptorConfiguration
               ? await params.configuration.read(exactConfigurationTarget)
-              : null;
+              : null);
         const configurationOwner: ConnectedAccountConfigurationOwner =
           params.configurationOwner ?? createConnectedAccountConfigurationOwner({
             async read(target) {
@@ -817,20 +860,26 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
               ) {
                 return null;
               }
-              const latest = await readExactSnapshots(
-                input.account,
-                input.signal,
-              );
-              if (!latest.configuration) return null;
+              const configuration = await readConfiguration({
+                token: params.credentials.token,
+                target: accountTarget(input.account),
+                signal: input.signal,
+              });
+              if (!configuration) return null;
+              assertConfigurationSnapshotIdentity(configuration, input.account);
+              requireRevisionedConfigurationSnapshot(configuration);
+              // The parallel credential guard verifies that this admitted pair's
+              // credential and configuration revisions still address the current row.
+              assertSnapshotPair({ credential: initial.credential, configuration });
               return parseConnectedAccountConfigurationRecordContent(
                 openEnvelope({
                   kind: 'configuration',
                   accountMode,
                   credentials: params.credentials,
                   material,
-                  envelope: latest.configuration.configurationContent,
+                  envelope: configuration.configurationContent,
                 }),
-                latest.configuration.configurationRevision,
+                configuration.configurationRevision,
               );
             },
             async replace() {
@@ -846,7 +895,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
               && runtimeLease.isCurrent()
             ),
           });
-        const admittedConfiguration = await configurationOwner.admit({
+        const admittedConfiguration = await observeMaterializationPhase('established_configuration', () => configurationOwner.admit({
           intent: 'reconnect',
           service: input.account.service,
           account: input.account,
@@ -859,7 +908,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
                 expectedConfigurationRevision:
                   initialConfigurationRecord.revision,
               }),
-        });
+        }));
         if (admittedConfiguration.status !== 'ready') {
           throw new Error('Connected-account established configuration is unavailable');
         }
@@ -900,7 +949,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
           }));
           assertNotAborted(input.signal);
         }
-        const result = await runCurrentAccountRead(() => invoker.invokeEstablished({
+        const result = await observeMaterializationPhase('established_runtime', () => runCurrentAccountRead(() => invoker.invokeEstablished({
           target: Object.freeze({
             account: input.account,
             expectedCredentialRevision,
@@ -915,11 +964,8 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
           }),
           async isConfigurationCurrent(configuration) {
             if (configuration !== exactConfiguration) return false;
-            if (params.isAccountRuntimeCurrent && !await params.isAccountRuntimeCurrent()) return false;
-            if (!await configurationOwner.isCurrent(baseConfiguration)) return false;
-            const latest = await readExactSnapshots(input.account, input.signal);
-            return latest.credential.configurationRevision
-              === initial.credential.configurationRevision;
+            if (!await isAccountRuntimeCurrent()) return false;
+            return configurationOwner.isCurrent(baseConfiguration);
           },
           configurationRevocationSignal(configuration) {
             return configuration === exactConfiguration
@@ -929,7 +975,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
                 );
           },
           async isCredentialRevisionCurrent() {
-            if (params.isAccountRuntimeCurrent && !await params.isAccountRuntimeCurrent()) return false;
+            // readCredential fences requester authority before and after transport.
             const latest = await readCredential({
               token: params.credentials.token,
               ref: input.account,
@@ -939,11 +985,14 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
               latest
               && sameQualifiedConnectedAccountRef(latest.ref, input.account)
               && latest.revisionSemantics === 'revisioned'
-              && latest.credentialRevision === expectedCredentialRevision,
+              && latest.credentialRevision === expectedCredentialRevision
+              // The credential row owns both revisions. Check their linkage in
+              // this read rather than reopening it in the parallel configuration guard.
+              && latest.configurationRevision === initial.credential.configurationRevision,
             );
           },
           ...(input.signal ? { signal: input.signal } : {}),
-        }));
+        })));
         return Object.freeze({
           result,
           basis: Object.freeze({
@@ -1054,7 +1103,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
           }),
         });
       } finally {
-        await lease.release();
+        await observeMaterializationPhase('established_registry_release', () => lease.release());
       }
   }
 
@@ -1121,8 +1170,8 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
           operation: input.operation,
           context: Object.freeze({ account: input.account, configuration, credentials }),
           isConfigurationCurrent: async (candidate) => candidate === configuration
-            && (!params.isAccountRuntimeCurrent || await params.isAccountRuntimeCurrent()) && await input.isCurrent(),
-          isCredentialRevisionCurrent: async () => (!params.isAccountRuntimeCurrent || await params.isAccountRuntimeCurrent())
+            && await isAccountRuntimeCurrent() && await input.isCurrent(),
+          isCredentialRevisionCurrent: async () => await isAccountRuntimeCurrent()
             && await input.isCurrent(),
           ...(input.signal ? { signal: input.signal } : {}),
         });
@@ -1286,14 +1335,19 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
   }
 
   const owner: QualifiedConnectedAccountEstablishedRuntimeOwner = {
-    recordScopeChallenge: input => runCurrentAccountRead(() => recordScopeChallenge(input)),
-    readCredentialConfigurationRevision: (input) => runCurrentAccountRead(() => readCredentialConfigurationRevision(input)),
-    readCredentialRevision: (input) => runCurrentAccountRead(() => readCredentialRevision(input)),
-    readMaterialSnapshot: (input) => runCurrentAccountRead(() => readMaterialSnapshot(input)),
-    readQuotaSourceSnapshot: (input) => runCurrentAccountRead(() => readQuotaSourceSnapshot(input)),
-    invokeDirectMaterial: (input) => runCurrentAccountRead(() => invokeDirectMaterial(input)),
-    readConfiguredEndpoints: (input) => runCurrentAccountRead(() => readConfiguredEndpoints(input)),
-    invokeWithReceipt: (input) => runCurrentAccountRead(() => invokeWithReceipt(input)),
+    recordScopeChallenge: input => runIndependentAccountRead(() => recordScopeChallenge(input)),
+    readCredentialConfigurationRevision: (input) => runIndependentAccountRead(() => readCredentialConfigurationRevision(input)),
+    readCredentialRevision: (input) => runIndependentAccountRead(() => readCredentialRevision(input)),
+    // Direct delivery and MCP resource checks prepare one snapshot through the
+    // same entry/publication fences as runtime materialization. Public reentry
+    // still starts a new admission; only its internal field readers share it.
+    readMaterialSnapshot: (input) => runMaterialization(() => readMaterialSnapshot(input), input.signal),
+    readQuotaSourceSnapshot: (input) => runIndependentAccountRead(() => readQuotaSourceSnapshot(input)),
+    invokeDirectMaterial: (input) => runMaterialization(() => invokeDirectMaterial(input), input.signal),
+    readConfiguredEndpoints: (input) => runIndependentAccountRead(() => readConfiguredEndpoints(input)),
+    invokeWithReceipt: (input) => input.operation.kind === 'materialize' || input.operation.kind === 'status'
+      ? runMaterialization(() => invokeWithReceipt(input), input.signal)
+      : runIndependentAccountRead(() => invokeWithReceipt(input)),
     async invoke<TOperation extends ConnectedAccountRuntimeEstablishedOperation>(
       input: Readonly<{
         account: QualifiedConnectedAccountRef;
@@ -1304,7 +1358,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
         signal?: AbortSignal;
       }>,
     ): Promise<ConnectedAccountRuntimeEstablishedResult<TOperation>> {
-      return (await runCurrentAccountRead(() => invokeWithReceipt(input))).result;
+      return (await owner.invokeWithReceipt(input)).result;
     },
   };
   return Object.freeze(owner);

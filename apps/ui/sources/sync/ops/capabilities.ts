@@ -34,7 +34,7 @@ export type MachineCapabilitiesDescribeResult =
 
 export async function machineCapabilitiesDescribe(
     machineId: string,
-    options?: { serverId?: string | null },
+    options?: { serverId?: string | null; signal?: AbortSignal },
 ): Promise<MachineCapabilitiesDescribeResult> {
     try {
         const result = await machineRpcWithServerScope<unknown, {}>({
@@ -42,6 +42,7 @@ export async function machineCapabilitiesDescribe(
             method: RPC_METHODS.CAPABILITIES_DESCRIBE,
             payload: {},
             serverId: options?.serverId,
+            signal: options?.signal,
         });
         if (isRpcMethodNotFoundResult(result)) return { supported: false, reason: 'not-supported' };
         if (isPlainObject(result) && typeof result.error === 'string') return { supported: false, reason: 'error' };
@@ -108,7 +109,7 @@ export type MachineCapabilitiesInvokeResult =
 export async function machineCapabilitiesInvoke(
     machineId: string,
     request: CapabilitiesInvokeRequest,
-    options?: { timeoutMs?: number | null; serverId?: string | null; accountId?: string | null; signal?: AbortSignal },
+    options?: { timeoutMs?: number | null; operationTimeoutMs?: null; serverId?: string | null; accountId?: string | null; signal?: AbortSignal },
 ): Promise<MachineCapabilitiesInvokeResult> {
     try {
         const result = await machineRpcWithServerScope<unknown, CapabilitiesInvokeRequest>({
@@ -121,6 +122,7 @@ export async function machineCapabilitiesInvoke(
             ...(typeof options?.timeoutMs === 'number'
                 ? { timeoutMs: options.timeoutMs }
                 : { operationTimeoutMs: null }),
+            ...(options?.operationTimeoutMs === null ? { operationTimeoutMs: null } : {}),
         });
 
         if (isRpcMethodNotFoundResult(result)) return { supported: false, reason: 'not-supported' };

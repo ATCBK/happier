@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ReviewCommentV1 } from '@happier-dev/protocol';
-import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
+import { pressTestInstanceAsync, renderScreen, reviewCommentLabelsFixture } from '@/dev/testkit';
 
 import { ReviewCommentDirectWriteGrantSheet } from './ReviewCommentDirectWriteGrantSheet';
 import { ReviewCommentsHeaderButton } from './ReviewCommentsHeaderButton';
@@ -46,44 +46,7 @@ function comment(overrides: Partial<ReviewCommentV1> = {}): ReviewCommentV1 {
     };
 }
 
-const labels = {
-    empty: 'No comments',
-    engine: 'Engine',
-    stale: 'Stale',
-    outdated: 'Outdated',
-    binarySnapshot: 'Binary snapshot',
-    minified: 'Likely minified',
-    submoduleSnapshot: 'Submodule snapshot',
-    symlinkSnapshot: 'Symlink snapshot',
-    textSnapshot: 'Text snapshot',
-    tooLargeSnapshot: 'Snapshot too large',
-    encryptedSnapshot: 'Encrypted snapshot',
-    truncated: 'Truncated',
-    bidiControls: 'Bidi controls',
-    redacted: 'Redacted',
-    contentUnavailable: 'Content unavailable',
-    edit: 'Edit',
-    resolve: 'Resolve',
-    dismiss: 'Dismiss',
-    reopen: 'Reopen',
-    redact: 'Redact',
-    reply: 'Reply',
-    replyUnavailable: 'Reply unavailable',
-    bulkResolve: 'Resolve visible',
-    bulkDismiss: 'Dismiss visible',
-    bulkPartialFailure: 'Some comments were not updated',
-    bulkFailure: ({ commentId, errorCode }: Readonly<{ commentId: string; errorCode: string }>) =>
-        `${commentId}:${errorCode}`,
-    filtersTitle: 'Filters',
-    states: {
-        proposed: 'Proposed',
-        open: 'Open',
-        delegated: 'Delegated',
-        pending_review: 'Pending review',
-        resolved: 'Resolved',
-        dismissed: 'Dismissed',
-    },
-};
+const labels = { ...reviewCommentLabelsFixture, filtersTitle: 'Filters' };
 
 describe('review comments panel components', () => {
     it('renders filters durable comments history badge and explicit grant copy', async () => {
@@ -99,7 +62,8 @@ describe('review comments panel components', () => {
                 selectedStates={['open']}
             />,
         );
-        expect(panel.getTextContent()).toContain('Filters');
+        expect(panel.findHostByTestId('review-comment-filter-state-open')?.props['aria-pressed']).toBe(true);
+        expect(panel.findHostByTestId('review-comment-filter-state-proposed')?.props['aria-pressed']).toBe(false);
         expect(panel.getTextContent()).toContain('Open issue.');
         expect(panel.getTextContent()).not.toContain('Proposals only');
 
@@ -178,7 +142,7 @@ describe('review comments panel components', () => {
                 onBulkTransition={onBulkTransition}
                 bulkTransitionResult={{
                     bulkActionId: 'bulk-1',
-                    failed: [{ commentId: 'proposed-1', errorCode: 'permission_denied' }],
+                    failed: [{ commentId: 'open-1', errorCode: 'permission_denied' }],
                 }}
                 testID="review-panel"
             />,
@@ -187,10 +151,20 @@ describe('review comments panel components', () => {
         await pressTestInstanceAsync(screen.findByTestId('review-panel-bulk-resolve'), 'review-panel-bulk-resolve');
 
         expect(onBulkTransition).toHaveBeenCalledWith({
-            commentIds: ['open-1', 'proposed-1'],
+            commentIds: ['open-1'],
             toState: 'resolved',
         });
         expect(screen.getTextContent()).toContain('Some comments were not updated');
-        expect(screen.getTextContent()).toContain('proposed-1:permission_denied');
+        expect(screen.getTextContent()).toContain('open-1:permission_denied');
+    });
+
+    it('offers bulk Dismiss but no bulk Resolve when only proposals are visible', async () => {
+        const onBulkTransition = vi.fn();
+        const screen = await renderScreen(<ReviewCommentsPanel
+            comments={[comment({ id: 'proposal', state: 'proposed' })]}
+            labels={labels} onBulkTransition={onBulkTransition} testID="proposals" />);
+        expect(screen.findByTestId('proposals-bulk-resolve')).toBeNull();
+        await screen.pressByTestIdAsync('proposals-bulk-dismiss');
+        expect(onBulkTransition).toHaveBeenCalledWith({ commentIds: ['proposal'], toState: 'dismissed' });
     });
 });

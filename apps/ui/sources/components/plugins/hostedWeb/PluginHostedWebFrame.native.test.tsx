@@ -1,51 +1,63 @@
 import * as React from 'react';
 import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol';
-import { describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 
 const genericFrameProps: Array<Record<string, unknown>> = [];
 const artifactFrameProps: Array<Record<string, unknown>> = [];
 const inlineDocumentFrameProps: Array<Record<string, unknown>> = [];
-
-// The remote source mirror intentionally omits build-generated app artifact bytes.
-vi.mock('@/sync/domains/plugins/availability/bundledAppExactArtifactSource', () => ({
-    createBundledPluginUiAppExactArtifactSource: () => Object.freeze({
-        kind: 'appExact' as const,
-        fetch: vi.fn(async () => null),
-    }),
-}));
-vi.mock('@/sync/domains/plugins/availability/reader', () => ({
-    createPluginAccountAvailabilityReader: vi.fn(() => null),
-    createPluginAccountAvailabilityReaderStore: vi.fn(() => ({
-        get: vi.fn(() => null),
-        subscribe: vi.fn(() => () => {}),
-    })),
-    projectPluginAccountAvailabilityMaterializationIdentity: vi.fn(() => null),
+const nativeModule = vi.hoisted(() => ({
+    registerInlineDocument: vi.fn(async (_input: Readonly<{ token: string; html: string; contentSecurityPolicy: string }>) => ({ kind: 'registered' })),
+    unregisterInlineDocument: vi.fn(() => true),
+    goBack: vi.fn(async () => false),
 }));
 
-vi.mock('@/components/browser/adapters/HostedPluginTarget.native', () => ({
-    HostedPluginTarget: (props: Record<string, unknown>) => {
+// The physical app-package inventory is absent in source-only host tests.
+// Keep Availability declaration admission and exact Artifact source logic real.
+vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
+    BUNDLED_PLUGIN_UI_APP_ARTIFACTS: Object.freeze([]),
+    BUNDLED_PLUGIN_BRAND_MARKS: Object.freeze([]),
+}));
+vi.mock('react-native', async () => (
+    await import('@/dev/testkit/mocks/reactNative')
+).createReactNativeNativeMock({ platformOS: 'ios' }));
+vi.mock('react-native-webview', () => ({
+    WebView: (props: Record<string, unknown>) => {
         genericFrameProps.push(props);
-        return React.createElement('HostedPluginTargetMock', props);
+        return React.createElement('WebView', props);
     },
 }));
-vi.mock('./HostedArtifactFrame.native', () => ({
-    HostedArtifactFrame: (props: Record<string, unknown>) => {
-        artifactFrameProps.push(props);
-        return React.createElement('HostedArtifactFrameMock', props);
-    },
-    HostedInlineDocumentFrame: (props: Record<string, unknown>) => {
-        inlineDocumentFrameProps.push(props);
-        return React.createElement('HostedInlineDocumentFrameMock', props);
-    },
-}));
+vi.mock('expo-modules-core', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('expo-modules-core')>();
+    return {
+        ...actual,
+        requireNativeModule: (name: string) => name === 'HappierHostedWebFrame'
+            ? nativeModule : actual.requireNativeModule(name),
+        requireNativeViewManager: (name: string) => {
+            if (name !== 'HappierHostedWebFrame') throw new Error(`Unexpected native view: ${name}`);
+            return React.forwardRef((props: Record<string, unknown>, _ref) => {
+                if (typeof props.artifactHandleToken === 'string') artifactFrameProps.push(props);
+                else inlineDocumentFrameProps.push(props);
+                return React.createElement('HappierHostedWebFrame', props);
+            });
+        },
+    };
+});
 
 const frameOrigin = 'happier-hosted-artifact://hpa_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
 describe('PluginHostedWebFrame native Artifact adoption', () => {
-    it('forwards the shared lifecycle callbacks to the generic native URL frame', async () => {
+    beforeEach(() => {
         genericFrameProps.length = 0;
+        artifactFrameProps.length = 0;
+        inlineDocumentFrameProps.length = 0;
+        nativeModule.registerInlineDocument.mockClear();
+        nativeModule.unregisterInlineDocument.mockClear();
+        nativeModule.goBack.mockClear();
+    });
+    it('forwards the shared lifecycle callbacks to the generic native URL frame', async () => {
         const onLoadStart = vi.fn();
         const onLoad = vi.fn();
         const onError = vi.fn();
@@ -71,13 +83,19 @@ describe('PluginHostedWebFrame native Artifact adoption', () => {
             />,
         );
 
-        expect(genericFrameProps.at(-1)).toMatchObject({ onLoadStart, onLoad, onError });
+        const frame = genericFrameProps.at(-1);
+        expect(frame).toMatchObject({ source: { uri: 'https://preview.example.test/' } });
+        await act(async () => {
+            (frame?.onLoadStart as ((event: unknown) => void))({ nativeEvent: { url: 'https://preview.example.test/' } });
+            (frame?.onLoadEnd as ((event: unknown) => void))({ nativeEvent: { url: 'https://preview.example.test/' } });
+            (frame?.onError as ((event: unknown) => void))({ nativeEvent: { code: 'unreachable' } });
+        });
+        expect(onLoadStart).toHaveBeenCalledOnce();
+        expect(onLoad).toHaveBeenCalledOnce();
+        expect(onError).toHaveBeenCalledOnce();
     });
 
     it('uses the opaque Artifact frame and its canonical custom-scheme bridge instead of a generic URL frame', async () => {
-        genericFrameProps.length = 0;
-        artifactFrameProps.length = 0;
-        inlineDocumentFrameProps.length = 0;
         const onMessage = vi.fn();
         const { PluginHostedWebFrame } = await import('./PluginHostedWebFrame.native');
 
@@ -132,17 +150,16 @@ describe('PluginHostedWebFrame native Artifact adoption', () => {
         });
         const receive = artifactFrameProps.at(-1)?.onMessage as ((event: unknown) => void) | undefined;
         receive?.({ nativeEvent: { url: `${frameOrigin}/index.html`, data: rawMessage } });
-        expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({ kind: 'ready' }), undefined);
+        expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({ kind: 'ready' }), expect.objectContaining({
+            consumeTransientActivation: expect.any(Function),
+        }));
     });
 
     it('registers by-value HTML with the incumbent isolated native frame instead of passing it to the generic WebView', async () => {
-        genericFrameProps.length = 0;
-        artifactFrameProps.length = 0;
-        inlineDocumentFrameProps.length = 0;
         const onMessage = vi.fn();
         const { PluginHostedWebFrame } = await import('./PluginHostedWebFrame.native');
 
-        await renderScreen(
+        const screen = await renderScreen(
             <PluginHostedWebFrame
                 title="Caller view"
                 bundle={artifactHtmlBundleFromBodyV1('<!doctype html><p>isolated</p>')}
@@ -170,22 +187,29 @@ describe('PluginHostedWebFrame native Artifact adoption', () => {
 
         expect(artifactFrameProps).toEqual([]);
         expect(genericFrameProps).toEqual([]);
-        expect(inlineDocumentFrameProps).toHaveLength(1);
-        expect(inlineDocumentFrameProps[0]).toMatchObject({
+        expect(screen.root.findAllByType('HappierHostedWebFrame')).toHaveLength(1);
+        const registration = nativeModule.registerInlineDocument.mock.calls.at(-1)?.[0];
+        expect(registration?.html).toContain('<p>isolated</p>');
+        const inlineFrame = inlineDocumentFrameProps.at(-1);
+        expect(inlineFrame).toMatchObject({
             title: 'Caller view',
-            bundle: artifactHtmlBundleFromBodyV1('<!doctype html><p>isolated</p>'),
+            inlineDocumentHandleToken: registration?.token,
             testID: 'caller-html-frame',
-            networkOrigins: undefined,
-            bootstrapConfig: undefined,
         });
-        expect(inlineDocumentFrameProps[0]?.bridge).toEqual(expect.objectContaining({
-            identity: { instanceId: 'caller-1', mountNonce: 'nonce-1' },
+        expect(inlineFrame).not.toHaveProperty('bundle');
+        expect(inlineFrame).not.toHaveProperty('html');
+        const receive = inlineFrame?.onMessage as ((event: unknown) => void) | undefined;
+        receive?.({ nativeEvent: {
+            url: `happier-hosted-artifact://${registration?.token}/`,
+            data: JSON.stringify({ version: 1, identity: { instanceId: 'caller-1', mountNonce: 'nonce-1' },
+                sequence: 1, kind: 'ready', payload: null }),
+        } });
+        expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({ kind: 'ready' }), expect.objectContaining({
+            consumeTransientActivation: expect.any(Function),
         }));
     });
 
     it('keeps the native Artifact mounted behind the shared accessible loading presentation and forwards its lifecycle callbacks', async () => {
-        genericFrameProps.length = 0;
-        artifactFrameProps.length = 0;
         const onLoadStart = vi.fn();
         const onLoadEnd = vi.fn();
         const onLoadError = vi.fn();
@@ -261,8 +285,6 @@ describe('PluginHostedWebFrame native Artifact adoption', () => {
     });
 
     it('forwards only an Artifact guest go-back command and its current history fact to the native Artifact frame', async () => {
-        genericFrameProps.length = 0;
-        artifactFrameProps.length = 0;
         const onHistoryStateChange = vi.fn();
         const onGoBackResult = vi.fn();
         const { PluginHostedWebFrame } = await import('./PluginHostedWebFrame.native');
@@ -296,11 +318,8 @@ describe('PluginHostedWebFrame native Artifact adoption', () => {
         );
 
         const artifact = artifactFrameProps.at(-1);
-        expect(artifact).toMatchObject({
-            navigationCommand: { commandId: 'guest-back-1', kind: 'goBack' },
-        });
-        (artifact?.onHistoryStateChange as ((canGoBack: boolean) => void) | undefined)?.(true);
-        (artifact?.onGoBackResult as ((handled: boolean) => void) | undefined)?.(false);
+        expect(nativeModule.goBack).toHaveBeenCalledOnce();
+        (artifact?.onHistoryStateChange as ((event: unknown) => void) | undefined)?.({ nativeEvent: { canGoBack: true } });
 
         expect(onHistoryStateChange).toHaveBeenCalledExactlyOnceWith(true);
         expect(onGoBackResult).toHaveBeenCalledExactlyOnceWith(false);

@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '../strings/maxCodeUnits.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
@@ -35,7 +36,7 @@ export type AutomationRunFailureDetailCorrespondenceV1 = z.infer<
 export const AutomationRunFailureDetailStoredPayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   correspondence: AutomationRunFailureDetailCorrespondenceV1Schema,
-  detail: z.string().check(z.minLength(1), z.maxLength(MAX_AUTOMATION_RUN_FAILURE_DETAIL_CODE_UNITS_V1)),
+  detail: z.string().check(z.minLength(1), maxCodeUnits(MAX_AUTOMATION_RUN_FAILURE_DETAIL_CODE_UNITS_V1)),
 }));
 export type AutomationRunFailureDetailStoredPayloadV1 = z.infer<
   typeof AutomationRunFailureDetailStoredPayloadV1Schema

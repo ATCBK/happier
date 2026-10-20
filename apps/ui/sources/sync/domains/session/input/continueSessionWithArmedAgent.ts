@@ -496,6 +496,7 @@ export type ArmedAgentContinuationPreparation = PreparedArmedAgentContinuation |
 export async function prepareArmedAgentContinuation(
     submission: ArmedAgentContinuationSubmission,
     currentOwnerMetadata: Metadata | null,
+    options?: Readonly<{ signal?: AbortSignal }>,
 ): Promise<ArmedAgentContinuationPreparation> {
     const authoredMode = submission.input.meta?.permissionMode;
     if (!Object.prototype.hasOwnProperty.call(submission.input.meta ?? {}, 'permissionMode')) {
@@ -511,7 +512,7 @@ export async function prepareArmedAgentContinuation(
     }
     const capability = await machineCapabilitiesDetect(submission.machineId, {
         requests: [{ id: 'tool.sessionAgentTransition' }],
-    }, { serverId: submission.serverId });
+    }, { serverId: submission.serverId, ...(options?.signal ? { signal: options.signal } : {}) });
     const detected = capability.supported ? capability.response.results['tool.sessionAgentTransition'] : undefined;
     const support = detected?.ok === true
         && detected.data !== null && typeof detected.data === 'object'
@@ -536,7 +537,7 @@ export async function prepareArmedAgentContinuation(
 
 export async function continueSessionWithArmedAgent(
     prepared: PreparedArmedAgentContinuation,
-    options?: Readonly<{ isCurrent?: () => boolean; onBeforeTransitionDispatch?: () => boolean }>,
+    options?: Readonly<{ isCurrent?: () => boolean; onBeforeTransitionDispatch?: () => boolean; signal?: AbortSignal }>,
 ): Promise<ArmedAgentContinuationOutcome> {
     const { submission } = prepared;
     const refuseLocally = (message: string | null): ArmedAgentContinuationOutcome => ({
@@ -550,6 +551,7 @@ export async function continueSessionWithArmedAgent(
     const result = await runSessionAgentTransitionOnMachine({
         machineId: submission.machineId,
         serverId: submission.serverId,
+        ...(options?.signal ? { signal: options.signal } : {}),
         request: {
             v: 1,
             sessionId: submission.sessionId,

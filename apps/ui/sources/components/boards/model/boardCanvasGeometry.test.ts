@@ -89,6 +89,30 @@ describe('board canvas geometry', () => {
             members: members.filter(member => member.key !== 'filtered-0'), previous: new Map() }));
     });
 
+    it('never draws two cards over each other when stored positions collide (FA19 W10)', () => {
+        // The stored rectangles of a Board whose items were not all visible when they were placed
+        // (a card that settles late sits where another was later set down).
+        const members = [{ key: 'habit', width: 408, height: 120 }, { key: 'session', width: 408, height: 72 },
+            { key: 'run', width: 408, height: 96 }, { key: 'agent', width: 408, height: 96 }];
+        const saved = { run: { x: 432, y: 0 }, habit: { x: 0, y: 96 }, session: { x: 144, y: 120 }, agent: { x: 432, y: 120 } };
+        const input = { members, positionsByItemRef: saved, columnCount: 2, snap: true, previous: new Map() };
+        const positions = resolveBoardCanvasPositions(input);
+        for (const a of members) for (const b of members) {
+            if (a.key === b.key) continue;
+            const first = positions.get(a.key)!, second = positions.get(b.key)!;
+            expect(first.x < second.x + b.width && second.x < first.x + a.width
+                && first.y < second.y + b.height && second.y < first.y + a.height, `${a.key} / ${b.key}`).toBe(false);
+        }
+        // Board order decides who keeps a contested place; the others settle at the nearest free grid slot.
+        expect(positions.get('habit')).toEqual(saved.habit);
+        expect(positions.get('run')).toEqual(saved.run);
+        for (const member of members) {
+            expect(positions.get(member.key)!.x % step, member.key).toBe(0);
+            expect(positions.get(member.key)!.y % step, member.key).toBe(0);
+        }
+        expect(resolveBoardCanvasPositions({ ...input, previous: positions })).toBe(positions);
+    });
+
     it('compacts filtered automatic cards into balanced columns while preserving saved rectangles', () => {
         const members = Array.from({ length: 6 }, (_, index) => ({ key: `card-${index}`, width: 408, height: 72 }));
         const previous = new Map(members.map((member, index) => [member.key, { x: 0, y: 200 + index * 88 }]));

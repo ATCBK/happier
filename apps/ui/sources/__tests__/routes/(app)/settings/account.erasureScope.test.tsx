@@ -1,16 +1,16 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import type { IModal } from '@/modal';
 import { AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema } from '@happier-dev/protocol';
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
 import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
-import { installLocalStorageMock, installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
-import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createAccountTokenForTests, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { initializeTerminalRouteRuntimeForTests } from '../terminal/terminalRouteTestHelpers';
 
@@ -25,22 +25,20 @@ vi.mock('expo-camera', () => ({
     useCameraPermissions: () => [{ granted: true }, async () => ({ granted: true })],
     CameraView: { isModernBarcodeScannerAvailable: false, onModernBarcodeScanned: () => ({ remove() {} }), launchScanner() {}, async dismissScanner() {} },
 }));
+const browser = await installBrowserRuntimeForTests({ url: 'https://origin.example.test' });
 await initializeTerminalRouteRuntimeForTests();
+afterAll(() => browser.restore());
 
 describe('Account erasure original confirmation target', () => {
-    let restoreStorage: (() => void) | undefined;
-    let restoreLocks: (() => void) | undefined;
     afterEach(async () => {
         await (await import('@/sync/runtime/orchestration/connectionManager')).disconnectActiveServerConnection();
         (await import('@/utils/system/runtimeFetch')).resetRuntimeFetch();
-        prompt.mockReset(); vi.restoreAllMocks(); restoreLocks?.(); restoreStorage?.(); vi.unstubAllGlobals();
+        prompt.mockReset(); vi.restoreAllMocks(); vi.unstubAllGlobals();
     });
 
     it('retains both Home credentials when focus changes inside the DELETE prompt', async () => {
-        restoreStorage = installLocalStorageMock().restore;
-        restoreLocks = installWebLockManagerMock().restore;
-        vi.stubGlobal('window', { location: { origin: 'https://origin.example.test' } });
-        vi.stubGlobal('document', {});
+        browser.activate();
+        browser.window.sessionStorage.clear();
         const erasures: Array<{ home: string; authorization: string | null }> = [];
         const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
         setRuntimeFetch(async (input, init) => {
@@ -62,6 +60,7 @@ describe('Account erasure original confirmation target', () => {
             return new Response('{}', { status: 404 });
         });
         const profiles = await import('@/sync/domains/server/serverProfiles');
+        const runtime = await import('@/sync/domains/server/serverRuntime');
         profiles.resetServerProfilesRuntimeForTests();
         const homeA = await profiles.upsertServerProfile({ serverUrl: 'https://prompt-a.example.test', name: 'Prompt A' });
         const homeB = await profiles.upsertServerProfile({ serverUrl: 'https://prompt-b.example.test', name: 'Prompt B' });
@@ -70,7 +69,7 @@ describe('Account erasure original confirmation target', () => {
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
         await expect(TokenStorage.setCredentialsForServerUrl(homeA.serverUrl, { serverId: homeA.id }, original)).resolves.toBe(true);
         await expect(TokenStorage.setCredentialsForServerUrl(homeB.serverUrl, { serverId: homeB.id }, other)).resolves.toBe(true);
-        await profiles.setActiveServerId(homeA.id, { scope: 'device' });
+        await runtime.setActiveServer({ serverId: homeA.id, scope: 'device' });
         const connection = await import('@/sync/runtime/orchestration/connectionManager');
         await connection.switchConnectionToActiveServer();
         const { storage } = await import('@/sync/domains/state/storage');
@@ -85,14 +84,15 @@ describe('Account erasure original confirmation target', () => {
             const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
             expect(captureActiveServerAccountScopeLifetime()?.scope.accountId).toBe('account-a');
             prompt.mockImplementationOnce(async () => {
-                await profiles.setActiveServerId(homeB.id, { scope: 'device' });
+                await runtime.setActiveServer({ serverId: homeB.id, scope: 'device' });
+                expect(runtime.getActiveServerSnapshot().serverUrl).toBe(homeB.serverUrl);
                 await auth.refreshFromActiveServer();
                 storage.getState().activateProfileScope({ serverId: profiles.resolveServerProfileScopeIdForIdentifier(homeB.id), accountId: 'account-b' });
                 return 'DELETE';
             });
             await act(async () => { await screen.pressByTestIdAsync('settings-account-delete'); });
             expect(prompt).toHaveBeenCalledOnce();
-            expect(getCurrentAuth()?.credentials).toEqual(other);
+            await waitForHomeGovernance(() => expect(getCurrentAuth()?.credentials).toEqual(other));
             expect(erasures).toEqual([]);
             expect(await TokenStorage.getCredentialsForServerUrl(homeA.serverUrl, { serverId: homeA.id })).toEqual(original);
             expect(await TokenStorage.getCredentialsForServerUrl(homeB.serverUrl, { serverId: homeB.id })).toEqual(other);

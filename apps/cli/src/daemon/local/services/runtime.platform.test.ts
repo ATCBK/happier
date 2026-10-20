@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ChildProcess } from 'node:child_process';
-import { installLocalServiceCensusFixture } from './inventory/platform/censusFixture.testkit';
+import * as fs from 'node:fs/promises';
+import { installLocalServiceCensusFixture, localServiceProcfsFixture } from './inventory/platform/censusFixture.testkit';
 import { createLocalServicesDaemonRuntime } from './runtime';
+import { createLocalServiceEndpointEnricher } from './inventory/endpoint';
 
 const execFileMock = vi.hoisted(() => vi.fn());
 
@@ -33,7 +35,81 @@ function mockProcessPlatform(platform: NodeJS.Platform): () => void {
 describe('createLocalServicesDaemonRuntime platform scanner dispatch', () => {
     afterEach(() => {
         execFileMock.mockReset();
+        vi.restoreAllMocks();
+        vi.useRealTimers();
         vi.resetModules();
+    });
+
+    it('attributes only internal listeners for summaries, then fully attributes a presentation reader joining that scan', async () => {
+        vi.useFakeTimers();
+        const restorePlatform = mockProcessPlatform('linux');
+        const processes = [
+            { pid: 100, command: ['happier', 'daemon'] },
+            { pid: 321, command: ['node', 'vite'], cwd: '/repo/web' },
+        ];
+        installLocalServiceCensusFixture(processes);
+        const census = localServiceProcfsFixture(processes);
+        const header = 'sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode';
+        const tcp = [header,
+            '0: 0100007F:1435 00000000:0000 0A 0 0 0 501 0 12345',
+            '1: 0100007F:1F91 00000000:0000 0A 0 0 0 501 0 99999',
+        ].join('\n');
+        vi.mocked(fs.readFile).mockImplementation(async path => String(path) === '/proc/net/tcp6' ? header
+            : String(path) === '/proc/net/tcp' ? tcp : census.readFile(String(path)));
+        const openedFdOwners: string[] = [];
+        vi.mocked(fs.readdir).mockImplementation(async path => {
+            const name = String(path);
+            if (name === '/proc') return ['100', '321', '777', String(process.pid)] as never;
+            openedFdOwners.push(name);
+            return ['3'] as never;
+        });
+        let releaseInternalRead: (() => void) | undefined;
+        let holdInternalRead = false;
+        vi.mocked(fs.readlink).mockImplementation(async path => {
+            const name = String(path);
+            if (name === '/proc/100/fd/3') {
+                if (holdInternalRead) await new Promise<void>(resolve => { releaseInternalRead = resolve; });
+                return 'socket:[99999]';
+            }
+            if (name === '/proc/321/fd/3') return 'socket:[12345]';
+            return name.includes('/fd/') ? '/dev/null' : census.readlink(name);
+        });
+        const runtime = createLocalServicesDaemonRuntime({
+            machineId: 'machine-a', inventoryEnabled: () => true, internalProcessPids: () => [100],
+            workspaceFacts: () => [], refreshIntervalMs: 1_000,
+            endpointEnricher: createLocalServiceEndpointEnricher({ now: Date.now, timeoutMs: 250,
+                concurrency: 1, successTtlMs: 30_000, failureTtlMs: 5_000, probe: async () => true }),
+        });
+        const unsubscribe = runtime.subscribeSummary(() => {});
+        try {
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect(runtime.getSummary()).toEqual({ v: 1, state: 'ready', runningCount: 1 });
+            expect(openedFdOwners).toEqual(['/proc/100/fd']);
+            expect(runtime.inventoryRegistry.getSnapshot().generatedAt).toBe(0);
+            openedFdOwners.length = 0;
+            holdInternalRead = true;
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect(releaseInternalRead).toBeTypeOf('function');
+            const detailed = runtime.inventoryRoutes.getSnapshot();
+            holdInternalRead = false;
+            releaseInternalRead?.();
+            const snapshot = await detailed;
+            expect(snapshot.entries.find(entry => entry.port === 5173)?.provenance?.process)
+                .toMatchObject({ pid: 321, cwd: '/repo/web' });
+            expect(snapshot.entries.find(entry => entry.port === 8081)?.classification?.kind).toBe('happier');
+            expect(openedFdOwners).toContain('/proc/321/fd');
+            expect(runtime.getSummary()).toEqual({ v: 1, state: 'ready', runningCount: 1 });
+            unsubscribe();
+            openedFdOwners.length = 0;
+            await vi.advanceTimersByTimeAsync(3_000);
+            expect(openedFdOwners).toEqual([]);
+        } finally {
+            holdInternalRead = false;
+            releaseInternalRead?.();
+            unsubscribe();
+            await runtime.stop();
+            restorePlatform();
+        }
     });
 
     it('uses the Windows platform scanner for win32 default inventory refreshes', async () => {

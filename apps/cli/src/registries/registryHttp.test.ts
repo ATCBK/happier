@@ -1,9 +1,28 @@
-import {describe,expect,it} from 'vitest';
+import {describe,expect,it,vi} from 'vitest';
 import {createRegistryHttpV1} from './registryHttp';
 import type {RegistrySourceV1} from '@happier-dev/protocol/registries';
 import {RegistrySourceStatusV1Schema} from '@happier-dev/protocol/registries';
 const source:RegistrySourceV1={id:'repo',title:'Repo',url:'https://github.com/a/b',format:'git',kinds:['skill'],enabled:true,addedAt:0,token:{secretRef:'secret'}};
 describe('registry HTTP boundary',()=>{
+  it('allows a rejected-token check at the upstream reset across Action host factories',async()=>{
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      let calls=0;
+      const transport:typeof fetch=async()=>++calls===1
+        ?new Response(null,{status:429,headers:{'retry-after':'2'}}):new Response(null,{status:401});
+      const url='https://registry-token-expiry.example/catalog';
+      const binding={source:{...source,url}};
+      const host=()=>createRegistryHttpV1({fetch:transport,resolveToken:async()=> 'rejected-fixture'});
+      expect(await host().getJson(url,binding)).toMatchObject({status:{state:'rate_limited',retryAt:3_000}});
+      vi.setSystemTime(2_999);
+      expect(await host().getJson(url,binding)).toMatchObject({status:{state:'rate_limited'}});
+      expect(calls).toBe(1);
+      vi.setSystemTime(3_000);
+      expect(await host().getJson(url,binding)).toEqual({ok:false,status:{state:'auth_failed'}});
+      expect(calls).toBe(2);
+    } finally { vi.useRealTimers(); }
+  });
   it('uses an unprefixed custom header when no scheme is declared',async()=>{
     let observed:string|null=null;
     const http=createRegistryHttpV1({resolveToken:async()=> 'value',fetch:async(_url,init)=>{

@@ -34,6 +34,13 @@ export type WorkspaceSyncRelationshipPreparation = Readonly<{
   targetReplacementApprovalActionInput?: unknown;
 }>;
 
+/** Exact requester-admitted inputs consumed by the incumbent controller, never a new definition source. */
+export type WorkspaceSyncFlushExpectation = Readonly<{
+  relationship: WorkspaceSyncRelationshipV1;
+  workspaceRefs: readonly WorkspaceRefV1[];
+  assertCurrent(): Promise<void>;
+}>;
+
 /** A read-only participant in a root already fenced by a linked workspace. */
 export type WorkspaceSyncSourceRootLoan = Readonly<{
   handle: WorkspaceRootOwnershipHandle;
@@ -57,7 +64,7 @@ export interface ManagedWorkspaceSync {
   subscribe(relationshipId: string, signal: AbortSignal): AsyncIterable<WorkspaceSyncStatusV1>;
   ensure(definition: WorkspaceSyncRelationshipV1, signal?: AbortSignal, preparation?: WorkspaceSyncRelationshipPreparation): Promise<WorkspaceSyncStatusV1>;
   copyOnce(input: WorkspaceSyncCopyOnceV1, signal?: AbortSignal, ownershipHandles?: readonly WorkspaceRootOwnershipHandle[]): Promise<WorkspaceSyncStatusV1>;
-  flush(relationshipId: string, signal?: AbortSignal): Promise<WorkspaceSyncStatusV1>;
+  flush(relationshipId: string, signal?: AbortSignal, expected?: WorkspaceSyncFlushExpectation): Promise<WorkspaceSyncStatusV1>;
   pause(relationshipId: string, signal?: AbortSignal): Promise<WorkspaceSyncStatusV1>;
   resume(relationshipId: string, signal?: AbortSignal): Promise<WorkspaceSyncStatusV1>;
   terminate(relationshipId: string, signal?: AbortSignal): Promise<void>;

@@ -74,6 +74,7 @@ describe('createDaemonControlApp external Action ingress', () => {
       // owners and target/creation identity preparation remain real.
       executor: createActionExecutor(createCliActionDeps({
         token: credentials.token, credentials, serverId: 'server-local',
+        serverHttpBaseUrl: 'http://server-local.test',
         sessionId: '', mode: 'plain', ctx: null,
         sessionSpawnDirectTargetTransport: {
           machineId: 'machine-local',
@@ -82,7 +83,10 @@ describe('createDaemonControlApp external Action ingress', () => {
             return { ok: true, directory: '/fixture/managed', directoryKind: 'managed',
               directoryCreationRequired: false, checkout: null };
           },
-          spawn: async () => { throw new Error('Fixture daemon cannot spawn processes'); },
+          spawnedSession: {
+            spawn: async () => { throw new Error('Fixture daemon cannot spawn processes'); },
+            resolveSpawnSessionByNonce: async () => ({ status: 'not_found' }),
+          },
         },
       })),
     });

@@ -9,6 +9,7 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import { serverAccountScopeKeySuffix, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { SessionViewerSourceAccountScopeProvider, useSessionViewerSourceAccountLifetime } from './SessionViewerSourceAccountScope';
 import { SessionViewerControllerScope, useOptionalSessionViewerController } from './SessionViewerController';
+import { useSessionDestinationAccountBinding } from './SessionViewerDestinationScope';
 
 function AccountBoundSource(props: React.PropsWithChildren<Readonly<{
     slotId: string;
@@ -31,6 +32,7 @@ function AccountBoundSource(props: React.PropsWithChildren<Readonly<{
 
 /** Source identity is qualified by its incumbent destination and Session/Home binding. */
 export function RetainedSessionViewerSource(props: Readonly<{
+    sessionId: string;
     slotId: string;
     serverId: string | null;
     accountLifetime?: ServerAccountScopeLifetime | null;
@@ -46,7 +48,12 @@ export function RetainedSessionViewerSource(props: Readonly<{
     // The body renders in the route-stable portal: carry the Session's viewer owner with it, so the
     // body can tell its presentation who it shows without resolving another owner there.
     const viewerController = useOptionalSessionViewerController();
-    const lifetime = props.accountLifetime === undefined ? inheritedLifetime : props.accountLifetime;
+    const suppliedLifetime = props.accountLifetime === undefined ? inheritedLifetime : props.accountLifetime;
+    const destinationLifetime = useSessionDestinationAccountBinding(props.sessionId, props.serverId ?? suppliedLifetime?.scope.serverId ?? null);
+    // Session, standalone Details and sticky frames bind one destination-owned body. A panel's
+    // temporary Account reader must neither restart it on handoff nor retire it when the panel leaves.
+    // Null is an unresolved destination authority; only an absent destination uses standalone custody.
+    const lifetime = destinationLifetime === undefined ? suppliedLifetime : destinationLifetime;
     // A nullable pane Home can use only its admitted Session authority, never ambient selection.
     if (!lifetime?.isCurrent() || (props.serverId !== null
         && !areServerProfileIdentifiersEquivalent(lifetime.scope.serverId, props.serverId))) return null;

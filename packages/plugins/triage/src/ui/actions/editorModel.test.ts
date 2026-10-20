@@ -41,7 +41,7 @@ describe('an open action draft revision', () => {
 describe('which actions an entry is offered', () => {
     it('offers an action on the subjects it declares, in the configured order', () => {
         expect(planTriageOfferedActionsV1(TRIAGE_DEFAULT_ACTIONS_V1, 'pullRequest')
-            .map((action) => action.actionId)).toEqual(['ask', 'fix', 'review']);
+            .map((action) => action.actionId)).toEqual(['ask', 'fix', 'review', 'explain-pr']);
         // The ordinary agent Review is declared on pull requests alone, so an
         // error group is offered the other two.
         expect(planTriageOfferedActionsV1(TRIAGE_DEFAULT_ACTIONS_V1, 'errorIssue')
@@ -95,14 +95,14 @@ describe('the words on a configured control', () => {
 describe('moving one action inside the set', () => {
     it('produces an exact permutation the writer will accept', () => {
         expect(triageMovedActionOrderV1(TRIAGE_DEFAULT_ACTIONS_V1, 'fix', 'up'))
-            .toEqual(['fix', 'ask', 'review']);
+            .toEqual(['fix', 'ask', 'review', 'explain-pr']);
         expect(triageMovedActionOrderV1(TRIAGE_DEFAULT_ACTIONS_V1, 'fix', 'down'))
-            .toEqual(['ask', 'review', 'fix']);
+            .toEqual(['ask', 'review', 'fix', 'explain-pr']);
     });
 
     it('refuses a move off either end rather than wrapping or writing a no-op', () => {
         expect(triageMovedActionOrderV1(TRIAGE_DEFAULT_ACTIONS_V1, 'ask', 'up')).toBeNull();
-        expect(triageMovedActionOrderV1(TRIAGE_DEFAULT_ACTIONS_V1, 'review', 'down')).toBeNull();
+        expect(triageMovedActionOrderV1(TRIAGE_DEFAULT_ACTIONS_V1, 'explain-pr', 'down')).toBeNull();
         expect(triageMovedActionOrderV1(TRIAGE_DEFAULT_ACTIONS_V1, 'not-a-stored-action', 'up'))
             .toBeNull();
     });

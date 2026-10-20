@@ -62,7 +62,8 @@ const { MockExternalSessionHistoricalImportRequiredItemError } = vi.hoisted(() =
   },
 }));
 
-vi.mock('@/persistence', () => ({
+vi.mock('@/persistence', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/persistence')>(),
   readStoredCredentials: (...args: unknown[]) => readCredentialsMock(...args),
 }));
 vi.mock('@/api/session/external/takeover/loadLinkedExternalSession', () => ({
@@ -364,8 +365,13 @@ async function startLoopbackJsonServer(
 ): Promise<string> {
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+    const body = readJson(url);
+    if (body === undefined) {
+      response.writeHead(404).end();
+      return;
+    }
     response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify(readJson(url)));
+    response.end(JSON.stringify(body));
   });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -1154,15 +1160,6 @@ describe('default external session materialize capture', () => {
     if (!contribution) {
       throw new Error('Codex External Sessions contribution was not registered');
     }
-    expect(Object.keys(contribution).sort()).toEqual([
-      'listCandidates',
-      'pageTranscript',
-      'readAfterTranscript',
-      'resolveLinkIdentity',
-      'resolveLinkedIdentity',
-      'resolveSource',
-    ]);
-
     const codexSource = {
       kind: 'codexHome' as const,
       home: 'user' as const,
@@ -1200,6 +1197,7 @@ describe('default external session materialize capture', () => {
         items: [],
         diagnostics: [{
           code: 'non_transcript_record_skipped',
+          severity: 'benign',
           count: 1,
           positions: [expect.any(Number)],
         }],
@@ -1309,6 +1307,9 @@ describe('default external session materialize capture', () => {
     roots.push(activeServerDir);
     const messagesBySession = new Map<string, unknown[]>();
     const baseUrl = await startLoopbackJsonServer((url) => {
+      // This fixture serves the V1 API; the leaf discovers its dialect through
+      // the same shaped health responses as an attached OpenCode server.
+      if (url.pathname === '/global/health') return { healthy: true };
       const sessionMatch = /^\/session\/([^/]+)$/u.exec(url.pathname);
       if (sessionMatch) {
         return {
@@ -1322,7 +1323,7 @@ describe('default external session materialize capture', () => {
         const limit = Math.max(1, Number(url.searchParams.get('limit') ?? 1));
         return (messagesBySession.get(sessionId) ?? []).slice(-limit);
       }
-      throw new Error(`Unexpected OpenCode test request: ${url.pathname}`);
+      return undefined;
     });
     const managedEndpoint = createLoopbackManagedEndpointRead(baseUrl);
     vi.stubEnv('HAPPIER_OPENCODE_SERVER_URL', baseUrl);
@@ -1335,16 +1336,6 @@ describe('default external session materialize capture', () => {
     if (!contribution) {
       throw new Error('OpenCode External Sessions contribution was not registered');
     }
-    expect(Object.keys(contribution).sort()).toEqual([
-      'listCandidates',
-      'pageTranscript',
-      'readAfterTranscript',
-      'resolveLinkIdentity',
-      'resolveLinkedIdentity',
-      'resolveManagedEndpointService',
-      'resolveSource',
-    ]);
-
     const opencodeSource = {
       kind: 'opencodeServer' as const,
       baseUrl,

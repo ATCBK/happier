@@ -7,7 +7,8 @@ import {
 import tweetnacl from 'tweetnacl';
 
 import { encodeBase64 } from '@/encryption/base64';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { Encryption } from '@/sync/encryption/encryption';
+import { legacyAccountKvVectors } from '../../../../../../packages/protocol/src/crypto/fixtures/accountKvLegacyV0';
 
 const LEGACY_SECRET_BYTES = new Uint8Array(32).fill(7);
 const LEGACY_SECRET = encodeBase64(LEGACY_SECRET_BYTES, 'base64url');
@@ -25,7 +26,6 @@ const mocks = vi.hoisted(() => ({
     kvGet: vi.fn(),
     kvList: vi.fn(),
     kvMutate: vi.fn(),
-    kvSet: vi.fn(),
     getServerFeaturesSnapshot: vi.fn(),
     accountEncryption: null as null | {
         encryptRaw: (value: unknown) => Promise<string>;
@@ -42,7 +42,6 @@ const mocks = vi.hoisted(() => ({
         doneOrder: string[];
         versions: Record<string, number>;
     },
-    randomUUID: vi.fn(() => 'todo-plain-1'),
 }));
 
 vi.mock('@/sync/api/account/apiAccountEncryptionMode', () => ({
@@ -59,7 +58,6 @@ vi.mock('@/sync/api/account/apiKv', () => ({
     kvBulkGet: vi.fn(),
     kvList: mocks.kvList,
     kvMutate: mocks.kvMutate,
-    kvSet: mocks.kvSet,
     kvDelete: vi.fn(),
 }));
 
@@ -80,26 +78,13 @@ vi.mock('@/sync/runtime/getSyncSingleton', () => ({
         getCredentials: () => ({ token: 'token', secret: LEGACY_SECRET }) }),
 }));
 
-vi.mock('@/platform/randomUUID', () => ({
-    randomUUID: mocks.randomUUID,
-}));
-
-vi.mock('@/auth/context/AuthContext', () => ({
-    getCurrentAuth: () => ({ credentials: { token: 'token-only' } }),
-}));
-
 import {
-    addTodo,
-    deleteTodo,
     fetchTodos,
     initializeTodoSync,
     reorderTodos,
-    toggleTodo,
-    updateTodoTitle,
 } from './todoOps';
 import { TodoStoredContentUnavailableError } from './todoStoredContent';
 import {
-    decodeBase64StoredJsonContentEnvelope,
     encodeBase64StoredJsonContentEnvelope,
 } from '@/sync/encryption/base64StoredJsonContent';
 
@@ -118,7 +103,6 @@ describe('todoOps plaintext account storage', () => {
         mocks.kvGet.mockReset();
         mocks.kvList.mockReset();
         mocks.kvMutate.mockReset();
-        mocks.kvSet.mockReset();
         mocks.getServerFeaturesSnapshot.mockReset();
         mocks.getServerFeaturesSnapshot.mockResolvedValue({
             status: 'ready',
@@ -136,7 +120,6 @@ describe('todoOps plaintext account storage', () => {
             },
         });
         mocks.accountEncryption = null;
-        mocks.randomUUID.mockClear();
         mocks.todoState = {
             todos: {},
             undoneOrder: [],
@@ -224,7 +207,7 @@ describe('todoOps plaintext account storage', () => {
         expect(mocks.applyTodos).not.toHaveBeenCalled();
     });
 
-    it('retains the predecessor raw-ciphertext read path when encryption material exists', async () => {
+    it('opens and lazily re-seals real predecessor item/index shapes before Todo projection', async () => {
         mocks.fetchAccountEncryptionCurrentness.mockResolvedValue({
             mode: 'e2ee',
             version: 1,
@@ -232,29 +215,17 @@ describe('todoOps plaintext account storage', () => {
             contentKeyFingerprint: LEGACY_ACCOUNT_MIGRATION_KEY_FINGERPRINT,
             updatedAt: 0,
         });
-        mocks.accountEncryption = {
-            encryptRaw: vi.fn(),
-            decryptRaw: vi.fn(async (encoded: string) => {
-                if (encoded === 'raw-index') {
-                    return {
-                        undoneOrder: ['item-1'],
-                        completedOrder: [],
-                    };
-                }
-                return {
-                    id: 'item-1',
-                    title: 'Historical todo',
-                    done: false,
-                    createdAt: 1,
-                    updatedAt: 1,
-                };
-            }),
-        };
+        const encryption = await Encryption.create(LEGACY_SECRET_BYTES);
+        mocks.accountEncryption = encryption;
         mocks.kvList.mockResolvedValue({
-            items: [
-                { key: 'todo.item-1', value: 'raw-item', version: 2 },
-                { key: 'todo.index', value: 'raw-index', version: 3 },
-            ],
+            items: legacyAccountKvVectors.map(row => ({ key: row.key, value: row.encoded, version: 6 })),
+        });
+        const paired = await Encryption.createFromContentKeyPair({ publicKey: encryption.contentDataKey, machineKey: encryption.getContentPrivateKey() });
+        mocks.kvMutate.mockImplementation(async (_credentials, rows: { key: string; value: string; version: number }[]) => {
+            const row = rows[0]!;
+            expect(row.version).toBe(6);
+            await expect(paired.decryptRaw(row.value)).resolves.toEqual(legacyAccountKvVectors.find(fixture => fixture.key === row.key)!.value);
+            return { success: true, results: [{ key: row.key, version: 7 }] };
         });
 
         await expect(fetchTodos({
@@ -262,9 +233,10 @@ describe('todoOps plaintext account storage', () => {
             secret: LEGACY_SECRET,
         })).resolves.toMatchObject({
             todos: {
-                'item-1': { title: 'Historical todo' },
+                'fx51-legacy': { title: 'QA FX51 synthetic legacy task' },
             },
-            undoneOrder: ['item-1'],
+            undoneOrder: ['fx51-legacy'],
+            versions: { 'todo.fx51-legacy': 7, 'todo.index': 7 },
         });
     });
 
@@ -351,108 +323,6 @@ describe('todoOps plaintext account storage', () => {
         expect(encryption.decryptRaw).not.toHaveBeenCalled();
     });
 
-    it('preserves the legacy E2EE Todo writer without requiring marker capability', async () => {
-        mocks.accountEncryption = {
-            encryptRaw: vi.fn(async (value: unknown) =>
-                `released-ciphertext:${JSON.stringify(value)}`),
-            decryptRaw: vi.fn(),
-        };
-        mocks.fetchAccountEncryptionCurrentness.mockResolvedValue({
-            mode: 'e2ee',
-            version: 1,
-            signingKeyFingerprint: 'signing-current',
-            contentKeyFingerprint: LEGACY_ACCOUNT_MIGRATION_KEY_FINGERPRINT,
-            updatedAt: 0,
-        });
-        mocks.kvGet.mockResolvedValue(null);
-        mocks.kvMutate.mockResolvedValue({
-            success: true,
-            results: [
-                { key: 'todo.todo-plain-1', version: 1 },
-                { key: 'todo.index', version: 1 },
-            ],
-        });
-        mocks.getServerFeaturesSnapshot.mockResolvedValue({
-            status: 'ready',
-            features: {
-                capabilities: {},
-            },
-        });
-
-        await expect(addTodo(
-            { token: 'token', secret: LEGACY_SECRET },
-            'Encrypted todo',
-        )).resolves.toBe('todo-plain-1');
-
-        expect(mocks.getServerFeaturesSnapshot).not.toHaveBeenCalled();
-        expect(mocks.kvMutate).toHaveBeenCalledTimes(1);
-    });
-
-    it('writes todo and index values as canonical plain KV envelopes', async () => {
-        mocks.fetchAccountEncryptionMode.mockResolvedValue({ mode: 'plain', updatedAt: 0 });
-        mocks.kvGet.mockResolvedValue(null);
-        mocks.kvMutate.mockResolvedValue({
-            success: true,
-            results: [
-                { key: 'todo.todo-plain-1', version: 1 },
-                { key: 'todo.index', version: 1 },
-            ],
-        });
-
-        await expect(addTodo({ token: 'token-only' }, 'Plain todo')).resolves.toBe('todo-plain-1');
-
-        const mutations = mocks.kvMutate.mock.calls[0]?.[1];
-        expect(mutations).toHaveLength(2);
-        expect(
-            decodeBase64StoredJsonContentEnvelope(mutations[0].value),
-        ).toMatchObject({
-            t: 'plain',
-            v: { id: 'todo-plain-1', title: 'Plain todo' },
-        });
-        expect(
-            decodeBase64StoredJsonContentEnvelope(mutations[1].value),
-        ).toEqual({
-            t: 'plain',
-            v: { undoneOrder: ['todo-plain-1'], completedOrder: [] },
-        });
-    });
-
-    it('refuses Todo writes and rolls back when an old Home lacks Account currentness', async () => {
-        // This contract uses the actual Sync, store, Account reader and KV client. Only the HTTP
-        // endpoint is unavailable; a missing feature snapshot is not the current write authority.
-        vi.resetModules();
-        for (const moduleId of [
-            '@/sync/api/account/apiAccountEncryptionMode',
-            '@/sync/api/capabilities/serverFeaturesClient',
-            '@/sync/api/account/apiKv',
-            '@/sync/domains/state/storage',
-            '@/sync/runtime/getSyncSingleton',
-            '@/auth/context/AuthContext',
-        ]) vi.doUnmock(moduleId);
-        const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-        const request = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-            Response.json({ error: 'not-found' }, { status: 404 }));
-        setRuntimeFetch(request);
-        try {
-            await loadSyncSingletonForTests();
-            const { storage } = await import('@/sync/domains/state/storage');
-            const priorState = { todos: {}, undoneOrder: [], doneOrder: [], versions: {} };
-            storage.getState().applyTodos(priorState);
-            const { addTodo: addTodoWithRealOwners } = await import('./todoOps');
-
-            await expect(addTodoWithRealOwners({ token: 'token-only' }, 'Do not send')).rejects.toMatchObject({
-                code: 'todo_stored_content_unavailable',
-                key: 'todo.index',
-                reason: 'account_currentness_unavailable',
-            });
-            expect(request).toHaveBeenCalledTimes(1);
-            expect(String(request.mock.calls[0]?.[0])).toMatch(/\/v1\/account\/encryption\/currentness$/);
-            expect(storage.getState().todoState).toEqual(priorState);
-        } finally {
-            resetRuntimeFetch();
-        }
-    });
-
     it('does not misreport encrypted Todo storage as empty when key material is unavailable', async () => {
         mocks.kvList.mockResolvedValue({
             items: [{
@@ -520,78 +390,7 @@ describe('todoOps plaintext account storage', () => {
         expect(mocks.todoState).toBe(priorState);
     });
 
-    it('does not write or retain an optimistic add when the authoritative index is unreadable', async () => {
-        const priorState = {
-            todos: {
-                existing: {
-                    id: 'existing',
-                    title: 'Keep me',
-                    done: false,
-                    createdAt: 1,
-                    updatedAt: 1,
-                },
-            },
-            undoneOrder: ['existing'],
-            doneOrder: [],
-            versions: {
-                'todo.existing': 1,
-                'todo.index': 4,
-            },
-        };
-        mocks.todoState = priorState;
-        mocks.kvGet.mockResolvedValue({
-            key: 'todo.index',
-            value: encodeBase64StoredJsonContentEnvelope({
-                t: 'plain',
-                v: { undoneOrder: ['existing'], completedOrder: false },
-            }),
-            version: 4,
-        });
-
-        await expect(addTodo({ token: 'token-only' }, 'Must not persist')).rejects.toMatchObject({
-            code: 'todo_stored_content_unavailable',
-            key: 'todo.index',
-        });
-
-        expect(mocks.kvMutate).not.toHaveBeenCalled();
-        expect(mocks.todoState).toEqual(priorState);
-    });
-
-    it('refuses an optimistic mutation whose authoritative baseline envelope mismatches Account mode', async () => {
-        const priorState = {
-            todos: {},
-            undoneOrder: [],
-            doneOrder: [],
-            versions: { 'todo.index': 4 },
-        };
-        mocks.todoState = priorState;
-        mocks.accountEncryption = {
-            encryptRaw: vi.fn(),
-            decryptRaw: vi.fn(async () => ({
-                undoneOrder: [],
-                completedOrder: [],
-            })),
-        };
-        mocks.kvGet.mockResolvedValue({
-            key: 'todo.index',
-            value: 'released-encrypted-ciphertext',
-            version: 4,
-        });
-
-        await expect(addTodo(
-            { token: 'token-only' },
-            'Must not persist',
-        )).rejects.toMatchObject({
-            code: 'todo_stored_content_unavailable',
-            key: 'todo.index',
-            reason: 'account_mode_mismatch',
-        });
-
-        expect(mocks.kvMutate).not.toHaveBeenCalled();
-        expect(mocks.todoState).toEqual(priorState);
-    });
-
-    it('fails closed across item and index mutation paths when their server baselines are unreadable', async () => {
+    it('fails closed when the authoritative reorder index is unreadable', async () => {
         const priorState = {
             todos: {
                 existing: {
@@ -609,57 +408,19 @@ describe('todoOps plaintext account storage', () => {
                 'todo.index': 4,
             },
         };
-        const malformedItem = {
-            key: 'todo.existing',
-            value: encodeBase64StoredJsonContentEnvelope({
-                t: 'plain',
-                v: { id: 'existing', title: 'Unreadable' },
-            }),
-            version: 2,
-        };
-        const validIndex = {
-            key: 'todo.index',
-            value: encodeBase64StoredJsonContentEnvelope({
-                t: 'plain',
-                v: { undoneOrder: ['existing'], completedOrder: [] },
-            }),
-            version: 4,
-        };
-        const malformedIndex = {
-            ...validIndex,
-            value: encodeBase64StoredJsonContentEnvelope({
-                t: 'plain',
-                v: { undoneOrder: null, completedOrder: [] },
-            }),
-        };
-
-        for (const mutate of [
-            () => updateTodoTitle({ token: 'token-only' }, 'existing', 'Changed'),
-            () => toggleTodo({ token: 'token-only' }, 'existing'),
-            () => deleteTodo({ token: 'token-only' }, 'existing'),
-        ]) {
-            mocks.todoState = priorState;
-            mocks.kvGet.mockImplementation(async (_credentials: unknown, key: string) =>
-                key === 'todo.index' ? validIndex : malformedItem
-            );
-
-            await expect(mutate()).rejects.toMatchObject({
-                code: 'todo_stored_content_unavailable',
-                key: 'todo.existing',
-            });
-            expect(mocks.todoState).toEqual(priorState);
-        }
-
         mocks.todoState = priorState;
-        mocks.kvGet.mockResolvedValue(malformedIndex);
+        mocks.kvGet.mockResolvedValue({
+            key: 'todo.index',
+            value: encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: { undoneOrder: null, completedOrder: [] } }),
+            version: 4,
+        });
         await expect(
-            reorderTodos({ token: 'token-only' }, 'existing', { anchorId: null, placement: 'before' }),
+            reorderTodos({ token: `header.${Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64url')}.signature` }, 'existing', { anchorId: null, placement: 'before' }),
         ).rejects.toMatchObject({
             code: 'todo_stored_content_unavailable',
             key: 'todo.index',
         });
 
-        expect(mocks.kvSet).not.toHaveBeenCalled();
         expect(mocks.kvMutate).not.toHaveBeenCalled();
         expect(mocks.todoState).toEqual(priorState);
     });

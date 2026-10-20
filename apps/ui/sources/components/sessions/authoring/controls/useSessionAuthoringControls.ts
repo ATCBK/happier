@@ -24,6 +24,7 @@ import { buildExtendedContextModelControl } from '@/sync/domains/models/extended
 import {
     findModelOptionForEffectiveModelId,
     getModelOptionsForSession,
+    resolveSessionModelLabel,
     supportsFreeformModelSelectionForSession,
     type ModelOption,
 } from '@/sync/domains/models/modelOptions';
@@ -185,24 +186,27 @@ export function useSessionAuthoringControls(
 
     const selectedModelLabel = React.useMemo(() => {
         const found = findModelOptionForEffectiveModelId(modelOptions, effectiveModelPolicy.selectedModelId);
-        if (found) return found.label;
+        if (found && found.label !== found.value) return found.label;
+        const label = resolveSessionModelLabel(agentId, composerOptionsInput, effectiveModelPolicy.selectedModelId);
+        if (label) return label;
         return effectiveModelPolicy.selectedModelId === 'default'
             ? t('agentInput.model.useCliSettings')
             : effectiveModelPolicy.selectedModelId;
-    }, [effectiveModelPolicy.selectedModelId, modelOptions]);
+    }, [agentId, composerOptionsInput, effectiveModelPolicy.selectedModelId, modelOptions]);
 
     const appliedModelPresentation = React.useMemo<SessionAuthoringAppliedModelPresentation | null>(() => {
         const appliedModelId = effectiveModelPolicy.appliedModelId;
         if (!appliedModelId) return null;
         const found = findModelOptionForEffectiveModelId(modelOptions, appliedModelId);
-        const label = found?.label ?? appliedModelId;
+        const label = found && found.label !== found.value ? found.label
+            : resolveSessionModelLabel(agentId, composerOptionsInput, appliedModelId) ?? appliedModelId;
         const status: ReportedModelStatus = resolveReportedModelStatus(input.sessionActive);
         return {
             optionValue: found?.value ?? appliedModelId,
             status,
             summary: reportedModelSummary(status, label),
         };
-    }, [effectiveModelPolicy.appliedModelId, input.sessionActive, modelOptions]);
+    }, [agentId, composerOptionsInput, effectiveModelPolicy.appliedModelId, input.sessionActive, modelOptions]);
 
     // One line under the section label: what is running, and when a change to it
     // takes effect. Anything a provider adds beyond that stays a note, so the

@@ -9,6 +9,12 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
         machineRpcWithServerScopeMock(...args),
 }));
 
+await Promise.all([
+    import('./machineRpc'),
+    import('../actions/runtimeActionExecutor'),
+    import('@/sync/ops/actions/defaultRuntimeActionExecutor'),
+]);
+
 const snapshot = {
     v: 1 as const,
     machineId: 'machine_1',
@@ -43,20 +49,25 @@ describe('local service launcher machine RPC client', () => {
         machineRpcWithServerScopeMock.mockReset();
     });
 
-    it('keeps the reviewed destination across the real runtime and launcher clients without rerouting source custody', async () => {
+    it('routes the reviewed exact destination through the real launcher while preserving SOURCE declaration custody', async () => {
         const choice = { kind: 'workers', destination: { kind: 'machine', machineId: 'reviewed-worker' } } as const;
         // Only the Machine transport is replaced; parsing and both UI clients remain real.
         machineRpcWithServerScopeMock.mockImplementationOnce(async ({ machineId, payload }) => {
-            expect(machineId).toBe('machine_1');
-            return { ...startResponse, ...(JSON.stringify(payload.choice) === JSON.stringify(choice)
-                ? {} : { status: 'denied', reasonCode: 'reviewed_destination_missing' }) };
+            expect(machineId).toBe('reviewed-worker');
+            expect(payload).toMatchObject({ machineId: 'reviewed-worker', choice,
+                workspace: { machineId: 'machine_1', workspaceId: 'source-ref' }, declaration: { workspaceRefId: 'source-ref' } });
+            return { ...startResponse, machineId, status: 'denied', reasonCode: 'native_boundary_observed',
+                snapshot: { ...startResponse.snapshot, machineId } };
         });
         const { startLocalServiceLauncherTargetViaMachineRpc } = await import('./machineRpc');
         const { createLocalServicesRuntimeActionExecutor } = await import('../actions/runtimeActionExecutor');
+        const { buildLocalServiceLauncherStartRequest } = await import('@/components/sessions/localServices/launcherStartAction');
         const execute = createLocalServicesRuntimeActionExecutor({ startLauncherTarget: startLocalServiceLauncherTargetViaMachineRpc });
-        await expect(execute({ actionId: 'localServices.launcher.start', input: {
-            machineId: 'machine_1', targetId: 'target_1', choice,
-        }, context: { surface: 'ui', serverId: 'server_1' } })).resolves.toMatchObject({ status: 'succeeded' });
+        const request = buildLocalServiceLauncherStartRequest({ target: { ...startResponse.snapshot.targets[0]!,
+            workspace: { serverId: 'server_1', machineId: 'machine_1', workspaceId: 'source-ref', rootPath: '/source' },
+            declaration: { workspaceRefId: 'source-ref', selection: { kind: 'manifest', name: 'server' } } }, choice });
+        await expect(execute({ actionId: 'localServices.launcher.start', input: request,
+            context: { surface: 'ui', serverId: 'server_1' } })).resolves.toMatchObject({ status: 'denied', reasonCode: 'native_boundary_observed' });
     });
 
     it.each(['localServices.launcher.history.clear', 'localServices.launcher.snapshot', 'localServices.launcher.start'] as const)

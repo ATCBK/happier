@@ -2,6 +2,7 @@ import { listSettingsRouteNames } from '@/components/settings/navigation/setting
 import type { IconName } from '@/components/ui/icons/Icon';
 import type { TranslationKeyNoParams } from '@/text';
 import { createWorkspaceRouteMatcher } from './workspaceRouteMatch';
+import { isMachineSubPageId } from '@/components/machines/page/machineSubPages';
 
 // A navigator's root declaration and its index name describe the same location.
 // The Settings registry owns the actual leaf module name (including /index).
@@ -31,6 +32,9 @@ export const registeredWorkspaceRoutes: Readonly<Record<string, WorkspaceRouteRe
 export const workspaceRouteFiles: Readonly<Record<string, string>> = {
     ...Object.fromEntries(Object.entries(registeredWorkspaceRoutes).map(([routeKey, route]) => [routeKey, route.moduleKey])),
     "external/browse": "./(app)/external/browse.tsx",
+    "discussions": "./(app)/discussions/index.tsx",
+    "discussions/new": "./(app)/discussions/new.tsx",
+    "discussions/[discussionId]": "./(app)/discussions/[discussionId].tsx",
     "artifacts": "./(app)/artifacts/index.tsx",
     "artifacts/new": "./(app)/artifacts/new.tsx",
     "artifacts/[id]": "./(app)/artifacts/[id].tsx",
@@ -66,6 +70,7 @@ export const workspaceRouteFiles: Readonly<Record<string, string>> = {
     "projects/[workspaceRefId]/scripts": "./(app)/projects/[workspaceRefId]/scripts.tsx",
     "projects/[workspaceRefId]/services": "./(app)/projects/[workspaceRefId]/services.tsx",
     "projects/[workspaceRefId]/context": "./(app)/projects/[workspaceRefId]/context.tsx",
+    "projects/[workspaceRefId]/memory": "./(app)/projects/[workspaceRefId]/memory.tsx",
     "projects/[workspaceRefId]": "./(app)/projects/[workspaceRefId]/index.tsx",
     "projects/[workspaceRefId]/terminal": "./(app)/projects/[workspaceRefId]/terminal.tsx",
     "projects": "./(app)/projects/index.tsx",
@@ -77,11 +82,10 @@ export const workspaceRouteFiles: Readonly<Record<string, string>> = {
     "session/[id]/automations": "./(app)/session/[id]/automations.tsx",
     "session/[id]/triggers": "./(app)/session/[id]/triggers.tsx",
     "session/[id]/commit": "./(app)/session/[id]/commit.tsx",
-    "session/[id]/discussions/new": "./(app)/session/[id]/discussions/new.tsx",
-    "session/[id]/discussions/[discussionId]": "./(app)/session/[id]/discussions/[discussionId].tsx",
     "session/[id]/file": "./(app)/session/[id]/file.tsx",
     "session/[id]/files": "./(app)/session/[id]/files.tsx",
     "session/[id]/follow": "./(app)/session/[id]/follow.tsx",
+    "session/[id]/follow-source": "./(app)/session/[id]/follow-source.tsx",
     "session/[id]/git": "./(app)/session/[id]/git.tsx",
     "session/[id]/info": "./(app)/session/[id]/info.tsx",
     "session/[id]/log": "./(app)/session/[id]/log.tsx",
@@ -106,4 +110,22 @@ export const workspaceRouteFiles: Readonly<Record<string, string>> = {
 const matchDestinationRoute = createWorkspaceRouteMatcher(Object.keys(workspaceRouteFiles));
 export function matchWorkspaceDestinationRoute(pathname: string) {
     return matchDestinationRoute(pathname);
+}
+
+/** Expo search params include path params; only the remaining params belong in the URL query. */
+export function workspaceRouteHref(pathname: string, params: Readonly<Record<string, string | string[] | undefined>>): string {
+    const route = matchWorkspaceDestinationRoute(pathname);
+    // A machine's pushed page has one canonical path. Query deep links enter
+    // that same route; Storage/Guard's own `page` values remain query state.
+    const machineSubPage = (route?.routeKey === 'machines/[id]' || route?.routeKey === 'settings/machines/[id]')
+        && isMachineSubPageId(params.page) ? params.page : null;
+    const pathParams = route?.params ?? {};
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+        if (Object.hasOwn(pathParams, key) || machineSubPage && key === 'page') continue;
+        if (Array.isArray(value)) for (const part of value) query.append(key, part);
+        else if (typeof value === 'string') query.append(key, value);
+    }
+    const path = machineSubPage ? `${pathname.replace(/\/$/, '')}/${machineSubPage}` : pathname;
+    return `${path}${query.size ? `?${query}` : ''}`;
 }

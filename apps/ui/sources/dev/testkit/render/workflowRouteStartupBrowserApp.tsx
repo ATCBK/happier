@@ -18,7 +18,8 @@ import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredCo
 import { WorkflowRunRecipientCensusResponseV1Schema } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
 import { WorkflowInvocationListRequestV1Schema, WorkflowRunGetRequestV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
 import { EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES } from '@happier-dev/protocol';
-import { z } from 'zod';
+import { z } from 'zod/mini';
+import { z as zMini } from 'zod/mini';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
 
 const credentials = { token: 'header.eyJzdWIiOiJhY2NvdW50LWEifQ==.signature' };
@@ -29,9 +30,9 @@ const unservedHttpPaths: string[] = [];
 const httpFetch = globalThis.fetch.bind(globalThis);
 // Server registerWorkflowRunStorageRoutes admits these storage-only fields;
 // they are deliberately not part of the public invocation-list Action input.
-const invocationStorageRequest = WorkflowInvocationListRequestV1Schema.extend({
-    progressEnvelopes: z.literal(true).optional(),
-    pageByteLimit: z.number().int().positive().max(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES).safe(),
+const invocationStorageRequest = zMini.extend(WorkflowInvocationListRequestV1Schema, {
+    progressEnvelopes: z.optional(z.literal(true)),
+    pageByteLimit: z.number().check(z.int(), z.positive(), z.maximum(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES), z.int()),
 });
 
 async function mount(seed = true, holdHome = false) {

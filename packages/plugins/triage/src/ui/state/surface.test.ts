@@ -51,6 +51,18 @@ function selectedAndFocused(): TriageSurfaceStateV1 {
 }
 
 describe('Triage surface reducer — focus and selection are independent cursors', () => {
+  it('keeps the Tasks page default in routed and saved lenses without imposing it on the PR page', () => {
+    const action = { kind: 'savedViewApplied', viewId: 'shared-view', query: 'reconnect',
+      filters: TRIAGE_LIST_NO_FILTERS_V1, order: 'newest', smartPolicy: CORPUS_DEFAULT_SMART_POLICY_V1 } as const;
+    const taskState = reduceTriageSurfaceV1(TRIAGE_SURFACE_INITIAL_STATE_V1, action, 'mine');
+    expect(taskState.filters.tasks).toBe('mine');
+    expect(taskState.search.query).toBe('reconnect');
+    expect(reduceTriageSurfaceV1(TRIAGE_SURFACE_INITIAL_STATE_V1, action).filters.tasks).toBeUndefined();
+    expect(reduceTriageSurfaceV1(taskState, { kind: 'settledRouteApplied', state: TRIAGE_SURFACE_INITIAL_STATE_V1 }, 'mine')
+      .filters.tasks).toBe('mine');
+    expect(reduceTriageSurfaceV1(taskState, { ...action, filters: { ...action.filters, tasks: 'agents' } }, 'mine')
+      .filters.tasks).toBe('agents');
+  });
   it('takes the qualified selection from the CURRENT focus when the focused row is activated', () => {
     const focused = focusedOn('13');
 

@@ -1,4 +1,5 @@
 import { stat } from 'node:fs/promises';
+import { readSessionInputPromptUserTextV1 } from '@happier-dev/plugin-sdk/sessions/external';
 
 import {
     isRecord,
@@ -55,7 +56,7 @@ function readTitleCandidate(value: string): string | null {
 
 function coerceTextContent(content: unknown): string | null {
     if (typeof content === 'string') {
-        return readTitleCandidate(content);
+        return readTitleCandidate(readSessionInputPromptUserTextV1(content));
     }
     if (!Array.isArray(content)) return null;
 
@@ -65,7 +66,7 @@ function coerceTextContent(content: unknown): string | null {
         })
         .filter((part) => part.trim().length > 0)
         .join(' ');
-    return readTitleCandidate(text);
+    return readTitleCandidate(readSessionInputPromptUserTextV1(text));
 }
 
 function readClaudeTitleIndexState(value: unknown): ClaudeTitleIndexState | null {
@@ -84,6 +85,10 @@ function readClaudeTitleIndexState(value: unknown): ClaudeTitleIndexState | null
         || (value.aiTitle !== null && typeof value.aiTitle !== 'string')
         || (value.fallbackTitle !== null && typeof value.fallbackTitle !== 'string')
     ) return null;
+    // Older checkpoints treated a host prompt echo as the first user title.
+    // Re-derive it from the same native file, including the unchanged-EOF path.
+    if (typeof value.fallbackTitle === 'string'
+        && readSessionInputPromptUserTextV1(value.fallbackTitle) !== value.fallbackTitle) return null;
     return Object.freeze({
         v: 1,
         kind: 'claude_title_index',

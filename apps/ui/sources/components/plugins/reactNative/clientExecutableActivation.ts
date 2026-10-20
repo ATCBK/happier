@@ -108,16 +108,17 @@ async function createProjectedClientExecutableActivation(input: Readonly<{
     const { accountLifetime, reader, target } = input;
     const serverId = target.authority.serverId;
     if (!reader || !accountLifetime || !serverId || !isCurrent(input)) return null;
-    let committed = false;
+    let claimedByComposition = false;
     let activation: PluginUiClientExecutableActivation;
     const scopeIsCurrent = () => accountLifetime.isCurrent() && (
-        committed && input.retainCommittedActivation
+        claimedByComposition && input.retainCommittedActivation
             ? input.composition.isCurrentActivation(activation)
             : isCurrent(input)
     );
 
     const acquired = await acquirePluginReactNativeArtifactAvailability({
         reader,
+        executionOrigin: target.executionOrigin,
         artifactGraph: target.artifactGraph,
         cacheIdentity: target.cacheIdentity,
         accountLifetime,
@@ -173,15 +174,18 @@ async function createProjectedClientExecutableActivation(input: Readonly<{
         backend: input.backend,
         isCurrent: () => scopeIsCurrent() && acquired.isCurrent(),
         createScope: (registrationScope) => {
+            // The complete-set composition claims this exact target before
+            // creating its scope. Equivalent inventory updates retain that
+            // claim even while foreign activation is still preparing.
+            claimedByComposition = true;
             const derivedScope = input.createDerivedScope?.({ target, registrationScope }) ?? null;
             let unwound = false;
             return Object.freeze({
                 commit: async () => {
-                    if (!isCurrent(input) || !acquired.isCurrent()) throw new Error('client_executable_activation_retired');
+                    if (!scopeIsCurrent() || !acquired.isCurrent()) throw new Error('client_executable_activation_retired');
                     if (derivedScope) await derivedScope.commit();
                     else registrationScope.commit();
-                    if (!isCurrent(input)) throw new Error('client_executable_activation_retired');
-                    committed = true;
+                    if (!scopeIsCurrent()) throw new Error('client_executable_activation_retired');
                 },
                 isCurrent: () => (
                     scopeIsCurrent()
@@ -230,13 +234,10 @@ export async function reconcileProjectedPluginUiClientExecutables(input: Readonl
     });
     const cache = getInstalledPluginReactNativeBundleCache();
     const backend = input.loaderBackend ?? resolveDefaultReactNativeLoaderBackend();
-    const prepared: Array<Readonly<{
-        activation: PluginUiClientExecutableActivation;
-        release: () => void;
-    }>> = [];
-    for (const target of targets) {
-        if (!isCurrent(input)) break;
-        const activation = await createProjectedClientExecutableActivation({
+    // Byte preparation is independent; settlement preserves target order for
+    // the one registration transaction and cleanup of every acquired lease.
+    const preparations = await Promise.allSettled(targets.map((target) => (
+        createProjectedClientExecutableActivation({
             target,
             composition,
             cache,
@@ -246,8 +247,15 @@ export async function reconcileProjectedPluginUiClientExecutables(input: Readonl
             isCurrent: input.isCurrent,
             retainCommittedActivation: input.retainCommittedActivation,
             createDerivedScope: input.createDerivedScope,
-        });
-        if (activation) prepared.push(activation);
+        })
+    )));
+    const prepared = preparations.flatMap((result) => (
+        result.status === 'fulfilled' && result.value ? [result.value] : []
+    ));
+    const failed = preparations.find((result) => result.status === 'rejected');
+    if (failed?.status === 'rejected') {
+        for (const candidate of prepared) release(candidate.release);
+        throw failed.reason;
     }
     if (!isCurrent(input)) {
         for (const candidate of prepared) release(candidate.release);

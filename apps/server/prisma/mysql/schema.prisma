@@ -36,6 +36,11 @@ model Account {
     createdArtifactTeamGrants ArtifactTeamGrant[] @relation("ArtifactTeamGrantCreator")
     createdArtifactGroupGrants ArtifactGroupGrant[] @relation("ArtifactGroupGrantCreator")
     artifactKeyEnvelopes ArtifactKeyEnvelope[] @relation("ArtifactKeyEnvelopeRecipient")
+    discussionAccountGrants DiscussionAccountGrant[] @relation("DiscussionAccountGrantRecipient")
+    createdDiscussionAccountGrants DiscussionAccountGrant[] @relation("DiscussionAccountGrantCreator")
+    createdDiscussionTeamGrants DiscussionTeamGrant[] @relation("DiscussionTeamGrantCreator")
+    createdDiscussionGroupGrants DiscussionGroupGrant[] @relation("DiscussionGroupGrantCreator")
+    discussionKeyEnvelopes DiscussionKeyEnvelope[] @relation("DiscussionKeyEnvelopeRecipient")
     workflowRunDataKeyEnvelopes WorkflowRunDataKeyEnvelope[]
     teamCredentialActivityEvents TeamCredentialActivityEvent[]
     custodiedTeamCredentialResources TeamCredentialResource[]
@@ -78,6 +83,8 @@ model Account {
     sessionAutoFollowTeam Boolean @default(false)
     sessionAutoFollowGroup Boolean @default(false)
     sessionFollows AccountSessionFollow[]
+    /// Private receiver routing suppression, distinct from a Follow edge or Unfollow.
+    deliveryMutes String? @db.LongText
     preferredHomeServerIdentityId String?
 
     // Profile
@@ -175,10 +182,11 @@ model Account {
     SessionOrganizationOrderEntry SessionOrganizationOrderEntry[]
     SessionOrganizationLabel      SessionOrganizationLabel[]
     SessionOrganizationCheckpoint SessionOrganizationCheckpoint?
-    SessionDiscussionsCreated     SessionDiscussion[]
-    SessionDiscussionMessages     SessionDiscussionMessage[]
-    SessionDiscussionMentions     SessionDiscussionMessageMention[]
-    SessionDiscussionReadStates   SessionDiscussionReadState[]
+    DiscussionsOwned              Discussion[] @relation("DiscussionOwner")
+    DiscussionsCreated            Discussion[] @relation("DiscussionCreator")
+    DiscussionMessages            DiscussionMessage[]
+    DiscussionMentions            DiscussionMessageMention[]
+    DiscussionReadStates          DiscussionReadState[]
     AccountSessionReadStates      AccountSessionReadState[]
 }
 
@@ -279,6 +287,7 @@ model Team {
     managedMachinePresets ManagedMachinePreset[]
     machineGrants MachineTeamGrant[]
     artifactGrants ArtifactTeamGrant[]
+    discussionGrants DiscussionTeamGrant[]
     credentialActivityEvents TeamCredentialActivityEvent[]
     credentialResources TeamCredentialResource[]
     id                          String                    @id @default(cuid())
@@ -598,6 +607,7 @@ model TeamDirectoryGroupMember {
 model TeamGroup {
     machineGrants MachineGroupGrant[]
     artifactGrants ArtifactGroupGrant[]
+    discussionGrants DiscussionGroupGrant[]
     credentialGrants TeamCredentialGroupGrant[]
     id               String   @id @default(cuid())
     teamId           String
@@ -1424,6 +1434,8 @@ model Session {
     originKind        String              @default("none")
     originSessionId   String?
     originRunId       String?
+    originDiscussionId String?
+    originDiscussionParticipantSlotId String?
     workDepth         Int                 @default(0)
     teamCredentialBindings SessionTeamCredentialBinding[]
     id                String              @id @default(cuid())
@@ -1433,6 +1445,9 @@ model Session {
     createdByApiToken AccountApiToken? @relation("ApiTokenCreatedSessions", fields: [createdByApiTokenId], references: [id], onDelete: SetNull)
     account           Account             @relation(fields: [accountId], references: [id])
     accountFollows    AccountSessionFollow[]
+    accountExecutionRunFollows AccountSessionFollow[] @relation("AccountFollowExecutionRunSource")
+    /// Receiver routing suppression for this Session, independent of Follow edges.
+    deliveryMutes     String? @db.LongText
     /// Explicit authored Team context only; access remains grant-owned.
     primaryTeamId     String?
     primaryTeam       Team?                @relation("SessionPrimaryTeam", fields: [primaryTeamId], references: [id], onDelete: SetNull)
@@ -1469,6 +1484,8 @@ model Session {
     pendingActivationManagedTarget Json?
     pendingPermissionRequestCount   Int                 @default(0)
     pendingUserActionRequestCount   Int                 @default(0)
+    /// Shared-metadata Action confirmations; owner Agent-state writes never replace this contribution.
+    pendingSharedActionConfirmationCount Int             @default(0)
     pendingRequestObservedAt        DateTime?
     latestTurnId                    String?
     latestTurnStatus                String?
@@ -1519,11 +1536,10 @@ model Session {
     accountChanges    AccountChange[]    @relation("AccountChangeSession")
     producedByAutomationRuns AutomationRun[] @relation("AutomationRunProducedSession")
     originatedWorkflowRuns AutomationRun[] @relation("WorkflowRunOriginSession")
-    discussions       SessionDiscussion[]
+    discussionParticipants DiscussionParticipant[]
     followSourceEdges      SessionFollowEdge[] @relation("SessionFollowSource")
+    followExecutionRunSourceEdges SessionFollowEdge[] @relation("ExecutionRunFollowSource")
     followDestinationEdges SessionFollowEdge[] @relation("SessionFollowDestination")
-    reportsTo              SessionReportsTo? @relation("SessionReportChild")
-    reports                SessionReportsTo[] @relation("SessionReportLead")
 
     @@unique([accountId, tag])
     @@index([createdByApiTokenId])
@@ -1877,12 +1893,17 @@ model SessionSubagentCustodyRetiredSource {
     @@unique([accountId, capacitySlot], map: "SubagentCustodyRetiredSource_capacity_slot_key")
 }
 
-/// One human discussion attached to a Session. Its readers are derived live
-/// from Session access: a discussion never owns an ACL, membership table,
-/// encryption key, runtime, or delivery queue.
-model SessionDiscussion {
+/// An independently owned conversation. Anchors are links, never lifetime,
+/// access, or key authorities. Grants use the shared resource grant policy.
+model Discussion {
     id                         String   @id @default(cuid())
-    sessionId                  String
+    ownerAccountId             String
+    encryptionMode             String
+    dataEncryptionKey          Bytes
+    anchorV1                   Json?
+    /// Indexed projection of the canonical Session anchor for pre-page queries.
+    /// No FK: deleting the source preserves the Discussion and unavailable link.
+    anchorSessionId            String?
     creationLocalId            String
     creationEqualityEvidenceV1 Json
     createdByAccountId         String?
@@ -1897,36 +1918,45 @@ model SessionDiscussion {
     createdAt                  DateTime @default(now())
     updatedAt                  DateTime @updatedAt
 
-    session                    Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-    createdByAccount           Account? @relation(fields: [createdByAccountId], references: [id], onDelete: SetNull)
-    messages                   SessionDiscussionMessage[]
-    readStates                 SessionDiscussionReadState[]
+    ownerAccount               Account  @relation("DiscussionOwner", fields: [ownerAccountId], references: [id], onDelete: Cascade)
+    createdByAccount           Account? @relation("DiscussionCreator", fields: [createdByAccountId], references: [id], onDelete: SetNull)
+    messages                   DiscussionMessage[]
+    readStates                 DiscussionReadState[]
+    accountGrants              DiscussionAccountGrant[]
+    teamGrants                 DiscussionTeamGrant[]
+    groupGrants                DiscussionGroupGrant[]
+    keyEnvelopes               DiscussionKeyEnvelope[]
+    participants               DiscussionParticipant[]
+    followDestinations         SessionFollowEdge[] @relation("DiscussionFollowSource")
+    accountFollows             AccountSessionFollow[] @relation("AccountFollowDiscussionSource")
 
-    @@unique([id, sessionId])
-    @@unique([sessionId, creationLocalId])
-    @@index([sessionId, archivedAt, lastMessageAt, id])
+    @@unique([createdByAccountId, creationLocalId])
+    @@index([ownerAccountId, archivedAt, lastMessageAt, id])
+    @@index([anchorSessionId, archivedAt, lastMessageAt])
 }
 
 /// One immutable authored human message. `producerV1` is null for a direct
 /// human post and mandatory for a post an Agent made on behalf of its
 /// authenticated execution Account, which remains `authorAccountId`.
-model SessionDiscussionMessage {
+model DiscussionMessage {
     id                        String   @id @default(cuid())
-    /// Present only to enforce cross-Session correspondence through the
-    /// composite foreign key. It is not independently writable after creation.
-    sessionId                 String
     discussionId              String
     localId                   String
     requestEqualityEvidenceV1 Json
     seq                       Int
     authorAccountId           String?
     producerV1                Json?
+    replyTargetV1             Json?
+    /// Original server-admitted participants and question cutoff; immutable with the message.
+    addressingV1              Json?
+    /// C5-owned decision output; null means this message has no proposal disposition.
+    docEditProposalDispositionV1 Json?
     content                   Json
     createdAt                 DateTime @default(now())
 
-    discussion                SessionDiscussion @relation(fields: [discussionId, sessionId], references: [id, sessionId], onDelete: Cascade)
+    discussion                Discussion @relation(fields: [discussionId], references: [id], onDelete: Cascade)
     authorAccount             Account? @relation(fields: [authorAccountId], references: [id], onDelete: SetNull)
-    mentions                  SessionDiscussionMessageMention[]
+    mentions                  DiscussionMessageMention[]
 
     @@unique([discussionId, localId])
     @@unique([discussionId, seq])
@@ -1936,12 +1966,12 @@ model SessionDiscussionMessage {
 
 /// "This Account was mentioned for attention." The row grants no access, implies
 /// no participation, and exposes no surrounding text.
-model SessionDiscussionMessageMention {
+model DiscussionMessageMention {
     messageId String
     accountId String
     createdAt DateTime @default(now())
 
-    message   SessionDiscussionMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+    message   DiscussionMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
     account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
     @@id([messageId, accountId])
@@ -1951,17 +1981,100 @@ model SessionDiscussionMessageMention {
 /// One private read cursor per tracked Account. A missing row never means
 /// historical unread: the tracking owner establishes the baseline before any
 /// unread can accrue, and another Account's cursor is never projected.
-model SessionDiscussionReadState {
+model DiscussionReadState {
     discussionId String
     accountId    String
     lastReadSeq  Int
     updatedAt    DateTime @updatedAt
 
-    discussion   SessionDiscussion @relation(fields: [discussionId], references: [id], onDelete: Cascade)
+    discussion   Discussion @relation(fields: [discussionId], references: [id], onDelete: Cascade)
     account      Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
     @@id([discussionId, accountId])
     @@index([accountId, discussionId])
+}
+
+model DiscussionAccountGrant {
+    discussionId String
+    accountId String
+    accessLevel ShareAccessLevel
+    createdByAccountId String
+    createdAt DateTime @default(now())
+
+    discussion Discussion @relation(fields: [discussionId], references: [id], onDelete: Cascade)
+    account Account @relation("DiscussionAccountGrantRecipient", fields: [accountId], references: [id], onDelete: Cascade)
+    createdBy Account @relation("DiscussionAccountGrantCreator", fields: [createdByAccountId], references: [id], onDelete: Cascade)
+
+    @@id([discussionId, accountId])
+    @@index([accountId, discussionId])
+}
+
+model DiscussionTeamGrant {
+    discussionId String
+    teamId String
+    accessLevel ShareAccessLevel
+    createdByAccountId String
+    createdAt DateTime @default(now())
+
+    discussion Discussion @relation(fields: [discussionId], references: [id], onDelete: Cascade)
+    team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+    createdBy Account @relation("DiscussionTeamGrantCreator", fields: [createdByAccountId], references: [id], onDelete: Cascade)
+
+    @@id([discussionId, teamId])
+    @@index([teamId, discussionId])
+}
+
+model DiscussionGroupGrant {
+    discussionId String
+    teamGroupId String
+    accessLevel ShareAccessLevel
+    createdByAccountId String
+    createdAt DateTime @default(now())
+
+    discussion Discussion @relation(fields: [discussionId], references: [id], onDelete: Cascade)
+    teamGroup TeamGroup @relation(fields: [teamGroupId], references: [id], onDelete: Cascade)
+    createdBy Account @relation("DiscussionGroupGrantCreator", fields: [createdByAccountId], references: [id], onDelete: Cascade)
+
+    @@id([discussionId, teamGroupId])
+    @@index([teamGroupId, discussionId])
+}
+
+model DiscussionKeyEnvelope {
+    discussionId String
+    recipientAccountId String
+    encryptedDataKey Bytes
+    recipientContentPublicKeyFingerprint String
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    discussion Discussion @relation(fields: [discussionId], references: [id], onDelete: Cascade)
+    recipient Account @relation("DiscussionKeyEnvelopeRecipient", fields: [recipientAccountId], references: [id], onDelete: Cascade)
+
+    @@id([discussionId, recipientAccountId])
+    @@index([recipientAccountId, discussionId])
+}
+
+/// Only executable Session participation is stored here; human invitations are
+/// grants. Delivery progress and suppression remain owned by Follow.
+model DiscussionParticipant {
+    discussionId String
+    participantSlotId String
+    sessionId String?
+    /// Frozen ordinary launch setup only for Discussion-owned model slots.
+    modelLaunch Json?
+    createdByAccountId String?
+    /// Owned slots retain exact Session identity for lifecycle retries/history.
+    removedAt DateTime?
+    answerPolicy String @default("when_addressed")
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    discussion Discussion @relation(fields: [discussionId], references: [id], onDelete: Cascade)
+    session Session? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+    @@id([discussionId, participantSlotId])
+    @@unique([discussionId, sessionId])
+    @@index([sessionId, discussionId])
 }
 
 enum SessionFollowNotificationLevel {
@@ -1971,29 +2084,47 @@ enum SessionFollowNotificationLevel {
 }
 
 model AccountSessionFollow {
+    id String @id @default(cuid())
     accountId String
-    sessionId String
+    sessionId String?
+    /// Session writers may omit this key; generic sources must provide it.
+    sourceKey String? @db.VarChar(202)
+    sourceDiscussionId String?
+    sourceExecutionRunSessionId String?
+    sourceExecutionRunId String?
+    sourceWorkflowRunId String?
+    deliveredDiscussionSeq Int?
+    deliveredExecutionRunTerminalEventId String?
+    deliveredWorkflowRunRevision Int?
     following Boolean @default(true)
     notificationLevel SessionFollowNotificationLevel @default(important)
+    hasPersistentFollow Boolean @default(true)
     includeInVoice Boolean @default(false)
     voiceDeliveredFrontier String?
+    /// Canonical personal event policy; legacy notificationLevel is read ingress only.
+    followPolicy String? @db.LongText
+    /// Armed or fulfilled one-shot custody, with original source identity and intent frontier.
+    notifyOnce String? @db.LongText
 
     account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
-    session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+    session Session? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+    sourceDiscussion Discussion? @relation("AccountFollowDiscussionSource", fields: [sourceDiscussionId], references: [id], onDelete: Cascade)
+    sourceExecutionRunSession Session? @relation("AccountFollowExecutionRunSource", fields: [sourceExecutionRunSessionId], references: [id], onDelete: Cascade)
+    sourceWorkflowRun AutomationRun? @relation("AccountFollowWorkflowRunSource", fields: [sourceWorkflowRunId], references: [id], onDelete: Cascade)
 
-    @@id([accountId, sessionId])
+    @@unique([accountId, sessionId])
+    @@unique([accountId, sourceKey])
     @@index([sessionId])
+    @@index([sourceDiscussionId])
+    @@index([sourceExecutionRunSessionId])
+    @@index([sourceWorkflowRunId])
 }
 
 enum SessionFollowDeliveredTurnStatus {
     completed
     failed
     cancelled
-}
-
-enum SessionFollowMode {
-    next_turn
-    wake_on_human_change
+    waiting
 }
 
 /// Durable Session-to-Session Follow relation.
@@ -2004,40 +2135,70 @@ enum SessionFollowMode {
 /// readiness, a pause flag, or a Follow-specific generation: every one of those
 /// is derived by its own owner from current facts.
 model SessionFollowEdge {
-    sourceSessionId      String
+    /// SQL enforces exactly one source FK and its matching domain-qualified key.
+    sourceKey            String @db.VarChar(202)
+    sourceSessionId      String?
+    sourceDiscussionId   String?
+    sourceExecutionRunSessionId String?
+    sourceExecutionRunId String?
+    sourceWorkflowRunId String?
     destinationSessionId String
-    mode                  SessionFollowMode @default(next_turn)
+    /// Manager is a relation on Follow, never an independent work-tree row.
+    relation              String @default("follower")
+    attachedAt            DateTime @default(now())
+    /// Nullable unique projection enforces one manager on all three providers.
+    /// SQL constraints require source identity for managers and null for followers.
+    managerSourceSessionId String? @unique
+    /// Strict FollowPolicyV1 JSON; no implicit policy for a new relation.
+    policyJson            String @db.LongText
     deliveredTranscriptSeq     Int    @default(0)
     deliveredReadyEventSeq     Int    @default(0)
     deliveredAgentStateVersion Int    @default(0)
     deliveredTurnId            String?
     deliveredTurnStatus        SessionFollowDeliveredTurnStatus?
+    deliveredExecutionRunTerminalEventId String?
+    deliveredWorkflowRunRevision Int?
 
-    sourceSession      Session @relation("SessionFollowSource", fields: [sourceSessionId], references: [id], onDelete: Cascade)
+    sourceSession      Session? @relation("SessionFollowSource", fields: [sourceSessionId], references: [id], onDelete: Cascade)
+    sourceDiscussion   Discussion? @relation("DiscussionFollowSource", fields: [sourceDiscussionId], references: [id], onDelete: Cascade)
+    sourceExecutionRunSession Session? @relation("ExecutionRunFollowSource", fields: [sourceExecutionRunSessionId], references: [id], onDelete: Cascade)
+    sourceWorkflowRun AutomationRun? @relation("WorkflowRunFollowSource", fields: [sourceWorkflowRunId], references: [id], onDelete: Cascade)
     destinationSession Session @relation("SessionFollowDestination", fields: [destinationSessionId], references: [id], onDelete: Cascade)
 
-    @@id([destinationSessionId, sourceSessionId])
+    @@id([destinationSessionId, sourceKey, relation])
+    @@unique([destinationSessionId, sourceSessionId, relation], map: "SessionFollowEdge_session_source_relation_key")
+    @@unique([destinationSessionId, sourceDiscussionId, relation], map: "SessionFollowEdge_discussion_source_relation_key")
     @@index([sourceSessionId])
-}
-
-/// Mutable single-parent work tree. Membership grants no Session authority.
-model SessionReportsTo {
-    sessionId                  String @id
-    leadSessionId              String
-    attachedAt                 DateTime @default(now())
-    deliveredTranscriptSeq     Int @default(0)
-    deliveredReadyEventSeq     Int @default(0)
-    deliveredAgentStateVersion Int @default(0)
-    deliveredTurnId            String?
-    deliveredTurnStatus        SessionFollowDeliveredTurnStatus?
-
-    session     Session @relation("SessionReportChild", fields: [sessionId], references: [id], onDelete: Cascade)
-    leadSession Session @relation("SessionReportLead", fields: [leadSessionId], references: [id], onDelete: Cascade)
-
-    @@index([leadSessionId])
+    @@index([sourceDiscussionId])
+    @@index([sourceExecutionRunSessionId, sourceExecutionRunId])
+    @@index([sourceWorkflowRunId])
 }
 
 model SessionMessage {
+    /// Private original-input reply custody; content stays in its encryption envelope.
+    replyProgress Json?
+    /// Query projections only; replyProgress retains authority.
+    replySourceSessionId String?
+    replySourceTurnId String?
+    replyDisposition String?
+    /// Indexed projection of the immutable admitted Machine for original-custody recovery.
+    replyTargetMachineId String?
+    /// Canonical original admitted input for this autonomous exchange.
+    autonomousExchangeRootSessionId String?
+    autonomousExchangeRootLocalId String?
+    /// Only the original input owns the mutable check-in projection.
+    autonomousExchangeState Json?
+    /// Host-settled causal classification; never inferred from encrypted text.
+    autonomousExchangeCause String?
+    /// Clear host-stamped accepted-turn identity; private acceptance content remains encrypted.
+    acceptedTurnKind String?
+    acceptedTurnId String?
+    /// Derived only after provider acceptance from this input's public original Follow identity.
+    acceptedFollowOriginalKey String?
+    /// Exact host Turn-begin witness for this original accepted input.
+    turnStartWitnessId String?
+    /// Input acceptance joined to the canonical started Turn and counted once at its root.
+    acceptedTurnCounted Boolean @default(false)
     id        String   @id @default(cuid())
     sessionId String
     session   Session  @relation(fields: [sessionId], references: [id])
@@ -2082,6 +2243,12 @@ model SessionMessage {
     @@index([sessionId, messageRole, seq])
     @@index([sessionId, sidechainId, messageRole, seq])
     @@index([authorAccountId, sessionId])
+    @@index([replySourceSessionId, replySourceTurnId], map: "SessionMessage_reply_source_idx")
+    @@index([sessionId, replyDisposition, localId], map: "SessionMessage_reply_disposition_idx")
+    @@index([replyTargetMachineId, replyDisposition, sessionId, localId], map: "SessionMessage_reply_machine_idx")
+    @@index([autonomousExchangeRootSessionId, autonomousExchangeRootLocalId], map: "SessionMessage_exchange_root_idx")
+    @@index([sessionId, acceptedTurnId], map: "SessionMessage_accepted_turn_idx")
+    @@index([sessionId, acceptedFollowOriginalKey], map: "SessionMessage_accepted_follow_original_idx")
 }
 
 enum SessionPendingMessageStatus {
@@ -2096,6 +2263,20 @@ enum PendingProviderAction {
 }
 
 model SessionPendingMessage {
+    /// Carried atomically to the committed original input when Pending retires.
+    replyProgress Json?
+    replySourceSessionId String?
+    replySourceTurnId String?
+    replyDisposition String?
+    replyTargetMachineId String?
+    /// Carried atomically to Message when this original input materializes.
+    autonomousExchangeRootSessionId String?
+    autonomousExchangeRootLocalId String?
+    /// Only the original input owns the mutable check-in projection.
+    autonomousExchangeState Json?
+    autonomousExchangeCause String?
+    /// Retained until Pending materializes, including Run-target turn starts.
+    turnStartWitnessId String?
     id              String                     @id @default(cuid())
     sessionId        String
     session          Session                    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
@@ -2137,6 +2318,10 @@ model SessionPendingMessage {
     @@index([sessionId, targetExecutionRunId, status, deliveryState, position], map: "SessionPendingMessage_sid_target_status_dstate_position_idx")
     @@index([sessionId, authorAccountId])
     @@index([sessionId, status, updatedAt])
+    @@index([replySourceSessionId, replySourceTurnId], map: "SessionPendingMessage_reply_source_idx")
+    @@index([sessionId, replyDisposition, localId], map: "SessionPendingMessage_reply_disposition_idx")
+    @@index([replyTargetMachineId, replyDisposition, sessionId, localId], map: "SessionPendingMessage_reply_machine_idx")
+    @@index([autonomousExchangeRootSessionId, autonomousExchangeRootLocalId, status], map: "SessionPendingMessage_exchange_root_idx")
 }
 
 model GithubOrganization {
@@ -2741,6 +2926,9 @@ model AutomationRun {
     originKind                 String   @default("automation")
     automationId               String?
     automation                 Automation? @relation(fields: [automationId], references: [id], onDelete: Restrict)
+    /// Immutable scope at Automation admission; false means historical scope was not captured.
+    automationScopeCaptured    Boolean @default(false)
+    automationScopeSessionId   String?
     originSessionId            String?
     originSession              Session? @relation("WorkflowRunOriginSession", fields: [originSessionId], references: [id], onDelete: SetNull)
     workflowAcceptedSnapshotEnvelope String? @db.LongText
@@ -2817,6 +3005,8 @@ model AutomationRun {
     assignments        AutomationRunAssignment[]
     workflowInvocations        WorkflowRunInvocation[]
     workflowDataKeyEnvelopes    WorkflowRunDataKeyEnvelope[]
+    accountFollows AccountSessionFollow[] @relation("AccountFollowWorkflowRunSource")
+    sessionFollowEdges SessionFollowEdge[] @relation("WorkflowRunFollowSource")
 
     @@index([accountId, state, dueAt])
     @@index([accountId, causeKind, state])
@@ -3240,6 +3430,7 @@ model Artifact {
     keyEnvelopes ArtifactKeyEnvelope[]
     id                String   @id // UUID provided by client
     accountId         String
+    kind              String?
     account           Account  @relation(fields: [accountId], references: [id])
     header            Bytes @db.LongBlob // Encrypted header (can contain JSON)
     headerVersion     Int      @default(0)
@@ -3259,6 +3450,7 @@ model Artifact {
 
     @@index([accountId])
     @@index([accountId, updatedAt])
+    @@index([accountId, kind])
 }
 
 model ArtifactRevision {

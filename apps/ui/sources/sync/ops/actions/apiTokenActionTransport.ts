@@ -4,7 +4,7 @@ import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionEx
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import type { ServerFetch } from '@/sync/http/client';
-import type { z } from 'zod';
+import { safeParse, type core } from 'zod/mini';
 export type ApiTokenActionTransport = Readonly<{ request: ServerFetch; target?: ExternalActionTargetV1 }>;
 export async function executeApiTokenAction(transport: ApiTokenActionTransport, actionId: ActionId, input: unknown, context?: ActionExecutorContext): Promise<ActionExecuteResult> {
     const refused = (code: string): ActionExecuteResult => ({ ok: false, errorCode: code, error: code });
@@ -13,8 +13,8 @@ export async function executeApiTokenAction(transport: ApiTokenActionTransport, 
     let body: unknown;
     try {
         const projection = actionId === 'session.spawn_new' ? projectSessionSpawnNewApiRequest(input) : { input, target: transport.target };
-        const inputSchema: z.ZodType<unknown> = PUBLIC_ACTION_INPUT_SCHEMAS[publicId.data];
-        const parsedInput = inputSchema.safeParse(projection.input);
+        const inputSchema: core.$ZodType<unknown> = PUBLIC_ACTION_INPUT_SCHEMAS[publicId.data];
+        const parsedInput = safeParse(inputSchema, projection.input);
         if (!parsedInput.success) return { ok: false, errorCode: 'invalid_parameters',
             error: parsedInput.error.issues.map((issue) => issue.message).join('; ') };
         const validatedInput = parsedInput.data;
@@ -32,7 +32,7 @@ export async function executeApiTokenAction(transport: ApiTokenActionTransport, 
     if (!parsed || parsed.actionId !== actionId || parsed.requestId !== undefined) return refused('invalid_action_output');
     if (!parsed.execution.ok) return parsed.execution;
     // This generic transport returns unknown; each Action's schema still validates its payload.
-    const outputSchema: z.ZodType<unknown> = PUBLIC_ACTION_OUTPUT_SCHEMAS[publicId.data];
-    const output = outputSchema.safeParse(parsed.execution.result);
+    const outputSchema: core.$ZodType<unknown> = PUBLIC_ACTION_OUTPUT_SCHEMAS[publicId.data];
+    const output = safeParse(outputSchema, parsed.execution.result);
     return output.success ? { ok: true, result: output.data } : refused('invalid_action_output');
 }

@@ -87,6 +87,24 @@ const response = UsageAnalyticsQueryResponseSchema.parse({
 });
 
 describe('buildUsageRecapCardModels', () => {
+    it('uses the witnessed favorite model even when unattributed usage leads the ranking', () => {
+        const filters = { period: '7days', metric: 'tokens', focus: null, costMode: 'auto' } as const;
+        const unknown = { key: 'unknown', label: 'unknown', eventCount: 4007 };
+        const viewModel = buildUsageAnalyticsViewModel({ ...response,
+            insights: { ...response.insights!, favoriteModel: { key: 'claude-haiku-4-5', label: 'claude-haiku-4-5' } },
+            leaders: { ...response.leaders!, models: [unknown, { key: 'claude-haiku-4-5', eventCount: 1561 }] },
+        }, filters);
+        const model = buildUsageRecapCardModels({ viewModel, filters }).find(card => card.id === 'model');
+        expect(model?.value).toBe(usageDimensionLabel('model', 'claude-haiku-4-5'));
+        const missing = buildUsageAnalyticsViewModel({ ...response,
+            insights: { ...response.insights!, favoriteModel: undefined },
+            leaders: { ...response.leaders!, models: [unknown] },
+            breakdowns: { ...response.breakdowns!, model: [] },
+        }, filters);
+        expect(buildUsageRecapCardModels({ viewModel: missing, filters }).find(card => card.id === 'model')?.value)
+            .toBe(t('usage.board.page.unattributed'));
+    });
+
     it('uses canonical leaders when the query omits model breakdowns and keeps missing money unavailable', () => {
         const filters = { period: '30days', metric: 'tokens', focus: null, costMode: 'auto' } as const;
         const viewModel = buildUsageAnalyticsViewModel({

@@ -11,6 +11,60 @@ import {
 } from './voiceConversationBindingStore';
 
 describe('createVoiceSessionBindingStore', () => {
+  it('does not notify subscribers when a storage refresh has equivalent persisted bindings', () => {
+    const store = createVoiceSessionBindingStore();
+    const binding = {
+      adapterId: 'local_conversation', controlSessionId: 'voice-global',
+      conversationSessionId: 'carrier-a',
+      conversationSessionAddress: { serverId: 'server-1', sessionId: 'carrier-a' },
+      transcriptMode: 'synthetic' as const, targetSessionAddress: null, updatedAt: 1,
+    };
+    store.getState().replacePersistedBindings([binding]);
+    const admitted = store.getState();
+    let notifications = 0;
+    const unsubscribe = store.subscribe(() => { notifications += 1; });
+    store.getState().replacePersistedBindings([{ ...binding }]);
+    expect(store.getState()).toBe(admitted);
+    expect(notifications).toBe(0);
+
+    store.getState().replacePersistedBindings([binding, {
+      ...binding, controlSessionId: 'voice-other', conversationSessionId: 'carrier-b',
+      conversationSessionAddress: { serverId: 'server-1', sessionId: 'carrier-b' },
+    }]);
+    expect(notifications).toBe(1);
+    expect(store.getState().persistedBindingsByConversationSessionId['carrier-a'])
+      .toBe(admitted.persistedBindingsByConversationSessionId['carrier-a']);
+    store.getState().replacePersistedBindings([]);
+    expect(store.getState().list()).toEqual([]);
+    expect(notifications).toBe(2);
+    unsubscribe();
+  });
+
+  it('does not publish equivalent runtime admission or removal of an absent binding', () => {
+    const store = createVoiceSessionBindingStore();
+    const binding = {
+      adapterId: 'local_conversation', controlSessionId: 'voice-global',
+      conversationSessionId: 'carrier-a',
+      conversationSessionAddress: { serverId: 'server-1', sessionId: 'carrier-a' },
+      transcriptMode: 'synthetic' as const, targetSessionAddress: null, updatedAt: 1,
+    };
+    store.getState().bind(binding);
+    const admitted = store.getState();
+    let notifications = 0;
+    const unsubscribe = store.subscribe(() => { notifications += 1; });
+    store.getState().bind({ ...binding });
+    store.getState().unbind('absent');
+    expect(store.getState()).toBe(admitted);
+    expect(notifications).toBe(0);
+    store.getState().bind({ ...binding, updatedAt: 2 });
+    expect(store.getState().getByConversationSessionId('carrier-a')?.updatedAt).toBe(2);
+    expect(notifications).toBe(1);
+    store.getState().unbind('carrier-a');
+    expect(store.getState().list()).toEqual([]);
+    expect(notifications).toBe(2);
+    unsubscribe();
+  });
+
   it('replaces stale bindings that reuse the same control session id', () => {
     const store = createVoiceSessionBindingStore();
 
@@ -297,6 +351,7 @@ describe('createVoiceSessionBindingStore', () => {
       owner,
       binding: runtimeBinding,
     });
+    const locallyAdmittedBindings = store.getState().bindingsByConversationSessionId;
     syncPersistedVoiceConversationBindings({
       store,
       state: {
@@ -321,6 +376,7 @@ describe('createVoiceSessionBindingStore', () => {
 
     expect(store.getState().getByControlSessionId(runtimeBinding.controlSessionId))
       .toMatchObject({ conversationSessionId: 'runtime-carrier-a' });
+    expect(store.getState().bindingsByConversationSessionId).toBe(locallyAdmittedBindings);
     expect(unbindVoiceRuntimeAttemptBindingIfOwned({
       store,
       owner,

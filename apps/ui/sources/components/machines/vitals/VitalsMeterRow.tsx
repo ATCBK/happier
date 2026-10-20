@@ -7,7 +7,7 @@ import {
   resolveMachineResourceToneColor,
   type MachineResourceTone,
 } from '@/components/machines/summary/machineSummaryStripModel';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
@@ -39,7 +39,7 @@ export const VitalsMeterRow = React.memo(function VitalsMeterRow(
 ) {
   const { theme } = useUnistyles();
   const reducedMotion = useReducedMotionPreference();
-  const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const pluginTheme = usePluginUiTheme(theme);
   const toned = props.tone !== 'calm';
   const fill = toned
     ? resolveMachineResourceToneColor(props.tone, theme.colors)

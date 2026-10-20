@@ -9,13 +9,14 @@ import { voiceConversationBindingResolver } from './VoiceConversationBindingReso
 import { writeVoiceConversationBindingMetadata } from './voiceConversationBindingMetadata';
 
 export const voiceSessionBindingManager = createVoiceSessionBindingManager({
-    resolveBinding: ({ adapterId, controlSessionId, requestedTargetSessionId, requestedTargetServerId }) =>
+    resolveBinding: ({ adapterId, controlSessionId, requestedTargetSessionId, requestedTargetServerId, signal }) =>
         ensureVoiceConversationBindingResolution({
             providerId: adapterId,
             controlSessionId,
             requestedTargetSessionId,
             requestedTargetServerId,
             settings: storage.getState().settings,
+            signal,
         }),
     resolveExistingBindingByConversationSessionId: (conversationSessionId) =>
         voiceConversationBindingResolver.resolveByConversationSessionId({ conversationSessionId }),

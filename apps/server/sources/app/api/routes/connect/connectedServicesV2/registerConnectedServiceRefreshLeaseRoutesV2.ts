@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import type { Fastify } from "../../../types";
 import { ConnectedServiceIdSchema, type ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
@@ -22,15 +22,15 @@ function registerConnectedServiceRefreshLeaseRoute(
         profileId: ConnectedServiceProfileIdSchema,
       }),
       body: z.object({
-        machineId: z.string().min(1),
-        ownerId: z.string().min(1).optional(),
-        leaseMs: z.number().int().min(1),
-        expectedCredentialRevision: z.string().trim().min(1).max(128).optional(),
+        machineId: z.string().check(z.minLength(1)),
+        ownerId: z.optional(z.string().check(z.minLength(1))),
+        leaseMs: z.number().check(z.int(), z.minimum(1)),
+        expectedCredentialRevision: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(128))),
       }),
       response: {
         200: z.object({
           acquired: z.boolean(),
-          leaseUntil: z.number().int().nonnegative(),
+          leaseUntil: z.number().check(z.int(), z.nonnegative()),
           ownerId: z.string(),
           credentialRevision: z.string(),
         }),

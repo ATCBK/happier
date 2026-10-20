@@ -1,7 +1,20 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { isServerFetchConnectivityProbeRequest } from '@/dev/testkit/mocks/serverFetch';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+
+beforeEach(() => {
+  // Home activation may acquire reachability/features before the quota reader starts.
+  vi.stubGlobal('fetch', vi.fn(async (input: unknown) => {
+    const path = new URL(String(input)).pathname;
+    if (isServerFetchConnectivityProbeRequest(input)) return Response.json({ ok: true });
+    if (path === '/v1/features' || path === '/v1/features/authenticated') {
+      return Response.json(createRootLayoutFeaturesResponse());
+    }
+    return Response.json({}, { status: 404 });
+  }));
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -11,9 +24,8 @@ afterEach(() => {
 const credentials: AuthCredentials = { token: 't', secret: 's' };
 
 async function activateTestHome() {
-    const { upsertAndActivateServer, setAccountServiceEndpoint } = await import('@/sync/domains/server/serverRuntime');
-    await upsertAndActivateServer({ serverUrl: 'https://api.example.test', scope: 'tab' });
-    await setAccountServiceEndpoint({ url: 'https://api.example.test', displayName: 'Test service', source: 'user' });
+    const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+    await upsertAndActivateServer({ serverUrl: 'https://api.example.test', scope: 'device' });
 }
 
 describe('apiConnectedServicesQuotasV3', () => {
@@ -22,16 +34,20 @@ describe('apiConnectedServicesQuotasV3', () => {
     let servedSnapshot = false;
     const fetchMock = vi.fn(async (input: unknown) => {
       if (isServerFetchConnectivityProbeRequest(input)) {
-        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+        return Response.json({ ok: true });
+      }
+      const path = new URL(String(input)).pathname;
+      if (path === '/v1/features' || path === '/v1/features/authenticated') {
+        return Response.json(createRootLayoutFeaturesResponse());
+      }
+      if (path !== '/v3/connect/openai-codex/profiles/work/quotas') {
+        return Response.json({}, { status: 404 });
       }
       // A rejected snapshot must yield a visible failed assertion rather than
       // leaving the API's retry loop pending for the whole test timeout.
-      if (servedSnapshot) return { ok: false, status: 404, json: async () => ({}) };
+      if (servedSnapshot) return Response.json({}, { status: 404 });
       servedSnapshot = true;
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({
+      return Response.json({
           content: {
             t: 'plain',
             v: {
@@ -52,8 +68,7 @@ describe('apiConnectedServicesQuotasV3', () => {
             },
           },
           metadata: { fetchedAt: 1, staleAfterMs: 2, status: 'ok' },
-        }),
-      };
+      });
     });
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
 
@@ -75,7 +90,7 @@ describe('apiConnectedServicesQuotasV3', () => {
     const fetchMock = vi.fn((input: unknown, init?: RequestInit) => {
       const url = String(input);
       if (isServerFetchConnectivityProbeRequest(input)) {
-        return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) });
+        return Promise.resolve(Response.json({ ok: true }));
       }
       if (url === 'https://api.example.test/v3/connect/openai-codex/profiles/work/quotas') {
         requestSignal = init?.signal ?? undefined;
@@ -87,7 +102,7 @@ describe('apiConnectedServicesQuotasV3', () => {
           init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
         });
       }
-      return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) } as Response);
+      return Promise.resolve(Response.json({ ok: true }));
     });
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
 
@@ -110,9 +125,9 @@ describe('apiConnectedServicesQuotasV3', () => {
     await activateTestHome();
     const fetchMock = vi.fn(async (input: unknown) => {
       if (isServerFetchConnectivityProbeRequest(input)) {
-        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+        return Response.json({ ok: true });
       }
-      return { ok: false, status: 404, json: async () => ({ error: 'connect_quotas_not_found' }) };
+      return Response.json({ error: 'connect_quotas_not_found' }, { status: 404 });
     });
     vi.stubGlobal(
       'fetch',
@@ -128,9 +143,9 @@ describe('apiConnectedServicesQuotasV3', () => {
     await activateTestHome();
     const fetchMock = vi.fn(async (input: unknown) => {
       if (isServerFetchConnectivityProbeRequest(input)) {
-        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+        return Response.json({ ok: true });
       }
-      return { ok: true, status: 200, json: async () => ({ success: true }) };
+      return Response.json({ success: true });
     });
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
 
@@ -147,9 +162,9 @@ describe('apiConnectedServicesQuotasV3', () => {
     await activateTestHome();
     const fetchMock = vi.fn(async (input: unknown) => {
       if (isServerFetchConnectivityProbeRequest(input)) {
-        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+        return Response.json({ ok: true });
       }
-      return { ok: false, status: 404, json: async () => ({ error: 'connect_quotas_not_found' }) };
+      return Response.json({ error: 'connect_quotas_not_found' }, { status: 404 });
     });
     vi.stubGlobal(
       'fetch',

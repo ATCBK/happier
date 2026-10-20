@@ -10,6 +10,7 @@ describe('Project Open refusal presentation', () => {
     });
     it('retains distinct Source and transport refusals', () => {
         expect(projectOpenRefusalPresentation('source_changed', null)).toEqual({ title: t('projects.open.sourceChanged') });
-        expect(projectOpenRefusalPresentation('machine_offline', null)).toEqual({ title: t('projects.open.accessLost') });
+        expect(projectOpenRefusalPresentation('machine_unreachable', null)).toEqual({ title: t('workspaceSync.start.blocked.targetMachineOffline') });
+        expect(projectOpenRefusalPresentation('machine_offline', null)).toEqual({ title: t('workspaceSync.start.blocked.targetMachineOffline') });
     });
 });

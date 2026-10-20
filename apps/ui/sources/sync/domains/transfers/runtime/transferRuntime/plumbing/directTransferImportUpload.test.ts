@@ -328,7 +328,7 @@ describe('uploadBulkPayloadFromFileViaDirectImport', () => {
                 kind: 'browser_stream',
                 request: async (input) => {
                     if (String(input).endsWith('/abort')) return Response.json({ success: true, aborted: true });
-                    throw new Error('selected Iroh stream failed');
+                    throw new TypeError('Failed to fetch');
                 },
                 release,
             }),

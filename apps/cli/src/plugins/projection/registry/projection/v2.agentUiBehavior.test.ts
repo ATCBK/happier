@@ -1,3 +1,4 @@
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { describe, expect, it } from 'vitest';
 import {
     PluginContributesV2Schema,
@@ -18,23 +19,7 @@ import { createMcpServerActionExecuteV1, MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } f
 import { loadMcpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 
 function emptyRegistry(): ResolvedContributionRegistry {
-    return {
-        agents: [],
-        providers: [],
-        actions: [],
-        tools: [],
-        commands: [],
-        resources: [],
-        activationTargets: [],
-        actionsById: new Map(),
-        toolsById: new Map(),
-        commandsById: new Map(),
-        resourcesById: new Map(),
-        catalogEntriesById: {},
-        agentDefinitionsById: new Map(),
-        providersByContributionKey: new Map(),
-        pluginDiagnosticsByPluginId: {},
-    };
+    return createResolvedContributionRegistry({});
 }
 
 describe('external Agent UI-behavior descriptor projection', () => {
@@ -72,7 +57,7 @@ describe('external Agent UI-behavior descriptor projection', () => {
         expect(byId.get('claude')).toMatchObject({ off: 'hidden', approval: 'host' });
         expect(byId.get('pi')).toMatchObject({ off: 'hidden', approval: 'host' });
         expect(byId.get('kilo')).toMatchObject({ off: 'blocked', approval: 'host' });
-        expect(byId.get('codex')).toMatchObject({ off: null, approval: null });
+        expect(byId.get('codex')).toMatchObject({ off: 'hidden', approval: 'host' });
         const adapted = adaptDaemonContributionRegistryProjectionToMergedProjectionInputs(projection);
         expect(resolveAgentCatalogProjection('claude', { enabledAgentIds: [],
             mergedProviderProjectionById: adapted.mergedProviderProjectionById }).title).toBe('Claude');

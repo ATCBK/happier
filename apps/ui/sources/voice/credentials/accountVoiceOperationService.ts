@@ -75,7 +75,7 @@ function responseStatusClass(status: number): AccountVoiceResponseFailure['statu
 }
 
 function responseFailure(
-  response: Response,
+  response: Pick<Response, 'status'>,
   kind: AccountVoiceResponseFailureKind,
 ): AccountVoiceResponseFailure {
   return Object.freeze({
@@ -500,6 +500,8 @@ export function createAccountVoiceOperationService(input: Readonly<{
     async request(request) {
       const operationSignal = composeAccountOperationSignal(input.signal, request.signal);
       let selectedOperationAuthority: AccountOperationCredentialAuthority | null = null;
+      let mutationDispatched = false;
+      let rejectedMutation: Error | null = null;
       try {
         if (operationSignal.signal.aborted || !input.isCurrent()) {
           throw operationError('voice_account_operation_cancelled');
@@ -547,14 +549,21 @@ export function createAccountVoiceOperationService(input: Readonly<{
           if (accountAuthority.source.selection.kind !== 'connectedAccount') {
             throw operationError('voice_account_operation_unauthorized');
           }
-          const response = await input.executeConnectedAccountOperation?.({
+          const executeConnectedAccountOperation = input.executeConnectedAccountOperation;
+          if (!executeConnectedAccountOperation) throw operationError('credential_unavailable');
+          mutationDispatched = operation.effect === 'mutation';
+          const response = await executeConnectedAccountOperation({
             operationId: operation.id,
             parameters: request.parameters,
             selection: accountAuthority.source.selection.target,
             signal: operationSignal.signal,
           });
+          const httpFailure = response && classifyVoiceProviderHttpFailure(response.status);
+          if (mutationDispatched && response && httpFailure) {
+            rejectedMutation = operationError(httpFailure, responseFailure(response, 'http_status'));
+          }
           if (operationSignal.signal.aborted || !isAuthorityCurrent(operationAuthority)) {
-            throw operationError('voice_account_operation_cancelled');
+            throw rejectedMutation ?? operationError('voice_account_operation_cancelled');
           }
           if (!response) throw operationError('credential_unavailable');
           return response;
@@ -593,6 +602,7 @@ export function createAccountVoiceOperationService(input: Readonly<{
           throw operationError('voice_account_operation_cancelled');
         }
         const requestBody = materialized.body ? Uint8Array.from(materialized.body).buffer : null;
+        mutationDispatched = operation.effect === 'mutation';
         const response = await fetchImpl(materialized.url, {
           method: materialized.method,
           headers: {
@@ -603,9 +613,13 @@ export function createAccountVoiceOperationService(input: Readonly<{
           redirect: 'error',
           signal: operationSignal.signal,
         });
+        const httpFailure = classifyVoiceProviderHttpFailure(response.status);
+        if (mutationDispatched && !response.redirected && httpFailure) {
+          rejectedMutation = operationError(httpFailure, responseFailure(response, 'http_status'));
+        }
         if (operationSignal.signal.aborted || !isAuthorityCurrent(operationAuthority)) {
           await response.body?.cancel().catch(() => undefined);
-          throw operationError('voice_account_operation_cancelled');
+          throw rejectedMutation ?? operationError('voice_account_operation_cancelled');
         }
         const responseContentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() ?? '';
         if (response.redirected) {
@@ -615,10 +629,9 @@ export function createAccountVoiceOperationService(input: Readonly<{
             responseFailure(response, 'redirect'),
           );
         }
-        const httpFailure = classifyVoiceProviderHttpFailure(response.status);
         if (httpFailure) {
           await response.body?.cancel().catch(() => undefined);
-          throw operationError(
+          throw rejectedMutation ?? operationError(
             httpFailure,
             responseFailure(response, 'http_status'),
           );
@@ -651,6 +664,7 @@ export function createAccountVoiceOperationService(input: Readonly<{
           body,
         });
       } catch (error) {
+        if (rejectedMutation !== null && error === rejectedMutation) throw error;
         if (
           operationSignal.signal.aborted
           || !input.isCurrent()
@@ -658,7 +672,11 @@ export function createAccountVoiceOperationService(input: Readonly<{
             && selectedOperationAuthority.resolution.state === 'resolved'
             && !isAuthorityCurrent(selectedOperationAuthority))
         ) {
-          throw operationError('voice_account_operation_cancelled');
+          // Revocation prevents consuming a stale response or publishing its
+          // patch; it cannot undo a mutation already sent to the provider.
+          throw operationError(mutationDispatched
+            ? 'voice_account_operation_outcome_unknown'
+            : 'voice_account_operation_cancelled');
         }
         throw error;
       } finally {

@@ -6,8 +6,11 @@ import {
 import { captureConsoleJsonOutput } from '@/testkit/logger/captureOutput';
 import { findCompiledActionCliCommand, listCompiledActionCliCommands } from './compiledCommands';
 import { runCompiledActionCliCommand } from './executeCommand';
+import { seedTestServerProfile } from '@/testkit/serverProfiles';
+import { getServerProfile } from '@/server/serverProfiles';
 
 it('watch streams the owner baseline and Ctrl+C cancels only observation', async () => {
+  await seedTestServerProfile({ id: 'home', homeId: 'srv_wait_home', serverUrl: 'https://home.example.test' });
   const command = findCompiledActionCliCommand(['watch'], listCompiledActionCliCommands())!;
   const input = { target: { kind: 'session', serverId: 'home', sessionId: 'session' }, condition: { kind: 'terminal' } };
   const before = process.listenerCount('SIGINT');
@@ -31,8 +34,7 @@ it('watch streams the owner baseline and Ctrl+C cancels only observation', async
     await runCompiledActionCliCommand({ command, argv: ['watch', '--server-id', 'home', '--json', '--input-json', JSON.stringify(input)],
       deps: {
         readCredentialsForServerIdFn: async () => ({ token: 'credential' } as never),
-        getServerProfileFn: async () => ({ id: 'home', serverUrl: 'https://home.example.test', localServerUrl: null,
-          homeConnectionDescriptorAuthority: 'exact', homeConnectionDescriptor: { homeServerIdentityId: 'identity' } } as never),
+        getServerProfileFn: getServerProfile,
         createServerFeaturesSnapshotStoreFn: () => ({ refresh: async () => ({}) } as never),
         createExecutorFn: () => ({ execute: (id, value, context) => owner.execute(id, value, { ...context, serverId: 'home' }),
           resolveSessionTarget: async (sessionId) => ({ ok: true, sessionId }),

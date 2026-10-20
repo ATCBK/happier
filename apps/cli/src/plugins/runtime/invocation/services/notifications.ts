@@ -2,6 +2,9 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { createPluginContributionIdentity } from '@happier-dev/protocol/plugins/contribution-identity';
+import { AccountNoticeItemTypeV1Schema, AccountNoticePageV1Schema } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
+import { resolveAttentionDeliveryPolicyDecision } from '@happier-dev/protocol/account/settings/attentionDeliveryPolicyDecision';
+import type { createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import {
     isPluginError,
     PluginError,
@@ -55,6 +58,10 @@ export type StablePluginNotificationsHost = Readonly<{
     channels: readonly ResolvedNotificationChannelContribution[];
     activateChannel(ref: PluginContributionRef): Promise<void>;
     readChannel(ref: PluginContributionRef, seed?: PluginInvocationServicesSeed): PluginNotificationSenderBinding | null;
+    readAttentionPolicy?(): unknown;
+    resolveNoticeArtifacts?(seed: PluginInvocationServicesSeed): Promise<Readonly<{
+        accountId: string; store: Pick<ReturnType<typeof createAccountArtifactStore>, 'writeNotice'>;
+    }> | null>;
     preferencePolicy?: Readonly<{
         read(params: Readonly<{
             pluginId: string;
@@ -205,24 +212,34 @@ function readRequest(request: Parameters<PluginNotificationsService['send']>[0])
     body?: string;
     channelIds?: readonly string[];
     data?: JsonValue;
+    itemId?: string;
+    type?: 'decision' | 'approval' | 'blocked' | 'update' | 'mention';
+    page?: Readonly<{ pageId: string; subPath?: string }>;
+    resolved?: boolean;
 }> {
     try {
         if (!request || typeof request !== 'object' || Array.isArray(request)) {
             throw notificationError('plugin_notification_invalid_request', 'Notification request is invalid');
         }
-        const allowedKeys = new Set(['clientRequestId', 'categoryId', 'title', 'body', 'channelIds', 'data']);
+        const allowedKeys = new Set(['clientRequestId', 'categoryId', 'title', 'body', 'channelIds', 'data', 'itemId', 'type', 'page', 'resolved']);
         if (Object.keys(request).some((key) => !allowedKeys.has(key))) {
             throw notificationError('plugin_notification_invalid_request', 'Notification request contains unknown fields');
         }
         const { clientRequestId, categoryId, title, body } = request;
         const channelIds = readChannelIds(request.channelIds);
         const rawData = request.data;
+        const { itemId, resolved } = request;
+        const itemType = request.type === undefined ? undefined : AccountNoticeItemTypeV1Schema.parse(request.type);
+        const itemPage = request.page === undefined ? undefined : AccountNoticePageV1Schema.parse(request.page);
         if (typeof clientRequestId !== 'string'
             || clientRequestId.length < 1
             || typeof categoryId !== 'string'
             || typeof title !== 'string'
             || title.length < 1
-            || (body !== undefined && typeof body !== 'string')) {
+            || (body !== undefined && typeof body !== 'string')
+            || (itemId !== undefined && (typeof itemId !== 'string' || itemId.trim().length === 0))
+            || (resolved !== undefined && typeof resolved !== 'boolean')
+            || (itemId === undefined && (itemType !== undefined || itemPage !== undefined || resolved !== undefined))) {
             throw notificationError('plugin_notification_invalid_request', 'Notification request is invalid');
         }
         const data = rawData === undefined
@@ -238,6 +255,8 @@ function readRequest(request: Parameters<PluginNotificationsService['send']>[0])
             ...(body === undefined ? {} : { body }),
             ...(channelIds === undefined ? {} : { channelIds }),
             ...(data === undefined ? {} : { data }),
+            ...(itemId === undefined ? {} : { itemId, type: itemType ?? 'update', resolved: resolved ?? false }),
+            ...(itemPage === undefined ? {} : { page: Object.freeze(itemPage) }),
         });
     } catch (error) {
         if (isPluginError(error)) throw error;
@@ -606,6 +625,8 @@ export function createStablePluginNotificationsOwner(host: StablePluginNotificat
                     ...(request.body === undefined ? {} : { body: request.body }),
                     channelIds: Object.freeze(selected.map((entry) => entry.key)),
                     ...(request.data === undefined ? {} : { data: request.data }),
+                    ...(request.itemId === undefined ? {} : { itemId: request.itemId, type: request.type!, resolved: request.resolved! }),
+                    ...(request.page === undefined ? {} : { page: request.page }),
                 });
                 const requestFingerprint = fingerprint(normalizedRequest);
                 const key = operationKey(seed, request.categoryId, request.clientRequestId);
@@ -624,6 +645,25 @@ export function createStablePluginNotificationsOwner(host: StablePluginNotificat
                     : seed.signal;
                 const result = (async (): Promise<PluginNotificationBatchResult> => {
                     const deliveries: PluginNotificationDeliveryResult[] = [];
+                    const eventReference = category.definition.eventIds?.[0] ?? category.definition.id;
+                    const event = typeof eventReference === 'string' ? eventReference : qualifiedKey(eventReference);
+                    const attentionDecision = (channel: string) => resolveAttentionDeliveryPolicyDecision({
+                        policy: host.readAttentionPolicy?.(), event, channel, now: new Date(),
+                        ...(request.type === undefined ? {} : { inboxItemType: request.type }),
+                    });
+                    if (request.itemId !== undefined) {
+                        const artifacts = await host.resolveNoticeArtifacts?.(seed);
+                        ensureCurrent(seed, operationSignal);
+                        if (!artifacts) throw notificationError('plugin_notification_inbox_unavailable', 'Private Account notice custody is unavailable');
+                        // Notice custody is independent of attention-channel eligibility.
+                        await artifacts.store.writeNotice({ accountId: artifacts.accountId,
+                            source: { kind: 'plugin', pluginId: seed.plugin.id, itemId: request.itemId },
+                            type: request.type ?? 'update', title: request.title, resolved: request.resolved === true,
+                            ...(request.body === undefined ? {} : { body: request.body }),
+                            ...(request.page === undefined ? {} : { page: request.page }),
+                            signal: operationSignal, beforeWrite: () => ensureCurrent(seed, operationSignal) });
+                    }
+                    if (request.resolved) return Object.freeze({ deliveries: Object.freeze(deliveries), replayed: false });
                     for (const selectedChannel of selected) {
                         const deliveryId = `notification_${fingerprint(`${key}\u0000${selectedChannel.key}`)}`;
                         const availability = readAvailability(selectedChannel.channel);
@@ -648,6 +688,11 @@ export function createStablePluginNotificationsOwner(host: StablePluginNotificat
                             deliveries.push(Object.freeze({
                                 deliveryId, channelId: selectedChannel.key, status: 'suppressed', code: 'plugin_notification_channel_disabled',
                             }));
+                            continue;
+                        }
+                        if (attentionDecision(selectedChannel.channel.definition.kind).delivery === 'suppress') {
+                            deliveries.push(Object.freeze({ deliveryId, channelId: selectedChannel.key,
+                                status: 'suppressed', code: 'plugin_notification_attention_suppressed' }));
                             continue;
                         }
                         if (seed.signal.aborted || !seed.isOccurrenceCurrent()) {

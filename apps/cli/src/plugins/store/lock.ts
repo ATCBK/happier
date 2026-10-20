@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { isPidPresent } from '@happier-dev/cli-common/process';
@@ -23,9 +23,9 @@ type PredecessorPluginStoreLockRecord = Readonly<{
 
 // Compatibility basis: the pre-consolidation plugin-store writer persisted exactly this shape.
 // Remove after supported mixed-version CLIs can no longer leave these records for a newer CLI.
-const PredecessorPluginStoreLockStoredReadSchema = createStoredReadSchema(z.object({
-  pid: z.number().int().positive(), createdAtMs: z.number().int().nonnegative(),
-}).strict());
+const PredecessorPluginStoreLockStoredReadSchema = createStoredReadSchema(z.strictObject({
+  pid: z.number().check(z.int(), z.positive()), createdAtMs: z.number().check(z.int(), z.nonnegative()),
+}));
 
 function parsePredecessorPluginStoreLock(raw: string): PredecessorPluginStoreLockRecord | null {
   try {

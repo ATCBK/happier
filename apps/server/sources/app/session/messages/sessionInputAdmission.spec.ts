@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { EffectiveSessionAccess } from "@/app/session/access/sessionAccess";
-import { projectSessionAccessCapabilitiesV1, SessionMessagesPageV1Schema, SessionExternalShareableMessagesPageV1Schema } from "@happier-dev/protocol";
+import { projectSessionAccessCapabilitiesV1, SessionMessagesPageV1Schema, SessionExternalShareableMessagesPageV1Schema, SessionInputAdmissionReceiptV1Schema } from "@happier-dev/protocol";
 import { UpdateBodySchema } from "@happier-dev/protocol/updates";
-import { buildSessionInputAdmissionReceipt, readStoredSessionInputAdmissionReceipt, isSameSessionInputAdmissionIssuer } from "./sessionInputAdmission";
+import { buildSessionInputAdmissionReceipt, readStoredSessionInputAdmissionReceipt, isSameSessionInputAdmissionIssuer, projectSessionInputAdmissionReceipt } from "./sessionInputAdmission";
 import { buildNewMessageUpdate, buildMessageUpdatedUpdate } from "@/app/events/eventPayloadBuilders";
+import { serializePendingMaterializedMessage } from '@/app/session/pending/serializePendingMaterializedMessage';
 
 const access: EffectiveSessionAccess = {
     accountId: "owner", sessionId: "session", level: "owner", sources: [{ kind: "owner" }],
@@ -11,6 +12,26 @@ const access: EffectiveSessionAccess = {
 };
 
 describe("Session input admission constraints", () => {
+    it.each(['authenticatedMachine', 'authenticatedAccount'] as const)('keeps private Follow proof inside %s admission custody, including native materialization', issuer => {
+        const publicReceipt = { v: 1, issuer, ...(issuer === 'authenticatedAccount' ? { actorAccountId: 'owner', sessionRelationship: 'owner' } : {}) };
+        const inputAdmissionReceipt = SessionInputAdmissionReceiptV1Schema.parse({ ...publicReceipt,
+            followSources: [{ destinationSessionId: 'destination', sourceSessionId: 'source',
+                rule: { ruleId: 'private-rule', ruleVersion: 3 }, sourceMessage: { localId: 'original', seq: 1 },
+                expectedSourcePublisherGeneration: '1', machineId: 'source-machine', installationId: 'source-installation' }] });
+        const message = { id: 'message', seq: 1, localId: 'accepted', messageRole: 'user' as const,
+            content: { t: 'encrypted' as const, c: 'opaque-receiver-content' },
+            createdAt: new Date(1), updatedAt: new Date(1), inputAdmissionReceipt };
+        expect(projectSessionInputAdmissionReceipt(inputAdmissionReceipt)).toEqual({ inputAdmissionReceipt: publicReceipt });
+        for (const build of [buildNewMessageUpdate, buildMessageUpdatedUpdate]) {
+            expect(build(message, 'destination', 1, 'update').body).toMatchObject({ message: {
+                inputAdmissionReceipt: publicReceipt,
+            } });
+            expect(JSON.stringify(build(message, 'destination', 1, 'update'))).not.toContain('private-rule');
+        }
+        expect(serializePendingMaterializedMessage(message)).toHaveProperty('inputAdmissionReceipt', publicReceipt);
+        expect(serializePendingMaterializedMessage(message, { nativeAdmission: true })).toHaveProperty('inputAdmissionReceipt', publicReceipt);
+        expect(JSON.stringify(serializePendingMaterializedMessage(message, { nativeAdmission: true }))).not.toContain('private-rule');
+    });
     it("drops future stored receipt fields but never accepts invalid or retargeted known placement", () => {
         const target = { homeId: 'home', accountId: 'owner', sessionId: 'session', machineId: 'machine', installationId: 'installation' };
         const receipt = { v: 1 as const, issuer: 'authenticatedAccount' as const, actorAccountId: 'owner',

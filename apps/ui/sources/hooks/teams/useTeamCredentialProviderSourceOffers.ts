@@ -92,6 +92,7 @@ export function useTeamCredentialProviderSourceOffers(input: Readonly<{
         loading: false,
     });
     const generation = React.useRef(0);
+    const pendingRead = React.useRef<AbortController | null>(null);
     const currentAccountLifetimeRef = React.useRef(accountLifetime);
     currentAccountLifetimeRef.current = accountLifetime;
     // The rows themselves rebuild on every machine heartbeat; only their
@@ -106,6 +107,7 @@ export function useTeamCredentialProviderSourceOffers(input: Readonly<{
         const registration = accountLifetime?.onRetire(() => {
             if (currentAccountLifetimeRef.current !== accountLifetime) return;
             generation.current += 1;
+            pendingRead.current?.abort();
             setState((current) => current.accountLifetime === accountLifetime
                 ? { scopeKey: null, accountLifetime: null, offers: NO_OFFERS, error: null, loading: false }
                 : current);
@@ -115,6 +117,7 @@ export function useTeamCredentialProviderSourceOffers(input: Readonly<{
 
     const refresh = React.useCallback(async () => {
         const requestGeneration = ++generation.current;
+        pendingRead.current?.abort();
         const requestStillCurrent = (): boolean => (
             currentAccountLifetimeRef.current === accountLifetime
             && (accountLifetime?.isCurrent() ?? true)
@@ -125,6 +128,8 @@ export function useTeamCredentialProviderSourceOffers(input: Readonly<{
             setState({ scopeKey, accountLifetime, offers: NO_OFFERS, error: null, loading: false });
             return NO_OFFERS;
         }
+        const controller = new AbortController();
+        pendingRead.current = controller;
         setState((current) => current.scopeKey === scopeKey && current.accountLifetime === accountLifetime
             ? { ...current, loading: true }
             : { scopeKey, accountLifetime, offers: NO_OFFERS, error: null, loading: true });
@@ -135,6 +140,7 @@ export function useTeamCredentialProviderSourceOffers(input: Readonly<{
                 const response = await describeProviderConnections({
                     machineId: row.target.machineId,
                     serverId: row.serverId,
+                    signal: controller.signal,
                 });
                 return { row, response } as const;
             } catch (caught) {
@@ -147,6 +153,7 @@ export function useTeamCredentialProviderSourceOffers(input: Readonly<{
                 } as const;
             }
         }));
+        if (pendingRead.current === controller) pendingRead.current = null;
         if (!requestStillCurrent()) return null;
 
         const freshOffers: TeamCredentialProviderSourceOfferV1[] = [];
@@ -213,7 +220,11 @@ export function useTeamCredentialProviderSourceOffers(input: Readonly<{
 
     React.useEffect(() => {
         void refresh();
-        return () => { generation.current += 1; };
+        return () => {
+            generation.current += 1;
+            pendingRead.current?.abort();
+            pendingRead.current = null;
+        };
     }, [refresh]);
 
     return React.useMemo(() => Object.freeze({

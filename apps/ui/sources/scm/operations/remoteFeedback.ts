@@ -12,46 +12,6 @@ export function formatRemoteTargetForDisplay(target: RemoteTargetDisplay, detach
     return `${target.remote} (${detachedHeadLabel})`;
 }
 
-export function buildRemoteConfirmBody(
-    target: RemoteTargetDisplay,
-    detachedHeadLabel: string,
-    options?: { kind?: Exclude<RemoteOperationKind, 'fetch'> },
-): string {
-    const lines = [
-        `Remote: ${target.remote}`,
-        `Branch: ${target.branch || detachedHeadLabel}`,
-    ];
-
-    if (options?.kind === 'pull') {
-        lines.push('Policy: fast-forward only');
-    }
-
-    if (options?.kind === 'push') {
-        lines.push('Push will update the remote branch with your local commits.');
-    }
-
-    return lines.join('\n');
-}
-
-export function buildRemoteConfirmDialog(input: {
-    kind: Exclude<RemoteOperationKind, 'fetch'>;
-    target: RemoteTargetDisplay;
-    detachedHeadLabel: string;
-}): {
-    title: string;
-    body: string;
-    confirmText: 'Pull' | 'Push';
-    cancelText: 'Cancel';
-} {
-    const { kind, target, detachedHeadLabel } = input;
-    return {
-        title: kind === 'pull' ? 'Pull latest changes' : 'Push local commits',
-        body: buildRemoteConfirmBody(target, detachedHeadLabel, { kind }),
-        confirmText: kind === 'pull' ? 'Pull' : 'Push',
-        cancelText: 'Cancel',
-    };
-}
-
 export function buildNonFastForwardFetchPromptDialog(input: {
     target: RemoteTargetDisplay;
     detachedHeadLabel: string;

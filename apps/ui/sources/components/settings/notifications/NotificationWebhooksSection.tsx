@@ -24,7 +24,7 @@ import { WebhookNotificationChannelRecordV1Schema,
     type WebhookNotificationChannelRecordV1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { NotificationConfigurationActionInputSchemas,
     type NotificationConfigurationActionId } from '@happier-dev/protocol/actions/notificationConfigurationActionFamily';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 
 type MutationId = Exclude<Extract<NotificationConfigurationActionId, `notifications.webhooks.${string}` | 'notifications.expoPush.update'>, 'notifications.webhooks.list'>;
 export type NotificationConfigurationMutation = {

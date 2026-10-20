@@ -4,7 +4,7 @@ import tweetnacl from 'tweetnacl';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { getActionSpec, listActionSpecs } from '@happier-dev/protocol/actions/actionSpecs';
 import { createTerminalPtySessionManager } from '@/terminal/pty/sessions';
 import type { PtyExitEvent, PtyProcess } from '@/terminal/pty/provider';
 import { executeProjectFiniteProcess } from '@/workspaces/projectSetup/projectSetupExecution';
@@ -23,8 +23,38 @@ import { registerActionSpecRpcHandlers } from '@/rpc/handlers/registerActionSpec
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
 import { createProjectWorkerAdmission } from '@/workspaces/execution/projectWorkerAdmission';
+import { normalizeSessionCreateSpawnRequest } from '@/cli/commands/session/create/normalizeSessionCreateSpawnRequest';
+import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
+import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
+import { buildSessionMetadataEnvelopeCreateFields } from '@/session/metadata/buildSessionMetadataEnvelopeCreateFields';
+import { buildCommittedLaunchMetadata } from '@/agent/runtime/createSessionMetadata';
+import { createCurrentSessionProjectionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { computeDaemonSpawnRequestKey, createSpawnRequestCoalescer } from '@/daemon/spawn/spawnRequestCoalescer';
 
 describe('finite host operation custody', () => {
+  // Open's native registrar owns observation across direct and relay calls;
+  // its composed settlement keeper exercises this same outer adapter.
+  it.each(listActionSpecs().filter(spec => spec.operation && spec.id !== 'projects.open').map(spec => spec.id))(
+    'supplies the incumbent runner acceptance to the admitted %s effect', async actionId => {
+      const runtime = createHostActionOperationRuntime({ machineId: 'machine', resolveAccountId: async () => 'requester',
+        generateOperationId: () => 'replayed-operation' });
+      const result = await runtime.runActionOperation({ actionId, input: {}, context: { actionRequestId: 'original-request' },
+        execute: async context => {
+          expect(context.operationAcceptance).toMatchObject({ actionId, operationId: 'replayed-operation' });
+          // Nested adapters consume that same acceptance instead of opening a second operation.
+          return runtime.runActionOperation({ actionId, input: {}, context, execute: async current => {
+            expect(current.operationAcceptance).toBe(context.operationAcceptance);
+            return { ok: true, result: { completed: true } };
+          } });
+        } });
+      expect(result).toEqual({ ok: true, result: { completed: true } });
+      expect(runtime.store.list({ accountId: 'requester', machineId: 'machine' }).items)
+        .toMatchObject([{ operationId: 'replayed-operation', actionId, requestId: 'original-request', state: 'succeeded' }]);
+      expect(await runtime.runner.waitForTerminal({ accountId: 'requester', machineId: 'machine' }, 'replayed-operation'))
+        .toMatchObject({ state: 'succeeded', result: { completed: true } });
+    });
   it('offers Stop for machine setup without settling until its process owner observes exit', async () => {
     const runtime = createHostActionOperationRuntime({ machineId: 'guest', resolveAccountId: async () => 'owner', generateOperationId: () => 'setup' });
     let exited!: () => void;
@@ -95,6 +125,183 @@ describe('finite host operation custody', () => {
     expect(runtime.store.get({ accountId: 'requester', machineId: 'guest' }, 'actual-spawn-operation'))
       .not.toHaveProperty('observation');
   });
+  it('retries a Discussion birth after HTTP 503 through the same ordinary creator instead of replaying its failed result forever', async () => {
+    let operationSequence = 0;
+    const runtime = createHostActionOperationRuntime({ machineId: 'guest', resolveAccountId: async () => 'owner',
+      generateOperationId: () => `discussion-birth-operation-${++operationSequence}` });
+    const input = { creationKey: 'participant-slot', executionTarget: { serverId: 'home', machineId: 'guest' },
+      directory: { kind: 'managed' as const },
+      agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+      discussionParticipant: { discussionId: 'discussion', participantSlotId: 'participant-slot' }, initialTriggers: [],
+      connectedServices: { v: 2 as const, bindingsByServiceId: {} }, memoryEnabled: false };
+    let available = false;
+    let committed: Record<string, unknown> | null = null;
+    let nativeStarts = 0;
+    const creationTags: string[] = [];
+    resetServerFeaturesClientForTests();
+    // HTTP and the native machine transport are the only replaced boundaries;
+    // Action admission, operation custody, birth metadata and creator stay real.
+    vi.stubGlobal('fetch', vi.fn(async value => String(value).endsWith('/v1/features')
+      ? Response.json({ features: {}, capabilities: { encryption: { storagePolicy: 'optional', allowAccountOptOut: true, defaultAccountMode: 'plain' } } })
+      : Response.json({ id: 'owner' })));
+    vi.spyOn(axios, 'get').mockImplementation(async url => String(url).includes('/v1/access-keys/')
+      ? { status: 200, data: { accessKey: 'existing' } }
+      : { status: 200, data: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null,
+        updatedAt: 1, recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } } });
+    vi.spyOn(axios, 'post').mockImplementation(async (url, raw) => {
+      if (String(url).endsWith('/lookup-by-tags')) return { status: 200, data: { sessions: committed ? [committed] : [] } };
+      if (!String(url).endsWith('/v1/sessions')) throw new Error(`Unexpected birth HTTP request ${url}`);
+      const body = raw as ReturnType<typeof buildSessionMetadataEnvelopeCreateFields> & { tag: string };
+      creationTags.push(body.tag);
+      if (!available) return { status: 503, data: { error: 'database_transaction_conflict_exhausted' } };
+      expect(committed).toBeNull();
+      committed = { id: 'backing-session', seq: 0, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
+        metadataLayoutVersion: body.metadataLayoutVersion, metadata: body.sharedMetadata.ciphertext,
+        ownerMetadata: body.ownerMetadata, metadataVersion: 1, encryptionMode: 'plain',
+        agentState: null, agentStateVersion: 0, dataEncryptionKey: null, share: null };
+      return { status: 200, data: { session: committed, created: true } };
+    });
+    try {
+      const executor = createActionExecutor(createCliActionDeps({ token: 'token', credentials: { token: 'token', encryption: null },
+        sessionId: 'cli-global', mode: 'plain', ctx: null, rawSession: {}, serverId: 'home', serverHttpBaseUrl: 'https://home.example.test',
+        actionsSettingsProvider: createActionSettingsProvider({ accountSettings: accountSettingsParse({}) }),
+        sessionSpawnDirectTargetTransport: { machineId: 'guest',
+          prepare: async () => ({ ok: true, directory: '/repo', directoryKind: 'managed', directoryCreationRequired: false, checkout: null }),
+          spawnedSession: { spawn: async request => {
+            expect(committed).not.toBeNull();
+            expect(request).toMatchObject({ existingSessionId: 'backing-session' });
+            expect(request).not.toHaveProperty('pendingFirstInput');
+            nativeStarts++;
+            return { type: 'success', sessionId: 'backing-session' };
+          }, resolveSpawnSessionByNonce: async () => ({ status: 'not_found' }) },
+        } }));
+      const invoke = (value = input) => runtime.observeExecution({ actionId: 'session.spawn_new', input: value,
+        actionRequestId: input.creationKey, execute: context => executor.execute('session.spawn_new', value,
+          { ...context, surface: 'cli', authority: 'present_user', serverId: 'home', presentUserConfirmation: { actionId: 'session.spawn_new' } }) });
+      expect(await invoke()).toMatchObject({ ok: true, result: { type: 'error', code: 'spawn_failed', retryable: true,
+        launchError: { message: 'Unexpected status from /v1/sessions: 503' } } });
+      expect(committed).toBeNull();
+      expect(nativeStarts).toBe(0);
+      expect(creationTags).toHaveLength(1);
+      const firstReceipt = runtime.store.get({ accountId: 'owner', machineId: 'guest' }, 'discussion-birth-operation-1');
+      expect(firstReceipt).toMatchObject({ state: 'succeeded', result: { type: 'error', retryable: true } });
+      expect(await invoke({ ...input, memoryEnabled: true })).toMatchObject({ ok: false, errorCode: 'action_request_input_conflict' });
+      expect(creationTags).toHaveLength(1);
+      available = true;
+      const completed = await invoke();
+      expect(completed).toMatchObject({ ok: true, result: { type: 'success', sessionId: 'backing-session' } });
+      expect(creationTags).toHaveLength(2);
+      expect(new Set(creationTags).size).toBe(1);
+      expect(nativeStarts).toBe(1);
+      expect(await invoke()).toEqual(completed);
+      expect(creationTags).toHaveLength(2);
+      expect(nativeStarts).toBe(1);
+      expect(runtime.store.get({ accountId: 'owner', machineId: 'guest' }, 'discussion-birth-operation-1')).toEqual(firstReceipt);
+      expect(runtime.store.list({ accountId: 'owner', machineId: 'guest' }).items).toHaveLength(2);
+    } finally {
+      vi.restoreAllMocks(); vi.unstubAllGlobals(); resetServerFeaturesClientForTests();
+    }
+  });
+  it('explicitly retries ordinary creation failures with the same native nonce without replaying the failed receipt', async () => {
+    let operationSequence = 0;
+    const runtime = createHostActionOperationRuntime({ machineId: 'guest', resolveAccountId: async () => 'owner',
+      generateOperationId: () => `ordinary-birth-operation-${++operationSequence}` });
+    const input = { creationKey: 'ordinary-creation', executionTarget: { serverId: 'home', machineId: 'guest' },
+      directory: { kind: 'managed' as const },
+      agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+      initialTriggers: [], connectedServices: { v: 2 as const, bindingsByServiceId: {} }, memoryEnabled: false };
+    const credentials = { token: 'token', encryption: null } as const;
+    const coalescer = createSpawnRequestCoalescer({ recentSuccessTtlMs: 60_000 });
+    let committed: ReturnType<typeof createCurrentSessionProjectionRecordFixture> | null = null;
+    let nativeStarts = 0;
+    const nativeAdmissions: Array<{ tag: string | undefined; nonce: string | undefined }> = [];
+    resetServerFeaturesClientForTests();
+    // The native machine adapter and HTTP are genuine boundaries. The ordinary
+    // Action creator and daemon's existing nonce coalescer are not substituted.
+    vi.stubGlobal('fetch', vi.fn(async value => String(value).endsWith('/v1/features')
+      ? Response.json({ features: {}, capabilities: { encryption: { storagePolicy: 'optional', allowAccountOptOut: true, defaultAccountMode: 'plain' } } })
+      : Response.json({ id: 'owner' })));
+    vi.spyOn(axios, 'get').mockImplementation(async url => String(url).includes('/v2/sessions/')
+      ? { status: 200, data: { session: committed } }
+      : { status: 200, data: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null,
+        updatedAt: 1, recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } } });
+    vi.spyOn(axios, 'post').mockImplementation(async url => {
+      if (String(url).endsWith('/lookup-by-tags')) return { status: 200, data: { sessions: committed ? [committed] : [] } };
+      throw new Error(`Unexpected ordinary birth HTTP request ${url}`);
+    });
+    try {
+      const executor = createActionExecutor(createCliActionDeps({ token: 'token', credentials,
+        sessionId: 'cli-global', mode: 'plain', ctx: null, rawSession: {}, serverId: 'home', serverHttpBaseUrl: 'https://home.example.test',
+        actionsSettingsProvider: createActionSettingsProvider({ accountSettings: accountSettingsParse({}) }),
+        sessionSpawnDirectTargetTransport: { machineId: 'guest',
+          prepare: async () => ({ ok: true, directory: '/repo', directoryKind: 'managed', directoryCreationRequired: false, checkout: null }),
+          spawnedSession: { spawn: request => coalescer.run(computeDaemonSpawnRequestKey(request), async () => {
+            nativeAdmissions.push({ tag: request.sessionCreationTag, nonce: request.spawnNonce });
+            if (nativeAdmissions.length === 1) return { type: 'error', errorCode: 'SPAWN_FAILED',
+              errorMessage: 'Unexpected status from /v1/sessions: 503' };
+            expect(committed).toBeNull();
+            const fields = buildSessionMetadataEnvelopeCreateFields({ credentials, accountEncryptionMode: 'plain',
+              storedContentMode: 'plain', agentState: null,
+              metadata: buildCommittedLaunchMetadata({ options: request, directory: '/repo' }) });
+            committed = createCurrentSessionProjectionRecordFixture({ id: 'ordinary-session', encryptionMode: 'plain', share: null,
+              metadataLayoutVersion: fields.metadataLayoutVersion, metadata: fields.sharedMetadata.ciphertext,
+              ownerMetadata: fields.ownerMetadata, dataEncryptionKey: null });
+            nativeStarts++;
+            return { type: 'success', sessionId: committed.id, sessionCreationOutcome: {
+              disposition: 'created', organizationPlacement: { folderId: null, tagIds: [] } } };
+          }), resolveSpawnSessionByNonce: async () => ({ status: 'not_found' }) },
+        } }));
+      const invoke = () => runtime.observeExecution({ actionId: 'session.spawn_new', input, actionRequestId: input.creationKey,
+        execute: context => executor.execute('session.spawn_new', input, { ...context, surface: 'cli', authority: 'present_user',
+          serverId: 'home', presentUserConfirmation: { actionId: 'session.spawn_new' } }) });
+      expect(await invoke()).toMatchObject({ ok: true, result: { type: 'error', code: 'spawn_failed', retryable: true } });
+      expect(nativeStarts).toBe(0);
+      const completed = await invoke();
+      expect(completed).toMatchObject({ ok: true, result: { type: 'success', sessionId: 'ordinary-session' } });
+      expect(nativeAdmissions).toHaveLength(2);
+      expect(nativeAdmissions[0]?.nonce).toBeTruthy();
+      expect(nativeAdmissions[1]).toEqual(nativeAdmissions[0]);
+      expect(await invoke()).toEqual(completed);
+      expect(nativeAdmissions).toHaveLength(2);
+      expect(nativeStarts).toBe(1);
+    } finally {
+      vi.restoreAllMocks(); vi.unstubAllGlobals(); resetServerFeaturesClientForTests();
+    }
+  });
+  it('rejoins the same CLI creation after selection timestamps refresh, while refusing changed launch values', async () => {
+    const runtime = createHostActionOperationRuntime({ machineId: 'guest', resolveAccountId: async () => 'requester',
+      generateOperationId: () => 'same-cli-spawn' });
+    const nativeModes: Array<boolean | undefined> = [];
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+      sessionSpawnNew: async input => {
+        nativeModes.push(input.resumeActionRequest);
+        return input.resumeActionRequest ? { type: 'success', disposition: 'rejoined', sessionId: 'original-session',
+          executionTarget: input.executionTarget, organizationPlacement: { folderId: null, tagIds: [] },
+          initialInput: { status: 'notRequested' } } : { type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' };
+      } });
+    const normalize = async (now: number, modelId = 'gpt-6-luna', effort = 'low') =>
+      (await normalizeSessionCreateSpawnRequest({ directory: '/workspace', backendTargetKey: null, modelId,
+        configOptions: { reasoning_effort: effort }, initialInput: { text: 'Reply once' } }, {
+        activeServerId: 'home', defaultAgentId: 'codex', readSettings: async () => ({ machineId: 'guest' }),
+        readAgentDefinitions: () => readAgentCatalogSnapshot().agentDefinitionsById.values(),
+        now: () => now,
+      })).input;
+    const invoke = (input: Awaited<ReturnType<typeof normalize>>) => runtime.observeExecution({ actionId: 'session.spawn_new',
+      input, actionRequestId: 'original-attempt', execute: context => executor.execute('session.spawn_new', input,
+        { ...context, surface: 'cli', authority: 'present_user', presentUserConfirmation: { actionId: 'session.spawn_new' } }) });
+    const original = await normalize(100);
+    expect(await invoke(original)).toMatchObject({ ok: true, result: { type: 'pending' } });
+    const settled = await invoke(await normalize(200));
+    expect(settled).toMatchObject({ ok: true, result: { type: 'success', sessionId: 'original-session' } });
+    expect(await invoke(await normalize(300))).toEqual(settled);
+    for (const changed of [await normalize(400, 'other-model'), await normalize(400, 'gpt-6-luna', 'high'),
+      { ...await normalize(400), initialInput: { text: 'Different prompt' } }]) {
+      expect(await invoke(changed)).toMatchObject({ ok: false, errorCode: 'action_request_input_conflict' });
+    }
+    expect(nativeModes).toEqual([undefined, true]);
+    expect(original.modelSelection?.updatedAt).toBe(100);
+    expect(original.configuration?.options.reasoning_effort).toEqual({ value: 'low', updatedAtMs: 100 });
+  });
   it.each(['machines.managed.acquire', 'machines.managed.bootstrap.retry'] as const)('keeps %s linked to its managed row and cancels the containing admitted lifetime', async actionId => {
     const runtime = createHostActionOperationRuntime({ machineId: 'controller', resolveAccountId: async () => 'owner',
       generateOperationId: () => 'managed-start' });
@@ -132,7 +339,7 @@ describe('finite host operation custody', () => {
     const waiting = new Promise<void>(resolve => { release = resolve; });
     await runtime.observeExecution({ actionId, input: { when: 'after-idle' }, actionRequestId: 'intent',
       execute: async ({ signal, operationAcceptance, operationOwnerUpdate }) => {
-        operationOwnerUpdate.update({ progress: { kind: 'phase', phase: 'managed.intent.waiting-idle', label: 'Waiting for unused machine' } });
+        operationOwnerUpdate.update({ progress: { phase: 'managed.intent.waiting-idle', label: 'Waiting for unused machine' } });
         operationAcceptance?.accept({ kind: 'accepted', managedId: 'managed', intentRevision: 1,
           operation: { operationId: 'managed-idle' } });
         signal.addEventListener('abort', () => { aborted = true; release(); }, { once: true });
@@ -249,7 +456,7 @@ describe('finite host operation custody', () => {
       });
       const spec = getActionSpec('projects.script.run');
       registerActionSpecRpcHandlers({ rpcHandlerManager: rpc, actionSpecs: [spec],
-        actionExecutor: createActionExecutor(createCliActionDeps({ token: '', sessionId: '' })),
+        actionExecutor: createActionExecutor(createCliActionDeps({ token: '', sessionId: '', mode: 'plain', ctx: null })),
         observeExecution: runtime.observeExecution });
       await rpc.handleRequest({ method: `worker:${spec.bindings!.rpcMethod}`, params: {
         workspace: { serverId: 'home', machineId: 'worker', workspaceId: 'workspace', rootPath: '/project' },
@@ -391,8 +598,10 @@ describe('finite host operation custody', () => {
     });
     await expect(request).resolves.toMatchObject({ ok: true });
     expect(await runtime.handlers.cancel({ operationId: 'move' })).toEqual({ kind: 'requested' });
-    expect(await runtime.handlers.get({ operationId: 'move', waitForTerminal: true }))
-      .toMatchObject({ kind: 'found', operation: { state: 'running', cancellation: 'supported' } });
+    expect(await runtime.handlers.getV2({ operationId: 'move', waitForTerminal: true }))
+      .toMatchObject({ kind: 'found', operation: { state: 'running', cancellation: 'unsupported',
+        observation: { kind: 'outcome_uncertain' } } });
+    expect(await runtime.handlers.cancel({ operationId: 'move' })).toEqual({ kind: 'unsupported' });
   });
   it('offers Stop for a finite producer and settles only its observed cancelled process', async () => {
     expect(getActionSpec('projects.script.run').operation).toBeDefined();

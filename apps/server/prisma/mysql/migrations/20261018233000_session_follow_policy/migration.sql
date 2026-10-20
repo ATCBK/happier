@@ -1,0 +1,6 @@
+-- Preserve ordinary Follow intent once; new relations require an explicit policy.
+ALTER TABLE `SessionFollowEdge` ADD COLUMN `policyJson` LONGTEXT NULL;
+UPDATE `SessionFollowEdge` SET `policyJson` = CASE WHEN `relation` = 'manager' OR `sourceDiscussionId` IS NOT NULL THEN '{"preset":"important"}'
+    WHEN `mode` = 'wake_on_human_change' THEN '{"preset":"custom","events":{"needs_you":{"decision":{"delivery":"quiet"},"approval":{"delivery":"quiet"},"blocked":{"delivery":"quiet"}},"finished":{"delivery":"quiet"},"failed_or_stopped":{"delivery":"quiet"},"stalled":{"delivery":"quiet"},"update_posted":{"delivery":"quiet"},"person_wrote":{"delivery":"interrupt"},"goal_changed":{"delivery":"quiet"},"message":{"delivery":"quiet"}}}'
+    ELSE '{"preset":"custom","events":{"needs_you":{"decision":{"delivery":"quiet"},"approval":{"delivery":"quiet"},"blocked":{"delivery":"quiet"}},"finished":{"delivery":"quiet"},"failed_or_stopped":{"delivery":"quiet"},"stalled":{"delivery":"quiet"},"update_posted":{"delivery":"quiet"},"person_wrote":{"delivery":"quiet"},"goal_changed":{"delivery":"quiet"},"message":{"delivery":"quiet"}}}' END;
+ALTER TABLE `SessionFollowEdge` MODIFY `policyJson` LONGTEXT NOT NULL, DROP COLUMN `mode`;

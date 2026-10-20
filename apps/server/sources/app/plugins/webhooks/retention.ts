@@ -53,7 +53,7 @@ export async function replayPluginWebhookDeliveryV1(params: Readonly<{
     const now = params.now ?? new Date();
     const serverIdentityId = await getOrCreateServerIdentityId(process.env);
     return await inTx(async (tx) => {
-        const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (fence.status !== "ready") return { kind: "unavailable" };
         const current = await tx.pluginWebhookDelivery.findUnique({
             where: { id: params.deliveryId },
@@ -145,7 +145,7 @@ export async function discardPluginWebhookDeliveryV1(params: Readonly<{
 > {
     const now = params.now ?? new Date();
     return await inTx(async (tx) => {
-        const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (fence.status !== "ready") return { kind: "unavailable" };
 
         const current = await tx.pluginWebhookDelivery.findUnique({
@@ -273,7 +273,7 @@ export async function purgeExpiredPluginWebhookDeliveriesV1(params: Readonly<{
     let metadataDeleted = 0;
     for (const [accountId, candidatePlugins] of [...byAccount.entries()].sort(([left], [right]) => left.localeCompare(right))) {
         const accountResult = await inTx(async (tx) => {
-            const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId);
+            const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId, "content");
             if (fence.status !== "ready") return { payloadsPurged: 0, metadataDeleted: 0 };
 
             let payloadsPurged = 0;

@@ -95,10 +95,22 @@ describe('createServerScopedRelaySocket (real scoped network)', () => {
         try {
             const network = boundary.socketBoundaries.find(entry => entry.socket.id === client.socketId);
             if (!network) throw new Error('Expected the actual viewer Socket.IO boundary');
+            const identities: string[] = [];
+            const unsubscribe = client.onSocketIdChange(() => identities.push(client.socketId));
             // Socket.IO replaces its connection id on reconnect. The retained logical
             // reader must not keep addressing the previous connection's room.
+            network.socket.id = '';
+            network.trigger('disconnect', 'transport close');
+            expect(identities.at(-1)).toBe('');
             network.socket.id = 'reconnected-viewer';
+            network.trigger('connect');
             expect(client.socketId).toBe(network.socket.id);
+            expect(identities.at(-1)).toBe('reconnected-viewer');
+            unsubscribe();
+            identities.length = 0;
+            network.socket.id = 'later-viewer';
+            network.trigger('connect');
+            expect(identities).toEqual([]);
         } finally { await client.disconnect(); }
     });
 

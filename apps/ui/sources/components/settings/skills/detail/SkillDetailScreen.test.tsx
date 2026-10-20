@@ -4,6 +4,7 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createPromptRegistrySkillFixture } from '@/dev/testkit/harness/promptMachineTransferBoundary';
 import {
   PromptBundleArtifactHeaderV1Schema,
   PromptBundleBodyV1Schema,
@@ -46,6 +47,8 @@ const { groupSkillsByFolder } = await import('../skillsCollectionModel');
 const { useSkillsUpdates } = await import('../updates/useSkillsUpdates');
 const { retrySkillRules } = await import('../add/skillInstall');
 const { useMountedActionExecution } = await import('@/components/approvals/useMountedActionExecution');
+const { useDraftReachRules } = await import('@/components/capabilities/where/WhereItsOnControl');
+const { SKILL_ACTION_OUTPUT_SCHEMAS_V1 } = await import('@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1');
 
 afterEach(() => {
   standardCleanup();
@@ -105,11 +108,36 @@ async function seededHome(
     }),
   });
   expect(seeded?.status).toBe(200);
-  storage.setState({ isDataReady: true, artifactsLoaded: true });
+  // Rows were seeded at the Home boundary; the global Artifact inventory has not synced.
+  storage.setState({ isDataReady: true, artifactsLoaded: false });
   return { ...home, catalog };
 }
 
 describe('SkillDetailScreen instructions autosave', () => {
+  it('keeps the draft Off choice through the mounted create Action, stored rules and library projection', async () => {
+    const home = await seededHome('https://skill-draft-off.test');
+    const draft = await renderHook(() => ({ reach: useDraftReachRules('skill'), action: useMountedActionExecution(home.home.id) }));
+    try {
+      await vi.waitFor(() => expect(draft.getCurrent().action.ready).toBe(true));
+      await act(async () => {
+        await draft.getCurrent().reach.onChange({ kind: 'replace', rules: [{ target: { t: 'allMachines' }, enabled: false }] });
+      });
+      expect(draft.getCurrent().reach.rules.map(rule => rule.enabled)).toEqual([false]);
+      const created = await draft.getCurrent().action.execute('skills.create', {
+        name: 'release-notes', files: [skillTextFile('SKILL.md', SKILL_MD)], where: draft.getCurrent().reach.where,
+      });
+      expect(created, JSON.stringify(created)).toMatchObject({ ok: true });
+      const receipt = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.create'].parse(created.ok ? created.result : null);
+      expect(receipt.incomplete).toBeUndefined();
+      const record = home.catalog.read('skill-rules');
+      if (record.key !== 'skill-rules') throw new Error('Expected skill rules');
+      expect(record.value.rules.filter(rule => rule.skillId === receipt.skillId)).toMatchObject([{ enabled: false }]);
+      const listed = await draft.getCurrent().action.execute('skills.list', {});
+      const library = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(listed.ok ? listed.result : null);
+      expect(library.items.find(item => item.skillId === receipt.skillId)?.rules).toMatchObject([{ enabled: false }]);
+    } finally { await draft.unmount(); await home.dispose(); }
+  });
+
   it('saves once per pause with the newest text, and a revision conflict keeps the text and stops saving', async () => {
     vi.useFakeTimers();
     const saves: string[] = [];
@@ -159,11 +187,36 @@ describe('SkillDetailScreen instructions autosave', () => {
 });
 
 describe('SkillDetailScreen over the real skills Actions', () => {
+  it('honors the delete Action waiver without a local removal dialog', async () => {
+    modalSpies.confirm.mockClear();
+    const home = await seededHome('https://skill-delete-waived.test', async (path) => path === '/v2/account/settings'
+      ? Response.json({ version: 1, content: { t: 'plain', v: { actionsSettingsV1: { v: 1,
+        approvalWaivedSurfaces: { 'skills.delete': ['ui'] },
+      } } } }) : null);
+    await home.hydrateAccountSettings();
+    const detail = await renderHook(() => useSkillDetail('release-notes'));
+    try {
+      await vi.waitFor(() => expect(detail.getCurrent().status).toBe('ready'));
+      let removed: boolean | 'cancelled' | undefined;
+      await act(async () => { removed = await detail.getCurrent().remove(); });
+      expect(removed).toBe(true);
+      expect(home.boundary.read('release-notes')).toBeNull();
+      expect(modalSpies.confirm).not.toHaveBeenCalled();
+    } finally { await detail.unmount(); await home.dispose(); }
+  });
+
   it('keeps rules retry incomplete on a refused Account CAS and recovers without reinstalling', async () => {
     let refuse = true;
-    const home = await seededHome('https://skill-rules-retry.test', async (path, init) =>
-      refuse && path.endsWith('/prompt-library/skill-rules') && init?.method === 'POST'
-        ? Response.json({ status: 'conflict', revision: 2 }) : null);
+    let refusedWrites = 0;
+    // Accept the shared admission prompt so the test reaches the real Account CAS.
+    modalSpies.confirm.mockResolvedValue(true);
+    const home = await seededHome('https://skill-rules-retry.test', async (path, init) => {
+      if (refuse && path.endsWith('/prompt-library/skill-rules') && init?.method === 'POST') {
+        refusedWrites += 1;
+        return Response.json({ status: 'conflict', revision: 2 });
+      }
+      return null;
+    });
     const author = await renderHook(() => {
       const library = useSkillsLibrary();
       return { ...useMountedActionExecution(library.scope), retry: library.retry };
@@ -173,6 +226,7 @@ describe('SkillDetailScreen over the real skills Actions', () => {
       const input = { skillId: 'release-notes', change: { kind: 'replace' as const,
         rules: [{ target: { t: 'allMachines' as const }, enabled: true }] } };
       expect(await retrySkillRules(author.getCurrent().execute, input)).toBe(false);
+      expect(refusedWrites).toBeGreaterThan(0);
       expect(home.catalog.read('skill-rules').value).not.toMatchObject({ rules: expect.arrayContaining([expect.objectContaining({ skillId: 'release-notes' })]) });
       refuse = false;
       await act(async () => { author.getCurrent().retry(); });
@@ -180,14 +234,19 @@ describe('SkillDetailScreen over the real skills Actions', () => {
       expect(await retrySkillRules(author.getCurrent().execute, input)).toBe(true);
       expect(home.boundary.list()).toHaveLength(1);
       expect(home.catalog.read('skill-rules').value).toMatchObject({ rules: expect.arrayContaining([expect.objectContaining({ skillId: 'release-notes', enabled: true })]) });
-    } finally { await author.unmount(); await home.dispose(); }
+    } finally { modalSpies.confirm.mockResolvedValue(false); await author.unmount(); await home.dispose(); }
   });
 
   it('keeps a second-device edit when applying choices from an older reviewed revision, then reloads the review', async () => {
+    modalSpies.confirm.mockResolvedValue(true);
     const commit = '2'.repeat(40);
     const url = 'https://github.com/fixture/skills';
-    const ref = { kind: 'gitTree', repo: url, path: 'review', commit, treeSha: '3'.repeat(40) };
     const upstreamText = `${SKILL_MD}\nUpstream instructions.`;
+    const upstream = createPromptRegistrySkillFixture({ sourceId: 'reviewed-update', itemId: 'review', title: 'release-notes',
+      files: [{ path: 'SKILL.md', content: upstreamText }] });
+    if (upstream.item.payload.kind !== 'skill') throw new Error('Expected a skill fixture');
+    const skill = upstream.item.payload.skill;
+    const ref = { ...skill.ref, commit };
     const externalRequests: string[] = [];
     const home = await seededHome('https://skill-reviewed-update.test', undefined, { header: { skillLock: {
       provenance: { kind: 'link', url, ref: { ...ref, commit: '1'.repeat(40), treeSha: '4'.repeat(40) } },
@@ -199,7 +258,7 @@ describe('SkillDetailScreen over the real skills Actions', () => {
       if (request.includes('/commits/')) return Response.json({ sha: commit });
       if (request.includes('/git/trees/')) return Response.json({ sha: ref.treeSha, tree: [
         { path: 'review', type: 'tree', mode: '040000', sha: ref.treeSha },
-        { path: 'review/SKILL.md', type: 'blob', mode: '100644', sha: '5'.repeat(40), size: upstreamText.length },
+        ...skill.files.map(file => ({ path: `review/${file.path}`, type: 'blob', mode: '100644', sha: file.blobSha, size: file.size })),
       ] });
       if (request.endsWith('/review/SKILL.md')) return new Response(upstreamText);
       return new Response(null, { status: 404 });
@@ -229,10 +288,10 @@ describe('SkillDetailScreen over the real skills Actions', () => {
       expect(hook.getCurrent().updates.applies.get(reviewed.skillId)).toMatchObject({ status: 'failed', code: 'revision_conflict' });
       expect(home.boundary.readPlainBody(reviewed.skillId)).toBe(JSON.stringify(body));
       await vi.waitFor(() => expect(hook.getCurrent().updates.diffs.get(reviewed.skillId)).toMatchObject({ status: 'ready', revision: newest.revision }));
-    } finally { await hook.unmount(); await home.dispose(); }
+    } finally { modalSpies.confirm.mockResolvedValue(false); await hook.unmount(); await home.dispose(); }
   });
 
-  it('publishes a rule flip to the shared catalog and rail immediately, offers Undo, and rolls back a refused write', async () => {
+  it('publishes a rule flip immediately, offers Undo after acknowledgement, and rolls back a refused write', async () => {
     const issued = createDeferred<void>();
     const reply = createDeferred<void>();
     let held = true;
@@ -256,16 +315,20 @@ describe('SkillDetailScreen over the real skills Actions', () => {
       expect(reader.getCurrent().rules[0]?.enabled).toBe(true);
       expect(getPromptLibraryCatalogValue(storage.getState().settingsScope, 'skill-rules').value?.rules.find(rule => rule.skillId === 'release-notes')?.enabled).toBe(true);
       expect(library.getCurrent().items.find(item => item.skillId === 'release-notes')?.rules[0]?.enabled).toBe(true);
-      expect(readPresentationNotice()?.undo).toBeDefined();
-      act(() => { readPresentationNotice()!.undo!.run(); });
-      expect(reader.getCurrent().rules).toEqual([]);
+      expect(readPresentationNotice()?.undo).toBeUndefined();
       held = false;
       await act(async () => { reply.resolve(); expect(await change).toEqual({ ok: true }); });
+      expect(reader.getCurrent().rules[0]?.enabled).toBe(true);
+      expect(readPresentationNotice()?.undo).toBeDefined();
+      await act(async () => { readPresentationNotice()!.undo!.run(); });
       await vi.waitFor(() => expect(reader.getCurrent().rules).toEqual([]));
+      await vi.waitFor(() => expect(library.getCurrent().items.find(item => item.skillId === 'release-notes')?.rules).toEqual([]));
+      retirePresentationNotice();
       refuse = true;
       await act(async () => { expect(await author.getCurrent().change({ kind: 'replace', rules: [{ target: { t: 'allMachines' }, enabled: true }] })).toEqual({ ok: false, message: 'conflict' }); });
       expect(reader.getCurrent().rules).toEqual([]);
       expect(library.getCurrent().items.find(item => item.skillId === 'release-notes')?.rules).toEqual([]);
+      expect(readPresentationNotice()?.undo).toBeUndefined();
     } finally {
       reply.resolve();
       await library.unmount(); await reader.unmount(); await author.unmount(); await home.dispose();
@@ -386,6 +449,9 @@ describe('SkillDetailScreen over the real skills Actions', () => {
         ] });
         expect(groups?.find(group => group.id === 'work')?.rows.map(item => item.skillId)).toEqual(['release-notes']);
         expect(groups?.some(group => group.id === 'old')).toBe(false);
+        await act(async () => { expect(await detail.getCurrent().moveToFolder(null)).toBe(true); });
+        await vi.waitFor(() => expect(library.getCurrent().items.find(item => item.skillId === 'release-notes')?.folderId).toBeNull());
+        await vi.waitFor(() => expect(reopened.getCurrent().items.find(item => item.skillId === 'release-notes')?.folderId).toBeNull());
         // The legacy header is deliberately unchanged: canonical personal placement must win it.
         expect(home.boundary.read('release-notes')?.header).toBe(encodePlainArtifactStoredContent(
           PromptBundleArtifactHeaderV1Schema.parse({ v: 1, kind: 'prompt_bundle.v2', title: 'release-notes',

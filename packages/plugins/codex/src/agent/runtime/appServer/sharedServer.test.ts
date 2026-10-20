@@ -9,7 +9,85 @@ import type { ExecService, PluginProcessResult } from '@happier-dev/plugin-sdk/e
 
 import { createCodexSharedAppServer } from './sharedServer.js';
 
+type AgentNativeLaunchQualifier = NonNullable<NonNullable<Parameters<ExecService['spawn']>[1]>['nativeLaunch']>;
+
 describe('createCodexSharedAppServer', () => {
+  it.skipIf(process.platform === 'win32').each(['ready', 'abort', 'exit'] as const)(
+    'observes native startup %s without imposing the RPC budget on backfill', async outcome => {
+    const directory = await mkdtemp(join('/tmp', 'codex-backfill-'));
+    const http = createServer();
+    const sockets = new WebSocketServer({ server: http });
+    sockets.on('connection', socket => socket.on('message', data => {
+      const message = JSON.parse(String(data)) as { id?: number; method?: string };
+      if (message.id !== undefined) socket.send(JSON.stringify({ id: message.id, result: {} }));
+    }));
+    const nativeResult: PluginProcessResult = {
+      termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'dispose', reason: 'caller' } },
+      stdout: new Uint8Array(), stderr: new Uint8Array(), stdoutTruncated: false, stderrTruncated: false,
+    };
+    let settleExit: ((result: PluginProcessResult) => void) | undefined;
+    const exited = new Promise<PluginProcessResult>(resolve => { settleExit = resolve; });
+    let clockOffset = 0;
+    const realNow = Date.now.bind(Date);
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + clockOffset);
+    const controller = new AbortController();
+    const dispose = vi.fn(async () => {
+      for (const socket of sockets.clients) socket.terminate();
+      if (http.listening) await new Promise<void>((resolve, reject) => http.close(error => error ? reject(error) : resolve()));
+      settleExit?.(nativeResult);
+    });
+    const exec = {
+      systemTools: { resolve: async () => ({ executable: { kind: 'systemTool', id: 'codex-cli' } }) },
+      run: async (request: Parameters<ExecService['run']>[0]) => ({
+        ...nativeResult,
+        termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } },
+        stdout: new TextEncoder().encode(request.args?.includes('--version') ? 'codex-cli 0.162.1' : ''),
+      }),
+      spawn: async (request: Parameters<ExecService['spawn']>[0]) => {
+        const args = request.args ?? [];
+        const socketPath = args[args.indexOf('--listen') + 1]!.slice('unix://'.length);
+        await mkdir(dirname(socketPath), { recursive: true });
+        setTimeout(() => {
+          if (outcome === 'exit') settleExit?.({ ...nativeResult,
+            termination: { observed: { kind: 'exit', exitCode: 1 }, requestedBy: { kind: 'none' } },
+          });
+          else {
+            // Simulate a native history backfill outlasting the RPC budget.
+            clockOffset += 120_000;
+            if (outcome === 'abort') controller.abort();
+            else http.listen(socketPath);
+          }
+        }, 10);
+        return { write: async () => undefined, closeStdin: async () => undefined,
+          onOutput: () => ({ dispose: () => undefined }), wait: () => exited, dispose };
+      },
+    } as unknown as ExecService; // Only the native process boundary is substituted.
+    let server: Awaited<ReturnType<typeof createCodexSharedAppServer>> = null;
+    try {
+        server = await createCodexSharedAppServer({
+          exec, processEnv: {}, platform: 'linux', signal: controller.signal,
+        });
+        if (!server) throw new Error('Expected supported shared control');
+        const opening = server.createClient({ cwd: directory, processEnv: {}, configOverrides: [], disableUserMcpServers: false });
+        if (outcome === 'abort') {
+          await expect(opening).rejects.toMatchObject({ name: 'AbortError' });
+          expect(dispose).toHaveBeenCalledTimes(1);
+        } else if (outcome === 'exit') {
+          await expect(opening).rejects.toMatchObject({ code: 'agent_startup_transport_failed',
+            startupFailure: { reason: 'process_exited', nativeExitCode: 1 },
+          });
+        } else {
+          const client = await opening;
+          await client.dispose();
+        }
+    } finally {
+      now.mockRestore();
+      await server?.dispose();
+      sockets.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it.skipIf(process.platform === 'win32').each([
     ['serializes native socket startup until the first real initialize completes', false, false],
     ['keeps failed native socket startup exclusive through process shutdown', true, false],
@@ -20,6 +98,9 @@ describe('createCodexSharedAppServer', () => {
     const nativeStartupLock = join(userInfo().homedir, '.happier-codex-native-startup.lock');
     const cleanupWasExclusive: boolean[] = [];
     let spawnCount = 0;
+    const nativeLaunch = Object.freeze({}) as AgentNativeLaunchQualifier;
+    const spawnOptions: Parameters<ExecService['spawn']>[1][] = [];
+    const probeOptions: Parameters<ExecService['run']>[1][] = [];
     const result = (stdout = ''): PluginProcessResult => ({
       termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } },
       stdout: new TextEncoder().encode(stdout), stderr: new Uint8Array(),
@@ -29,9 +110,12 @@ describe('createCodexSharedAppServer', () => {
     // client perform the handshake; no provider orchestration is replaced.
     const exec = {
       systemTools: { resolve: async () => ({ executable: { kind: 'systemTool', id: 'codex-cli' } }) },
-      run: async (request: Parameters<ExecService['run']>[0]) => result(request.args?.includes('--version')
-        ? 'codex-cli 0.162.1' : 'realtime_conversation under development false'),
-      spawn: async (request: Parameters<ExecService['spawn']>[0]) => {
+      run: async (request: Parameters<ExecService['run']>[0], options: Parameters<ExecService['run']>[1]) => {
+        probeOptions.push(options);
+        return result(request.args?.includes('--version') ? 'codex-cli 0.162.1' : 'realtime_conversation under development false');
+      },
+      spawn: async (request: Parameters<ExecService['spawn']>[0], options: Parameters<ExecService['spawn']>[1]) => {
+        spawnOptions.push(options);
         const shouldFailInitialize = firstInitializeFails && spawnCount++ === 0;
         const startupOwner = readFileSync(nativeStartupLock, 'utf8');
         await mkdir(guard);
@@ -83,7 +167,7 @@ describe('createCodexSharedAppServer', () => {
     try {
       const outcomes = await Promise.allSettled([0, 1].map(async index => {
         const server = await createCodexSharedAppServer({
-          exec, processEnv: {}, platform: 'linux',
+          exec, processEnv: {}, platform: 'linux', nativeLaunch,
           dependencies: {
             createRuntimeDirectory: async () => await mkdtemp(join('/tmp', `c-${index}-`)),
             removeRuntimeDirectory: async path => await rm(path, { recursive: true, force: true }),
@@ -102,6 +186,8 @@ describe('createCodexSharedAppServer', () => {
         { status: 'fulfilled', value: { pong: true } },
       ]));
       if (firstInitializeFails) expect(cleanupWasExclusive[0]).toBe(true);
+      expect(spawnOptions).toEqual([{ nativeLaunch }, { nativeLaunch }]);
+      expect(probeOptions.every(options => options === undefined)).toBe(true);
     } finally {
       await Promise.all(clients.map(client => client.dispose()));
       await Promise.all(servers.map(server => server.dispose()));
@@ -178,7 +264,7 @@ describe('createCodexSharedAppServer', () => {
     expect(waitForSocket).toHaveBeenCalledWith(
       '/tmp/happier-codex-private/private/app-server.sock',
       processHandle,
-      90_000,
+      undefined,
     );
     expect(createClient).toHaveBeenCalledWith(expect.objectContaining({
       transport: {

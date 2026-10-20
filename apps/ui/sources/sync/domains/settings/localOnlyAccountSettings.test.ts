@@ -28,9 +28,8 @@ describe('localOnlyAccountSettings', () => {
             .machineAdministrationTargetsLocalV1).toEqual({});
     });
 
-    it('keeps device layout and Administration memory out of Account writes without changing execution-origin policy', () => {
+    it('keeps device Administration memory out of Account writes without changing execution-origin policy', () => {
         const input = JSON.parse(JSON.stringify({
-            sessionSplitCanvasLayoutsV1: {},
             machineAdministrationTargetsLocalV1: {},
             machineAdministrationSelectionsV1: { v: 1, pluginExecutionOriginsByPluginId: {} },
         }));
@@ -49,12 +48,14 @@ describe('localOnlyAccountSettings', () => {
                     },
                 } },
             } },
-            localSettings: { machineAdministrationTargetsLocalV1: {}, sessionSplitCanvasLayoutsV1: {} },
+            localSettings: { machineAdministrationTargetsLocalV1: {} },
         });
         expect(pickLocalOnlyAccountSettings(hydrated)).toMatchObject({
-            machineAdministrationTargetsLocalV1: {}, sessionSplitCanvasLayoutsV1: {},
+            machineAdministrationTargetsLocalV1: {},
         });
-        expect(hydrated.machineAdministrationSelectionsV1.pluginExecutionOriginsByPluginId['acme.plugin']?.materializationRef.machineId).toBe('remote');
+        expect(hydrated.machineAdministrationSelectionsV1.pluginExecutionOriginsByPluginId['acme.plugin']).toMatchObject({
+            materializationRef: { machineId: 'remote' },
+        });
     });
 
     it('strips UI-local lastUsedAgent from server-synced settings', () => {
@@ -118,7 +119,6 @@ describe('localOnlyAccountSettings', () => {
 
     it('keeps every device-local Account setting out of the Protocol persistence catalog', () => {
         const localOnlyKeys = [
-            'sessionSplitCanvasLayoutsV1',
             'machineAdministrationTargetsLocalV1',
             'lastUsedAgent',
             'lastUsedBackendTarget',

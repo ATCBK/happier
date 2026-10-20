@@ -175,7 +175,8 @@ export function toTriageSnapshot(
     title,
     // No `summary`. It is one line of row subtitle, never a body excerpt, and GitHub
     // publishes no such line: the body, its comments and its activity are live detail
-    // materializations and never ride a list result.
+    // materializations and never ride a list result. Complete task edit values
+    // are carried separately by exact get, never by this display snapshot.
     scopeLabel,
     ...(snapshot.scopeDisplayName === undefined ? {} : { scopeDisplayName: snapshot.scopeDisplayName }),
     ...(snapshot.authorLabel === undefined ? {} : { authorLabel: snapshot.authorLabel }),
@@ -183,6 +184,8 @@ export function toTriageSnapshot(
     ...(isEmittableInstant(snapshot.createdAtMs) ? { createdAtMs: snapshot.createdAtMs } : {}),
     state: Object.freeze({
       presentation: snapshot.state.presentation,
+      ...(snapshot.state.stage === undefined ? {} : { stage: snapshot.state.stage }),
+      ...(snapshot.state.completionReason === undefined ? {} : { completionReason: snapshot.state.completionReason }),
       // GitHub's `state` is a bare provider string and an unrecognized value reaches
       // here verbatim, so the provider's own word is projected into one bounded line
       // like every other display string. Nothing surviving omits the label rather than
@@ -190,6 +193,7 @@ export function toTriageSnapshot(
       ...(nativeLabel.value.length === 0 ? {} : { nativeLabel: nativeLabel.value }),
     }),
     facts: facts.facts,
+    ...(snapshot.relations === undefined ? {} : { relations: snapshot.relations }),
     ...(snapshot.reviewRevision === undefined
       ? {}
       : { reviewRevision: snapshot.reviewRevision }),
@@ -207,6 +211,7 @@ export function toTriageFailure(failure: GithubTriageFailureV1): TriageSourceFai
   return Object.freeze({
     class: failure.class,
     code: failure.code,
+    ...(failure.detail === undefined ? {} : { detail: failure.detail }),
     ...(failure.retryNotBeforeMs === undefined
       ? {}
       : { retryNotBeforeMs: failure.retryNotBeforeMs }),
@@ -241,6 +246,10 @@ function toTriagePresentObservation(
   });
 }
 
+export function toTriageObservation(
+  observation: Extract<GithubTriageObservationV1, { kind: 'present' }>,
+): Extract<TriageSourceObservationV1, { kind: 'present' }>;
+export function toTriageObservation(observation: GithubTriageObservationV1): TriageSourceObservationV1;
 export function toTriageObservation(
   observation: GithubTriageObservationV1,
 ): TriageSourceObservationV1 {
@@ -277,7 +286,9 @@ export function toTriageGetResult(
   instance: TriageConfiguredSourceInstanceV1,
 ): TriageGetResultV1 {
   const projected = toTriageObservation(observation);
-  if (observation.kind !== 'present' || projected.kind !== 'present' || observation.localRef.kindId !== 'pull-request') return projected;
+  if (observation.kind !== 'present' || projected.kind !== 'present') return projected;
+  if (observation.localRef.kindId !== 'pull-request') return { ...projected,
+    ...(observation.taskFields === undefined ? {} : { taskFields: observation.taskFields }) };
   const revision = observation.snapshot.reviewRevision;
   const route = parseGithubRoutingToken(observation.locator.routingToken);
   const repository = route === null ? null : buildGithubRepositoryKey(route);

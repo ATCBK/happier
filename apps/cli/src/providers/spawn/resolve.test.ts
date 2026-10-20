@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
+import { getAgentStaticModels } from '@happier-dev/agents';
 import * as persistence from '@/persistence';
 // Composed first-party test: exercise the native materializer, not a replacement
 // for the internal binding logic. No production host/plugin import is introduced.
@@ -14,6 +15,7 @@ import {
   ProviderContributionV1Schema,
   ProviderRuntimeStateFileV1Schema,
   ProviderSettingsV1Schema,
+  PluginAgentContributionV2Schema,
   createProviderAccountGrantFingerprintV1,
   createProviderCatalogFingerprintV1,
   createProviderMachineGrantFingerprintV1,
@@ -43,7 +45,7 @@ import {
   type ActiveAccountSettingsSnapshot,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { hydrateSavedSecretCatalog } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { hydrateSavedSecretCatalog } from "@/settings/secrets/savedSecretCatalogRead";
 import type {
   ResolveManagedProviderPurposeBindingIntent,
 } from '@/providers/managed/resolvePurposeBindingSnapshot';
@@ -54,6 +56,9 @@ import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/sett
 import { DaemonProviderModelProjectionResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
 
 import { resolveProviderConnectionForMachine } from '../registry';
+import { resolveProviderContributionRegistryView } from '../registry/contributions';
+import { projectManifestAgentContribution } from '@/plugins/projection/registry/projectManifestAgentContribution';
+import type { ProviderContributionRegistryView } from '../registry/types';
 import { resolveProviderModelCompatibility } from '../catalog/compatibility';
 import { createProviderCatalogRefreshFingerprint } from '../probe/catalog';
 import {
@@ -66,6 +71,7 @@ import {
   resolveProviderSpawnAuthorization,
 } from './resolve';
 import { collectProviderConnectionDnsEvidence } from '../registry/dnsEvidence';
+import { createForegroundAgentRuntimeAdmissionOwner } from '@/daemon/agentRuntime/foregroundAdmission';
 
 const connectionId = ProviderConnectionIdSchema.parse('pc_gateway');
 const contributionKey = 'acme.gateway/gateway';
@@ -178,7 +184,7 @@ function providerSettings(): ProviderSettingsV1 {
 }
 
 function grantedSettings(
-  providerRegistry: typeof registry = registry,
+  providerRegistry: ProviderContributionRegistryView = registry,
 ): ProviderSettingsV1 {
   const initial = providerSettings();
   const resolution = resolveProviderConnectionForMachine({
@@ -347,6 +353,7 @@ function lease(
       providersByContributionKey,
     },
     agentRuntimesByAgentId: new Map([['codex', {
+      hasPrimaryRuntime: true,
       pluginId: 'happier.agent.codex',
       pluginVersion: '1.0.0',
       agentId: 'codex',
@@ -449,6 +456,67 @@ function definitiveSelection(modelId = 'model-a') {
 }
 
 describe('provider spawn authorization resolver', () => {
+  it.each(['admission', 'commit', 'foreground'] as const)('cancels deferred DNS during %s and releases admission resources', async (phase) => {
+    const providersByContributionKey = new Map([[canonicalContributionKey, {
+      ...contribution,
+      definition: ProviderContributionV1Schema.parse({ ...definition, credential: { ...definition.credential, required: false } }),
+    }]]);
+    const settings = ProviderSettingsV1Schema.parse({ ...grantedSettings({ providersByContributionKey }), secretBindingsByConnectionId: {} });
+    const snapshot: ActiveAccountSettingsSnapshot = {
+      source: 'network', settings: AccountSettingsSchema.parse(accountSettings(settings)),
+      providerConnectionsCatalog: { status: 'ready', revision: 1, catalog: splitProviderSettingsV1(settings).catalog },
+      settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [key], scopeKey: 'account-a',
+    };
+    const controller = new AbortController();
+    let enter = () => {};
+    let release = (_addresses: readonly string[]) => {};
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const network = new Promise<readonly string[]>(resolve => { release = resolve; });
+    let defer = phase !== 'commit';
+    const unsubscribe = vi.fn();
+    const input = {
+      selection: { v: 1 as const, updatedAt: 1, ref: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: connectionId, modelId: 'model-a' } },
+      machineId: 'machine-a', agentTargetKey: 'agent:happier.agent.codex/codex', agentId: 'codex', lease: lease(undefined, true, 'restart_session', providersByContributionKey, true),
+      getAccountSettingsSnapshot: () => snapshot, subscribeAccountSettingsSnapshot: () => unsubscribe,
+      signal: controller.signal,
+      resolveAddresses: async () => { if (!defer) return ['1.1.1.1']; enter(); return await network; },
+      materializationBaseDir: '/unused', sessionId: `cancel-${phase}`,
+    };
+    let attempt: Awaited<ReturnType<typeof createRuntimeProviderSpawnAuthorizationAttempt>> | undefined;
+    let pending: Promise<unknown> | undefined;
+    try {
+      if (phase === 'foreground') {
+        const owner = createForegroundAgentRuntimeAdmissionOwner({ prepare: async (_request, signal) => {
+          const result = await createRuntimeProviderSpawnAuthorizationAttempt({ ...input, signal });
+          if (result.ok) { result.attempt.cleanupOnFailure(); throw new Error('Cancelled admission unexpectedly succeeded'); }
+          return result;
+        } });
+        const admission = owner.admit({ v: 1, attemptId: 'attempt', sessionId: 'session', foregroundPid: 1234,
+          machineId: 'machine-a', directory: '/workspace', agentId: 'codex',
+          backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' } });
+        const settled = expect(admission).rejects.toThrow('unavailable');
+        await entered;
+        pending = owner.release('attempt', 'session');
+        try { await pending; await settled; } finally { release(['1.1.1.1']); await admission.catch(() => undefined); await owner.dispose(); }
+        return;
+      } else if (phase === 'commit') {
+        attempt = await createRuntimeProviderSpawnAuthorizationAttempt(input);
+        expect(attempt, JSON.stringify(attempt)).toMatchObject({ ok: true });
+        if (!attempt.ok) throw new Error('Expected admission');
+        defer = true;
+        pending = attempt.attempt.revalidateBeforeCommit();
+      } else pending = createRuntimeProviderSpawnAuthorizationAttempt(input);
+      await entered;
+      controller.abort();
+      // The DNS resolver is still pending; cancellation must settle independently.
+      await expect(pending).resolves.toMatchObject({ ok: false, error: { code: 'provider_endpoint_unavailable' } });
+      if (phase === 'commit') expect(unsubscribe).toHaveBeenCalledOnce();
+    } finally {
+      release(['1.1.1.1']);
+      await pending;
+      if (attempt?.ok) attempt.attempt.cleanupOnFailure();
+    }
+  });
   const executableRegistries: ResolvedExecutablePluginRuntimeRegistry[] = [];
 
   afterEach(async () => {
@@ -934,6 +1002,7 @@ describe('provider spawn authorization resolver', () => {
     })) });
     const runtimeLease = lease();
     const native = runtimeLease.registry.agentRuntimesByAgentId.get('codex')!;
+    if (!native.hasPrimaryRuntime) throw new Error('Expected an executable Codex runtime fixture');
     const definition = runtimeLease.registry.contributes.agentDefinitionsById.get('codex')!;
     const nativeLease: PluginRuntimeRegistryLease = { ...runtimeLease, registry: {
       ...runtimeLease.registry,
@@ -1015,6 +1084,45 @@ describe('provider spawn authorization resolver', () => {
           },
         },
       },
+    });
+  });
+
+  it.each(['provider', 'agent'] as const)('publishes a Gateway-returned snapshot using a contributed %s catalog name while retaining the exact routed id', (source) => {
+    const vendor: ResolvedProviderContribution = {
+      ...contribution, pluginId: 'acme.vendor', identity: { pluginId: 'acme.vendor', localId: 'vendor' },
+      definition: ProviderContributionV1Schema.parse({ ...definition, id: 'vendor', catalog: {
+        source: 'static', manualModelPolicy: 'allowed',
+        staticModels: [{ id: 'vendor-fast', name: 'Vendor Fast', aliases: ['vendor-fast-pinned'], contextWindowTokens: 100_000 }],
+      } }),
+    };
+    const agentBase = projectManifestAgentContribution({
+      definition: PluginAgentContributionV2Schema.parse({ id: 'claude', title: 'Claude', primary: 'sessions',
+        runtime: { kind: 'custom' }, capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } } }),
+      provenance: 'first_party', source: { kind: 'bundled' }, pluginId: 'happier.agent.claude',
+    });
+    const vendorModels = 'staticModels' in vendor.definition.catalog ? vendor.definition.catalog.staticModels : [];
+    const model = source === 'provider' ? vendorModels[0] : getAgentStaticModels(agentBase.id, { catalogOnly: true })[0];
+    if (!model) throw new Error('Expected a contributed static model descriptor');
+    const routedId = model.aliases?.[0] ?? model.id;
+    const nameRegistry = resolveProviderContributionRegistryView({
+      providersByContributionKey: new Map([
+        [canonicalContributionKey, contribution], ...(source === 'provider' ? [['acme.vendor/vendor', vendor] as const] : []),
+      ]),
+      agentDefinitionsById: new Map(source === 'agent' ? [[agentBase.id, agentBase]] : []),
+    }, 1);
+    const settings = grantedSettings(nameRegistry);
+    const result = resolveProviderSpawnAuthorization({
+      selection: { v: 1, updatedAt: 1, ref: {
+        agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: connectionId, modelId: routedId,
+      } },
+      runtimeModelDescriptor: { id: routedId, name: routedId, capabilities: { toolRoundTrips: 'supported' } },
+      machineId: 'machine-a', agentTargetKey: 'agent:happier.agent.codex/codex', agentId: 'codex',
+      accountSettings: accountSettings(settings), providerSettings: settings, registry: nameRegistry,
+      dnsEvidenceByEndpointUrl: dns, lease: lease(),
+    });
+    if (!result.ok) throw new Error(result.error.code);
+    expect(result.authorization.binding.selection.model).toEqual({
+      id: routedId, name: model.name, capabilities: { toolRoundTrips: 'supported' },
     });
   });
 

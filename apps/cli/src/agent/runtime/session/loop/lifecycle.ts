@@ -6,13 +6,15 @@ import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime/ag
 import { isRecord } from '@happier-dev/plugin-sdk';
 import { validatePluginHookPayloadV1 } from '@happier-dev/protocol/plugins/hooks';
 import type { AgentSessionRuntimeEvent, ProviderBoundModelRef, SessionModelTransitionResultV1, SessionTurnFactsV1, SessionRolePromptContextV1 } from '@happier-dev/protocol';
-import { render } from 'ink';
-import React from 'react';
+import type { render } from 'ink';
+import type React from 'react';
 
 import type { ApiClient } from '@/api/api';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { RuntimeSessionTurnMutationV1 } from '@/api/session/client/transport/mutations/createRuntimeSessionClientDurableMutationOutbox';
 import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
+import type { TurnAssistantTextSnapshot } from '@/api/session/turns/assistantTextSnapshot';
+import type { RegisterProviderAcceptedEffect } from '@/agent/runtime/session/input/providerInputOutcome';
 import { createKeyedStreamedTranscriptBridge } from '@/api/session/createKeyedStreamedTranscriptBridge';
 import { isTerminalSessionTurnMutationAction } from '@/api/session/sessionTurnStatusSnapshot';
 import type { Metadata, PermissionMode } from '@/api/types';
@@ -54,6 +56,7 @@ import {
 } from '@/ui/remoteControl/remoteModeControl';
 import { logger } from '@/ui/logger';
 import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
+import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabledBit';
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
 import { readAgentSessionCapabilities } from '@/plugins/projection/registry/agentContributionDefinition';
 import { NormalizedToolTurnChangeTracker } from '@/agent/tools/diff/normalizedToolTurnChangeTracker';
@@ -87,6 +90,7 @@ import {
 import {
   createRuntimeTranscriptProjector,
   RuntimeTranscriptRequiredAdmissionError,
+  type RuntimeTranscriptProjectionResult,
 } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
 import {
   observeAgentStreamTokenThroughPluginHooks,
@@ -111,7 +115,7 @@ import type {
   RuntimeTurnDisposeReason,
   RuntimeTurnOperations,
 } from '@/agent/runtime/turns/runtimeTurnOperations';
-import { RemoteOnlyTerminalDisplay, type RemoteOnlyTerminalDisplayProps } from './display';
+import type { RemoteOnlyTerminalDisplayProps } from './display/types';
 import { resolveStartingMode } from './resolveStartingMode';
 import { runTerminalRemoteSessionModeLoop, type TerminalRemoteSessionMode } from './runTerminalRemoteSessionModeLoop';
 import type {
@@ -221,10 +225,7 @@ export type SessionLoopLifecycleParams = Readonly<{
   runtime: RuntimeTurnOperations;
   hookRuntime: HostSessionRuntimeHookRuntime;
   capabilitySelection?: Pick<CapabilitySelectionSynchronizerInput, 'agent' | 'skillsRunner' | 'readSkillRules' | 'initialSkillRules' | 'readMcpRules' | 'initialMcpRules' | 'subscribeAccountSettings'>;
-  registerProviderAcceptedEffect: (
-    localId: string,
-    onAccepted: (() => void) | null,
-  ) => void;
+  registerProviderAcceptedEffect: RegisterProviderAcceptedEffect;
   terminalRemoteModeLoop?: HostSessionTerminalRemoteModeLoop | null;
   messageBuffer: MessageBuffer;
   permissionHandler: PromptLoopPermissionHandler;
@@ -310,7 +311,6 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   const registerRunnerTerminationHandlersFn = params.deps.registerRunnerTerminationHandlersFn ?? registerRunnerTerminationHandlers;
   const sendReadyWithPushNotificationFn = params.deps.sendReadyWithPushNotificationFn;
   const registerKillSessionHandlerFn = params.deps.registerKillSessionHandlerFn ?? registerKillSessionHandler;
-  const renderFn = params.deps.renderFn ?? render;
   const startRemoteModeStaticControlFn = params.deps.startRemoteModeStaticControlFn ?? startRemoteModeStaticControl;
   const runTerminalRemoteSessionModeLoopFn = params.deps.runTerminalRemoteSessionModeLoopFn ?? runTerminalRemoteSessionModeLoop;
   const onBeforeSessionClose = params.deps.onBeforeSessionClose;
@@ -322,7 +322,6 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
     ?? (daemonTurnContributionsBridge
       ? undefined
       : observeAgentStreamTokenThroughPluginHooks);
-  const RemoteOnlyTerminalDisplayComponent = params.deps.remoteOnlyTerminalDisplayComponent ?? RemoteOnlyTerminalDisplay;
 
   const hasTTY = process.stdout.isTTY && process.stdin.isTTY;
   const shouldRenderTerminalDisplay = params.config.shouldRenderTerminalDisplay?.({ opts: params.opts, session: params.session, metadata: params.runtimeMetadata }) ?? true;
@@ -407,7 +406,26 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   const runtimeTranscriptStateByTurnId = new Map<string, {
     failure?: RuntimeTranscriptRequiredAdmissionError;
     userLocalIds: Set<string>;
+    hasAssistantText?: true;
+    terminalAssistantSnapshot?: TurnAssistantTextSnapshot | null;
   }>();
+  const pendingInputSettlementsByLocalId = new Map<string, Promise<void>>();
+  const retireTurnTranscriptState = (turnId: string): void => {
+    for (const localId of runtimeTranscriptStateByTurnId.get(turnId)?.userLocalIds ?? []) {
+      pendingInputSettlementsByLocalId.delete(localId);
+    }
+    runtimeTranscriptStateByTurnId.delete(turnId);
+    if (activeRuntimeTranscriptTurnId === turnId) activeRuntimeTranscriptTurnId = null;
+  };
+  const registerProviderAcceptedEffect: RegisterProviderAcceptedEffect = (localId, onAccepted, representedInputs) => {
+    // This prompt-loop registration also owns anchor ordering when the prompt
+    // has no optional accepted effect. Canonical rejection retires its entry.
+    if (!onAccepted) params.registerProviderAcceptedEffect(localId, null, representedInputs);
+    params.registerProviderAcceptedEffect(localId, pendingSettlement => {
+      if (pendingSettlement) pendingInputSettlementsByLocalId.set(localId, pendingSettlement);
+      onAccepted?.(pendingSettlement);
+    }, representedInputs);
+  };
   const readTurnTranscriptState = (turnId: string) => {
     let state = runtimeTranscriptStateByTurnId.get(turnId);
     if (!state) {
@@ -480,15 +498,17 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
           },
         };
         await enqueueTerminalMutation(failureMutation);
-        runtimeTranscriptStateByTurnId.delete(mutation.turnId);
-        if (activeRuntimeTranscriptTurnId === mutation.turnId) {
-          activeRuntimeTranscriptTurnId = null;
-        }
+        retireTurnTranscriptState(mutation.turnId);
         return { terminalStatusOverride: 'failed' as const };
       }
       if (transcriptAdmissionFailure) throw transcriptAdmissionFailure;
 
       try {
+        const turnState = 'turnId' in mutation ? readTurnTranscriptState(mutation.turnId) : null;
+        // Join the existing Pending write before reading its acknowledged-row
+        // projection. A settled attempt is ordering, not invented commit evidence.
+        await Promise.all([...turnState?.userLocalIds ?? []]
+          .map(localId => pendingInputSettlementsByLocalId.get(localId)));
         // Resolve only acknowledged rows after prior transcript projections.
         // Native acceptance can precede both begin-marker admission and HTTP ACKs.
         const userMessageSeqs = 'turnId' in mutation
@@ -498,7 +518,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
               .sort((left, right) => left - right)
           : [];
         const startUserMessageSeq = userMessageSeqs[0];
-        const snapshot = params.session.getTurnAssistantTextSnapshotStore?.()?.getCurrentTurnSnapshot();
+        const snapshot = turnState?.terminalAssistantSnapshot;
         const finalAssistantMessageSeq = (snapshot?.source === 'committed' || snapshot?.source === 'socket')
           && typeof snapshot.seq === 'number' && Number.isSafeInteger(snapshot.seq) && snapshot.seq >= 0
           ? snapshot.seq : null;
@@ -513,7 +533,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
         const endSeqs = [...userMessageSeqs,
           ...(typeof observedSeq === 'number' && Number.isSafeInteger(observedSeq) && observedSeq >= 0 ? [observedSeq] : []),
           ...(finalAssistantMessageSeq === null ? [] : [finalAssistantMessageSeq])];
-        if ((mutation.action === 'fail' || mutation.action === 'cancel') && startUserMessageSeq !== undefined) {
+        if ((mutation.action === 'fail' || mutation.action === 'cancel' || mutation.action === 'wait') && startUserMessageSeq !== undefined) {
           await enqueueTerminalMutation({
             v: mutation.v, sessionId: mutation.sessionId,
             mutationId: `${mutation.mutationId}:input-anchors`, observedAt: mutation.observedAt,
@@ -539,10 +559,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
             : mutation;
         await enqueueTerminalMutation(settledMutation);
         if ('turnId' in mutation) {
-          runtimeTranscriptStateByTurnId.delete(mutation.turnId);
-          if (activeRuntimeTranscriptTurnId === mutation.turnId) {
-            activeRuntimeTranscriptTurnId = null;
-          }
+          retireTurnTranscriptState(mutation.turnId);
         }
       } catch (error) {
         logger.debug(`${params.config.uiLogPrefix} Runtime terminal turn mutation failed`, {
@@ -557,6 +574,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
     return terminalMutation;
   };
   let capabilityOverrideSync: RuntimeOverrideSynchronizers | null = null;
+  const readCapabilityOverrideSync = (): RuntimeOverrideSynchronizers | null => capabilityOverrideSync;
   let lastCapabilitySettledTurnId: string | undefined;
   const sessionTurnLifecycle = createSessionTurnLifecycle({
     session: {
@@ -564,11 +582,19 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
         return params.session.sessionId;
       },
       enqueueSessionTurnMutation,
+      readQuestionWaitTurnId: () => params.session.readQuestionWaitTurnId?.() ?? null,
     },
     agentId: params.policyAgentId,
     readTurnFacts: () => preparedTurnFacts ?? stampTurnFacts({
       sessionWorkDepth: params.session.getWorkDepth?.() ?? 0, hostContextOnly: true,
     }),
+    readStartingInput: (turnId) => {
+      const snapshot = params.session.getServerFeaturesSnapshot();
+      if (snapshot?.status !== 'ready'
+        || readServerEnabledBit(snapshot.features, 'sessions.autonomousExchange') !== true) return null;
+      const inputId = runtimeForPromptLoop.readTurnStartingInputId?.(turnId);
+      return inputId ? { turnId, inputId } : null;
+    },
     onTurnFactsChanged: (input) => {
       params.session.observeHostTurnFacts?.(input);
       if (input.facts === null) {
@@ -652,9 +678,13 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   let terminalHandoffFailureRequiresManualAction = false;
   let runtimeTranscriptProjectionSerial = Promise.resolve();
   const projectRuntimeTranscript = createRuntimeTranscriptProjector();
+  // A native runtime ending can mean observer/protocol loss or a crash. It
+  // cannot establish a clean process end, even when host cleanup exits zero.
+  let runtimeEndedWithoutCleanExit = false;
   let requestRuntimeEndedTermination = (): void => undefined;
   const observeRuntimeLifecycleMessage = (message: unknown): void => {
     const parsedRuntimeEvent = AgentSessionRuntimeEventSchema.safeParse(message);
+    const questionWaitTurnId = params.session.readQuestionWaitTurnId?.() ?? null;
     if (parsedRuntimeEvent.success && parsedRuntimeEvent.data.kind === 'turn-start') {
       if (hostReadyCapture?.turnId === null && parsedRuntimeEvent.data.startedBy === 'host') {
         hostReadyCapture.turnId = parsedRuntimeEvent.data.turnId;
@@ -679,6 +709,13 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       : typeof parsedProjectionTurnId === 'string'
         ? parsedProjectionTurnId
         : activeRuntimeTranscriptTurnId;
+    if (parsedRuntimeEvent.success && projectionTurnId
+      && isForegroundTurnRuntimeTranscriptEvent(parsedRuntimeEvent.data)
+      && ((parsedRuntimeEvent.data.kind === 'message-delta' && parsedRuntimeEvent.data.channel === 'assistant')
+        || (parsedRuntimeEvent.data.kind === 'transcript-message-committed' && parsedRuntimeEvent.data.role === 'assistant'))
+      && parsedRuntimeEvent.data.text.trim().length > 0) {
+      readTurnTranscriptState(projectionTurnId).hasAssistantText = true;
+    }
     if (parsedRuntimeEvent.success && params.config.publishHostRuntimeEvent) {
       try {
         params.config.publishHostRuntimeEvent(parsedRuntimeEvent.data);
@@ -692,8 +729,9 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
     const readyCapture = hostReadyCapture?.turnId === projectionTurnId ? hostReadyCapture : null;
     const transcriptProjection = runtimeTranscriptProjectionSerial.then(async () => {
       let transcriptProjectionError: unknown = null;
+      let projectionResult: RuntimeTranscriptProjectionResult | undefined;
       try {
-        await projectRuntimeTranscript({
+        projectionResult = await projectRuntimeTranscript({
           session: params.session,
           provider: runtimeTranscriptProvider,
           runtimeMessageDeltaBridge,
@@ -703,6 +741,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
           skillDelivery: params.config.readSkillDelivery?.(),
           usageAccount: params.config.skillUsageAccount,
           event: message,
+          questionWaitTurnId,
         });
       } catch (error) {
         transcriptProjectionError = error;
@@ -721,6 +760,15 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
         transcriptProjectionError ??= error;
       }
       if (
+        parsedRuntimeEvent.success && projectionTurnId
+        && (parsedRuntimeEvent.data.kind === 'turn-complete' || parsedRuntimeEvent.data.kind === 'turn-failed'
+          || parsedRuntimeEvent.data.kind === 'turn-cancelled')
+      ) {
+        const state = readTurnTranscriptState(projectionTurnId);
+        state.terminalAssistantSnapshot = transcriptProjectionError || !state.hasAssistantText ? null
+          : params.session.getTurnAssistantTextSnapshotStore?.()?.getCurrentTurnSnapshot() ?? null;
+      }
+      if (
         readyCapture && readyCapture.context === undefined && parsedRuntimeEvent.success
         && (parsedRuntimeEvent.data.kind === 'turn-complete' || parsedRuntimeEvent.data.kind === 'turn-failed'
           || parsedRuntimeEvent.data.kind === 'turn-cancelled')
@@ -730,6 +778,12 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
         readyCapture.context = {
           assistantPreviewText: transcriptProjectionError ? null : params.session.getTurnAssistantTextSnapshotStore?.()
             ?.getCurrentTurnSnapshot({ turnToken: readyCapture.snapshotScope?.turnToken ?? null })?.normalizedText ?? null,
+          ...(!transcriptProjectionError && parsedRuntimeEvent.data.kind === 'turn-complete'
+            && questionWaitTurnId !== parsedRuntimeEvent.data.turnId && projectionResult?.projected ? {
+              completedTurn: { turnId: parsedRuntimeEvent.data.turnId,
+                ...(projectionResult.terminalSourceMessage ? { original: projectionResult.terminalSourceMessage } : {}),
+              },
+            } : {}),
         };
       }
       if (transcriptProjectionError) {
@@ -781,6 +835,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       terminalTurnStateMachine.observe(observation);
     }
     if (parsedRuntimeEvent.success && parsedRuntimeEvent.data.kind === 'runtime-ended') {
+      runtimeEndedWithoutCleanExit = true;
       requestRuntimeEndedTermination();
     }
   };
@@ -826,7 +881,20 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   let runtimeDisposeReason: RuntimeTurnDisposeReason = 'runtime_recovery';
   let runtimeDisposePromise: Promise<void> | null = null;
   const disposeRuntimeOnce = (reason: RuntimeTurnDisposeReason): Promise<void> => {
-    runtimeDisposePromise ??= Promise.resolve().then(() => runtimeForPromptLoop.resetOrDisposeRuntime(reason));
+    runtimeDisposePromise ??= (async () => {
+      // Physical runner retirement owns every child Run in this generation.
+      // Start child cleanup before native or transport cleanup can suspend it.
+      // A mode handoff/recovery retains the Session's independent child work.
+      const outcomes = await Promise.allSettled([
+        ...(reason === 'host_shutdown' || reason === 'session_closed'
+          ? [Promise.resolve().then(() => params.session.disposeExecutionRuns())]
+          : []),
+        Promise.resolve().then(() => runtimeForPromptLoop.resetOrDisposeRuntime(reason)),
+      ]);
+      const failures = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
+      if (failures.length === 1) throw failures[0]!.reason;
+      if (failures.length > 1) throw new AggregateError(failures.map(failure => failure.reason), 'Runner retirement failed');
+    })();
     return runtimeDisposePromise;
   };
   let startupCoordinatorStarted = false;
@@ -841,13 +909,19 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   const handleAbort = async () => {
     logger.debug(`${params.config.uiLogPrefix} Abort requested`);
     resetAssistantTextSnapshotTurnScope(params.session, 'abort');
-    await params.permissionHandler.reset();
+    try {
+      await params.permissionHandler.reset({ scope: 'foreground' });
+    } catch {
+      logger.infoFile(`${params.config.uiLogPrefix} Permission reset failed during Stop; continuing runtime cancellation`, {
+        error: 'permission_reset_failed',
+      });
+    }
     try {
       abortController.abort();
       abortController = new AbortController();
       await runtimeForPromptLoop.cancelTurn();
     } catch {
-      logger.debug(`${params.config.uiLogPrefix} Failed to cancel current operation (non-fatal)`, {
+      logger.infoFile(`${params.config.uiLogPrefix} Failed to cancel current operation (non-fatal)`, {
         error: 'runtime_cancel_failed',
       });
     }
@@ -855,6 +929,8 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   params.setAbortRequestedCallback(handleAbort, () => abortController.signal);
   let inkInstance: ReturnType<typeof render> | null = null;
   let staticControl: RemoteModeStaticControl | null = null;
+  let terminalDisplayRequested = false;
+  let terminalDisplayMount: Promise<void> | null = null;
   const requestTerminalExit = async (): Promise<void> => {
     terminationHandlers.requestTermination({
       kind: 'signal',
@@ -862,8 +938,9 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
     });
     await terminationHandlers.whenTerminated;
   };
-  const mountTerminalDisplay = (): void => {
-    if (!hasTTY || inkInstance || staticControl) return;
+  const mountTerminalDisplay = async (): Promise<void> => {
+    if (!hasTTY || shouldExit || inkInstance || staticControl) return;
+    terminalDisplayRequested = true;
     const shouldMountRemoteOnlyTerminalDisplay =
       resolvedStartingMode.kind === 'remote-only' && remoteControlSurface !== 'none';
     if (!shouldMountRemoteOnlyTerminalDisplay && remoteControlSurface === 'static') {
@@ -877,22 +954,41 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       return;
     }
     if (!shouldMountRemoteOnlyTerminalDisplay && remoteControlSurface !== 'ink') return;
-    console.clear();
-    const displayProps = {
-      messageBuffer: params.messageBuffer,
-      logPath: process.env.DEBUG ? logger.getLogPath() : undefined,
-      onExit: requestTerminalExit,
-    };
-    const displayElement = shouldMountRemoteOnlyTerminalDisplay
-      ? React.createElement(RemoteOnlyTerminalDisplayComponent, {
-          ...displayProps,
-          backendDisplayName: params.config.backendDisplayName,
-          requestedMode: resolvedStartingMode.requestedMode,
-        })
-      : React.createElement(params.config.terminalDisplay, displayProps);
-    inkInstance = renderFn(displayElement, { exitOnCtrlC: false, patchConsole: false });
+    terminalDisplayMount ??= (async () => {
+      // The catalog/daemon can construct plans without initializing the TUI.
+      // Only this existing Ink-render branch owns loading its complete subtree.
+      const displayProps = {
+        messageBuffer: params.messageBuffer,
+        logPath: process.env.DEBUG ? logger.getLogPath() : undefined,
+        onExit: requestTerminalExit,
+      };
+      const reactModule = import('react');
+      const displayElement = shouldMountRemoteOnlyTerminalDisplay
+        ? Promise.all([
+            reactModule,
+            params.deps.remoteOnlyTerminalDisplayComponent
+              ? Promise.resolve(params.deps.remoteOnlyTerminalDisplayComponent)
+              : import('./display/remoteOnlyTerminal').then(module => module.RemoteOnlyTerminalDisplay),
+          ]).then(([React, Display]) => React.createElement(Display, {
+            ...displayProps,
+            backendDisplayName: params.config.backendDisplayName,
+            requestedMode: resolvedStartingMode.requestedMode,
+          }))
+        : Promise.all([reactModule, params.config.loadTerminalDisplay()])
+          .then(([React, Display]) => React.createElement(Display, displayProps));
+      const [{ render }, element] = await Promise.all([import('ink'), displayElement]);
+      // An attach/unmount or termination can retire this request while its
+      // module loads. Do not clear or redraw the newly owned terminal then.
+      if (!terminalDisplayRequested || shouldExit) return;
+      console.clear();
+      inkInstance = (params.deps.renderFn ?? render)(element, { exitOnCtrlC: false, patchConsole: false });
+    })().finally(() => {
+      terminalDisplayMount = null;
+    });
+    await terminalDisplayMount;
   };
   const unmountTerminalDisplay = async (): Promise<void> => {
+    terminalDisplayRequested = false;
     if (staticControl) {
       await staticControl.stop();
       staticControl = null;
@@ -935,14 +1031,48 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   };
   publishKeepAlive();
 
+  let closeFailedSession = false;
+  const endSessionAfterProcessExit = async (cleanExit: boolean): Promise<void> => {
+    try {
+      if (cleanExit && params.session.hasOwnerMetadataAuthority()) {
+        const stoppedAt = Date.now();
+        await params.session.updateMetadataAsCurrentPublisher(metadata => ({
+          ...metadata,
+          lifecycleState: 'stopped',
+          lifecycleStateSince: stoppedAt,
+        }));
+      }
+    } finally {
+      // Metadata failure or a superseded publisher must not skip the existing
+      // semantic-end/transport cleanup; its own authority checks still apply.
+      await params.session.endSessionAndClose();
+    }
+  };
   const cleanupOnce = (): Promise<void> => {
     cleanupPromise ??= (async () => {
+      if (closeFailedSession) params.session.prepareForClose();
       unsubscribeRuntimeEventsOnce();
       await drainRuntimeTranscriptProjections();
       // Normal completion retains accepted marker custody until it drains.
       // Termination retires publication separately when the daemon is quiescing.
       await sessionTurnLifecycle.drainAcceptedLifecycle();
       sessionTurnLifecycle.retireAcceptedLifecyclePublication();
+      if (closeFailedSession) {
+        // Failed startup/terminal admission still owns an open Session RPC
+        // channel. Withdraw controls and settle its callers through normal
+        // close before native cleanup can wait on those same observers.
+        try {
+          try {
+            await onBeforeSessionClose?.({ session: params.session, runtime: hookRuntimeForCallbacks });
+          } finally {
+            await params.session.close();
+          }
+        } catch {
+          logger.debug(`${params.config.uiLogPrefix} Failed Session close rejected (non-fatal)`, {
+            error: 'failed_session_close_failed',
+          });
+        }
+      }
       await params.config.lifecycleHooks?.onBeforeDispose?.({ session: params.session, runtime: hookRuntimeForCallbacks });
       await cleanupBackendRunResourcesFn({
         stopKeepAlive,
@@ -965,15 +1095,18 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       : {}),
     sessionExitReport: { sessionId: params.session.sessionId },
     onTerminate: (event, outcome) => {
+      const cleanProcessExit = outcome.exitCode === 0 && !runtimeEndedWithoutCleanExit;
       const work = (async () => {
         runtimeDisposeReason = resolveRunnerRuntimeDisposalReason(event);
         shouldExit = true;
         try {
           await abortAndDisposeRunnerRuntime({
+            retireUndispatchedInput: () => params.session.retireUndispatchedProviderInput(),
             abortActiveTurn: handleAbort,
             disposeRuntime: disposeRuntimeOnce,
             reason: runtimeDisposeReason,
           });
+          params.session.prepareForClose();
           unsubscribeRuntimeEventsOnce();
           await drainRuntimeTranscriptProjections();
           sessionTurnLifecycle.retireAcceptedLifecyclePublication();
@@ -985,7 +1118,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
           // Termination ends the runtime, never the Happy session's lifecycle intent:
           // the session becomes inactive and stays resumable. Archiving is a separate
           // user-intent action owned by the session archive service.
-          await params.session.endSessionAndClose();
+          await endSessionAfterProcessExit(cleanProcessExit);
         } finally {
           await cleanupOnce();
         }
@@ -1005,6 +1138,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   const requestRuntimeStop = async () => {
     logger.debug(`${params.config.uiLogPrefix} Kill session requested`);
     await requestExplicitRunnerStop({
+      retireUndispatchedInput: () => params.session.retireUndispatchedProviderInput(),
       abortActiveTurn: handleAbort,
       disposeRuntime: disposeRuntimeOnce,
       requestTermination: terminationHandlers.requestTermination,
@@ -1014,18 +1148,18 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   params.config.onRuntimeStopReady?.(requestRuntimeStop);
   registerKillSessionHandlerFn(params.session.rpcHandlerManager, requestRuntimeStop);
 
-  if (hasTTY && shouldRenderTerminalDisplay) {
-    mountTerminalDisplay();
-  }
-
   if (!shouldExit) {
     try {
-      subscribeRuntimeEventsRequired();
-      await startStartupCoordinator();
+      if (hasTTY && shouldRenderTerminalDisplay) await mountTerminalDisplay();
+      if (!shouldExit) {
+        subscribeRuntimeEventsRequired();
+        await startStartupCoordinator();
+      }
     } catch (error) {
       terminationHandlers.dispose();
       shouldExit = true;
       abortController.abort();
+      closeFailedSession = true;
       try {
         await cleanupOnce();
       } catch {
@@ -1173,7 +1307,8 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   };
   let terminalRemoteModeLoopError: unknown = null;
   let terminalProcessExited = false;
-  const terminalRemoteModeLoopPromise = terminalRemoteModeLoop && resolvedStartingMode.kind === 'switching'
+  let terminalProcessExitedCleanly = false;
+  const terminalRemoteModeLoopPromise = !shouldExit && terminalRemoteModeLoop && resolvedStartingMode.kind === 'switching'
     ? runTerminalRemoteSessionModeLoopFn({
         ...terminalRemoteModeLoop,
         startingMode: resolvedStartingMode.startingMode,
@@ -1183,15 +1318,17 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
             if (mode === 'terminal') {
               await unmountTerminalDisplay();
             } else {
-              mountTerminalDisplay();
+              await mountTerminalDisplay();
             }
           }
           await terminalRemoteModeLoop.onBeforeIteration?.(mode);
         },
         runTerminal: async (loopParams) => {
+          if (shouldExit) return { type: 'exit', code: 0 };
           const result = await terminalRemoteModeLoop.runTerminal(loopParams);
           if (result.type === 'exit') {
             terminalProcessExited = true;
+            terminalProcessExitedCleanly = result.code === 0;
             terminalTurnStateMachine.observe({
               type: 'process_exited',
               agentId: params.policyAgentId,
@@ -1201,6 +1338,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
           return result;
         },
         runRemote: async () => {
+          if (shouldExit) return 'exit';
           activeTerminalRemoteMode = 'remote';
           return await terminalRemoteModeLoop.runRemote();
         },
@@ -1214,6 +1352,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
         },
       }).catch((error: unknown) => {
         terminalRemoteModeLoopError = error;
+        closeFailedSession = true;
       }).finally(() => {
         shouldExit = true;
         abortController.abort();
@@ -1258,7 +1397,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       currentPermissionModeUpdatedAt: params.permissionModeState.getCurrentPermissionModeUpdatedAt(),
       setCurrentPermissionMode: params.permissionModeState.setCurrentPermissionMode,
       setCurrentPermissionModeUpdatedAt: params.permissionModeState.setCurrentPermissionModeUpdatedAt,
-      registerProviderAcceptedEffect: params.registerProviderAcceptedEffect,
+      registerProviderAcceptedEffect,
       onBeforeTurnBegin: (input, snapshotScope) => {
         const capture: HostReadyCapture = { turnId: null, snapshotScope };
         hostReadyCapture = capture;
@@ -1426,23 +1565,31 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
     });
   } catch (error) {
     promptLoopError = error;
+    closeFailedSession = true;
     throw error;
   } finally {
     terminationHandlers.dispose();
     shouldExit = true;
     abortController.abort();
-    await capabilityOverrideSync?.dispose?.();
+    await readCapabilityOverrideSync()?.dispose?.();
     const activeRunnerTerminationWork = runnerTerminationWork;
     if (activeRunnerTerminationWork) {
       await activeRunnerTerminationWork;
     } else {
       try {
         if (terminalProcessExited) {
-          await onBeforeSessionClose?.({
-            session: params.session,
-            runtime: hookRuntimeForCallbacks,
-          });
-          await params.session.endSessionAndClose();
+          // Publish unresolved native input custody while Pending settlement
+          // still has the Session transport. Physical exit does not prove
+          // whether the native process accepted an in-flight input.
+          try {
+            await disposeRuntimeOnce('session_closed');
+          } finally {
+            await onBeforeSessionClose?.({
+              session: params.session,
+              runtime: hookRuntimeForCallbacks,
+            });
+            await endSessionAfterProcessExit(terminalProcessExitedCleanly);
+          }
         }
       } finally {
         await cleanupOnce();

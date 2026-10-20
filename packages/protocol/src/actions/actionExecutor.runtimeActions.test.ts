@@ -43,6 +43,57 @@ function createDeps(overrides: Partial<ActionExecutorDeps> = {}): ActionExecutor
 }
 
 describe('createActionExecutor (runtime-unification actions)', () => {
+  it('retains an exchange occurrence revision instead of preparing a fresh grant on replay', async () => {
+    let currentRevision = 'session-message-row-revision:v1:0';
+    const prepare = vi.fn(async () => currentRevision);
+    const control = vi.fn(async ({ request }: Parameters<NonNullable<ActionExecutorDeps['sessionExchangeControl']>>[0]) => {
+      if (request.observedRevision !== currentRevision) return { ok: false, errorCode: 'exchange_revision_conflict' };
+      currentRevision = 'session-message-row-revision:v1:1';
+      return { state: { v: 1, observedStarts: 5, pauseAtStarts: 10, stopped: false, afterTurns: 5 },
+        observedRevision: currentRevision };
+    });
+    const executor = createActionExecutor(createDeps({ sessionExchangePrepare: prepare,
+      sessionExchangeControl: control }));
+    const input = { sessionId: 'session-1', originInputLocalId: 'root-1', decision: 'continue' };
+    const context = { surface: 'ui', authority: 'present_user', bypassApprovals: true } as const;
+    expect(await executor.execute('session.exchange.control', input, context)).toMatchObject({ ok: true });
+    expect(prepare).toHaveBeenCalledTimes(1);
+    currentRevision = 'session-message-row-revision:v1:3'; // Later starts and a different control advanced the root.
+    expect(await executor.execute('session.exchange.control', { ...input,
+      observedRevision: 'session-message-row-revision:v1:0' }, context)).toMatchObject({ ok: false });
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(control).toHaveBeenCalledTimes(2);
+    expect(control.mock.calls.at(-1)?.[0].request.observedRevision).toBe('session-message-row-revision:v1:0');
+  });
+  it('opens Browser views directly for their user, while honoring Ask and Agent defaults', async () => {
+    const target = { kind: 'localServicePreview', targetId: 'preview_1', machineId: 'machine_1' } as const;
+    const output = { v: 1, commandId: 'open_1', status: 'dispatched', adapterKind: 'localPreview', events: [] } as const;
+    for (const row of [
+      { id: 'browser.workspace.open', input: { scopeId: 'workspace_1', commandId: 'open_1', target },
+        output: { ...output, outcome: 'workspaceTab' } },
+      { id: 'browser.view.open', input: { commandId: 'open_1', browserSessionId: 'browser_1', viewId: 'view_1',
+        kind: 'openView', target, platform: 'web' }, output },
+    ] as const) {
+      const effects: unknown[] = [];
+      // Only the client/runtime effect is a boundary; declaration and policy stay real.
+      const executor = createActionExecutor(createDeps({
+        isActionApprovalRequired: undefined,
+        runtimeActionExecute: async args => { effects.push(args); return row.output; },
+      }));
+      const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
+      expect(await executor.execute(row.id, row.input, context), row.id).toEqual({ ok: true, result: row.output });
+      expect(effects.splice(0)).toHaveLength(1);
+      const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: {
+        [row.id]: { approvalRequiredSurfaces: ['ui'] },
+      } });
+      expect(await executor.execute(row.id, row.input, { ...context, actionsSettings }))
+        .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+      expect(await executor.execute(row.id, row.input, { surface: 'agent', authority: 'account_automation' }))
+        .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+      expect(effects).toEqual([]);
+    }
+  });
+
   it('preserves the approval bypass but returns the picker requirement without selecting a target', async () => {
     const runtimeActionExecute = vi.fn(async () => ({ consentGranted: false,
       approvalDisplay: { machineDisplayName: 'Workstation', requiresTargetSelection: true } }));

@@ -8,11 +8,15 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import type { StorageState } from '@/sync/store/types';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 import type { WorkspacePathDisplayModeV1 } from '@/sync/domains/workspaces/workspaceDisplayPresentation';
+import type { SessionFollowRulesSnapshot } from '@/sync/api/session/sessionFollowRulesApi';
+import type { ActivityPersonalSessionMembership } from './activityPersonalSessionMembership';
 
 export type ActivityAttentionSource = Readonly<{
     audienceScopes?: ReadonlyMap<string, ServerAccountScope>;
     audienceLabelsVersion?: string;
     isDataReady: boolean;
+    personalFollowRulesByServerId?: Readonly<Record<string, SessionFollowRulesSnapshot>>;
+    accountDeliveryMutesByServerId?: ActivityPersonalSessionMembership['accountDeliveryMutesByServerId'];
     sessionsById: Readonly<Record<string, Session>>;
     sessionListRowsByServerId: StorageState['sessionListRowsByServerId'];
     ordinarySessionListMembershipByServerId: StorageState['ordinarySessionListMembershipByServerId'];
@@ -33,6 +37,10 @@ export type ActivityAttentionSource = Readonly<{
     sessionMessagesById?: StorageState['sessionMessages'];
     /** Canonical Account workspace names used by every Activity-derived surface. */
     workspaceRefsV1?: ReadonlyArray<WorkspaceRefV1>;
+    /** Rule facts require the complete current Account census; display may retain stale names. */
+    followRuleWorkspaceRefsV1?: ReadonlyArray<WorkspaceRefV1>;
+    /** Explicit loaded assignments only; an absent entry is not a proven empty tag set. */
+    followRuleTagAssignmentsBySessionKey?: StorageState['sessionOrganizationTagAssignmentsBySessionKey'];
     /** Canonical fallback presentation preference when a workspace has no custom name. */
     workspacePathDisplayModeV1?: WorkspacePathDisplayModeV1 | null;
     serverProfilesById?: Readonly<Record<string, ServerProfile | null | undefined>>;

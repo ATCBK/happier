@@ -285,6 +285,33 @@ describe('ToolTimelineRowHeader', () => {
         expect(flattenRevealStyle(slot?.props.style).pointerEvents).toBe('none');
     });
 
+    it('ends the row in its terminal status, after the reveal slots, so status columns line up across rows', async () => {
+        const { ToolTimelineRowHeader, TOOL_TIMELINE_ROW_REVEAL_SLOT_TEST_ID } = await import('./ToolTimelineRowHeader');
+        const onPress = vi.fn();
+
+        const screen = await renderScreen(
+            <ToolTimelineRowHeader
+                density="comfortable"
+                icon={React.createElement('Text', null, 'ICON')}
+                title="Title"
+                onPress={onPress}
+                canOpen={true}
+                onOpen={() => {}}
+                openActionTestID="tool-timeline-row-open"
+                terminalStatus={React.createElement('Text', { testID: 'terminal-status-probe' }, 'Failed')}
+            />,
+        );
+
+        const order = screen.findAll(() => true);
+        const slotIndex = order.indexOf(screen.findByTestId(TOOL_TIMELINE_ROW_REVEAL_SLOT_TEST_ID)!);
+        const statusIndex = order.indexOf(screen.findByTestId('terminal-status-probe')!);
+        expect(slotIndex).toBeGreaterThan(-1);
+        expect(statusIndex).toBeGreaterThan(slotIndex);
+        // Pressing the status is still pressing the row.
+        await screen.pressByTestIdAsync('tool-timeline-row-status-slot');
+        expect(onPress).toHaveBeenCalledTimes(1);
+    });
+
     it('crossfades the left icon to a chevron-down on hover when expandable (web)', async () => {
         const { ToolTimelineRowHeader } = await import('./ToolTimelineRowHeader');
 

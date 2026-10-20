@@ -27,6 +27,7 @@ describe('Account Voice Follow transport V1', () => {
         voiceSessionId: 'voice-session',
         expected: null,
         observed: frontier,
+        policy: { preset: 'custom' as const, events: { finished: { delivery: 'quiet' as const, voice: true } } },
       }],
     };
 
@@ -56,6 +57,7 @@ describe('Account Voice Follow transport V1', () => {
       observed: frontier,
       consumed: frontier,
       acceptance: { localInputId: 'input-1', userMessageSeq: null },
+      policy: { preset: 'important' as const, voice: true },
     };
 
     expect(AccountVoiceFollowAcknowledgeRequestV1Schema.parse(value)).toEqual(value);

@@ -25,11 +25,19 @@ import { testkitEntryRef } from './corpus/testkit/observations.test-support.js';
 import { createTriageSetEntryPinnedActionHandler, listTriagePinnedEntries } from './actions/userMarks.js';
 
 describe('Triage plugin manifest', () => {
+  it('declares Tasks as another page of the existing plugin and /task through its create Action', () => {
+    expect(PLUGIN_MANIFEST.contributes.ui.views.find((view) => view.id === 'tasks')).toMatchObject({ container: 'appPage', renderer: 'tasks-page' });
+    expect(PLUGIN_MANIFEST.contributes.actions.find((action) => action.id === 'tasks/open-create-v1')).toMatchObject({
+      slash: { tokens: ['/task'] }, surfaces: expect.arrayContaining(['ui', 'voice', 'agent', 'mcp', 'cli']),
+      scopes: expect.arrayContaining(['global', 'message']),
+      placementBindings: expect.arrayContaining(['composer.slash', 'commandPalette', 'message.menu']),
+    });
+  });
   it('keeps linked-session selection requestable on the incumbent mounted client Action', async () => {
     const action = PLUGIN_MANIFEST.contributes.actions.find((entry) => entry.id === TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1);
     if (!action) throw new Error('Mounted action must be declared');
     expect(action.surfaces).toEqual(expect.arrayContaining(['ui', 'agent', 'mcp', 'cli']));
-    expect(action.execution).toMatchObject({ target: 'client', client: { exportName: 'createTriageMountedUiActionHandler' } });
+    expect(action.execution).toMatchObject({ target: 'client', client: { exportName: 'activate' } });
     const input = TriageMountedUiInputV1Schema.parse({ mountId: 'active-detail', operation: {
       kind: 'selectLinkedSession', sessionId: 'linked-session',
     } });
@@ -98,12 +106,10 @@ describe('Triage plugin manifest', () => {
     expect({
       id: normalized.manifest.id,
       version: normalized.manifest.version,
-      displayName: normalized.manifest.displayName,
       entrypoints: normalized.manifest.entrypoints,
     }).toEqual({
       id: 'happier.triage',
       version: '0.0.0',
-      displayName: 'PRs & Issues',
       entrypoints: { daemon: './.happier-plugin/daemon.js' },
     });
     expect(Object.keys(TRIAGE_PLUGIN.manifest.contributes).sort()).toEqual([
@@ -117,6 +123,7 @@ describe('Triage plugin manifest', () => {
       'pluginContributionPoints',
       'resources',
       'searchProviders',
+      'targetedPluginContributions',
       'ui',
     ]);
   });
@@ -141,7 +148,9 @@ describe('Triage plugin manifest', () => {
   it('declares its rail page without an app-rail views column', () => {
     expect(PLUGIN_MANIFEST.contributes.ui.views.map(({ id, icon }) => ({ id, icon }))).toEqual([
       { id: 'triage', icon: 'change-open' },
+      { id: 'tasks', icon: 'list' },
       { id: 'latest', icon: 'change-open' },
+      { id: 'my-tasks', icon: 'list' },
       { id: 'session-entries', icon: 'change-open' },
     ]);
     // Owner ruling 2026-10-11: the in-page Views menu is the one view selector on every platform, so the
@@ -188,7 +197,7 @@ describe('Triage plugin manifest', () => {
     // The explicit empty list is the canonical mounted-only declaration: the
     // definePlugin projection preserves it on the wire, and the host admits it
     // while global placement discovery reads no destination from it.
-    for (const action of uiActions) {
+    for (const action of uiActions.filter((action) => action.id !== 'tasks/open-create-v1')) {
       expect(action, action.id).toMatchObject({ placementBindings: [] });
     }
   });
@@ -239,7 +248,7 @@ describe('Triage plugin manifest', () => {
   });
 
   it('names the product, not the program, everywhere a user can read it', () => {
-    expect(PLUGIN_MANIFEST.displayName).toBe('PRs & Issues');
+    expect(PLUGIN_MANIFEST.displayName).toBe('PRs, Issues & Tasks');
     expect(`${PLUGIN_MANIFEST.displayName} ${PLUGIN_MANIFEST.description}`).not.toMatch(/triage/iu);
   });
 
@@ -299,7 +308,7 @@ describe('Triage plugin manifest', () => {
       'publishCurrentUiContext',
     ]);
     expect(renderers
-      .filter((candidate) => candidate.id !== 'list-page')
+      .filter((candidate) => candidate.id !== 'list-page' && candidate.id !== 'tasks-page')
       .some((candidate) => candidate.requiredHostMethods?.includes('publishCurrentUiContext')))
       .toBe(false);
   });

@@ -5,9 +5,17 @@ import * as React from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Socket } from 'socket.io-client';
 import { AccountSettingsV2GetResponseSchema, V2SessionListResponseSchema, type SessionListQueryV1 } from '@happier-dev/protocol';
+import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
+import { SESSION_ORGANIZATION_SNAPSHOT_VERSION } from '@happier-dev/protocol/sessions/organization/constants';
+import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
 
-import { createPlainV2SessionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import {
+    createPlainSessionCurrentProjectionRecordFixture,
+    createSessionFixture,
+    createSessionOwnerViewerFixture,
+} from '@/dev/testkit/fixtures/sessionFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { initializeRealAppRuntimeForTests } from '@/dev/testkit/harness/realAppRuntimeHarness';
@@ -16,6 +24,7 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { sync } from '@/sync/sync';
 import { TokenStorage, type HomeCredentialWriteRollback } from '@/auth/storage/tokenStorage';
 import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { removeServerProfile, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { updateEffectiveHomeViewState } from '@/sync/domains/server/selection/homeViewSelectionState';
 import {
@@ -24,6 +33,11 @@ import {
     stopConcurrentSessionCacheSync,
 } from '@/sync/runtime/orchestration/concurrentSessionCache';
 import { resolveOrdinarySessionListHomeOwner } from './sessionListQueryRuntime';
+import {
+    ActivityPersonalSessionMembershipProvider,
+    useActivityPersonalSessionMembership,
+    type ActivityPersonalSessionMembership,
+} from '@/activity/source/activityPersonalSessionMembership';
 import { buildSessionListQueryKey } from './sessionListQueryKey';
 import {
     type SessionListQueryHomeInput,
@@ -40,35 +54,71 @@ const HOME_A_URL = 'https://ordinary-frontier-a.test';
 const HOME_B_URL = 'https://ordinary-frontier-b.test';
 const HOME_C_URL = 'https://ordinary-frontier-c.test';
 const features = createRootLayoutFeaturesResponse({ features: {
-    sessions: { filteredListing: { enabled: false } },
+    sessions: { enabled: true, filteredListing: { enabled: false } },
     workflows: { enabled: false }, automations: { enabled: false },
     social: { friends: { enabled: false } },
     encryption: { plaintextStorage: { enabled: true } },
 } });
 const requests: Array<Readonly<{ origin: string; cursor: string | null }>> = [];
+const personalQueryRequests: Array<string | null> = [];
+let filteredListingEnabled = false;
+let secondaryHeadRevision = 1;
+const socketsByOrigin = new Map<string, Socket>();
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 let homes: Awaited<ReturnType<typeof upsertServerProfile>>[] = [];
 let secondaryCredentialWrites: HomeCredentialWriteRollback[] = [];
 let secondaryPageThreeGate: Promise<void> | null = null;
 let releaseSecondaryPageThree: (() => void) | null = null;
 let markSecondaryPageThreeStarted: (() => void) | null = null;
+const sessionActiveAt = Date.now();
 
-async function respond(url: Parameters<typeof fetch>[0]) {
+function ordinarySessionRow(origin: string, page: number) {
+    const session = createSessionFixture({ id: 'session-page-' + page, active: true, activeAt: sessionActiveAt,
+        updatedAt: origin === HOME_B_URL && page === 1 ? secondaryHeadRevision : 1 });
+    return { ...createPlainSessionCurrentProjectionRecordFixture({
+        id: session.id, active: session.active, activeAt: session.activeAt, updatedAt: session.updatedAt,
+    }), viewer: createSessionOwnerViewerFixture(session) };
+}
+
+async function respond(url: Parameters<typeof fetch>[0], init?: RequestInit) {
     const target = new URL(String(url));
     if (![HOME_A_URL, HOME_B_URL, HOME_C_URL].includes(target.origin)) throw new Error('Unexpected listing Home');
     if (target.pathname === '/health' || target.pathname === '/v1/auth/ping') return Response.json({});
-    if (target.pathname === '/v1/features' || target.pathname === '/v1/features/authenticated') return Response.json(features);
+    if (target.pathname === '/v1/features' || target.pathname === '/v1/features/authenticated') return Response.json({
+        ...features, features: { ...features.features, sessions: {
+            ...features.features.sessions, filteredListing: { enabled: filteredListingEnabled },
+        } },
+    });
     if (target.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
     if (target.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
     if (target.pathname === '/v2/account/settings') return Response.json(AccountSettingsV2GetResponseSchema.parse({
         content: { t: 'plain', v: {} }, version: 1,
     }));
     if (target.pathname === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
+    if (target.pathname === '/v2/session-organization') return Response.json(SessionOrganizationSnapshotResponseSchema.parse({
+        snapshot: { schemaVersion: SESSION_ORGANIZATION_SNAPSHOT_VERSION, version: 0, pins: [], folders: [],
+            folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [] },
+    }));
     if (target.pathname === '/v1/machines') return Response.json([]);
     if (target.pathname === '/v2/sessions/active') return Response.json(V2SessionListResponseSchema.parse({
         sessions: [], nextCursor: null, hasNext: false,
         attentionNextCursor: null, attentionHasNext: false,
     }));
+    if (target.pathname === '/v2/sessions/query') {
+        const query = JSON.parse(String(init?.body)) as { cursor?: string };
+        personalQueryRequests.push(query.cursor ?? null);
+        const page = query.cursor === undefined ? 1 : 2;
+        const session = createSessionFixture({ id: 'personal-page-' + page, active: true, activeAt: Date.now() });
+        return Response.json(V2SessionListResponseSchema.parse({
+            sessions: [{ ...createPlainSessionCurrentProjectionRecordFixture({
+                id: session.id, active: session.active, activeAt: session.activeAt,
+            }), viewer: createSessionOwnerViewerFixture(session) }],
+            nextCursor: page === 1 ? 'personal-page-2' : null, hasNext: page === 1,
+            attentionNextCursor: null, attentionHasNext: false,
+        }));
+    }
+    const exactSession = /^\/v2\/sessions\/session-page-([1-3])$/.exec(target.pathname);
+    if (exactSession) return Response.json({ session: ordinarySessionRow(target.origin, Number(exactSession[1])) });
     if (target.pathname !== '/v2/sessions') return new Response('{}', { status: 404 });
     const cursor = target.searchParams.get('cursor');
     requests.push({ origin: target.origin, cursor });
@@ -79,7 +129,7 @@ async function respond(url: Parameters<typeof fetch>[0]) {
         await secondaryPageThreeGate;
     }
     return Response.json(V2SessionListResponseSchema.parse({
-        sessions: [createPlainV2SessionRecordFixture({ id: 'session-page-' + page, active: true, activeAt: Date.now() })],
+        sessions: [ordinarySessionRow(target.origin, page)],
         nextCursor: page === 3 ? null : 'page-' + (page + 1),
         hasNext: page < 3,
         attentionNextCursor: null,
@@ -128,11 +178,16 @@ describe('ordinary Session-list frontier on the Home Sync owns', () => {
     beforeEach(async () => {
         storage.setState(storage.getInitialState(), true);
         requests.length = 0;
+        personalQueryRequests.length = 0;
+        filteredListingEnabled = false;
+        secondaryHeadRevision = 1;
+        socketsByOrigin.clear();
         secondaryPageThreeGate = null;
         releaseSecondaryPageThree = null;
         markSecondaryPageThreeStarted = null;
         const connected = new Promise<void>((resolve) => {
-            installDisconnectedServerSocketBoundary((socket) => {
+            installDisconnectedServerSocketBoundary((socket, serverUrl) => {
+                if (serverUrl) socketsByOrigin.set(new URL(serverUrl).origin, socket);
                 // Replace only the remote connection event. ApiSocket and Sync
                 // must publish readiness through the real SDK listeners.
                 vi.spyOn(socket, 'connect').mockImplementation(() => {
@@ -159,6 +214,7 @@ describe('ordinary Session-list frontier on the Home Sync owns', () => {
             secondaryCredentialWrites.push(write);
         }
         setRuntimeFetch(respond);
+        await Promise.all(homes.map((home) => getServerFeaturesSnapshot({ serverId: home.id, force: true })));
         await updateEffectiveHomeViewState((current) => ({
             ...current, groups: [], activeTargetKind: 'server', activeTargetId: homes[0]!.id,
         }), { scope: 'device' });
@@ -203,10 +259,51 @@ describe('ordinary Session-list frontier on the Home Sync owns', () => {
         } finally { await harness.dispose(); }
     });
 
-    it('reads a managed secondary Home\'s incumbent frontier instead of truncating it to page one', async () => {
+    it('keeps background Activity membership partial without draining unseen personal-list pages', async () => {
+        filteredListingEnabled = true;
+        await getServerFeaturesSnapshot({
+            serverId: homes[0]!.id,
+            force: true,
+        });
+        const actEnvironment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+        const previousActEnvironment = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+        actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        const membership: { current: ActivityPersonalSessionMembership | null } = { current: null };
+        function Observer() {
+            membership.current = useActivityPersonalSessionMembership();
+            return null;
+        }
+        try {
+            await act(async () => root.render(
+                <ActivityPersonalSessionMembershipProvider enabled>
+                    <Observer />
+                </ActivityPersonalSessionMembershipProvider>,
+            ));
+            const serverId = homes[0]!.id;
+            await vi.waitFor(async () => {
+                await act(async () => {});
+                expect(membership.current?.statesByServerId[serverId]).toMatchObject({
+                    phase: 'ready', failureReason: null, failureCode: null,
+                });
+            });
+            expect(personalQueryRequests).toEqual([null]);
+            expect(membership.current?.membershipByServerId[serverId]).toEqual(['personal-page-1']);
+            expect(membership.current?.coverageComplete).toBe(false);
+            expect(storage.getState().sessionListRowsByServerId[serverId]?.['personal-page-2']).toBeUndefined();
+        } finally {
+            await act(async () => root.unmount());
+            container.remove();
+            actEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+        }
+    });
+
+    it('pages a managed secondary Home only on demand through its incumbent frontier', async () => {
         const serverId = homes[1]!.id;
-        // The concurrent owner eagerly continues its ordinary list. Hold the next
-        // HTTP response, not its lifecycle, while the filter joins that acquisition.
+        // Hold the final HTTP response to exercise concurrent demands through the
+        // real transport, owner, membership publication and mounted source.
         secondaryPageThreeGate = new Promise<void>((resolve) => { releaseSecondaryPageThree = resolve; });
         const pageThreeStarted = new Promise<void>((resolve) => { markSecondaryPageThreeStarted = resolve; });
         await updateEffectiveHomeViewState((current) => ({ ...current,
@@ -215,12 +312,15 @@ describe('ordinary Session-list frontier on the Home Sync owns', () => {
                 serverIds: [homes[0]!.id, serverId], presentation: 'grouped' }],
         }), { scope: 'device' });
         startConcurrentSessionCacheSync();
-        // Continuations are serialized by the real owner's debounce. Await the
-        // transport event instead of imposing a shorter polling deadline.
-        await pageThreeStarted;
-        expect(requestsFor(HOME_B_URL)).toEqual([null, 'page-2', 'page-3']);
-        expect(readConcurrentOrdinarySessionListLifecycle(serverId).frontier.nextCursor).toBe('page-3');
-        expect(storage.getState().ordinarySessionListMembershipByServerId[serverId]).toEqual(['session-page-1', 'session-page-2']);
+        await vi.waitFor(() => expect(readConcurrentOrdinarySessionListLifecycle(serverId)).toMatchObject({
+            hasFetchedSnapshot: true, fetchInFlight: false, fetchMoreInFlight: false,
+        }));
+        // Cross the owner's 600 ms continuation debounce. With no viewport or
+        // explicit operation asking for more, the first page must remain alone.
+        await new Promise((resolve) => setTimeout(resolve, 1_200));
+        expect(requestsFor(HOME_B_URL)).toEqual([null]);
+        expect(readConcurrentOrdinarySessionListLifecycle(serverId).frontier.nextCursor).toBe('page-2');
+        expect(storage.getState().ordinarySessionListMembershipByServerId[serverId]).toEqual(['session-page-1']);
         expect(resolveOrdinarySessionListHomeOwner(serverId)).toBe('concurrent');
         const beforeMount = requestsFor(HOME_B_URL);
         const harness = await renderSource([{ serverId, query: QUERY, ordinaryAdapter: ORDINARY_ADAPTER }]);
@@ -228,17 +328,115 @@ describe('ordinary Session-list frontier on the Home Sync owns', () => {
             await harness.settle(serverId);
             expect(requestsFor(HOME_B_URL)).toEqual(beforeMount);
             expect(harness.read()?.statesByServerId[serverId]?.addresses.map((address) => address.sessionId))
-                .toEqual(['session-page-1', 'session-page-2']);
+                .toEqual(['session-page-1']);
+            expect(harness.read()?.statesByServerId[serverId]).toMatchObject({ phase: 'ready', nextCursor: 'page-2' });
+            expect(harness.read()?.coverageComplete).toBe(false);
+            await act(async () => { await harness.read()?.loadNext(); });
+            expect(requestsFor(HOME_B_URL)).toEqual([null, 'page-2']);
+            expect(harness.read()?.statesByServerId[serverId]).toMatchObject({ phase: 'ready', nextCursor: 'page-3' });
+            // A remote content update refreshes the already-visible head. It
+            // must keep both the acquired second page and the next demand cursor.
+            secondaryHeadRevision = 2;
+            const secondarySocket = socketsByOrigin.get(HOME_B_URL);
+            expect(secondarySocket).toBeDefined();
+            await act(async () => {
+                for (const listener of secondarySocket!.listeners('update')) {
+                    listener({ body: { t: 'update-session', id: 'session-page-1' } });
+                }
+                await vi.waitFor(() => {
+                    expect(storage.getState().sessionListRowsByServerId[serverId]?.['session-page-1']?.updatedAt).toBe(2);
+                    expect(readConcurrentOrdinarySessionListLifecycle(serverId).fetchMoreInFlight).toBe(false);
+                });
+            });
+            expect(requestsFor(HOME_B_URL)).toEqual([null, 'page-2', null]);
             expect(harness.read()?.statesByServerId[serverId]?.nextCursor).toBe('page-3');
+            expect(harness.read()?.statesByServerId[serverId]?.addresses.map((address) => address.sessionId))
+                .toEqual(['session-page-1', 'session-page-2']);
             await act(async () => {
                 const acquisition = harness.read()?.loadNext();
+                await pageThreeStarted;
+                const sameAcquisition = harness.read()?.loadNext();
                 releaseSecondaryPageThree?.();
-                await acquisition;
+                await Promise.all([acquisition, sameAcquisition]);
             });
-            expect(requestsFor(HOME_B_URL)).toEqual(beforeMount);
+            expect(requestsFor(HOME_B_URL)).toEqual([null, 'page-2', null, 'page-3']);
             expect(harness.read()?.statesByServerId[serverId]?.addresses.map((address) => address.sessionId))
                 .toEqual(['session-page-1', 'session-page-2', 'session-page-3']);
+            const activeHomeRow = storage.getState().sessionListRowsByServerId[homes[0]!.id]?.['session-page-1'];
+            expect(activeHomeRow).toBeDefined();
+            await act(async () => {
+                const deleted = UpdateContainerSchema.parse({
+                    id: 'secondary-page-one-deleted', seq: 2, createdAt: 2,
+                    body: { t: 'delete-session', sid: 'session-page-1' },
+                });
+                for (const listener of secondarySocket!.listeners('update')) listener(deleted);
+            });
+            expect(harness.read()?.statesByServerId[serverId]?.addresses.map((address) => address.sessionId))
+                .toEqual(['session-page-2', 'session-page-3']);
+            expect(storage.getState().sessionListRowsByServerId[serverId]?.['session-page-1']).toBeUndefined();
+            expect(storage.getState().sessionListRowsByServerId[homes[0]!.id]?.['session-page-1']).toBe(activeHomeRow);
         } finally { await harness.dispose(); }
+    });
+
+    it('retires a revoked direct share only from its validated secondary Home socket identity', async () => {
+        const serverId = homes[1]!.id;
+        await updateEffectiveHomeViewState((current) => ({ ...current,
+            activeTargetKind: 'group', activeTargetId: 'ordinary-homes',
+            groups: [{ id: 'ordinary-homes', name: 'Ordinary Homes',
+                serverIds: [homes[0]!.id, serverId], presentation: 'grouped' }],
+        }), { scope: 'device' });
+        startConcurrentSessionCacheSync();
+        await vi.waitFor(() => expect(storage.getState().ordinarySessionListMembershipByServerId[serverId])
+            .toEqual(['session-page-1']));
+        const secondarySocket = socketsByOrigin.get(HOME_B_URL);
+        expect(secondarySocket).toBeDefined();
+        const activeHomeRow = storage.getState().sessionListRowsByServerId[homes[0]!.id]?.['session-page-1'];
+        expect(activeHomeRow).toBeDefined();
+        // A sharing-shaped object without the canonical envelope/required share
+        // identity cannot authorize destructive local retirement.
+        for (const listener of secondarySocket!.listeners('update')) {
+            listener({ body: { t: 'session-share-revoked', sessionId: 'session-page-1' } });
+        }
+        expect(storage.getState().ordinarySessionListMembershipByServerId[serverId]).toEqual(['session-page-1']);
+        const revoked = UpdateContainerSchema.parse({
+            id: 'secondary-share-revoked', seq: 2, createdAt: 2,
+            body: { t: 'session-share-revoked', sessionId: 'session-page-1', shareId: 'direct-share-1' },
+        });
+        for (const listener of secondarySocket!.listeners('update')) listener(revoked);
+        expect(storage.getState().ordinarySessionListMembershipByServerId[serverId]).toEqual([]);
+        expect(storage.getState().sessionListRowsByServerId[serverId]?.['session-page-1']).toBeUndefined();
+        expect(storage.getState().sessionListRowsByServerId[homes[0]!.id]?.['session-page-1']).toBe(activeHomeRow);
+    });
+
+    it('moves a retained secondary row between ordinary and archived membership from validated socket updates', async () => {
+        const serverId = homes[1]!.id;
+        await updateEffectiveHomeViewState((current) => ({ ...current,
+            activeTargetKind: 'group', activeTargetId: 'ordinary-homes',
+            groups: [{ id: 'ordinary-homes', name: 'Ordinary Homes',
+                serverIds: [homes[0]!.id, serverId], presentation: 'grouped' }],
+        }), { scope: 'device' });
+        startConcurrentSessionCacheSync();
+        await vi.waitFor(() => expect(storage.getState().ordinarySessionListMembershipByServerId[serverId])
+            .toEqual(['session-page-1']));
+        const secondarySocket = socketsByOrigin.get(HOME_B_URL);
+        expect(secondarySocket).toBeDefined();
+        const activeHomeRow = storage.getState().sessionListRowsByServerId[homes[0]!.id]?.['session-page-1'];
+        expect(activeHomeRow).toBeDefined();
+        const publish = (archivedAt: number | null, seq: number) => {
+            const update = UpdateContainerSchema.parse({ id: 'archive-' + seq, seq, createdAt: seq,
+                body: { t: 'update-session', id: 'session-page-1', archivedAt } });
+            for (const listener of secondarySocket!.listeners('update')) listener(update);
+        };
+        publish(3, 3);
+        expect(storage.getState().ordinarySessionListMembershipByServerId[serverId]).toEqual([]);
+        expect(storage.getState().archivedSessionListMembershipByServerId[serverId]).toEqual(['session-page-1']);
+        expect(storage.getState().sessionListRowsByServerId[serverId]?.['session-page-1']?.archivedAt).toBe(3);
+        publish(null, 4);
+        expect(storage.getState().ordinarySessionListMembershipByServerId[serverId]).toEqual(['session-page-1']);
+        expect(storage.getState().archivedSessionListMembershipByServerId[serverId]).toEqual([]);
+        expect(storage.getState().sessionListRowsByServerId[serverId]?.['session-page-1']?.archivedAt).toBeNull();
+        expect(storage.getState().sessionListRowsByServerId[homes[0]!.id]?.['session-page-1']).toBe(activeHomeRow);
+        expect(requestsFor(HOME_B_URL)).toEqual([null]);
     });
 
     it('keeps its own controller for a Home no incumbent ordinary owner manages', async () => {

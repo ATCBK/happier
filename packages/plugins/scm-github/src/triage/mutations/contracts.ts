@@ -16,7 +16,8 @@ import {
 } from '@happier-dev/plugin-sdk/reviews';
 import {
   MAX_TRIAGE_ROUTING_TOKEN_UTF8_BYTES_V1,
-  TriageConfiguredSourceInstanceV1Schema,
+  TriageConfiguredSourceCredentialInstanceV1Schema as TriageConfiguredSourceInstanceV1Schema,
+  TriageSourceCredentialBindingV1Schema,
   TriageSourceEntryLocalRefV1Schema,
   TriageSourceFailureV1Schema,
   TriageSourceObservationV1Schema,
@@ -25,9 +26,10 @@ import {
 
 /** Source UI and publication admission describe the same credential authority. */
 export function githubReviewPublicationCredential(binding: TriageSourceAccountBindingV1) {
-  return 'account' in binding
-    ? Object.freeze({ configuredAccountId: binding.account.accountId })
-    : Object.freeze({ nativeService: binding.service });
+  const admitted = TriageSourceCredentialBindingV1Schema.parse(binding);
+  return 'account' in admitted
+    ? Object.freeze({ configuredAccountId: admitted.account.accountId })
+    : Object.freeze({ nativeService: admitted.service });
 }
 
 /**

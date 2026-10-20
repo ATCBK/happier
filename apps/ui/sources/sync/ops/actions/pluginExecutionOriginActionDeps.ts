@@ -5,12 +5,13 @@ import { readPluginUiExecutionOriginCandidates } from '@/sync/domains/plugins/ui
 import { readPluginAccountAvailability } from '@/sync/domains/plugins/availability/projection';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
-import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { areServerProfileIdentifiersEquivalent, getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { storage } from '@/sync/domains/state/storageStore';
-import { readFreshPluginMachineExecutionOriginCandidates, resolveFreshPluginMachineExecutionOrigin } from '@/sync/domains/machines/administration/usePluginExecutionOriginSelection';
+import { readFreshPluginMachineExecutionOriginCandidates, resolveFreshPluginMachineExecutionOrigin,
+    readPluginExecutionOriginAutomaticHints } from '@/sync/domains/machines/administration/usePluginExecutionOriginSelection';
 import { getPluginExecutionOriginCandidateOrigin, getPluginExecutionOriginCandidateVersion,
     isPluginMachineExecutionOriginCandidateSelectable, resolvePluginMachineExecutionOriginState } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
-import { persistPluginMachineExecutionOriginSelection } from '@/sync/domains/machines/administration/selectionPreferences';
+import { persistPluginMachineExecutionOriginSelection, readCurrentPluginMachineExecutionTargetPreference } from '@/sync/domains/machines/administration/selectionPreferences';
 import type { LazyActionAccountContext } from './actionAccountContext';
 import { readCurrentUiContextActionReader } from '@/components/appShell/currentUiContext/currentUiContextActionRuntime';
 
@@ -58,26 +59,25 @@ export function createPluginExecutionOriginActionDeps(account: Pick<LazyActionAc
                 ...readPluginUiExecutionOriginCandidates({ projection: readCurrentAppShellPluginUiProjection(), pluginId: parsed.pluginId }) };
         };
         if (actionId === 'plugins.execution_origin.list') {
-            const settingsVersion = storage.getState().settingsVersion;
-            if (settingsVersion === null) return { status: 'unavailable' };
             const facts = readFacts();
             const candidates = readFreshPluginMachineExecutionOriginCandidates(facts);
-            const storedOrigin = storage.getState().settings.machineAdministrationSelectionsV1.pluginExecutionOriginsByPluginId[parsed.pluginId] ?? null;
-            const selection = resolvePluginMachineExecutionOriginState({ ...facts, storedOrigin, candidates });
-            return { status: 'available', settingsVersion, storedOrigin,
+            const storedTarget = readCurrentPluginMachineExecutionTargetPreference(parsed.pluginId);
+            const selection = resolvePluginMachineExecutionOriginState({ ...facts, storedOrigin: null, storedTarget, candidates,
+                ...readPluginExecutionOriginAutomaticHints(parsed.pluginId, candidates),
+                homeServerIdentityId: getServerProfileById(scope.serverId)?.serverIdentityId });
+            return { status: 'available', storedTarget, storedOrigin: null,
                 selectedOrigin: selection.kind === 'selected' ? selection.origin : null,
+                selectionSource: storedTarget ? 'pinned' : selection.kind === 'selected' ? selection.selectionSource : null,
                 candidates: candidates.map(candidate => ({ origin: getPluginExecutionOriginCandidateOrigin(candidate),
                     version: getPluginExecutionOriginCandidateVersion(candidate), selectable: isPluginMachineExecutionOriginCandidateSelectable(candidate) })) };
         }
         const mutation = actionId === 'plugins.execution_origin.set' ? inputs[actionId].parse(input)
             : inputs['plugins.execution_origin.clear'].parse(input);
-        if (mutation.expectedSettingsVersion === undefined) return { status: 'unavailable' };
         const result = await persistPluginMachineExecutionOriginSelection({ pluginId: mutation.pluginId,
             origin: actionId === 'plugins.execution_origin.set' ? inputs[actionId].parse(input).origin : null,
-            expectedSettingsScope: scope, expectedSettingsVersion: mutation.expectedSettingsVersion,
+            expectedSettingsScope: scope,
             isInvocationCurrent: () => { context.signal?.throwIfAborted(); return current(); },
             isOriginCurrent: origin => current() && resolveFreshPluginMachineExecutionOrigin({ ...readFacts(), origin }) !== null });
-        if (result.status === 'applied') return { status: 'applied', settingsVersion: result.settingsVersion };
         return result;
     } };
 }

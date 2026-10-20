@@ -1,64 +1,53 @@
 import * as React from 'react';
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import { InitialPresentationReadinessProvider } from '@/components/ui/presentation/InitialPresentationReadinessContext';
+import { storage } from '@/sync/domains/state/storageStore';
 
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-let rendererMode: 'happier' | 'pierre' = 'pierre';
-
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useSetting: (key: string) => {
-            if (key === 'filesDiffRendererMode') return rendererMode;
-            return undefined;
-        },
-    });
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
+// Only the third-party renderer's DOM paint port is replaced. Happier parses
+// the patch, chooses the renderer and mounts its real virtualized owner.
+vi.mock('@pierre/diffs/react', async importOriginal => {
+    const actual = await importOriginal<typeof import('@pierre/diffs/react')>();
+    return { ...actual,
+        FileDiff: (props: React.ComponentProps<typeof actual.FileDiff>) => React.createElement('pierre-file-diff', props),
+        Virtualizer: ({ children }: React.PropsWithChildren) => React.createElement(React.Fragment, null, children),
+    };
 });
-
-vi.mock('@/components/ui/performance/LazyMountOnScreen', () => ({
-    LazyMountOnScreen: (props: any) => React.createElement('LazyMountOnScreen', { ...props, testID: 'lazy-mount-on-screen' }),
-}));
-
-vi.mock('./pierre/PierreDiffViewer.web', () => ({
-    PierreDiffViewer: (props: any) => React.createElement('PierreDiffViewer', { ...props, testID: 'pierre-diff-viewer' }),
-}));
-
-vi.mock('./happier/HappierUnifiedDiffViewer', () => ({
-    HappierUnifiedDiffViewer: (props: any) => React.createElement('HappierUnifiedDiffViewer', { ...props, testID: 'happier-unified-diff-viewer' }),
-}));
-
-vi.mock('./happier/HappierTextDiffViewer', () => ({
-    HappierTextDiffViewer: (props: any) => React.createElement('HappierTextDiffViewer', { ...props, testID: 'happier-text-diff-viewer' }),
-}));
+const { PierreDiffViewer } = await import('./pierre/PierreDiffViewer.web');
+const { HappierUnifiedDiffViewer } = await import('./happier/HappierUnifiedDiffViewer');
+const { LazyMountOnScreen } = await import('@/components/ui/performance/LazyMountOnScreen');
+const pierreViewerType = Reflect.get(PierreDiffViewer, 'type') ?? PierreDiffViewer;
+const unifiedViewerType = Reflect.get(HappierUnifiedDiffViewer, 'type') ?? HappierUnifiedDiffViewer;
+const initialState = storage.getState();
 
 describe('DiffViewer (web renderer selection)', () => {
     const previousEnv = process.env.EXPO_PUBLIC_HAPPIER_PIERRE_DIFFS__ENABLED;
-    const previousWindow = (globalThis as any).window;
-    const previousDocument = (globalThis as any).document;
-    const previousWorker = (globalThis as any).Worker;
+    let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>>;
 
-    beforeEach(() => {
-        rendererMode = 'pierre';
+    beforeEach(async () => {
         process.env.EXPO_PUBLIC_HAPPIER_PIERRE_DIFFS__ENABLED = previousEnv;
 
-        (globalThis as any).Worker = function Worker() {} as any;
-        (globalThis as any).window = {};
-        (globalThis as any).document = {
-            baseURI: 'http://localhost/',
-            createElement: () => ({ attachShadow: () => ({}) }),
-        };
+        browser = await installBrowserRuntimeForTests({ url: 'http://localhost/' });
+        vi.stubGlobal('Worker', class Worker {
+            constructor() { throw new Error('Native worker construction is unavailable in the renderer-selection fixture'); }
+        });
+        storage.setState({ settings: { ...storage.getState().settings, filesDiffRendererMode: 'pierre' } });
     });
 
-    afterAll(() => {
+    afterEach(() => {
         if (previousEnv === undefined) delete process.env.EXPO_PUBLIC_HAPPIER_PIERRE_DIFFS__ENABLED;
         else process.env.EXPO_PUBLIC_HAPPIER_PIERRE_DIFFS__ENABLED = previousEnv;
 
-        (globalThis as any).window = previousWindow;
-        (globalThis as any).document = previousDocument;
-        (globalThis as any).Worker = previousWorker;
+        standardCleanup();
+        storage.setState(initialState, true);
+        browser?.restore();
     });
 
     it('uses Pierre when enabled by setting + env and runtime supports it', async () => {
@@ -66,9 +55,9 @@ describe('DiffViewer (web renderer selection)', () => {
 
         const screen = await renderScreen(<DiffViewer mode="unified" unifiedDiff={'diff --git a/a.ts b/a.ts'} filePath="a.ts" />);
 
-        expect(screen.findByTestId('pierre-diff-viewer')).toBeTruthy();
-        expect(screen.findByTestId('happier-unified-diff-viewer')).toBeNull();
-        expect(screen.findByTestId('lazy-mount-on-screen')).toBeNull();
+        expect(screen.findAllByType(pierreViewerType)[0] ?? null).toBeTruthy();
+        expect(screen.findAllByType(unifiedViewerType)[0] ?? null).toBeNull();
+        expect(screen.findAllByType(LazyMountOnScreen)[0] ?? null).toBeNull();
     });
 
     it('wraps virtualized Pierre diffs in LazyMountOnScreen for lazy mounting', async () => {
@@ -76,8 +65,8 @@ describe('DiffViewer (web renderer selection)', () => {
 
         const screen = await renderScreen(<DiffViewer mode="unified" unifiedDiff={'diff --git a/a.ts b/a.ts'} filePath="a.ts" virtualized={true} />);
 
-        expect(screen.findByTestId('pierre-diff-viewer')).toBeTruthy();
-        expect(screen.findByTestId('lazy-mount-on-screen')).toBeTruthy();
+        expect(screen.findAllByType(pierreViewerType)[0] ?? null).toBeTruthy();
+        expect(screen.findAllByType(LazyMountOnScreen)[0] ?? null).toBeTruthy();
     });
 
     it('eagerly mounts only already-rendered virtualized Pierre rows while initial presentation is pending', async () => {
@@ -98,7 +87,7 @@ describe('DiffViewer (web renderer selection)', () => {
         );
 
         expect(
-            screen.findByTestId('lazy-mount-on-screen')?.props.initiallyVisible,
+            screen.findAllByType(LazyMountOnScreen)[0]?.props.initiallyVisible,
         ).toBe(true);
     });
 
@@ -108,8 +97,8 @@ describe('DiffViewer (web renderer selection)', () => {
 
         const screen = await renderScreen(<DiffViewer mode="unified" unifiedDiff={'diff --git a/a.ts b/a.ts'} filePath="a.ts" />);
 
-        expect(screen.findByTestId('pierre-diff-viewer')).toBeNull();
-        expect(screen.findByTestId('happier-unified-diff-viewer')).toBeTruthy();
+        expect(screen.findAllByType(pierreViewerType)[0] ?? null).toBeNull();
+        expect(screen.findAllByType(unifiedViewerType)[0] ?? null).toBeTruthy();
     });
 
     it('keeps Pierre renderer for click-only interactivity', async () => {
@@ -124,8 +113,8 @@ describe('DiffViewer (web renderer selection)', () => {
             />,
         );
 
-        expect(screen.findByTestId('pierre-diff-viewer')).toBeTruthy();
-        expect(screen.findByTestId('happier-unified-diff-viewer')).toBeNull();
+        expect(screen.findAllByType(pierreViewerType)[0] ?? null).toBeTruthy();
+        expect(screen.findAllByType(unifiedViewerType)[0] ?? null).toBeNull();
     });
 
     it('uses the Happier renderer when range interaction is required', async () => {
@@ -141,7 +130,7 @@ describe('DiffViewer (web renderer selection)', () => {
             />,
         );
 
-        expect(screen.findByTestId('pierre-diff-viewer')).toBeNull();
-        expect(screen.findByTestId('happier-unified-diff-viewer')).toBeTruthy();
+        expect(screen.findAllByType(pierreViewerType)[0] ?? null).toBeNull();
+        expect(screen.findAllByType(unifiedViewerType)[0] ?? null).toBeTruthy();
     });
 });

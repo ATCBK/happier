@@ -16,6 +16,8 @@ describe('machine agent inventory store', () => {
         const second = { ...facts('custom-acp'), definitionId: 'second', title: 'Second', version: '2.0' };
         store.publish('machine', { status: 'ready', items: [first, second], lastCheckedAt: 1 });
         const initial = store.read('machine').agents;
+        expect(Reflect.set(initial[0], 'definitionId', 'second')).toBe(false);
+        expect(Reflect.set(initial, '0', initial[1])).toBe(false);
         expect(initial.map(agent => [agent.definitionId, agent.version])).toEqual([['first', '1.0.0'], ['second', '2.0']]);
         store.publish('machine', { status: 'ready', items: [first, { ...second, version: '3.0' }], lastCheckedAt: 2 });
         expect(store.read('machine').agents[0]).toBe(initial[0]);

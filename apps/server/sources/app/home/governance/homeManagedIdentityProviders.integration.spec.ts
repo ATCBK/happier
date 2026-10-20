@@ -322,6 +322,7 @@ describe("Home managed OIDC consumed lifecycle", () => {
             HAPPIER_FEATURE_AUTH_MANAGED_IDENTITY__PRIVATE_NETWORK_ENABLED: "true",
         };
         await expect(inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env: privateNetworkEnv,
             patch: {

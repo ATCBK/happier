@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { clearTimeout, setTimeout } from 'node:timers';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -30,6 +31,29 @@ function createDeferred<T>() {
 }
 
 describe('startPluginHostedMcpLoopbackServer', () => {
+    it('presents hosted plugin unions as object fields while keeping strict call validation', async () => {
+        const inputs: unknown[] = [];
+        const server = await startPluginHostedMcpLoopbackServer({ pluginId: 'acme', spec: {
+            id: 'acme.union', name: 'acme-union', transport: { kind: 'hosted', exposure: { kind: 'loopbackHttp', requested: true } },
+            hosted: { tools: [{ name: 'ext.acme.union', inputSchema: { type: 'object', oneOf: [
+                { type: 'object', properties: { kind: { const: 'text' }, text: { type: 'string' } }, required: ['kind', 'text'], additionalProperties: false },
+                { type: 'object', properties: { kind: { const: 'count' }, count: { type: 'integer' } }, required: ['kind', 'count'], additionalProperties: false },
+            ] }, handler: async input => { inputs.push(input); return { content: [] }; } }] },
+        } });
+        const client = new Client({ name: 'hosted-union-test', version: '1' });
+        try {
+            await client.connect(new StreamableHTTPClientTransport(new URL(server.endpoint.url)));
+            const tool = (await client.listTools()).tools.find(tool => tool.name === 'ext.acme.union')!;
+            expect(tool.inputSchema).toMatchObject({ type: 'object', properties: { kind: expect.any(Object), text: { type: 'string' }, count: { type: 'integer' } }, required: ['kind'] });
+            for (const key of ['oneOf', 'anyOf', 'allOf']) expect(tool.inputSchema).not.toHaveProperty(key);
+            const input = { kind: 'text', text: 'exact value' };
+            expect(await client.callTool({ name: tool.name, arguments: input })).not.toMatchObject({ isError: true });
+            expect(inputs).toEqual([input]);
+            expect(await client.callTool({ name: tool.name, arguments: { kind: 'text', count: 1 } })).toMatchObject({ isError: true });
+            expect(inputs).toEqual([input]);
+        } finally { await client.close(); await server.dispose(); }
+    });
+
     it('lists and calls plugin-declared hosted tools through a real MCP client', async () => {
         const calls: unknown[] = [];
         const server = await startPluginHostedMcpLoopbackServer({

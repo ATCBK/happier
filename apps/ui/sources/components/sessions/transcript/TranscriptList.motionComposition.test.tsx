@@ -40,9 +40,10 @@ vi.mock('@/components/sessions/transcript/MessageView', async () => {
     };
 });
 
-vi.mock('@legendapp/list/react-native', async () => {
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@legendapp/list/react-native')>();
     const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
-    return createCapturingLegendListMock().module;
+    return createCapturingLegendListMock({ original }).module;
 });
 
 installDisconnectedServerSocketBoundary();

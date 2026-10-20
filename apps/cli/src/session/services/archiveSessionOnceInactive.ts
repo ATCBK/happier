@@ -1,5 +1,6 @@
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import { openSessionEventSource } from '@/session/transport/socket/sessionSocketAgentState';
+import type { resolveSessionIdOrPrefix } from '@/session/query/resolveSessionId';
 
 import { isSessionActiveArchiveError, setSessionArchivedStateById } from './sessionArchivedStateById';
 
@@ -9,18 +10,24 @@ export async function archiveSessionOnceInactive(params: Readonly<{
   token: string;
   sessionId: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
+  resolveAuthorizationHeaders?: Parameters<typeof resolveSessionIdOrPrefix>[0]['resolveAuthorizationHeaders'];
 }>): Promise<Readonly<{ archivedAt: number | null }>> {
+  params.signal?.throwIfAborted();
   const deadlineMs = Date.now() + (params.timeoutMs ?? DEFAULT_ARCHIVE_TIMEOUT_MS);
   const events = openSessionEventSource(params);
   let inactiveRetryRevision: number | undefined;
   try {
     while (true) {
+      params.signal?.throwIfAborted();
       const revision = events.currentRevision();
       try {
         return await setSessionArchivedStateById({
           token: params.token,
           sessionId: params.sessionId,
           archived: true,
+          ...(params.signal ? { signal: params.signal } : {}),
+          ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
         });
       } catch (error) {
         if (!isSessionActiveArchiveError(error)) {
@@ -34,10 +41,13 @@ export async function archiveSessionOnceInactive(params: Readonly<{
       const rawSession = await fetchSessionByIdCompat({
         token: params.token,
         sessionId: params.sessionId,
-      }).catch(() => null);
+        ...(params.signal ? { signal: params.signal } : {}),
+        ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
+      }).catch(() => { params.signal?.throwIfAborted(); return null; });
 
       if (!rawSession || rawSession.active !== false || inactiveRetryRevision === revision) {
-        if (!(await events.waitForChange(revision, { deadlineMs }))) {
+        if (!(await events.waitForChange(revision, { deadlineMs, signal: params.signal }))) {
+          params.signal?.throwIfAborted();
           throw Object.assign(new Error('Cannot archive an active session'), { code: 'session_active' });
         }
       } else {

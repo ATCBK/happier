@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import * as pluginUi from '../hostApi/index.js';
 import { PluginHostApiProviderInternal } from '../hostApi/context.js';
+import { createHostApiStub } from '../surfaceFixture.testSupport.js';
 
 type ComposerRef = Parameters<PluginUiHostApi['readComposer']>[0];
 type ComposerReadResult = Awaited<ReturnType<PluginUiHostApi['readComposer']>>;
@@ -85,19 +86,7 @@ describe('Composer facade', () => {
       sha256: 'a'.repeat(64),
     };
     const inspection = { offset: 0, bytes: new Uint8Array([1, 2, 3]), eof: true };
-    const hostApi = {
-      version: () => ({ apiVersion: '1.0.0', wireVersion: 1, methods: [] }),
-      context: vi.fn(async () => { throw new Error('not used'); }),
-      watchContext: vi.fn(async (): Promise<Disposable> => ({ dispose: vi.fn() })),
-      executeAction: vi.fn(async () => null),
-      selectActionInput: vi.fn(async () => ({ kind: 'cancelled' as const })),
-      readResource: vi.fn(async () => { throw new Error('not used'); }),
-      statOpenableContent: vi.fn(async () => { throw new Error('not used'); }),
-      readOpenableContent: vi.fn(async () => { throw new Error('not used'); }),
-      watchResource: vi.fn(async () => { throw new Error('not used'); }),
-      openSurface: vi.fn(async () => undefined),
-      notify: vi.fn(async () => undefined),
-      confirm: vi.fn(async () => false),
+    const hostApi = createHostApiStub(undefined, {
       activeComposer: vi.fn(async () => activeRef),
       readComposer: vi.fn(async (ref: ComposerRef) => (
         ref.kind === mountedRef.kind && ref.sessionId === mountedRef.sessionId
@@ -112,11 +101,7 @@ describe('Composer facade', () => {
       pickComposerMedia: vi.fn(async () => stagedMedia),
       inspectComposerContent: vi.fn(async () => inspection),
       releaseComposerContent: vi.fn(async () => undefined),
-      diagnostic: vi.fn(),
-      readClipboard: vi.fn(async () => ''),
-      writeClipboard: vi.fn(async () => undefined),
-      openExternalLink: vi.fn(async () => undefined),
-    } as PluginUiHostApi;
+    });
     let service: ComposersService | undefined;
 
     await act(async () => {
@@ -193,18 +178,16 @@ describe('Composer facade', () => {
   it('preserves every exact Composer ref against runtime retargeting', async () => {
     const refs = [
       { kind: 'session', sessionId: 'session-immutable' },
+      { kind: 'discussion', discussionId: 'discussion-immutable' },
       { kind: 'newSession', instanceId: 'new-session-immutable' },
       { kind: 'pendingMessage', sessionId: 'pending-session-immutable', localId: 'pending-immutable' },
       { kind: 'participantMessage', sessionId: 'participant-session-immutable', instanceId: 'participant-immutable' },
       { kind: 'automationAuthoring', sessionId: 'automation-session-immutable', instanceId: 'automation-immutable' },
+      { kind: 'workflowAuthoring', draftId: 'draft-immutable', blockId: 'block-immutable', instanceId: 'workflow-immutable' },
     ] as const;
     const unavailable = { status: 'unavailable' as const, reason: 'scopeClosed' as const };
     const readComposer = vi.fn(async () => unavailable);
-    const hostApi = {
-      version: () => ({ methods: [] }),
-      readResource: vi.fn(async () => { throw new Error('Not used by Composer facade tests.'); }),
-      readComposer,
-    } as unknown as PluginUiHostApi;
+    const hostApi = createHostApiStub(undefined, { readComposer });
     let service: ComposersService | undefined;
 
     await act(async () => {
@@ -245,10 +228,7 @@ describe('Composer facade', () => {
   it('updates current only when the host-private mounted reference changes', async () => {
     const firstRef = { kind: 'session', sessionId: 'session-first' } as const;
     const secondRef = { kind: 'newSession', instanceId: 'new-second' } as const;
-    const hostApi = {
-      version: () => ({ methods: [] }),
-      readResource: vi.fn(async () => { throw new Error('not used'); }),
-    } as unknown as PluginUiHostApi;
+    const hostApi = createHostApiStub();
     let service: ComposersService | undefined;
     let tree: renderer.ReactTestRenderer;
 

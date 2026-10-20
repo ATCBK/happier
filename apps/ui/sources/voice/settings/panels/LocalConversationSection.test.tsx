@@ -872,7 +872,46 @@ describe('LocalConversationSection', () => {
     expect(screen.findRowByTitle(t('settingsVoice.local.conversation.commitIsolation.title'))).toBeTruthy();
     expect(screen.findRowByTitle(t('settingsVoice.local.mediatorIdleTtl'))).toBeTruthy();
     expect(capabilitiesInvoke).not.toHaveBeenCalled();
+
+    for (const id of ['agentSource', 'agent', 'customAgent', 'chatModelSource', 'chatModelId', 'commitModelSource', 'commitModelId'] as const) {
+      const setting = VOICE_CONVERSATIONS_SETTINGS.settings[id];
+      routeParams.value = { setting: setting.anchor };
+      await screen.update(<LocalConversationSection voice={voice} setVoice={() => {}} />);
+      const prerequisite = screen.findAllHostsByTestId('settings.voice.searchPrerequisite');
+      expect(prerequisite, `Search must explain the absent ${id} row`).toHaveLength(1);
+      expect(screen.findRowByTitle(t(setting.titleKey))?.props.subtitle).toEqual(expect.any(String));
+      expect(screen.findAll((node) => typeof node.type === 'string' && node.props.nativeID === `setting-${setting.anchor}`)).toHaveLength(1);
+    }
+
+    const cfg = readLocalConversationVoiceSettings(voice);
+    const withoutProviderChat = writeLocalConversationVoiceSettings(voice, { ...cfg, agent: { ...cfg.agent, providerChat: null } });
+    routeParams.value = { setting: VOICE_CONVERSATIONS_SETTINGS.settings.chatModelId.anchor };
+    await screen.update(<LocalConversationSection voice={withoutProviderChat} setVoice={() => {}} />);
+    expect(findDropdownByItemTriggerTitle(screen, t('settingsVoice.local.conversation.chatModelId.title'))).not.toBeNull();
+    expect(screen.findAllHostsByTestId('settings.voice.searchPrerequisite')).toHaveLength(0);
   });
+
+  it.each([
+    { id: 'agentSource', overrides: { conversationMode: 'direct_session' } },
+    { id: 'customAgent', overrides: { conversationMode: 'agent', agent: { agentSource: 'session' } } },
+    { id: 'chatModelId', overrides: { conversationMode: 'agent', agent: { chatModelSource: 'session' } } },
+    { id: 'commitModelId', overrides: { conversationMode: 'agent', agent: { commitModelSource: 'chat' } } },
+    { id: 'maxWarmRoots', overrides: { conversationMode: 'agent', agent: { rootSessionPolicy: 'single' } } },
+    { id: 'silenceMs', overrides: { handsFree: { ...readLocalConversationVoiceSettings(voiceSettingsDefaults).handsFree, enabled: false } } },
+    { id: 'sttLanguage', overrides: { stt: { ...readLocalConversationVoiceSettings(voiceSettingsDefaults).stt, provider: 'device' } } },
+    { id: 'ttsVoiceId', overrides: { tts: { ...readLocalConversationVoiceSettings(voiceSettingsDefaults).tts, provider: 'device' } } },
+  ] satisfies readonly { id: keyof typeof VOICE_CONVERSATIONS_SETTINGS.settings; overrides: LocalConversationAdapterOverrides }[])(
+    'explains a hidden $id at its rendered owner when search requests it', async ({ id, overrides }) => {
+      const LocalConversationSection = await loadLocalConversationSection();
+      const setting = VOICE_CONVERSATIONS_SETTINGS.settings[id];
+      routeParams.value = { setting: setting.anchor };
+      const screen = await renderSettingsView(<LocalConversationSection voice={createLocalConversationVoice(overrides)} setVoice={() => {}} />);
+      const prerequisite = screen.findAllHostsByTestId('settings.voice.searchPrerequisite');
+      expect(prerequisite).toHaveLength(1);
+      expect(screen.findRowByTitle(t(setting.titleKey))?.props.subtitle).toEqual(expect.any(String));
+      expect(screen.findAll((node) => typeof node.type === 'string' && node.props.nativeID === `setting-${setting.anchor}`)).toHaveLength(1);
+    },
+  );
 
   it('offers the default session Agent model catalog while following the current session', async () => {
     const LocalConversationSection = await loadLocalConversationSection();

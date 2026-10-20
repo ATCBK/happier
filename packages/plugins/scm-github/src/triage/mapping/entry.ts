@@ -17,7 +17,7 @@ import type {
 
 import {
   buildGithubRowFacts,
-  type GithubChecksRowStateV1,
+  type GithubRowFactsInputV1,
   type GithubReviewDecisionV1,
 } from './facts.js';
 import { mapGithubIssueState, mapGithubPullRequestState } from './state.js';
@@ -292,7 +292,7 @@ function buildGithubNameWithOwner(owner: string, name: string): string | null {
 
 export type GithubEntryProjectionExtrasV1 = Readonly<{
   reviewDecision?: GithubReviewDecisionV1 | null;
-  checks?: GithubChecksRowStateV1 | null;
+  checks?: GithubRowFactsInputV1['checks'];
   mergeability?: 'conflicts' | 'blocked' | 'computing' | null;
   additionsDeletions?: 'detailOnly' | Readonly<{ additions: number; deletions: number }> | null;
 }>;
@@ -341,6 +341,13 @@ export function projectGithubEntry(
   const state = view.kindId === 'pull-request'
     ? mapGithubPullRequestState(view.state)
     : mapGithubIssueState(view.state);
+  const childSummary = view.kindId === 'issue' && isRecord(view.state.sub_issues_summary)
+    ? view.state.sub_issues_summary : null;
+  const children = childSummary !== null
+    && typeof childSummary.total === 'number' && Number.isSafeInteger(childSummary.total) && childSummary.total >= 0
+    && typeof childSummary.completed === 'number' && Number.isSafeInteger(childSummary.completed)
+    && childSummary.completed >= 0 && childSummary.completed <= childSummary.total
+    ? { total: childSummary.total, completed: childSummary.completed } : undefined;
   // Who opened it, as one bounded display line beside the row facts' own copy of the login.
   const author = view.authorLogin === null
     ? null
@@ -379,6 +386,7 @@ export function projectGithubEntry(
       sourceUpdatedAtMs: view.updatedAtMs,
       nativeRevision: view.nativeRevision,
       state,
+      ...(children === undefined ? {} : { relations: { children } }),
       rowFacts: facts.rowFacts,
       projectionTruncated: title.truncated || scopeLabel.truncated || scopeDisplayName.truncated || author?.truncated === true
         || designation.truncated || facts.truncated,

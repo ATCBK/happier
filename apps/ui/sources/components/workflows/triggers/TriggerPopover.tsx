@@ -7,7 +7,6 @@ import type { AutomationRunPluginEventTriggerEvidenceV1 } from '@happier-dev/pro
 
 import { RoundButton, RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { FieldItem } from '@/components/ui/forms/FieldItem';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { FieldValueItem } from '@/components/ui/forms/FieldValueItem';
 import { FIELD_BOX_METRICS } from '@/components/ui/forms/fieldBox';
@@ -52,6 +51,7 @@ import {
 } from './sessionTriggerForm';
 import { buildSimpleScheduleCron, formatClockTimeInput, parseClockTime, type SimpleScheduleRepeat } from './triggerSchedule';
 import { useNotifyMeChannelOptions, useTriggerWorkflowDefinition } from './useTriggerThenOptions';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { SessionTriggerPullRequestPicker } from './SessionTriggerPullRequestPicker';
 import { WorkflowExamplesSection } from '../library/WorkflowExamplesSection';
 import { resolveWorkflowBuiltinInputPresentation } from '../presentation/workflowBuiltinInputPresentation';
@@ -104,6 +104,7 @@ type TriggerPopoverBaseProps = Readonly<{
     machineId?: string | null;
     directory?: string | null;
     serverId?: string | null;
+    accountLifetime?: ServerAccountScopeLifetime | null;
     /** The exact saved row, whose private source configuration is read only when editing it. */
     eventEdit?: Readonly<{ automationId: string; triggerId: string }>;
     /** Route-local retained observation for a non-executing draft test. Never re-admitted. */
@@ -120,7 +121,49 @@ type TriggerPopoverBaseProps = Readonly<{
     onSaveAsWorkflow?: (target: TriggerTargetV1) => void;
     /** Writes the trigger through its owner; a rejection keeps the popover and its edits. */
     onDelete?: () => Promise<void>;
+    /**
+     * The popover frame the editor opens in. Defaults to a popover hanging from the launching row;
+     * a host with its own popover owner (the composer's chip pickers) passes that owner's shell.
+     */
+    shell?: React.ComponentType<TriggerPopoverShellProps>;
 }>;
+
+export type TriggerPopoverShellProps = Readonly<{
+    anchorRef: React.RefObject<View | null>;
+    onRequestClose: () => void;
+    open: true;
+    autoFocusOnOpen: true;
+    phonePresentation: 'sheet';
+    sheetHeaderAction?: React.ReactNode;
+    sheetSubtitle?: string;
+    accessibilityLabel?: string;
+    maxWidthCap: number;
+    maxHeightCap: number;
+    /** `placement` is reported only by a shell whose side can vary; it points the surface's arrow. */
+    children: (args: Readonly<{
+        maxHeight: number;
+        placement?: 'top' | 'bottom' | 'left' | 'right';
+        presentation: 'popover' | 'sheet';
+    }>) => React.ReactNode;
+}>;
+
+function TriggerAnchoredPopoverShell(props: TriggerPopoverShellProps): React.ReactElement {
+    return (
+        <Popover
+            {...props}
+            placement="bottom"
+            // Keep both steps on the launching row's edge. Side-auto placement put the event
+            // step over the document when the settings pane had no room to its right.
+            portal={{ web: { target: 'body' }, native: true, matchAnchorWidth: false, anchorAlign: 'end' }}
+        >
+            {({ maxHeight, placement, presentation }) => props.children({
+                maxHeight,
+                placement,
+                presentation: presentation === 'sheet' ? 'sheet' : 'popover',
+            })}
+        </Popover>
+    );
+}
 
 type TriggerPopoverWrite<Trigger> = Readonly<{
     trigger: Trigger;
@@ -238,6 +281,9 @@ function FieldSelect(props: Readonly<{
  * one. Session and Account triggers differ only in the kinds offered and the write their host makes.
  */
 export function TriggerPopover(props: TriggerPopoverProps): React.ReactElement {
+    const Shell = props.shell ?? TriggerAnchoredPopoverShell;
+    const scope = useActiveServerAccountScope();
+    const originServerId = props.serverId ?? scope?.serverId;
     const isNew = props.initial === null;
     const [when, setWhen] = React.useState<TriggerWhenValue>(() => props.initial?.when ?? props.initialWhen
         ?? createDefaultWhen(props.whenKinds[0] ?? 'turnEnds', props.pullRequestLinks));
@@ -249,13 +295,17 @@ export function TriggerPopover(props: TriggerPopoverProps): React.ReactElement {
     const [examplesOpen, setExamplesOpen] = React.useState(false);
     const [eventEditing, setEventEditing] = React.useState(false);
     const workflow = useTriggerWorkflowDefinition(then.kind === 'runWorkflow' ? then.ref : null,
-        props.libraryWorkflowsAvailable !== false);
+        props.libraryWorkflowsAvailable !== false, props.accountLifetime);
     const inlineDefinition = then.kind === 'kept' && then.target.kind === 'inline' ? then.target.definition : null;
     const inputFields = React.useMemo(() => projectWorkflowRunInputFields({
         inputs: inlineDefinition?.inputs ?? workflow.definition?.inputs ?? [],
         values: then.kind === 'runWorkflow' || then.kind === 'kept' ? then.inputs : {},
         rawTextValues: rawInputText,
-    }), [inlineDefinition, workflow.definition, then, rawInputText]);
+        ...(props.sessionId && originServerId ? { originSession: {
+            serverId: originServerId, sessionId: props.sessionId,
+        } } : {}),
+        deferOriginSessionDefault: props.creatingSession === true,
+    }), [inlineDefinition, workflow.definition, then, rawInputText, props.sessionId, props.creatingSession, originServerId]);
     const inputPresentation = resolveWorkflowBuiltinInputPresentation(then.kind === 'runWorkflow' ? then.ref : null);
     const changeThen = (next: TriggerThenValue) => {
         if (next.kind !== then.kind || (next.kind === 'runWorkflow' && then.kind === 'runWorkflow' && next.ref !== then.ref)) {
@@ -322,7 +372,7 @@ export function TriggerPopover(props: TriggerPopoverProps): React.ReactElement {
         disabled={!complete} loading={pending} onPress={submit} />;
 
     return (
-        <Popover
+        <Shell
             // Each step reuses the overlay's focus/close owner; the parent keeps the form draft.
             key={eventEditing ? 'event' : 'trigger'}
             open
@@ -331,14 +381,10 @@ export function TriggerPopover(props: TriggerPopoverProps): React.ReactElement {
             sheetSubtitle={eventEditing ? undefined : unavailableWhen ?? props.subtitle}
             accessibilityLabel={eventEditing ? t('workflows.triggers.popover.configureEvent') : title}
             anchorRef={props.anchorRef}
-            placement="bottom"
             maxWidthCap={TRIGGER_POPOVER_WIDTH}
             maxHeightCap={640}
             autoFocusOnOpen
             onRequestClose={props.onRequestClose}
-            // Keep both steps on the launching row's edge. Side-auto placement put the event
-            // step over the document when the settings pane had no room to its right.
-            portal={{ web: { target: 'body' }, native: true, matchAnchorWidth: false, anchorAlign: 'end' }}
         >
             {({ maxHeight, placement, presentation }) => eventEditing && when.kind === 'pluginEvent' ? (
                 <TriggerPluginEventRows testID={props.testID} when={when} onChange={setWhen}
@@ -346,8 +392,8 @@ export function TriggerPopover(props: TriggerPopoverProps): React.ReactElement {
                     eventEdit={props.eventEdit} activityEvent={props.activityEvent}
                     editing onEditingChange={setEventEditing} editorMaxHeight={maxHeight} />
             ) : (
-                // An opaque theme surface: the form must not show the document through it (lab T1).
-                <FloatingOverlay maxHeight={maxHeight} scrollEnabled surfaceChrome="theme" arrow={{ placement }} footer={<RoundButtonSizeScope size="small" presentation="uniform"><View style={styles.foot}>
+                // The floating theme surface every popover shares (DESIGN.md floating glass).
+                <FloatingOverlay maxHeight={maxHeight} scrollEnabled surfaceChrome="theme" arrow={placement ? { placement } : false} footer={<RoundButtonSizeScope size="small" presentation="uniform"><View style={styles.foot}>
                             {isNew ? (
                                 <>
                                     <RoundButton size="small" display="inverted"
@@ -501,7 +547,7 @@ export function TriggerPopover(props: TriggerPopoverProps): React.ReactElement {
                     </ListPresentationProvider>
                 </FloatingOverlay>
             )}
-        </Popover>
+        </Shell>
     );
 }
 
@@ -626,16 +672,21 @@ function ThenRows(props: Readonly<{
                         <PromptAgentRows testID={props.testID} then={then} onChange={props.onChange}
                             machineId={props.machineId} serverId={props.serverId} directory={props.directory} />
                     ) : null}
-                    <FieldItem label={t('workflows.triggers.then.promptLabel')}>
-                        <FieldTextInput
-                            testID={`${props.testID}-prompt`}
-                            value={then.prompt}
-                            multiline
-                            placeholder={t('workflows.triggers.then.promptPlaceholder')}
-                            accessibilityLabel={t('workflows.triggers.then.promptLabel')}
-                            onChangeText={(prompt) => props.onChange({ ...then, prompt })}
-                        />
-                    </FieldItem>
+                    <Item
+                        title={t('workflows.triggers.then.promptLabel')}
+                        showChevron={false}
+                        accessoryLayout="stacked"
+                        rightElement={(
+                            <FieldTextInput
+                                testID={`${props.testID}-prompt`}
+                                value={then.prompt}
+                                multiline
+                                placeholder={t('workflows.triggers.then.promptPlaceholder')}
+                                accessibilityLabel={t('workflows.triggers.then.promptLabel')}
+                                onChangeText={(prompt) => props.onChange({ ...then, prompt })}
+                            />
+                        )}
+                    />
                 </>
             );
         case 'doAction':

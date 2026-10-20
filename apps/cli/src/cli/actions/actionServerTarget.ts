@@ -1,5 +1,5 @@
 import type { StoredCredentials } from '@/persistence';
-import type { ServerProfile } from '@/server/serverProfiles';
+import { refreshServerProfileHomeConnectionDescriptor, resolveServerProfileHomeIdentityId, type ServerProfile } from '@/server/serverProfiles';
 import { configuration } from '@/configuration';
 import { ACTION_CLI_SERVER_ID_FLAG } from './parseCommandInput';
 
@@ -12,7 +12,7 @@ export type ActionCliCredentialTargetDeps = Readonly<{
 }>;
 
 export type ActionCliFixedServerTarget = Readonly<{
-  /** Device-local profile id used for routing, credential lookup, and Action scope. */
+  /** Device-local routing/credential profile; portable Home records use serverIdentityId. */
   serverId: string;
   /** Stable identity observed from the exact Home endpoint; never inferred from the profile id. */
   serverIdentityId?: string;
@@ -49,12 +49,6 @@ export function readActionCliServerId(argv: readonly string[], acceptsServerId: 
   return selected;
 }
 
-function readExactHomeIdentity(profile: ServerProfile | null): string | undefined {
-  return profile?.homeConnectionDescriptorAuthority === 'exact'
-    ? profile.homeConnectionDescriptor?.homeServerIdentityId
-    : undefined;
-}
-
 /**
  * Resolves credentials and endpoint as one qualified Home target. Callers may
  * parse argv differently, but none may pair an explicit URL with ambient Home
@@ -69,14 +63,27 @@ export async function resolveActionCliCredentialTarget(params: Readonly<{
   fixedServer: ActionCliFixedServerTarget | null;
   serverIdentityId?: string;
 }>> {
+  const prepareProfile = async (profile: ServerProfile | null, credentials: StoredCredentials | null): Promise<ServerProfile | null> => {
+    if (!profile || !credentials || profile.homeConnectionDescriptorAuthority === 'exact' && profile.homeConnectionDescriptor) return profile;
+    // Restored identities can have credentials and a URL-only profile. Establish
+    // its binding at the existing authenticated descriptor owner before Actions
+    // apply their saved-Home currentness checks.
+    const refreshed = await refreshServerProfileHomeConnectionDescriptor({ profileId: profile.id,
+      serverUrl: profile.localServerUrl ?? profile.serverUrl, token: credentials.token,
+    }).catch(() => 'unavailable' as const);
+    return refreshed === 'unavailable' ? profile : await params.deps.getServerProfileFn(profile.id);
+  };
   if (params.requestedServerId === null) {
-    const profile = await params.deps.getServerProfileFn(configuration.activeServerId).catch(() => null);
-    const serverIdentityId = readExactHomeIdentity(profile);
-    return { credentials: await params.deps.readCredentialsFn(), fixedServer: null,
+    const credentials = await params.deps.readCredentialsFn();
+    const profile = await prepareProfile(await params.deps.getServerProfileFn(configuration.activeServerId).catch(() => null), credentials);
+    const serverIdentityId = profile ? await resolveServerProfileHomeIdentityId(profile.id) ?? undefined : undefined;
+    return { credentials, fixedServer: null,
       ...(serverIdentityId ? { serverIdentityId } : {}) };
   }
-  const profile = await params.deps.getServerProfileFn(params.requestedServerId);
-  const serverIdentityId = readExactHomeIdentity(profile);
+  const selectedProfile = await params.deps.getServerProfileFn(params.requestedServerId);
+  const credentials = await params.deps.readCredentialsForServerIdFn(selectedProfile.id);
+  const profile = await prepareProfile(selectedProfile, credentials) ?? selectedProfile;
+  const serverIdentityId = await resolveServerProfileHomeIdentityId(profile.id) ?? undefined;
   if (params.requireServerIdentityId && !serverIdentityId) {
     throw Object.assign(
       new Error(`Saved Home "${profile.id}" has no verified server identity. Re-add or refresh it before retrying.`),
@@ -84,7 +91,7 @@ export async function resolveActionCliCredentialTarget(params: Readonly<{
     );
   }
   return {
-    credentials: await params.deps.readCredentialsForServerIdFn(profile.id),
+    credentials,
     ...(serverIdentityId ? { serverIdentityId } : {}),
     fixedServer: {
       serverId: profile.id,

@@ -12,6 +12,9 @@ import { createScopedPluginSettingsActionAdapter } from '@/sync/domains/plugins/
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { applyAccountSettingsSavedSecretMutation, resolveAccountSettingsPluginSecretBinding } from '@happier-dev/protocol';
 import { createAccountPluginSecretSettingsAdapter } from '@/sync/domains/plugins/settings/scopedPluginAccountSecretSettingsAdapter';
+import { renderHook, standardCleanup } from '@/dev/testkit';
+import { act } from 'react-test-renderer';
+import { useScopedPluginSettingsProjection } from '@/sync/domains/plugins/settings/scopedPluginSettingsProjection';
 
 type SettingsActionRequest = Parameters<NonNullable<ActionExecutorDeps['pluginSettingsAdministrationAction']>>[0];
 function settingsStoragePort(scope: Omit<Parameters<typeof executeScopedPluginSettingsAdministrationAction>[0], keyof SettingsActionRequest>) {
@@ -21,6 +24,179 @@ function settingsStoragePort(scope: Omit<Parameters<typeof executeScopedPluginSe
 }
 
 describe('UI plugin Settings Action owner', () => {
+    it('cancels the daemon read preceding a Settings write when its request retires', async () => {
+        const { projectPluginSettingsContributionV2 } = await import('@happier-dev/protocol/daemon/contributionRegistryProjection');
+        const { mapV2EditableSettingsGroup } = await import('@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters');
+        const definition = PluginSettingsContributionV2Schema.parse({ id: 'preferences', title: 'Preferences', scope: 'daemon',
+            target: { kind: 'plugin' }, fields: [{ id: 'endpoint', title: 'Endpoint', schema: { type: 'string' } }] });
+        const groups = [mapV2EditableSettingsGroup(projectPluginSettingsContributionV2({ pluginId: 'acme.settings', definition }))];
+        const controller = new AbortController();
+        const started = createDeferred<void>();
+        let cancelled = false;
+        const unexpected = async (): Promise<never> => { throw new Error('Unexpected Settings write'); };
+        const adapter = createScopedPluginSettingsAdapter({ accountRead: unexpected, accountWrite: unexpected, daemonSet: unexpected,
+            daemonGet: async (_machineId, options) => {
+                started.resolve();
+                return new Promise<never>((_resolve, reject) => {
+                    options.signal?.addEventListener('abort', () => { cancelled = true; reject(new Error('aborted')); }, { once: true });
+                });
+            },
+        });
+        const pending = executeScopedPluginSettingsAdministrationAction({ actionId: 'plugins.settings.set',
+            input: { pluginId: 'acme.settings', scope: { kind: 'daemon' },
+                target: { kind: 'daemon', serverIdentityId: 'srv_a', machineId: 'machine-a' },
+                localId: 'endpoint', value: 'next', expectedRevision: '1' },
+            context: { surface: 'ui', signal: controller.signal },
+            target: { kind: 'daemon', serverIdentityId: 'srv_a', serverId: 'home-a', machineId: 'machine-a' },
+            groups, adapter, secretAdapter: adapter, assertCurrent: () => controller.signal.throwIfAborted(),
+        });
+        await started.promise;
+        controller.abort();
+        expect(cancelled).toBe(true);
+        expect(await pending).toMatchObject({ ok: false });
+    });
+
+    it.each(['account', 'daemon'] as const)('preserves quiet secret declines and sole executor confirmation for %s custody', async custody => {
+        const { projectPluginSettingsContributionV2 } = await import('@happier-dev/protocol/daemon/contributionRegistryProjection');
+        const { mapV2EditableSettingsGroup } = await import('@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters');
+        for (const scenario of ['reject', 'canceled', 'default', 'waived'] as const) {
+            let accountSnapshot = { revision: 5, settings: {} };
+            let daemonState: 'configured' | 'missing' = 'configured';
+            let confirmations = 0;
+            let approvalRequests = 0;
+            const accountTarget = { kind: 'account' as const, serverIdentityId: 'srv_a' };
+            const daemonTarget = { kind: 'daemon' as const, serverIdentityId: 'srv_a', serverId: 'home-a', machineId: 'machine-a' };
+            const target = custody === 'account' ? accountTarget : daemonTarget;
+            const secretAdapter = createAccountPluginSecretSettingsAdapter({ readSnapshot: () => accountSnapshot,
+                async writeOnce(input) {
+                    accountSnapshot = { revision: accountSnapshot.revision + 1, settings: input.mutate(accountSnapshot.settings) };
+                    return { status: 'applied', revision: accountSnapshot.revision, snapshot: accountSnapshot };
+                } }, { createId: () => 'saved-token', now: () => 2 });
+            const secretInput = { pluginId: 'acme.settings', scope: { kind: 'account' as const }, target: accountTarget,
+                fields: [{ key: 'token', redacted: true }], fieldId: 'token', expectedRevision: { kind: 'account-secret' as const, value: 5 } };
+            expect(await secretAdapter.write({ ...secretInput, mutation: { kind: 'set', value: 'synthetic-private-token' } })).toMatchObject({ status: 'ready' });
+            const unexpected = async (): Promise<never> => { throw new Error('Wrong secret custody'); };
+            const daemonAdapter = createScopedPluginSettingsAdapter({ accountRead: unexpected, accountWrite: unexpected,
+                daemonGet: unexpected, daemonSet: unexpected,
+                daemonSecretStatus: async (_machineId, input) => ({ supported: true, result: { protocolVersion: 1, pluginId: input.pluginId,
+                    secretId: input.secretId, state: daemonState, revision: 'secret-r1' } }),
+                daemonSecretSet: unexpected,
+                daemonSecretDelete: async (_machineId, input) => { daemonState = 'missing'; return { supported: true,
+                    result: { protocolVersion: 1, pluginId: input.pluginId, secretId: input.secretId, state: daemonState, revision: 'secret-r2' } }; },
+            });
+            const adapter = custody === 'account' ? secretAdapter : daemonAdapter;
+            const definition = PluginSettingsContributionV2Schema.parse({ id: 'preferences', title: 'Preferences', scope: custody,
+                target: { kind: 'plugin' }, fields: [{ id: 'token', title: 'Token', schema: { type: 'string' }, secret: { custody } }] });
+            const groups = [mapV2EditableSettingsGroup(projectPluginSettingsContributionV2({ pluginId: 'acme.settings', definition }))];
+            const settings = ActionsSettingsV1Schema.parse({ v: 1, ...(scenario === 'waived'
+                ? { approvalWaivedSurfaces: { 'plugins.settings.secret.delete': ['ui'] } }
+                : scenario === 'default' ? {} : { actions: { 'plugins.settings.secret.delete': { approvalRequiredSurfaces: ['ui'] } } }) });
+            const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+                isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, settings, context),
+                hostActionApprovalLifetime: { actionId: 'plugins.settings.secret.delete', signal: new AbortController().signal, surface: 'ui' },
+                presentUserActionConfirmation: async () => { confirmations += 1; return true; },
+                isApprovalExecutionOriginCurrent: async () => true,
+                approvalsCreate: async () => { approvalRequests += 1; return { artifactId: 'secret-approval' }; },
+                approvalsUpdate: async () => ({ ok: true }),
+                approvalsWaitForDecision: async ({ request }) => ({ decision: scenario === 'reject' ? 'reject' : 'canceled', request }),
+                pluginSettingsAdministrationAction: settingsStoragePort({ target, groups, adapter, secretAdapter, assertCurrent() {} }),
+            }));
+            let executionSummary: unknown;
+            const actionAdapter = createScopedPluginSettingsActionAdapter({ adapter,
+                accountLifetime: { scope: { serverId: 'home-a', accountId: 'alice' }, isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
+                // Production's host stamps caller provenance before the pure Protocol executor.
+                execute: async (id, input, context) => {
+                    const result = await executor.execute(id, input, { ...context,
+                        authority: 'present_user', actionCaller: { kind: 'host' }, actionRequestId: `secret-${custody}-${scenario}` });
+                    executionSummary = result.ok ? { ok: true, result: result.result } : { ok: false, errorCode: result.errorCode };
+                    return result;
+                } });
+            const result = custody === 'account'
+                ? await actionAdapter.write({ ...secretInput, expectedRevision: { kind: 'account-secret', value: accountSnapshot.revision }, mutation: { kind: 'delete' } })
+                : await actionAdapter.daemonSecret!.write({ pluginId: 'acme.settings', target: daemonTarget, secretId: 'token',
+                    expectedRevision: 'secret-r1', mutation: { kind: 'delete' } });
+            const declined = scenario === 'reject' || scenario === 'canceled';
+            expect(confirmations).toBe(scenario === 'default' ? 1 : 0);
+            expect(approvalRequests).toBe(declined ? 1 : 0);
+            expect(result, JSON.stringify({ scenario, executionSummary })).toMatchObject({ status: declined ? 'declined' : custody === 'account' ? 'applied' : 'ready' });
+            const configured = custody === 'account'
+                ? Boolean(resolveAccountSettingsPluginSecretBinding(accountSnapshot.settings, { pluginId: 'acme.settings', localId: 'token' }))
+                : daemonState === 'configured';
+            expect(configured).toBe(declined);
+        }
+    });
+    it.each(['reject', 'canceled'] as const)('settles %s without field errors, recovery reads or persisted changes', async decision => {
+        let revision = 7;
+        let values: Readonly<Record<string, unknown>> = { enabled: false, endpoint: 'before' };
+        let reads = 0;
+        let failWrites = false;
+        const target = { kind: 'account' as const, serverIdentityId: 'srv_a' };
+        const groups = projectAccountDeclaredPluginSettingsGroups({ pluginId: 'acme.settings', declaration: { id: 'acme.settings',
+            contributes: { settings: [PluginSettingsContributionV2Schema.parse({ id: 'preferences', title: 'Preferences', scope: 'account',
+                target: { kind: 'plugin' }, fields: [{ id: 'enabled', title: 'Enabled', schema: { type: 'boolean' } },
+                    { id: 'endpoint', title: 'Endpoint', schema: { type: 'string' } }] })] } } });
+        const transport = createAccountScopedPluginSettingsTransport({ readRecord: async () => { reads += 1; return { status: 'present', revision, values }; },
+            writeRecord: async input => {
+                if (failWrites) return { status: 'unavailable', reason: 'transport' };
+                values = input.values; revision += 1; return { status: 'updated', revision };
+            } });
+        const unexpected = async (): Promise<never> => { throw new Error('Wrong Settings scope'); };
+        const adapter = createScopedPluginSettingsAdapter({ accountRead: transport.read, accountWrite: transport.write,
+            daemonGet: unexpected, daemonSet: unexpected });
+        let ask = true;
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+            isActionApprovalRequired: () => ask,
+            isApprovalExecutionOriginCurrent: async () => true,
+            approvalsCreate: async () => ({ artifactId: 'approval-1' }),
+            approvalsUpdate: async () => ({ ok: true }),
+            approvalsWaitForDecision: async ({ request }) => ({ decision, request }),
+            pluginSettingsAdministrationAction: settingsStoragePort({ target, groups, adapter, secretAdapter: adapter, assertCurrent() {} }),
+        }));
+        const accountLifetime = { scope: { serverId: 'home-a', accountId: `quiet-${decision}` }, isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
+        let invocation = 0;
+        const actionAdapter = createScopedPluginSettingsActionAdapter({ adapter, accountLifetime,
+            execute: (id, input, context) => executor.execute(id, input, { ...context,
+                authority: 'present_user', actionCaller: { kind: 'host' }, actionRequestId: `field-${decision}-${++invocation}` }) });
+        const fields = groups[0]!.fields.map(field => ({ key: field.key, redacted: false }));
+        const scope = { kind: 'account' as const };
+        const hook = await renderHook(() => useScopedPluginSettingsProjection({ pluginId: 'acme.settings', scope, target,
+            perActiveServerIdentityId: null,
+            accountLifetime, fields,
+            declaredFields: groups[0]!.fields, enabled: true, adapter: actionAdapter }));
+        try {
+            expect(hook.getCurrent().state.ready).toBe(true);
+            for (const [key, draft] of [['enabled', true], ['endpoint', 'after']] as const) {
+                const beforeReads = reads;
+                await act(async () => {
+                    expect(await hook.getCurrent().fieldModels.find(model => model.field.key === key)!.commit({ draft }))
+                        .toEqual({ status: 'declined' });
+                });
+                expect(hook.getCurrent().state).toMatchObject({ writePending: false, error: null, values: { enabled: false, endpoint: 'before' } });
+                expect(reads).toBe(beforeReads);
+                const model = hook.getCurrent().fieldModels.find(model => model.field.key === key)!;
+                expect(model.error).toBeNull();
+                expect(model.draft).toBe(key === 'enabled' ? false : 'after');
+            }
+            expect(values).toEqual({ enabled: false, endpoint: 'before' });
+            expect(revision).toBe(7);
+            ask = false;
+            failWrites = true;
+            await act(async () => {
+                expect(await hook.getCurrent().fieldModels.find(model => model.field.key === 'endpoint')!.commit())
+                    .toMatchObject({ status: 'unavailable' });
+            });
+            expect(hook.getCurrent().state.error).toBe('failed');
+            expect(hook.getCurrent().fieldModels.find(model => model.field.key === 'endpoint')!.error).toBe('failed');
+            ask = true;
+            await act(async () => {
+                expect(await hook.getCurrent().fieldModels.find(model => model.field.key === 'endpoint')!.commit())
+                    .toEqual({ status: 'declined' });
+            });
+            expect(hook.getCurrent().state).toMatchObject({ error: null, writePending: false });
+            expect(hook.getCurrent().fieldModels.find(model => model.field.key === 'endpoint')).toMatchObject({ error: null, draft: 'after' });
+            expect(values).toEqual({ enabled: false, endpoint: 'before' });
+        } finally { standardCleanup(); }
+    });
     it('keeps an omitted secret target Account-owned and never borrows an ambient daemon for custody', async () => {
         for (const custody of ['account', 'daemon'] as const) {
             let snapshot = { revision: 5, settings: applyAccountSettingsSavedSecretMutation({}, { kind: 'add', secret: {
@@ -342,8 +518,10 @@ describe('UI plugin Settings Action owner', () => {
         const adapter = createScopedPluginSettingsAdapter({ accountRead: transport.read, accountWrite: transport.write,
             daemonGet: async () => { throw new Error('Wrong custody'); }, daemonSet: async () => { throw new Error('Wrong custody'); } });
         let current = true;
+        const settings = ActionsSettingsV1Schema.parse({ v: 1,
+            actions: { 'plugins.settings.set': { approvalRequiredSurfaces: ['ui'] } } });
         const executor = createActionExecutor(createActionExecutorBoundaryFixture({
-            isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, ActionsSettingsV1Schema.parse({ v: 1 }), context),
+            isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, settings, context),
             pluginSettingsAdministrationAction: settingsStoragePort({
                 target, groups, adapter, secretAdapter: adapter, assertCurrent: () => { if (!current) throw new Error('retired'); } }),
         }));

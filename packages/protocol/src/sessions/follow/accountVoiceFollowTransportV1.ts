@@ -4,6 +4,7 @@ import { z } from 'zod/mini';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 import { SessionIdSchema } from '../idsV1.js';
 import { SessionFollowFrontierV1Schema } from './sessionFollowFrontierV1.js';
+import { FollowPolicyV1Schema } from './sessionFollowPolicyV1.js';
 
 const SessionIdZodSchema = asProtocolZod(SessionIdSchema);
 const PublisherGenerationV1Schema = lazyZodSchema(() => z.string().check(z.regex(/^(?:0|[1-9]\d{0,18})$/u), z.refine((value) => BigInt(value) <= 9_223_372_036_854_775_807n)));
@@ -22,6 +23,8 @@ export const AccountVoiceFollowPendingObservationV1Schema = lazyZodSchema(() => 
   voiceSessionId: SessionIdZodSchema,
   expected: z.nullable(SessionFollowFrontierV1Schema),
   observed: SessionFollowFrontierV1Schema,
+  /** Absent only for the independent legacy include-in-Voice ingress. */
+  policy: z.optional(FollowPolicyV1Schema),
 }));
 export type AccountVoiceFollowPendingObservationV1 = z.infer<typeof AccountVoiceFollowPendingObservationV1Schema>;
 
@@ -58,6 +61,7 @@ export const AccountVoiceFollowAcknowledgeRequestV1Schema = lazyZodSchema(() => 
   expected: z.nullable(SessionFollowFrontierV1Schema),
   observed: SessionFollowFrontierV1Schema,
   consumed: SessionFollowFrontierV1Schema,
+  policy: z.optional(FollowPolicyV1Schema),
   acceptance: AcceptanceSchema,
 }).check(z.superRefine((value, context) => {
   if (value.sourceSessionId === value.voiceSessionId) {

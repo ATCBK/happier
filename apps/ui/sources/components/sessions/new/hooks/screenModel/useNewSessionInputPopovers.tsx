@@ -7,7 +7,10 @@ import { NewSessionMachineSelectionContent } from '@/components/sessions/new/com
 import { NewSessionResumeSelectionContent } from '@/components/sessions/new/components/NewSessionResumeSelectionContent';
 import type { ServerScopedMachineGroup } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { useProfile as useAccountProfile } from '@/sync/store/hooks';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { getConnectedMetadataCatalog } from '@/sync/store/settings/connectedMetadataCatalogSnapshot';
 import { t } from '@/text';
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
 import { openExternalSessionsResumeIdPickerModal } from '@/components/sessions/external/browse/openExternalSessionsResumeIdPickerModal';
@@ -119,7 +122,6 @@ export function useNewSessionInputPopovers(params: Readonly<{
     agentType: string;
     agentLabel: string;
     agentOptionState: ExternalSessionBrowseLockContext['agentOptionState'];
-    settings: ExternalSessionBrowseLockContext['settings'];
     pluginProjectionV2: PluginProjectionV2 | null | undefined;
 }>): Readonly<{
     pathPopover: AgentInputContentPopoverConfig;
@@ -268,7 +270,7 @@ export function useNewSessionInputPopovers(params: Readonly<{
     ]);
 
     const machinePopover = React.useMemo<AgentInputContentPopoverConfig>(() => ({
-        renderContent: ({ maxHeight, requestClose }) => {
+        renderContent: ({ maxHeight, requestClose, inline }) => {
             const renderParams = machinePopoverRenderParamsRef.current;
             // One shared row owner with the full-screen picker: the composer
             // popover and the picker route must never disagree about whether
@@ -348,6 +350,7 @@ export function useNewSessionInputPopovers(params: Readonly<{
                     searchPlacement="header"
                     testIdPrefix="new-session-machine"
                     maxHeight={maxHeight}
+                    presentation={inline ? 'inline' : undefined}
                 />
             );
         },
@@ -391,12 +394,16 @@ export function useNewSessionInputPopovers(params: Readonly<{
                         enabled: true,
                         onBrowse: async () => {
                             if (!params.selectedMachineId) return null;
+                            const accountScope = getActiveServerAccountScope();
                             const source = resolveExternalSessionBrowseLockedSource({
+                                accountScope,
+                                serverId: params.targetServerId,
                                 providerId: params.agentType,
                                 machineId: params.selectedMachineId,
                                 agentOptionState: params.agentOptionState,
                                 profile: accountProfile,
-                                settings: params.settings,
+                                labelsByKey: getConnectedMetadataCatalog(accountScope).labelsByKey,
+                                agentSettings: getStorage().getState().settings,
                                 projection: params.pluginProjectionV2,
                                 interaction: 'pickRemoteSessionId',
                             });
@@ -442,7 +449,6 @@ export function useNewSessionInputPopovers(params: Readonly<{
         params.pluginProjectionV2,
         params.resumeSessionId,
         params.selectedMachineId,
-        params.settings,
         params.setResumeSessionId,
         params.targetServerId,
     ]);

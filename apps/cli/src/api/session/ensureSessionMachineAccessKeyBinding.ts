@@ -2,8 +2,9 @@ import axios from 'axios';
 import { randomUUID } from 'node:crypto';
 
 import { buildCurrentSessionRunnerCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
-import { createAuthenticationHttpStatusError, isAuthenticationStatus } from '@/api/client/httpStatusError';
+import { createAuthenticationHttpStatusError, createHttpStatusError, isAuthenticationStatus } from '@/api/client/httpStatusError';
 import { configuration } from '@/configuration';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 const ACCESS_KEY_BINDING_CACHE_TTL_MS = 30_000;
 const MAX_ACCESS_KEY_BINDING_CACHE_ENTRIES = 2_048;
@@ -31,14 +32,15 @@ function pruneAccessKeyBindingSuccessCache(now: number): void {
 }
 
 export async function ensureSessionMachineAccessKeyBinding(params: Readonly<{
-    serverUrl: string;
+    serverUrl?: string;
     token: string;
     sessionId: string;
     machineId?: string;
 }>): Promise<void> {
     if (!params.machineId) return;
+    const serverUrl = params.serverUrl ?? resolveServerHttpBaseUrl();
     const cacheKey = buildAccessKeyBindingCacheKey({
-        serverUrl: params.serverUrl,
+        serverUrl,
         sessionId: params.sessionId,
         machineId: params.machineId,
     });
@@ -50,7 +52,7 @@ export async function ensureSessionMachineAccessKeyBinding(params: Readonly<{
     const existingInFlight = accessKeyBindingInFlight.get(cacheKey);
     if (existingInFlight) return await existingInFlight;
 
-    const bindingPromise = ensureSessionMachineAccessKeyBindingUncached({ ...params, machineId: params.machineId })
+    const bindingPromise = ensureSessionMachineAccessKeyBindingUncached({ ...params, serverUrl, machineId: params.machineId })
         .then(() => {
             const completedAt = Date.now();
             accessKeyBindingSuccessExpiresAt.set(cacheKey, completedAt + ACCESS_KEY_BINDING_CACHE_TTL_MS);
@@ -84,7 +86,7 @@ async function ensureSessionMachineAccessKeyBindingUncached(params: Readonly<{
     if (isAuthenticationStatus(existing.status)) {
         throw createAuthenticationHttpStatusError(existing.status, 'Authentication failed while binding session machine control');
     }
-    if (existing.status !== 200) throw new Error(`Unexpected status from ${accessKeyUrl}: ${existing.status}`);
+    if (existing.status !== 200) throw createHttpStatusError(existing.status, 'Session machine access-key lookup failed');
 
     const created = await axios.post(accessKeyUrl, {
         data: `session-machine-control:${randomUUID()}`,
@@ -93,5 +95,5 @@ async function ensureSessionMachineAccessKeyBindingUncached(params: Readonly<{
         throw createAuthenticationHttpStatusError(created.status, 'Authentication failed while binding session machine control');
     }
     if (created.status === 200 || created.status === 409) return;
-    throw new Error(`Unexpected status from ${accessKeyUrl}: ${created.status}`);
+    throw createHttpStatusError(created.status, 'Session machine access-key binding failed');
 }

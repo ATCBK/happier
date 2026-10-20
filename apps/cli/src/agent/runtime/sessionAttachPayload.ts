@@ -1,12 +1,12 @@
-import * as z from 'zod';
+import * as z from 'zod/mini';
 import { ExecutionRunIdSchema } from '@happier-dev/protocol/sessions/idsV1';
 import { SESSION_METADATA_LAYOUT_VERSION_V1, SessionOwnerMetadataEnvelopeV1Schema, SessionOwnerMetadataV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
-import { SessionReportsToV1Schema } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
+import { SessionManagerV1Schema } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { SessionAwarenessOriginV1Schema } from '@happier-dev/protocol/sessions/awareness/projectionV1';
-import type { SessionReportsToV1, SessionAwarenessOriginV1, SessionOwnerMetadataEnvelopeV1, SessionOwnerMetadataV1 } from '@happier-dev/protocol';
+import type { SessionManagerV1, SessionAwarenessOriginV1, SessionOwnerMetadataEnvelopeV1, SessionOwnerMetadataV1 } from '@happier-dev/protocol';
 
 type AttachSnapshotPayload = Readonly<{
-  reportsTo?: SessionReportsToV1;
+  manager?: SessionManagerV1;
   origin?: SessionAwarenessOriginV1;
   metadata: Readonly<Record<string, unknown>>;
   metadataVersion: number;
@@ -51,47 +51,47 @@ export type SessionAttachPayload =
   | LegacyAttachPayload;
 
 const AttachSnapshotSchema = z.object({
-  reportsTo: SessionReportsToV1Schema.optional(),
-  origin: SessionAwarenessOriginV1Schema.optional(),
+  manager: z.optional(SessionManagerV1Schema),
+  origin: z.optional(SessionAwarenessOriginV1Schema),
   metadata: z.record(z.string(), z.unknown()),
-  metadataVersion: z.number().int().nonnegative(),
-  agentState: z.record(z.string(), z.unknown()).nullable(),
-  agentStateVersion: z.number().int().nonnegative(),
-  pendingExecutionRunIds: z.array(ExecutionRunIdSchema).optional(),
-  metadataLayoutVersion: z.literal(SESSION_METADATA_LAYOUT_VERSION_V1).optional(),
-  ownerMetadata: SessionOwnerMetadataV1Schema.optional(),
-  ownerMetadataEnvelope: SessionOwnerMetadataEnvelopeV1Schema.optional(),
+  metadataVersion: z.number().check(z.int(), z.nonnegative()),
+  agentState: z.nullable(z.record(z.string(), z.unknown())),
+  agentStateVersion: z.number().check(z.int(), z.nonnegative()),
+  pendingExecutionRunIds: z.optional(z.array(ExecutionRunIdSchema)),
+  metadataLayoutVersion: z.optional(z.literal(SESSION_METADATA_LAYOUT_VERSION_V1)),
+  ownerMetadata: z.optional(SessionOwnerMetadataV1Schema),
+  ownerMetadataEnvelope: z.optional(SessionOwnerMetadataEnvelopeV1Schema),
 });
 
 const LegacyAttachPayloadSchema = z.object({
-  encryptionKeyBase64: z.string().min(1),
+  encryptionKeyBase64: z.string().check(z.minLength(1)),
   encryptionVariant: z.union([z.literal('legacy'), z.literal('dataKey')]),
-  v: z.undefined().optional(),
-  encryptionMode: z.undefined().optional(),
+  v: z.optional(z.undefined()),
+  encryptionMode: z.optional(z.undefined()),
 });
 
 const AttachPayloadV2PlainSchema = z.object({
   v: z.literal(2),
   encryptionMode: z.literal('plain'),
-  lastObservedMessageSeq: z.number().int().nonnegative().optional(),
-  initialTranscriptAfterSeq: z.number().int().nonnegative().optional(),
-  snapshot: AttachSnapshotSchema.optional(),
+  lastObservedMessageSeq: z.optional(z.number().check(z.int(), z.nonnegative())),
+  initialTranscriptAfterSeq: z.optional(z.number().check(z.int(), z.nonnegative())),
+  snapshot: z.optional(AttachSnapshotSchema),
 });
 
 const AttachPayloadV2E2eeSchema = z.object({
   v: z.literal(2),
   encryptionMode: z.literal('e2ee'),
-  encryptionKeyBase64: z.string().min(1),
+  encryptionKeyBase64: z.string().check(z.minLength(1)),
   encryptionVariant: z.union([z.literal('legacy'), z.literal('dataKey')]),
-  lastObservedMessageSeq: z.number().int().nonnegative().optional(),
-  initialTranscriptAfterSeq: z.number().int().nonnegative().optional(),
-  snapshot: AttachSnapshotSchema.optional(),
+  lastObservedMessageSeq: z.optional(z.number().check(z.int(), z.nonnegative())),
+  initialTranscriptAfterSeq: z.optional(z.number().check(z.int(), z.nonnegative())),
+  snapshot: z.optional(AttachSnapshotSchema),
 });
 
-export const SessionAttachPayloadV2Schema: z.ZodType<SessionAttachFilePayload> =
+export const SessionAttachPayloadV2Schema: z.ZodMiniType<SessionAttachFilePayload> =
   z.union([AttachPayloadV2PlainSchema, AttachPayloadV2E2eeSchema]);
 
-export const SessionAttachPayloadSchema: z.ZodType<SessionAttachPayload> = z.union([
+export const SessionAttachPayloadSchema: z.ZodMiniType<SessionAttachPayload> = z.union([
   // v2: explicit encryption mode. Parse before legacy because v2 e2ee carries legacy key fields too.
   SessionAttachPayloadV2Schema,
   // v1 (legacy): treat as e2ee.

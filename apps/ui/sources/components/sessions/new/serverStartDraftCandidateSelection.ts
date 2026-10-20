@@ -3,6 +3,7 @@ import type { MachineReachabilityScope } from '@/sync/domains/machines/reachabil
 import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { resolveMachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
 import { resolveExactServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachines';
+import { normalizeLocalPathForComparison } from '@/utils/path/resolvePathRelativeToRoot';
 import { formatSessionPath } from '@/utils/sessions/formatPathRelativeToHome';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 
@@ -54,6 +55,25 @@ export function resolveSessionServerStartCandidateSelection(params: Readonly<{
             scope: selectActiveServerAccountScopeForServer(params.accountScope ?? null, target.serverId),
         }).status === 'ready',
     };
+}
+
+/**
+ * The candidate the working directory currently stands for: same Home and Machine as the chosen target, same
+ * folder. A folder typed or browsed to that no candidate names selects none, while the chosen Machine and Home stay
+ * the target; the checkout rows never claim a directory the reader moved away from.
+ */
+export function findSessionServerStartCandidateForDirectory(params: Readonly<{
+    candidates: readonly Candidate[] | undefined;
+    target: SessionServerStartDraftTarget;
+    directory: string;
+}>): number {
+    const directory = normalizeLocalPathForComparison(params.directory);
+    if (directory === null || params.candidates === undefined) return -1;
+    return params.candidates.findIndex((candidate) => (
+        candidate.serverId === params.target.serverId
+        && candidate.machineId === params.target.machineId
+        && normalizeLocalPathForComparison(candidate.rootPath) === directory
+    ));
 }
 
 /**

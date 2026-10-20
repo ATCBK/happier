@@ -101,7 +101,14 @@ function assertSchemaSemantics(schema: Readonly<Record<string, unknown>>): void 
   }
 }
 
+// Retain snapshots only for their input's lifetime. Mutable declarations still
+// pass admission on every read; unchanged bytes keep one immutable identity for
+// the compiler, and edits replace that identity rather than reusing stale code.
+const normalizedPluginJsonSchemas = new WeakMap<object, PluginJsonSchemaV2>();
+
 export function normalizePluginJsonSchema(schema: object): PluginJsonSchemaV2 {
+  const previous = normalizedPluginJsonSchemas.get(schema);
+  if (previous === schema) return previous;
   let normalized: unknown;
   try {
     normalized = cloneStrictPluginJsonValue(schema, 'schema');
@@ -128,7 +135,11 @@ export function normalizePluginJsonSchema(schema: object): PluginJsonSchemaV2 {
   // JSON owner. Zod only verifies this established value; returning its
   // parser output would create a second mutable projection.
   assertSchemaSemantics(normalized as Readonly<Record<string, unknown>>);
-  return normalized as PluginJsonSchemaV2;
+  if (previous && pluginJsonValuesEqual(previous, normalized)) return previous;
+  const jsonSchema = normalized as PluginJsonSchemaV2;
+  normalizedPluginJsonSchemas.set(schema, jsonSchema);
+  normalizedPluginJsonSchemas.set(jsonSchema, jsonSchema);
+  return jsonSchema;
 }
 
 export function isValidPluginJsonSchemaValue(validate: PluginJsonSchemaValidator, value: unknown): boolean {
@@ -210,6 +221,34 @@ export function createProtocolStoredReadSchemaFromPreparedProjection<TOutput>(sc
   return createTypedProtocolStoredReader(schema, value => projection.safeParse(value));
 }
 
+/** @internal The existing stored-reader projection also supplies its JSON admission document. */
+export function projectProtocolStoredReadJsonSchema(jsonSchema: object): Readonly<{ document: object; needsProjection: boolean }> {
+  const document = JSON.parse(JSON.stringify(jsonSchema)) as object;
+  let needsProjection = false;
+  const openObjects = (raw: unknown): void => {
+    if (!isProtocolRecord(raw)) return;
+    // Typed additional properties are declared map data, not unknown fields.
+    if (raw.type === 'object' && raw.properties && !isProtocolRecord(raw.additionalProperties)) {
+      needsProjection = true;
+      raw.additionalProperties = true;
+    } else if (raw.type === 'object' && raw.properties && isProtocolRecord(raw.additionalProperties)
+      && Object.keys(raw.additionalProperties).length === 0) {
+      needsProjection = true;
+      raw.additionalProperties = true;
+    }
+    for (const key of ['properties', 'definitions', '$defs']) {
+      if (isProtocolRecord(raw[key])) Object.values(raw[key]).forEach(openObjects);
+    }
+    for (const key of ['anyOf', 'oneOf', 'allOf']) {
+      if (Array.isArray(raw[key])) raw[key].forEach(openObjects);
+    }
+    openObjects(raw.items);
+    openObjects(raw.additionalProperties);
+  };
+  openObjects(document);
+  return { document, needsProjection };
+}
+
 /** Reuses the canonical DSL parser and normalization; current inputs stay closed. */
 export function createProtocolStoredReadSchema<TOutput>(schema: Readonly<{
   jsonSchema: object;
@@ -222,33 +261,12 @@ export function createProtocolStoredReadSchema<TOutput>(schema: Readonly<{
   return createTypedProtocolStoredReader(schema, value => {
     if (needsProjection === false) return schema.safeParse(value);
     if (!projection) {
-      needsProjection = false;
-      const document = JSON.parse(JSON.stringify(schema.jsonSchema)) as object;
-      const openObjects = (raw: unknown): void => {
-        if (!isProtocolRecord(raw)) return;
-        // Typed additional properties are declared map data, not unknown fields.
-        if (raw.type === 'object' && raw.properties && !isProtocolRecord(raw.additionalProperties)) {
-          needsProjection = true;
-          raw.additionalProperties = true;
-        } else if (raw.type === 'object' && raw.properties && isProtocolRecord(raw.additionalProperties)
-          && Object.keys(raw.additionalProperties).length === 0) {
-          needsProjection = true;
-          raw.additionalProperties = true;
-        }
-        for (const key of ['properties', 'definitions', '$defs']) {
-          if (isProtocolRecord(raw[key])) Object.values(raw[key]).forEach(openObjects);
-        }
-        for (const key of ['anyOf', 'oneOf', 'allOf']) {
-          if (Array.isArray(raw[key])) raw[key].forEach(openObjects);
-        }
-        openObjects(raw.items);
-        openObjects(raw.additionalProperties);
-      };
-      openObjects(document);
+      const projected = projectProtocolStoredReadJsonSchema(schema.jsonSchema);
+      needsProjection = projected.needsProjection;
       // Atomic owners may normalize before checking their exported bounds.
       // With no object fields to drop, only their incumbent parser is needed.
       if (!needsProjection) return schema.safeParse(value);
-      const prepared = rehydrateCanonicalProtocolComposableSchema(document);
+      const prepared = rehydrateCanonicalProtocolComposableSchema(projected.document);
       if (!prepared) return createProtocolSingleFailure('invalid_schema', 'Stored Protocol projection is not a canonical composable schema');
       projection = prepared;
     }

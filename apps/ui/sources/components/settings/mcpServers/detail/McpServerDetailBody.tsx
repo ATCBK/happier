@@ -178,6 +178,7 @@ export function useMcpServerDetail(
     tests,
     tools,
     update,
+    execution: updateExecution,
     signIn,
     statuses,
     machineStatuses,

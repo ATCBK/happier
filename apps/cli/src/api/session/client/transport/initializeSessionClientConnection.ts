@@ -67,6 +67,7 @@ export function initializeSessionClientConnection(
         flushDurableSessionMutationsOnReconnect: () => Promise<void>;
         replayLatestSessionPresenceOnReconnect?: () => void;
         reofferAcceptedProviderInputSettlementsAfterConnection?: () => void;
+        recoverAppliedPermissionCompletions?: () => Promise<void>;
         markConnected: () => Readonly<{ reason: 'connect' | 'reconnect'; epoch: number }> | 'connect' | 'reconnect';
         setSessionSyncPendingInputServerContractResult?: (
             result: SessionClientConnectionContractResult | null,
@@ -161,6 +162,9 @@ export function initializeSessionClientConnection(
             const connected = typeof markedConnected === 'string'
                 ? { reason: markedConnected, epoch: 0 }
                 : markedConnected;
+            await params.recoverAppliedPermissionCompletions?.().catch(() => {
+                logger.infoFile('[API] session_permission_completion_recovery_failed', { operation: 'update-state' });
+            });
             const probeScope = sessionConnectionSupervisor.captureProbeReportScope?.();
             const contractProbe = {
                 sessionConnectionEpoch: connected.epoch,

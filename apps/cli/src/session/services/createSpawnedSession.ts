@@ -5,6 +5,7 @@ import { buildSpawnedFirstTurnLocalId, buildSessionSpawnInitialInputLocalIdV1 } 
 import { sessionCreationCorrespondenceMatchesV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
 import { migrateRetainedSessionWorkContextV1 } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 import { readSessionAccessProjectionRoleV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
+import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { prepareSessionMemoryInheritance } from '@/agent/prompting/coding/sessionPromptStack';
 import { DEFAULT_SESSION_WEBHOOK_TIMEOUT_MS, DEFAULT_SPAWN_INITIAL_INPUT_ADMISSION_TIMEOUT_MS } from '@happier-dev/protocol/sessions/creation/sessionSpawnBudget';
 import { SessionForkFilesNotCopiedV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
@@ -53,7 +54,7 @@ import { resolveSessionUserMessageRequestedAction } from './resolveSessionUserMe
 import { abandonSpawnedSessionBestEffort, awaitSpawnedSessionId, type SpawnSessionNonceResolver } from './awaitSpawnedSessionId';
 import { archiveSessionOnceInactive } from './archiveSessionOnceInactive';
 import { requestSessionStop } from './requestSessionStop';
-import { createStableSpawnNonce } from '@/session/shared/spawnNonce';
+import { createSessionCreationSpawnNonce } from '@/session/shared/spawnNonce';
 import { seedForkVisualsBestEffort } from '@/session/fork/seedForkVisuals';
 import {
   createConnectedServiceChildLaunchContext,
@@ -68,7 +69,7 @@ import {
 export type DirectSpawnedSessionTransport = Readonly<{
   spawn: (
     request: SpawnDaemonSessionRequest,
-    options?: Readonly<{ signal?: AbortSignal }> & Pick<SpawnSessionOptions, 'creationAuthorization' | 'callerInputConstraints' | 'requesterSessionBootstrap'>,
+    options?: Readonly<{ signal?: AbortSignal; localActionContext?: import('@/api/rpc/types').RpcLocalActionContext }> & Pick<SpawnSessionOptions, 'creationAuthorization' | 'callerInputConstraints' | 'requesterSessionBootstrap'>,
   ) => Promise<unknown>;
   resolveSpawnSessionByNonce: (
     spawnNonce: string,
@@ -143,7 +144,7 @@ export type CreateSpawnedSessionParams = Readonly<import('@happier-dev/protocol'
   initialTriggers?: readonly import('@happier-dev/protocol').SessionInitialTriggerAdmissionV1[];
   /** Birth-only preparation; an authenticated creation-key rejoin never re-admits drafts. */
   prepareInitialTriggers?: () => Promise<readonly import('@happier-dev/protocol').SessionInitialTriggerAdmissionV1[]>;
-  reportsTo?: import('@happier-dev/protocol').SessionReportsToV1;
+  manager?: import('@happier-dev/protocol').SessionManagerV1;
   /** Canonical Action host's resolved snapshot; never accepted from raw public Action input. */
   initialSessionRolesV1?: import('@happier-dev/protocol').SessionRolesV1;
   primaryTeamId?: string | null;
@@ -212,6 +213,7 @@ export type CreateSpawnedSessionParams = Readonly<import('@happier-dev/protocol'
   | 'permissionMode'
   | 'allowedTools'
   | 'unlistedTools'
+  | 'workspaceWrites'
   | 'creationAuthorization'
   | 'callerInputConstraints'
   | 'permissionModeUpdatedAt'
@@ -610,7 +612,7 @@ async function dispatchReplaySeededSpawn(args: Readonly<{
     placementOrigin: _creationOwnedPlacementOrigin,
     initialAccess: _creationOwnedInitialAccess,
     initialTriggers: _creationOwnedInitialTriggers,
-    reportsTo: _creationOwnedReportsTo,
+    manager: _creationOwnedManager,
     initialSessionRolesV1: _creationOwnedRoles,
     identity: _creationOwnedIdentity,
     memoryEnabled: _creationOwnedMemoryEnabled,
@@ -619,6 +621,8 @@ async function dispatchReplaySeededSpawn(args: Readonly<{
     originKind: _originKind,
     originSessionId: _originSessionId,
     originRunId: _originRunId,
+    discussionParticipant: _discussionParticipant,
+    discussionParticipantLaunch: _discussionParticipantLaunch,
     workDepth: _workDepth,
     ...attachSpawnRequestInput
   } = args.spawnRequestInput;
@@ -698,12 +702,14 @@ async function createSeededSpawnedSession(args: Readonly<{
   // label and writes the same `tag` metadata field this creation already owns.
   // The two never co-occur: that replay path carries no source recipe.
   const accountSettings = params.accountSettings ?? await resolveAvailableAccountSettings({ credentials: params.credentials });
-  const isWorker = Boolean(params.initialSessionRolesV1 || params.reportsTo);
+  const isWorker = Boolean(params.initialSessionRolesV1 || params.manager);
   const replayMetadata = { ...seededCreation.metadata };
   // Workers use their own Profile, including an explicit or implicit no-Profile choice.
   if (isWorker) delete replayMetadata.profileId;
   const created = await getOrCreateSessionByTag({
-    ...(params.creationAuthorization ? { creationAuthorizationToken: params.creationAuthorization.token } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.creationAuthorization ? { creationAuthorizationToken: params.creationAuthorization.token,
+      prepareCreationAuthorizationProof: params.creationAuthorization.prepareRequestProof } : {}),
     ...pickSessionCreateOriginFields(params),
     credentials: params.credentials,
     tag,
@@ -726,7 +732,7 @@ async function createSeededSpawnedSession(args: Readonly<{
     agentState: null,
     ...(params.initialAccess !== undefined ? { initialAccess: params.initialAccess } : {}),
     ...(params.initialTriggers !== undefined ? { initialTriggers: params.initialTriggers } : {}),
-    ...(params.reportsTo !== undefined ? { reportsTo: params.reportsTo } : {}),
+    ...(params.manager !== undefined ? { manager: params.manager } : {}),
     ...(params.primaryTeamId !== undefined ? { primaryTeamId: params.primaryTeamId } : {}),
     ...(params.teamCredentialBindings !== undefined ? { teamCredentialBindings: params.teamCredentialBindings } : {}),
     ...(params.organizationPlacement ? { organizationPlacement: params.organizationPlacement } : {}),
@@ -940,9 +946,7 @@ export async function createSpawnedSession(
   // for settlement rather than inventing a generated nonce that cleanup could
   // later mistake for an abandoned one-off attempt.
   const creationOwnedSpawnNonce = params.sessionCreationTag
-    ? createStableSpawnNonce('session.spawn_new.creation', {
-      sessionCreationTag: params.sessionCreationTag,
-    })
+    ? createSessionCreationSpawnNonce(params.sessionCreationTag)
     : null;
   // A public creation key is the durable retry identity. The transport request
   // id only distinguishes otherwise-unkeyed calls and must never change the
@@ -980,7 +984,7 @@ export async function createSpawnedSession(
     ...(params.managedDirectorySeed ? { managedDirectorySeed: params.managedDirectorySeed } : {}),
     ...(params.initialAccess !== undefined ? { initialAccess: params.initialAccess } : {}),
     ...(params.initialTriggers !== undefined ? { initialTriggers: params.initialTriggers } : {}),
-    ...(params.reportsTo !== undefined ? { reportsTo: params.reportsTo } : {}),
+    ...(params.manager !== undefined ? { manager: params.manager } : {}),
     ...(params.initialSessionRolesV1 !== undefined ? { initialSessionRolesV1: params.initialSessionRolesV1 } : {}),
     ...(params.primaryTeamId !== undefined ? { primaryTeamId: params.primaryTeamId } : {}),
     ...(params.teamCredentialBindings !== undefined ? { teamCredentialBindings: params.teamCredentialBindings } : {}),
@@ -1003,6 +1007,7 @@ export async function createSpawnedSession(
     ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
     ...(params.allowedTools !== undefined ? { allowedTools: [...params.allowedTools] } : {}),
     ...(params.unlistedTools !== undefined ? { unlistedTools: params.unlistedTools } : {}),
+    ...(params.workspaceWrites !== undefined ? { workspaceWrites: params.workspaceWrites } : {}),
     ...(typeof params.permissionModeUpdatedAt === 'number' && Number.isFinite(params.permissionModeUpdatedAt)
       ? { permissionModeUpdatedAt: params.permissionModeUpdatedAt }
       : {}),
@@ -1055,6 +1060,7 @@ export async function createSpawnedSession(
       throw createCodedError(
         'Deterministic Session creation requires tag lookup support',
         SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
+        { incompatibleTarget: { reason: 'creation_lookup_unavailable' } },
       );
     }
     if (lookup.sessions.length > 1) {
@@ -1063,7 +1069,7 @@ export async function createSpawnedSession(
         'creation_conflict',
       );
     }
-    const existing = lookup.sessions[0];
+    let existing = lookup.sessions[0];
     // An archived row left by failed launch cleanup is not evidence that the
     // runner survived its refusal. Preserve that refusal and do not attach
     // initial input. Ordinary same-key preflight retains its identity contract.
@@ -1110,6 +1116,30 @@ export async function createSpawnedSession(
           'creation_conflict',
           { sessionId: existing.id },
         );
+      }
+      if ((existing.archivedAt !== null && existing.archivedAt !== undefined)
+        || params.discussionParticipant || params.sessionCreationCorrespondence.recipe.discussionParticipant) {
+        // Authentication proves identity, not a usable carrier or current
+        // Discussion membership. Ordinary tag rejoin owns same-id restoration
+        // and live-slot validation before input can attach.
+        const current = await getOrCreateSessionByTag({
+          ...(params.signal ? { signal: params.signal } : {}),
+          ...pickSessionCreateOriginFields(params),
+          credentials: params.credentials,
+          tag: params.sessionCreationTag,
+          metadata: buildCommittedLaunchMetadata({ options: spawnRequest, directory: params.directory,
+            ...(params.accountSettings ? { accountSettings: params.accountSettings } : {}),
+          }),
+          agentState: null,
+          accountEncryptionCurrentness,
+          ...(params.creationAuthorization ? { creationAuthorizationToken: params.creationAuthorization.token,
+            prepareCreationAuthorizationProof: params.creationAuthorization.prepareRequestProof } : {}),
+        });
+        if (current.session.id !== existing.id) {
+          throw createCodedError('Session tag rejoin changed its committed Session', 'creation_conflict',
+            { sessionId: existing.id });
+        }
+        existing = current.session;
       }
       let organizationPlacement = params.sessionCreationCorrespondence.recipe.organization;
       try {
@@ -1166,7 +1196,7 @@ export async function createSpawnedSession(
   // Rejoined and nonce-resumed Sessions retain their birth context. Only a
   // genuinely fresh worker captures its lead's current memory attachments.
   let inheritedMemory: Awaited<ReturnType<typeof prepareSessionMemoryInheritance>> | undefined;
-  const leadSessionId = params.reportsTo?.sessionId
+  const leadSessionId = readSessionManagerSessionIdV1(params)
     ?? params.initialSessionRolesV1?.inheritedFrom
     ?? (params.originKind === 'run_step' ? params.originSessionId : undefined);
   if (params.resumeOnly !== true && leadSessionId) {
@@ -1198,7 +1228,8 @@ export async function createSpawnedSession(
     ? await params.prepareInitialTriggers()
     : params.initialTriggers;
   const hasInitialTriggers = (preparedInitialTriggers?.length ?? 0) > 0;
-  const hasSessionToolPolicy = params.allowedTools !== undefined || params.unlistedTools !== undefined;
+  const hasSessionToolPolicy = params.allowedTools !== undefined || params.unlistedTools !== undefined
+    || params.workspaceWrites !== undefined;
   if (params.resumeOnly !== true && (params.initialSessionRolesV1 || hasInitialTriggers || inheritedMemory || hasSessionToolPolicy)
     && !params.directTransport && !params.machineActionTransport) {
     // The moving 0.2 predecessor strips these unknown birth fields. The current
@@ -1215,10 +1246,10 @@ export async function createSpawnedSession(
         });
       if (hasInitialTriggers) {
         throw createCodedError('The selected daemon requires an update to create a Session with initial triggers',
-          SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE);
+          SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE, { incompatibleTarget: { reason: 'initial_trigger_protocol_unavailable' } });
       }
       if (inheritedMemory && !params.initialSessionRolesV1) throw createCodedError('The selected daemon requires an update to inherit Session Context memory',
-        SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE);
+        SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE, { incompatibleTarget: { reason: 'context_memory_protocol_unavailable' } });
       throw createCodedError('The selected daemon requires an update to create a Session with inherited roles',
         SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED, {
           kind: 'update_required', operation: 'session.spawn_new', component: 'daemon',
@@ -1273,6 +1304,7 @@ export async function createSpawnedSession(
             ? 'Provider-bound session creation is unavailable because the selected machine does not support this request'
             : 'Exact-machine session creation is unavailable because the selected machine does not support this request',
           SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
+          { incompatibleTarget: { reason: 'spawn_rpc_unavailable' } },
         );
       }
       const requestDisposition = readMachineRpcRequestDisposition(error);
@@ -1298,9 +1330,9 @@ export async function createSpawnedSession(
   };
 
   let seededCreation: SeededSessionCreationV1 | undefined = params.replaySeededCreation;
-  if (params.attestedContext && !seededCreation) {
+  if ((params.attestedContext || params.discussionParticipant) && !seededCreation) {
     const tag = params.sessionCreationTag;
-    if (!tag) throw createCodedError('Attested Session creation requires its canonical creation tag', SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST);
+    if (!tag) throw createCodedError('Session birth provenance requires its canonical creation tag', SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST);
     seededCreation = { tag, metadata: buildCommittedLaunchMetadata({
       options: birthSpawnRequest, directory: params.directory,
       ...(params.agentModeId ? { agentModeId: params.agentModeId, agentModeUpdatedAt: Date.now() } : {}),
@@ -1414,7 +1446,8 @@ export async function createSpawnedSession(
         reason: settledSpawn.errorMessage,
         resolveSpawnSessionByNonce,
         stopSession: async (sessionId) => {
-          const stopped = await requestSessionStop({ credentials: params.credentials, idOrPrefix: sessionId });
+          const stopped = await requestSessionStop({ credentials: params.credentials, idOrPrefix: sessionId,
+            stopIntent: 'lifecycle_control' });
           return stopped.ok && stopped.stopped;
         },
         archiveSession: async (sessionId) => {
@@ -1443,7 +1476,7 @@ export async function createSpawnedSession(
     throw createCodedError(
       'Spawn settlement did not include the authoritative create-or-rejoin outcome',
       SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
-      { sessionId },
+      { sessionId, incompatibleTarget: { reason: 'creation_settlement_unavailable' } },
     );
   }
   // The Session row is committed and settled here; initial input is submitted

@@ -12,15 +12,17 @@ import { hasProfileTransferSourceV1, readEffectiveProfileSecretBindingsV1 } from
 import type { ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordSchemaV1';
 import type { Tx } from '@/storage/inTx';
 import type { TeamOperationAuthenticationContext } from '@/app/teams/actorContext';
-import { inTx } from '@/storage/inTx';
+import { inTx, type TransactionResult } from '@/storage/inTx';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
+import { AccountSettingsPublicationConflict, validateAccountSettingsVersionAtPublicationInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
 import { openPlainAccountSettingsDbValue, PlainAccountSettingsStorageUnavailableError } from '@/app/encryption/accountSettingsStorage';
 import { PROFILE_ACCOUNT_KV_PREFIX, PROFILE_TRANSFER_ACCOUNT_KV_KEY, parseProfilePhysicalKey } from '@/app/kv/accountScopedKv';
 import {
     mutateReservedAccountScopedKvRowInTx, listReservedAccountScopedKvRowsInTx,
+    readReservedAccountScopedKvRowMutationConflict,
 } from '@/app/kv/reservedAccountScopedKvRow';
 import { readArtifactForCallerInTx, projectPlainArtifactSharingResourceV1 } from '@/app/artifacts/artifactAccessService';
-import { listSavedSecretResourcesForAccountInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
+import { readSavedSecretResourcesForAccountInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
 import { profileRecordDomain, mutateProfileRowsInTx } from './profileRows';
 import { profileTransferDomain, readProfileTransferControlInTx, markProfileTransferChangedInTx } from './profileTransferControl';
 export { profileTransferDomain, readProfileTransferControlInTx, profileTransferControlReadResponseV1, markProfileTransferChangedInTx } from './profileTransferControl';
@@ -93,7 +95,8 @@ async function verifyProfileTransferInventoryInTx(tx: Tx, input: Readonly<{
         return { status: 'inventory-incomplete' };
     }
     const secretInventory = input.inventory.filter(entry => entry.kind === 'saved_secret');
-    const secrets = secretInventory.length > 0 ? await listSavedSecretResourcesForAccountInTx(tx, input.accountId, input.authentication) : [];
+    const secrets = secretInventory.length > 0
+        ? await readSavedSecretResourcesForAccountInTx(tx, input.accountId, input.authentication, secretInventory.map(entry => entry.id)) : [];
     for (const entry of secretInventory) {
         const ref = formatSharedSavedSecretRefV1(entry.id);
         const resource = secrets.find(secret => 'ref' in secret && secret.ref === ref);
@@ -111,9 +114,11 @@ export class ProfileTransferTransactionAbort extends Error {
 /** Preparation imports and its proof commit together; activation only changes the fenced proof. */
 export async function mutateProfileTransferInTx(tx: Tx, input: Readonly<{
     accountId: string; mutation: ProfileTransferMutationV1; authentication?: TeamOperationAuthenticationContext;
-}>): Promise<ProfileTransferMutationResponseV1> {
+}>): Promise<Exclude<ProfileTransferMutationResponseV1, { status: 'updated' }>
+    | (Omit<Extract<ProfileTransferMutationResponseV1, { status: 'updated' }>, 'cursor'>
+        & TransactionResult<Extract<ProfileTransferMutationResponseV1, { status: 'updated' }>>)> {
     const mutation = ProfileTransferMutationV1Schema.parse(input.mutation);
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
     if (fence.status === 'account_not_found') return { status: 'account-not-found' };
     if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent', reason: fence.reason };
     const current = await readProfileTransferControlInTx(tx, input);
@@ -125,6 +130,7 @@ export async function mutateProfileTransferInTx(tx: Tx, input: Readonly<{
     const revision = current.status === 'absent' ? 'absent' : current.revision;
     if (revision !== mutation.expectedRevision) return { status: 'conflict', revision: revision === 'absent' ? -1 : revision };
     if (fence.account.settingsVersion !== mutation.sourceSettingsVersion) return { status: 'settings-conflict', revision: fence.account.settingsVersion };
+    validateAccountSettingsVersionAtPublicationInTx(tx, { accountId: input.accountId, expectedVersion: mutation.sourceSettingsVersion });
     try { assertProfileTransferContentForModeV1(mutation.content, fence.account.currentness.encryptionMode); }
     catch { return { status: 'account-mode-mismatch' }; }
     if (mutation.operation === 'activate' && current.status !== 'present') {
@@ -174,6 +180,10 @@ export async function mutateProfileTransfer(input: Readonly<{
     try { return await inTx(tx => mutateProfileTransferInTx(tx, input), { /* Profile transfer validates shared Artifact and Secret inventory before activation. */ isolationLevel: "Serializable" }); }
     catch (error) {
         if (error instanceof ProfileTransferTransactionAbort) return error.result;
+        const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+        if (conflict) return conflict;
+        if (error instanceof AccountSettingsPublicationConflict) return error.result.status === 'version_mismatch'
+            ? { status: 'settings-conflict', revision: error.result.currentVersion } : { status: 'invalid-stored-content' };
         throw error;
     }
 }

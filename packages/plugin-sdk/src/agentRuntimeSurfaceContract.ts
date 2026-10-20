@@ -669,6 +669,7 @@ type _SessionHostServicesMustStayNarrowAndProviderNeutral = AssertTrue<
   Equal<
     keyof AgentSessionHostServices,
     | 'sessionHooks'
+    | 'nativeLaunch'
     | 'transcripts'
     | 'accountUsage'
     | 'mcp'

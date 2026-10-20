@@ -19,15 +19,24 @@ export const ApprovalDecisionFooter = React.memo(function ApprovalDecisionFooter
     approveAccessibilityHint?: string;
     disabledReason?: TranscriptPermissionDisabledReason;
     isDeciding: boolean;
-    onApprove: () => void;
-    onReject: () => void;
     testIDPrefix?: string;
     requestId?: string;
-}>) {
+}> & (
+    | Readonly<{ onApprove: () => void; onReject: () => void; onDismiss?: undefined }>
+    /** A settled failure offers only this: closing the card on this device, never a decision. */
+    | Readonly<{ onDismiss: () => void; onApprove?: undefined; onReject?: undefined }>
+)) {
     const disabled = props.disabled === true || props.decisionDisabled === true || props.isDeciding;
     const approveDisabled = disabled || props.approveDisabled === true;
     const testIDPrefix = props.testIDPrefix ?? 'approval-prompt';
     const primaryAnswerRef = usePendingPromptPrimaryFocus(props.requestId ?? null, !approveDisabled && !props.disabledReason);
+
+    if (props.onDismiss) {
+        // The bar's secondary pill (Reject's own weight) keeps the lone action on the card's text column; its plain
+        // text form insets the word from that column.
+        return <ApprovalDecisionBar size="small"
+            reject={{ label: t('approvals.dismiss'), testID: `${testIDPrefix}-dismiss`, onPress: props.onDismiss }} />;
+    }
 
     if (props.disabledReason === 'inactive') return null;
 

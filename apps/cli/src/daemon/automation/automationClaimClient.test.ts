@@ -37,6 +37,8 @@ const START_CURRENTNESS = {
   contentKeyFingerprint: null,
 };
 
+const CLAIM_LEASE_EXPIRES_AT = 1_723_247_231_000;
+
 const DEFAULT_WORKER_SETTINGS = {
   maxActiveRunsPerMachine: DEFAULT_AUTOMATION_V3_MAX_ACTIVE_RUNS_PER_MACHINE,
 } as const;
@@ -95,10 +97,10 @@ describe('createAutomationClaimClient', () => {
       settings: DEFAULT_WORKER_SETTINGS, runLifecycleSources: [] });
   });
 
-  it.each(['direct', 'automation'] as const)('retains consumed Resume intent from a %s V3 claim', async origin => {
+  it.each(['direct', 'automation'] as const)('retains consumed Resume intent and server expiry when rejoining a %s V3 claim', async origin => {
     // HTTP is the system boundary; the strict parser and private worker
     // normalization remain real so neither can silently discard the intent.
-    const common = { id: 'resumed-run', attempt: 2, revision: 3, recipeKind: 'workflow-v2',
+    const common = { id: 'resumed-run', attempt: 2, revision: 3, leaseExpiresAt: CLAIM_LEASE_EXPIRES_AT, recipeKind: 'workflow-v2',
       triggerId: null, triggerRetired: false, workflowResumeRequestedRevision: 2 };
     axiosGet.mockResolvedValue({ data: { assignments: [], settings: DEFAULT_WORKER_SETTINGS } });
     axiosPost.mockResolvedValue({ data: {
@@ -110,10 +112,11 @@ describe('createAutomationClaimClient', () => {
       automation: origin === 'direct' ? null : { id: 'automation-1', name: 'Resumed', enabled: true },
       accountCurrentness: CLAIM_CURRENTNESS,
     } });
+    axiosPost.mockRejectedValueOnce(Object.assign(new Error('response_lost'), { code: 'ECONNABORTED' }));
     const client = createAutomationClaimClient({ token: 'token' });
     await client.fetchAssignments('machine-1');
     expect(await client.claimRun({ machineId: 'machine-1', leaseDurationMs: 30_000 }))
-      .toMatchObject({ run: { id: 'resumed-run', workflowResumeRequestedRevision: 2,
+      .toMatchObject({ run: { id: 'resumed-run', workflowResumeRequestedRevision: 2, leaseExpiresAt: CLAIM_LEASE_EXPIRES_AT,
         workflowAcceptedSnapshotEnvelope: 'accepted' } });
   });
 
@@ -121,7 +124,7 @@ describe('createAutomationClaimClient', () => {
     axiosGet.mockResolvedValue({ data: { assignments: [], settings: DEFAULT_WORKER_SETTINGS } });
     axiosPost.mockResolvedValue({ data: {
       run: {
-        id: 'scoped-run', automationId: 'scoped-automation', attempt: 1, revision: 0,
+        id: 'scoped-run', automationId: 'scoped-automation', attempt: 1, revision: 0, leaseExpiresAt: CLAIM_LEASE_EXPIRES_AT,
         recipeKind: 'legacy', triggerId: null, triggerRetired: false,
         cause: { kind: 'manual', invokedAt: 1_723_247_201_000 },
         executionInputEnvelope: 'frozen-input',
@@ -229,7 +232,7 @@ describe('createAutomationClaimClient', () => {
         id: 'run-1',
         automationId: 'automation-1',
         attempt: 1,
-        revision: 0,
+        revision: 0, leaseExpiresAt: CLAIM_LEASE_EXPIRES_AT,
         recipeKind: 'legacy',
         triggerId: null,
         triggerRetired: false,
@@ -253,7 +256,7 @@ describe('createAutomationClaimClient', () => {
         id: 'run-1',
         automationId: 'automation-1',
         attempt: 1,
-        revision: 0,
+        revision: 0, leaseExpiresAt: CLAIM_LEASE_EXPIRES_AT,
         recipeKind: 'legacy',
         triggerId: null,
         cause: { kind: 'manual', invokedAt: 1_723_247_201_000 },
@@ -348,7 +351,7 @@ describe('createAutomationClaimClient', () => {
           id: 'run-parent-turn',
           automationId: 'automation-parent-turn',
           attempt: 1,
-          revision: 0,
+          revision: 0, leaseExpiresAt: CLAIM_LEASE_EXPIRES_AT,
           recipeKind: 'legacy',
           triggerId: 'trigger-parent-turn',
           triggerRetired: false,
@@ -369,7 +372,7 @@ describe('createAutomationClaimClient', () => {
         id: 'run-parent-turn',
         automationId: 'automation-parent-turn',
         attempt: 1,
-        revision: 0,
+        revision: 0, leaseExpiresAt: CLAIM_LEASE_EXPIRES_AT,
         recipeKind: 'legacy',
         triggerId: 'trigger-parent-turn',
         cause,
@@ -413,7 +416,7 @@ describe('createAutomationClaimClient', () => {
           id: 'run-final',
           automationId: 'automation-final',
           attempt: 1,
-          revision: 0,
+          revision: 0, leaseExpiresAt: CLAIM_LEASE_EXPIRES_AT,
           recipeKind: 'legacy',
           triggerId: null,
           triggerRetired: false,
@@ -469,6 +472,7 @@ describe('createAutomationClaimClient', () => {
     axiosGet.mockResolvedValue({ data: { assignments: [], settings: DEFAULT_WORKER_SETTINGS } });
     axiosPost
       .mockResolvedValueOnce({ data: START_RESPONSE })
+      .mockResolvedValueOnce({ data: { ok: true, leaseExpiresAt: 123_456 } })
       .mockResolvedValue({ data: undefined });
 
     const client = createAutomationClaimClient({ token: 'token-z' });
@@ -481,7 +485,8 @@ describe('createAutomationClaimClient', () => {
       attempt: 2,
       accountCurrentness: CLAIM_CURRENTNESS,
     })).resolves.toEqual(START_CURRENTNESS);
-    await client.heartbeatRun({ protocol: 'v3', runId: 'run/1', machineId: 'm1', attempt: 2, leaseDurationMs: 12_000 });
+    await expect(client.heartbeatRun({ protocol: 'v3', runId: 'run/1', machineId: 'm1', attempt: 2, leaseDurationMs: 12_000 }))
+      .resolves.toBe(123_456);
     await client.succeedRun({
       protocol: 'v3',
       runId: 'run/1',
@@ -562,7 +567,7 @@ describe('createAutomationClaimClient', () => {
             id: 'run-v3',
             automationId: 'automation-event',
             attempt: 1,
-            revision: 0,
+            revision: 0, leaseExpiresAt: CLAIM_LEASE_EXPIRES_AT,
             recipeKind: 'legacy',
             triggerId: 'trigger-event',
             triggerRetired: false,

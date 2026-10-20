@@ -1,9 +1,10 @@
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { builtinModules } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'vite';
+import { CLI_RUNTIME_SIDECAR_ENTRIES } from '@happier-dev/cli-common/componentArtifacts/cliRuntimeSidecars';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -57,6 +58,11 @@ describe('daemon plugin development root ownership', () => {
     await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({ name: '@happier-dev/plugins-codex', type: 'module' }));
     await writeFile(join(pluginRoot, 'dist/index.js'), 'export async function activate() {}\n');
     await symlink(join(repoRoot, 'node_modules'), join(root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    // The real bundled owner imports the CLI's runtime sidecars. Keep this
+    // disposable bundle layout faithful to that canonical file contract.
+    for (const entry of CLI_RUNTIME_SIDECAR_ENTRIES) {
+      await cp(join(repoRoot, 'apps/cli/scripts', ...entry), join(cliRoot, 'scripts', ...entry), { recursive: true });
+    }
     const previousRoot = process.env.HAPPIER_STACK_CLI_ROOT_DIR;
     try {
       await build({
@@ -156,13 +162,12 @@ describe('daemon plugin development root ownership', () => {
       expect(log).toContain(missingDependencyPath);
       expect(log).toMatch(/dependency prep failed in \d+\.\d s/u);
       expect(log).toMatch(/"elapsedMs":\d/u);
-      for (const args of [
-        ['install', sourceRoot, '--dev', '--json'],
-        ['dev', sourceRoot, '--json'],
-      ]) {
+      // Install is now an approval-owned Action, covered at that public owner;
+      // only the dev command directly controls the development-root owner.
+      {
         const output = captureStdoutJsonOutput();
         try {
-          await handlePluginsCommand(args, {
+          await handlePluginsCommand(['dev', sourceRoot, '--json'], {
             ensureDaemon: async () => undefined,
             controlPluginDevelopment: async (request) => await owner.control(request),
           });

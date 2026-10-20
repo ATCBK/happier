@@ -1,6 +1,8 @@
 import type { SessionAwarenessProjectionV1 } from './projectionV1.js';
 import { isSessionAwarenessContentReadableV1 } from './availability.js';
-import type { SessionReportsV1 } from '../relations/sessionReportsToV1.js';
+import type { SessionManagedSessionsV1 } from '../follow/sessionManagerV1.js';
+import { lazyZodSchema } from '../../lazyZodSchema.js';
+import { z } from 'zod/mini';
 
 export type SessionAwarenessPresentationFactsV1 = Readonly<{
   runtime: SessionAwarenessProjectionV1['runtime'];
@@ -12,11 +14,13 @@ export type SessionAwarenessPresentationFactsV1 = Readonly<{
   }>;
 }>;
 
-export type SessionAwarenessPresentationStateV1 =
-  | Exclude<SessionAwarenessProjectionV1['encryption'], 'plain' | 'ready'>
-  | Exclude<SessionAwarenessProjectionV1['operational']['primary'], 'none' | 'working'>
-  | 'archived' | 'recoverable_unservable' | 'resuming' | 'disconnected' | 'stale'
-  | 'background_active' | 'waiting' | 'thinking';
+/** Serializable facet vocabulary for the canonical presentation projection below. */
+export const SessionAwarenessPresentationStateV1Schema = lazyZodSchema(() => z.enum([
+  'preparing', 'repair_needed', 'locked', 'access_pending', 'setup_required', 'content_unavailable', 'unknown',
+  'failed', 'permission_required', 'action_required', 'ready', 'pending_input',
+  'archived', 'recoverable_unservable', 'resuming', 'disconnected', 'stale', 'background_active', 'waiting', 'thinking',
+]));
+export type SessionAwarenessPresentationStateV1 = z.infer<typeof SessionAwarenessPresentationStateV1Schema>;
 
 /** One precedence for localized Session words, Work buckets and tones. No lifecycle is changed. */
 export function readSessionAwarenessPresentationV1(awareness: SessionAwarenessPresentationFactsV1): SessionAwarenessPresentationStateV1 {
@@ -67,8 +71,8 @@ export function readSessionWorkStateGroupV1(
 }
 
 /** Compact report counts use the same Work vocabulary as the individual Session rows. */
-export function readSessionReportsPresentationV1(
-  reports: Pick<SessionReportsV1, 'working' | 'needsYou' | 'stalled'>,
+export function readSessionManagedSessionsPresentationV1(
+  reports: Pick<SessionManagedSessionsV1, 'working' | 'needsYou' | 'stalled'>,
 ): Readonly<{ bucket: 'needs_you' | 'working' | 'offline' | 'idle'; count: number }> {
   if (reports.needsYou > 0) return { bucket: 'needs_you', count: reports.needsYou };
   if (reports.working > 0) return { bucket: 'working', count: reports.working };

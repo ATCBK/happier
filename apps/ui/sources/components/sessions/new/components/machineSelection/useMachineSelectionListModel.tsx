@@ -142,6 +142,10 @@ export type MachineSelectionPresentation = Readonly<{
     subtitle?: string;
 }>;
 
+function supportsManagedMachineSelection(purpose: MachineDestinationPurposeV1): boolean {
+    return purpose === 'session' || purpose === 'finite' || purpose === 'service-start';
+}
+
 export type BuildMachineSelectionListModelParams<TMachine extends MachineDisplayRenderable = Machine> = Readonly<{
     purpose?: MachineDestinationPurposeV1;
     workerPlacement?: MachineDestinationWorkerPlacement;
@@ -454,7 +458,7 @@ export function useMachineSelectionListModel<TMachine extends MachineDisplayRend
         handlersRef.current.onConnectMachine?.();
     }, []);
     const selectManagedMachine = React.useCallback((offerId: string) => {
-        if (handlersRef.current.purpose !== 'session' && handlersRef.current.purpose !== 'finite') return;
+        if (!supportsManagedMachineSelection(handlersRef.current.purpose)) return;
         const offer = handlersRef.current.managedMachines?.find((candidate) => candidate.id === offerId);
         if (!offer || offer.disabled) return;
         if (offer.draft) handlersRef.current.onSelectManagedMachine?.(offer.draft);
@@ -646,8 +650,8 @@ export function useMachineSelectionListModel<TMachine extends MachineDisplayRend
         const poolGroups = params.poolGroups ?? [];
         const hasPools = poolGroups.some((group) => group.pools.length > 0);
         const temporaryComputers = purpose === 'session' ? params.temporaryComputers ?? [] : [];
-        const managedMachines = purpose === 'session' || purpose === 'finite' ? params.managedMachines ?? [] : [];
-        const managedOptionId = (purpose === 'session' || purpose === 'finite') && params.selectedManagedMachine
+        const managedMachines = supportsManagedMachineSelection(purpose) ? params.managedMachines ?? [] : [];
+        const managedOptionId = supportsManagedMachineSelection(purpose) && params.selectedManagedMachine
             ? managedMachineSelectionOptionId(params.selectedManagedMachine.selection)
             : null;
         // "Connect a computer…" closes the New machine group (lab m-pick): the other way to add a machine.

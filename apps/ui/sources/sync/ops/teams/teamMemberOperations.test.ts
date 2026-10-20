@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createDeferred, standardCleanup, teamGroupFixture, teamMembershipFixture, teamSummaryFixture } from '@/dev/testkit';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
@@ -48,6 +49,11 @@ describe('teamMemberOperations', () => {
             const { resolveTeamViewState } = await import('@/components/settings/teams/teamViewState');
             snapshots.applyTeamProjection({ scope, address, team: teamSummaryFixture(), observedAt: 1 });
             const refresh = createDeferred<void>();
+            harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
+                actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: {
+                    'teams.members.remove': ['ui'], 'teams.members.leave': ['ui'],
+                } }),
+            } }, version: 1 } });
             harness.answer(serverId, '/v1/teams/get', { body: teamSummaryFixture(), respondAfter: refresh.promise });
             harness.answer(serverId, '/v1/teams/list', { body: { items: [], nextCursor: null }, respondAfter: refresh.promise });
             harness.answer(serverId, MEMBER_ADD_PATH, { body: teamMembershipFixture() });
@@ -75,7 +81,16 @@ describe('teamMemberOperations', () => {
                 if (operation === 'leave') expect(continued).toBe(true);
             } finally {
                 refresh.resolve();
-                await receipt;
+                // Join real revalidation before the next case replaces this Home's HTTP answers.
+                const engine = await import('@/sync/engine/teams/teamsDirectoryEngine');
+                await Promise.all([
+                    receipt,
+                    engine.refreshTeam(scope, address),
+                    ...(operation === 'leave' ? [
+                        engine.refreshTeamsDirectory(scope, { v: 1, scope: 'member', archived: 'active' }),
+                        engine.refreshTeamsDirectory(scope, { v: 1, scope: 'member', archived: 'archived' }),
+                    ] : []),
+                ]);
             }
         },
     );
@@ -154,6 +169,8 @@ describe('teamMemberOperations', () => {
             role: 'admin',
             historyAccess: 'all_existing',
         });
+        const { refreshTeam } = await import('@/sync/engine/teams/teamsDirectoryEngine');
+        await refreshTeam(scope, address);
     });
 
     it('rejects the retired add-result envelope instead of rendering it as admission success', async () => {

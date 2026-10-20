@@ -317,6 +317,47 @@ describe('WorkspaceSyncMutagenAdapterClient', () => {
     expect(commands).toEqual([{ t: 'list', requestId: 'request-1', limit: 100 }]);
   });
 
+  it.each([
+    { paused: true, status: 'disconnected' },
+    { paused: false, status: 'halted-on-root-emptied' },
+    { paused: false, status: 'halted-on-root-deletion' },
+    { paused: false, status: 'halted-on-root-type-change' },
+  ])('preserves explicit pause and safety halt on flush: $paused/$status', async ({ paused, status }) => {
+    let current = genericSession();
+    // The native command transport is the boundary. An erroneous resume would
+    // clear the fixture's halt and let flush succeed, losing the safety hold.
+    const send = async (command: Readonly<{ t: string }>) => {
+      if (command.t === 'list') return listPage([current]);
+      if (command.t === 'resume') current = genericSession();
+      if (command.t === 'flush' && (current.paused || current.status.startsWith('halted-'))) {
+        throw new BrokerProtocolError('engine_unavailable', 'session cannot synchronize');
+      }
+      return current;
+    };
+    const adapter = createWorkspaceSyncMutagenAdapter({
+      send,
+      resolveWorkspaceRef: async (id) => ({ machineId: 'm1', rootPath: `/${id}` }),
+    });
+    await adapter.ensure(relationship);
+    current = genericSession({ paused, status });
+
+    await expect(adapter.flush('r1')).rejects.toMatchObject({ code: 'engine_unavailable' });
+    await expect(adapter.get('r1')).resolves.toMatchObject({ state: paused ? 'paused' : 'error', lastCleanSyncAtMs: null });
+  });
+
+  it('retains the typed engine refusal when a selected session disappears before flush', async () => {
+    const adapter = createWorkspaceSyncMutagenAdapter({
+      send: async (command) => {
+        if (command.t === 'list') return listPage([genericSession()]);
+        if (command.t === 'get') return null;
+        throw new BrokerProtocolError('engine_unavailable', 'selected session is absent');
+      },
+      resolveWorkspaceRef: async (id) => ({ machineId: 'm1', rootPath: `/${id}` }),
+    });
+    await adapter.ensure(relationship);
+    await expect(adapter.flush('r1')).rejects.toMatchObject({ code: 'engine_unavailable' });
+  });
+
   it('advances last clean sync only after completed clean flush, preserving history across checks and failed attempts', async () => {
     let nowMs = 1000;
     let installed = true;

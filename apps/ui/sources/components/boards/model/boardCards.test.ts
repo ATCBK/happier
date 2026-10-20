@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BoardItemRefV1 } from '@happier-dev/protocol';
+import { buildWorkBoardItemKeyV1 } from '@happier-dev/protocol/boards/workBoardV1';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 
 vi.mock('@/text', async () => {
@@ -25,12 +26,14 @@ import {
 import type { BoardMember } from './boardMembership';
 import { readSessionStatusNextRefreshAtMs } from '@/utils/sessions/sessionUtils';
 import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
+import { adoptHomeProfile } from '@/sync/domains/server/serverProfiles';
+import { readBoardMachineSourceState, readBoardPagedEntitySourceState, readBoardSessionSourceState, shouldLoadNextBoardEntityPage } from './boardEntityBinding';
 
 const NOW = 1_000_000;
 afterEach(clearMachineRequestReachabilityForTest);
 
 function member(ref: BoardItemRefV1, available = true): BoardMember {
-    return { key: JSON.stringify([ref.kind, ref.qualifiedId.serverId, ref.qualifiedId.id]), ref, picked: true, sourced: false, available };
+    return { key: buildWorkBoardItemKeyV1(ref), ref, picked: true, sourced: false, available };
 }
 
 const permissionSession = createSessionListRenderableSessionFixture({
@@ -51,6 +54,90 @@ const workingSession = createSessionListRenderableSessionFixture({
 });
 
 describe('board cards', () => {
+    it('settles linked-task status with its Session read and recovers without replacing the task', () => {
+        const ref = { kind: 'task', qualifiedId: { serverId: 'home-a', id: 'issue-cold' }, pluginId: 'com.acme.tasks' } as const;
+        const task = { title: 'Cold linked work', category: 'completed' as const,
+            linkedSessions: [{ serverId: 'home-a', sessionId: permissionSession.id }] };
+        const facts: BoardCardFacts = { nowMs: NOW, session: () => null, task: () => task,
+            workflowRun: () => null, machine: () => null, workflow: () => null,
+            machineSessionCounts: new Map(), accountScopedHome: () => true };
+        const project = createBoardCardProjection();
+        expect(project([member(ref)], facts)[0]?.status.bucket).toBe('idle');
+        const settled = { ...facts, missingEntityReason: (item: BoardItemRefV1) => item.kind === 'session' ? 'read failed' : null };
+        expect(project([member(ref)], settled)[0]).toMatchObject({ availability: 'ready', title: task.title,
+            status: { bucket: 'offline' } });
+        expect(project([member(ref)], { ...settled, session: () => permissionSession })[0]?.status.bucket).toBe('needs_you');
+    });
+
+    it('keeps external task cards, uses linked-agent status, and refreshes that status without changing task facts', () => {
+        const ref = { kind: 'task', qualifiedId: { serverId: 'home-a', id: 'issue-7' }, pluginId: 'com.acme.tasks' } as const;
+        const task = { title: 'Fix payments', category: 'backlog' as const, categoryLabel: 'Backlog',
+            linkedSessions: [{ serverId: 'home-a', sessionId: permissionSession.id }] };
+        const facts: BoardCardFacts = { nowMs: NOW, session: () => permissionSession, workflowRun: () => null,
+            machine: () => null, workflow: () => null, machineSessionCounts: new Map(), accountScopedHome: () => true,
+            task: () => task };
+        const project = createBoardCardProjection();
+        const cards = project([member(ref)], facts);
+        expect(cards[0]).toMatchObject({ title: 'Fix payments', availability: 'ready', status: { bucket: 'needs_you' } });
+        expect(project([member(ref)], { ...facts, session: () => workingSession })[0]?.status.bucket).toBe('working');
+        expect(buildBoardCards([member(ref)], { ...facts, task: () => ({ ...task, linkedSessions: [] }) })[0]?.status)
+            .toMatchObject({ bucket: 'idle', word: 'Backlog' });
+        const unavailable = buildBoardCards([member(ref)], { ...facts, task: () => null,
+            missingEntityReason: () => 'boards.card.unavailable' })[0];
+        expect(unavailable).toMatchObject({ ref, availability: 'content_unavailable' });
+    });
+
+    it('binds Session settlement to its exact Home while retaining a real row over a tombstone', async () => {
+        const serverId = 'srv_board_source';
+        const profile = await adoptHomeProfile({ descriptor: { v: 1, homeServerIdentityId: serverId,
+            canonicalServerUrl: 'https://board-source.example.test', revision: 1,
+            endpoints: [{ kind: 'https', url: 'https://board-source.example.test' }],
+        }, source: 'manual' });
+        const ref = { kind: 'session' as const, qualifiedId: { serverId, id: 'uncached' } };
+        const cold = { sessionListRowsByServerId: {}, deletedSessionIds: {}, concurrentSessionListCacheByServerId: {} };
+        expect(readBoardSessionSourceState(cold, ref)).toBe('loading');
+        expect(readBoardSessionSourceState({ ...cold, deletedSessionIds: { uncached: 'other' }, concurrentSessionListCacheByServerId: {
+            other: { serverName: null, listObservation: { phase: 'ready', lastSuccessAt: 1 } },
+        } }, ref)).toBe('loading');
+        const warm = { ...cold, concurrentSessionListCacheByServerId: {
+            [profile.id]: { serverName: null, listObservation: { phase: 'refreshing' as const, lastSuccessAt: 1 } },
+        } };
+        expect(readBoardSessionSourceState(warm, ref)).toBe('settled');
+        expect(readBoardSessionSourceState({ ...cold, deletedSessionIds: { uncached: profile.id } }, ref)).toBe('retired');
+        const row = createSessionListRenderableSessionFixture({ id: ref.qualifiedId.id, archivedAt: 1 });
+        expect(readBoardSessionSourceState({ ...cold, deletedSessionIds: { uncached: profile.id },
+            sessionListRowsByServerId: { [profile.id]: { [row.id]: row } },
+        }, ref)).toBe('ready');
+        expect(readBoardSessionSourceState({ ...cold, concurrentSessionListCacheByServerId: {
+            [serverId]: { serverName: null, listObservation: { phase: 'error', lastSuccessAt: null } },
+        } }, ref)).toBe('failed');
+    });
+
+    it('binds Machine settlement to applied canonical inventory and retains its cached row during refresh', () => {
+        const ref = { kind: 'machine' as const, qualifiedId: { serverId: 'home-a', id: 'machine' } };
+        expect(readBoardMachineSourceState({ machineListByServerId: { 'home-a': null },
+            machineListStatusByServerId: { 'home-a': 'loading' } }, ref)).toBe('loading');
+        expect(readBoardMachineSourceState({ machineListByServerId: { 'home-a': [] },
+            machineListStatusByServerId: { 'home-a': 'idle' } }, ref)).toBe('settled');
+        expect(readBoardMachineSourceState({ machineListByServerId: { 'home-a': [createMachineFixture({ id: 'machine' })] },
+            machineListStatusByServerId: { 'home-a': 'loading' } }, ref)).toBe('ready');
+        expect(readBoardMachineSourceState({ machineListByServerId: { 'home-a': null },
+            machineListStatusByServerId: { 'home-a': 'signedOut' } }, ref)).toBe('settled');
+    });
+
+    it('keeps Workflow and Run refs loading through pages and settles exhausted or failed readers', () => {
+        const source = { status: 'loaded' as const, hasMore: true, loadingMore: false, loadMoreFailed: false };
+        expect(readBoardPagedEntitySourceState(source)).toBe('loading');
+        expect(shouldLoadNextBoardEntityPage(source, true)).toBe(true);
+        expect(shouldLoadNextBoardEntityPage(source, false)).toBe(false);
+        expect(shouldLoadNextBoardEntityPage({ ...source, loadingMore: true }, true)).toBe(false);
+        expect(readBoardPagedEntitySourceState({ ...source, hasMore: false })).toBe('settled');
+        const failed = { ...source, loadMoreFailed: true };
+        expect(readBoardPagedEntitySourceState(failed)).toBe('settled');
+        expect(shouldLoadNextBoardEntityPage(failed, true)).toBe(false);
+        expect(readBoardPagedEntitySourceState({ ...source, status: 'failed' })).toBe('settled');
+    });
+
     it('reprojects request failure and recovery for the machine own Home and Account without a machine row update', () => {
         const ref = { kind: 'machine', qualifiedId: { serverId: 'home-a', id: 'mbp' } } as const;
         const machine = createMachineFixture({ id: 'mbp', active: true, activeAt: NOW });
@@ -104,6 +191,19 @@ describe('board cards', () => {
         });
         expect(card?.status).toMatchObject({ bucket: 'idle', tone: 'neutral', word: 'boards.card.unavailable' });
         expect(card?.body).toMatchObject({ kind: 'session', statusDetail: 'session.access.unavailable' });
+        // No readable title exists, so the card is named by its kind rather than by a placeholder session name.
+        expect(card?.title).toBe('boards.kinds.session');
+    });
+    it('gives an unreadable Session of unknown state one reason instead of a bare Unavailable', () => {
+        const row = createSessionListRenderableSessionFixture({ ...permissionSession, metadata: null,
+            encryptionMode: 'e2ee', encryptedContentAvailability: null });
+        const [card] = buildBoardCards([member({ kind: 'session', qualifiedId: { serverId: 'home-a', id: row.id } })], {
+            nowMs: NOW, session: () => row, workflowRun: () => null, machine: () => null,
+            workflow: () => null, machineSessionCounts: new Map(), accountScopedHome: () => true,
+        });
+        expect(card?.title).toBe('boards.kinds.session');
+        expect(card?.status.word).toBe('boards.card.unavailable');
+        expect(card?.body).toMatchObject({ kind: 'session', statusDetail: 'boards.card.readFailed' });
     });
     it('reprojects unchanged Session sources when the canonical status freshness deadline passes', () => {
         const members = [member({ kind: 'session', qualifiedId: { serverId: 'home-a', id: permissionSession.id } })];
@@ -150,7 +250,38 @@ describe('board cards', () => {
         const notRead = buildBoardCards([member(ref)], { ...facts, workflow: () => ({ title: 'Manual', triggers: [], summary: null }) })[0];
         expect(notRead?.body)
             .toMatchObject({ triggerSummary: 'workflows.triggers.summary.manual', nextRun: { kind: 'unscheduled' }, needsYouCount: null });
-        expect(notRead?.status.word).toBe('boards.card.notLoaded');
+        expect(notRead?.status.word).toBe('common.loading');
+    });
+
+    it('reads an item this device has not loaded yet as loading, and keeps "unavailable" for a Home that is not connected', () => {
+        const ref = { kind: 'session', qualifiedId: { serverId: 'home-a', id: 's-late' } } as const;
+        const facts: BoardCardFacts = {
+            nowMs: NOW, session: () => null, workflowRun: () => null, workflow: () => null,
+            machine: () => null, machineSessionCounts: new Map(), accountScopedHome: () => true,
+        };
+        // While the Session row is still arriving the card does not claim the item is unavailable.
+        expect(buildBoardCards([member(ref)], facts)[0]).toMatchObject({
+            availability: 'not_loaded', title: 'common.loading', status: { word: 'common.loading' },
+        });
+        expect(buildBoardCards([member(ref, false)], facts)[0]).toMatchObject({
+            availability: 'home_unavailable', title: 'boards.kinds.session', status: { word: 'boards.card.unavailable' },
+        });
+    });
+
+    it('reprojects an absent entity when its binding settles without inventing a row', () => {
+        const ref = { kind: 'session', qualifiedId: { serverId: 'home-a', id: 's-missing' } } as const;
+        const members = [member(ref)];
+        const facts: BoardCardFacts = {
+            nowMs: NOW, session: () => null, workflowRun: () => null, workflow: () => null,
+            machine: () => null, machineSessionCounts: new Map(), accountScopedHome: () => true,
+        };
+        const project = createBoardCardProjection();
+        expect(project(members, facts)[0]?.availability).toBe('not_loaded');
+        const settled = { ...facts, missingEntityReason: () => 'source answered without this item' };
+        expect(project(members, settled)[0]).toMatchObject({ availability: 'content_unavailable',
+            unavailableReason: 'source answered without this item', status: { bucket: 'offline', word: 'boards.card.unavailable' }, body: { kind: 'none' } });
+        const row = createSessionListRenderableSessionFixture({ id: ref.qualifiedId.id });
+        expect(project(members, { ...settled, session: () => row })[0]?.availability).toBe('ready');
     });
 
     it('counts running and needs-you sessions per machine from the loaded rows, through the shared status owner', () => {

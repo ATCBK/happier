@@ -62,6 +62,8 @@ export async function seedCurrentLocalPathPluginFixture(input: Readonly<{
   manifestVersion: string;
   devWatch?: boolean;
   includeAvailability?: boolean;
+  /** Publish a fresh physical generation for an already-installed fixture. */
+  replaceExisting?: boolean;
 }>): Promise<void> {
   const paths = await ensurePluginStoreDirectories({ happyHomeDir: input.happyHomeDir });
   const store = createPluginRegistryStateStore({ happyHomeDir: input.happyHomeDir });
@@ -73,7 +75,7 @@ export async function seedCurrentLocalPathPluginFixture(input: Readonly<{
     paths,
     reference: currentCommit.installationState,
   });
-  if (currentRevision.plugins[input.pluginId] || currentCommit.pluginOccurrenceIds[input.pluginId]) {
+  if (!input.replaceExisting && (currentRevision.plugins[input.pluginId] || currentCommit.pluginOccurrenceIds[input.pluginId])) {
     throw new Error(`Current plugin registry fixture '${input.pluginId}' is already installed`);
   }
 

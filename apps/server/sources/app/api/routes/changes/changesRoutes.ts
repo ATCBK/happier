@@ -1,5 +1,5 @@
 import { inTx } from "@/storage/inTx";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { type Fastify } from "../../types";
 import { changesRequestsCounter, changesReturnedChangesCounter } from "@/app/monitoring/metrics/index";
 import { debug, warn } from "@/utils/logging/log";
@@ -40,8 +40,8 @@ export function changesRoutes(app: Fastify) {
         schema: {
             response: {
                 200: z.object({
-                    cursor: z.number().int().min(0),
-                    changesFloor: z.number().int().min(0),
+                    cursor: z.number().check(z.int(), z.minimum(0)),
+                    changesFloor: z.number().check(z.int(), z.minimum(0)),
                 }),
                 404: z.object({ error: z.literal('account-not-found') }),
             },
@@ -72,12 +72,12 @@ export function changesRoutes(app: Fastify) {
             }
         }, app.authenticate],
         schema: {
-            querystring: z.object({
-                after: z.coerce.number().int().min(0).optional(),
-                limit: z.coerce.number().int().min(1).max(500).default(200),
+            querystring: z.optional(z.object({
+                after: z.optional(z.coerce.number().check(z.int(), z.minimum(0))),
+                limit: z._default(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(500)), 200),
                 sessionId: z.optional(asServerProtocolZod(SessionIdSchema)),
                 sessionAccessSessionId: z.optional(asServerProtocolZod(SessionIdSchema)),
-            }).optional(),
+            })),
         },
         config: {
             allowApiToken: true,

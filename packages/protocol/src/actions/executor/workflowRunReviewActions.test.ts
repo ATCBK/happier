@@ -179,6 +179,24 @@ function harness(options: Readonly<{
 }
 
 describe('Account review Actions', () => {
+  it.each([
+    ['use_result', 'storage_unavailable'], ['generate', 'storage_unavailable'],
+    ['use_result', 'automation_api_request_failed'], ['generate', 'automation_api_request_failed'],
+  ] as const)('preserves a received fetch storage refusal for %s (%s) instead of reporting a stale review', async (mode, code) => {
+    const h = harness({ callerAccountId: 'editor', e2ee: true });
+    const execute = h.deps.storage.execute;
+    const owner = createWorkflowAccountRunActionOwner({ ...h.deps, storage: { execute: async (operation, options) => {
+      if (operation.operation === 'invocations.complete_review') {
+        // Fetch's AutomationApiError carries status/code, unlike Axios's response wrapper.
+        throw Object.assign(new Error(code), { code, status: 503 });
+      }
+      return execute(operation, options);
+    } } });
+    await expect(owner.execute({ actionId: 'workflow.run.invocations.complete_review',
+      input: { ...target, mode }, context: actor })).rejects.toMatchObject({ code: 'storage_unavailable', status: 503 });
+    expect(h.rows.get(heldId)!.index).toMatchObject({ contentRevision: '4', lifecycle: 'waiting_for_review' });
+  });
+
   it.each([false, true])('keeps agent-requested review custody until a present user decides (stale=%s)', async stale => {
     const h = harness({ callerAccountId: 'account-1' });
     let stored: ApprovalRequest | null = null;
@@ -198,7 +216,6 @@ describe('Account review Actions', () => {
       resetGlobalVoiceAgent: unreachable,
       workflowAction: createWorkflowActionExecutor({ isWorkflowFeatureEnabled: () => true, runs: h.owner,
         definitions: { list: unavailable, get: unavailable, create: unavailable, update: unavailable, edit: unavailable, delete: unavailable } }),
-      isActionApprovalRequired: () => false,
       approvalsCreate: async ({ request }) => { stored = ApprovalRequestV2Schema.parse(request); return { artifactId: 'review-request' }; },
       approvalsGet: async () => stored,
       approvalsUpdate: async ({ request }) => {

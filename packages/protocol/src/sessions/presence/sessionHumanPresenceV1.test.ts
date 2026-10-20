@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import * as sessions from '../index.js';
+import * as sessions from './sessionHumanPresenceV1.js';
 
 describe('human presence V1 operation', () => {
   it('normalizes the whole visible set and rejects malformed or authority-bearing extra input', () => {
@@ -12,14 +12,14 @@ describe('human presence V1 operation', () => {
     ]) expect(sessions.SessionHumanPresenceVisibleReplaceV1Schema.safeParse(value).success).toBe(false);
   });
 
-  it('adds exact discussion locations without changing the Session-only V1 shape', () => {
+  it('admits independent Discussion locations while preserving the Session-only V1 shape', () => {
     expect(sessions.SessionHumanPresenceVisibleReplaceV1Schema.safeParse({
       v: 1,
       sessionIds: ['session-b', 'session-a'],
       locations: [
-        { sessionId: 'session-b', discussionId: 'discussion-2' },
-        { sessionId: 'session-a', discussionId: 'discussion-1' },
-        { sessionId: 'session-a', discussionId: 'discussion-1' },
+        { discussionId: 'discussion-2' },
+        { discussionId: 'discussion-1' },
+        { discussionId: 'discussion-1' },
       ],
     })).toMatchObject({
       success: true,
@@ -27,8 +27,8 @@ describe('human presence V1 operation', () => {
         v: 1,
         sessionIds: ['session-a', 'session-b'],
         locations: [
-          { sessionId: 'session-a', discussionId: 'discussion-1' },
-          { sessionId: 'session-b', discussionId: 'discussion-2' },
+          { discussionId: 'discussion-1' },
+          { discussionId: 'discussion-2' },
         ],
       },
     });
@@ -41,19 +41,29 @@ describe('human presence V1 operation', () => {
       ok: true,
       admittedSessionIds: ['session-a'],
     }).success).toBe(true);
+    expect(sessions.SessionHumanPresenceVisibleReplaceV1Schema.safeParse({
+      v: 1, sessionIds: [], locations: [{ sessionId: 'session-a', discussionId: 'discussion-1' }],
+    }).success).toBe(false);
+    expect(sessions.SessionHumanPresenceVisibleReplaceResultV1Schema.safeParse({
+      v: 1, ok: true, admittedSessionIds: [], admittedLocations: [{ discussionId: ' discussion-1 ' }],
+    })).toMatchObject({ success: true, data: { admittedLocations: [{ discussionId: 'discussion-1' }] } });
     expect(sessions.SessionHumanPresenceTypingSetV1Schema.safeParse({
       v: 1,
-      sessionId: 'session-a',
       discussionId: 'discussion-1',
       typing: true,
     }).success).toBe(true);
     expect(sessions.SessionHumanPresenceSnapshotV1Schema.safeParse({
       v: 1,
-      sessionId: 'session-a',
       discussionId: 'discussion-1',
       observedAt: 1,
       viewers: [],
     }).success).toBe(true);
+    expect(sessions.SessionHumanPresenceTypingSetV1Schema.safeParse({
+      v: 1, sessionId: 'session-a', discussionId: 'discussion-1', typing: true,
+    }).success).toBe(false);
+    expect(sessions.SessionHumanPresenceSnapshotV1Schema.safeParse({
+      v: 1, sessionId: 'session-a', discussionId: 'discussion-1', observedAt: 1, viewers: [],
+    }).success).toBe(false);
   });
 
   it('accepts the complete finite rendered set without a Lane-specific count ceiling', () => {

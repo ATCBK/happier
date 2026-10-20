@@ -6,7 +6,7 @@ import type {
     HostingProviderRuntimeCommandResult as ScmHostingProviderRuntimeCommandResult,
     HostingProviderRuntimeServices as ScmHostingProviderRuntimeServices,
 } from '@happier-dev/plugin-sdk/scm/hosting';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import {
     createScmHostingProviderRegistry,
     type ResolvedScmHostingProviderRegistry,
@@ -76,19 +76,19 @@ type ScmHostingProviderRuntimeMaterializationRequest =
     | ScmHostingProviderRuntimeTokenMaterializationRequest
     | ScmHostingProviderRuntimeBasicAuthMaterializationRequest;
 
-const ScmHostingProviderRuntimeMaterializationRequestBaseSchema = z.object({
-    providerId: z.string().min(1),
-    host: z.string().min(1),
+const ScmHostingProviderRuntimeMaterializationRequestBaseSchema = z.strictObject({
+    providerId: z.string().check(z.minLength(1)),
+    host: z.string().check(z.minLength(1)),
     provider: ScmHostingProviderRefSchema,
-    profileId: z.string().nullable().optional(),
-}).strict();
+    profileId: z.optional(z.nullable(z.string())),
+});
 
 const ScmHostingProviderRuntimeMaterializationRequestSchema = z.discriminatedUnion('kind', [
-    ScmHostingProviderRuntimeMaterializationRequestBaseSchema.extend({
+    z.extend(ScmHostingProviderRuntimeMaterializationRequestBaseSchema, {
         kind: z.literal('scm_hosting_token'),
-        boundAccountOnly: z.literal(true).optional(),
+        boundAccountOnly: z.optional(z.literal(true)),
     }),
-    ScmHostingProviderRuntimeMaterializationRequestBaseSchema.extend({
+    z.extend(ScmHostingProviderRuntimeMaterializationRequestBaseSchema, {
         kind: z.literal('scm_hosting_basic_auth'),
     }),
 ]);

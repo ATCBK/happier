@@ -2,6 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol';
+import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
@@ -16,10 +17,13 @@ import { CurrentUiContextProvider, useOptionalCurrentUiContextReader, usePublish
 import { createCurrentUiContextVoiceToolPort } from './currentUiContextVoiceToolPort';
 import { executeCurrentUiContextAction, registerCurrentUiContextActionPort } from './currentUiContextActionRuntime';
 import { CurrentUiContextCommandsProvider, useCurrentUiContextComposedCommands, useCurrentUiContextLocalCommands } from './CurrentUiContextCommands';
+import { t } from '@/text';
+
+const routeState = vi.hoisted(() => ({ pathname: '/settings/usage', segments: ['(app)', 'settings', 'usage'] }));
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    return createExpoRouterMock({ pathname: '/settings/usage', segments: ['(app)', 'settings', 'usage'] }).module;
+    return createExpoRouterMock({ pathname: () => routeState.pathname, segments: () => routeState.segments }).module;
 });
 
 let home: Awaited<ReturnType<typeof serveActionHomes>> | undefined;
@@ -65,9 +69,69 @@ afterEach(async () => {
     standardCleanup(); unregister?.(); unregister = undefined; reader = null;
     retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined;
     intents.clear(); changes.length = 0;
+    routeState.pathname = '/settings/usage'; routeState.segments = ['(app)', 'settings', 'usage'];
 });
 
 describe('mounted current-context descendant commands', () => {
+    it('keeps an unchanged local command when its owner adds a sibling and invokes its latest callback', async () => {
+        home = await serveActionHomes({ homes: [{ key: 'a', serverUrl: 'https://local-command-reconcile.test', accountId: 'account-a' }],
+            route: request => request.path === '/v1/kv/bulk' ? Response.json({ values: [] }) : undefined });
+        const server = home.homes.a!;
+        publishAppliedActiveServerSnapshot({ serverId: server.id, serverUrl: server.serverUrl, generation: 0 });
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const credentials = (await TokenStorage.getCredentialsForServerUrl(server.serverUrl))!;
+        function Choices(props: Readonly<{ extra: boolean }>) {
+            const choices = useCurrentUiContextLocalCommands([
+                { key: 'first', title: 'First choice', invoke: () => { changes.push(props.extra ? 'latest' : 'original'); } },
+                ...(props.extra ? [{ key: 'second', title: 'Second choice', invoke: () => { changes.push('second'); } }] : []),
+            ]);
+            intents.set('choices', choices.invoke);
+            return <Publication />;
+        }
+        const tree = (extra: boolean) => <InjectedAuthProvider credentials={credentials}>
+            <MainAppTabStateProvider><AppPaneProvider><CurrentUiContextProvider>
+                <PluginSurfaceFocusEligibilityProvider active currentUiContextActive><Choices extra={extra} /></PluginSurfaceFocusEligibilityProvider>
+            </CurrentUiContextProvider></AppPaneProvider></MainAppTabStateProvider>
+        </InjectedAuthProvider>;
+        const screen = await renderScreen(tree(false));
+        const first = reader!.readCurrentUiContext()!.commands[0]!;
+        const retirement = reader!.resolveCurrentUiCommand(first.id)!.retirementSignal;
+        await screen.update(tree(true));
+        expect(reader!.readCurrentUiContext()!.commands[0]!.id).toBe(first.id);
+        expect(retirement.aborted).toBe(false);
+        await act(async () => { expect(await intents.get('choices')!('first')).toBe(true); });
+        expect(changes).toEqual(['latest']);
+        const second = reader!.readCurrentUiContext()!.commands[1]!;
+        const secondRetirement = reader!.resolveCurrentUiCommand(second.id)!.retirementSignal;
+        await screen.update(tree(false));
+        expect(reader!.readCurrentUiContext()!.commands[0]!.id).toBe(first.id);
+        expect(reader!.resolveCurrentUiCommand(second.id)).toBeNull();
+        expect(secondRetirement.aborted).toBe(true);
+        await screen.unmount();
+        expect(retirement.aborted).toBe(true);
+    });
+
+    it('keeps Settings admission out of Session context and publishes the Settings identity on navigation', async () => {
+        routeState.pathname = '/session/session-a'; routeState.segments = ['(app)', 'session', '[id]'];
+        home = await serveActionHomes({ homes: [{ key: 'a', serverUrl: 'https://current-context-settings-demand.test', accountId: 'account-a' }],
+            route: request => request.path === '/v1/kv/bulk' ? Response.json({ values: [] }) : undefined });
+        const server = home.homes.a!;
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const credentials = (await TokenStorage.getCredentialsForServerUrl(server.serverUrl))!;
+        const governancePaths = new Set((['home.governance.get', 'home.governance.eligibility.get'] as const).map(id =>
+            bindHomeDomainActionHttpRequestV1(id, {}).path));
+        const priorReads = home.httpRequests.filter(request => governancePaths.has(request.path)).length;
+        const tree = () => <InjectedAuthProvider credentials={credentials}>
+            <MainAppTabStateProvider><AppPaneProvider><CurrentUiContextProvider><Publication /></CurrentUiContextProvider></AppPaneProvider></MainAppTabStateProvider>
+        </InjectedAuthProvider>;
+        const screen = await renderScreen(tree());
+        expect(reader!.readCurrentUiContext()).not.toBeNull();
+        expect(home.httpRequests.filter(request => governancePaths.has(request.path))).toHaveLength(priorReads);
+        routeState.pathname = '/settings/usage'; routeState.segments = ['(app)', 'settings', 'usage'];
+        await screen.update(tree());
+        expect(reader!.readCurrentUiContext()?.navigation).toMatchObject({ area: 'settings', title: t('settings.usage') });
+        await screen.unmount();
+    });
     it('publishes mounted host commands alongside author commands through the real UI Actions and retires them on unmount', async () => {
         home = await serveActionHomes({ homes: [{ key: 'a', serverUrl: 'https://mounted-host-commands.test', accountId: 'account-a' }],
             route: request => request.path === '/v1/kv/bulk' ? Response.json({ values: [] }) : undefined });
@@ -88,6 +152,8 @@ describe('mounted current-context descendant commands', () => {
         const read = await executor.execute('ui.current_context.read', {}, { surface: 'agent' });
         expect(read.ok).toBe(true);
         const command = reader!.readCurrentUiContext()!.commands.find(command => command.title === 'widget details');
+        const author = reader!.readCurrentUiContext()!.commands.find(command => command.title === 'Author details')!;
+        const authorRetirement = reader!.resolveCurrentUiCommand(author.id)!.retirementSignal;
         expect(command).toBeDefined();
         expect(reader!.readCurrentUiContext()!.commands.map(command => command.title)).toEqual(['Author details', 'widget details']);
         await act(async () => {
@@ -96,8 +162,11 @@ describe('mounted current-context descendant commands', () => {
         expect(changes).toEqual(['expanded']);
         await screen.update(tree(false));
         expect(reader!.readCurrentUiContext()!.commands.map(command => command.title)).toEqual(['Author details']);
+        expect(reader!.readCurrentUiContext()!.commands[0]!.id).toBe(author.id);
+        expect(authorRetirement.aborted).toBe(false);
         expect(await executor.execute('ui.current_context.command.invoke', { commandId: command!.id }, { surface: 'agent' })).toMatchObject({ ok: false });
         await screen.unmount();
+        expect(authorRetirement.aborted).toBe(true);
     });
     it('composes descendants through Action admission and retires removed, unbound and Account-stale capabilities', async () => {
         home = await serveActionHomes({ homes: [{ key: 'a', serverUrl: 'https://current-context-composition.test', accountId: 'account-a' }],

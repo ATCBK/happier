@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
-import { buildConnectedServiceCredentialRecord, type ConnectedServiceBindingsV2, QualifiedConnectedAccountCredentialSnapshotV4Schema } from '@happier-dev/protocol';
+import { accountSettingsParse, buildConnectedServiceCredentialRecord, type ConnectedServiceBindingsV2, QualifiedConnectedAccountCredentialSnapshotV4Schema } from '@happier-dev/protocol';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 
 const io = vi.hoisted(() => vi.fn());
@@ -54,6 +54,8 @@ const unexpectedAccountBoundary = async (): Promise<never> => { throw new Error(
 const purposeOwner = createConnectedAccountPurposeBindingOwner({
   store: { read: unexpectedAccountBoundary, update: unexpectedAccountBoundary, subscribe: () => ({ dispose() {} }) },
   selectTarget: unexpectedAccountBoundary,
+  projectTargetAccounts: unexpectedAccountBoundary,
+  assertTargetAccountMaterializable: unexpectedAccountBoundary,
   // The boundary fixture supplies account metadata; all binding and plugin serialization stays real.
   resolveTarget: async target => target.kind === 'account'
     ? { displayName: target.account.accountId, account: target.account }
@@ -103,16 +105,16 @@ describe('materializeSessionConnectedServiceRuntimeAuthSelection', () => {
         [CLAUDE_SUBSCRIPTION_SERVICE_KEY]: { source: 'connected', selection: 'profile', profileId: 'backup' },
       } };
       const selection = { source: 'connected' as const, selection: 'profile' as const,
-        serviceId: CLAUDE_SUBSCRIPTION_SERVICE_KEY, profileId: 'backup' };
+        serviceId: CLAUDE_SUBSCRIPTION_SERVICE_KEY, profileId: 'backup', groupId: null };
       const params = {
         credentials: { token: 'fixture-token', encryption: null } satisfies StoredCredentials,
         api: api as unknown as ApiClient, activeServerDir, baseDir: join(root, 'materialized'),
         connectedAccountsOwner: purposeOwner, activatePurposeBindings: purposeOwner.activatePurposeBindings,
         processEnv: { CLAUDE_CONFIG_DIR: nativeRoot }, allowNativeAccountState,
-        accountSettings: { connectedServicesProviderStateSharingSettingsV1: {
+        accountSettings: accountSettingsParse({ connectedServicesProviderStateSharingSettingsV1: {
           v: 1 as const, defaults: { configMode: 'isolated' as const, stateMode: 'shared' as const },
           byAgentId: {}, acknowledgedRisksByAgentId: {},
-        } },
+        } }),
         input: { mode: 'apply' as const, sessionId, agentId: 'claude', serviceId: CLAUDE_SUBSCRIPTION_SERVICE_KEY,
           tracked: { startedBy: 'daemon' as const, happySessionId: sessionId, pid: 123 },
           previous: selection, next: selection, previousBindings: bindings, normalizedBindings: bindings },
@@ -251,9 +253,9 @@ describe('materializeSessionConnectedServiceRuntimeAuthSelection', () => {
         credentials: { token: 'token', encryption: null }, api: api as unknown as ApiClient,
         activeServerDir, baseDir: join(root, 'materialized'), connectedAccountsOwner: purposeOwner,
         activatePurposeBindings: purposeOwner.activatePurposeBindings,
-        processEnv: {}, accountSettings: { connectedServicesProviderStateSharingSettingsV1: {
+        processEnv: {}, accountSettings: accountSettingsParse({ connectedServicesProviderStateSharingSettingsV1: {
           v: 1, defaults: { configMode: 'isolated', stateMode: 'isolated' }, byAgentId: {}, acknowledgedRisksByAgentId: {},
-        } },
+        } }),
         input: {
           mode, tracked: { startedBy: 'daemon', happySessionId: 'retained-session', pid: 123, spawnOptions: {
             directory: '/project',

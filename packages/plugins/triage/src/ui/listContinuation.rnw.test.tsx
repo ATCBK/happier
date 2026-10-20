@@ -296,6 +296,8 @@ async function mountShell(harness: Harness): Promise<PluginUiTestkit> {
             surfaceContext: createSurfaceContextFixture(),
             adapter: createPluginUiRnwSemanticSurfaceAdapter({
                 ephemeralSharedScope: harness.ephemeralSharedScope,
+                // The row menu presents inline, so a test opens it the way a reader does.
+                overlays: true,
             }),
             handlers: {
                 publishCurrentUiContext: () => undefined,
@@ -390,10 +392,13 @@ describe('the mounted window continuations', () => {
         await expect(shell.getByText('Pinned change 0'))
             .resolves.toEqual({ content: 'Pinned change 0' });
 
-        // Reachable is only half of it. Unpin is only ever offered on a row, so
-        // a pin that could not be listed could not be removed either.
+        // Reachable is only half of it. Unpin is only ever offered on a row (its one
+        // row menu), so a pin that could not be listed could not be removed either.
         await act(async () => {
-            await shell.press(await shell.getByRole('button', { name: 'Unpin Pinned change 0' }));
+            await shell.press(await shell.getByRole('button', { name: 'More actions for Pinned change 0' }));
+        });
+        await act(async () => {
+            await shell.press(await shell.getByRole('menuitem', { name: 'Unpin' }));
         });
 
         await expect(shell.queryByText('Pinned change 0')).resolves.toBeUndefined();

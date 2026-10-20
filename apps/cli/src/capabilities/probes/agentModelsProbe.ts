@@ -5,6 +5,7 @@ import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/cat
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { AcpCatalogUnavailableError } from '@/agent/acp/catalog/configured/resolveBackend';
 import type { AgentCatalogEntry } from '@/agent/catalog/types';
+import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
 import type { AcpProbeBackend } from '@/agent/acp/runtime/acpRuntimeBackendContract';
 import type { CatalogAgentLookupId } from '@/agent/catalog/ids';
 import { resolveAgentCliLaunchSpec } from '@/packagedRuntime/managedTools/requireAgentCliLaunchSpec';
@@ -34,7 +35,7 @@ import { withPreflightSessionControlsProbeEnvironment } from './preflightSession
 import { isDynamicModelProbeEnabled } from '@/providers/probe/nativeCatalogCredential';
 import { SpawnFailureError, type SpawnFailure } from '@/processes/spawnFailure/classifySpawnFailure';
 import { SpawnFailureV1Schema } from '@happier-dev/protocol/machines/processes/spawnFailureV1';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 type ProbedAgentModelOptionValue = ProbedCatalogOptionValue;
 
@@ -57,33 +58,33 @@ const agentModelsProbeCache = new AsyncTtlCache<ProbedAgentModelsResult>({
 
 const ProbeModelsObservationSchema = z.object({
   availableModels: z.array(z.unknown()),
-  observedAt: z.number().finite().nonnegative().optional(),
-  refreshError: z.boolean().optional(),
+  observedAt: z.optional(z.number().check(z.nonnegative())),
+  refreshError: z.optional(z.boolean()),
   spawnFailure: z.optional(SpawnFailureV1Schema),
-  source: z.enum(['dynamic', 'static']).optional(),
+  source: z.optional(z.enum(['dynamic', 'static'])),
 });
-const ProbeNonEmptyStringSchema = z.string().trim().min(1);
+const ProbeNonEmptyStringSchema = z.string().check(z.trim(), z.minLength(1));
 const ProbeDescriptionSchema = z.string();
 const ProbeModelOptionChoiceInputSchema = z.object({
-  value: z.unknown().optional(),
+  value: z.optional(z.unknown()),
   name: ProbeNonEmptyStringSchema,
-  description: ProbeDescriptionSchema.optional(),
+  description: z.optional(ProbeDescriptionSchema),
 });
 const ProbeDynamicModelInputSchema = z.object({
-  id: ProbeNonEmptyStringSchema.optional(),
-  modelId: ProbeNonEmptyStringSchema.optional(),
+  id: z.optional(ProbeNonEmptyStringSchema),
+  modelId: z.optional(ProbeNonEmptyStringSchema),
   name: ProbeNonEmptyStringSchema,
-  description: ProbeDescriptionSchema.optional(),
-  contextWindowTokens: z.number().int().positive().max(100_000_000).optional(),
-  extendedContextModelId: ProbeNonEmptyStringSchema.optional(),
-  modelOptions: z.array(z.unknown()).optional(),
+  description: z.optional(ProbeDescriptionSchema),
+  contextWindowTokens: z.optional(z.number().check(z.int(), z.positive(), z.maximum(100_000_000))),
+  extendedContextModelId: z.optional(ProbeNonEmptyStringSchema),
+  modelOptions: z.optional(z.array(z.unknown())),
   capabilities: ProviderModelDescriptorV1Schema.shape.capabilities,
   costTier: ProviderModelDescriptorV1Schema.shape.costTier,
 });
 const ProbeConfigOptionCandidateSchema = z.object({
-  id: z.string().optional(),
-  name: z.string().optional(),
-  options: z.array(z.unknown()).optional(),
+  id: z.optional(z.string()),
+  name: z.optional(z.string()),
+  options: z.optional(z.array(z.unknown())),
 });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -111,8 +112,10 @@ function hasStaticAgentModelsFallback(agentId: CatalogAgentLookupId): boolean {
 }
 
 function buildDefaultModelPlaceholder(): ProbedAgentModel {
-  // The selection sentinel is not evidence that the native/catalog model was offered.
-  return { id: 'default', name: 'Default', capabilities: { structuredOutput: 'unknown' } };
+  // This selects the native default without claiming a concrete model identity.
+  // The native projection applies its Agent's declared JSON contract; configured
+  // ACP defaults keep their separately negotiated evidence below.
+  return { id: 'default', name: 'Default' };
 }
 
 function buildStatic(
@@ -164,6 +167,14 @@ function buildUnavailable(agentId: CatalogAgentLookupId): ProbedAgentModelsResul
 function resolveStaticFallback(agentId: CatalogAgentLookupId): ProbedAgentModelsResult {
   const cfg = resolveAgentModelConfigForLookupId(agentId);
   return cfg ? buildStatic(agentId, cfg) : buildUnavailable(agentId);
+}
+
+function resolveDynamicProbeFailureFallback(agentId: CatalogAgentLookupId): ProbedAgentModelsResult {
+  const cfg = resolveAgentModelConfigForLookupId(agentId);
+  if (!cfg || getAgentStaticModels(agentId, { catalogOnly: true }).length === 0) {
+    return buildUnavailable(agentId);
+  }
+  return buildStatic(agentId, cfg);
 }
 
 function tryResolveAgentCliLaunchSpec(agentId: CatalogAgentLookupId) {
@@ -431,7 +442,10 @@ function normalizeModelsFromConfigOptions(configOptionsRaw: unknown): ProbedAgen
 }
 
 export function normalizeAcpModelsSnapshot(modelsRaw: unknown, configOptionsRaw: unknown): ProbedAgentModel[] | null {
-  return normalizeDynamicModels(modelsRaw) ?? normalizeModelsFromConfigOptions(configOptionsRaw);
+  const models = normalizeDynamicModels(modelsRaw) ?? normalizeModelsFromConfigOptions(configOptionsRaw);
+  return models?.map(model => model.id === 'default' && model.capabilities?.structuredOutput === undefined
+    ? { ...model, capabilities: { ...model.capabilities, structuredOutput: 'unknown' as const } }
+    : model) ?? null;
 }
 
 export async function probeModelsFromAcpBackend(params: {
@@ -461,6 +475,7 @@ async function probeAgentModels(params: {
   bypassCache?: boolean;
   agentId: CatalogAgentLookupId;
   catalogEntry?: AgentCatalogEntry | null;
+  registrySnapshot?: ResolvedContributionRegistry;
   runtimeCacheKey?: string;
   signal?: AbortSignal;
   backendTarget?: BackendTargetRefV1;
@@ -519,7 +534,9 @@ async function probeAgentModels(params: {
     const nowMs2 = Date.now();
     if (!params.bypassCache && cached2?.kind === 'success' && agentModelsProbeCache.isFresh(cached2, nowMs2)) return cached2.value;
 
-    const fallback = configuredAcp ? buildUnavailable(params.agentId) : resolveStaticFallback(params.agentId);
+    const fallback = configuredAcp
+      ? buildUnavailable(params.agentId)
+      : resolveDynamicProbeFailureFallback(params.agentId);
     let spawnFailure: SpawnFailure | undefined;
     const observeFailure = (error: unknown) => {
       if (error instanceof SpawnFailureError) spawnFailure = error.spawnFailure;
@@ -640,13 +657,13 @@ export async function probeAgentModelsBestEffort(
   // inherit the native Agent's prompted-JSON publication contract.
   if (params.backendTarget?.kind === 'configuredAcpBackend' || result.source === 'unavailable') return result;
   const formats = readAgentStructuredOutputCapabilities(
-    readAgentCatalogSnapshot().agentDefinitionsById.get(params.agentId)?.richDefinition?.definition,
+    (params.registrySnapshot ?? readAgentCatalogSnapshot()).agentDefinitionsById.get(params.agentId)?.richDefinition?.definition,
   )?.formats;
   return {
     ...result,
     availableModels: result.availableModels.map((model) => {
       const support = resolveModelStructuredOutputSupport({ model, catalogModel: true, agentFormats: formats });
-      return support === 'unknown' && model.capabilities?.structuredOutput === undefined
+      return support === 'unknown' && model.capabilities?.structuredOutput === undefined && model.id !== 'default'
         ? model
         : { ...model, capabilities: { ...model.capabilities, structuredOutput: support } };
     }),

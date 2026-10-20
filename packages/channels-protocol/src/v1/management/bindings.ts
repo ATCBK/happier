@@ -176,6 +176,9 @@ export const ConversationBindingEndpointSelectionV1ProtocolSchema = defineProtoc
 
 const conversationBindingPrincipalSelectionEntryV1 = defineProtocolObject({
     id: ConversationPrincipalIdV1ProtocolSchema,
+    // Accumulated selections retain the exact provider query that found them.
+    // Omission uses the containing selection's query for existing callers.
+    query: ConversationResolutionQueryV1ProtocolSchema.optional(),
     kind: defineProtocolUnion([
         defineProtocolLiteral('human'),
         defineProtocolLiteral('bot'),
@@ -196,6 +199,7 @@ const conversationBindingHumanPrincipalSelectionV1 = defineProtocolObject({
         defineProtocolObject({
             id: ConversationPrincipalIdV1ProtocolSchema,
             kind: defineProtocolLiteral('human'),
+            query: ConversationResolutionQueryV1ProtocolSchema.optional(),
         }, { policy: 'closed' }),
         { minItems: 1 },
     ),

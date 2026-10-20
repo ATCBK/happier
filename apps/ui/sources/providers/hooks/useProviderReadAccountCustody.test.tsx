@@ -10,11 +10,14 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createProviderSettingsAccountHarness, createProviderSettingsHarness, installProviderSettingsRpcBoundary,
+    installProviderConnectionsCatalogHttpBoundary,
     createProviderConnectionsDescribeFixture, createProviderConnectionViewFixture, createProviderModelsFixture,
     createProviderModelProjectionFixture, createProviderModelProjectionGroupFixture } from '@/dev/testkit/harness/providerSettingsHarness';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { parseToken } from '@/utils/auth/parseToken';
 
 const account = createProviderSettingsAccountHarness();
 const provider = createProviderSettingsHarness({ machines: [createMachineFixture({ id: 'machine-a', activeAt: Date.now() })] });
@@ -60,8 +63,11 @@ const readers = [
 ] as const;
 
 beforeEach(async () => {
-    await account.restore();
-    peerId = await account.addHome({ name: 'Read peer', serverUrl: peerUrl, accountId: 'peer-a', active: false });
+    await account.restore({ serverIdentityId: 'srv_provider_active', currentAccount: true });
+    peerId = await account.addHome({ name: 'Read peer', serverUrl: peerUrl,
+        serverIdentityId: 'srv_provider_peer', accountId: 'peer-a', currentAccount: true, active: false });
+    installProviderConnectionsCatalogHttpBoundary({ home: account.home, serverId: peerId,
+        catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 });
 });
 afterEach(async () => {
     await standardCleanup();
@@ -74,6 +80,15 @@ describe('Provider read custody at an addressed peer Account', () => {
         const activeLifetime = captureActiveServerAccountScopeLifetime();
         let release!: () => void;
         const replacementResponse = new Promise<void>(resolve => { release = resolve; });
+        account.home.answer(peerId, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, {
+            select: (_input, request) => {
+                const authorization = new Headers(request.init?.headers).get('Authorization');
+                const accountId = authorization?.startsWith('Bearer ') ? parseToken(authorization.slice(7)) : null;
+                return { body: { status: 'present', revision: 1,
+                    content: { t: 'plain', v: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } },
+                    ...(accountId === 'peer-b' ? { respondAfter: replacementResponse } : {}) };
+            },
+        });
         provider.intercept(reader.method, async request => {
             if (request.accountId === 'peer-b') await replacementResponse;
             return reader.response();
@@ -89,7 +104,10 @@ describe('Provider read custody at an addressed peer Account', () => {
             if (metadataRefresh) retainedObservations.push(result.data);
             return { ...result, resolution: accountScope.resolution.kind };
         });
-        await waitForHomeGovernance(() => expect(rendered.getCurrent().data).not.toBeNull());
+        await waitForHomeGovernance(() => {
+            expect(rendered.getCurrent().data).not.toBeNull();
+            expect(rendered.getCurrent().loading).toBe(false);
+        });
         metadataRefresh = true;
         await act(async () => { await upsertServerProfile({ serverUrl: peerUrl, name: 'Renamed read peer' }); });
         expect(retainedObservations.length).toBeGreaterThan(0);
@@ -98,7 +116,7 @@ describe('Provider read custody at an addressed peer Account', () => {
         const oldRefresh = rendered.getCurrent().refresh;
         const unsubscribe = subscribeHomeCredentialChange(event => { if (event.serverId === peerId) retired = true; });
         try {
-            await act(async () => { await account.home.switchAccount(peerId, 'peer-b'); });
+            await act(async () => { await account.home.switchAccount(peerId, 'peer-b', { currentAccount: true }); });
             expect(captureActiveServerAccountScopeLifetime()).toBe(activeLifetime);
             expect(activeLifetime?.isCurrent()).toBe(true);
             expect(rendered.getCurrent().data).toBeNull();

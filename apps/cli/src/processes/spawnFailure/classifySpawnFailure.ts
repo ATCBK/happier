@@ -1,5 +1,17 @@
 import type { MachineVitalsSampleV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsSampleV1';
 import type { SpawnFailureV1 } from '@happier-dev/protocol';
+import { statSync } from 'node:fs';
+
+/** Only called after spawn fails: ENOENT alone cannot distinguish cwd from executable absence. */
+export function isSpawnWorkingDirectoryMissing(cwd: string | undefined): boolean {
+    if (cwd === undefined) return false;
+    try {
+        return !statSync(cwd).isDirectory();
+    } catch (error) {
+        return error !== null && typeof error === 'object' && 'code' in error
+            && (error.code === 'ENOENT' || error.code === 'ENOTDIR');
+    }
+}
 
 export type SpawnFailure = Readonly<SpawnFailureV1>;
 export type SpawnFailureLimitsReader = () => MachineVitalsSampleV1['limits'];
@@ -32,11 +44,13 @@ export function spawnFailureMessage(failure: SpawnFailure, fallback: string): st
         case 'no_ptys': return "This machine can't open more terminals. Close ones you are not using.";
         case 'process_limit': return "This machine can't start more processes. Stop sessions or apps you are not using.";
         case 'out_of_memory': return "This machine doesn't have enough memory to start this process. Stop sessions or apps you are not using.";
-        case 'other': return fallback;
+        case 'other': return failure.errno === 'ENOENT'
+            ? 'The process could not start. Check that the command is installed and the working directory exists.'
+            : fallback;
     }
 }
 
-/** PTY adapters throw an Error; retain the original cause and OS code on that path. */
+/** Process adapters retain the original cause and OS code on startup failure. */
 export class SpawnFailureError extends Error {
     readonly code?: string;
     readonly syscall?: string;

@@ -10,6 +10,16 @@ function spec<K extends UsageSourceActionId>(id: K, title: string, summary: stri
   return {
     id, approval: { result: 'required' }, title, description: summary,
     safety: read || dismiss ? 'safe' : 'danger', sideEffectClass: read ? 'read' : 'write',
+    ...(id === 'usage.sources.stop' || id === 'usage.sources.root.set'
+      ? { approvalPolicy: { uiConfirmation: 'direct' as const } } : {}),
+    ...(id === 'usage.sources.consent.set' ? { approvalPolicy: {
+      uiConfirmation: 'direct' as const,
+      // Enabling capture discloses new accounting; stopping it retains history.
+      uiConfirmationForInput: (input: unknown) => {
+        const consent = inputs['usage.sources.consent.set'].safeParse(input);
+        return !consent.success || consent.data.enabled;
+      },
+    } } : {}),
     requiredAuthority: 'account_automation', executionPlacement: dismiss ? 'client' : 'machine', placements: [],
     ...(id === 'usage.sources.root.set' ? { approvalInputCustody: 'live_only' as const } : {}),
     ...(!dismiss && id !== 'usage.sources.history.delete' ? { approvalResultCustody: 'live_only' as const } : {}),

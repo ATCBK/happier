@@ -5,12 +5,12 @@ import { act, type ReactTestInstance } from 'react-test-renderer';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 
 import type { WorkflowStep } from '@happier-dev/protocol/workflows/workflowV1';
-import type { WorkflowReferenceScope, WorkflowValueReference } from '@happier-dev/protocol/workflows/workflowReferenceV1';
+import type { WorkflowCondition, WorkflowReferenceScope, WorkflowValueReference } from '@happier-dev/protocol/workflows/workflowReferenceV1';
 import { setWorkflowInputs } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
 import { createWorkflowEditorDraft } from '@/sync/domains/workflows/workflowEditorDraft';
 // Load the real owner during collection, not against the first interaction's timeout.
-import { formatWorkflowValueReference, WorkflowBindingRow, WorkflowStepDataEditor } from './WorkflowStepDataEditor';
-import { formatWorkflowConditionSentence } from './WorkflowConditionEditor';
+import { formatWorkflowValueReference, WorkflowBindingRow, WorkflowStepDataEditor, WorkflowValueReferenceEditor } from './WorkflowStepDataEditor';
+import { formatWorkflowConditionSentence, WorkflowConditionEditor } from './WorkflowConditionEditor';
 import { formatWorkflowLoopSentence } from './WorkflowLoopEditor';
 import { getBuiltinWorkflowCatalogV1 } from '@happier-dev/protocol';
 import { buildWorkflowEditorDraftFromDefinition } from '@/sync/domains/workflows/workflowAuthoring';
@@ -83,6 +83,53 @@ function selectTrigger(root: ReactTestInstance, testID: string): ReactTestInstan
 }
 
 describe('WorkflowStepDataEditor field selects', () => {
+    it('shows and edits an input field path without losing it when selecting another input', async () => {
+        const draft = setWorkflowInputs(createWorkflowEditorDraft({ draftId: 'input-path' }), [
+            { name: 'reviewSession', valueType: 'json', required: true },
+            { name: 'otherSession', valueType: 'json', required: true },
+        ]);
+        let current: WorkflowValueReference = { kind: 'input', name: 'reviewSession', path: ['sessionId'] };
+        function Editor() {
+            const [reference, setReference] = React.useState(current);
+            current = reference;
+            return <WorkflowValueReferenceEditor reference={reference} index={0} draft={draft} stepId={draft.blocks[0]!.id}
+                onChange={setReference} testIDPrefix="input-path" />;
+        }
+        expect(formatWorkflowValueReference(draft, current)).not.toBe(
+            formatWorkflowValueReference(draft, { kind: 'input', name: 'reviewSession' }));
+        const screen = await renderScreen(<Editor />);
+        expect(screen.findByTestId('input-path-input-0-path')?.props.value).toBe('sessionId');
+        await act(async () => { screen.changeTextByTestId('input-path-input-0-path', 'targets.0.sessionId'); });
+        expect(current).toEqual({ kind: 'input', name: 'reviewSession', path: ['targets', 0, 'sessionId'] });
+        await act(async () => { fieldSelect(screen.root, 'input-path-input-0-input-name').props.onSelect('otherSession'); });
+        expect(current).toEqual({ kind: 'input', name: 'otherSession', path: ['targets', 0, 'sessionId'] });
+    });
+    it('preserves a named result operand when changing between existence, comparison and negation', async () => {
+        const reference: WorkflowValueReference = { kind: 'result', producer: { blockId: 'check', scope: { kind: 'current' } }, path: ['fixed'] };
+        const producer = stepBlock('check', []);
+        const draft = createWorkflowEditorDraft({ draftId: 'conditions', blocks: [producer] });
+        let current: WorkflowCondition | undefined;
+        function Editor() {
+            const [condition, setCondition] = React.useState<WorkflowCondition | undefined>({ kind: 'exists', value: reference });
+            current = condition;
+            return <WorkflowConditionEditor label="If" condition={condition} draft={draft} consumerBlockId="if"
+                onChange={setCondition} testIDPrefix="condition" required />;
+        }
+        const screen = await renderScreen(<Editor />);
+        const changeKind = async (kind: string) => {
+            await act(async () => fieldSelect(screen.root, 'condition-kind').props.onSelect(kind));
+        };
+        await changeKind('compare');
+        expect(current).toEqual({ kind: 'compare', operator: 'eq', left: reference, right: { kind: 'literal', value: true } });
+        await act(async () => fieldSelect(screen.root, 'condition-operator').props.onSelect('neq'));
+        expect(current).toMatchObject({ operator: 'neq', left: reference });
+        await changeKind('not');
+        expect(current).toMatchObject({ kind: 'not', condition: { kind: 'compare', operator: 'neq', left: reference } });
+        await changeKind('compare');
+        expect(current).toMatchObject({ kind: 'compare', operator: 'neq', left: reference });
+        await changeKind('exists');
+        expect(current).toEqual({ kind: 'exists', value: reference });
+    });
     it('reads human input and result field names without leaking wire keys or clipped prompt titles', () => {
         const producer = stepBlock('opaque-producer', []);
         const draft = createWorkflowEditorDraft({ draftId: 'human-references', name: 'Review', blocks: [producer] });

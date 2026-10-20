@@ -19,7 +19,9 @@ export function createUiNotificationActionDeps(
         notificationChannelsList: async (context) => {
             const result = await execute({
                 actionId: 'action.options.resolve',
-                input: { actionId: 'notifications.notify_me', fieldPath: 'channels' },
+                // Trigger authoring reads the catalog; it does not send a notification.
+                // Preserve the standalone source instead of borrowing notify_me's surface policy.
+                input: { optionsSourceId: 'notifications.channels.available' },
                 context,
             });
             const failure = ActionExecuteFailureSchema.safeParse(result);

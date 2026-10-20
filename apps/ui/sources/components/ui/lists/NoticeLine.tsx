@@ -8,7 +8,7 @@ import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Tooltip } from '@/components/ui/overlays/Tooltip';
 import { Text } from '@/components/ui/text/Text';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 
 /**
  * Core's binding of the shared compact status line (`HappierNoticeLine`): a glyph (its tooltip carries
@@ -34,7 +34,7 @@ export const NoticeLine = React.memo(function NoticeLine(props: Readonly<{
     }>;
 }>) {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const icon = <Icon name={props.iconName} size={ICON_SIZE.sm} color={props.iconColor} />;
     return (
         <HappierNoticeLine

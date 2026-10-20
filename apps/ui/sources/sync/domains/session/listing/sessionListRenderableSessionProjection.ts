@@ -58,6 +58,29 @@ export function readSessionListRenderableOwnerMetadataView(
     return null;
 }
 
+// Display selectors expose metadata under useShallow; an unchanged row must retain this reference.
+const sharedMetadataByDisplayMetadata = new WeakMap<object, Metadata>();
+
+/** Restore the declared layout before passing display metadata to Session presentation readers. */
+export function readSessionListRenderableSharedMetadata(
+    renderable: Readonly<{ metadata: unknown; metadataLayoutVersion?: number }>,
+): Metadata | null {
+    const metadata = renderable.metadata;
+    if (metadata === null || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+    if (readSessionMetadataLayoutVersion(renderable.metadataLayoutVersion) !== 1) {
+        return metadata as Metadata;
+    }
+    const cached = sharedMetadataByDisplayMetadata.get(metadata);
+    if (cached) return cached;
+    // `flavor` in a list row is projected from public agentPresentation, never the private owner flavor.
+    const agentId = Reflect.get(metadata, 'flavor');
+    const displayMetadata = metadata as Metadata;
+    const sharedMetadata = { ...displayMetadata, v: 1,
+        agentPresentation: typeof agentId === 'string' && agentId ? { agentId } : undefined };
+    sharedMetadataByDisplayMetadata.set(metadata, sharedMetadata);
+    return sharedMetadata;
+}
+
 function mergeRenderableMetadata(
     baseMetadata: Metadata | null | undefined,
     renderableMetadata: SessionListRenderableSession['metadata'],
@@ -103,12 +126,15 @@ export function buildSessionFromListRenderable(
     const baseMetadataLayoutVersion = readSessionMetadataLayoutVersion(options.baseSession?.metadataLayoutVersion);
     const metadataLayoutVersion = metadataCurrent || !options.baseSession
         ? rowMetadataLayoutVersion : baseMetadataLayoutVersion;
-    const rowMetadata = renderable.metadata === null ? null : {
-        ...renderable.metadata,
+    const displayMetadata = readSessionListRenderableSharedMetadata({
+        metadata: renderable.metadata, metadataLayoutVersion: rowMetadataLayoutVersion,
+    });
+    const rowMetadata = displayMetadata === null ? null : {
+        ...displayMetadata,
         sessionWorkStateV1: renderable.workState ?? null,
         sessionAgentActivityHeadlineV1: renderable.agentActivityHeadline ?? null,
         sessionWorkflowActivityHeadlineV1: renderable.workflowHeadline ?? null,
-        ...(renderable.metadata.terminalControlServiceabilityV1
+        ...(renderable.metadata?.terminalControlServiceabilityV1
             ? { terminal: { controlServiceabilityV1: renderable.metadata.terminalControlServiceabilityV1 } }
             : {}),
     };
@@ -131,12 +157,6 @@ export function buildSessionFromListRenderable(
     const projectedMetadata = metadataUnavailable ? null : metadataCurrent
         ? mergeRenderableMetadata(sameMetadataLayout ? options.baseSession?.metadata : null, rowMetadata)
         : options.baseSession?.metadata ?? null;
-    // The list's layout-1 flavor is already the public Agent presentation. Restore its
-    // envelope so all Session presentation readers use the same declared identity.
-    const metadata = metadataCurrent && metadataLayoutVersion === 1 && projectedMetadata !== null
-        ? { ...projectedMetadata, v: 1,
-            agentPresentation: renderable.metadata?.flavor ? { agentId: renderable.metadata.flavor } : undefined }
-        : projectedMetadata;
 
     return reconcileSessionLifecycleProjection(options.baseSession, {
         ...baseSessionWithoutResponsibility,
@@ -185,11 +205,13 @@ export function buildSessionFromListRenderable(
         runtimeActivityRevision: renderable.runtimeActivityRevision ?? null,
         lastRuntimeIssue: renderable.lastRuntimeIssue ?? null,
         lastTurnCompletedAt: renderable.lastTurnCompletedAt ?? null,
-        reportsTo: renderable.reportsTo !== undefined ? renderable.reportsTo : options.baseSession?.reportsTo ?? null,
+        manager: renderable.manager !== undefined ? renderable.manager : options.baseSession?.manager ?? null,
         origin: renderable.origin ?? options.baseSession?.origin,
         workDepth: renderable.workDepth ?? options.baseSession?.workDepth,
-        reports: renderable.reports ?? options.baseSession?.reports ?? null,
-        metadata,
+        ownerAccountId: renderable.ownerAccountId ?? options.baseSession?.ownerAccountId,
+        managedSessions: renderable.managedSessions ?? options.baseSession?.managedSessions ?? null,
+        receivedRuleCount: renderable.receivedRuleCount,
+        metadata: projectedMetadata,
         // The row owns this ephemeral projection; a stale base must not revive a retired title.
         lockedDisplayTitle: metadataLayoutVersion === 1
             && renderable.metadata === null

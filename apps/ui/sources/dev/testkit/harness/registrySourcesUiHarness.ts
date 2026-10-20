@@ -14,6 +14,8 @@ export async function createRegistrySourcesUiHome(suffix: string, options: Reado
     picks?: boolean;
     token?: RegistrySourceV1['token'];
     savedSecretResourceIds?: readonly string[];
+    /** A registry link outside the fixture repository (checked before the defaults). */
+    external?: (url: string, init?: RequestInit) => Promise<Response | null>;
 }> = {}) {
     const sourceUrl = 'https://github.com/fixture/skills';
     const sourceId = deriveRegistrySourceIdV1(sourceUrl);
@@ -46,8 +48,10 @@ export async function createRegistrySourcesUiHome(suffix: string, options: Reado
             if (failRulesWrites && path.endsWith('/skill-rules') && init?.method === 'POST')
                 return Response.json({ error: 'unavailable' }, { status: 503 });
             return catalog.handle(path, init);
-        }, handleExternalRequest: async url => {
+        }, handleExternalRequest: async (url, init) => {
         externalRequests.push(url);
+        const custom = await options.external?.(url, init);
+        if (custom) return custom;
         if (url === DEFAULT_CURATED_MARKETPLACE_SOURCE_URL) return Response.json(MarketplaceIndexSourceSnapshotV1Schema.parse({
             source: { id: HAPPIER_PICKS_SOURCE_ID, title: 'Happier picks', kind: 'curated', sourceUrl: url },
             freshness: { state: 'fresh', fetchedAtMs: 1 }, entries: [], diagnostics: [],

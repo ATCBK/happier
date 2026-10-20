@@ -2,6 +2,7 @@ import { canonicalSessionDraftAddressV2, isAccountOwnedDraftAddressV2, type Sess
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import type { AccountEncryptionMigrateRequest, AccountEncryptionMigrateSuccessResponse } from '@happier-dev/protocol/account/encryptionMigrate';
 import { buildProjectAccountRowPhysicalKeyV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { equalFollowRuleReceiverV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
 
 type Params = Readonly<{
   request: AccountEncryptionMigrateRequest;
@@ -21,6 +22,19 @@ export async function runAccountEncryptionModeMigration(
   if (params.isCurrent && !params.isCurrent()) return result;
   if (result.mode !== params.request.toMode) {
     throw new Error('Invalid Account mode migration response');
+  }
+  if (params.request.sessionFollowRules || result.sessionFollowRules) {
+    const expected = params.request.sessionFollowRules?.items;
+    const rules = result.sessionFollowRules?.rules;
+    const byId = new Map(expected?.map(item => [item.ruleId, item]));
+    const seen = new Set<string>();
+    if (!expected || !rules || rules.length !== expected.length || !rules.every(rule => {
+      const item = byId.get(rule.ruleId);
+      if (!item || seen.has(rule.ruleId)) return false;
+      seen.add(rule.ruleId);
+      return rule.version === item.expectedVersion + 1 && equalFollowRuleReceiverV1(rule.receiver, item.receiver)
+        && pluginJsonValuesEqual(rule.content, item.content);
+    })) throw new Error('Invalid Follow rule migration response');
   }
   for (const field of ['remoteHosts', 'notificationChannels', 'connectedPresentation', 'connectedAcknowledgements'] as const) {
     const expected = params.request[field];

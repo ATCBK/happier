@@ -29,7 +29,7 @@ export function buildInboxSessionContextLine(
   // (Needs you, Updates, the Voice brief) agrees without being told.
   const rowStatus = readSessionAwarenessPresentationV1(candidate.awareness);
   const statusSaysNotCurrent = rowStatus === 'unknown' || rowStatus === 'disconnected';
-  const reports = candidate.session.reports;
+  const reports = candidate.session.managedSessions;
   const workingReports = reports?.working ?? 0;
   const need = options.showNeed !== false ? readInboxSessionNeed(candidate) : null;
   const context = candidate.context

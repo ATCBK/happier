@@ -15,7 +15,8 @@ describe('InlineAddExpander', () => {
         const onCancel = vi.fn();
         const screen = await renderScreen(
             <InlineAddExpander isOpen onOpenChange={() => {}} title="Add variable" trigger={null}
-                onSave={onSave} onCancel={onCancel} saveLabel="Save" cancelLabel="Cancel">
+                onSave={onSave} onCancel={onCancel} saveLabel="Save" cancelLabel="Cancel"
+                saveTestID="add-save" cancelTestID="add-cancel">
                 {React.createElement('Text', null, 'Variable fields')}
             </InlineAddExpander>,
         );
@@ -23,8 +24,8 @@ describe('InlineAddExpander', () => {
             .map((node) => node.props.children as string);
         expect(hostTexts).not.toContain('Add variable');
         expect(hostTexts).toContain('Variable fields');
-        const save = screen.root.findAll((node) => typeof node.type === 'string' && node.props.accessibilityLabel === 'Save')[0];
-        const cancel = screen.root.findAll((node) => typeof node.type === 'string' && node.props.accessibilityLabel === 'Cancel')[0];
+        const save = screen.findByTestId('add-save')!;
+        const cancel = screen.findByTestId('add-cancel')!;
         await act(async () => save.props.onPress());
         await act(async () => cancel.props.onPress());
         expect(onSave).toHaveBeenCalledOnce();

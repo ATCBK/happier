@@ -5,7 +5,22 @@ import {
   AgentModelOptionOverrideRuleSchema,
   ProviderModelDescriptorV1Schema,
   resolveModelStructuredOutputSupport,
+  resolveModelDisplayName,
 } from './descriptor.js';
+
+describe('catalog model display names', () => {
+  const catalog = [{ id: 'vendor-model', name: 'Vendor Model', aliases: ['vendor-model-snapshot'] }];
+
+  it('reuses exact catalog names and declared snapshot aliases without changing ids or guessing unknown snapshots', () => {
+    expect(resolveModelDisplayName({ id: 'vendor-model-snapshot', name: 'vendor-model-snapshot' }, catalog)).toBe('Vendor Model');
+    expect(resolveModelDisplayName({ id: 'vendor-model' }, catalog)).toBe('Vendor Model');
+    expect(resolveModelDisplayName({ id: 'vendor-model-20990101' }, catalog)).toBe('vendor-model-20990101');
+    expect(resolveModelDisplayName({ id: 'vendor-model-snapshot', name: 'My deployment' }, catalog)).toBe('My deployment');
+    expect(resolveModelDisplayName({ id: 'vendor-model-snapshot' }, [
+      ...catalog, { id: 'other-model', name: 'Another model', aliases: ['vendor-model-snapshot'] },
+    ])).toBe('vendor-model-snapshot');
+  });
+});
 
 describe('structured model capability', () => {
   it('preserves an explicit unsupported JSON capability from a model catalog', () => {

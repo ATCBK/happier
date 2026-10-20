@@ -1,6 +1,5 @@
 import * as React from 'react';
 import { useGlobalSearchParams, useLocalSearchParams, usePathname, useRouter } from 'expo-router';
-import { NavigationContext } from '@react-navigation/native';
 import { resolveHref } from 'expo-router/build/link/href';
 
 import { hrefForDestinationRef, type DestinationRef } from '@/components/appShell/destinations/compactAppDestinationCatalog';
@@ -12,41 +11,23 @@ import type { NativeStackNavigationOptions } from '@react-navigation/native-stac
 import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { DefaultBackButton, Header, NavigationHeaderTitle, PageHeaderActionsHost } from '@/components/navigation/Header';
-import { HeaderActionsScope } from '@/components/navigation/stackHeaderActions';
+import { HeaderActionsScope, useEnclosingHeaderActionsScope } from '@/components/navigation/stackHeaderActions';
 import { NavigationTitleChromeProvider, useNavigationChromeShowsBack, useNavigationTitleChromePublisher, useNavigationTitleChromeShowsTitle } from '@/components/ui/layout/navigationTitleChrome';
 import { useRootStackRouteOptions } from '@/components/navigation/root/useRootStackRouteOptions';
 import { resolveRootStackRouteOptions } from '@/components/navigation/root/rootStackRouteOptions';
 import { matchWorkspaceDestinationRoute, workspaceRouteFiles } from './workspaceRoutes';
 import { SessionViewerDestinationScope } from '@/components/sessions/viewer/SessionViewerDestinationScope';
 import { normalizeSessionAddress, sessionAddressKey } from '@/sync/domains/session/sessionAddress';
+import { DestinationInstanceContext, DestinationHeaderOptionsContext, useDestinationInstanceKey, type DestinationInstanceContextValue, type DestinationNavigation } from './destinationInstanceContext';
+export { useDestinationInstanceKey, useDestinationNavigation, type DestinationNavigation } from './destinationInstanceContext';
 
 const EMPTY_SCREEN_OPTIONS: NativeStackNavigationOptions = {};
 
-const DestinationHeaderOptionsContext = React.createContext<((options: NativeStackNavigationOptions) => void) | null>(null);
-
-export type DestinationNavigation = Pick<ReturnType<typeof useRouter>, 'push' | 'replace' | 'back'>
-    & Partial<ReturnType<typeof useRouter>> & {
-        /** Open another destination without retiring the caller's mounted draft. */
-        pushRetainingCurrent?: ReturnType<typeof useRouter>['push'];
-        /** Retain this pane before acquiring work that outlives its preview. */
-        retainCurrent?: () => void;
-    };
-
 type DestinationRouter = ReturnType<typeof useRouter> & {
+    redirect: ReturnType<typeof useRouter>['replace'];
     pushRetainingCurrent: ReturnType<typeof useRouter>['push'];
     retainCurrent: () => void;
 };
-
-type DestinationInstanceContextValue = Readonly<{
-    tabId: string;
-    ref: DestinationRef;
-    pathname: string;
-    focused: boolean;
-    visible: boolean;
-    navigation?: DestinationNavigation;
-}>;
-
-const DestinationInstanceContext = React.createContext<DestinationInstanceContextValue | null>(null);
 
 function RetainedDestinationContext(props: Readonly<{
     captured: DestinationInstanceContextValue | null;
@@ -154,11 +135,14 @@ function DestinationNavigationChrome(props: Readonly<{
     const canGoBack = props.navigation?.canGoBack?.() ?? false;
     const tintColor = options.headerTintColor ?? theme.colors.chrome.header.foreground;
     const chromeShown = props.phone && options.headerShown !== false;
-    const renderActions = React.useMemo(() => !chromeShown && (options.headerLeft || options.headerRight)
-        ? () => <>
-            {options.headerLeft?.({ tintColor, canGoBack }) ?? null}
-            {options.headerRight?.({ tintColor, canGoBack }) ?? null}
-        </> : null, [canGoBack, chromeShown, options.headerLeft, options.headerRight, tintColor]);
+    // Only the trailing actions are lent: `headerLeft` is the hidden header's way back, which the page header's
+    // own Back (or the page's crumb) already is. Lent, it would stand a second Back among the actions.
+    const renderActions = React.useMemo(() => !chromeShown && options.headerRight
+        ? () => options.headerRight?.({ tintColor, canGoBack }) ?? null
+        : null, [canGoBack, chromeShown, options.headerRight, tintColor]);
+    // Hosted inside a pane that lends its controls (a Work peek, the Inbox's detail), a route with no
+    // actions of its own hands the pane's scope through, so the page's header draws those controls.
+    const enclosingScope = useEnclosingHeaderActionsScope();
     const declaredTitle = typeof options.headerTitle === 'string' ? options.headerTitle : options.title;
     // headerTitle belongs to navigation chrome; title and PageHeader supply
     // screen identity. A page's explicit null withdraws its previous identity.
@@ -187,7 +171,7 @@ function DestinationNavigationChrome(props: Readonly<{
                         ? <DefaultBackButton tintColor={tintColor} onPress={() => props.navigation?.back()} /> : null)}
                     headerRight={options.headerRight ? () => options.headerRight!({ tintColor, canGoBack }) : undefined} />
             </View> : null}
-            <HeaderActionsScope scopeKey={chromeShown ? null : props.scopeKey}>
+            <HeaderActionsScope scopeKey={chromeShown ? null : renderActions === null && typeof enclosingScope === 'string' ? enclosingScope : props.scopeKey}>
                 <PageHeaderActionsHost scopeKey={props.scopeKey} render={renderActions} />
                 {props.children}
             </HeaderActionsScope>
@@ -261,10 +245,6 @@ export function useDestinationVisibility(): boolean {
     return React.useContext(DestinationInstanceContext)?.visible ?? true;
 }
 
-export function useDestinationInstanceKey(): string | null {
-    return React.useContext(DestinationInstanceContext)?.tabId ?? null;
-}
-
 export function useDestinationPaneScopeId(resourceScopeId: string): string {
     return qualifyPaneScopeId(resourceScopeId, useDestinationInstanceKey());
 }
@@ -289,6 +269,7 @@ export function useDestinationRouter(): DestinationRouter {
             reload: unsupported,
             prefetch: () => {},
             ...navigation,
+            redirect: navigation.redirect ?? navigation.replace,
             pushRetainingCurrent: navigation.pushRetainingCurrent ?? unsupported,
             retainCurrent: navigation.retainCurrent ?? unsupported,
         };
@@ -299,7 +280,7 @@ function useWorkspaceOrExpoRouter() {
     const workspace = useOptionalWorkspaceNavigation();
     const router = useRouter();
     return React.useMemo(() => {
-        if (!workspace) return { ...router, pushRetainingCurrent: router.push, retainCurrent: () => {} };
+        if (!workspace) return { ...router, redirect: router.replace, pushRetainingCurrent: router.push, retainCurrent: () => {} };
         const navigate: typeof router.push = (href, options) => {
             if (!workspace.openHref(resolveHref(href))) router.push(href, options);
         };
@@ -320,25 +301,10 @@ function useWorkspaceOrExpoRouter() {
             if (!navigation.retainCurrent) throw new Error('The workspace navigation owner did not supply pane retention');
             navigation.retainCurrent();
         };
-        return { ...router, push: navigate, navigate, replace, pushRetainingCurrent, retainCurrent,
+        return { ...router, push: navigate, navigate, replace, redirect: replace, pushRetainingCurrent, retainCurrent,
             back: workspace.active ? workspace.back : router.back,
             canGoBack: workspace.active ? () => workspace.canGoBack : router.canGoBack };
     }, [router, workspace]);
-}
-
-/** The retained host owns its chrome options; Back still belongs to the same tab owner. */
-export function useDestinationNavigation() {
-    const instance = React.useContext(DestinationInstanceContext);
-    const nativeNavigation = React.useContext(NavigationContext);
-    const setOptions = React.useContext(DestinationHeaderOptionsContext);
-    return React.useMemo(() => instance ? {
-        canGoBack: () => instance.navigation?.canGoBack?.() ?? false,
-        goBack: () => instance.navigation?.back(),
-        setOptions: setOptions ?? ((_options: NativeStackNavigationOptions) => {}),
-        isFocused: () => instance.focused,
-        addListener: (_event: string, _listener: () => void) => () => {},
-        getParent: () => undefined,
-    } : nativeNavigation, [instance, nativeNavigation, setOptions]);
 }
 
 export function useDestinationFocusEffect(effect: React.EffectCallback): void {

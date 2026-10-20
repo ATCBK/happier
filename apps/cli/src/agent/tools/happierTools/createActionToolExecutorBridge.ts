@@ -158,6 +158,7 @@ async function buildActionExecutorContext(params: Readonly<{
     && typeof params.resolveActiveTurnPermissionWitness === 'function';
   let causalPermissionAuthority: unknown = null;
   let activeTurnId: string | null = null;
+  let activeInputId: string | null = null;
   if (hasActiveTurnPermissionWitnessResolver) {
     try {
       const rawWitness = await params.resolveActiveTurnPermissionWitness!();
@@ -165,6 +166,9 @@ async function buildActionExecutorContext(params: Readonly<{
       causalPermissionAuthority = witness?.causalPermissionAuthority ?? null;
       activeTurnId = typeof witness?.turnId === 'string' && witness.turnId.trim().length > 0
         ? witness.turnId.trim()
+        : null;
+      activeInputId = typeof witness?.inputId === 'string' && witness.inputId.trim().length > 0
+        ? witness.inputId.trim()
         : null;
     } catch {
       // An active-turn reader failure is non-authorizing; do not fall back to
@@ -212,6 +216,7 @@ async function buildActionExecutorContext(params: Readonly<{
           sessionInputSource: {
             sourceSessionId: params.defaultSessionId,
             sourceTurnId: activeTurnId,
+            ...(activeInputId ? { sourceInputId: activeInputId } : {}),
             via: params.sessionInputVia ?? 'action',
           },
         }

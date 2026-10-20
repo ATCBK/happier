@@ -30,7 +30,8 @@ export function useComputerTargetPicker(input: ComputerTargetPickerInput) {
     const [state, setState] = React.useState<ComputerTargetPickerState>(
         input.refusalCode ? { kind: 'failed', code: input.refusalCode } : { kind: 'loading' });
     const [selectedKey, setSelectedKey] = React.useState<string | null>(input.currentTargetKey);
-    const [access, setAccess] = React.useState<ComputerAccessV1>(input.access ?? 'use');
+    // Opens on the current share's access, or See it when nothing is shared: widening is an explicit choice.
+    const [access, setAccess] = React.useState<ComputerAccessV1>(input.access ?? 'see');
     const [suggestedKey, setSuggestedKey] = React.useState<string | null>(null);
     const [sharing, setSharing] = React.useState(false);
     const [noticeCode, setNoticeCode] = React.useState<string | null>(null);
@@ -45,7 +46,7 @@ export function useComputerTargetPicker(input: ComputerTargetPickerInput) {
         currentClient.current = client;
         choiceResolved.current = false;
         setSelectedKey(input.currentTargetKey);
-        setAccess(input.access ?? 'use');
+        setAccess(input.access ?? 'see');
         setSuggestedKey(null);
         setSharing(false);
         setNoticeCode(null);

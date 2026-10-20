@@ -1,52 +1,37 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /** Read-only v1 migration input. Never use this schema for canonical writes. */
 export const GoogleGeminiSttSettingsLegacySchema = z.object({
-  apiKey: z.unknown().nullable().default(null),
-  model: z.string().trim().min(1).max(256).default('gemini-2.5-flash'),
-  language: z.string().trim().min(1).max(64).nullable().default(null),
+  apiKey: z._default(z.nullable(z.unknown()), null),
+  model: z._default(z.string().check(z.trim(), z.minLength(1), z.maxLength(256)), 'gemini-2.5-flash'),
+  language: z._default(z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(64))), null),
 });
 
-export const GoogleGeminiSttSettingsSchema = z.object({
-  model: z.string().trim().min(1).max(256).default('gemini-2.5-flash'),
-  language: z.preprocess(
-    (value) => value === null ? '' : value,
-    z.string().trim().max(64).default(''),
-  ),
-}).strict();
+export const GoogleGeminiSttSettingsSchema = z.strictObject({
+  model: z._default(z.string().check(z.trim(), z.minLength(1), z.maxLength(256)), 'gemini-2.5-flash'),
+  language: (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => value === null ? '' : value), z._default(z.string().check(z.trim(), z.maxLength(64)), '')),
+});
 
 export type GoogleGeminiSttSettings = z.infer<typeof GoogleGeminiSttSettingsSchema>;
 
 /** Read-only v1 migration input. Never use this schema for canonical writes. */
 export const GoogleCloudTtsSettingsLegacySchema = z.object({
-  apiKey: z.unknown().nullable().default(null),
-  androidCertSha1: z.string().trim().min(1).max(256).nullable().default(null),
-  voiceName: z.string().trim().min(1).max(256).nullable().default(null),
-  languageCode: z.string().trim().min(1).max(64).nullable().default(null),
-  format: z.enum(['mp3', 'wav']).default('mp3'),
-  speakingRate: z.number().min(0.25).max(4).nullable().default(null),
-  pitch: z.number().min(-20).max(20).nullable().default(null),
+  apiKey: z._default(z.nullable(z.unknown()), null),
+  androidCertSha1: z._default(z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))), null),
+  voiceName: z._default(z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))), null),
+  languageCode: z._default(z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(64))), null),
+  format: z._default(z.enum(['mp3', 'wav']), 'mp3'),
+  speakingRate: z._default(z.nullable(z.number().check(z.minimum(0.25), z.maximum(4))), null),
+  pitch: z._default(z.nullable(z.number().check(z.minimum(-20), z.maximum(20))), null),
 });
 
-export const GoogleCloudTtsSettingsSchema = z.object({
-  voiceName: z.preprocess(
-    (value) => value === null ? '' : value,
-    z.string().trim().max(256).default(''),
-  ),
-  languageCode: z.preprocess(
-    (value) => value === null ? '' : value,
-    z.string().trim().max(64).default(''),
-  ),
-  format: z.enum(['mp3', 'wav']).default('mp3'),
-  speakingRate: z.preprocess(
-    (value) => value === null ? 1 : value,
-    z.number().min(0.25).max(4).default(1),
-  ),
-  pitch: z.preprocess(
-    (value) => value === null ? 0 : value,
-    z.number().min(-20).max(20).default(0),
-  ),
-}).strict();
+export const GoogleCloudTtsSettingsSchema = z.strictObject({
+  voiceName: (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => value === null ? '' : value), z._default(z.string().check(z.trim(), z.maxLength(256)), '')),
+  languageCode: (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => value === null ? '' : value), z._default(z.string().check(z.trim(), z.maxLength(64)), '')),
+  format: z._default(z.enum(['mp3', 'wav']), 'mp3'),
+  speakingRate: (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => value === null ? 1 : value), z._default(z.number().check(z.minimum(0.25), z.maximum(4)), 1)),
+  pitch: (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => value === null ? 0 : value), z._default(z.number().check(z.minimum(-20), z.maximum(20)), 0)),
+});
 
 export type GoogleCloudTtsSettings = z.infer<typeof GoogleCloudTtsSettingsSchema>;
 export type GoogleGeminiSttSettingsLegacy = z.infer<typeof GoogleGeminiSttSettingsLegacySchema>;

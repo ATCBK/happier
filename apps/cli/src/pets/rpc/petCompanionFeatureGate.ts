@@ -1,6 +1,6 @@
 import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabledBit';
 
-import { configuration } from '@/configuration';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveCliFeatureDecisionForServer } from '@/features/featureDecisionService';
 import { resolveCliGlobalOnlyFeatureDecision } from '@/features/featureDecisionGlobalOnly';
 import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
@@ -29,7 +29,7 @@ export async function resolvePetCompanionFeatureEnabled(params: Readonly<{
   const resolved = await resolveCliFeatureDecisionForServer({
     featureId: PET_COMPANION_FEATURE_ID,
     env: params.env ?? process.env,
-    serverUrl: params.serverUrl ?? configuration.apiServerUrl,
+    serverUrl: params.serverUrl ?? resolveServerHttpBaseUrl(),
     timeoutMs: params.timeoutMs ?? PET_COMPANION_FEATURE_GATE_TIMEOUT_MS,
   });
   if (resolved.serverSnapshot) {
@@ -40,7 +40,7 @@ export async function resolvePetCompanionFeatureEnabled(params: Readonly<{
   }
 
   const serverSnapshot = await fetchServerFeaturesSnapshot({
-    serverUrl: params.serverUrl ?? configuration.apiServerUrl,
+    serverUrl: params.serverUrl ?? resolveServerHttpBaseUrl(),
     timeoutMs: params.timeoutMs ?? PET_COMPANION_FEATURE_GATE_TIMEOUT_MS,
   });
   if (serverSnapshot.status !== 'ready') {

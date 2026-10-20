@@ -5,6 +5,7 @@ import { createMockSession, createPlainSessionFixture, createAccountEncryptionCu
 import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { AgentStateRequestStore } from '@/agent/permissions/agentStateRequestStore';
 import { decodeBase64, decrypt, encodeBase64, encrypt } from '../encryption';
+import { SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 
 const {
     mockIo,
@@ -109,6 +110,7 @@ describe('ApiSessionClient shared-editor metadata authority', () => {
         fetchSessionByIdCompatMock.mockImplementation(async () => rawSession);
         // HTTP persistence is the boundary; tuple preparation and request classification remain real.
         patchSessionMetadataEnvelopeTupleMock.mockImplementation(async ({ patch }) => {
+            patch = SessionMetadataTuplePatchV1Schema.parse(patch);
             rawSession = {
                 ...rawSession,
                 metadata: patch.sharedMetadata.ciphertext,
@@ -134,7 +136,7 @@ describe('ApiSessionClient shared-editor metadata authority', () => {
             ...state,
             requests: {
                 permission: { tool: 'Write', kind: 'permission', arguments: {}, createdAt: 100 },
-                question: { tool: 'AskUserQuestion', kind: 'user_action', arguments: {}, createdAt: 250 },
+                question: { tool: 'AskUserQuestion', kind: 'user_action', arguments: {}, createdAt: 250, turnId: 'turn-question' },
             },
         }));
         expect(patchSessionMetadataEnvelopeTupleMock.mock.calls.at(-1)?.[0].patch).toMatchObject({
@@ -143,6 +145,8 @@ describe('ApiSessionClient shared-editor metadata authority', () => {
                 pendingPermissionRequestCount: 1,
                 pendingUserActionRequestCount: 1,
                 pendingRequestNewestCreatedAt: 250,
+                newUserActionRequiredOccurrences: [{ requestId: 'question', sourceTurnId: 'turn-question', requestKind: 'user_action',
+                    occurredAt: 250, followEvent: { kind: 'needs_you', type: 'decision' } }],
             },
         });
 

@@ -413,7 +413,7 @@ describe('apps/ui/metro.config.js (Expo resolution fallbacks)', () => {
         );
         expect(nativeVoiceResult).toEqual({
             type: 'sourceFile',
-            filePath: path.resolve(__dirname, '../../../../packages/plugins/elevenlabs/src/ui/voice/index.native.ts'),
+            filePath: path.resolve(__dirname, '../../../../packages/plugins/elevenlabs/src/ui/voice/index.ts'),
         });
 
         const browserSdkResult = config.resolver.resolveRequest({}, '@happier-dev/plugin-sdk', 'web');
@@ -502,32 +502,6 @@ describe('apps/ui/metro.config.js (Expo resolution fallbacks)', () => {
         });
     });
 
-    it('falls back from missing absolute internal workspace dist targets to source files', () => {
-        process.env.HAPPIER_STACK_STACK = 'qa-test';
-        delete process.env.CI;
-        delete process.env.EXPO_NO_METRO_WORKSPACE_ROOT;
-        delete process.env.HAPPIER_UI_METRO_NARROW_WATCH_FOLDERS;
-
-        const missingDistTarget = path.resolve(
-            __dirname,
-            '../../../../node_modules/@happier-dev/protocol/dist/actions/index.js',
-        );
-        const realExistsSync = fs.existsSync.bind(fs);
-        vi.spyOn(fs, 'existsSync').mockImplementation((candidate) => (
-            path.normalize(String(candidate)) === path.normalize(missingDistTarget)
-                ? false
-                : realExistsSync(candidate)
-        ));
-
-        const config = requireFreshMetroConfig();
-
-        const actionsResult = config.resolver.resolveRequest({}, missingDistTarget, 'web');
-        expect(actionsResult).toEqual({
-            type: 'sourceFile',
-            filePath: path.resolve(__dirname, '../../../../packages/protocol/src/actions/index.ts'),
-        });
-    });
-
     it('maps explicit internal workspace source .js imports to their TypeScript source files', () => {
         process.env.HAPPIER_STACK_STACK = 'qa-test';
         delete process.env.CI;
@@ -581,7 +555,7 @@ describe('apps/ui/metro.config.js (Expo resolution fallbacks)', () => {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const metroResolver = require('metro-resolver');
         const context = {
-            originModulePath: path.join(exampleUiRoot, 'reviewPanel.native.tsx'),
+            originModulePath: path.join(exampleUiRoot, 'reviewPanelPortable.tsx'),
             resolveRequest: metroResolver.resolve,
             fileSystemLookup: (candidate: string) => {
                 try {

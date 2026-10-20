@@ -1,5 +1,12 @@
-import { HappierDisclosure, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
-import { HappierMemoryFactRow, type HappierMemoryFactRowHost } from '@happier-dev/plugin-ui/components';
+import { HappierDisclosure, HappierSkeletonBlock, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import {
+  HappierMemoryDuplicateChoice,
+  HappierMemoryFactRow,
+  type HappierMemoryDuplicateChoiceControlProps,
+  type HappierMemoryDuplicateChoiceKind,
+  type HappierMemoryDuplicateChoiceTextProps,
+  type HappierMemoryFactRowHost,
+} from '@happier-dev/plugin-ui/components';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { MemoryScopeTargetV1 } from '@happier-dev/protocol/actions/executor/types';
 import {
@@ -8,7 +15,8 @@ import {
 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import * as React from 'react';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
-import { StyleSheet } from 'react-native-unistyles';
+import { Pressable, View } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
@@ -16,11 +24,16 @@ import { InlineAddExpander } from '@/components/ui/forms/InlineAddExpander';
 import { Icon } from '@/components/ui/icons/Icon';
 import { reanimatedDisclosureMotion } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ManagedSectionCount } from '@/components/settings/machines/managed/ManagedSectionCount';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
+import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { publishPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { motionTokens } from '@/components/ui/motion';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
@@ -29,29 +42,53 @@ import {
   memoryDocumentActions,
   readMemoryActionOutcome,
   readMemoryCreationReceipt,
+  readMemoryDuplicateReview,
   type MemoryCreationReceipt,
   type MemoryDocumentTarget,
   type MemorySessionTarget,
 } from '@/sync/ops/promptLibrary/memoryDocuments';
-import { getPreferredLanguage, t } from '@/text';
-import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
+import { t } from '@/text';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { memoryDocumentHref } from './memoryDocumentRoutes';
 import type { MemoryDocumentSource } from './useMemoryDocument';
+import type { MemoryDocumentSummary } from '@/sync/domains/memory/fetchDaemonMemoryStatus';
 import { useMemoryDocumentSummary } from './useMemoryDocumentSummary';
+import { readMemoryFactSource } from './useMemoryFactSource';
+import { formatMemoryDate, useMemoryFactAttribution } from './useMemoryFactAttribution';
 import type { MemorySearchScope } from '@happier-dev/protocol/memory/memorySearch';
+
+export { formatMemoryDate } from './useMemoryFactAttribution';
 
 /** A fact this fresh reads "Just now" rather than today's date. */
 const JUST_NOW_MS = 60_000;
 
 type Notice = 'pending' | 'conflict' | 'refused' | null;
 
+export type DuplicateReview = NonNullable<ReturnType<typeof readMemoryDuplicateReview>>;
+export type DuplicateChoiceKind = HappierMemoryDuplicateChoiceKind;
+
+/** The candidate the review leads with: a word-for-word match before a related one. */
+export function leadingCandidateId(review: DuplicateReview): string | null {
+  return (review.candidates.find((entry) => entry.match === 'exact') ?? review.candidates[0])?.factId ?? null;
+}
+
 /** A forgotten fact holding its place while its row collapses; `settled` once the row has closed. */
 type CollapsingFact = Readonly<{ fact: MemoryFactV1; index: number; settled: boolean }>;
 
 const NO_FACT_IDS: ReadonlySet<string> = new Set();
+const NO_FACTS: readonly MemoryFactV1[] = [];
+
+function isExpiredFact(fact: MemoryFactV1, nowMs: number): boolean {
+  return fact.expiresAtMs !== undefined && fact.expiresAtMs <= nowMs;
+}
+
+function orderDecisionsFirst(facts: readonly MemoryFactV1[] | undefined): readonly MemoryFactV1[] {
+  if (!facts || facts.length === 0) return NO_FACTS;
+  if (!facts.some((fact) => fact.decision)) return facts;
+  return [...facts.filter((fact) => fact.decision), ...facts.filter((fact) => !fact.decision)];
+}
 
 /**
  * The rows to draw: the shown facts, with each forgotten fact kept at its place until its row has
@@ -92,13 +129,6 @@ function useArrivedFactIds(viewKey: string | null, facts: readonly MemoryFactV1[
   return arrived;
 }
 
-export function formatMemoryDate(ms: number): string {
-  return formatWithCachedDateTimeFormatter(ms, getPreferredLanguage(), {
-    month: 'short',
-    day: 'numeric',
-  });
-}
-
 /** The topic's name as people read it; the reserved archive topic has a translated name. */
 export function memoryTopicLabel(title: string): string {
   return title === MEMORY_ARCHIVE_TOPIC_TITLE_V1
@@ -126,6 +156,8 @@ export type MemoryDocumentBodyProps = Readonly<{
   preparationScope?: MemorySearchScope;
   preparationBasis?: string;
   onCreatedMemory?: (receipt: MemoryCreationReceipt) => void;
+  /** The composition owner presents these candidates in the current save sheet, preserving its draft. */
+  onDuplicateReview?: (review: NonNullable<ReturnType<typeof readMemoryDuplicateReview>>) => void;
   emptyText: string;
   /**
    * How the host says "nothing remembered yet" in its own empty treatment (the Work pane's one quiet
@@ -133,7 +165,21 @@ export type MemoryDocumentBodyProps = Readonly<{
    */
   renderEmpty?: (line: Readonly<{ testID: string; text: string }>) => React.ReactNode;
   /** Opens the Session a fact came from, through the host's Session navigation owner. */
-  onOpenSession?: (ref: Readonly<{ serverId: string; sessionId: string }>) => void;
+  onOpenSession?: (ref: Readonly<{ serverId: string; sessionId: string; messageId?: string }>) => void;
+  /** The document's own pages open a fact's detail (reason, source, approval, history) from its row. */
+  onOpenFact?: (fact: MemoryFactV1) => void;
+  /** The fact whose detail is open beside the list. */
+  selectedFactId?: string | null;
+  /** The signed-in Account, so its own approvals read "you" even while no write target is admitted. */
+  viewerAccountId?: string | null;
+  /**
+   * The document's own index page (lab K2 `A`): decisions and notes are their own counted sections,
+   * and expired facts fold into one line (kept in history, out of context) that shows them on demand.
+   * The body then draws its own sections, so the caller does not wrap it in one.
+   */
+  grouped?: boolean;
+  /** Opens this fact's edit form on arrival (a fact page's Edit returns to the list to edit it). */
+  editFactId?: string;
 }>;
 
 /**
@@ -148,6 +194,7 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
   props: MemoryDocumentBodyProps,
 ) {
   const styles = stylesheet;
+  const { theme } = useUnistyles();
   const { source, serverId, testID, onComposingChange, onCreatedMemory } = props;
   const router = useRouter();
   const view = source.view;
@@ -156,11 +203,21 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
   const readSummary = useMemoryDocumentSummary({ source, serverId,
     scope: props.preparationScope, preparationBasis: props.preparationBasis,
     enabled: topic === null });
-  const summary = source.status === 'ready' && !source.stale
-    ? readSummary : { state: 'unavailable' as const };
-  const countLabel = (count: number | undefined) => count === undefined
-    ? t(summary.state === 'pending' ? 'common.loading' : 'common.unavailable')
-    : t('memoryContext.memory.factCount', { count });
+  // Counts being read again keep their last-known values for this document. Without known
+  // counts, the caller-lived status read reports unavailability rather than reserving a spinner.
+  const fresh = source.status === 'ready' && !source.stale;
+  const countsKey = view ? JSON.stringify(view.ref) : null;
+  const lastKnownCounts = React.useRef<Readonly<{ key: string; summary: MemoryDocumentSummary }> | null>(null);
+  React.useEffect(() => {
+    if (countsKey !== null && fresh && readSummary.state === 'ready') lastKnownCounts.current = { key: countsKey, summary: readSummary };
+  }, [countsKey, fresh, readSummary]);
+  const countsPending = readSummary.state === 'pending' || (readSummary.state === 'unavailable'
+    && (readSummary.cause?.reason === 'status_pending' || readSummary.cause?.reason === 'coverage_pending'));
+  const summary: MemoryDocumentSummary = !fresh ? { state: 'unavailable' }
+    : countsPending && lastKnownCounts.current?.key === countsKey
+      ? lastKnownCounts.current.summary
+      : readSummary;
+  const countLabel = (count: number) => t('memoryContext.memory.factCount', { count });
   const archive = topic?.title === MEMORY_ARCHIVE_TOPIC_TITLE_V1;
   const writable = !props.readOnly && !archive;
   const [busy, setBusy] = React.useState(false);
@@ -169,17 +226,33 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
   const [storedDraft, setDraft] = React.useState('');
   const [storedDraftTopic, setDraftTopic] = React.useState('');
   const [draftCustody, setDraftCustody] = React.useState<MemoryDocumentSource['draftCustody']>(null);
+  // A similar saved fact, found by the write owner before anything was saved: the same form asks
+  // what to do with it, keeping what was typed.
+  const [storedReview, setReview] = React.useState<DuplicateReview | null>(null);
+  const [choiceKind, setChoiceKind] = React.useState<DuplicateChoiceKind>('update');
+  const [candidateId, setCandidateId] = React.useState<string | null>(null);
+  // An Undo whose restore met a related saved fact: the same comparison asks before it comes back.
+  const [restoring, setRestoring] = React.useState<Readonly<{
+    fact: MemoryFactV1; target: MemoryDocumentTarget; topic?: string;
+  }> | null>(null);
+  const draftCustodyRef = React.useRef(source.draftCustody);
+  draftCustodyRef.current = source.draftCustody;
   const draftCurrent = draftCustody !== null && draftCustody.isCurrent()
     && draftCustody.key === source.draftCustody?.key;
   const editingId = draftCurrent ? storedEditingId : null;
   const draft = draftCurrent ? storedDraft : '';
   const draftTopic = draftCurrent ? storedDraftTopic : '';
+  const review = draftCurrent ? storedReview : null;
   const draftRef = React.useRef<React.ElementRef<typeof FieldTextInput>>(null);
   const reducedMotion = useReducedMotionPreference();
   // A forgotten fact keeps its place while its row collapses (lab `c-mem` Motion), then leaves.
   const [collapsing, setCollapsing] = React.useState<readonly CollapsingFact[]>([]);
   const factsRef = React.useRef<readonly MemoryFactV1[]>([]);
-  factsRef.current = view?.facts ?? [];
+  // Decisions lead, then notes, each in their saved order (lab K2): one list, not a second destination.
+  const orderedFacts = React.useMemo(() => orderDecisionsFirst(view?.facts), [view?.facts]);
+  factsRef.current = orderedFacts;
+  const [showExpired, setShowExpired] = React.useState(false);
+  const now = Date.now();
 
   const refresh = source.refresh;
   const settle = React.useCallback(
@@ -190,13 +263,21 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
         const result = await run();
         const outcome = readMemoryActionOutcome(result);
         const receipt = readMemoryCreationReceipt(result);
+        const review = readMemoryDuplicateReview(result);
+        if (review) {
+          setReview(review);
+          setCandidateId(leadingCandidateId(review));
+          setChoiceKind('update');
+          props.onDuplicateReview?.(review);
+        }
         // A refusal is said in place, beside what it did not change, until the next attempt.
         if (outcome === 'pending' || outcome === 'conflict' || outcome === 'refused') setNotice(outcome);
-        // An attachment conflict still saved this fact. Keep the exact document reachable,
+        // A saved-but-unattached result is not an unsaved revision conflict. Keep its exact document reachable,
         // and close its draft so retrying cannot create a second copy of that fact.
         if (receipt) onCreatedMemory?.(receipt);
-        // A conflict hands back the current version; show it and keep what was typed.
-        const target = outcome !== 'refused' ? await refresh() : null;
+        // A conflict hands back the current version; show it and keep what was typed. A review saved
+        // nothing, so the document is not read again under the open comparison.
+        const target = outcome !== 'refused' && outcome !== 'review' ? await refresh() : null;
         return { applied: outcome === 'applied' || receipt !== null, target };
       } catch {
         setNotice('refused');
@@ -205,7 +286,7 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
         setBusy(false);
       }
     },
-    [onCreatedMemory, refresh],
+    [onCreatedMemory, props.onDuplicateReview, refresh],
   );
 
   const closeDraft = React.useCallback(() => {
@@ -213,6 +294,8 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
     setEditingId(null);
     setDraft('');
     setDraftTopic('');
+    setReview(null);
+    setRestoring(null);
     onComposingChange(false);
   }, [onComposingChange]);
 
@@ -242,6 +325,10 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
     const named = draftTopic.trim();
     const fallback = sessionTarget;
     if (!target && !canCreate) return;
+    const duplicateChoice = review ? reviewedDuplicateChoice(review, choiceKind, candidateId) : undefined;
+    const choice = duplicateChoice ? { duplicateChoice } : {};
+    // Replaying a choice through a Session or scope names the document that was reviewed.
+    const reviewed = review ? { reviewedTarget: { ref: review.ref, expectedRevision: review.revision } } : {};
     fireAndForget(
       (async () => {
         const { applied } = await settle(() => {
@@ -249,22 +336,27 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
             return memoryDocumentActions.update(target, {
               factId: editingId,
               text,
+              ...choice,
             });
           if (target) {
             return memoryDocumentActions.remember(
               topic || !named ? target : { ...target, topic: named },
-              { text },
+              { text, ...choice },
             );
           }
           if (scopeTarget)
             return memoryDocumentActions.rememberInScope(scopeTarget, {
               text,
               ...(named ? { topic: named } : {}),
+              ...choice,
+              ...reviewed,
             }, serverId);
           if (!fallback) throw new Error('memory_target_unavailable');
           return memoryDocumentActions.rememberInSession(fallback, {
             text,
             ...(named ? { topic: named } : {}),
+            ...choice,
+            ...reviewed,
           });
         });
         if (applied) closeDraft();
@@ -272,6 +364,9 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
       { tag: 'MemoryDocumentBody.save' },
     );
   }, [
+    candidateId,
+    choiceKind,
+    review,
     closeDraft,
     draft,
     draftTopic,
@@ -286,6 +381,24 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
     target,
     topic,
   ]);
+
+  // Resubmits the exact Undo with the chosen effect; the archived fact's own text comes back unchanged.
+  const saveRestore = React.useCallback(() => {
+    if (!restoring || !review || !draftCustody?.isCurrent()) return;
+    if (!restoring.target.isCurrent()) {
+      setNotice('refused');
+      return;
+    }
+    const duplicateChoice = reviewedDuplicateChoice(review, choiceKind, candidateId);
+    fireAndForget(
+      (async () => {
+        const { applied } = await settle(() => memoryDocumentActions.restore(
+          restoring.target, restoring.fact.id, restoring.topic, undefined, duplicateChoice));
+        if (applied) closeDraft();
+      })(),
+      { tag: 'MemoryDocumentBody.restoreWithChoice' },
+    );
+  }, [candidateId, choiceKind, closeDraft, draftCustody, restoring, review, settle]);
 
   const forget = React.useCallback(
     (fact: MemoryFactV1) => {
@@ -327,8 +440,14 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
                 }
                 // Undo puts the row back in place: it stops leaving and returns with the restored view.
                 setCollapsing((list) => list.filter((entry) => entry.fact.id !== fact.id));
+                // A restore that needs a duplicate choice opens it in place, under this document's custody.
+                setDraftCustody(draftCustodyRef.current);
+                setRestoring({ fact, target: restoreTarget, ...(restoreTopic === undefined ? {} : { topic: restoreTopic }) });
                 fireAndForget(
-                  settle(() => memoryDocumentActions.restore(restoreTarget, fact.id, restoreTopic)),
+                  (async () => {
+                    const { applied } = await settle(() => memoryDocumentActions.restore(restoreTarget, fact.id, restoreTopic));
+                    if (applied) setRestoring(null);
+                  })(),
                   { tag: 'MemoryDocumentBody.undoForget' },
                 );
               },
@@ -365,12 +484,23 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
     (fact: MemoryFactV1) => {
       if (!source.draftCustody?.isCurrent()) return;
       onComposingChange(false);
+      setRestoring(null);
+      setReview(null);
       setDraftCustody(source.draftCustody);
       setEditingId(fact.id);
       setDraft(fact.text);
     },
     [onComposingChange, source.draftCustody],
   );
+  // A fact page's Edit lands here once its fact and an admitted version are on screen.
+  const requestedEdit = React.useRef<string | null>(null);
+  const editFact = props.editFactId ? orderedFacts.find((fact) => fact.id === props.editFactId) ?? null : null;
+  const canEdit = writable && target !== null && Boolean(source.draftCustody?.isCurrent());
+  React.useEffect(() => {
+    if (!editFact || !canEdit || requestedEdit.current === editFact.id) return;
+    requestedEdit.current = editFact.id;
+    startEdit(editFact);
+  }, [canEdit, editFact, startEdit]);
 
   const openTopic = React.useCallback(
     (title: string) => {
@@ -389,7 +519,7 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
   }, [router, view]);
 
   const status = source.status;
-  const facts = view?.facts ?? [];
+  const facts = orderedFacts;
   const limit = props.collapsedFactCount;
   const shown =
     limit === undefined || facts.length <= limit
@@ -413,12 +543,25 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
       saveDisabled={busy || draft.trim().length === 0}
       cancelLabel={t('common.cancel')}
       saveLabel={
-        editingId ? t('common.save') : t('memoryContext.memory.rememberSave')
+        review ? duplicateSaveLabel(choiceKind)
+          : editingId ? t('common.save') : t('memoryContext.memory.rememberSave')
       }
       autoFocusRef={draftRef}
       saveTestID={`${testID}.draft.save`}
       cancelTestID={`${testID}.draft.cancel`}
     >
+      {review ? (
+        <MemoryDuplicateChoice
+          testID={`${testID}.draft.duplicate`}
+          review={review}
+          newText={draft}
+          candidateId={candidateId}
+          onCandidateChange={setCandidateId}
+          choice={choiceKind}
+          onChoiceChange={setChoiceKind}
+          disabled={busy}
+        />
+      ) : null}
       <FieldTextInput
         ref={draftRef}
         testID={`${testID}.draft`}
@@ -443,7 +586,63 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
     </InlineAddExpander>
   );
 
-  return (
+  const restoreForm = restoring && review ? (
+    <InlineAddExpander
+      isOpen
+      onOpenChange={() => {}}
+      trigger={null}
+      title={t('memoryContext.memory.undo')}
+      onCancel={closeDraft}
+      onSave={saveRestore}
+      saveDisabled={busy}
+      cancelLabel={t('common.cancel')}
+      saveLabel={duplicateSaveLabel(choiceKind)}
+      saveTestID={`${testID}.restore.save`}
+      cancelTestID={`${testID}.restore.cancel`}
+    >
+      <MemoryDuplicateChoice
+        testID={`${testID}.restore.duplicate`}
+        review={review}
+        newText={restoring.fact.text}
+        candidateId={candidateId}
+        onCandidateChange={setCandidateId}
+        choice={choiceKind}
+        onChoiceChange={setChoiceKind}
+        disabled={busy}
+      />
+    </InlineAddExpander>
+  ) : null;
+
+  const factRow = ({ fact, leaving }: Readonly<{ fact: MemoryFactV1; leaving: boolean }>) =>
+        editingId === fact.id ? (
+          <React.Fragment key={fact.id}>{draftForm}</React.Fragment>
+        ) : (
+          <MemoryFactSlot
+            key={fact.id}
+            testID={`${testID}.fact.${fact.id}.slot`}
+            factId={fact.id}
+            leaving={leaving}
+            reducedMotion={reducedMotion}
+            onCollapsed={settleCollapse}
+          >
+            <MemoryFactRow
+              testID={`${testID}.fact.${fact.id}`}
+              fact={fact}
+              serverId={view?.ref.serverId ?? serverId}
+              archived={archive}
+              writable={writable && target !== null && !leaving}
+              disabled={busy}
+              arrived={arrivedFactIds.has(fact.id)}
+              viewerAccountId={target?.accountId ?? props.viewerAccountId ?? null}
+              onEdit={startEdit}
+              onForget={forget}
+              onOpenSession={props.onOpenSession}
+              onOpenFact={props.onOpenFact}
+              selected={props.selectedFactId === fact.id}
+            />
+          </MemoryFactSlot>
+        );
+  const leading = (
     <>
       {notice === 'pending' ? (
         <SurfaceFreshnessLine
@@ -480,73 +679,55 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
           }}
         />
       ) : null}
-      {view ? (
-        <Item
-          testID={`${testID}.summary`}
-          mode="info"
-          density="compact"
-          showChevron={false}
-          showDivider={false}
-          title={
-            <Text style={styles.summary}>
-              {topic ? null : `${t('memoryContext.memory.alwaysRemembered')} `}
-              {/* Only a known count takes the value weight; "Loading" and "Unavailable" stay quiet words. */}
-              <Text style={topic || summary.state === 'ready' ? styles.summaryValue : undefined}>
-                {topic ? t('memoryContext.memory.factCount', { count: facts.length })
-                  : countLabel(summary.state === 'ready' ? summary.loadedFactCount : undefined)}
-              </Text>
-              {!topic ? (
-                <>
-                  {` · ${t('memoryContext.memory.searchable')} `}
-                  <Text style={summary.state === 'ready' ? styles.summaryValue : undefined}>
-                    {countLabel(summary.state === 'ready' ? summary.indexedFactCount : undefined)}
-                  </Text>
-                </>
-              ) : null}
-            </Text>
-          }
-        />
-      ) : null}
-      {props.composing && !editingId && writable && (target || canCreate) ? draftForm : null}
-      {editingId && view && !rows.some(({ fact }) => fact.id === editingId) ? draftForm : null}
-      {rows.map(({ fact, leaving }) =>
-        editingId === fact.id ? (
-          <React.Fragment key={fact.id}>{draftForm}</React.Fragment>
+      {/* A stale view keeps its facts; it has no counts to reserve a line for, so the line steps aside. */}
+      {/* An open duplicate comparison is the one thing in progress; the count line steps aside until it closes. */}
+      {view && (fresh || topic || summary.state === 'ready') && !(review && !topic) ? (
+        summary.state === 'unavailable' && fresh && !topic ? (
+          <SurfaceStateCard
+            testID={`${testID}.summaryUnavailable`}
+            size="line"
+            kind="error"
+            title={t('memoryContext.memory.countsUnavailable')}
+            action={{ label: t('common.retry'), onPress: () => fireAndForget(refresh(), { tag: 'MemoryDocumentBody.retrySummary' }) }}
+          />
         ) : (
-          <MemoryFactSlot
-            key={fact.id}
-            testID={`${testID}.fact.${fact.id}.slot`}
-            factId={fact.id}
-            leaving={leaving}
-            reducedMotion={reducedMotion}
-            onCollapsed={settleCollapse}
-          >
-            <MemoryFactRow
-              testID={`${testID}.fact.${fact.id}`}
-              fact={fact}
-              serverId={serverId}
-              archived={archive}
-              writable={writable && target !== null && !leaving}
-              disabled={busy}
-              arrived={arrivedFactIds.has(fact.id)}
-              onEdit={startEdit}
-              onForget={forget}
-              onOpenSession={props.onOpenSession}
-            />
-          </MemoryFactSlot>
-        ),
-      )}
-      {hiddenCount > 0 ? (
-        <Item
-          testID={`${testID}.showAll`}
-          density="compact"
-          showChevron={false}
-          showDivider={false}
-          title={t('memoryContext.memory.showAll', { count: facts.length })}
-          titleStyle={styles.showAll}
-          onPress={openAll}
-        />
+          <Item
+            testID={`${testID}.summary`}
+            mode="info"
+            density="compact"
+            showChevron={false}
+            showDivider={false}
+            title={topic || summary.state === 'ready' ? (
+              <Text style={styles.summary}>
+                {topic ? null : `${t('memoryContext.memory.alwaysRemembered')} `}
+                <Text style={styles.summaryValue}>
+                  {topic ? countLabel(facts.length)
+                    // Unknown is not zero: a count the machine does not report keeps its slot as a dash.
+                    : summary.state === 'ready' && summary.loadedFactCount !== undefined ? countLabel(summary.loadedFactCount) : '—'}
+                </Text>
+                {!topic && summary.state === 'ready' ? (
+                  <>
+                    {` · ${t('memoryContext.memory.searchable')} `}
+                    <Text style={styles.summaryValue}>{countLabel(summary.indexedFactCount)}</Text>
+                  </>
+                ) : null}
+              </Text>
+            ) : (
+              // One reserved line the height of the summary, so the counts land without moving the facts.
+              <View style={styles.summarySkeleton}>
+                <HappierSkeletonBlock width={216} height={8} radius={4} color={theme.colors.surface.skeleton} reducedMotion={reducedMotion} />
+              </View>
+            )}
+          />
+        )
       ) : null}
+      {restoreForm}
+      {props.composing && !editingId && !restoring && writable && (target || canCreate) ? draftForm : null}
+      {editingId && view && !rows.some(({ fact }) => fact.id === editingId) ? draftForm : null}
+    </>
+  );
+  const trailing = (
+    <>
       {view && facts.length === 0 && !props.composing ? (
         props.renderEmpty ? props.renderEmpty({
           testID: `${testID}.empty`,
@@ -577,7 +758,16 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
           onPress={() => openTopic(entry.title)}
         />
       ))}
-      {!view && status === 'none' ? (
+      {!view && status === 'loading' ? (
+        // The sheet keeps its place while the document is read: the facts' rows are reserved, not a late strip.
+        <ItemLoadStateRows
+          testID={`${testID}.loading`}
+          state={{ kind: 'loading' }}
+          rows={3}
+          lines={2}
+          accessibilityLabel={t('common.loading')}
+        />
+      ) : !view && status === 'none' ? (
         props.composing && writable && canCreate ? null : props.renderEmpty ? props.renderEmpty({ testID: `${testID}.none`, text: props.emptyText }) : (
           <Item
             testID={`${testID}.none`}
@@ -620,9 +810,206 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
       ) : null}
     </>
   );
+  if (!props.grouped || topic) {
+    return (
+      <>
+        {leading}
+        {rows.map(factRow)}
+      {hiddenCount > 0 ? (
+        <Item
+          testID={`${testID}.showAll`}
+          density="compact"
+          showChevron={false}
+          showDivider={false}
+          title={t('memoryContext.memory.showAll', { count: facts.length })}
+          titleStyle={styles.showAll}
+          onPress={openAll}
+        />
+      ) : null}
+        {trailing}
+      </>
+    );
+  }
+  // The index page: decisions, then notes, each its own counted section; expired facts fold away.
+  const leadingForm = (props.composing && !editingId && !restoring && writable && Boolean(target || canCreate))
+    || (restoring !== null && review !== null)
+    || (editingId !== null && view !== null && !rows.some(({ fact }) => fact.id === editingId));
+  const live = rows.filter(({ fact, leaving }) => leaving || !isExpiredFact(fact, now) || showExpired);
+  const expiredFacts = facts.filter((fact) => isExpiredFact(fact, now));
+  const decisionRows = live.filter(({ fact }) => fact.decision !== undefined);
+  const noteRows = live.filter(({ fact }) => fact.decision === undefined);
+  return (
+    <>
+      {/* A form opened here is a sheet of its own; the lines above the facts stay flat. */}
+      <ItemGroup header="none" surface={leadingForm ? undefined : 'none'}>{leading}</ItemGroup>
+      {decisionRows.length > 0 ? (
+        <ItemGroup
+          testID={`${testID}.decisions`}
+          title={t('memoryContext.memory.decisionsTitle')}
+          titleAccessory={<ManagedSectionCount count={decisionRows.length} />}
+          // Selection spans both sections: one fact of the page is open at a time.
+          selectableItemCountOverride={live.length}
+        >
+          {decisionRows.map(factRow)}
+        </ItemGroup>
+      ) : null}
+      {noteRows.length > 0 ? (
+        <ItemGroup
+          testID={`${testID}.notes`}
+          title={t('memoryContext.memory.notesTitle')}
+          titleAccessory={<ManagedSectionCount count={noteRows.length} />}
+          selectableItemCountOverride={live.length}
+        >
+          {noteRows.map(factRow)}
+        </ItemGroup>
+      ) : null}
+      <ItemGroup header="none" surface="none">
+        {expiredFacts.length > 0 ? (
+          <Item
+            testID={`${testID}.expired`}
+            mode="info"
+            density="compact"
+            showChevron={false}
+            showDivider={false}
+            icon={<Icon name="clock-counter-clockwise" />}
+            title={expiredFacts.every((fact) => fact.decision !== undefined)
+              ? t('memoryContext.memory.expiredDecisions', { count: expiredFacts.length })
+              : t('memoryContext.memory.expiredFacts', { count: expiredFacts.length })}
+            titleStyle={styles.footer}
+            rightElement={(
+              <Pressable
+                testID={`${testID}.expired.toggle`}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: showExpired }}
+                onPress={() => setShowExpired((open) => !open)}
+                hitSlop={8}
+              >
+                <Text style={styles.showAll}>{showExpired ? t('memoryContext.memory.hideExpired') : t('memoryContext.memory.showExpired')}</Text>
+              </Pressable>
+            )}
+          />
+        ) : null}
+        {trailing}
+      </ItemGroup>
+    </>
+  );
 });
 
 function ignoreExpandedChange() {}
+
+/** The reviewed effect bound to the exact revision it was reviewed at. */
+function reviewedDuplicateChoice(review: DuplicateReview, kind: DuplicateChoiceKind, candidateId: string | null) {
+  const factId = candidateId ?? leadingCandidateId(review);
+  return kind === 'keep_both' || factId === null
+    ? { kind: 'keep_both' as const, expectedRevision: review.revision }
+    : { kind, factId, expectedRevision: review.revision };
+}
+
+function duplicateSaveLabel(choice: DuplicateChoiceKind): string {
+  return choice === 'update' ? t('memoryContext.memory.duplicateSaveUpdate')
+    : choice === 'replace' ? t('memoryContext.memory.duplicateSaveReplace')
+      : t('memoryContext.memory.duplicateKeepBoth');
+}
+
+/**
+ * The write owner found a saved fact like this one before saving anything (lab K2 `Sd`): the shared
+ * plugin-ui comparison plugins draw too, bound to this review, the app's copy and its own controls.
+ * The review, the effect's revision binding and the write stay here.
+ */
+export function MemoryDuplicateChoice(props: Readonly<{
+  testID: string;
+  review: DuplicateReview;
+  /** What the person has typed now; the New line follows the draft. */
+  newText: string;
+  candidateId: string | null;
+  onCandidateChange: (factId: string) => void;
+  choice: DuplicateChoiceKind;
+  onChoiceChange: (choice: DuplicateChoiceKind) => void;
+  disabled: boolean;
+}>) {
+  const { theme } = useUnistyles();
+  const styles = stylesheet;
+  const candidates = React.useMemo(
+    () => [...props.review.candidates]
+      .sort((a, b) => (a.match === b.match ? 0 : a.match === 'exact' ? -1 : 1))
+      .map((candidate) => ({
+        id: candidate.factId,
+        text: candidate.text,
+        meta: [
+          candidate.match === 'exact' ? t('memoryContext.memory.duplicateExact') : t('memoryContext.memory.duplicateRelated'),
+          candidate.topic ? memoryTopicLabel(candidate.topic) : null,
+          candidate.decision ? (candidate.decision.approvedBy ? t('memoryContext.memory.decision') : t('memoryContext.memory.decisionNotApproved')) : null,
+        ].filter((part): part is string => Boolean(part)).join(' · '),
+      })),
+    [props.review.candidates],
+  );
+  return (
+    <HappierMemoryDuplicateChoice
+      testID={props.testID}
+      candidates={candidates}
+      newText={props.newText}
+      candidateId={props.candidateId}
+      onCandidateChange={props.onCandidateChange}
+      choice={props.choice}
+      onChoiceChange={props.onChoiceChange}
+      disabled={props.disabled}
+      labels={{
+        title: candidates.length > 1
+          ? t('memoryContext.memory.duplicateTitleMany', { count: candidates.length })
+          : t('memoryContext.memory.duplicateTitle'),
+        saved: t('memoryContext.memory.duplicateSaved'),
+        new: t('memoryContext.memory.duplicateNew'),
+        choice: t('memoryContext.memory.duplicateChoice'),
+        options: {
+          update: t('memoryContext.memory.duplicateUpdate'),
+          replace: t('memoryContext.memory.duplicateReplace'),
+          keep_both: t('memoryContext.memory.duplicateKeepBoth'),
+        },
+        effects: {
+          update: t('memoryContext.memory.duplicateUpdateHint'),
+          replace: t('memoryContext.memory.duplicateReplaceHint'),
+          keep_both: t('memoryContext.memory.duplicateKeepBothHint'),
+        },
+      }}
+      Text={DuplicateChoiceText}
+      Choice={DuplicateChoiceControl}
+      style={styles.duplicate}
+      colors={{ chosen: theme.colors.surface.selected, hover: theme.colors.surface.pressed }}
+      radius={theme.borderRadius.md}
+      space={theme.space}
+    />
+  );
+}
+
+function DuplicateChoiceText(props: HappierMemoryDuplicateChoiceTextProps) {
+  const styles = stylesheet;
+  const style = props.role === 'title' ? styles.duplicateTitle
+    : props.role === 'label' ? styles.duplicateLabel
+      : props.role === 'meta' ? styles.factMeta
+        : props.role === 'effect' ? styles.duplicateEffect
+          : [styles.duplicateText, props.retired ? styles.retired : null];
+  return (
+    <Text testID={props.testID} style={style} numberOfLines={props.numberOfLines} accessibilityRole={props.accessibilityRole}>
+      {props.children}
+    </Text>
+  );
+}
+
+function DuplicateChoiceControl(props: HappierMemoryDuplicateChoiceControlProps) {
+  return (
+    <SegmentedTabBar<DuplicateChoiceKind>
+      tabs={props.options}
+      activeTabId={props.value}
+      onSelectTab={props.onChange}
+      segmentSizing="content"
+      targetSize="platform"
+      role="radiogroup"
+      accessibilityLabel={props.accessibilityLabel}
+      disabled={props.disabled}
+      testIDPrefix={props.testIDPrefix}
+    />
+  );
+}
 
 /**
  * A fact's place in the list. Forgetting collapses its height and opacity together on the
@@ -695,20 +1082,28 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
     disabled: boolean;
     /** It landed while the list was on screen: it arrives with a soft wash that fades. */
     arrived: boolean;
+    /** The Account reading this document, so its own approval reads "approved by you". */
+    viewerAccountId: string | null;
     onEdit: (fact: MemoryFactV1) => void;
     onForget: (fact: MemoryFactV1) => void;
     onOpenSession?: (
-      ref: Readonly<{ serverId: string; sessionId: string }>,
+      ref: Readonly<{ serverId: string; sessionId: string; messageId?: string }>,
     ) => void;
+    onOpenFact?: (fact: MemoryFactV1) => void;
+    selected?: boolean;
   }>,
 ) {
-  const { fact, onEdit, onForget, onOpenSession } = props;
+  const { fact, onEdit, onForget, onOpenSession, onOpenFact } = props;
   const [highlighting, setHighlighting] = React.useState(props.arrived);
   React.useEffect(() => {
     if (props.arrived) setHighlighting(true);
   }, [props.arrived]);
   const endHighlight = React.useCallback(() => setHighlighting(false), []);
-  const source = fact.sourceSessionRef;
+  const decision = fact.decision;
+  // A decision links the Session message it was decided in; a note links the Session it came from.
+  const factSource = readMemoryFactSource(fact);
+  const source = factSource?.kind === 'session'
+    ? { ...factSource.session, ...(factSource.messageId ? { messageId: factSource.messageId } : {}) } : null;
   // Row-local: only this fact's source Session title, and only when that Session is loaded here.
   const sourceName = useSessionSelector(
     source?.sessionId ?? '',
@@ -718,10 +1113,13 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
   );
   const now = Date.now();
   const expired = fact.expiresAtMs !== undefined && fact.expiresAtMs <= now;
+  const attribution = useMemoryFactAttribution(fact, props.serverId);
   const facts = [
+    decision ? t('memoryContext.memory.decision') : null,
+    attribution.rowApproval,
     now - fact.createdAtMs < JUST_NOW_MS
       ? t('memoryContext.memory.justNow')
-      : formatMemoryDate(fact.createdAtMs),
+      : attribution.savedLabel,
     fact.expiresAtMs === undefined
       ? null
       : expired
@@ -731,7 +1129,6 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
         : t('memoryContext.memory.until', {
             date: formatMemoryDate(fact.expiresAtMs),
           }),
-    source ? null : t('memoryContext.memory.addedByYou'),
   ]
     .filter((part): part is string => Boolean(part))
     .join(' · ');
@@ -765,9 +1162,12 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
       testID={props.testID}
       text={fact.text}
       metadata={facts}
+      detail={decision?.reason}
       source={source ? { label: sourceName || t('memoryContext.memory.openSource'), accessibilityLabel: t('memoryContext.memory.openSource'), onPress: sourceLink } : undefined}
       archived={props.archived}
       expired={expired}
+      onPress={onOpenFact ? () => onOpenFact(fact) : undefined}
+      selected={props.selected}
       host={memoryFactHost}
       arrival={highlighting ? <MemoryFactArrival testID={`${props.testID}.arrived`} onDone={endHighlight} /> : null}
       actions={
@@ -786,9 +1186,10 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
 
 const memoryFactHost: HappierMemoryFactRowHost = {
   Row: function MemoryFactItem(props) {
-    return <Item testID={props.testID} mode="info" title={props.text}
+    return <Item testID={props.testID} mode={props.onPress ? 'interactive' : 'info'} title={props.text}
+      onPress={props.onPress} selected={props.selected}
       titleLines={props.archived ? undefined : 2}
-      titleStyle={props.retired ? stylesheet.retired : undefined}
+      titleStyle={props.retired ? [stylesheet.factText, stylesheet.retired] : stylesheet.factText}
       subtitle={props.subtitle} subtitleLines={1} showChevron={false} rightElement={props.actions} />;
   },
   Metadata: function MemoryFactMetadata(props) {
@@ -796,6 +1197,9 @@ const memoryFactHost: HappierMemoryFactRowHost = {
   },
   Source: function MemoryFactSource(props) {
     return <Text {...props} style={stylesheet.factSource} />;
+  },
+  Detail: function MemoryFactDetail(props) {
+    return <Text {...props} numberOfLines={2} style={stylesheet.factDetail} />;
   },
 };
 
@@ -805,6 +1209,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     ...happierPageTextMetrics('meta'),
     color: theme.colors.text.secondary,
     fontVariant: ['tabular-nums'],
+  },
+  summarySkeleton: {
+    // The summary line's own height, so the counts replace the bar without moving the facts below.
+    justifyContent: 'center',
+    height: happierPageTextMetrics('meta').lineHeight,
   },
   summaryValue: {
     ...Typography.default('semiBold'),
@@ -825,6 +1234,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     ...happierPageTextMetrics('meta'),
     color: theme.colors.text.tertiary,
   },
+  // A fact is content, not a row label: it reads in the regular face, as the lab's fact rows do.
+  factText: {
+    ...Typography.default(),
+  },
   retired: {
     color: theme.colors.text.tertiary,
     textDecorationLine: 'line-through',
@@ -835,11 +1248,46 @@ const stylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.text.tertiary,
     fontVariant: ['tabular-nums'],
   },
+  factDetail: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('meta'),
+    color: theme.colors.text.secondary,
+  },
   factSource: {
     color: theme.colors.text.secondary,
   },
   topicField: {
     marginTop: theme.space.s8,
+  },
+  duplicate: {
+    // One grouped comparison on the inset ground, its text on the form fields' edge (lab K2 `Sd`).
+    marginBottom: theme.space.s12,
+    paddingVertical: theme.space.s12,
+    paddingHorizontal: theme.space.s12,
+    borderRadius: theme.borderRadius.lg,
+    backgroundColor: theme.colors.surface.inset,
+  },
+  duplicateTitle: {
+    ...Typography.default('semiBold'),
+    ...happierPageTextMetrics('rowTitle'),
+    color: theme.colors.text.primary,
+  },
+  duplicateLabel: {
+    // The label sits on the text's first line.
+    ...Typography.default(),
+    ...happierPageTextMetrics('rowDescription'),
+    lineHeight: happierPageTextMetrics('rowTitle').lineHeight,
+    color: theme.colors.text.tertiary,
+  },
+  duplicateText: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('rowTitle'),
+    color: theme.colors.text.primary,
+  },
+  duplicateEffect: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('rowDescription'),
+    color: theme.colors.text.secondary,
   },
   arrival: {
     position: 'absolute',

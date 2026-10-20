@@ -18,6 +18,8 @@ import type { DevcontainerChildProjectionV1 } from '@happier-dev/protocol/machin
 import { readMachineInstallationPublicKey } from '@/sync/domains/machines/machineInstallationPublicKey';
 import { encodeBase64 } from '@/encryption/base64';
 import { yieldToEventLoop } from '@/sync/encryption/cryptoBatchYield';
+import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { hasCurrentMachineContent } from '@/sync/domains/machines/resolveServerScopedMachines';
 
 type MachineEncryption = {
     decryptMetadata: (version: number, value: string) => Promise<any>;
@@ -220,6 +222,7 @@ export async function buildUpdatedMachineFromSocketUpdate(params: {
     updateSeq: number;
     updateCreatedAt: number;
     existingMachine: Machine | undefined;
+    keyBasis?: Machine['keyBasis'];
     getMachineEncryption: (machineId: string) => MachineEncryption | null | undefined;
 }): Promise<Machine | null> {
     const { machineUpdate, updateCreatedAt, existingMachine, getMachineEncryption } = params;
@@ -256,8 +259,16 @@ export async function buildUpdatedMachineFromSocketUpdate(params: {
         ...(existingMachine?.access ? { access: existingMachine.access } : {}),
         ...(existingMachine?.isShared !== undefined ? { isShared: existingMachine.isShared } : {}),
         ...(existingMachine?.keyBasis !== undefined ? { keyBasis: existingMachine.keyBasis } : {}),
+        ...(params.keyBasis !== undefined ? { keyBasis: params.keyBasis } : {}),
         ...(existingMachine?.dataEncryptionKey !== undefined ? { dataEncryptionKey: existingMachine.dataEncryptionKey } : {}),
     };
+    // Content patches do not republish the capability projection. Re-parsing
+    // its retained object would look like an identity change to in-flight reads.
+    if (existingMachine && !('operationProtocolCapabilities' in machineUpdate)
+        && !('operationProtocolCapabilitiesRevision' in machineUpdate)) {
+        updatedMachine.operationProtocolCapabilities = existingMachine.operationProtocolCapabilities;
+        updatedMachine.operationProtocolCapabilitiesRevision = existingMachine.operationProtocolCapabilitiesRevision;
+    }
 
     // Socket content never widens the current access projection; list refresh owns access changes.
     if (existingMachine?.isShared && existingMachine.access?.accessState !== 'ready') return updatedMachine;
@@ -265,6 +276,11 @@ export async function buildUpdatedMachineFromSocketUpdate(params: {
         if (machineUpdate.devcontainerChild !== undefined
             || (machineUpdate.metadata && machineUpdate.metadata.version > (existingMachine?.metadataVersion ?? 0))) {
             updatedMachine.metadata = projectMachinePublishedMetadataFromRowV1(updatedMachine.metadata, machineUpdate.devcontainerChild);
+        }
+    };
+    const qualifyOpenedContent = () => {
+        if (updatedMachine.metadata && updatedMachine.availability?.kind !== 'locked') {
+            updatedMachine.availability = hasCurrentMachineContent(updatedMachine) ? { kind: 'available' } : undefined;
         }
     };
 
@@ -308,6 +324,7 @@ export async function buildUpdatedMachineFromSocketUpdate(params: {
             };
         }
         projectChildFact();
+        qualifyOpenedContent();
         return updatedMachine;
     }
 
@@ -355,7 +372,9 @@ export async function buildUpdatedMachineFromSocketUpdate(params: {
     }
 
     projectChildFact();
-    return getMachineEncryption(machineId) === machineEncryption ? updatedMachine : null;
+    if (getMachineEncryption(machineId) !== machineEncryption) return null;
+    qualifyOpenedContent();
+    return updatedMachine;
 }
 
 const machineActivityPlaceholderContent = {
@@ -397,7 +416,7 @@ export function buildMachineFromMachineActivityEphemeralUpdate(params: {
     };
 }
 
-/** A presence-only publication cannot retire a captured content/access read. */
+/** Presence and same-key version hints cannot retire a captured content/access read. */
 function isMachineReadSnapshotCurrent(
     current: Machine | null | undefined,
     captured: Machine | null | undefined,
@@ -408,8 +427,28 @@ function isMachineReadSnapshotCurrent(
         return isMachineActivityPlaceholder(current);
     }
     return Object.keys(current).length === Object.keys(captured).length
-        && Object.entries(current).every(([key, value]) => key === 'active' || key === 'activeAt'
-            || value === captured[key as keyof Machine]);
+        && Object.entries(current).every(([key, value]) => {
+            if (key === 'active' || key === 'activeAt' || key === 'updatedAt') return true;
+            // Socket hints replace the basis object as published versions advance.
+            // Only its key identity retires this read; hydration still withholds
+            // execution until both opened fields satisfy the latest version hints.
+            if (key === 'keyBasis') return current.keyBasis?.dataEncryptionKey === captured.keyBasis?.dataEncryptionKey;
+            return value === captured[key as keyof Machine];
+        });
+}
+
+/** Opened socket content can advance one field while the list opens the other. */
+function isMachineHydrationSnapshotCurrent(current: Machine | null, captured: Machine | null | undefined): boolean {
+    if (isMachineReadSnapshotCurrent(current, captured)) return true;
+    if (!current || !captured || current.availability?.kind === 'locked'
+        || current.metadataVersion < captured.metadataVersion || current.daemonStateVersion < captured.daemonStateVersion) return false;
+    return Object.keys({ ...captured, ...current }).every(key => {
+        if (key === 'active' || key === 'activeAt' || key === 'updatedAt'
+            || key === 'metadata' || key === 'metadataVersion' || key === 'daemonState' || key === 'daemonStateVersion') return true;
+        if (key === 'availability') return current.availability?.kind === 'available' || current.availability === captured.availability;
+        if (key === 'keyBasis') return current.keyBasis?.dataEncryptionKey === captured.keyBasis?.dataEncryptionKey;
+        return current[key as keyof Machine] === captured[key as keyof Machine];
+    });
 }
 
 export async function fetchAndApplyMachines(params: {
@@ -434,6 +473,8 @@ export async function fetchAndApplyMachines(params: {
      * response), so the list owner can end its loading state instead of waiting forever.
      */
     onListUnavailable?: (error: unknown) => void;
+    /** Called after the complete list is published, including display-first hydration. */
+    onListComplete?: () => void;
     /**
      * When true, drop any locally-cached machines that are missing from the
      * latest fetch response.
@@ -523,18 +564,50 @@ export async function fetchAndApplyMachines(params: {
     ] as const));
     const readIncumbentRow = (machineId: string) => (params.getMachineSnapshot
         ? params.getMachineSnapshot()[machineId] : params.getExistingMachine?.(machineId)) ?? null;
+    let hydratingPublishedRows = false;
     const isMachineCurrent = (machineId: string) => {
         const row = capturedRows.get(machineId);
         return shouldContinue() && machineContexts.get(machineId)?.isCurrent() !== false
-            && (!(params.getMachineSnapshot || params.getExistingMachine) || isMachineReadSnapshotCurrent(readIncumbentRow(machineId), incumbentRows.get(machineId)))
-            && Boolean(row && rowIsNotOlder(row));
+            && (!(params.getMachineSnapshot || params.getExistingMachine) || (hydratingPublishedRows
+                ? isMachineHydrationSnapshotCurrent(readIncumbentRow(machineId), incumbentRows.get(machineId))
+                : isMachineReadSnapshotCurrent(readIncumbentRow(machineId), incumbentRows.get(machineId))))
+            && Boolean(row && (hydratingPublishedRows || rowIsNotOlder(row)));
     };
     const applyCurrentMachines = (incoming: Machine[], replace: boolean) => {
         const current = incoming.filter((machine) => isMachineCurrent(machine.id)).map((machine) => {
             const presence = readIncumbentRow(machine.id);
             const captured = requestMachineSnapshot ? requestMachineSnapshot[machine.id] : incumbentRows.get(machine.id);
-            return presence && (presence.active !== captured?.active || presence.activeAt !== captured?.activeAt)
-                ? { ...machine, active: presence.active, activeAt: presence.activeAt } : machine;
+            if (!presence) return machine;
+            const readBasis = machine.keyBasis;
+            const currentBasis = presence.keyBasis;
+            // Preserve newer same-key hints before warm publication as well as
+            // hydration. An older HTTP row may open useful metadata, but cannot
+            // erase a socket's pending-content requirement and admit execution.
+            const keyBasis = readBasis && currentBasis
+                && readBasis.dataEncryptionKey === currentBasis.dataEncryptionKey
+                && (currentBasis.metadataVersion > readBasis.metadataVersion
+                    || currentBasis.daemonStateVersion > readBasis.daemonStateVersion)
+                ? { ...readBasis, metadataVersion: Math.max(readBasis.metadataVersion, currentBasis.metadataVersion),
+                    daemonStateVersion: Math.max(readBasis.daemonStateVersion, currentBasis.daemonStateVersion) }
+                : readBasis;
+            const merged = {
+                ...machine,
+                ...(hydratingPublishedRows ? {
+                    updatedAt: Math.max(machine.updatedAt, presence.updatedAt),
+                    ...(presence.metadataVersion > machine.metadataVersion
+                        ? { metadata: presence.metadata, metadataVersion: presence.metadataVersion } : {}),
+                    ...(presence.daemonStateVersion > machine.daemonStateVersion
+                        ? { daemonState: presence.daemonState, daemonStateVersion: presence.daemonStateVersion } : {}),
+                    ...(presence.keyBasis ? { keyBasis: presence.keyBasis } : {}),
+                } : {}),
+                ...(keyBasis ? { keyBasis } : {}),
+                ...(presence.active !== captured?.active || presence.activeAt !== captured?.activeAt
+                    ? { active: presence.active, activeAt: presence.activeAt } : {}),
+            };
+            // Retain opened display fields while a newer hinted peer is pending,
+            // but never promote that partial row into execution readiness.
+            return hydratingPublishedRows && merged.metadata && merged.availability?.kind === 'available'
+                && !hasCurrentMachineContent(merged) ? { ...merged, availability: undefined } : merged;
         });
         applyMachines(current, replace && current.length === incoming.length,
             current.flatMap(machine => {
@@ -758,9 +831,10 @@ export async function fetchAndApplyMachines(params: {
             ...readMachineIdentityFields(machine),
             ...readMachinePublishedContext(machine),
             storageMode: 'e2ee',
-            // Current key/access checks succeeded. A previous lock is not the
-            // state of this pending hydration; retain only last-known readiness.
-            ...(canReuseContent && existingMachine?.storageMode === 'e2ee' && existingMachine.availability?.kind === 'available'
+            // Retain display content while hydrating, but only current admitted
+            // versions carry execution readiness before the whole list settles.
+            ...(canReuseContent && !needsMachineWarmHydration(machine)
+                && existingMachine?.storageMode === 'e2ee' && existingMachine.availability?.kind === 'available'
                 ? { availability: existingMachine.availability } : {}),
         });
     };
@@ -850,6 +924,7 @@ export async function fetchAndApplyMachines(params: {
         const replace = (params.replace ?? false) && !hasOlderRows && machines.every((machine) => isMachineCurrent(machine.id));
         params.applyMachineDisplayEntries!(displayEntries, { replace });
         applyCurrentMachines(warmMachines, replace);
+        hydratingPublishedRows = true;
 
         const machinesNeedingHydration = machines
             .filter((machine) =>
@@ -886,26 +961,44 @@ export async function fetchAndApplyMachines(params: {
                 }
                 return publication;
             };
-            void runTasksWithLimit(
-                machinesNeedingHydration.map((machine) => async () => {
-                    // Reuse the crypto owner's cooperative release before the
-                    // next background open; foreground RPCs do not join this fleet.
-                    await yieldHydrationCohort();
-                    if (!isMachineCurrent(machine.id)) return null;
-                    const decryptedMachine = await decryptMachine(machine);
-                    if (!isMachineCurrent(machine.id)) return null;
-                    if (decryptedMachine) {
-                        await publishHydratedMachine(decryptedMachine);
-                    }
-                    return decryptedMachine;
-                }),
-                concurrencyLimit,
-            ).catch((error) => {
+            // Keep this read joined to its InvalidateSync attempt. Display rows
+            // are already published; otherwise this older completion could
+            // overwrite the outcome of a newer list read.
+            const onlineHydration: FetchedMachineRow[] = [];
+            const backgroundHydration: FetchedMachineRow[] = [];
+            for (const machine of machinesNeedingHydration) {
+                (isMachineOnline(readIncumbentRow(machine.id) ?? machine)
+                    ? onlineHydration : backgroundHydration).push(machine);
+            }
+            // Sorting alone lets an offline peer share the last online cohort's
+            // key/crypto batch. Finish online content through the same bounded
+            // owner before admitting background work to that resource.
+            await (async () => {
+                for (const cohort of [onlineHydration, backgroundHydration]) {
+                    await runTasksWithLimit(cohort.map((machine) => async () => {
+                        // Reuse the crypto owner's cooperative release before the
+                        // next background open; foreground RPCs do not join this fleet.
+                        await yieldHydrationCohort();
+                        if (!isMachineCurrent(machine.id)) return null;
+                        const decryptedMachine = await decryptMachine(machine);
+                        if (!isMachineCurrent(machine.id)) return null;
+                        if (decryptedMachine) {
+                            await publishHydratedMachine(decryptedMachine);
+                        }
+                        return decryptedMachine;
+                    }), concurrencyLimit);
+                }
+            })().then(() => {
+                if (shouldContinue()) params.onListComplete?.();
+            }).catch((error) => {
                 console.error('[machinesSnapshot] Background hydration failed', error);
+                if (shouldContinue()) params.onListUnavailable?.(error);
             });
+        } else if (shouldContinue()) {
+            params.onListComplete?.();
         }
 
-        log.log(`🖥️ fetchMachines completed - rendered ${displayEntries.length} machine display rows before selective hydration`);
+        log.log(`🖥️ fetchMachines completed - rendered ${displayEntries.length} machine display rows and completed selective hydration`);
         return;
     }
 
@@ -920,5 +1013,6 @@ export async function fetchAndApplyMachines(params: {
     // particular refresh response unless the caller opts into a hard replace.
     if (!shouldContinue()) return;
     applyCurrentMachines(decryptedMachines, (params.replace ?? false) && !hasOlderRows && machines.every((machine) => isMachineCurrent(machine.id)));
+    if (shouldContinue()) params.onListComplete?.();
     log.log(`🖥️ fetchMachines completed - processed ${decryptedMachines.length} machines`);
 }

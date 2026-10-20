@@ -17,6 +17,7 @@ import { resolveSpawnServerRouteParam } from '@/components/sessions/new/navigati
 import { useNewSessionPickerRoutePresentation } from '@/components/sessions/new/navigation/newSessionContainedModalScreen';
 import { Icon } from '@/components/ui/icons/Icon';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { useEventCallback } from '@/hooks/ui/useEventCallback';
 
 export default React.memo(function SecretPickerScreen() {
     const { theme } = useUnistyles();
@@ -122,9 +123,9 @@ export default React.memo(function SecretPickerScreen() {
         spawnServerId,
     ]);
 
-    const handleBackPress = React.useCallback(() => {
+    const handleBackPress = useEventCallback(() => {
         safeRouterBack({ router, navigation, fallbackHref: pickerFallbackHref });
-    }, [navigation, pickerFallbackHref, router]);
+    });
 
     React.useEffect(() => {
         if (hasUsableRouteState) return;

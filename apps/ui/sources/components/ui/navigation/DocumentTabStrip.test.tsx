@@ -8,6 +8,9 @@ import { installPanelCommonModuleMocks } from '@/components/ui/panels/panelTestH
 import { DocumentTabStrip } from './DocumentTabStrip';
 import { createEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropRuntime';
 
+/** The node mock sees React Native's host ScrollView by its mocked host name. */
+const isHostScrollView = (type: unknown) => type === 'ScrollView';
+
 installPanelCommonModuleMocks();
 
 function TabPressMenuFixture(props: Readonly<{ runtime: ReturnType<typeof createEntityDragDropRuntime>; variant: 'bar' | 'rail'; sourceOnly?: boolean }>) {
@@ -213,6 +216,71 @@ describe('DocumentTabStrip actions', () => {
         expect(pin).toHaveBeenCalledWith('a');
         expect(unpin).toHaveBeenCalledWith('b');
         expect(close).toHaveBeenCalledWith('b');
+    });
+
+    it('keeps pinned tabs fixed ahead of one scrolling strip of every other tab and scrolls the open tab into view', async () => {
+        const keys = ['pin', 'a', 'b', 'c', 'd', 'e', 'f'];
+        const scrollTo = vi.fn();
+        const strip = (active: string) => <DocumentTabStrip variant="bar"
+            tabs={keys.map(key => ({ key, title: `Tab ${key}`, isPinned: key === 'pin', isPreview: false }))}
+            activeTabKey={active} accessibilityLabel="Documents"
+            onActivate={() => {}} onPin={() => {}} onUnpin={() => {}} onClose={() => {}}
+            renderLeadingIcon={() => null} tabNativeId={id => id} panelNativeId={id => id}
+            testIds={{ tab: id => `tab-${id}` }} />;
+        const screen = await renderScreen(strip('a'), {
+            createNodeMock: element => (isHostScrollView(element.type) ? { scrollTo } : null),
+        });
+        const scroller = screen.root.findAll(node => isHostScrollView(node.type));
+        expect(scroller).toHaveLength(1);
+        const inScroller = (key: string) => scroller[0]!.findAll(node => node.props?.testID === `tab-${key}`).length > 0;
+        // Every unpinned tab stays in the strip (nothing is truncated behind a count); the pinned one leads outside it.
+        expect(keys.filter(inScroller)).toEqual(['a', 'b', 'c', 'd', 'e', 'f']);
+        expect(screen.findAllByTestId('tab-pin').length).toBeGreaterThan(0);
+        // Measured: a 300 px viewport over six 120 px tabs.
+        await act(async () => {
+            scroller[0]!.props.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width: 300, height: 30 } } });
+            for (const [index, key] of keys.slice(1).entries()) {
+                screen.findByTestId(`document-tab-frame-${key}`)?.props.onLayout?.({ nativeEvent: { layout: { x: index * 122, y: 0, width: 120, height: 30 } } });
+            }
+        });
+        scrollTo.mockClear();
+        await screen.update(strip('f'));
+        expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ x: 5 * 122 + 120 - 300 + 12 }));
+    });
+
+    it('takes a carried item only at a tab inside the visible strip, never at one scrolled out of view', async () => {
+        const runtime = createEntityDragDropRuntime();
+        const scope = { serverId: 'home', accountId: 'account' };
+        runtime.registerSource({ id: 'row', scope, isCurrent: () => true,
+            getItem: () => ({ kind: 'destination', scope, href: '/inbox' }) });
+        // Window geometry is the platform's: the strip shows 0–100; tab b lies at 200–260, past its clip.
+        const rects: Record<string, { x: number; y: number; width: number; height: number }> = {
+            'document-tab-viewport': { x: 0, y: 0, width: 100, height: 30 },
+            'document-tab-entity-a': { x: 0, y: 0, width: 60, height: 30 },
+            'document-tab-entity-b': { x: 200, y: 0, width: 60, height: 30 },
+        };
+        const screen = await renderScreen(<DocumentTabStrip variant="bar"
+            tabs={['a', 'b'].map(key => ({ key, title: key, isPinned: false, isPreview: false }))}
+            activeTabKey="a" accessibilityLabel="Documents"
+            onActivate={() => {}} onPin={() => {}} onUnpin={() => {}} onClose={() => {}}
+            renderLeadingIcon={() => null} tabNativeId={id => id} panelNativeId={id => id}
+            testIds={{ tab: id => `tab-${id}` }}
+            entityDragDrop={{ runtime, id: 'strip', scope, acceptedKinds: ['destination'], getItem: () => null,
+                resolve: ({ beforeTabId }) => ({ status: 'allowed', effect: { actionId: 'workspace.tabs.open',
+                    input: { href: '/inbox', beforeTabId }, preview: { verb: 'Open', target: String(beforeTabId) } } }),
+                execute: async () => ({ status: 'applied' }) }} />, {
+            createNodeMock: element => {
+                const rect = rects[String(element.props?.testID ?? '')];
+                return rect ? { getBoundingClientRect: () => rect } : null;
+            },
+        });
+        const carry = runtime.begin('row', 'pointer');
+        await act(async () => { carry?.move({ x: 230, y: 10 }); });
+        expect(runtime.getSnapshot().targetId).toBeNull();
+        await act(async () => { carry?.move({ x: 30, y: 10 }); });
+        expect(runtime.getSnapshot().targetId).not.toBeNull();
+        act(() => carry?.cancel());
+        await screen.unmount();
     });
 
     it('shows a tab\'s live status in its trailing slot and keeps close on the open tab without one (terminal lab B1)', async () => {

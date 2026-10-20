@@ -1,7 +1,9 @@
 import { nestSessionListReports, resolveWorkflowRunParentSessionId } from './nestSessionListReports';
-import { matchSessionBotFilterV1, normalizeSessionListFilterV1, type SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { canSessionListFilterIncludeRunsV1, normalizeSessionListFilterV1, type SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import type { WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
-import { workflowRunMatchesSessionListFilter } from './sessionListWorkFilter';
+import { matchSessionListRowLocalFilter, workflowRunMatchesSessionListFilter } from './sessionListWorkFilter';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { buildSessionListDateGroups } from './sessionListDateGroups';
 import { t } from '@/text';
 import { isTerminalWorkflowRunState } from '@/components/work/status/resolveWorkStatusTone';
@@ -86,7 +88,10 @@ export type ComputeVisibleSessionListIndexParams = Readonly<{
     storageFilterApplied?: boolean;
     nowMs?: number;
     workFilter?: SessionListFilterV1;
+    workspaceRefs?: readonly WorkspaceRefV1[];
+    viewerAccountIdByServerId?: ReadonlyMap<string, string>;
     workflowRuns?: readonly Readonly<{ serverId: string; summary: WorkflowRunSummaryV1 }>[];
+    workflowRunUnderSessionId?: string;
     folderFocus?: SessionFolderFocusScope | null;
 }>;
 
@@ -1379,7 +1384,7 @@ function computeVisibleSessionListIndexUnmeasured(
 }
 
 /**
- * One row resolution per Session per compute: the placement passes and the `reportsTo` nesting pass
+ * One row resolution per Session per compute: the placement passes and the `manager` nesting pass
  * read the same rows, so they share one lookup instead of each resolving the row again.
  */
 function resolveEachSessionRowOnce(
@@ -1403,8 +1408,10 @@ function projectWorkflowRunRows(
     const filter = params.workFilter ?? normalizeSessionListFilterV1({
         homeServerIds: [...new Set(params.workflowRuns?.map((run) => run.serverId) ?? [])],
     });
-    const runs = params.corpusStorage === 'archived' || filter.bot !== undefined ? [] : (params.workflowRuns ?? [])
-        .filter((run) => workflowRunMatchesSessionListFilter(run.summary, run.serverId, filter))
+    const runs = params.corpusStorage === 'archived' || !canSessionListFilterIncludeRunsV1(filter) ? [] : (params.workflowRuns ?? [])
+        .filter((run) => workflowRunMatchesSessionListFilter(run.summary, run.serverId, filter,
+            params.viewerAccountIdByServerId?.get(resolveServerProfileScopeIdForIdentifier(run.serverId) || run.serverId),
+            params.workflowRunUnderSessionId === filter.underSessionId && filter.underSessionId !== undefined))
         .filter((run) => {
             if (!params.folderFocus) return true;
             const parentSessionId = resolveWorkflowRunParentSessionId(run.summary);
@@ -1421,8 +1428,14 @@ function projectWorkflowRunRows(
     }
     const output = visible.filter((item) => {
         if (item.type !== 'session') return item.type === 'header';
-        if (matchSessionBotFilterV1(params.resolveSessionRow(item.serverId, item.sessionId)?.metadata, filter.bot) !== 'match') return false;
-        const step = params.resolveSessionRow(item.serverId, item.sessionId)?.origin?.kind === 'run_step';
+        const row = params.resolveSessionRow(item.serverId, item.sessionId);
+        const step = row?.origin?.kind === 'run_step';
+        // A step represents an admitted native Run. The nesting owner drops orphan steps;
+        // its Run's protected starter was already filtered above, not inferred from the graph.
+        const localFilter = step ? { ...filter, startedBy: ['you', 'agents', 'triggers'] as const } : filter;
+        if (matchSessionListRowLocalFilter(row, item.serverId ?? '', localFilter,
+            { nowMs: params.nowMs ?? Date.now(), workspaceRefs: params.workspaceRefs, storageKind: item.storageKind,
+                viewerAccountId: params.viewerAccountIdByServerId?.get(resolveServerProfileScopeIdForIdentifier(item.serverId) || item.serverId || '') }) !== 'match') return false;
         return step ? filter.show !== 'sessions' : filter.show !== 'runs';
     });
     const summaryByKey = new Map(runs.map((run) => [JSON.stringify([run.serverId, run.summary.id]), run.summary]));

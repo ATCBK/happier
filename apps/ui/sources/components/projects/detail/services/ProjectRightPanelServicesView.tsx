@@ -7,7 +7,7 @@ import { useProjectDefinitionInspection } from '@/components/projects/projectSet
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import type { ServiceRowOpenHandler } from '@/components/sessions/localServices/ServiceRowView';
-import type { RuntimeActionExecute } from '@happier-dev/protocol';
+import type { FrontDoorRuntimeActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import type {
     LocalServiceLauncherSnapshotClient,
     LocalServiceLauncherState,
@@ -27,7 +27,7 @@ export type ProjectRightPanelServicesViewProps = Readonly<{
     launcherSnapshotClient?: LocalServiceLauncherSnapshotClient;
     publicPreviewState?: LocalServicePublicPreviewState | null;
     publicPreviewStatusClient?: LocalServicePublicPreviewStatusClient;
-    runtimeActionExecute?: RuntimeActionExecute;
+    runtimeActionExecute?: FrontDoorRuntimeActionExecute;
     onOpenServiceInBrowser?: ServiceRowOpenHandler;
     /** The Services page leads with its purpose; the rail keeps the pane chrome. Same body. */
     presentation?: 'pane' | 'page';
@@ -44,8 +44,9 @@ export function ProjectRightPanelServicesView(props: ProjectRightPanelServicesVi
     const inspection = useProjectDefinitionInspection(workspace, binding);
     const declarations = React.useMemo(() => {
         const document = inspection.read && 'value' in inspection.read ? inspection.read.value.definition.document : null;
+        const currentnessKey = document?.status === 'valid' ? JSON.stringify(document.manifest) : undefined;
         return document?.status === 'valid' ? Object.fromEntries(Object.entries(document.manifest.services ?? {}).map(([name, service]) =>
-            [name, { portable: service.execution === 'portable', ...(service.memoryDemand ? { memoryDemand: service.memoryDemand } : {}) }])) : {};
+            [name, { portable: service.execution === 'portable', currentnessKey }])) : {};
     }, [inspection.read]);
     const placementSource = React.useMemo(() => props.serverId && props.machineId && props.workspaceRefId
         ? { serverId: props.serverId, machineId: props.machineId, refId: props.workspaceRefId } : null,
@@ -72,5 +73,5 @@ export function ProjectRightPanelServicesView(props: ProjectRightPanelServicesVi
             testID={props.testID ?? 'project-rightpanel-services'}
         />
     );
-    return placementSource ? <ProjectServicePlacementObservationProvider source={placementSource}>{body}</ProjectServicePlacementObservationProvider> : body;
+    return placementSource ? <ProjectServicePlacementObservationProvider source={placementSource} runtimeActionExecute={props.runtimeActionExecute}>{body}</ProjectServicePlacementObservationProvider> : body;
 }

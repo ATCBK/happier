@@ -1,6 +1,7 @@
 import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { SessionListQueryV1Schema, SessionListUnavailableQueryV1Schema } from '@happier-dev/protocol/sessions/listing/query';
-import { z } from 'zod';
+import { z } from 'zod/mini';
+import { projectSessionTurnWaitingHttpResponse } from '@/app/clientCompatibility/sessionTurnWaitingCompatibility';
 
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';
 import { readAccountStoredContentCompatibilityForHttpRequest } from '@/app/clientCompatibility/accountStoredContentCompatibility';
@@ -20,20 +21,21 @@ import { type Fastify } from '../../types';
 import { readSessionAccessAuthenticationFromRequest } from '@/app/session/access/sessionAccessAuthentication';
 
 const FILTERED_LISTING_UNAVAILABLE_RESPONSE_SCHEMA = z.union([
-    z.object({ error: z.literal('not_found') }).strict(),
+    z.strictObject({ error: z.literal('not_found') }),
     SessionListUnavailableQueryV1Schema,
 ]);
-const FILTERED_LISTING_METADATA_UPGRADE_RESPONSE_SCHEMA = z.object({
+const FILTERED_LISTING_METADATA_UPGRADE_RESPONSE_SCHEMA = z.strictObject({
     error: z.literal('Session metadata privacy upgrade required'),
     code: z.literal('metadata_privacy_upgrade_required'),
-}).strict();
-const FILTERED_LISTING_INVALID_CURSOR_RESPONSE_SCHEMA = z.object({
+});
+const FILTERED_LISTING_INVALID_CURSOR_RESPONSE_SCHEMA = z.strictObject({
     error: z.literal('Invalid cursor format'),
-}).strict();
+});
 
 /** The route stays unavailable until the canonical feature catalog enables it. */
 export function registerSessionFilteredListingRoute(app: Fastify): void {
     app.post('/v2/sessions/query', {
+        preSerialization: projectSessionTurnWaitingHttpResponse,
         preHandler: [
             createServerFeatureGatePreHandler('sessions.filteredListing'),
             app.authenticate,

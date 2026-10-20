@@ -11,6 +11,7 @@ import {
 } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
 import {
   buildWorkflowResultFieldsContract,
+  isWorkflowResultFieldNameValid,
   projectWorkflowResultFields,
   WORKFLOW_RESULT_FIELD_TYPES,
   WORKFLOW_RESULT_LIST_ITEM_TYPES,
@@ -34,10 +35,12 @@ import {
 import { Item } from '@/components/ui/lists/Item';
 import { ItemAddRow } from '@/components/ui/lists/ItemAddRow';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
+import { useDeviceType } from '@/utils/platform/responsive';
 import { Modal } from '@/modal';
 import { workflowBlockReferenceLabel } from '@/sync/domains/workflows/workflowBlockLabel';
 import type { WorkflowEditorDraft } from '@/sync/domains/workflows/workflowEditorDraft';
@@ -57,8 +60,6 @@ import {
  * Renaming or removing a field that later steps read asks first and repairs
  * through the shared draft operations (`rename_result_field`).
  */
-
-const FIELD_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/u;
 
 const TYPE_ICON: Readonly<Record<WorkflowResultFieldType, IconName>> = {
   boolean: 'diamond',
@@ -98,7 +99,12 @@ const styles = StyleSheet.create((theme) => ({
     ...Typography.mono(),
     color: theme.colors.text.primary,
   },
-  body: { gap: theme.space.s12, paddingBottom: theme.space.s8 },
+  // The body starts on the key's line, past the row's leading caret column.
+  body: {
+    gap: theme.space.s12,
+    paddingBottom: theme.space.s8,
+    paddingLeft: PAGE_LIST_METRICS.rowLeadingColumnPx + PAGE_LIST_METRICS.rowLeadingGapPx,
+  },
   line: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -106,6 +112,11 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
   },
   lineTop: { alignItems: 'flex-start' },
+  /** Phone: a wide control moves beneath its label (only a switch stays beside it). */
+  lineStacked: {
+    gap: theme.space.s4,
+    minWidth: 0,
+  },
   label: {
     ...Typography.variant('label'),
     color: theme.colors.text.secondary,
@@ -113,6 +124,10 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 0,
   },
   labelTop: { paddingTop: theme.space.s8 },
+  labelStacked: {
+    ...Typography.variant('label'),
+    color: theme.colors.text.secondary,
+  },
   control: { flex: 1, minWidth: 0 },
   choices: { flex: 1, minWidth: 0, gap: theme.space.s8 },
   choice: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
@@ -143,7 +158,7 @@ function FieldNameInput(
   const error =
     trimmed === props.field.name
       ? null
-      : !FIELD_NAME_PATTERN.test(trimmed)
+      : !isWorkflowResultFieldNameValid(trimmed)
         ? rf('nameInvalid')
         : props.fields.some((field) => field.name === trimmed)
           ? rf('nameTaken')
@@ -254,6 +269,10 @@ function FieldRow(
           ].join(', '),
         });
   const summary = `${formatWorkflowResultFieldType(field)} · ${rf(field.required ? 'required' : 'optional')}`;
+  // A phone recomposes: a field's label sits above its control instead of a label column.
+  const stacked = useDeviceType() === 'phone';
+  const line = stacked ? styles.lineStacked : styles.line;
+  const label = stacked ? styles.labelStacked : styles.label;
   return (
     <ExpandableItem
       testID={props.testID}
@@ -278,15 +297,15 @@ function FieldRow(
           {...(consumers === undefined ? {} : { detail: consumers })}
           accessibilityLabel={`${field.name}, ${summary}${consumers === undefined ? '' : `, ${consumers}`}`}
           showChevron={false}
-          rightElement={<ExpandableItemCaret expanded={expanded} />}
+          leftElement={<ExpandableItemCaret expanded={expanded} />}
         />
       )}
     >
       {props.editable ? (
         <SectionContentRow>
           <View style={styles.body}>
-            <View style={styles.line}>
-              <Text style={styles.label}>{rf('name')}</Text>
+            <View style={line}>
+              <Text style={label}>{rf('name')}</Text>
               <View style={styles.control}>
                 <FieldNameInput
                   field={field}
@@ -296,8 +315,8 @@ function FieldRow(
                 />
               </View>
             </View>
-            <View style={styles.line}>
-              <Text style={styles.label}>{rf('type')}</Text>
+            <View style={line}>
+              <Text style={label}>{rf('type')}</Text>
               <WorkflowFieldSelect
                 testID={`${props.testID}-type`}
                 label={rf('type')}
@@ -329,8 +348,8 @@ function FieldRow(
               />
             </View>
             {field.type === 'choice' ? (
-              <View style={[styles.line, styles.lineTop]}>
-                <Text style={[styles.label, styles.labelTop]}>
+              <View style={stacked ? line : [styles.line, styles.lineTop]}>
+                <Text style={stacked ? label : [styles.label, styles.labelTop]}>
                   {rf('choices')}
                 </Text>
                 <ChoiceValues
@@ -341,8 +360,8 @@ function FieldRow(
               </View>
             ) : null}
             {field.type === 'list' ? (
-              <View style={styles.line}>
-                <Text style={styles.label}>{rf('items')}</Text>
+              <View style={line}>
+                <Text style={label}>{rf('items')}</Text>
                 <WorkflowFieldSelect
                   testID={`${props.testID}-items`}
                   label={rf('items')}
@@ -363,8 +382,8 @@ function FieldRow(
               </View>
             ) : null}
             <View style={styles.line}>
-              <Text style={styles.label}>{rf('required')}</Text>
-              <View style={styles.control}>
+              <Text style={stacked ? [label, styles.control] : label}>{rf('required')}</Text>
+              <View style={stacked ? null : styles.control}>
                 <Switch
                   testID={`${props.testID}-required`}
                   accessibilityLabel={rf('required')}
@@ -375,8 +394,8 @@ function FieldRow(
                 />
               </View>
             </View>
-            <View style={styles.line}>
-              <Text style={styles.label}>{rf('descriptionLabel')}</Text>
+            <View style={line}>
+              <Text style={label}>{rf('descriptionLabel')}</Text>
               <View style={styles.control}>
                 <FieldTextInput
                   testID={`${props.testID}-description`}
@@ -483,10 +502,10 @@ export function WorkflowResultFieldsEditor(
   };
 
   return (
-    <ItemGroup description={rf('description')}>
+    <ItemGroup>
       {editable ? (
         <SegmentedChoiceItem<'text' | 'fields'>
-          title={t('workflows.page.inspector.resultTitle')}
+          title={rf('returns')}
           value={projection.kind}
           onChange={async (kind) => {
             if (kind === projection.kind) return;
@@ -522,7 +541,7 @@ export function WorkflowResultFieldsEditor(
             {
               id: 'text',
               label: rf('typeText'),
-              description: t('workflows.page.blocks.returnsText'),
+              description: rf('describeWhole'),
             },
             {
               id: 'fields',
@@ -553,12 +572,11 @@ export function WorkflowResultFieldsEditor(
             if (
               readers.length > 0 &&
               !(await Modal.confirm(
-                rf('renameTitle', {
-                  from: field.name,
+                rf('renameTitle', { from: field.name, to: name }),
+                rf('renameBody', {
+                  names: readers.map((reader) => consumerLabel(draft, reader)).join(', '),
                   to: name,
-                  count: readers.length,
                 }),
-                undefined,
                 { confirmText: rf('renameEverywhere') },
               ))
             )

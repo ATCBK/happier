@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 
 import type { PauseController } from '@/utils/timing/pauseController';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -114,6 +115,8 @@ vi.mock('@/log', () => ({
     log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+await loadSyncSingletonForTests();
+
 describe('sync AppState pause/resume', () => {
     beforeEach(() => {
         vi.resetModules();
@@ -142,6 +145,7 @@ describe('sync AppState pause/resume', () => {
         const { sync } = await import('./sync');
         const { isServerReachabilityNetworkAllowed } = await import('./runtime/connectivity/serverReachabilitySupervisorPool');
         const releaseActivityLease = sync.acquireUserRequestLease();
+        apiSocketDisconnect.mockClear();
 
         for (const handler of appStateHandlers) handler('background');
 
@@ -160,6 +164,7 @@ describe('sync AppState pause/resume', () => {
         const { sync } = await import('./sync');
         (sync as unknown as { subscribeToUpdates(): void }).subscribeToUpdates();
         const resumeSync = vi.spyOn(sync, 'resumeSync').mockResolvedValue(undefined);
+        apiSocketDisconnect.mockClear();
 
         for (const handler of socketStatusHandlers) handler('connected');
         for (const handler of appStateHandlers) handler('background');
@@ -246,6 +251,7 @@ describe('sync AppState pause/resume', () => {
     });
 
     it('invokes durable outbox rearm from both bootstrap and the foreground resume pipeline', async () => {
+        const { InvalidateSync } = await import('@/utils/sessions/sync');
         const { upsertAndActivateServer, getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
         const { storage } = await import('./domains/state/storage');
         upsertAndActivateServer({ serverUrl: 'http://localhost:53288', scope: 'tab' });
@@ -260,16 +266,14 @@ describe('sync AppState pause/resume', () => {
         (sync as any).credentials = { token: 'token', secret: 'secret' };
         (sync as any).serverID = 'account-a';
         const rearm = vi.spyOn(sync as any, 'rearmPendingOutboxForActiveScope').mockResolvedValue(undefined);
-        const syncUnit = {
-            invalidateCoalesced: vi.fn(),
-            awaitQueue: vi.fn(async () => undefined),
-        };
+        const syncUnit = new InvalidateSync(async () => {});
         for (const field of [
             'settingsSync',
             'profileSync',
             'accountPetsSync',
             'sessionsSync',
             'machinesSync',
+            'pluginAvailabilitySync',
             'purchasesSync',
             'artifactsSync',
             'automationsSync',
@@ -297,7 +301,8 @@ describe('sync AppState pause/resume', () => {
         expect(rearm).toHaveBeenCalledTimes(2);
     });
 
-    it('resumes a paused bootstrap and exposes hydrated artifacts when draft hydration is unavailable', async () => {
+    it('resumes a paused bootstrap and starts artifacts after core readiness when draft hydration is unavailable', async () => {
+        const { InvalidateSync } = await import('@/utils/sessions/sync');
         await loadSyncSingletonForTests();
         const { sync } = await import('./sync');
         const { storage } = await import('./domains/state/storage');
@@ -327,15 +332,9 @@ describe('sync AppState pause/resume', () => {
             'feedSync',
             'nativeUpdateSync',
         ]) {
-            (sync as any)[field] = {
-                invalidateCoalesced: vi.fn(() => events.push(field)),
-                awaitQueue: vi.fn(async () => undefined),
-            };
+            (sync as any)[field] = new InvalidateSync(async () => { events.push(field); });
         }
-        (sync as any).artifactsSync = {
-            invalidateCoalesced: vi.fn(() => events.push('artifacts')),
-            awaitQueue: vi.fn(async () => undefined),
-        };
+        (sync as any).artifactsSync = new InvalidateSync(async () => { events.push('artifacts'); });
 
         pauseController.pause();
         const bootstrap = (sync as any).bootstrapSync() as Promise<void>;
@@ -346,7 +345,8 @@ describe('sync AppState pause/resume', () => {
         await bootstrap;
 
         expect(events).toContain('artifacts');
-        expect(events.indexOf('artifacts')).toBeLessThan(events.indexOf('ready'));
+        expect(events).toContain('ready');
+        expect(events.indexOf('ready')).toBeLessThan(events.indexOf('artifacts'));
     });
 
     it('pauses on background and resumes on active (disconnect/connect socket)', async () => {
@@ -461,22 +461,8 @@ describe('sync AppState pause/resume', () => {
     });
 
     it('seeds initial web visibility hidden as backgrounded (pauses immediately on startup)', async () => {
-        const globalWithDocument = globalThis as unknown as { document?: unknown };
-        const originalDocument = globalWithDocument.document;
-        const handlers = new Map<string, Set<() => void>>();
-        const documentStub = {
-            visibilityState: 'hidden',
-            addEventListener: (event: string, listener: () => void) => {
-                const set = handlers.get(event) ?? new Set<() => void>();
-                set.add(listener);
-                handlers.set(event, set);
-            },
-            removeEventListener: (event: string, listener: () => void) => {
-                handlers.get(event)?.delete(listener);
-            },
-            dispatchEvent: (_event: unknown) => {},
-        };
-        globalWithDocument.document = documentStub;
+        const browser = await installBrowserRuntimeForTests({ url: 'http://localhost/' });
+        vi.spyOn(browser.document, 'visibilityState', 'get').mockReturnValue('hidden');
 
         try {
             await loadSyncSingletonForTests();
@@ -488,29 +474,15 @@ describe('sync AppState pause/resume', () => {
             expect(apiSocketDisconnect).toHaveBeenCalledTimes(1);
             expect(isServerReachabilityNetworkAllowed()).toBe(false);
         } finally {
-            globalWithDocument.document = originalDocument;
+            browser.restore();
         }
     });
 
     it('does not treat Tauri desktop "hidden" visibility as backgrounded (keeps sync unpaused)', async () => {
         tauriDesktopState.value = true;
 
-        const globalWithDocument = globalThis as unknown as { document?: unknown };
-        const originalDocument = globalWithDocument.document;
-        const handlers = new Map<string, Set<() => void>>();
-        const documentStub = {
-            visibilityState: 'hidden',
-            addEventListener: (event: string, listener: () => void) => {
-                const set = handlers.get(event) ?? new Set<() => void>();
-                set.add(listener);
-                handlers.set(event, set);
-            },
-            removeEventListener: (event: string, listener: () => void) => {
-                handlers.get(event)?.delete(listener);
-            },
-            dispatchEvent: (_event: unknown) => {},
-        };
-        globalWithDocument.document = documentStub;
+        const browser = await installBrowserRuntimeForTests({ url: 'http://localhost/' });
+        vi.spyOn(browser.document, 'visibilityState', 'get').mockReturnValue('hidden');
 
         try {
             await loadSyncSingletonForTests();
@@ -522,7 +494,7 @@ describe('sync AppState pause/resume', () => {
             expect(apiSocketDisconnect).toHaveBeenCalledTimes(0);
             expect(isServerReachabilityNetworkAllowed()).toBe(true);
         } finally {
-            globalWithDocument.document = originalDocument;
+            browser.restore();
         }
     });
 
@@ -541,43 +513,21 @@ describe('sync AppState pause/resume', () => {
     });
 
     it('resumes on web startup when the browser reports the page was discarded', async () => {
-        const globalWithDocument = globalThis as unknown as { document?: unknown };
-        const originalDocument = globalWithDocument.document;
-        const documentStub = {
-            visibilityState: 'visible',
-            wasDiscarded: true,
-            addEventListener: () => {},
-            removeEventListener: () => {},
-            dispatchEvent: (_event: unknown) => {},
-        };
-        globalWithDocument.document = documentStub;
+        const browser = await installBrowserRuntimeForTests({ url: 'http://localhost/' });
+        Object.defineProperty(browser.document, 'wasDiscarded', { value: true });
 
         try {
             await loadSyncSingletonForTests();
 
             expect(apiSocketConnect).toHaveBeenCalledTimes(1);
         } finally {
-            globalWithDocument.document = originalDocument;
+            browser.restore();
         }
     });
 
     it('pauses on web visibility hidden and resumes on visible', async () => {
-        const globalWithDocument = globalThis as unknown as { document?: unknown };
-        const originalDocument = globalWithDocument.document;
-        const handlers = new Map<string, Set<() => void>>();
-        const documentStub = {
-            visibilityState: 'visible',
-            addEventListener: (event: string, listener: () => void) => {
-                const set = handlers.get(event) ?? new Set<() => void>();
-                set.add(listener);
-                handlers.set(event, set);
-            },
-            removeEventListener: (event: string, listener: () => void) => {
-                handlers.get(event)?.delete(listener);
-            },
-            dispatchEvent: (_event: unknown) => {},
-        };
-        globalWithDocument.document = documentStub;
+        const browser = await installBrowserRuntimeForTests({ url: 'http://localhost/' });
+        const visibility = vi.spyOn(browser.document, 'visibilityState', 'get').mockReturnValue('visible');
 
         try {
             await loadSyncSingletonForTests();
@@ -587,42 +537,23 @@ describe('sync AppState pause/resume', () => {
             expect(pauseController.isPaused()).toBe(false);
             expect(apiSocketDisconnect).toHaveBeenCalledTimes(0);
 
-            documentStub.visibilityState = 'hidden';
-            for (const handler of handlers.get('visibilitychange') ?? []) {
-                handler();
-            }
+            visibility.mockReturnValue('hidden');
+            browser.document.dispatchEvent(new browser.window.Event('visibilitychange'));
             expect(apiSocketDisconnect).toHaveBeenCalledTimes(1);
             expect(pauseController.isPaused()).toBe(true);
 
-            documentStub.visibilityState = 'visible';
-            for (const handler of handlers.get('visibilitychange') ?? []) {
-                handler();
-            }
+            visibility.mockReturnValue('visible');
+            browser.document.dispatchEvent(new browser.window.Event('visibilitychange'));
             expect(apiSocketConnect).toHaveBeenCalledTimes(1);
             expect(pauseController.isPaused()).toBe(false);
         } finally {
-            globalWithDocument.document = originalDocument;
+            browser.restore();
         }
     });
 
     it('keeps socket reachability through routine hidden visibility until pre-accept leases settle', async () => {
-        const globalWithDocument = globalThis as unknown as { document?: unknown };
-        const originalDocument = globalWithDocument.document;
-        const handlers = new Map<string, Set<() => void>>();
-        const documentStub = {
-            visibilityState: 'visible',
-            getElementById: () => null,
-            addEventListener: (event: string, listener: () => void) => {
-                const set = handlers.get(event) ?? new Set<() => void>();
-                set.add(listener);
-                handlers.set(event, set);
-            },
-            removeEventListener: (event: string, listener: () => void) => {
-                handlers.get(event)?.delete(listener);
-            },
-            dispatchEvent: (_event: unknown) => {},
-        };
-        globalWithDocument.document = documentStub;
+        const browser = await installBrowserRuntimeForTests({ url: 'http://localhost/' });
+        const visibility = vi.spyOn(browser.document, 'visibilityState', 'get').mockReturnValue('visible');
 
         try {
             await loadSyncSingletonForTests();
@@ -630,8 +561,8 @@ describe('sync AppState pause/resume', () => {
             const { isServerReachabilityNetworkAllowed } = await import('./runtime/connectivity/serverReachabilitySupervisorPool');
             const releaseAcceptanceLease = sync.acquireUserRequestLease();
 
-            documentStub.visibilityState = 'hidden';
-            for (const handler of handlers.get('visibilitychange') ?? []) handler();
+            visibility.mockReturnValue('hidden');
+            browser.document.dispatchEvent(new browser.window.Event('visibilitychange'));
 
             expect(apiSocketDisconnect).not.toHaveBeenCalled();
             expect(isServerReachabilityNetworkAllowed()).toBe(true);
@@ -641,22 +572,13 @@ describe('sync AppState pause/resume', () => {
             expect(apiSocketDisconnect).toHaveBeenCalledTimes(1);
             expect(isServerReachabilityNetworkAllowed()).toBe(false);
         } finally {
-            globalWithDocument.document = originalDocument;
+            browser.restore();
         }
     });
 
     it.each(['pagehide', 'freeze'] as const)('%s remains an immediate hard boundary during pre-accept', async (eventName) => {
-        const globalWithDocument = globalThis as unknown as { document?: unknown };
-        const originalDocument = globalWithDocument.document;
+        const browser = await installBrowserRuntimeForTests({ url: 'http://localhost/' });
         const lifecycleHandlers = new Map<string, (event?: unknown) => void>();
-        const documentStub = {
-            visibilityState: 'visible',
-            getElementById: () => null,
-            addEventListener: () => {},
-            removeEventListener: () => {},
-            dispatchEvent: (_event: unknown) => {},
-        };
-        globalWithDocument.document = documentStub;
         vi.stubGlobal('addEventListener', (event: string, listener: (event?: unknown) => void) => {
             lifecycleHandlers.set(event, listener);
         });
@@ -672,7 +594,7 @@ describe('sync AppState pause/resume', () => {
             expect(apiSocketDisconnect).toHaveBeenCalledTimes(1);
             expect(isServerReachabilityNetworkAllowed()).toBe(false);
         } finally {
-            globalWithDocument.document = originalDocument;
+            browser.restore();
         }
     });
 });

@@ -1,16 +1,7 @@
 import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
-import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
-
-import { AgentExecutionTargetV1Schema } from '../../agents/executionTargetV1.js';
-import { ConnectedServiceBindingsV2IngressSchema } from '../../connect/connectedServiceBindings.js';
-import { SessionCapabilitySelectionAuthoringV1Schema } from '../../reach/sessionCapabilitySelectionV1.js';
-import { SessionModelSelectionV1Schema } from '../../providers/selection/v1.js';
-import {
-  AgentSessionConfigurationSnapshotV1Schema,
-} from '../../runtime/agentSessionV1.js';
-import { AgentPermissionIntentV1Schema, AgentSessionToolPolicyShapeV1 } from '../../runtime/permissionIntentV1.js';
+import { SessionSpawnNewSelectionV2BaseSchema } from './sessionSpawnNewSelectionV2.js';
 import {
   AgentSessionStartupInstructionsV1Schema,
 } from '../../runtime/agentSessionStartupInstructionsV1.js';
@@ -20,26 +11,18 @@ import {
 } from '../messages/sessionInputAuthoringV1.js';
 import { RawIngressStructuredInputV1Schema } from '../../runtime/input/structuredInputV1.js';
 import { ReviewCommentDraftMessageV1Schema } from '../../messages/structured/reviewCommentsV1.js';
-import {
-  SessionAuthoringCheckoutCreationDraftV1Schema,
-  SessionAuthoringTerminalV1Schema,
-} from '../authoring/creationFieldsV1.js';
 export { SessionAuthoringCheckoutCreationDraftV1Schema } from '../authoring/creationFieldsV1.js';
 export type { SessionAuthoringCheckoutCreationDraftV1 } from '../authoring/creationFieldsV1.js';
 import { SessionCreationKeyV1Schema } from './sessionCreationIdentityV1.js';
 import { SessionSpawnSourceContextV1Schema } from './sessionSpawnSourceContextV1.js';
-import { SessionExecutionTargetV1Schema } from './sessionExecutionTargetV1.js';
-import { SessionOrganizationPlacementV1Schema } from './sessionSpawnNewResultV1.js';
-import { MachinePoolSelectionOriginV1Schema } from '../../machines/pools/v1.js';
 import { SessionInitialAccessDraftV1Schema } from '../access/sessionInitialAccessDraftV1.js';
-import { SessionReportsToV1Schema } from '../relations/sessionReportsToV1.js';
-import { SessionTeamCredentialBindingIntentsV1Schema } from '../../teams/credentials/sessionBindingIntentV1.js';
-import { SecretReferenceOverlayV1Schema } from '../../profiles/secretReferenceOverlayV1.js';
-import { SessionDirectoryIntentV1Schema, refineSessionDirectoryIntentCheckoutV1 } from './sessionDirectoryIntentV1.js';
+import { SessionManagerV1Schema } from '../follow/sessionManagerV1.js';
+import { refineSessionDirectoryIntentCheckoutV1 } from './sessionDirectoryIntentV1.js';
 import { SessionInitialTriggerV1Schema } from '../../workflows/triggers/workflowTriggerActionsV1.js';
 import { SessionIdentityAdditionsV1Schema } from '../identity/sessionBotV1.js';
 import { SessionPromptStackV1Schema } from '../context/sessionContextV1.js';
 import { SessionManagedCreationV1Schema } from './sessionCreationCorrespondenceV1.js';
+import { SessionDiscussionParticipantV1Schema } from './sessionDiscussionParticipantV1.js';
 import { SessionAttestedContextV1Schema } from './sessionAttestedContextV1.js';
 export { SessionAttestedContextV1Schema, type SessionAttestedContextV1 } from './sessionAttestedContextV1.js';
 
@@ -67,44 +50,22 @@ export type SessionSpawnNewInitialInputV1 = z.infer<typeof SessionSpawnNewInitia
  * second canonical creation vocabulary.
  */
 export const SessionSpawnNewInputV2BaseSchema = lazyZodSchema(() => z.strictObject({
-  ...AgentSessionToolPolicyShapeV1,
+  ...SessionSpawnNewSelectionV2BaseSchema.shape,
   creationKey: zMini.optional(SessionCreationKeyV1Schema),
-  executionTarget: SessionExecutionTargetV1Schema,
-  placementOrigin: zMini.optional(MachinePoolSelectionOriginV1Schema),
-  directory: SessionDirectoryIntentV1Schema,
-  organizationPlacement: zMini.optional(SessionOrganizationPlacementV1Schema),
-  agentTarget: AgentExecutionTargetV1Schema,
-  roleId: z.optional(z.string().check(z.trim(), z.minLength(1))),
-  modelSelection: zMini.optional(SessionModelSelectionV1Schema),
-  profileId: z.optional(z.string().check(z.trim(), z.minLength(1))),
-  /** Value-free Saved Secret binding overrides for this launch only. */
-  secretReferenceOverlay: zMini.optional(SecretReferenceOverlayV1Schema),
-  permissionMode: zMini.optional(asProtocolZod(AgentPermissionIntentV1Schema)),
-  agentModeId: z.optional(z.string().check(z.trim(), z.minLength(1))),
-  configuration: zMini.optional(AgentSessionConfigurationSnapshotV1Schema),
-  connectedServices: zMini.optional(ConnectedServiceBindingsV2IngressSchema),
-  capabilitySelection: zMini.optional(SessionCapabilitySelectionAuthoringV1Schema),
-  transcriptStorage: z.optional(z.enum(['persisted', 'direct'])),
-  terminal: zMini.optional(SessionAuthoringTerminalV1Schema),
-  checkoutCreationDraft: zMini.optional(zMini.nullable(SessionAuthoringCheckoutCreationDraftV1Schema)),
-  title: z.optional(z.string().check(z.trim(), z.minLength(1))),
   /** Host-owned identity facts persisted at ordinary Session birth. */
   identity: zMini.optional(SessionIdentityAdditionsV1Schema),
   /** Plugin-only, immutable integrator facts; never authored by an Agent or token. */
   attestedContext: zMini.optional(SessionAttestedContextV1Schema),
   /** Host-verified resource this Session was created with; never current Controller authority. */
   managedCreation: zMini.optional(SessionManagedCreationV1Schema),
-  /** Admitted kind preference or explicit draft choice; omission uses the birth kind default. */
-  memoryEnabled: z.optional(z.boolean()),
+  /** Current Discussion ownership is validated by the ordinary Session birth owner. */
+  discussionParticipant: z.optional(SessionDiscussionParticipantV1Schema),
   /** Complete selected Session context committed before its first preparation. */
   promptStack: zMini.optional(SessionPromptStackV1Schema),
   initialInput: z.optional(SessionSpawnNewInitialInputV1Schema),
   initialTriggers: z.optional(z.array(z.lazy(() => SessionInitialTriggerV1Schema))),
   initialAccess: zMini.optional(SessionInitialAccessDraftV1Schema),
-  reportsTo: zMini.optional(SessionReportsToV1Schema),
-  primaryTeamId: z.optional(z.nullable(z.string().check(z.minLength(1)))),
-  /** Complete slot-keyed Team credential selection batch for the fresh Session commit. */
-  teamCredentialBindings: zMini.optional(SessionTeamCredentialBindingIntentsV1Schema),
+  manager: zMini.optional(SessionManagerV1Schema),
   agentSessionStartupInstructionsV1: zMini.optional(AgentSessionStartupInstructionsV1Schema),
   /**
    * Create this Session as a continuation of an existing one. Because this
@@ -122,9 +83,29 @@ export const SessionSpawnNewInputV2BaseSchema = lazyZodSchema(() => z.strictObje
   environmentVariables: z.optional(z.record(z.string().check(z.minLength(1), z.maxLength(128)), z.string().check(z.maxLength(16 * 1024)))),
 }));
 
-export const SessionSpawnNewInputV2Schema = lazyZodSchema(() => SessionSpawnNewInputV2BaseSchema.check(z.superRefine(refineSessionDirectoryIntentCheckoutV1)));
+function refineDiscussionParticipantSpawn(input: {
+  discussionParticipant?: unknown; initialInput?: unknown; initialTriggers?: readonly unknown[]; sourceContext?: unknown;
+}, context: z.core.ParsePayload): void {
+  if (input.discussionParticipant === undefined) return;
+  for (const key of ['initialInput', 'sourceContext'] as const) {
+    if (input[key] !== undefined) context.issues.push({ code: 'custom', path: [key],
+      message: 'A Discussion participant is prepared without starting a turn', input: context.value, continue: true });
+  }
+  if ((input.initialTriggers?.length ?? 0) > 0) context.issues.push({ code: 'custom', path: ['initialTriggers'],
+    message: 'A Discussion participant is prepared without starting a trigger', input: context.value, continue: true });
+}
+
+export const SessionSpawnNewInputV2Schema = lazyZodSchema(() => SessionSpawnNewInputV2BaseSchema.check(
+  z.superRefine(refineSessionDirectoryIntentCheckoutV1), z.superRefine(refineDiscussionParticipantSpawn),
+));
 
 export type SessionSpawnNewInputV2 = z.infer<typeof SessionSpawnNewInputV2Schema>;
+
+/** Session Agents may inherit these choices; the start owner resolves them before creation admission. */
+export const SessionSpawnNewAgentAuthoringInputV2Schema = lazyZodSchema(() => z.partial(SessionSpawnNewInputV2BaseSchema, {
+  executionTarget: true,
+  agentTarget: true,
+}).check(z.superRefine(refineSessionDirectoryIntentCheckoutV1), z.superRefine(refineDiscussionParticipantSpawn)));
 
 /**
  * Browser-safe omission of host-sealed creation facts. The daemon-only
@@ -136,7 +117,7 @@ export const SessionServerStartSpawnDraftV1Schema = lazyZodSchema(() => (<T exte
   initialInput: true,
   environmentVariables: true,
   attestedContext: true,
-})).check(z.superRefine(refineSessionDirectoryIntentCheckoutV1)));
+})).check(z.superRefine(refineSessionDirectoryIntentCheckoutV1), z.superRefine(refineDiscussionParticipantSpawn)));
 
 export type SessionServerStartSpawnDraftV1 = Omit<
   SessionSpawnNewInputV2,

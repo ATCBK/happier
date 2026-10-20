@@ -69,9 +69,13 @@ export interface ProfilesListProps {
     /**
      * `page` renders the list as a configuration page (Settings › Profiles): sections carry
      * descriptions and adding a profile is the last row of your own profiles, which always shows.
-     * Pickers keep the default grouped look.
+     * Pickers keep the default grouped look. `embedded` is a picker that is itself one section of a page
+     * (the New Session wizard's Profile section): one sheet of flat rows under `section`'s heading, with
+     * no list chrome and no sub-headings, on the page's own edge.
      */
-    presentation?: 'page' | 'grouped';
+    presentation?: 'page' | 'grouped' | 'embedded';
+    /** Embedded presentation: the page section this list is (its heading and purpose line). */
+    section?: { title: string; description?: string };
     /** Page presentation: what each section holds, above its rows. */
     groupDescriptions?: {
         favorites?: string;
@@ -119,6 +123,12 @@ type ProfileRowProps = {
     getSecretOverrideReady?: (profile: AIBackendProfile) => boolean;
     getSecretMachineEnvOverride?: (profile: AIBackendProfile) => { isReady: boolean; isLoading: boolean } | null;
 };
+
+/**
+ * An embedded list marks its chosen profile with the check, as the page's other choices do (permissions,
+ * machines, folders): the sheet shows no row fill, which a section of more than one selectable row would draw.
+ */
+const EMBEDDED_SELECTABLE_COUNT = 1;
 
 /** The size every leading mark in this list takes: a profile's compatibility mark (its default size). */
 const PROFILE_ROW_MARK_PX = 32;
@@ -227,6 +237,7 @@ export function ProfilesList(props: ProfilesListProps) {
     const isDefaultEnvironmentFavorite = groups.favoriteIds.has('');
     // A picker selects one choice; a page lists them, so it draws no selection.
     const isPage = props.presentation === 'page';
+    const embedded = props.presentation === 'embedded';
     const showsSelection = !isPage;
     const defaultEnvironmentSelected = showsSelection && !props.selectedProfileId;
     // On a page, adding happens in the collection it adds to: the last row of your own profiles.
@@ -393,7 +404,7 @@ export function ProfilesList(props: ProfilesListProps) {
                 isSelected={isSelected}
                 isFavorite={isFavorite}
                 isDisabled={isDisabled}
-                showDivider={!isLast}
+                showDivider={embedded || !isLast}
                 isMobile={isMobile}
                 machineId={props.machineId}
                 serverId={props.serverId}
@@ -410,18 +421,24 @@ export function ProfilesList(props: ProfilesListProps) {
         );
     };
 
-    return (
-        <ItemList style={{ paddingTop: 0 }} presentation={props.presentation ?? 'grouped'}>
+    // Embedded in a page section, the groups' rows run flat in one sheet: no sub-headings, one
+    // edge, and the hairlines fall between every pair of rows (the sheet drops the last).
+    const group = (key: string, groupProps: Omit<React.ComponentProps<typeof ItemGroup>, 'children'>, rows: React.ReactNode) => (embedded
+        ? <React.Fragment key={key}>{rows}</React.Fragment>
+        : <ItemGroup key={key} {...groupProps}>{rows}</ItemGroup>);
+
+    const content = (
+        <>
             {props.header}
-            {showFavoritesGroup && (
-                <ItemGroup
-                    title={props.groupTitles?.favorites ?? t('profiles.groups.favorites')}
-                    description={props.groupDescriptions?.favorites}
-                    selectableItemCountOverride={Math.max(
-                        1,
-                        (props.includeDefaultEnvironmentRow && isDefaultEnvironmentFavorite ? 1 : 0) + groups.favoriteProfiles.length,
-                    )}
-                >
+            {showFavoritesGroup && group('favorites', {
+                title: props.groupTitles?.favorites ?? t('profiles.groups.favorites'),
+                description: props.groupDescriptions?.favorites,
+                selectableItemCountOverride: Math.max(
+                    1,
+                    (props.includeDefaultEnvironmentRow && isDefaultEnvironmentFavorite ? 1 : 0) + groups.favoriteProfiles.length,
+                ),
+            }, (
+                <>
                     {props.includeDefaultEnvironmentRow && isDefaultEnvironmentFavorite && (
                         <Item
                             testID="profiles-list-row:default-environment"
@@ -438,7 +455,7 @@ export function ProfilesList(props: ProfilesListProps) {
                                 props.onPressDefaultEnvironment?.();
                             }}
                             rightElement={renderDefaultEnvironmentRightElement(defaultEnvironmentSelected)}
-                            showDivider={groups.favoriteProfiles.length > 0}
+                            showDivider={embedded || groups.favoriteProfiles.length > 0}
                         />
                     )}
                     {groups.favoriteProfiles.map((profile, index) => {
@@ -465,7 +482,7 @@ export function ProfilesList(props: ProfilesListProps) {
                                 isSelected={isSelected}
                                 isFavorite={true}
                                 isDisabled={isDisabled}
-                                showDivider={!isLast}
+                                showDivider={embedded || !isLast}
                                 isMobile={isMobile}
                                 machineId={props.machineId}
                                 serverId={props.serverId}
@@ -481,15 +498,15 @@ export function ProfilesList(props: ProfilesListProps) {
                             />
                         );
                     })}
-                </ItemGroup>
-            )}
+                </>
+            ))}
 
-            {(groups.customProfiles.length > 0 || addsInCustomGroup) && (
-                <ItemGroup
-                    title={props.groupTitles?.custom ?? t('profiles.groups.custom')}
-                    description={props.groupDescriptions?.custom}
-                    selectableItemCountOverride={Math.max(2, groups.customProfiles.length + (addsInCustomGroup ? 1 : 0))}
-                >
+            {(groups.customProfiles.length > 0 || addsInCustomGroup) && group('custom', {
+                title: props.groupTitles?.custom ?? t('profiles.groups.custom'),
+                description: props.groupDescriptions?.custom,
+                selectableItemCountOverride: Math.max(2, groups.customProfiles.length + (addsInCustomGroup ? 1 : 0)),
+            }, (
+                <>
                     {groups.customProfiles.map((profile, index) => renderSavedProfileRow(
                         profile,
                         index === groups.customProfiles.length - 1 && !addsInCustomGroup,
@@ -500,32 +517,27 @@ export function ProfilesList(props: ProfilesListProps) {
                             title={t('profiles.addProfile')}
                             leftElement={<ProfileRowGlyph name="plus" size={20} color={theme.colors.text.secondary} />}
                             onPress={props.onAddProfilePress}
-                            showDivider={false}
+                            showDivider={embedded}
                         />
                     ) : null}
-                </ItemGroup>
-            )}
+                </>
+            ))}
 
-            {groups.sharedProfiles.length > 0 ? (
-                <ItemGroup
-                    title={t('roles.profiles.sharedWithYouTitle')}
-                    description={props.presentation === 'page' ? t('roles.profiles.sharedWithYouDescription') : undefined}
-                    selectableItemCountOverride={Math.max(2, groups.sharedProfiles.length)}
-                >
-                    {groups.sharedProfiles.map((profile, index) => renderSavedProfileRow(profile, index === groups.sharedProfiles.length - 1))}
-                </ItemGroup>
-            ) : null}
+            {groups.sharedProfiles.length > 0 ? group('shared', {
+                title: t('roles.profiles.sharedWithYouTitle'),
+                description: props.presentation === 'page' ? t('roles.profiles.sharedWithYouDescription') : undefined,
+                selectableItemCountOverride: Math.max(2, groups.sharedProfiles.length),
+            }, groups.sharedProfiles.map((profile, index) => renderSavedProfileRow(profile, index === groups.sharedProfiles.length - 1))) : null}
 
-            <ItemGroup
-                title={props.groupTitles?.builtIn ?? t('profiles.groups.builtIn')}
-                description={props.groupDescriptions?.builtIn}
-                selectableItemCountOverride={
-                    Math.max(
-                        1,
-                        (props.includeDefaultEnvironmentRow && !isDefaultEnvironmentFavorite ? 1 : 0) + groups.builtInProfiles.length,
-                    )
-                }
-            >
+            {group('builtIn', {
+                title: props.groupTitles?.builtIn ?? t('profiles.groups.builtIn'),
+                description: props.groupDescriptions?.builtIn,
+                selectableItemCountOverride: Math.max(
+                    1,
+                    (props.includeDefaultEnvironmentRow && !isDefaultEnvironmentFavorite ? 1 : 0) + groups.builtInProfiles.length,
+                ),
+            }, (
+                <>
                 {props.includeDefaultEnvironmentRow && !isDefaultEnvironmentFavorite && (
                     <Item
                         testID="profiles-list-row:default-environment"
@@ -542,7 +554,7 @@ export function ProfilesList(props: ProfilesListProps) {
                             props.onPressDefaultEnvironment?.();
                         }}
                         rightElement={renderDefaultEnvironmentRightElement(defaultEnvironmentSelected)}
-                        showDivider={groups.builtInProfiles.length > 0}
+                        showDivider={embedded || groups.builtInProfiles.length > 0}
                     />
                 )}
                 {groups.builtInProfiles.map((profile, index) => {
@@ -570,7 +582,7 @@ export function ProfilesList(props: ProfilesListProps) {
                             isSelected={isSelected}
                             isFavorite={isFavorite}
                             isDisabled={isDisabled}
-                            showDivider={!isLast}
+                            showDivider={embedded || !isLast}
                             isMobile={isMobile}
                             machineId={props.machineId}
                             serverId={props.serverId}
@@ -586,21 +598,36 @@ export function ProfilesList(props: ProfilesListProps) {
                         />
                     );
                 })}
-            </ItemGroup>
+                </>
+            ))}
 
-            {props.includeAddProfileRow && props.onAddProfilePress && !addsInCustomGroup && (
-                <ItemGroup title="" selectableItemCountOverride={1}>
-                    <Item
-                        testID="profiles-list-add-profile"
-                        title={t('profiles.addProfile')}
-                        subtitle={t('profiles.subtitle')}
-                        leftElement={<ProfileRowGlyph name="plus-circle" size={24} color={theme.colors.button.secondary.tint} />}
-                        onPress={props.onAddProfilePress}
-                        showChevron={false}
-                        showDivider={false}
-                    />
-                </ItemGroup>
-            )}
+            {props.includeAddProfileRow && props.onAddProfilePress && !addsInCustomGroup && group('add', {
+                title: '',
+                selectableItemCountOverride: 1,
+            }, (
+                <Item
+                    testID="profiles-list-add-profile"
+                    title={t('profiles.addProfile')}
+                    subtitle={t('profiles.subtitle')}
+                    leftElement={<ProfileRowGlyph name="plus-circle" size={24} color={theme.colors.button.secondary.tint} />}
+                    onPress={props.onAddProfilePress}
+                    showChevron={false}
+                    showDivider={false}
+                />
+            ))}
+        </>
+    );
+
+    if (embedded) {
+        return (
+            <ItemGroup title={props.section?.title} description={props.section?.description} selectableItemCountOverride={EMBEDDED_SELECTABLE_COUNT}>
+                {content}
+            </ItemGroup>
+        );
+    }
+    return (
+        <ItemList style={{ paddingTop: 0 }} presentation={props.presentation === 'page' ? 'page' : 'grouped'}>
+            {content}
         </ItemList>
     );
 }

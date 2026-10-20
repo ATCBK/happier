@@ -5,9 +5,6 @@ import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { queryUsageAnalytics } from "./usageQueryService";
 import { recordLegacyUsageReport, recordUsageEvent } from "./usageWriteService";
-import { buildClaudeAssistantUsageObservation } from '../../../../../packages/plugins/claude/src/agent/usage/buildAssistantObservation';
-import { buildClaudeSdkResultUsageObservation } from '../../../../../packages/plugins/claude/src/agent/usage/buildSdkResultObservation';
-import { buildUsageEventIngestRequest } from '../../../../cli/src/usage/buildUsageEventIngestRequest';
 
 async function createUsageOwner(label: string): Promise<{ accountId: string; sessionId: string }> {
     const account = await db.account.create({
@@ -86,35 +83,6 @@ describe("usageQueryService scoped aggregation", () => {
             () => db.session.deleteMany(),
             () => db.account.deleteMany(),
         ]);
-    });
-
-    it.each([20, 100])('composes Claude producer → ingest → query without inflating a whole-call final (%i earlier tokens)', async earlierTokens => {
-        const owner = await createUsageOwner(`claude-producer-${earlierTokens}`);
-        const modelId = 'claude-haiku-4-5';
-        const assistant = buildClaudeAssistantUsageObservation({ modelId, turnId: 'turn',
-            usage: { input_tokens: earlierTokens, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } });
-        const final = buildClaudeSdkResultUsageObservation({ modelId, result: { type: 'result', subtype: 'success', total_cost_usd: 0.12,
-            modelUsage: { [modelId]: { inputTokens: 100, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 } } } });
-        expect(assistant).not.toBeNull();
-        expect(final).not.toBeNull();
-        for (const [index, observation] of [assistant!, final!].entries()) {
-            const request = buildUsageEventIngestRequest({ sessionId: owner.sessionId,
-                observedAt: Date.UTC(2026, 6, index + 1), observation, externalKey: `event-${index}` });
-            expect(request).not.toBeNull();
-            expect(await recordUsageEvent(owner.accountId, request!)).toMatchObject({ ok: true });
-        }
-        const result = await querySession(owner.accountId, owner.sessionId, { breakdowns: ['model', 'source', 'session'] });
-        expect(result.totals.tokens.total).toBe(100);
-        expect(result.costPresentation?.effectiveUsd).toBeCloseTo(0.12, 10);
-        expect(result.contributions?.find(row => row.cost.reportedUsd > 0)?.tokens.total).toBe(0);
-        const finalDay = await querySession(owner.accountId, owner.sessionId,
-            { dateRange: { startMs: Date.UTC(2026, 6, 2), endMs: Date.UTC(2026, 6, 3) } });
-        expect(finalDay.costPresentation).toBeUndefined();
-        expect(finalDay.costFacts).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'reported', amountUsd: 0.12 })]));
-        if (earlierTokens === 100) {
-            const priced = await querySession(owner.accountId, owner.sessionId, { costMode: 'api_equivalent' });
-            expect(priced.totals.cost.apiEquivalentUsd).toBeCloseTo(estimateUsageModelCost(modelId, assistant!.tokens)!.total, 10);
-        }
     });
 
     it("counts real messages only within their Account, publication ceiling and half-open query range", async () => {
@@ -536,7 +504,8 @@ describe("usageQueryService scoped aggregation", () => {
         expect(result.totals.cost).toMatchObject({ reportedUsd: 0.12, estimatedUsd: 0.1, costSource: "none" });
         expect(result.series?.map((bucket) => bucket.cost.effectiveUsd)).toEqual([
             undefined,
-            undefined,
+            // The covered estimate remains a raw fact; select the final report once.
+            expect.closeTo(0.12, 10),
         ]);
         expect(result.costFacts).toEqual(expect.arrayContaining([
             expect.objectContaining({ kind: "estimated", amountUsd: 0.1 }),

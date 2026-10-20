@@ -109,6 +109,70 @@ afterEach(async () => {
 });
 
 describe('canonical review Run comments', () => {
+  it.each(['bounded', 'retained'] as const)('preserves admitted target invocation scope through %s findings and re-raise transport', async (mode) => {
+    const workflowScope = { actionRequestId: 'workflow-1/invocation-1/0', invocationId: 'invocation-1',
+      sessions: [{ serverId: 'home', sessionId: 'target-B' }] };
+    const initial = { ...run(), sessionId: 'target-B',
+      // Authored input cannot replace the host-admitted Session or scope.
+      intentInput: { reviewedFingerprint: 'launch-fingerprint', workflowScope: { sessions: [{ sessionId: 'target-C' }] } },
+      ...(mode === 'retained' ? { runClass: 'long_lived' as const, retentionPolicy: 'resumable' as const } : {}) };
+    let stored: ReviewCommentV1 | undefined;
+    const admitted: string[] = [];
+    vi.mocked(axios.post).mockImplementation(async (url, body, config) => {
+      const principal = ReviewCommentPrincipalHeaderV1Schema.parse(JSON.parse(Buffer.from(
+        String(config?.headers?.[REVIEW_COMMENT_PRINCIPAL_HEADER_V1]), 'base64url').toString('utf8')));
+      expect(principal.actor).toEqual({ kind: 'workflow', runId: 'workflow-1' });
+      expect(principal.workflowScope).toEqual(workflowScope);
+      const { signatureBase64Url, ...proof } = principal.proof!;
+      expect(tweetnacl.sign.detached.verify(createReviewCommentPrincipalSigningInputV1({
+        actor: principal.actor, currentIntent: principal.currentIntent, workflowScope: principal.workflowScope, proof,
+      }), Buffer.from(signatureBase64Url, 'base64url'), signingKeys.publicKey)).toBe(true);
+      if (String(url).endsWith('/transition')) {
+        admitted.push('transition');
+        expect(body).toMatchObject({ expectedState: 'dismissed', toState: 'open' });
+        return { status: 200, data: { comment: { ...stored, state: 'open', serverRevision: 4 } } };
+      }
+      admitted.push('create');
+      expect(principal.currentIntent).toMatchObject({ sessionId: 'target-B', workflowRunId: 'workflow-1' });
+      expect(body).toMatchObject({ sessionId: 'target-B' });
+      stored = { ...commentForCreate(body, 'dismissed'), author: principal.actor };
+      return { status: 200, data: { comment: stored, replayed: true } };
+    });
+    // Native provider lifetime is the boundary; controller, materializer, signer and strict schema are real.
+    const controller = { kind: 'backend', cancelled: false, workflowRunId: 'workflow-1', workflowScope } as ExecutionRunBackendController;
+    const runs = new Map([[initial.runId, initial]]);
+    const controllers = new Map([[initial.runId, controller]]);
+    if (mode === 'retained') {
+      await publishExecutionRunTurn({ runId: initial.runId, turnId: 'review-turn', controller, controllers, runs,
+        rawText: JSON.stringify({ summary: 'Findings', findings: [findings[1]] }), finishedAtMs: 2,
+        parentProvider: 'claude', reviewComments: service(), sendAcp: async () => {} });
+    } else {
+      await finishExecutionRun({ runId: initial.runId, next: { status: 'succeeded', finishedAtMs: 2 }, runs, controllers,
+        toolResult: { output: { findings: [findings[1]] } }, budgetRegistry: null,
+        structuredMeta: { kind: 'review_findings.v2', payload: { runRef: { runId: initial.runId, callId: initial.callId, backendId: initial.backendId },
+          summary: 'Findings', overviewMarkdown: 'Findings', findings: [findings[1]], questions: [], assumptions: [], generatedAtMs: 2 } },
+        parentProvider: 'claude', reviewComments: service(), sendAcp: async () => {},
+        enqueueMarkerWrite: async (_id, write) => { await write(); }, terminalMarkerWritePromises: terminalWrites });
+    }
+    expect(admitted).toEqual(['create', 'transition']);
+    expect(runs.get(initial.runId)?.latestToolResult).toMatchObject({ materialization: { kind: 'complete' },
+      findings: [{ comment: { sessionId: 'target-B', state: 'open' } }] });
+  });
+
+  it('does not manufacture missing invocation scope from authored review input', async () => {
+    vi.mocked(axios.post).mockImplementation(async (_url, _body, config) => {
+      const principal = ReviewCommentPrincipalHeaderV1Schema.parse(JSON.parse(Buffer.from(
+        String(config?.headers?.[REVIEW_COMMENT_PRINCIPAL_HEADER_V1]), 'base64url').toString('utf8')));
+      expect(principal).not.toHaveProperty('workflowScope');
+      return { status: 403, data: { error: 'review_comment_permission_denied' } };
+    });
+    const result = await service().materialize({ run: { ...run(), sessionId: 'target-B',
+      intentInput: { workflowScope: { actionRequestId: 'workflow-1/invocation-1/0', invocationId: 'invocation-1',
+        sessions: [{ serverId: 'home', sessionId: 'target-B' }] } } },
+      findings: [findings[1]], reviewedFingerprint: null, workflowRunId: 'workflow-1' });
+    expect(result).toMatchObject({ status: 'failed', commentIds: [], failures: [{ errorCode: 'not_authenticated' }] });
+  });
+
   it('exposes saved publication refusal through public Run/get without replacing the manual output, then clears only superseded operation errors', async () => {
     const comparison = ScmComparisonSchema.parse({ id: 'comparison', source: { kind: 'workingTree' },
       repository: { rootPath: root }, endpoints: {}, inventory: { state: 'complete', reasons: [], files: [] } });
@@ -249,11 +313,14 @@ describe('canonical review Run comments', () => {
       machineActionDirectTargetTransport: { machineId: 'machine-1', invoke: async (_method, request, options) => {
         observed = true;
         expect(request).not.toHaveProperty('workflowRunId');
-        expect(options).toMatchObject({ executionRunWorkflowRunId: 'workflow-1' });
+        expect(options).toMatchObject({ executionRunWorkflowRunId: 'workflow-1', executionRunWorkflowScope: workflowScope,
+          localActionContext: { executionRunWorkflowScope: workflowScope } });
         return { ok: true, runId: 'review-run' };
       } },
     });
-    await deps.executionRunStart(null, { intent: 'review' }, { exactMachineId: 'machine-1', workflowRunId: 'workflow-1' });
+    const workflowScope = { actionRequestId: 'workflow-1/invocation-1/0', invocationId: 'invocation-1',
+      sessions: [{ serverId: 'home', sessionId: 'target-B' }] };
+    await deps.executionRunStart(null, { intent: 'review' }, { exactMachineId: 'machine-1', workflowRunId: 'workflow-1', workflowScope });
     expect(observed).toBe(true);
   });
   it('does not infer user acceptance from an automatically opened comment', () => {

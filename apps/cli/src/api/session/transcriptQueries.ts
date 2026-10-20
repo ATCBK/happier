@@ -13,6 +13,8 @@ import { SessionMessageContentSchema, type PermissionMode, type SessionMessageCo
 import { extractSemanticTranscriptItemFromDecryptedPayload } from '@/session/services/transcript/extractSemanticTranscriptItem';
 import { openSessionMessageContent, SessionMessageContentError } from '@/session/transport/encryption/sessionEncryptionContext';
 import { fetchEncryptedTranscriptMessagesPage } from '@/session/replay/fetchEncryptedTranscriptMessages';
+import { loadCommittedTranscriptLocalIdBaseline, type CommittedTranscriptLocalIdBaseline } from './client/transcript/committedTranscriptLocalIdBaseline';
+import { readStreamedTranscriptSourceMessageId } from './streamedTranscriptWriter/buildStreamedTranscriptSegmentSnapshot';
 import {
   createSessionTranscriptStoredContentUnavailableError,
   resolveSessionTranscriptStoredContentUnavailableError,
@@ -53,6 +55,38 @@ type SessionTranscriptQueryParams = Readonly<{
     }>
 );
 
+function openTranscriptMessage(row: Readonly<{ content?: unknown }>, params: SessionTranscriptQueryParams): unknown {
+  return openSessionMessageContent({ content: SessionMessageContentSchema.parse(row.content),
+    ...(params.encryptionMode === 'plain' ? { mode: 'plain', ctx: null } as const
+      : { mode: 'e2ee', ctx: { encryptionKey: params.encryptionKey, encryptionVariant: params.encryptionVariant } } as const),
+  });
+}
+
+/** Source identity lives inside the Session's mode-protected message metadata. */
+export async function fetchCommittedTranscriptLocalIdBaseline(
+  params: SessionTranscriptQueryParams & Readonly<{ signal?: AbortSignal; deadlineAtMs?: number; localIds?: Set<string> }>,
+): Promise<CommittedTranscriptLocalIdBaseline> {
+  return await loadCommittedTranscriptLocalIdBaseline({
+    ...(params.localIds ? { localIds: params.localIds } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.deadlineAtMs === undefined ? {} : { deadlineAtMs: params.deadlineAtMs }),
+    fetchPage: async (input) => {
+      const page = await fetchEncryptedTranscriptMessagesPage({ ...input,
+        // Identity custody includes hidden consumed-source markers (role unknown),
+        // not only displayable conversation rows.
+        token: params.token, sessionId: params.sessionId, scope: 'all',
+      });
+      return { ...page, messages: page.messages.map((row) => {
+        const payload = openTranscriptMessage(row, params);
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+          throw createSessionTranscriptStoredContentUnavailableError();
+        }
+        return { localId: row.localId, meta: Reflect.get(payload, 'meta') };
+      }) };
+    },
+  });
+}
+
 /** Full committed conversation identity baseline, using the ordinary paged and encrypted reader. */
 export async function fetchCommittedTranscriptIdentitySnapshot(
   params: SessionTranscriptQueryParams & Readonly<{ signal?: AbortSignal }>,
@@ -67,11 +101,7 @@ export async function fetchCommittedTranscriptIdentitySnapshot(
     });
     for (const row of page.messages) {
       if (row.sidechainId) continue;
-      const content = SessionMessageContentSchema.parse(row.content);
-      const decrypted = openSessionMessageContent({ content,
-        ...(params.encryptionMode === 'plain' ? { mode: 'plain', ctx: null } as const
-          : { mode: 'e2ee', ctx: { encryptionKey: params.encryptionKey, encryptionVariant: params.encryptionVariant } } as const),
-      });
+      const decrypted = openTranscriptMessage(row, params);
       if (!decrypted || typeof decrypted !== 'object' || Array.isArray(decrypted)) { complete = false; continue; }
       const semantic = extractSemanticTranscriptItemFromDecryptedPayload({ decrypted, row, index: rows.length,
         options: { mode: 'transcript', transcriptRoles: ['user', 'assistant'], maxTextChars: null },
@@ -80,7 +110,8 @@ export async function fetchCommittedTranscriptIdentitySnapshot(
       const payload = decrypted as Record<string, unknown>;
       const meta = payload.meta && typeof payload.meta === 'object' && !Array.isArray(payload.meta)
         ? payload.meta as Record<string, unknown> : null;
-      rows.push({ localId: typeof row.localId === 'string' && row.localId.length > 0 ? row.localId : null,
+      rows.push({ localId: readStreamedTranscriptSourceMessageId(row.localId, meta)
+          ?? (typeof row.localId === 'string' && row.localId.length > 0 ? row.localId : null),
         role: semantic.role === 'user' ? 'user' : 'agent', ...(semantic.provider ? { provider: semantic.provider } : {}), meta });
     }
     if (!page.hasMore) return { complete, rows };

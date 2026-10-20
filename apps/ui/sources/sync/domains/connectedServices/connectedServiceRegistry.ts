@@ -124,6 +124,12 @@ let connectedServiceRegistrySnapshot: ConnectedServiceRegistrySnapshot = {
   errorReason: null,
 };
 let connectedServiceRegistryAccountLifetime: ActiveServerAccountScopeLifetime | null = null;
+const registryListeners = new Set<() => void>();
+
+export function subscribeConnectedServiceRegistry(listener: () => void): () => void {
+  registryListeners.add(listener);
+  return () => { registryListeners.delete(listener); };
+}
 
 function createConnectedServiceRegistryLoadingSnapshot(
   scopeKey: string | null,
@@ -142,16 +148,21 @@ function readProjectedFieldTitle(
   return typeof value === 'string' ? value : value.fallback;
 }
 
+// Validate the generated immutable input once. Its projection can contain
+// newer qualified services that are not part of the released scalar contract.
+const bundledLegacyServiceIds = Object.keys(BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID)
+  .filter((serviceId): serviceId is ConnectedServiceId => ConnectedServiceIdSchema.safeParse(serviceId).success);
+
 function readBundledLegacyConnectedAccountCompatibility(
   serviceId: string,
 ) {
-  const parsedServiceId = ConnectedServiceIdSchema.safeParse(serviceId);
-  if (!parsedServiceId.success) return null;
+  const legacyServiceId = bundledLegacyServiceIds.find(id => id === serviceId);
+  if (!legacyServiceId) return null;
   return {
-    serviceId: parsedServiceId.data,
+    serviceId: legacyServiceId,
     compatibility:
       BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID[
-        parsedServiceId.data
+        legacyServiceId
       ],
   };
 }
@@ -223,6 +234,7 @@ export function installConnectedAccountDescriptorProjection(
     errorReason: projection.errorReason,
   };
   connectedServiceRegistryAccountLifetime = accountLifetime;
+  for (const listener of registryListeners) listener();
 }
 
 /** The same descriptor projection for an explicitly captured target, without installing it as focused Account state. */
@@ -334,6 +346,7 @@ export function retireConnectedAccountDescriptorProjection(
     connectedServiceRegistrySnapshot.scopeKey,
   );
   connectedServiceRegistryAccountLifetime = null;
+  for (const listener of registryListeners) listener();
 }
 
 export function getConnectedServiceRegistrySnapshot(): ConnectedServiceRegistrySnapshot {
@@ -345,6 +358,19 @@ export function getConnectedServiceRegistrySnapshot(): ConnectedServiceRegistryS
     );
   }
   return connectedServiceRegistrySnapshot;
+}
+
+/** Read capability, not execution admission: sleeping services keep their usage identity. */
+export function isConnectedServiceUsageCapable(
+  service: PluginContributionIdentityV1,
+  snapshot: Pick<ConnectedServiceRegistrySnapshot, 'entries'> = getConnectedServiceRegistrySnapshot(),
+): boolean {
+  const entry = snapshot.entries.find(candidate => candidate.service && sameService(candidate.service, service));
+  if (entry?.projectedDescriptorCandidates && entry.projectedDescriptorCandidates.length > 1) return false;
+  if (entry?.projectedDescriptor?.capabilities.includes('usage')) return true;
+  const legacyId = resolveLegacyServiceId(service);
+  const legacy = legacyId ? readBundledLegacyConnectedAccountCompatibility(legacyId) : null;
+  return legacy?.compatibility.peerOperations.revisionedV2V3.some(operation => operation === 'quota_read') === true;
 }
 
 /**

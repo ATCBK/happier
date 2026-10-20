@@ -49,6 +49,32 @@ function httpsRequestBoundary(seen: RequestOptions[]): typeof import('node:https
 }
 
 describe('pinned HTTP stream transport', () => {
+  it.each(['DELETE', 'OPTIONS', 'POST'])('frames a complete %s body by its byte length', async (method) => {
+    let receivedBody = Buffer.alloc(0);
+    let receivedLength: string | undefined;
+    const server = createServer(async (request, response) => {
+      receivedLength = request.headers['content-length'];
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      receivedBody = Buffer.concat(chunks);
+      response.end('ok');
+    });
+    const port = await listen(server);
+    const body = new TextEncoder().encode(JSON.stringify({ names: ['éclair'] }));
+    const stream = await openPinnedHttpStream({
+      url: `http://body.example.test:${port}/members`,
+      validatedAddresses: ['127.0.0.1'],
+      headers: { 'content-type': 'application/json' },
+      method,
+      body,
+      signal: new AbortController().signal,
+    });
+    while (await stream.read() !== null) { /* Drain the real response. */ }
+    expect(stream.status).toBe(200);
+    expect(receivedBody).toEqual(Buffer.from(body));
+    expect(receivedLength).toBe(String(body.byteLength));
+  });
+
   it('omits TLS SNI for IPv4 and bracketed IPv6 URL literals while retaining DNS hostnames', async () => {
     const cases = [
       {

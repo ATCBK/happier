@@ -22,12 +22,14 @@ import {
   materializeConnectedServicesForSpawn,
 } from './materialize/materializeConnectedServicesForSpawn';
 import { resolveConnectedServiceTargetMaterializedRoot } from './materialize/resolveConnectedServiceTargetMaterializedRoot';
+import { observeConnectedServiceMaterializationPhase } from './materialize/materializationPhase';
 import { verifySpawnResumeReachability } from './verifySpawnResumeReachability';
 import type {
   ConnectedServiceResolvedSelection,
   ConnectedServicesMaterializationAuthority,
   ConnectedServicesMaterialization,
   ConnectedServicesMaterializationDiagnostic,
+  ConnectedServiceMaterializedStateObservationBinding,
 } from './materialization/materializer';
 import { resolveConnectedServiceAuthGroupPreTurnQuotaProbeProfileIds } from './accountGroups/selection/resolveConnectedServiceAuthGroupPreTurnQuotaProbeProfileIds';
 import { selectConnectedServiceAuthGroupCandidate, resolveConnectedServiceAuthGroupModelEligibilityBlocker } from './accountGroups/selection/selectConnectedServiceAuthGroupCandidate';
@@ -152,6 +154,7 @@ export class ConnectedServiceSpawnCredentialRefreshError extends Error {
   readonly serviceId: ConnectedAccountServiceKey;
   readonly profileId: string;
   readonly diagnostic: ConnectedServiceCredentialRefreshResult['diagnostic'] | undefined;
+  readonly reason: QualifiedConnectedAccountSpawnPreflightResult['reason'];
 
   constructor(params: Readonly<{
     kind: ConnectedServiceSpawnCredentialRefreshErrorKind;
@@ -160,6 +163,7 @@ export class ConnectedServiceSpawnCredentialRefreshError extends Error {
     kind: ConnectedServiceSpawnCredentialRefreshErrorKind;
     serviceId: ConnectedAccountServiceKey;
     profileId: string;
+    reason?: QualifiedConnectedAccountSpawnPreflightResult['reason'];
   }>) {
     const serviceId = 'diagnostic' in params ? params.diagnostic.serviceId : params.serviceId;
     const profileId = 'diagnostic' in params ? params.diagnostic.profileId : params.profileId;
@@ -173,6 +177,7 @@ export class ConnectedServiceSpawnCredentialRefreshError extends Error {
     this.serviceId = serviceId;
     this.profileId = profileId;
     this.diagnostic = 'diagnostic' in params ? params.diagnostic : undefined;
+    this.reason = 'reason' in params ? params.reason : undefined;
   }
 }
 
@@ -598,6 +603,7 @@ async function resolveCredentialBindings(params: Readonly<{
     credentialRevision?: ConnectedServiceCredentialRevisionV1 | null;
   }>;
   groupSelections: ReadonlyMap<ConnectedAccountServiceKey, ConnectedServiceResolvedGroupSelection>;
+  directProfiles: ReadonlyMap<ConnectedAccountServiceKey, Awaited<ReturnType<typeof readQualifiedSpawnProfile>>>;
   qualifiedAccountApi: ConnectedServiceQualifiedAuthGroupApi;
 }>> {
   const credentialBindings: Array<{
@@ -606,6 +612,7 @@ async function resolveCredentialBindings(params: Readonly<{
     credentialRevision?: ConnectedServiceCredentialRevisionV1 | null;
   }> = [];
   const groupSelections = new Map<ConnectedAccountServiceKey, ConnectedServiceResolvedGroupSelection>();
+  const directProfiles = new Map<ConnectedAccountServiceKey, Awaited<ReturnType<typeof readQualifiedSpawnProfile>>>();
   const qualifiedAccountApi = params.qualifiedConnectedAccountApi ?? {
     readGroup: ({ service, groupId, signal }: Readonly<{
       service: QualifiedConnectedAccountServiceRef;
@@ -637,39 +644,10 @@ async function resolveCredentialBindings(params: Readonly<{
     }
 
     if (selection.kind === 'profile') {
-      const listed = await qualifiedAccountApi.listAccounts({
-        service: qualifiedService,
+      const profile = await readQualifiedSpawnProfile({
+        serviceId: selection.serviceId, profileId: selection.profileId, api: qualifiedAccountApi,
       });
-      if (
-        listed.service.pluginId !== qualifiedService.pluginId
-        || listed.service.localId !== qualifiedService.localId
-      ) {
-        throw new ConnectedServiceSpawnAuthGroupAuthorityError({
-          kind: 'resolution_failed',
-          serviceId: selection.serviceId,
-          groupId: '',
-        });
-      }
-      const profile = listed.accounts.find((candidate) => (
-        candidate.ref.service.pluginId === qualifiedService.pluginId
-        && candidate.ref.service.localId === qualifiedService.localId
-        && candidate.ref.accountId === selection.profileId
-      ));
-      if (!profile) {
-        throw new ConnectedServiceSpawnAuthGroupAuthorityError({
-          kind: 'active_profile_missing',
-          serviceId: selection.serviceId,
-          groupId: '',
-        });
-      }
       if (!isQualifiedConnectedAccountProfileActiveV4(profile, params.nowMs)) {
-        if (profile.status === 'needs_reauth') {
-          throw new ConnectedServiceSpawnProfileActionRequiredError({
-            serviceId: selection.serviceId,
-            profileId: selection.profileId,
-            status: profile.status,
-          });
-        }
         throw new ConnectedServiceSpawnAuthGroupAuthorityError({
           kind: 'resolution_failed',
           serviceId: selection.serviceId,
@@ -681,6 +659,7 @@ async function resolveCredentialBindings(params: Readonly<{
         profileId: selection.profileId,
         credentialRevision: profile.credentialRevision,
       });
+      directProfiles.set(selection.serviceId, profile);
       continue;
     }
 
@@ -792,7 +771,7 @@ async function resolveCredentialBindings(params: Readonly<{
     });
   }
 
-  return { credentialBindings, groupSelections, qualifiedAccountApi };
+  return { credentialBindings, groupSelections, directProfiles, qualifiedAccountApi };
 }
 
 type ConnectedServiceResolvedGroupSelection = Readonly<{
@@ -1259,6 +1238,7 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
   connectedServicesBindings: ConnectedServicesBindingsV2;
   targetMaterializedRoot?: string | null;
   requestAuthMaterializedRoot?: string | null;
+  materializedStateObservationBinding?: ConnectedServiceMaterializedStateObservationBinding;
   diagnostics?: readonly ConnectedServicesMaterializationDiagnostic[];
   requestAuthPurposeBindings?: readonly QualifiedConnectedAccountPurposeBindingV1[];
   qualifiedPurposeBindingSnapshot: AgentSpawnQualifiedPurposeBindingSnapshot | null;
@@ -1271,8 +1251,13 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
   const admittedBindings = ConnectedServicesBindingsIngressSchema.parse(params.connectedServicesBindingsRaw);
   const selections = parseConnectedServiceBindingSelections(admittedBindings);
   if (selections.length === 0) return null;
+  // Declared purposes authorize selection before any Account credential lookup.
+  assertQualifiedPurposeAuthorityForSelections({
+    selections,
+    snapshot: admittedBindings ? params.resolveQualifiedPurposeBindingSnapshot?.(admittedBindings) ?? null : null,
+  });
   const nowMs = (params.nowMs ?? (() => Date.now()))();
-  const resolvedBindings = await resolveCredentialBindings({
+  const resolvedBindings = await observeConnectedServiceMaterializationPhase(params, 'credential_binding_resolution', () => resolveCredentialBindings({
     agentId: params.agentId,
     ...(params.modelId ? { modelId: params.modelId } : {}),
     api: params.api,
@@ -1287,7 +1272,7 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     authGroupSwitchCoordinator: params.authGroupSwitchCoordinator ?? null,
     predictiveSwitchGuard: params.predictiveSwitchGuard ?? null,
-  });
+  }));
 
   const credentialRevisionsByServiceId = new Map<
     ConnectedAccountServiceKey,
@@ -1308,7 +1293,17 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
     });
     try {
       for (const binding of credentialBindings) {
-        const profile = await readQualifiedSpawnProfile({ ...binding, api: resolvedBindings.qualifiedAccountApi });
+        const service = parseQualifiedPluginContributionKey(binding.serviceId);
+        const phaseContext = {
+          agentId: params.agentId, materializationKey: params.materializationKey,
+          ...(service ? { service } : {}),
+        };
+        // Direct binding resolution already read and admitted this profile.
+        // Reuse it only for the first preflight; refresh still re-reads below.
+        // Group switches and recovery attempts require their own observation.
+        const profile = (attempt === 0 ? resolvedBindings.directProfiles.get(binding.serviceId) : undefined)
+          ?? await observeConnectedServiceMaterializationPhase(phaseContext, 'credential_read',
+            () => readQualifiedSpawnProfile({ ...binding, api: resolvedBindings.qualifiedAccountApi }));
         if (params.credentialRefreshService) {
           const refresh = params.credentialRefreshService.refreshQualifiedConnectedAccountCredentialForSpawnPreflight;
           if (!refresh) {
@@ -1316,16 +1311,19 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
               kind: 'transient_refresh_failed', serviceId: binding.serviceId, profileId: binding.profileId,
             });
           }
-          const result = await refresh.call(params.credentialRefreshService, { profile });
+          const result = await observeConnectedServiceMaterializationPhase(phaseContext, 'credential_refresh',
+            () => refresh.call(params.credentialRefreshService, { profile }));
           if (result.status !== 'ready') {
             throw new ConnectedServiceSpawnCredentialRefreshError({
               kind: result.status === 'reconnect_required' ? 'reconnect_required' : 'transient_refresh_failed',
               serviceId: binding.serviceId, profileId: binding.profileId,
+              ...(result.reason ? { reason: result.reason } : {}),
             });
           }
         }
         const current = params.credentialRefreshService
-          ? await readQualifiedSpawnProfile({ ...binding, api: resolvedBindings.qualifiedAccountApi })
+          ? await observeConnectedServiceMaterializationPhase(phaseContext, 'credential_read',
+            () => readQualifiedSpawnProfile({ ...binding, api: resolvedBindings.qualifiedAccountApi }))
           : profile;
         if (!isQualifiedConnectedAccountProfileActiveV4(current, (params.nowMs ?? Date.now)())) {
           throw new ConnectedServiceSpawnCredentialRefreshError({ kind: 'transient_refresh_failed', serviceId: binding.serviceId, profileId: binding.profileId });
@@ -1377,9 +1375,9 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
     });
 
     const materializationPurposeLease = qualifiedPurposeBindingSnapshot
-      ? await params.activateQualifiedPurposeBindings?.(
+      ? await observeConnectedServiceMaterializationPhase(params, 'purpose_activation', async () => await params.activateQualifiedPurposeBindings?.(
           qualifiedPurposeBindingSnapshot,
-        ) ?? null
+        ) ?? null)
       : null;
     let retainMaterializationPurposeLease = false;
     try {

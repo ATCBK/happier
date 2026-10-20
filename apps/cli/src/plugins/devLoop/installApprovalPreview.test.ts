@@ -7,6 +7,19 @@ import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixtu
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 
 import { buildPluginInstallApprovalPreview } from './installApprovalPreview';
+import { createPluginInstallationReviewFixture } from '@/plugins/testkit/pluginInstallationReviewFixture';
+
+function daemonEvaluation(source: ReturnType<typeof createPluginInstallationReviewFixture>['source']) {
+  return {
+    kind: 'reviewRequired' as const,
+    reviewKind: 'installation' as const,
+    pendingChangeId: 'pending-install-preview',
+    reason: 'firstInstall' as const,
+    currentVersion: null,
+    authorityExpansion: [],
+    review: createPluginInstallationReviewFixture({ source }),
+  };
+}
 
 async function materializePlugin(rootDir: string): Promise<void> {
   await mkdir(join(rootDir, '.happier-plugin'), { recursive: true });
@@ -51,15 +64,19 @@ describe('buildPluginInstallApprovalPreview', () => {
   it('previews the requested marketplace pin without presenting unverified permissions as empty', async () => {
     const source = { kind: 'marketplace', sourceId: 'marketplace:team', pluginId: 'acme.plugin', version: '1.2.3' };
     expect(await buildPluginInstallApprovalPreview({ input: { source, machineId: 'machine-1' },
+      daemonEvaluation: daemonEvaluation({ kind: 'npm', locator: '@acme/plugin@1.2.3',
+        integrity: 'sha512-exact', integrityBasis: 'expected' }),
       defaultPreview: { actionId: 'plugins.install' } })).toMatchObject({
       actionId: 'plugins.install', pluginInstall: { ok: true, source, machineId: 'machine-1',
-        permissionsDisclosure: 'pendingDaemonEvaluation' },
+        permissionsDisclosure: 'daemonEvaluated',
+        pendingReview: expect.objectContaining({ pendingChangeId: 'pending-install-preview' }) },
     });
   });
-  it('summarizes local plugin identity, source provenance, and declared permissions before install', async () => {
+  it('uses the retained daemon review as the only local identity and permission disclosure', async () => {
     const workspaceRoot = await createTempDir('happier-plugin-install-preview-workspace-');
     const pluginRoot = await createTempDir('happier-plugin-install-preview-source-', workspaceRoot);
     await materializePlugin(pluginRoot);
+    const evaluation = daemonEvaluation({ kind: 'path', locator: pluginRoot });
 
     try {
       const preview = await buildPluginInstallApprovalPreview({
@@ -77,78 +94,55 @@ describe('buildPluginInstallApprovalPreview', () => {
           },
         },
         workspaceRoot,
+        daemonEvaluation: evaluation,
       });
 
-      expect(preview).toEqual(expect.objectContaining({
+      expect(preview).toEqual({
         actionId: 'plugins.install',
         actionArgs: {
           path: pluginRoot,
           dev: true,
           force: true,
         },
-        pluginInstall: expect.objectContaining({
-          plugin: expect.objectContaining({
-            id: 'acme.install-preview',
-            version: '1.2.3',
-            title: 'Acme Install Preview',
-          }),
-          source: expect.objectContaining({
+        pluginInstall: {
+          ok: true,
+          source: {
             kind: 'path',
-            locator: expect.stringContaining('happier-plugin-install-preview-source-'),
+            locator: pluginRoot,
             dev: true,
             force: true,
-            trustPolicy: 'prompt',
-            installPolicy: 'link',
-          }),
-          provenance: expect.objectContaining({
-            sourceKind: 'path',
-            manifestPath: expect.stringContaining(join('happier-plugin-install-preview-source-')),
-          }),
-          permissions: {
-            required: [
-              {
-                id: 'network',
-                capability: 'network',
-                reason: 'Call the fixture API.',
-                authorizationClass: 'cooperativeDisclosure',
-                normalizedScope: {
-                  targets: [{ kind: 'fixedOrigin', origin: 'https://example.test' }],
-                  methods: ['GET'],
-                },
-              },
-              {
-                id: 'workspace',
-                capability: 'filesystem',
-                reason: 'Read the workspace.',
-                authorizationClass: 'cooperativeDisclosure',
-                normalizedScope: {
-                  locations: [{ root: 'workspace' }],
-                  access: ['delete', 'read'],
-                },
-              },
-              {
-                id: 'gateway',
-                capability: 'network.client',
-                reason: 'Maintain the gateway connection.',
-                authorizationClass: 'cooperativeDisclosure',
-                normalizedScope: {
-                  targets: [{ kind: 'fixedOrigin', origin: 'https://gateway.example.test' }],
-                  transports: ['websocket'],
-                  privateNetwork: false,
-                },
-              },
-            ],
-            optional: [{
-              id: 'synced-storage',
-              capability: 'storage.account',
-              reason: 'Synchronize state when selected.',
-              authorizationClass: 'hostResourceSelection',
-              normalizedScope: { enabled: true },
-            }],
+            dryRun: false,
           },
-        }),
-      }));
-      expect(preview).not.toHaveProperty('pluginInstall.provenance.manifestDigest');
+          permissionsDisclosure: 'daemonEvaluated',
+          pendingReview: evaluation,
+        },
+      });
+    } finally {
+      await removeTempDir(workspaceRoot);
+    }
+  });
+
+  it('reuses the daemon-reviewed local candidate after its author source becomes unavailable', async () => {
+    const workspaceRoot = await createTempDir('happier-plugin-install-preview-workspace-');
+    const pluginRoot = await createTempDir('happier-plugin-install-preview-source-', workspaceRoot);
+    await materializePlugin(pluginRoot);
+    const evaluation = daemonEvaluation({ kind: 'path', locator: pluginRoot });
+    await removeTempDir(pluginRoot);
+
+    try {
+      await expect(buildPluginInstallApprovalPreview({
+        input: { path: pluginRoot, dev: true },
+        defaultPreview: { actionId: 'plugins.install' },
+        workspaceRoot,
+        daemonEvaluation: evaluation,
+      })).resolves.toMatchObject({
+        actionId: 'plugins.install',
+        pluginInstall: {
+          ok: true,
+          permissionsDisclosure: 'daemonEvaluated',
+          pendingReview: evaluation,
+        },
+      });
     } finally {
       await removeTempDir(workspaceRoot);
     }

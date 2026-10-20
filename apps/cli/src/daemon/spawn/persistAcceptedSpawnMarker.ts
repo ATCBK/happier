@@ -102,6 +102,9 @@ export async function persistAcceptedSpawnMarker(params: Readonly<{
         }
       : {}),
     respawn,
+    ...(trackedSession.materializedStateObservationBinding
+      ? { materializedStateObservationBinding: trackedSession.materializedStateObservationBinding }
+      : {}),
     ...(trackedSession.spawnOptions.requesterWorkAttributionV1
       ? { requesterWorkAttributionV1: trackedSession.spawnOptions.requesterWorkAttributionV1 } : {}),
     ...(trackedSession.agentRuntimeDaemonServiceAuthorityFilePath

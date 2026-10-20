@@ -2,18 +2,12 @@ import * as React from 'react';
 
 import { readLocalConversationVoiceSettings, readLocalDirectVoiceSettings, readVoiceProviderSettingsConfig, type VoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { createBundledConversationUi } from '@/voice/credentials/bundledConversationClient';
-import { BundledSpeechDaemonClient } from '@/voice/credentials/bundledSpeechClient';
 import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
 import { resolveSelectedVoiceProviderTitleKey } from '@/voice/registry/providerSelection';
 import { BUILT_IN_LOCAL_NEURAL_VOICE_DECLARATION, BUILT_IN_LOCAL_NEURAL_VOICE_PROVIDER_ID, readSessionVoiceSettingFieldV1, type SessionVoiceDeclarationV1 } from '@happier-dev/protocol/sessions/instructions/sessionVoicePreferenceV1';
 import { VoiceProviderSettingsJsonValueV1Schema, type VoiceProviderSettingsJsonValueV1 } from '@happier-dev/protocol/voice/realtime/providerSettings';
-import { readLocalNeuralVoiceCatalog } from '@/voice/kokoro/assets/readLocalNeuralVoiceCatalog';
-import { resolveVoiceExecutionMachineIdFromState } from '@/voice/settings/executionMachine';
+import { useVoiceExecutionMachineId } from '@/voice/credentials/useExecutionMachinePresentation';
 import { storage } from '@/sync/domains/state/storage';
-import type { VoiceCatalogClient } from './voiceCatalog';
-import type { VoiceCatalogPreviewSynthesizer } from './catalogPreview';
-import { previewLocalNeuralTts } from '@/voice/settings/panels/localTts/providers/localNeural/previewLocalNeuralTts';
-import { t } from '@/text';
 import {
   getExternalVoiceProviderRegistrationsRevision,
   subscribeExternalVoiceProviderRegistrations,
@@ -37,9 +31,9 @@ export type ConversationSessionVoiceChoice = Readonly<{
   providerTitleKey: string | null;
   declaration: SessionVoiceDeclarationV1 | null;
   config: VoiceProviderSettingsJsonValueV1;
-  client: VoiceCatalogClient | null;
+  catalogAvailable: boolean;
   targetKey: string;
-  preview?: VoiceCatalogPreviewSynthesizer;
+  canPreview?: boolean;
 }>;
 
 function createUiSafely(providerId: string) {
@@ -117,7 +111,7 @@ export function useBundledConversationProviderSettings(voice: VoiceSettings): Re
   const envelope = providerId ? voice.providers?.[providerId] ?? null : null;
   const resolved = React.useMemo(() => owner ? resolveRealtimeProviderConfig(owner, envelope) : null, [envelope, owner]);
   const config = resolved?.status === 'ready' ? resolved.config : null;
-  const machineId = storage(state => resolveVoiceExecutionMachineIdFromState(state));
+  const machineId = useVoiceExecutionMachineId();
   const scope = storage(state => state.settingsScope);
   const sessionChoice = React.useMemo<ConversationSessionVoiceChoice | null>(() => {
     if (!providerId) return null;
@@ -133,17 +127,10 @@ export function useBundledConversationProviderSettings(voice: VoiceSettings): Re
         providerTitleKey,
         declaration: BUILT_IN_LOCAL_NEURAL_VOICE_DECLARATION,
         config: { voiceId: tts.localNeural.voiceId },
-        preview: input => previewLocalNeuralTts({ config: { ...tts.localNeural, voiceId: input.row.id },
-          sample: t('settingsVoice.local.testTtsSample'), timeoutMs: local.networkTimeoutMs,
-          signal: input.signal, isCurrent: input.isCurrent, registerPlaybackStopper: input.registerPlaybackStopper }),
+        canPreview: true,
         targetKey: JSON.stringify([BUILT_IN_LOCAL_NEURAL_VOICE_PROVIDER_ID, tts.localNeural.assetId,
           tts.localNeural.execution, machineId, scope]),
-        client: { fetchVoiceCatalog: async signal => {
-          signal?.throwIfAborted();
-          const catalog = await readLocalNeuralVoiceCatalog({ config: tts.localNeural, originMachineId: machineId });
-          signal?.throwIfAborted();
-          return catalog.rows;
-        } },
+        catalogAvailable: true,
       };
       const declaration = entry?.kind === 'voice.speech-engine.v1' ? entry.declaration ?? null : null;
       const speechConfig = readVoiceProviderSettingsConfig(voice, tts.provider) ?? {};
@@ -152,14 +139,13 @@ export function useBundledConversationProviderSettings(voice: VoiceSettings): Re
         targetKey: JSON.stringify([tts.provider, entry?.providerSettings?.schemaVersion ?? voice.providers[tts.provider]?.schemaVersion,
           readCatalogConfig(tts.provider, speechConfig), readCatalogCredentialBindings(voice, tts.provider),
           machineId, scope, registrationsRevision]),
-        client: entry && declaration ? { fetchVoiceCatalog: signal =>
-          new BundledSpeechDaemonClient().fetchCatalog(entry, 'voices', signal, machineId) } : null };
+        catalogAvailable: Boolean(entry && declaration) };
     }
     const entry = registry.get(providerId);
     const declaration = entry && entry.kind !== 'voice.turn-support.v1' ? entry.declaration ?? null : null;
     return { providerId, providerTitleKey: resolveSelectedVoiceProviderTitleKey(voice, registry),
       declaration, config: VoiceProviderSettingsJsonValueV1Schema.parse(config ?? {}),
-      client: bundledUi?.client ?? null, targetKey: JSON.stringify([providerId, owner?.schemaVersion ?? envelope?.schemaVersion,
+      catalogAvailable: Boolean(bundledUi?.client), targetKey: JSON.stringify([providerId, owner?.schemaVersion ?? envelope?.schemaVersion,
         config ? readCatalogConfig(providerId, config) : envelope, readCatalogCredentialBindings(voice, providerId),
         machineId, scope, registrationsRevision]) };
   }, [bundledUi, config, envelope, machineId, owner, providerId, registrationsRevision, scope, voice]);

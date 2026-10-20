@@ -104,16 +104,16 @@ function deriveRequirementsByMode(declaration: Extract<VoiceProviderContribution
 export function createDeclaredSettingsProjector(declaration: VoiceProviderContribution,
     providerSettings: ExternalVoiceProviderSettingsDescriptor, options: readonly VoiceProviderSelectionOption[]) {
     return (envelope: Readonly<{ schemaVersion: number; config: unknown }> | null): VoiceProviderSettingsProjection => {
-        const projection = projectExternalVoiceProviderSettings(envelope, providerSettings);
-        if (!isVoiceProviderSettingsProjectionCurrent(projection)) return projection;
-        const config = VoiceProviderSettingsJsonObjectV1Schema.safeParse(providerSettings.parseStoredConfig(envelope?.config));
-        if (!config.success) return INVALID_SETTINGS_PROJECTION;
-        const modeId = options.find((option) => option.configPatch && isConfigPatchMatch(config.data, option.configPatch))?.modeId
-            ?? options[0]?.modeId ?? projection.modeId;
-        const requirements = projectDeclaredSettingsRequirements(declaration, config.data);
-        return Object.freeze({ ...projection,
-            status: projection.status === 'ready' ? projectDeclaredSettingsReadiness(declaration, config.data) : projection.status,
-            modeId, ...(requirements ? { requirements: [...requirements] } : {}),
+        return projectExternalVoiceProviderSettings(envelope, providerSettings, 'default', (admittedConfig, projection) => {
+            const config = VoiceProviderSettingsJsonObjectV1Schema.safeParse(admittedConfig);
+            if (!config.success) return INVALID_SETTINGS_PROJECTION;
+            const modeId = options.find((option) => option.configPatch && isConfigPatchMatch(config.data, option.configPatch))?.modeId
+                ?? options[0]?.modeId ?? projection.modeId;
+            const requirements = projectDeclaredSettingsRequirements(declaration, config.data);
+            return Object.freeze({ ...projection,
+                status: projection.status === 'ready' ? projectDeclaredSettingsReadiness(declaration, config.data) : projection.status,
+                modeId, ...(requirements ? { requirements: [...requirements] } : {}),
+            });
         });
     };
 }

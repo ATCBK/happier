@@ -9,18 +9,19 @@ import { readProviderCatalogForMutationInContext,
 import { refreshProviderCatalog } from '@/sync/engine/settings/providerCatalogEngine';
 import { getProviderCatalogSnapshot } from '@/sync/store/settings/providerCatalogSnapshot';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
-import type { LazyActionAccountContext } from './actionAccountContext';
+import { withActionAccountRequestSignal, type LazyActionAccountContext } from './actionAccountContext';
 
 export function createUiProviderActionExecuteV1(account: LazyActionAccountContext,
   options?: Readonly<{ onRpcDispatched?: () => void }>,
 ): NonNullable<ActionExecutorDeps['providerActionExecute']> {
   return createProviderActionExecuteV1({
     assertCurrent: context => { context.signal?.throwIfAborted(); account.assertCurrent(); },
-    rpc: ({ machineId, method, request, context }) => machineRpcWithServerScope<unknown, typeof request.input>({
+    rpc: ({ machineId, method, request, context, operationTimeoutMs }) => withActionAccountRequestSignal(account, context.signal, signal => machineRpcWithServerScope<unknown, typeof request.input>({
       machineId, method, payload: request.input, serverId: account.serverId, accountId: account.accountId,
-      signal: context.signal,
+      signal,
+      ...(operationTimeoutMs === null ? { operationTimeoutMs: null } : {}),
       onDispatched: () => { context.signal?.throwIfAborted(); account.assertCurrent(); options?.onRpcDispatched?.(); },
-    }),
+    })),
     setDefault: (input, context) => account.mutateRawSettings(raw => applyProviderDefaultModelSelectionV1(raw, input),
       { signal: context.signal, observeOutcome: true }),
     account: (request, context) => {

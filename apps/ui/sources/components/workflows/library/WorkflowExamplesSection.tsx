@@ -92,10 +92,13 @@ export function WorkflowExamplesSection(props: Readonly<{
     if (session !== undefined && props.presentation === 'list') {
         // A Session's own picker (lab `b-habit T`): the full catalog, one line each, and never a Session chooser.
         // Read as a small configuration page, like the trigger popover beside it: what the picker does sits under
-        // its title at the top, and the rows lie on the picker itself.
+        // its title at the top, and the rows lie on the picker itself. The examples made for a Session (the
+        // ones that seed a trigger) lead; the general templates follow in the catalog's own order.
+        const forSession = [...examples.filter((example) => example.triggerSeed !== undefined),
+            ...examples.filter((example) => example.triggerSeed === undefined)];
         return <ListPresentationProvider value="page"><ItemGroup surface="none"
             title={props.hideTitle ? undefined : t('workflows.examples.title')} description={t('workflows.examples.sessionDescription')}>
-            {examples.map((example) => {
+            {forSession.map((example) => {
                 const sessionDescriptionKey = SESSION_DESCRIPTION_KEYS[example.key];
                 return <Item key={example.key} testID={`workflow-examples:${example.key}`}
                     title={tLoose(example.titleKey)} titleAccessory={<ExampleNewTag example={example} />}
@@ -142,7 +145,7 @@ function ExamplesStrip(props: Readonly<{
     const rest = props.examples.length - STRIP_EXAMPLE_COUNT;
     return <ItemGroup title={t('workflows.examples.title')} description={t('workflows.examples.description')} surface="none"
         action={rest > 0 ? <View ref={anchorRef} collapsable={false}><SectionActionButton testID="workflow-examples:more"
-            icon="tree-structure" title={t('common.more', { count: rest })} expanded={pickerOpen}
+            icon="tree-structure" title={t('common.more')} expanded={pickerOpen}
             onPress={() => setPickerOpen(true)} /></View> : undefined}>
         <ItemGroupColumns columns={2} paddingHorizontal={0} paddingVertical={0}>
             {props.examples.slice(0, STRIP_EXAMPLE_COUNT).map((example) => <ItemGroupColumn key={example.key} style={styles.cell}>

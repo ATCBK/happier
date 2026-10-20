@@ -17,6 +17,8 @@ import type {
   SessionCapabilitySelectionV1,
   SecretReferenceOverlayV1,
   TeamCredentialProviderModelSelectionV1,
+  ExecutionRunError,
+  ReviewCommentPrincipalHeaderV1,
 } from '@happier-dev/protocol';
 import type { PermissionIntent } from '@happier-dev/agents';
 import type { ExecutionRunBackendController } from '@/agent/executionRuns/controllers/types';
@@ -27,8 +29,23 @@ import type {
 } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
 import type { ExecutionRunPermissionRequestStoreProvider } from './executionRunPermissionResponseTarget';
 import type { ExecutionRunWorkflowObservationSink } from './executionRunWorkflowObservation';
+import type { AgentProbeModel } from '@happier-dev/protocol/capabilities';
+import type { FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+
+export type ExecutionRunNativeOfferedModelReader = (request: Readonly<{
+  backendTarget: BackendTargetRefV1;
+  modelId: string;
+  cwd: string;
+  runtimeDescriptorV1?: PortableRuntimeDescriptorV1;
+  connectedServices?: ConnectedServiceBindingsV2 | null;
+  secretReferenceOverlay?: SecretReferenceOverlayV1;
+}>) => Promise<AgentProbeModel | undefined>;
 
 export type ExecutionRunManagerStartParams = Readonly<{
+  /** Host-only caller lifetime for pending Voice initialization; detached after start accepts. */
+  signal?: AbortSignal;
+  projectLaunchContext?: import('@/agent/runtime/registry/engineRegistryTypes').ExecutionRunProjectLaunchContext;
+  projectSetupOperation?: import('@/workspaces/projectSetup/projectSetupExecution').ProjectSetupOperationContext;
   /** Nonsecret host-admitted custody identity; never accepted from authored Run input. */
   requesterWorkAttributionV1?: import('@/daemon/lifecycle/requesterWorkAttribution').RequesterWorkAttributionV1;
   /** Session association is explicit; `null` is a daemon-owned detached run. */
@@ -41,6 +58,8 @@ export type ExecutionRunManagerStartParams = Readonly<{
   workflowObservationSink?: ExecutionRunWorkflowObservationSink;
   /** Host-private identity from an admitted Workflow Action leaf, never authored input. */
   workflowRunId?: string;
+  /** Exact admitted invocation corpus; host-private and never reconstructed from Run input. */
+  workflowScope?: NonNullable<ReviewCommentPrincipalHeaderV1['workflowScope']>;
   intent: ExecutionRunIntent;
   roleId?: string;
   launchProfileId?: string;
@@ -48,6 +67,8 @@ export type ExecutionRunManagerStartParams = Readonly<{
   resolvedRole?: import('@happier-dev/protocol').ResolvedRoleV1;
   roleSessionMetadata?: unknown;
   promptCredentials?: import('@/persistence').StoredCredentials;
+  /** Host-private native catalog reader bound to the admitted executable snapshot. */
+  readNativeOfferedModel?: ExecutionRunNativeOfferedModelReader;
   backendTarget: BackendTargetRefV1;
   accountSettings?: Readonly<Record<string, unknown>> | null;
   childSelection?: 'agentDefault';
@@ -115,12 +136,16 @@ export type ExecutionRunManagerStartParams = Readonly<{
    * turn's admission ceiling.
    */
   causalPermissionAuthority?: SessionInputCausalPermissionAuthorityV1;
+  /** Host-private cause of this launch; never persisted as the Run's latest requester. */
+  actionRequestAttributionV1?: import('@happier-dev/protocol/actions/actionRequestAttributionV1').ActionRequestAttributionV1;
   permissionMode: string;
   workspaceWrites?: 'allow' | 'deny';
   retentionPolicy: 'ephemeral' | 'resumable';
   runClass: 'bounded' | 'long_lived';
   ioMode: 'request_response' | 'streaming';
   notifyParentOnCompletion?: boolean;
+  /** Captured at creation by the owning Account host; never accepted from Run request input. */
+  runReportPolicy?: FollowPolicyV1;
   profileId?: string | null;
   profileSourceCustody?: import('@happier-dev/protocol').PluginSourceCustodyV1 | null;
   // Internal runtime override for bounded-run timeouts. Not part of the public RPC contract.
@@ -156,6 +181,8 @@ export type ExecutionRunRuntimeSettings = Readonly<{
 }>;
 
 export type ExecutionRunState = Readonly<{
+  /** Current controller's live setup facts; never persisted or exposed as public Run state. */
+  projectSetup?: import('./executionRunProjectSetup').ExecutionRunProjectSetup;
   /** Retained with this accepted occurrence, independently of public Run state. */
   requesterWorkAttributionV1?: import('@/daemon/lifecycle/requesterWorkAttribution').RequesterWorkAttributionV1;
   /** Resolved host runtime engine, rather than a requested launch preference. */
@@ -183,6 +210,7 @@ export type ExecutionRunState = Readonly<{
   runClass: ExecutionRunManagerStartParams['runClass'];
   ioMode: ExecutionRunManagerStartParams['ioMode'];
   notifyParentOnCompletion?: boolean;
+  runReportPolicy?: FollowPolicyV1;
   /**
    * Cumulative backend turn count for long-lived runs.
    * Persisted in run state so resuming cannot reset enforcement (for example maxTurns).
@@ -220,9 +248,11 @@ export type ExecutionRunState = Readonly<{
     secretReferenceOverlay?: SecretReferenceOverlayV1;
   }>;
   status: 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
+  /** Original terminal fact, retained independently of optional parent-report ACK. */
+  terminalOccurrenceId?: string;
   startedAtMs: number;
   finishedAtMs?: number;
-  error?: { code: string; message?: string };
+  error?: ExecutionRunError;
   summary?: string;
   structuredMeta?: ExecutionRunStructuredMeta;
   latestToolResult?: unknown;

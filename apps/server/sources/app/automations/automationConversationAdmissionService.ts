@@ -591,7 +591,7 @@ export async function admitEncryptedAutomationConversationV1(params: Readonly<{
         });
 
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, automationIds: [hostEvidence.automationId] });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         // The sealed arm is only meaningful for an Account whose persisted mode
         // is E2EE under the exact content key the host sealed with.
         if (
@@ -649,7 +649,7 @@ export async function admitEncryptedAutomationConversationV1(params: Readonly<{
                 scopedTrigger: hostEvidence.scopedTrigger,
             },
         });
-    }));
+    }, { transactionClass: "automation-conversation-admit-encrypted" }));
 }
 
 /**
@@ -686,7 +686,7 @@ export async function admitAutomationConversationV1(params: Readonly<{
         });
 
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, automationIds: [input.automationId] });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return blocked("temporarilyUnavailable");
         // The plain Action transports plaintext sender/text/context. An
         // encrypted Account must use the sealed host-evidence arm instead; the
@@ -750,5 +750,5 @@ export async function admitAutomationConversationV1(params: Readonly<{
                 scopedTrigger: input.hostEvidence,
             },
         });
-    }));
+    }, { transactionClass: "automation-conversation-admit" }));
 }

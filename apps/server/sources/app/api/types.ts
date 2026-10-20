@@ -27,7 +27,11 @@ import type { CurrentSessionPublisherAuthority } from '@/app/presence/sessionPub
 export type RestrictedCredentialRouteSessionField =
     | "params.sessionId"
     | "params.destinationSessionId"
+    | "params.sourceSessionId"
     | "body.sessionId"
+    | "body.managerSessionId"
+    | "body.expectedManagerSessionId"
+    | "body.subject.id"
     | "body.consumer.sessionId"
     | "query.sessionId"
     | "query.sessionAccessSessionId";
@@ -59,6 +63,11 @@ export type RestrictedCredentialRouteBinding =
     | Readonly<{
         scope: "session";
         session: RestrictedCredentialRouteSessionSelector;
+        /** Other Session operands whose captured resource ceiling must also be proved. */
+        additionalSessions?: readonly (RestrictedCredentialRouteSessionSelector
+            | Readonly<{ field: RestrictedCredentialRouteSessionSelector; nullable: true }>)[];
+        /** A signed operand declaration does not opt a previously closed route into Runner transport. */
+        allowSessionRuntime?: false;
         machine?: RestrictedCredentialRouteMachineField;
         /** The Machine field is optional in this route's body; absent means Session-only. */
         machineOptional?: true;
@@ -120,6 +129,8 @@ declare module 'fastify' {
         sessionRuntimePrincipal?: VerifiedEphemeralSessionRunnerPrincipal;
         /** Exact Machine-bound external Action proof admitted this request. */
         externalActionExecutionAuthorized?: true;
+        /** All declared Session operands passed captured-resource admission at the signed owner. */
+        externalActionSessionAccessAdmitted?: true;
         /** Exact immutable binding admitted by the installed execution proof. */
         externalActionExecutionAuthorizationBinding?: ExternalActionExecutionAuthorizationBindingV1;
         /** Immutable caller input ceiling from verified invocation admission, not a later PAT grant. */

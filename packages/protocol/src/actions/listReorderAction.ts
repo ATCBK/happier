@@ -1,25 +1,25 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { EntityDragScopeV1Schema } from '../plugins/ui/entityDragDrop.js';
 import { ParticipantExecutionRunRecipientRoutingIdentityV1Schema } from '../messages/structured/participantMessageV1.js';
 import { AnchoredListPositionV1Schema } from './anchoredListOrderV1.js';
 import type { PreNormalizedActionSpec } from './actionSpecs.js';
 
-const id = z.string().trim().min(1);
+const id = z.string().check(z.trim(), z.minLength(1));
 // V1 mutation envelopes, including routing, scope and anchors, are closed.
-export const TodoReorderInputV1Schema = lazyZodSchema(() => z.object({
+export const TodoReorderInputV1Schema = lazyZodSchema(() => z.strictObject({
   scope: EntityDragScopeV1Schema, sourceId: id, position: AnchoredListPositionV1Schema,
-}).strict());
-export const PendingReorderInputV1Schema = lazyZodSchema(() => TodoReorderInputV1Schema.extend({
+}));
+export const PendingReorderInputV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(TodoReorderInputV1Schema, {
   sessionId: id,
   // Main is explicit null; a selected Run never supplies a missing recipient.
-  recipient: ParticipantExecutionRunRecipientRoutingIdentityV1Schema.nullable(),
-}).strict());
+  recipient: z.nullable(ParticipantExecutionRunRecipientRoutingIdentityV1Schema),
+})));
 export const ListReorderOutputV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('applied') }).strict(),
-  z.object({ status: z.literal('unavailable') }).strict(),
-  z.object({ status: z.literal('refused'), reason: id }).strict(),
-  z.object({ status: z.literal('unknown'), reason: id }).strict(),
+  z.strictObject({ status: z.literal('applied') }),
+  z.strictObject({ status: z.literal('unavailable') }),
+  z.strictObject({ status: z.literal('refused'), reason: id }),
+  z.strictObject({ status: z.literal('unknown'), reason: id }),
 ]));
 export type TodoReorderInputV1 = z.infer<typeof TodoReorderInputV1Schema>;
 export type PendingReorderInputV1 = z.infer<typeof PendingReorderInputV1Schema>;
@@ -45,8 +45,9 @@ export const LIST_REORDER_ACTION_SPECS = [
       { path: 'recipient', title: 'Recipient (null for Main)', widget: 'json', required: true },
     ] },
     bindings: { mcpToolName: 'session_pending_reorder' }, inputSchema: PendingReorderInputV1Schema },
-  { ...shared, id: 'todos.reorder', approval: {result: 'required'}, title: 'Reorder undone todo',
-    cli: { commands: [{ path: ['todos', 'reorder'], visibility: 'canonical' }] },
+  { ...shared, id: 'tasks.internal.reorder', executionPlacement: 'account', approval: {result: 'required'}, title: 'Reorder unfinished task',
+    originalExecution: { accountRoot: 'allowed' },
+    cli: { acceptsServerId: true, commands: [{ path: ['tasks', 'internal', 'reorder'], visibility: 'canonical' }] },
     description: 'Move an undone todo relative to current undone membership. Does not change completion status.',
-    bindings: { mcpToolName: 'todos_reorder' }, inputSchema: TodoReorderInputV1Schema },
+    bindings: { mcpToolName: 'tasks_internal_reorder' }, inputSchema: TodoReorderInputV1Schema },
 ] as const satisfies readonly PreNormalizedActionSpec[];

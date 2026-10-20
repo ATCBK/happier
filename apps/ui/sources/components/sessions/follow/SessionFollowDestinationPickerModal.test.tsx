@@ -1,171 +1,237 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
+import { SessionCurrentProjectionRecordV1Schema, SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { SetSessionFollowSourceResponseSchema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
+import { AccountEncryptionCurrentnessResponseSchema, sealSessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol';
 
-import { renderScreen } from '@/dev/testkit';
-import { createStorageModuleStub } from '@/dev/testkit/mocks/storage';
-import { t } from '@/text';
+import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainSessionCurrentProjectionRecordFixture, createSessionFixture,
+    createSessionOwnerViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { encodeBase64 } from '@/encryption/base64';
 
-const api = vi.hoisted(() => ({ set: vi.fn() }));
-const preparation = vi.hoisted(() => ({ run: vi.fn() }));
-const connectivity = vi.hoisted(() => ({ online: true }));
-const querySource = vi.hoisted(() => ({ refresh: vi.fn(), phase: 'ready', empty: false }));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 
-vi.mock('@/sync/api/session/sessionFollowSourcesApi', () => ({ setSessionFollowSource: api.set }));
-vi.mock('./prepareSessionFollowSourceKey', () => ({ prepareSessionFollowSourceKey: preparation.run }));
-vi.mock('@/sync/runtime/connectivity/serverReachabilitySupervisorPool', async (importOriginal) => ({
-    ...(await importOriginal<Record<string, unknown>>()),
-    isServerReachabilityNetworkAllowed: () => connectivity.online,
-    subscribeServerReachabilityNetworkAllowed: () => () => undefined,
-}));
-vi.mock('@/sync/domains/session/listing/useSessionListQuerySourceState', () => ({
-    useSessionListQuerySourceState: () => ({
-        byServerId: { 'home-a': querySource.empty ? [] : [{ type: 'session', sessionId: 'source-a' }, { type: 'session', sessionId: 'destination-a' }] },
-        statesByServerId: { 'home-a': { phase: querySource.phase } },
-        coverageComplete: true,
-        loadNext: vi.fn(),
-        refresh: querySource.refresh,
-    }),
-}));
-vi.mock('@/sync/domains/session/sessionAddress', () => ({
-    sessionAddressKey: ({ serverId, sessionId }: { serverId: string; sessionId: string }) => `${serverId}:${sessionId}`,
-}));
-vi.mock('@/sync/domains/state/storage', () => createStorageModuleStub({
-    useMachineListByServerId: () => ({ 'home-a': [] }),
-    useSessionListRowRenderablesForItems: () => new Map([
-        ['home-a:source-a', { id: 'source-a', serverId: 'home-a', active: true, metadata: { machineId: 'machine-a', path: '/source' } }],
-        ['home-a:destination-a', { id: 'destination-a', serverId: 'home-a', active: true, metadata: { machineId: 'runner-a', path: '/destination' } }],
-    ]),
-}));
-vi.mock('./resolveSessionFollowDestinationTargets', () => ({
-    resolveSessionFollowDestinationTargets: ({ sessions }: { sessions: unknown[] }) => sessions,
-    resolveSessionFollowSourceTargets: ({ sessions }: { sessions: unknown[] }) => sessions,
-}));
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => ({
-    ...(await importOriginal<Record<string, unknown>>()),
-    getServerProfileById: () => ({ name: 'Home' }),
-}));
-vi.mock('@/modal/components/card/useModalCardChrome', () => ({ useModalCardChrome: () => undefined }));
-vi.mock('@/components/ui/selectionList', () => ({
-    SelectionList: (props: Record<string, unknown>) => React.createElement('SelectionList', props),
-}));
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown>) => React.createElement('Item', props),
-}));
-vi.mock('@/components/ui/text/Text', () => ({ Text: (props: Record<string, unknown>) => React.createElement('Text', props) }));
+const network = await installSessionOpsNetworkBoundary();
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { restoreServerAccountForTest } =
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+const { Encryption } = await import('@/sync/encryption/encryption');
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { sync } = await import('@/sync/sync');
+const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable } =
+    await import('@/sync/runtime/orchestration/connectionManager');
+const { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { setServerReachabilityNetworkAllowed } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
+const { SelectionList } = await import('@/components/ui/selectionList');
+const { SessionFollowDestinationPickerModal } = await import('./SessionFollowDestinationPickerModal');
+const { t } = await import('@/text');
+const previousState = storage.getState();
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let releaseQuery: (() => void) | undefined;
+
+beforeEach(() => network.resetRequests());
+afterEach(async () => {
+    releaseQuery?.();
+    releaseQuery = undefined;
+    standardCleanup();
+    await connection?.dispose();
+    connection = undefined;
+    setServerReachabilityNetworkAllowed(true);
+    resetServerFeaturesClientForTests();
+    storage.setState(previousState, true);
+});
+afterAll(() => network.dispose());
+
+async function pickerHome(options: Readonly<{ query?: 'loading' | 'error'; preparation?: 'unreachable' | 'unsupported' }> = {}) {
+    const accountId = 'follow-picker-account';
+    const serverUrl = 'https://follow-picker.test';
+    const secret = new Uint8Array(32).fill(7);
+    const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`,
+        secret: encodeBase64(secret, 'base64url') };
+    const home = await network.addHome(serverUrl, accountId, { credentials, encryptionMode: 'e2ee' });
+    const encryption = await Encryption.create(secret);
+    const sourceKey = new Uint8Array(32).fill(9);
+    await encryption.initializeSessions(new Map([['source-a', sourceKey]]));
+    const sourceReader = encryption.getSessionEncryption('source-a');
+    if (!sourceReader) throw new Error('Source encryption fixture was not opened');
+    const sourceMetadata = { path: '/source', host: 'test', machineId: 'machine-1' };
+    const sourceBase = createPlainSessionCurrentProjectionRecordFixture({ id: 'source-a', metadata: sourceMetadata });
+    if (sourceBase.ownerMetadata?.t !== 'plain') throw new Error('Expected canonical owner fixture');
+    const source = SessionCurrentProjectionRecordV1Schema.parse({ ...sourceBase,
+        encryptionMode: 'e2ee',
+        metadata: await sourceReader.encryptRaw(JSON.parse(sourceBase.metadata)),
+        ownerMetadata: sealSessionOwnerMetadataEnvelopeV1({ ownerMetadata: sourceBase.ownerMetadata.v,
+            material: { type: 'legacy', secret }, randomBytes: length => new Uint8Array(length).fill(4) }),
+        dataEncryptionKey: encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey: sourceKey,
+            recipientPublicKey: encryption.contentDataKey, randomBytes: length => new Uint8Array(length).fill(3) })),
+    });
+    const destinationBase = createPlainSessionCurrentProjectionRecordFixture({ id: 'destination-a', active: true,
+        activeAt: Date.now(), metadata: { path: '/destination', host: 'test', machineId: 'runner-a' } });
+    if (destinationBase.ownerMetadata?.t !== 'plain') throw new Error('Expected canonical owner fixture');
+    const destination = SessionCurrentProjectionRecordV1Schema.parse({ ...destinationBase,
+        ownerMetadata: sealSessionOwnerMetadataEnvelopeV1({ ownerMetadata: destinationBase.ownerMetadata.v,
+            material: { type: 'legacy', secret }, randomBytes: length => new Uint8Array(length).fill(5) }),
+    });
+    const page = SessionListQueryResponseV1Schema.parse({ sessions: [source, destination].map(record => ({ ...record,
+        viewer: createSessionOwnerViewerFixture(createSessionFixture({ id: record.id })) })),
+        nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false });
+    const queryGate = createDeferred<void>();
+    if (options.query === 'loading') releaseQuery = () => queryGate.resolve();
+    let failQuery = options.query === 'error';
+    let queryReads = 0;
+    let failCommit = false;
+    let committed = false;
+    const order: string[] = [];
+    const writes: Array<Readonly<{ path: string; body: unknown }>> = [];
+    network.setHttpResponder(async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/account/encryption/currentness') return Response.json(AccountEncryptionCurrentnessResponseSchema.parse({
+            mode: 'e2ee', version: 1, signingKeyFingerprint: 'follow-picker-signing-key',
+            contentKeyFingerprint: encodeBase64(encryption.contentDataKey), updatedAt: 1,
+            recipientEnvelopeReadiness: { status: 'available' },
+        }));
+        if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse({
+            features: { sessions: { enabled: true, filteredListing: { enabled: true }, following: { enabled: true } } },
+        }));
+        if (path === '/v1/machines') return Response.json([
+            createPlainMachineRowFixture({ id: 'machine-1', accountId }),
+            { ...createPlainMachineRowFixture({ id: 'runner-a', accountId }), kind: 'ephemeral_session_runner',
+                operationProtocolCapabilities: {} },
+        ]);
+        if (path === '/v2/sessions/query') {
+            queryReads += 1;
+            if (options.query === 'loading') await queryGate.promise;
+            // A query rejection leaves the Home reachable; a 503 would instead
+            // exercise the canonical Home-offline presentation and recovery.
+            return failQuery ? Response.json({ errorCode: 'invalid_query' }, { status: 400 }) : Response.json(page);
+        }
+        if (path === '/v2/sessions/destination-a/follows/sessions/source-a' && init?.method === 'PUT') {
+            writes.push({ path, body: JSON.parse(String(init.body)) });
+            order.push('set');
+            if (failCommit) return Response.json({}, { status: 503 });
+            committed = true;
+            return Response.json(SetSessionFollowSourceResponseSchema.parse({ changed: true, source: {
+                sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'important' },
+                deliveryState: 'eligible', hasPendingUpdates: false,
+            } }));
+        }
+        if (path === '/v2/sessions/source-a') {
+            if (committed) order.push('prepare');
+            return options.preparation === 'unreachable'
+                ? Response.json({}, { status: 404 }) : Response.json({ session: source });
+        }
+        if (path === '/v2/sessions/destination-a') return Response.json({ session: destination });
+        return createEmptyAccountBootstrapHttpResponse(path, init);
+    });
+    connection = await restoreServerAccountForTest({ serverUrl, accountId, credentials, request: network.request });
+    await getServerFeaturesSnapshot({ serverId: home.id, force: true });
+    // Preparation independently resolves the exact Runner published by the Home census.
+    await sync.refreshMachines();
+    return { home, order, writes, queryReads: () => queryReads,
+        allowQuery: () => { failQuery = false; }, failCommit: () => { failCommit = true; } };
+}
+
+async function waitForChoices(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    await vi.waitFor(async () => {
+        await flushHookEffects();
+        expect(screen.findByType(SelectionList).props.rootStep.sections[0].options, JSON.stringify({
+        content: screen.getTextContent(), socket: storage.getState().socketStatus,
+        profile: storage.getState().profileScope, applied: getAppliedActiveServerSnapshot(),
+        runtime: isAppliedActiveServerRuntimeAvailable(), paths: network.httpRequests.map(request => new URL(request.url).pathname),
+        })).not.toHaveLength(0);
+    });
+}
 
 describe('SessionFollowDestinationPickerModal', () => {
-    beforeEach(() => {
-        api.set.mockReset();
-        preparation.run.mockReset();
-        querySource.refresh.mockReset();
-        connectivity.online = true;
-        querySource.phase = 'ready';
-        querySource.empty = false;
-    });
-
     it('reserves the rows while the first page loads instead of showing an empty list and a status line', async () => {
-        querySource.phase = 'loading';
-        querySource.empty = true;
-        const { SessionFollowDestinationPickerModal } = await import('./SessionFollowDestinationPickerModal');
+        const { home } = await pickerHome({ query: 'loading' });
         const screen = await renderScreen(<SessionFollowDestinationPickerModal
-            source={{ serverId: 'home-a', sessionId: 'source-a' }}
-            onClose={vi.fn()}
-            setChrome={vi.fn()}
-        />);
-
+            source={{ serverId: home.id, sessionId: 'source-a' }} onClose={vi.fn()} setChrome={vi.fn()} />);
+        await vi.waitFor(() => expect(screen.findByType(SelectionList).props.contentState?.props.testID)
+            .toBe('session-follow-destination-loading'));
         expect(screen.findByTestId('session-follow-picker-currentness')).toBeNull();
-        expect(screen.findByType('SelectionList').props.contentState?.props.testID).toBe('session-follow-destination-loading');
     });
 
     it('offers an in-place retry when destination discovery fails for the exact Home', async () => {
-        querySource.phase = 'error';
-        const { SessionFollowDestinationPickerModal } = await import('./SessionFollowDestinationPickerModal');
+        const fixture = await pickerHome({ query: 'error' });
         const screen = await renderScreen(<SessionFollowDestinationPickerModal
-            source={{ serverId: 'home-a', sessionId: 'source-a' }}
-            onClose={vi.fn()}
-            setChrome={vi.fn()}
-        />);
-
-        const status = screen.findByTestId('session-follow-picker-currentness');
-        expect(status?.props.title).toBe(t('sessionsList.queryRefreshFailedTitle'));
-        expect(status?.props.detail).toBe(t('common.retry'));
-        await act(async () => { status?.props.onPress(); });
-        expect(querySource.refresh).toHaveBeenCalledTimes(1);
-        // The list and its retained search are untouched by the retry.
+            source={{ serverId: fixture.home.id, sessionId: 'source-a' }} onClose={vi.fn()} setChrome={vi.fn()} />);
+        await vi.waitFor(async () => { await flushHookEffects();
+            expect(screen.getTextContent()).toContain(t('sessionsList.queryRefreshFailedTitle')); });
+        expect(screen.getTextContent()).toContain(t('common.retry'));
+        const list = screen.findByType(SelectionList);
+        const reads = fixture.queryReads();
+        fixture.allowQuery();
+        await screen.pressByTestIdAsync('session-follow-picker-currentness');
+        await waitForChoices(screen);
+        expect(fixture.queryReads()).toBe(reads + 1);
+        expect(screen.findByType(SelectionList)).toBe(list);
         expect(screen.findByTestId('session-follow-destination-list')).not.toBeNull();
     });
 
     it('preserves the list lifetime offline and refuses a selection from the previous connected render', async () => {
-        api.set.mockResolvedValue({ kind: 'error', error: 'network' });
-        const { SessionFollowDestinationPickerModal } = await import('./SessionFollowDestinationPickerModal');
-        const props = { source: { serverId: 'home-a', sessionId: 'source-a' }, onClose: vi.fn() };
+        const fixture = await pickerHome();
+        fixture.failCommit();
+        const props = { source: { serverId: fixture.home.id, sessionId: 'source-a' }, onClose: vi.fn() };
         const screen = await renderScreen(<SessionFollowDestinationPickerModal {...props} />);
-        const list = screen.findByType('SelectionList');
+        await waitForChoices(screen);
+        const list = screen.findByType(SelectionList);
         const selectWhileConnected = list.props.onSelect;
-        connectivity.online = false;
+        await act(async () => { setServerReachabilityNetworkAllowed(false); });
         await act(async () => { selectWhileConnected('destination-a'); });
-        expect(api.set).not.toHaveBeenCalled();
+        expect(fixture.writes).toHaveLength(0);
         await screen.update(<SessionFollowDestinationPickerModal {...props} setChrome={vi.fn()} />);
-        const retained = screen.findByType('SelectionList');
-        expect(retained).toBe(list);
-        expect(retained.props.rootStep.sections[0].options).toEqual(expect.arrayContaining([
+        expect(screen.findByType(SelectionList)).toBe(list);
+        expect(list.props.rootStep.sections[0].options).toEqual(expect.arrayContaining([
             expect.objectContaining({ id: 'destination-a', disabled: true }),
         ]));
-        connectivity.online = true;
-        await screen.update(<SessionFollowDestinationPickerModal {...props} setChrome={vi.fn()} />);
-        await act(async () => { screen.findByType('SelectionList').props.onSelect('destination-a'); });
-        expect(api.set).toHaveBeenCalledWith({ serverId: 'home-a', sourceSessionId: 'source-a', destinationSessionId: 'destination-a' });
+        await act(async () => { setServerReachabilityNetworkAllowed(true); });
+        await vi.waitFor(() => expect(list.props.rootStep.sections[0].options[0].disabled).toBe(false));
+        await screen.pressByTestIdAsync('session-follow-destination-option-destination-a');
+        await vi.waitFor(() => expect(fixture.writes).toEqual([{
+            path: '/v2/sessions/destination-a/follows/sessions/source-a', body: { policy: { preset: 'important' } },
+        }]));
     });
 
     it('commits the edge before preparation and keeps a reachable Retry action when preparation waits', async () => {
-        const order: string[] = [];
-        api.set.mockImplementation(async () => { order.push('set'); return { kind: 'ok', value: {} }; });
-        preparation.run.mockImplementation(async () => { order.push('prepare'); return { kind: 'waiting', reason: 'runner_unreachable' }; });
+        const fixture = await pickerHome({ preparation: 'unreachable' });
         const onClose = vi.fn();
         const onChanged = vi.fn();
-        const { SessionFollowDestinationPickerModal } = await import('./SessionFollowDestinationPickerModal');
         const screen = await renderScreen(<SessionFollowDestinationPickerModal
-            destination={{ serverId: 'home-a', sessionId: 'destination-a' }}
-            onClose={onClose}
-            onChanged={onChanged}
-        />);
-
-        await act(async () => {
-            screen.findByType('SelectionList').props.onSelect('source-a');
-            await Promise.resolve();
-            await Promise.resolve();
-        });
-
-        expect(order).toEqual(['set', 'prepare']);
+            destination={{ serverId: fixture.home.id, sessionId: 'destination-a' }} onClose={onClose} onChanged={onChanged} />);
+        await waitForChoices(screen);
+        await screen.pressByTestIdAsync('session-follow-destination-option-source-a');
+        await vi.waitFor(() => expect(fixture.order).toEqual(['set', 'prepare']));
+        expect(fixture.writes).toEqual([{
+            path: '/v2/sessions/destination-a/follows/sessions/source-a', body: { policy: { preset: 'important' } },
+        }]);
         expect(onClose).not.toHaveBeenCalled();
-        const retry = screen.findByType('Item');
-        expect(retry.props.testID).toBe('session-follow-source-key-waiting');
-        await act(async () => { retry.props.onPress(); await Promise.resolve(); });
-        expect(preparation.run).toHaveBeenCalledTimes(2);
+        expect(screen.findByTestId('session-follow-source-key-waiting')).not.toBeNull();
+        await screen.pressByTestIdAsync('session-follow-source-key-waiting');
+        await vi.waitFor(() => expect(fixture.order).toEqual(['set', 'prepare', 'prepare']));
     });
 
     it('asks for a daemon update instead of offering a retry the outdated runtime cannot satisfy', async () => {
-        api.set.mockResolvedValue({ kind: 'ok', value: {} });
-        preparation.run.mockResolvedValue({ kind: 'waiting', reason: 'unsupported' });
-        const { SessionFollowDestinationPickerModal } = await import('./SessionFollowDestinationPickerModal');
+        const fixture = await pickerHome({ preparation: 'unsupported' });
         const screen = await renderScreen(<SessionFollowDestinationPickerModal
-            destination={{ serverId: 'home-a', sessionId: 'destination-a' }}
-            onClose={vi.fn()}
-        />);
-
-        await act(async () => {
-            screen.findByType('SelectionList').props.onSelect('source-a');
-            await Promise.resolve();
-            await Promise.resolve();
-        });
-
-        const waiting = screen.findByType('Item');
-        expect(waiting.props.testID).toBe('session-follow-source-key-waiting');
-        expect(waiting.props.title).toBe(t('session.follow.sources.unsupported'));
-        // Repeating the same preparation against the same outdated runtime cannot
-        // succeed; the readiness effect already re-attempts once the destination
-        // Machine reports new capabilities.
+            destination={{ serverId: fixture.home.id, sessionId: 'destination-a' }} onClose={vi.fn()} />);
+        await waitForChoices(screen);
+        await screen.pressByTestIdAsync('session-follow-destination-option-source-a');
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain(t('session.follow.sources.unsupported')));
+        const waiting = screen.findByTestId('session-follow-source-key-waiting')!;
         expect(waiting.props.detail).toBeUndefined();
         expect(waiting.props.onPress).toBeUndefined();
     });

@@ -11,6 +11,8 @@ function jsonResponse(body: unknown, status = 200): Response {
     });
 }
 
+await import('./apiPush');
+
 describe('apiPush', () => {
     const credentials = { token: 't', secret: 's' } satisfies AuthCredentials;
     const fetchBoundary = vi.fn<typeof fetch>();

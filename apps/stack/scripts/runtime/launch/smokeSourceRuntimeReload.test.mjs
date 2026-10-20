@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildSourceRuntimeBundle } from '../../build/build_source_runtime.mjs';
 import { runCaptureResult } from '../../utils/proc/proc.mjs';
 import { smokeSourceRuntimeReload } from './smokeSourceRuntimeReload.mjs';
+import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 
 const repoDir = fileURLToPath(new URL('../../../../../', import.meta.url));
 
@@ -60,6 +61,28 @@ test('source reload probes local database server code on isolated scratch data',
     /cannot smoke mysql without a separately authorized scratch database/);
   await assert.rejects(access(witness), { code: 'ENOENT' });
 });
+
+test('PostgreSQL import smoke loads the replacement and rejects module failures without retained database access', async (t) => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-postgres-import-smoke-' });
+  const witness = fixture.path('imported');
+  const server = await createServerFixture(fixture.root, 'postgres', witness);
+  await writeFile(server.entrypoint, `
+    import {writeFileSync} from 'node:fs';
+    if (!process.argv.includes('--probe-runtime-import')) throw new Error('boot would open the database');
+    if (process.env.DATABASE_URL || process.env.HANDY_MASTER_SECRET || process.env.HAPPIER_STACK_SHARED_DB_SOURCE_ENV_FILE) throw new Error('retained database authority leaked');
+    if (!process.env.HAPPIER_SERVER_LIGHT_DATA_DIR.includes('hstack-reload-smoke-')) throw new Error('data directory not isolated');
+    writeFileSync(${JSON.stringify(witness)}, 'loaded');
+  `);
+  const env = { ...process.env, DATABASE_URL: 'postgresql://retained.invalid/live', HANDY_MASTER_SECRET: 'retained-secret',
+    HAPPIER_STACK_SHARED_DB_SOURCE_ENV_FILE: fixture.path('retained.env'),
+    HAPPIER_SERVER_LIGHT_DATA_DIR: fixture.path('retained-data') };
+  await smokeSourceRuntimeReload({ components: { server }, env, logger: { log() {} } });
+  assert.equal(await readFile(witness, 'utf8'), 'loaded');
+  await writeFile(server.entrypoint, 'throw new TypeError("replacement-schema.optional is not a function");');
+  await assert.rejects(smokeSourceRuntimeReload({ components: { server }, env, logger: { log() {} } }),
+    /replacement-schema.optional is not a function/);
+});
+
 test('source reload recognizes the real emitted PostgreSQL graph and skips only its database-backed probe', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hstack-reload-smoke-real-postgres-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -80,15 +103,31 @@ test('source reload recognizes the real emitted PostgreSQL graph and skips only 
       DATABASE_URL: '',
     },
   });
-  assert.notEqual(emittedMigration.code, 0);
+  assert.notEqual(emittedMigration.exitCode, 0);
   assert.match(emittedMigration.err, /schema\.prisma:[0-9]+|environment variable `DATABASE_URL` resolved to an empty string/i);
+
+  // Reach the real light entry and its lazy server graph, not the shallow
+  // capability probe. A successful probe must stop before database startup.
+  const imported = await runCaptureResult(process.execPath, [server.entrypoint, '--probe-runtime-import'], {
+    cwd: server.serverDir,
+    env: { ...process.env, ...server.env, DATABASE_URL: '', HANDY_MASTER_SECRET: '',
+      HAPPIER_SERVER_LIGHT_DATA_DIR: join(root, 'probe-data') },
+  });
+  assert.equal(imported.exitCode, 0, imported.err);
+  await assert.rejects(access(join(root, 'probe-data')), { code: 'ENOENT' });
 
   const witness = join(root, 'smoke-processes');
   const observer = join(root, 'observe-smoke.mjs');
-  await writeFile(observer, `import {appendFileSync} from 'node:fs';
-    if(process.env.HAPPIER_DB_PROVIDER==='pglite') appendFileSync(${JSON.stringify(witness)}, JSON.stringify({
+  await writeFile(observer, `import {writeFileSync} from 'node:fs';
+    if(process.argv.includes('--probe-runtime-import')) process.once('exit', () => writeFileSync(${JSON.stringify(witness)}, JSON.stringify({
       entry:process.argv[1],provider:process.env.HAPPIER_DB_PROVIDER,dataDir:process.env.HAPPIER_SERVER_LIGHT_DATA_DIR,
-      databaseUrl:process.env.DATABASE_URL})+'\\n');`);
+      databaseUrl:process.env.DATABASE_URL,masterSecret:process.env.HANDY_MASTER_SECRET})));`);
+  const retainedEnv = join(root, 'retained.env');
+  await writeFile(retainedEnv, [
+    'DATABASE_URL=postgresql://retained.invalid/live',
+    'HANDY_MASTER_SECRET=retained-fixture-secret',
+    `HAPPIER_SERVER_LIGHT_DATA_DIR=${join(root, 'retained-data')}`,
+  ].join('\n'));
   const logs = [];
   await smokeSourceRuntimeReload({
     components: { server },
@@ -96,10 +135,17 @@ test('source reload recognizes the real emitted PostgreSQL graph and skips only 
       ...process.env,
       HAPPIER_STACK_REPO_DIR: repoDir,
       DATABASE_URL: 'postgresql://retained.invalid/live',
+      DOTENV_CONFIG_PATH: retainedEnv,
+      DOTENV_CONFIG_OVERRIDE: 'true',
       NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${pathToFileURL(observer).href}`.trim(),
     },
     logger: { log: message => logs.push(message) },
   });
   assert.match(logs.join('\n'), /skipping its database-backed migration and health smoke because the shared DATABASE_URL is forbidden/);
-  await assert.rejects(access(witness), { code: 'ENOENT' });
+  const observation = JSON.parse((await readFile(witness, 'utf8')).trim());
+  assert.equal(observation.entry, server.entrypoint);
+  assert.equal(observation.provider, 'postgres');
+  assert.equal(observation.databaseUrl, '');
+  assert.equal(observation.masterSecret, '');
+  assert.ok(observation.dataDir.includes('hstack-reload-smoke-'));
 });

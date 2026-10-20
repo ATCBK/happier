@@ -9,6 +9,33 @@ import {
 } from './resultContract.js';
 
 describe('execution Run result contract codec', () => {
+  it.each([{ language: 'json', newline: '\n' }, { language: '', newline: '\r\n' }])('decodes one complete $language fence and still validates the declared schema', ({ language, newline }) => {
+    const contract = { kind: 'json' as const, schema: { type: 'object' as const,
+      properties: { verdict: { enum: ['progress', 'no_progress', 'done'] } }, required: ['verdict'], additionalProperties: false } };
+    const fence = (body: string) => `${newline}\`\`\`${language}${newline}${body}${newline}\`\`\`${newline}`;
+    expect(decodeExecutionRunProfileResult(fence('{"verdict":"progress"}'), contract))
+      .toEqual({ ok: true, value: { verdict: 'progress' } });
+    expect(decodeExecutionRunProfileResult(fence('{"verdict":"stop"}'), contract))
+      .toMatchObject({ ok: false, reason: 'schema_mismatch' });
+    expect(decodeExecutionRunProfileResult(fence('{"verdict":"done","extra":true}'), contract))
+      .toMatchObject({ ok: false, reason: 'schema_mismatch' });
+    expect(decodeExecutionRunProfileResult(fence('broken'), contract)).toEqual({ ok: false, reason: 'not_json' });
+    expect(decodeExecutionRunProfileResult(fence('"done"'), { kind: 'decision', decisions: ['continue', 'done'] }))
+      .toEqual({ ok: true, value: 'done' });
+    expect(decodeExecutionRunProfileResult(fence('{"verdict":"done"}'), { kind: 'text' }))
+      .toEqual({ ok: true, value: fence('{"verdict":"done"}') });
+  });
+
+  it.each([
+    'Here is the result:\n```json\n{"ok":true}\n```',
+    '```json\n{"ok":true}\n```\nExplanation',
+    '```json\n{"ok":true}\n```\n```json\n{"ok":false}\n```',
+    '```javascript\n{"ok":true}\n```',
+    '```json\n{"ok":true}',
+  ])('rejects prose, multiple fences, other languages and unfinished fences: %s', (rawText) => {
+    expect(decodeExecutionRunProfileResult(rawText, { kind: 'json', schema: {} }))
+      .toEqual({ ok: false, reason: 'not_json' });
+  });
   it('keeps declared decision reasons through typed and raw observations and rejects undeclared or malformed objects', () => {
     const contract = { kind: 'decision' as const, decisions: ['continue', 'done', 'stuck'] };
     const value = { decision: 'stuck', reason: 'no progress' };

@@ -584,19 +584,18 @@ const openAiCodexRuntimeDefinition: PluginConnectedAccountRuntime = {
     }
     const files: Record<string, Uint8Array> = {};
     if (!request.fileIds.includes(CODEX_AUTH_FILE_ID)) return { kind: 'files', files };
-    const accessToken = await readCredential(context.credentials, ACCESS_TOKEN_KEY, options);
-    const idToken = await readCredential(context.credentials, ID_TOKEN_KEY, options);
-    const providerAccountId = await readCredential(
-      context.credentials,
-      PROVIDER_ACCOUNT_ID_KEY,
-      options,
-    );
+    // All native-file fields use the same admitted revision. Keep each host
+    // currentness fence while avoiding sequential independent transport waits.
+    const [accessToken, idToken, providerAccountId, lastRefreshValue] = await Promise.all([
+      readCredential(context.credentials, ACCESS_TOKEN_KEY, options),
+      readCredential(context.credentials, ID_TOKEN_KEY, options),
+      readCredential(context.credentials, PROVIDER_ACCOUNT_ID_KEY, options),
+      readCredential(context.credentials, LAST_REFRESH_AT_MS_KEY, options),
+    ]);
     if (!accessToken) {
       throw new Error('OpenAI Codex connected-account credentials are unavailable');
     }
-    const lastRefreshAt = Number(
-      await readCredential(context.credentials, LAST_REFRESH_AT_MS_KEY, options),
-    );
+    const lastRefreshAt = Number(lastRefreshValue);
     const lastRefreshIso = new Date(
       Number.isFinite(lastRefreshAt) && lastRefreshAt > 0 ? lastRefreshAt : 0,
     ).toISOString();

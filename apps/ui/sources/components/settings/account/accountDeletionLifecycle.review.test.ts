@@ -1,44 +1,38 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
 import { createManagedResourceDependencyFixture } from '@/dev/testkit/fixtures/managedResourceDependencyFixtures';
-import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { setRuntimeFetch, resetRuntimeFetch } from '@/utils/system/runtimeFetch';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { publishAppliedActiveServerRuntimeAvailability } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
-import { installLocalStorageMock, installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 
 const modal = vi.hoisted(() => ({ reviews: [] as string[], onConfirm: null as null | (() => Promise<boolean>) }));
 vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
-installApprovalCommonModuleMocks({ modal: async () => ({ Modal: {
+installApprovalCommonModuleMocks({ storage: original => original(), modal: async () => ({ Modal: {
     confirm: async (_title: string, body: string) => { modal.reviews.push(body); return modal.onConfirm ? modal.onConfirm() : true; },
 } }) });
 const { completeAccountDeletion } = await import('./accountDeletionLifecycle');
 const { deleteCurrentAccount } = await import('@/sync/api/account/deleteCurrentAccount');
-const { storage } = await import('@/sync/domains/state/storage');
+const account = createProviderSettingsAccountHarness();
 let target: ServerAccountScopeLifetime;
-let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
-let restoreBrowserStorage: (() => void) | undefined;
-let restoreBrowserLocks: (() => void) | undefined;
-const credentials = { token: createAccountTokenForTests('owner', { currentAccount: true }) };
+let credentials: { token: string };
 
 beforeEach(async () => {
     modal.reviews = []; modal.onConfirm = null;
-    restoreBrowserStorage = installLocalStorageMock().restore;
-    restoreBrowserLocks = installWebLockManagerMock().restore;
-    connection = await restoreServerAccountForTest({ serverUrl: 'https://self-erasure-review.test', accountId: 'owner', credentials });
-    const home = connection.home;
-    storage.getState().activateProfileScope({ serverId: resolveServerProfileScopeIdForIdentifier(home.id), accountId: 'owner' });
+    await account.restore({ accountId: 'owner', currentAccount: true });
+    const home = account.home.findByServerUrl('https://provider-settings-account.test');
+    if (!home?.token) throw new Error('Account erasure fixture requires a current credential');
+    credentials = { token: home.token };
     const captured = captureActiveServerAccountScopeLifetime();
     if (!captured) throw new Error('Expected the real active Account lifetime');
     target = captured;
 });
-afterEach(async () => { await connection?.dispose(); connection = null; retireActiveServerAccountScopeLifetime(); publishAppliedActiveServerRuntimeAvailability(false); resetRuntimeFetch(); restoreBrowserLocks?.(); restoreBrowserStorage?.(); vi.restoreAllMocks(); });
+afterEach(async () => { await account.reset(); retireActiveServerAccountScopeLifetime(); publishAppliedActiveServerRuntimeAvailability(false); resetRuntimeFetch(); vi.restoreAllMocks(); });
 
 describe('ordinary Account erasure managed-resource review', () => {
     it('never sends the original token after its text-confirmation Account lifetime retired', async () => {

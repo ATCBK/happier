@@ -104,6 +104,7 @@ export const CLIPROXYAPI_PROVIDER_CONTRIBUTION = {
       (declaration) => ({
         ...declaration,
         endpointTemplateIds: [...declaration.endpointTemplateIds],
+        staticModels: [...declaration.staticModels],
         service: { ...declaration.service },
         materializationKinds: [
           ...declaration.materializationKinds,

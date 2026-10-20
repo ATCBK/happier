@@ -131,11 +131,9 @@ describe('SurfaceState: the shared full state composition', () => {
       retry?.click();
     });
     expect(retried).toBe(0);
-    const details = mount.container.querySelector<HTMLElement>('[data-testid="row-details-toggle"]');
-    expect(details).not.toBeNull();
+    expect(mount.container.querySelector('[data-testid="row-details-toggle"]')).toBeNull();
+    expect(mount.container.querySelector('[data-testid="row-diagnostic-E_MACHINE_UNREACHABLE"]')).not.toBeNull();
     expect(textOf(mount.container)).not.toContain('E_MACHINE_UNREACHABLE');
-    await act(async () => { details?.click(); });
-    expect(textOf(mount.container)).toContain('E_MACHINE_UNREACHABLE');
     mount.unmount();
   });
 

@@ -115,12 +115,13 @@ describe('describeEffectiveModelMode', () => {
     });
 
     it('reads known applied model facts despite retired nested stored fields', () => {
+        const retiredFields = { retired: true };
         const out = describeEffectiveModelMode({
             agentType: 'codex', selectedModelId: 'gpt-5.6-sol', metadata: buildMetadata({
                 sessionAppliedModelV1: {
-                    v: 1, provider: 'codex', updatedAt: 10, modelId: 'gpt-5.6-terra', retired: true,
+                    v: 1, provider: 'codex', updatedAt: 10, modelId: 'gpt-5.6-terra', ...retiredFields,
                     selection: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null,
-                        modelId: 'gpt-5.6-terra', retired: true },
+                        modelId: 'gpt-5.6-terra', ...retiredFields },
                 },
             }),
         });
@@ -146,7 +147,7 @@ describe('describeEffectiveModelMode', () => {
             metadata: null,
         });
 
-        expect(out.effectiveModelId).toBe(getAgentCore('gemini').model?.defaultMode);
+        expect(out.effectiveModelId).toBe(getAgentCore('gemini')?.model?.defaultMode);
         expect(out.notes.join(' ')).not.toMatch(/custom model ids|not validated/i);
     });
 
@@ -228,7 +229,7 @@ describe('describeEffectiveModelMode', () => {
             metadata: null,
         });
 
-        expect(out.effectiveModelId).toBe(getAgentCore('codex').model?.defaultMode);
+        expect(out.effectiveModelId).toBe(getAgentCore('codex')?.model?.defaultMode);
         expect(out.notes.join(' ')).not.toMatch(/custom model ids|not validated/i);
     });
 });

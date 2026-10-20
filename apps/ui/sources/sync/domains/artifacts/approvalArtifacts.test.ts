@@ -1,15 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { ApprovalRequestV2Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
+import { ApprovalRequestV1Schema, ApprovalRequestV2Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
 
 import type { DecryptedArtifact } from './artifactTypes';
 import {
     collectOpenApprovalSessionReferences,
     isOpenApprovalInboxArtifact,
+    readOpenApprovalDiscussionAttention,
     listOpenApprovalArtifactsForSession,
     listTranscriptApprovalArtifactsForSession,
     resolveOpenApprovalSessionKeys,
 } from './approvalArtifacts';
 import { buildSessionListServerScopedRowKey } from '@/sync/domains/session/listing/sessionListKeyNormalization';
+import { setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { buildDiscussionListAttention } from '@/activity/attention/buildDiscussionListAttention';
 
 function artifact(
     id: string,
@@ -76,11 +79,84 @@ function durableApprovalBody(sessionId: string) {
 }
 
 describe('listOpenApprovalArtifactsForSession', () => {
+    it('distinguishes immutable pending draft-review purpose through the strict private Inbox reader', () => {
+        const request = ApprovalRequestV2Schema.parse({
+            ...durableApprovalBody('publisher'), actionId: 'discussion.reply',
+            actionArgs: { discussionId: 'discussion-a', content: { v: 1, parts: [{ t: 'text', text: 'Private answer' }] },
+                replyTarget: { kind: 'message', messageId: 'question' } },
+            executionOriginV1: { ...durableApprovalBody('publisher').executionOriginV1, actionId: 'discussion.reply' },
+        });
+        const reviewed = ApprovalRequestV2Schema.parse({ ...request, discussionDraftReview: true });
+        const ordinary = artifact('ordinary', buildApprovalRequestArtifactHeaderV1(request), request);
+        const draft = artifact('private-draft', buildApprovalRequestArtifactHeaderV1(reviewed), reviewed);
+        const scope = { serverId: 'server-a', accountId: 'account-1' };
+        const input = { scope, artifactScope: scope, artifactsLoaded: true, artifacts: [ordinary, draft],
+            items: [{ id: 'discussion-a', unreadMentionCount: 1 }] };
+        const rows = buildDiscussionListAttention(input);
+        expect(rows[0]).toMatchObject({ attentionReason: 'draft_waiting', approvalArtifactIds: [ordinary.id, draft.id] });
+        expect(buildDiscussionListAttention(input, rows)).toBe(rows);
+        expect(buildDiscussionListAttention({ ...input, artifacts: [ordinary] }, rows)[0])
+            .toMatchObject({ attentionReason: 'approval_pending', approvalArtifactIds: [ordinary.id] });
+        expect(buildDiscussionListAttention({ ...input, artifacts: [{ ...draft, body: undefined }] }, rows)[0])
+            .toMatchObject({ attentionReason: 'mentioned', approvalArtifactIds: [] });
+        const settled = ApprovalRequestV2Schema.parse({ ...reviewed, status: 'executed', updatedAtMs: 2,
+            decision: { kind: 'approve', decidedAtMs: 2 }, execution: { executedAtMs: 3, ok: true, result: {} } });
+        expect(buildDiscussionListAttention({ ...input,
+            artifacts: [artifact(draft.id, buildApprovalRequestArtifactHeaderV1(settled), settled)] }, rows)[0])
+            .toMatchObject({ attentionReason: 'mentioned', approvalArtifactIds: [] });
+        expect(buildDiscussionListAttention({ ...input, artifactScope: { ...scope, accountId: 'other-account' } }, rows)[0])
+            .toMatchObject({ attentionReason: 'mentioned', approvalArtifactIds: [], approvalAttentionAvailable: false });
+        const otherHome = { ...scope, serverId: 'other-home' };
+        expect(buildDiscussionListAttention({ ...input, scope: otherHome, artifactScope: otherHome }, rows)[0])
+            .toMatchObject({ attentionReason: 'mentioned', approvalArtifactIds: [] });
+    });
+
+    it('qualifies Discussion approval attention by the strict Action target and captured Home', () => {
+        const request = ApprovalRequestV2Schema.parse({
+            ...durableApprovalBody('publisher'), actionId: 'discussion.reply',
+            actionArgs: { discussionId: 'same-raw-discussion', content: { v: 1, parts: [{ t: 'text', text: 'Private answer' }] },
+                replyTarget: { kind: 'message', messageId: 'question' } },
+            executionOriginV1: { ...durableApprovalBody('publisher').executionOriginV1, actionId: 'discussion.reply' },
+        });
+        const open = artifact('reply-approval', buildApprovalRequestArtifactHeaderV1(request), request);
+        const target = { serverId: 'server-a', discussionId: 'same-raw-discussion' };
+        expect(readOpenApprovalDiscussionAttention(open)).toEqual({ ...target, reason: 'approval_pending' });
+        expect(readOpenApprovalDiscussionAttention({ ...open, body: undefined })).toBeNull();
+        expect(readOpenApprovalDiscussionAttention({ ...open, header: { ...open.header, title: 'Changed index' } })).toBeNull();
+        expect(readOpenApprovalDiscussionAttention({ ...open, draft: true })).toBeNull();
+        const scope = { serverId: target.serverId, accountId: 'account-1' };
+        const items = [{ id: target.discussionId, unreadMentionCount: 2 }, { id: 'quiet', unreadMentionCount: 0 }];
+        const input = { scope, artifactScope: scope, artifactsLoaded: true, artifacts: [open], items };
+        const rows = buildDiscussionListAttention(input);
+        expect(rows).toMatchObject([{ attentionReason: 'approval_pending', approvalArtifactIds: [open.id] },
+            { attentionReason: null, approvalArtifactIds: [] }]);
+        expect(buildDiscussionListAttention(input, rows)).toBe(rows);
+        const otherHome = { ...scope, serverId: 'other-home' };
+        expect(buildDiscussionListAttention({ ...input, scope: otherHome, artifactScope: otherHome }, rows)[0])
+            .toMatchObject({ attentionReason: 'mentioned', approvalArtifactIds: [] });
+        expect(buildDiscussionListAttention({ ...input, items: [{ id: 'other-discussion', unreadMentionCount: 0 }] }, rows)[0])
+            .toMatchObject({ attentionReason: null, approvalArtifactIds: [] });
+        expect(buildDiscussionListAttention({ ...input, artifacts: [] }, rows)[0])
+            .toMatchObject({ attentionReason: 'mentioned', approvalArtifactIds: [] });
+        expect(buildDiscussionListAttention({ ...input, artifactScope: { ...scope, accountId: 'different-account' } }, rows)[0])
+            .toMatchObject({ attentionReason: 'mentioned', approvalArtifactIds: [], approvalAttentionAvailable: false });
+        expect(buildDiscussionListAttention({ ...input, artifactsLoaded: false }, rows)[0])
+            .toMatchObject({ attentionReason: 'mentioned', approvalArtifactIds: [], approvalAttentionAvailable: false });
+    });
+
     it('keeps draft requests out of the canonical Inbox approval predicate', () => {
         const body = approvalBody('s1');
-        const header = { title: 'Approve', v: 1, kind: 'approval_request.v1', approvalStatus: 'open', sessionId: 's1', actionId: 'session.list', approvalSummary: 'List sessions' };
+        const header = buildApprovalRequestArtifactHeaderV1(ApprovalRequestV1Schema.parse(body));
         expect(isOpenApprovalInboxArtifact(artifact('open', header, body))).toBe(true);
         expect(isOpenApprovalInboxArtifact(artifact('draft', { ...header, draft: true }, body))).toBe(false);
+    });
+    it('preserves every open approval when the Inbox uses its predicate as an array callback', () => {
+        const body = ApprovalRequestV1Schema.parse(approvalBody('s1'));
+        const header = buildApprovalRequestArtifactHeaderV1(body);
+        const first = artifact('first', header, body);
+        const second = artifact('second', header, body);
+        expect([first, second, artifact('draft', { ...header, draft: true }, body)]
+            .filter(isOpenApprovalInboxArtifact).map(row => row.id)).toEqual(['first', 'second']);
     });
     it('rejects bodyless approval indexes until the authoritative body is hydrated', () => {
         const approvals = listOpenApprovalArtifactsForSession([
@@ -163,6 +239,40 @@ describe('listOpenApprovalArtifactsForSession', () => {
 
         expect(approvals).toHaveLength(1);
         expect(approvals[0]?.approval).toMatchObject({ v: 2, actionId: 'session.title.set' });
+    });
+
+    it('links a remote Agent approval by its portable Home identity through hydration and settlement', async () => {
+        const serverUrl = 'https://approval-cross-device-home.test';
+        const profile = await upsertServerProfile({ serverUrl });
+        await setServerProfileIdentityForUrl(serverUrl, 'srv_approval_cross_device');
+        const request = ApprovalRequestV2Schema.parse({
+            ...durableApprovalBody('same-session'),
+            executionOriginV1: { ...durableApprovalBody('same-session').executionOriginV1,
+                serverId: 'remote-cli-profile', serverIdentityId: 'srv_approval_cross_device' },
+        });
+        const header = buildApprovalRequestArtifactHeaderV1(request);
+        const head = artifact('remote-approval', header);
+        const opened = artifact('remote-approval', header, request);
+        const address = { serverId: profile.id, sessionId: 'same-session' };
+        const knownSessionAddresses = [address, { serverId: 'other-home', sessionId: address.sessionId }];
+
+        expect([...resolveOpenApprovalSessionKeys(collectOpenApprovalSessionReferences([head]), knownSessionAddresses)])
+            .toEqual([buildSessionListServerScopedRowKey(profile.id, address.sessionId)]);
+        expect(listOpenApprovalArtifactsForSession([opened], address, { knownSessionAddresses }))
+            .toHaveLength(1);
+        expect(listOpenApprovalArtifactsForSession([opened], {
+            serverId: 'srv_approval_cross_device', sessionId: address.sessionId,
+        }, { knownSessionAddresses })).toHaveLength(1);
+        expect(listOpenApprovalArtifactsForSession([opened], knownSessionAddresses[1]!, { knownSessionAddresses })).toEqual([]);
+
+        const settled = ApprovalRequestV2Schema.parse({ ...request, status: 'executed', updatedAtMs: 2,
+            decision: { kind: 'approve', decidedAtMs: 2 }, execution: { executedAtMs: 3, ok: true, result: {} } });
+        const completed = artifact('remote-approval', buildApprovalRequestArtifactHeaderV1(settled), settled);
+        expect(collectOpenApprovalSessionReferences([completed])).toEqual([]);
+        expect(listOpenApprovalArtifactsForSession([completed], address, { knownSessionAddresses })).toEqual([]);
+        expect(listTranscriptApprovalArtifactsForSession([completed], address, {
+            knownSessionAddresses, settledPresentations: [() => true],
+        })).toHaveLength(1);
     });
 
     it('admits a legacy unscoped approval only when canonical membership resolves one exact Home', () => {

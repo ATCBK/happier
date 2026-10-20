@@ -14,8 +14,9 @@ import { installVoiceToolActionImplCommonModuleMocks } from './voiceToolActionIm
 import { AcpBackendDefinitionV1Schema } from '@happier-dev/protocol/acp/catalog/settingsV1';
 import { applyAcpCatalogSnapshot, resetAcpCatalogSnapshotsForTests } from '@/sync/store/settings/acpCatalogSnapshot';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { applyProviderCatalogSnapshot, resetProviderCatalogSnapshotsForTests } from '@/sync/store/settings/providerCatalogSnapshot';
-import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { resetProviderCatalogSnapshotsForTests } from '@/sync/store/settings/providerCatalogSnapshot';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1,
+  ProviderConnectionsRowReadResponseV1Schema, sealProviderConnectionsContentV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
@@ -168,6 +169,10 @@ describe('agent catalog voice tools', () => {
     accountHomes = await serveAccountHomes({ homes: [{ key: 'catalog', serverUrl: 'https://voice-test.invalid', accountId: 'account-a', currentAccount: true, settings: state.settings }],
       route: request => {
         if (request.path.startsWith('/v1/features') && featureResponse) return featureResponse();
+        if (request.path === PROVIDER_CONNECTIONS_ROWS_ROUTE_V1) return Response.json(ProviderConnectionsRowReadResponseV1Schema.parse({
+          status: 'present', revision: 1, content: sealProviderConnectionsContentV1({ mode: 'plain', material: null,
+            catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 }),
+        }));
         const machine = /^\/v1\/machines\/([^/]+)$/.exec(request.path);
         if (machine) return Response.json({ machine: createPlainMachineRowFixture({ id: decodeURIComponent(machine[1]), accountId: 'account-a' }) });
         return undefined;
@@ -180,7 +185,6 @@ describe('agent catalog voice tools', () => {
     resetAcpCatalogSnapshotsForTests();
     state.settingsScope = { serverId: catalogHomeId, accountId: 'account-a' };
     resetProviderCatalogSnapshotsForTests();
-    applyProviderCatalogSnapshot(state.settingsScope, { status: 'ready', revision: 1, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 }, true);
     applyAcpCatalogSnapshot(state.settingsScope, { status: 'ready', revision: 1, record: { v: 1, definitions: [AcpBackendDefinitionV1Schema.parse({
       id: 'team-review', name: 'team-review', title: 'Team review', description: 'Custom team review backend', launch: { kind: 'command' as const, command: 'kiro-cli', args: ['acp'] },
        createdAt: 1, updatedAt: 1,

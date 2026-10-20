@@ -1,11 +1,12 @@
 import axios from 'axios';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ExternalActionMachineBootstrapV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { AccessibleMachineAccessV1Schema, type AccessibleMachineAccessV1 } from '@happier-dev/protocol/machines/machineAccessV1';
 import { DevcontainerChildProjectionV1Schema, type DevcontainerChildProjectionV1 } from '@happier-dev/protocol/machines/managed/devcontainerV1';
 import { isMachineReachableV1 } from '@happier-dev/protocol/machines/machineReachabilityV1';
 import { StoredMachinePublishedMetadataV1Schema, type MachinePublishedMetadataV1 } from '@happier-dev/protocol/machines/machinePublishedContentV1';
+import { readMachineName, resolveMachineDisplayNameParts, type MachineNameMetadata } from '@happier-dev/protocol/machines/machineDisplayNames';
 import type { StoredCredentials } from '@/persistence';
 import { resolvePublishedMachineContentCodec } from './machineDataEncryptionKey';
 import { readAccountEncryptionModeOnce } from '@/api/client/accountEncryptionMode';
@@ -17,10 +18,9 @@ import { normalizeServerHttpBaseUrl, resolveServerHttpBaseUrl } from '@/api/clie
 // bootstrap projection; this parser extends it only with the legacy/full-account
 // `metadata` blob it genuinely needs. Labels and decoded platform facts remain
 // CLI projections of that metadata and never alter machine identity.
-const ACCOUNT_MACHINE_ROW_SCHEMA = ExternalActionMachineBootstrapV1Schema
-  .extend({ metadata: z.string().optional(), activeAt: z.number().nullable().optional(), access: AccessibleMachineAccessV1Schema.optional(),
-    devcontainerChild: z.optional(z.nullable(DevcontainerChildProjectionV1Schema)) })
-  .passthrough();
+const ACCOUNT_MACHINE_ROW_SCHEMA = z.looseObject({ ...ExternalActionMachineBootstrapV1Schema.shape,
+    metadata: z.optional(z.string()), activeAt: z.optional(z.nullable(z.number())), access: z.optional(AccessibleMachineAccessV1Schema),
+    devcontainerChild: z.optional(z.nullable(DevcontainerChildProjectionV1Schema)) });
 
 const ACCOUNT_MACHINE_INVENTORY_SCHEMA = z.array(ACCOUNT_MACHINE_ROW_SCHEMA);
 
@@ -50,14 +50,15 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
-function readMachineLabel(metadata: string | undefined, fallback: string): string {
-  if (!metadata) return fallback;
+function readMachineNameMetadata(metadata: string | undefined): MachineNameMetadata | null {
+  if (!metadata) return null;
   try {
     const value: unknown = JSON.parse(metadata);
-    if (!value || typeof value !== 'object') return fallback;
-    return nonEmptyString((value as Readonly<Record<string, unknown>>).host) ?? fallback;
+    if (!value || typeof value !== 'object') return null;
+    const record = value as Readonly<Record<string, unknown>>;
+    return { displayName: nonEmptyString(record.displayName), host: nonEmptyString(record.host) };
   } catch {
-    return fallback;
+    return null;
   }
 }
 
@@ -102,7 +103,7 @@ export async function listCurrentAccountMachines(params: Readonly<{
       `${serverHttpBaseUrl}/v1/account/encryption`, { headers: { Authorization: `Bearer ${credentials.token}` },
         timeout: 20_000, ...(params.signal ? { signal: params.signal } : {}) },
     ) }).then(mode => mode.kind === 'resolved' ? mode.mode : 'unknown' as const).catch(() => 'unknown' as const);
-    return await Promise.all(inventory.data.map(async (row) => {
+    const namedMachines = await Promise.all(inventory.data.map(async (row) => {
       let metadata: ReturnType<typeof StoredMachinePublishedMetadataV1Schema.parse> | undefined;
       if (params.credentials && row.metadata && (!row.access || row.access.accessState === 'ready')) {
         try {
@@ -120,32 +121,55 @@ export async function listCurrentAccountMachines(params: Readonly<{
         }
       }
       params.signal?.throwIfAborted();
+      const nameMetadata = metadata ?? (params.credentials ? null : readMachineNameMetadata(row.metadata));
       return {
-      id: row.id, label: metadata ? nonEmptyString(metadata.host) ?? row.id
-        : params.credentials ? row.id : readMachineLabel(row.metadata, row.id), kind: row.kind, active: row.active,
-      revokedAt: row.revokedAt, replacedByMachineId: row.replacedByMachineId,
-      ...(row.activeAt === undefined ? {} : { activeAt: row.activeAt }),
-      ...(metadata ? { platform: metadata.platform, ...(metadata.arch === undefined ? {} : { arch: metadata.arch }) } : {}),
-      ...(metadata?.agentInventory ? { agentInventory: metadata.agentInventory } : {}),
-      ...(row.access ? { access: row.access } : {}),
-      ...(row.devcontainerChild ? { devcontainerChild: row.devcontainerChild } : {}),
-      ...(row.operationProtocolCapabilities === undefined ? {} : { operationProtocolCapabilities: row.operationProtocolCapabilities }),
-      ...(row.operationProtocolCapabilitiesRevision === undefined ? {} : { operationProtocolCapabilitiesRevision: row.operationProtocolCapabilitiesRevision }),
+        host: nameMetadata?.host,
+        machine: {
+          id: row.id, label: readMachineName(nameMetadata) ?? row.id, kind: row.kind, active: row.active,
+          revokedAt: row.revokedAt, replacedByMachineId: row.replacedByMachineId,
+          ...(row.activeAt === undefined ? {} : { activeAt: row.activeAt }),
+          ...(metadata ? { platform: metadata.platform, ...(metadata.arch === undefined ? {} : { arch: metadata.arch }) } : {}),
+          ...(metadata?.agentInventory ? { agentInventory: metadata.agentInventory } : {}),
+          ...(row.access ? { access: row.access } : {}),
+          ...(row.devcontainerChild ? { devcontainerChild: row.devcontainerChild } : {}),
+          ...(row.operationProtocolCapabilities === undefined ? {} : { operationProtocolCapabilities: row.operationProtocolCapabilities }),
+          ...(row.operationProtocolCapabilitiesRevision === undefined ? {} : { operationProtocolCapabilitiesRevision: row.operationProtocolCapabilitiesRevision }),
+        },
       };
     }));
+    const names = resolveMachineDisplayNameParts(namedMachines.map(({ host, machine }) => ({ id: machine.id, name: machine.label, host })));
+    return namedMachines.map(({ machine }) => {
+      const name = names.get(machine.id)!;
+      return { ...machine, label: name.hint ? `${name.name} · ${name.hint}` : name.name };
+    });
   } catch (error) {
     params.signal?.throwIfAborted();
     throw Object.assign(new Error('The current machine inventory is unavailable.'), { code: 'machine_inventory_unavailable', cause: error });
   }
 }
 
-/** Background Account administration selects a reachable daemon in the exact Home. */
-export async function resolveCurrentAccountAdministrationMachine(params: Parameters<typeof listCurrentAccountMachines>[0]
-  & Readonly<{ preferredMachineId?: string | null }>): Promise<string | null> {
+/**
+ * Background Account administration preserves explicit targets and otherwise lists the reachable daemons in the
+ * exact Home, preferred Machine first. Presence is only the first filter: a Machine row whose daemon is connected
+ * to another server still looks present, so a caller that reads through one Machine tries the next on a
+ * target-unavailable verdict (`isMachineRequestReachabilityFailureV1`).
+ */
+export async function listCurrentAccountAdministrationMachines(params: Parameters<typeof listCurrentAccountMachines>[0]
+  & Readonly<{ token: string; requestedMachineId?: string; preferredMachineId?: string | null }>): Promise<readonly string[]> {
+  if (params.requestedMachineId !== undefined) {
+    const resolution = await resolveCurrentAccountMachineTarget(params);
+    return resolution.kind === 'selected' ? [resolution.target.machineId] : [];
+  }
   const machines = await listCurrentAccountMachines(params);
   const reachable = machines.filter(machine => machine.kind === 'persistent' && !machine.replacedByMachineId
-    && (!machine.access || machine.access.accessState === 'ready') && isMachineReachableV1({ machine, nowMs: Date.now() }));
-  return reachable.find(machine => machine.id === params.preferredMachineId)?.id ?? reachable[0]?.id ?? null;
+    && (!machine.access || machine.access.accessState === 'ready') && isMachineReachableV1({ machine, nowMs: Date.now() }))
+    .map(machine => machine.id);
+  return params.preferredMachineId && reachable.includes(params.preferredMachineId)
+    ? [params.preferredMachineId, ...reachable.filter(id => id !== params.preferredMachineId)] : reachable;
+}
+
+export async function resolveCurrentAccountAdministrationMachine(params: Parameters<typeof listCurrentAccountAdministrationMachines>[0]): Promise<string | null> {
+  return (await listCurrentAccountAdministrationMachines(params))[0] ?? null;
 }
 
 /**

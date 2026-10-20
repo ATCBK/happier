@@ -1,8 +1,11 @@
-import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
-import type { ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { approvalArtifactBodyMatchesHeaderV1, type ParsedApprovalArtifactBodyV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import type { ApprovalRequest, ApprovalRequesterConfirmationV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { isDiscussionActionIdV1 } from '@happier-dev/protocol/discussions/actionIds';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 
 import type { DecryptedArtifact } from './artifactTypes';
 import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
 export type OpenApprovalArtifactForSession = Readonly<{
     artifact: DecryptedArtifact;
@@ -48,10 +51,76 @@ function parseApprovalRequestArtifact(artifact: DecryptedArtifact): ApprovalRequ
     return parsed?.family === 'built_in' ? parsed.request : null;
 }
 
-export function isOpenApprovalInboxArtifact(artifact: DecryptedArtifact): boolean {
-    if (artifact.draft === true) return false;
+function readOpenApprovalInboxArtifact(artifact: DecryptedArtifact) {
+    if (artifact.draft === true) return null;
     const parsed = approvalArtifactBodyMatchesHeaderV1(artifact.header ?? {}, typeof artifact.body === 'string' ? artifact.body : null);
-    return parsed?.request.status === 'open';
+    return parsed?.request.status === 'open' ? parsed : null;
+}
+
+export type ApprovalDiscussionAddress = Readonly<{ serverId: string; discussionId: string }>;
+export type OpenApprovalDiscussionAttention = ApprovalDiscussionAddress & Readonly<{
+    reason: 'approval_pending' | 'draft_waiting';
+}>;
+
+/** The Inbox's strict private request is the only source of this Discussion link. */
+export function readOpenApprovalDiscussionAttention(artifact: DecryptedArtifact): OpenApprovalDiscussionAttention | null {
+    const parsed = readOpenApprovalInboxArtifact(artifact);
+    if (parsed?.family !== 'built_in' || parsed.request.v !== 2 || !isDiscussionActionIdV1(parsed.request.actionId)) return null;
+    const request = parsed.request;
+    const input = getActionSpec(request.actionId).inputSchema.safeParse(request.actionArgs);
+    if (!input.success || typeof input.data !== 'object' || input.data === null || !('discussionId' in input.data)
+        || typeof input.data.discussionId !== 'string') return null;
+    const serverId = request.executionOriginV1.serverIdentityId ?? request.executionOriginV1.serverId;
+    return { serverId, discussionId: input.data.discussionId,
+        reason: request.discussionDraftReview === true ? 'draft_waiting' : 'approval_pending' };
+}
+
+/**
+ * A shared Bot's outward request that waits for the person who asked, joined to the Discussion
+ * message that asked it. The admitted cause (`executionOriginV1.actionRequestAttributionV1`) is the
+ * only source of the link; nothing is inferred from the thread. Every status is kept, so the card
+ * becomes the request's receipt in place once it is decided.
+ */
+export type DiscussionRequesterApproval = Readonly<{
+    artifact: DecryptedArtifact;
+    parsed: Extract<ParsedApprovalArtifactBodyV1, { family: 'built_in' | 'target_action' }>;
+    subject: ApprovalRequesterConfirmationV1;
+    /** The admitted cause; a Bot reply stamped with the same ref is the answer to this ask. */
+    requestRef: string;
+    originMessageId: string;
+}>;
+
+function readDiscussionRequesterApproval(
+    artifact: DecryptedArtifact,
+    discussion: ApprovalDiscussionAddress,
+): DiscussionRequesterApproval | null {
+    if (artifact.draft === true || typeof artifact.body !== 'string') return null;
+    const parsed = approvalArtifactBodyMatchesHeaderV1(artifact.header ?? {}, artifact.body);
+    if (!parsed || parsed.family === 'execution_run_host_action') return null;
+    const request = parsed.family === 'target_action' ? parsed.request : parsed.request.v === 2 ? parsed.request : null;
+    if (!request) return null;
+    const subject = request.requesterConfirmation;
+    const cause = request.executionOriginV1?.actionRequestAttributionV1;
+    const origin = cause?.origin;
+    if (!subject || !cause || origin?.kind !== 'discussion') return null;
+    if (origin.discussion.discussionId !== discussion.discussionId
+        || !areServerProfileIdentifiersEquivalent(origin.discussion.serverId, discussion.serverId)) return null;
+    return { artifact, parsed, subject, requestRef: cause.requestRef, originMessageId: origin.messageId };
+}
+
+export function listDiscussionRequesterApprovals(
+    artifacts: readonly DecryptedArtifact[],
+    discussion: ApprovalDiscussionAddress,
+): DiscussionRequesterApproval[] {
+    return artifacts.flatMap((artifact) => {
+        const entry = readDiscussionRequesterApproval(artifact, discussion);
+        return entry ? [entry] : [];
+    }).sort((left, right) => left.parsed.request.createdAtMs - right.parsed.request.createdAtMs
+        || left.artifact.id.localeCompare(right.artifact.id));
+}
+
+export function isOpenApprovalInboxArtifact(artifact: DecryptedArtifact): boolean {
+    return readOpenApprovalInboxArtifact(artifact) !== null;
 }
 
 function collectApprovalLinkedSessionReferences(
@@ -59,7 +128,9 @@ function collectApprovalLinkedSessionReferences(
     approval?: ApprovalRequest | null,
 ): readonly OpenApprovalSessionReference[] {
     const referencesByKey = new Map<string, OpenApprovalSessionReference>();
-    const serverId = readString(artifact.header?.serverId);
+    // A producer's profile id is device-local. Its portable Home identity is
+    // the cross-device link; profile aliases are resolved only when matching.
+    const serverId = readString(artifact.header?.serverIdentityId) ?? readString(artifact.header?.serverId);
     addSessionReference(referencesByKey, artifact.header?.sessionId, serverId);
     collectSessionReferencesFromUnknownArray(referencesByKey, artifact.sessions, serverId);
     collectSessionReferencesFromUnknownArray(referencesByKey, artifact.header?.sessions, serverId);
@@ -67,7 +138,7 @@ function collectApprovalLinkedSessionReferences(
         addSessionReference(
             referencesByKey,
             approval.executionOriginV1.sessionId ?? approval.createdBy.sessionId,
-            approval.executionOriginV1.serverId,
+            approval.executionOriginV1.serverIdentityId ?? approval.executionOriginV1.serverId,
         );
     } else {
         addSessionReference(referencesByKey, approval?.createdBy.sessionId, serverId);
@@ -84,15 +155,28 @@ function referenceMatchesTarget(
         const key = sessionAddressKey(reference.address);
         return typeof target === 'string'
             ? key === target.trim()
-            : key === sessionAddressKey(target);
+            : reference.address.sessionId === target.sessionId
+                && areServerProfileIdentifiersEquivalent(reference.address.serverId, target.serverId);
     }
     if (typeof target === 'string') return false;
     const candidates = new Map(
         knownSessionAddresses
             .filter((address) => address.sessionId === reference.sessionId)
-            .map((address) => [sessionAddressKey(address), address] as const),
+            .map((address) => [resolveServerProfileScopeIdForIdentifier(address.serverId), address] as const),
     );
-    return candidates.size === 1 && candidates.has(sessionAddressKey(target));
+    return candidates.size === 1 && candidates.has(resolveServerProfileScopeIdForIdentifier(target.serverId));
+}
+
+/** Read demand only; admission still requires the strict body/header reader. */
+export function listApprovalArtifactIdsNeedingHydrationForSession(
+    artifacts: readonly DecryptedArtifact[],
+    target: SessionAddress,
+    knownSessionAddresses: readonly SessionAddress[],
+): string[] {
+    return artifacts.filter(artifact => artifact.draft !== true && artifact.isDecrypted
+        && artifact.header?.kind === 'approval_request.v1' && artifact.body === undefined
+        && collectApprovalLinkedSessionReferences(artifact).some(reference => referenceMatchesTarget(reference, target, knownSessionAddresses)))
+        .map(artifact => artifact.id);
 }
 
 /**
@@ -187,7 +271,10 @@ export function resolveOpenApprovalSessionKeys(
     }
     for (const reference of references) {
         if (reference.kind === 'exact') {
-            keys.add(sessionAddressKey(reference.address));
+            const matching = knownSessionAddresses.filter(address => address.sessionId === reference.address.sessionId
+                && areServerProfileIdentifiersEquivalent(address.serverId, reference.address.serverId));
+            if (matching.length > 0) for (const address of matching) keys.add(sessionAddressKey(address));
+            else keys.add(sessionAddressKey(reference.address));
             continue;
         }
         const candidates = addressesBySessionId.get(reference.sessionId);

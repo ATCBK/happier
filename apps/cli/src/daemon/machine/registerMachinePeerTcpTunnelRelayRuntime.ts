@@ -1,4 +1,5 @@
 import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabledBit';
+import { resolvePeerRouteFeatureId } from '@happier-dev/protocol/machines/peer/mediation/routeFeature';
 import type { FeaturesResponse, PeerTcpTunnelRelayEnvelope } from '@happier-dev/protocol';
 
 import {
@@ -39,7 +40,14 @@ export function registerMachinePeerTcpTunnelRelayRuntime(input: Readonly<{
   onHandlerError?: (error: unknown) => void;
   dependencies?: Dependencies;
 }>): Readonly<{ dispose(): Promise<void> }> | null {
-  if (readServerEnabledBit(input.serverFeatures, 'machines.tunnel.serverRouted') !== true) return null;
+  // This carrier also terminates application flows whose relay gates differ
+  // from generic TCP. Register it for each enabled, actually installed consumer.
+  const flowEnabled = (flowKind: 'tcp_tunnel' | 'voice_media' | 'provider_broker') => readServerEnabledBit(
+    input.serverFeatures, resolvePeerRouteFeatureId({ flowKind, routeKind: 'server_relay' }),
+  ) === true;
+  if (!flowEnabled('tcp_tunnel')
+    && !(input.voiceBinaryAppendConsumer && flowEnabled('voice_media'))
+    && !(input.resolveProviderBrokerApplicationTarget && flowEnabled('provider_broker'))) return null;
   const relayAuthorizationTrustRoots = input.serverFeatures.capabilities.machines.peerMediation.grantSigningKeys
     .filter((key) => key.expiresAt == null || key.expiresAt > input.nowMs())
     .map((key) => ({

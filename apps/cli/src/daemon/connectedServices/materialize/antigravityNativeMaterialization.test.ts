@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import type { ConnectedAccountRuntime } from '@happier-dev/plugin-sdk/connected-accounts';
 import { antigravityConnectedAccountRuntime } from '../../../../../../packages/plugins/antigravity/src/connectedAccounts/antigravityConnectedAccountRuntime';
+import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 
 function context(): Parameters<ConnectedAccountRuntime['materialize']>[1] {
   const account = { service: { pluginId: 'happier.agent.antigravity', localId: 'antigravity-account' }, accountId: 'selected-account' };
   // Host credential/configuration services are genuine boundaries; materialization remains real.
-  return { account, signal: new AbortController().signal, credentials: { async get() { return null; } },
+  return { account, plugin: { id: account.service.pluginId, version: '1.0.0' },
+    contribution: { id: account.service.localId, qualifiedId: `${account.service.pluginId}/${account.service.localId}` },
+    surface: 'background', invokedAtMs: 0, services: createUnavailablePluginServices(),
+    signal: new AbortController().signal, credentials: { async get() { return null; } },
     configuration: { target: { kind: 'account', account, modeId: 'oauth-personal' }, revision: 'configuration-1', values: {}, async getSecret() { return null; } },
-  } as Parameters<ConnectedAccountRuntime['materialize']>[1];
+  };
 }
 
 describe('Antigravity native authentication materialization', () => {

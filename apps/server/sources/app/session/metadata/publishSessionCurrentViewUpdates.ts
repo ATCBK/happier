@@ -33,9 +33,10 @@ import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
  *   ordinary change cursor instead.
  *
  * Returns `{ ok: false }` when the projection cannot be built, so the caller can
- * fail its request rather than emit a malformed or over-disclosing payload. The
- * write has already committed at that point; refusing to publish is the safe
- * direction, because the change cursor still wakes every participant.
+ * report publication failure without emitting a malformed or over-disclosing
+ * payload. The write and change cursor have already committed; publication
+ * failure must not contradict that mutation receipt. Ordinary cursor recovery
+ * remains available to every participant.
  */
 
 export type SessionCurrentViewPublicationSourceV1 =

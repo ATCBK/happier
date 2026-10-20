@@ -150,7 +150,7 @@
                       "-Command",
                       "irm https://x.ai/cli/install.ps1 | iex"
                     ],
-                    "cmd": "powershell"
+                    "cmd": "powershell.exe"
                   }
                 ]
               }
@@ -213,6 +213,7 @@
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [
       {
         "executableNames": [
@@ -344,6 +345,7 @@
     "voiceModelPacks": [],
     "voiceProviders": [],
     "webhooks": [],
+    "workItems": [],
     "workflows": []
   },
   "displayName": "Grok",

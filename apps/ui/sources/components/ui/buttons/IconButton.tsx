@@ -158,6 +158,11 @@ export function IconButton(props: Readonly<{
     /** Borderless resting fill; overrides `variant`. See {@link IconButtonFill}. */
     fill?: IconButtonFill;
     disabled?: boolean;
+    /**
+     * Work owned elsewhere is in flight (a write that outlives the press that started it): the icon
+     * becomes the spinner and presses are ignored, as for a pending `onPress` promise.
+     */
+    busy?: boolean;
     /** Whether this toggle-style action is currently selected. */
     selected?: boolean;
     /** Disable the resting selection fill when the caller supplies another selection marker. */
@@ -201,7 +206,7 @@ export function IconButton(props: Readonly<{
 
     const size = props.size ?? DEFAULT_SIZE;
     const iconSize = props.iconSize ?? Math.max(12, size - 10);
-    const variant = props.fill ? 'outlined' : props.variant ?? 'outlined';
+    const variant = props.fill ? 'well' : props.variant ?? 'outlined';
     const fillColor = props.fill === 'danger'
         ? theme.colors.state.danger.background
         : props.fill === 'neutral'
@@ -219,7 +224,7 @@ export function IconButton(props: Readonly<{
             selected: paintColor(theme.colors.surface.pressed),
             focus: theme.colors.border.focus,
         } : {
-            // The fill is its own edge: the outline the chrome draws matches it.
+            // The fill is its own edge: a `well` draws no outline.
             background: paintColor(fillColor, undefined, 'solidControl'),
             border: fillColor,
             hover: paintColor(props.fill === 'danger' ? fillColor : theme.colors.state.neutral.border, undefined, 'solidControl'),
@@ -228,12 +233,6 @@ export function IconButton(props: Readonly<{
             focus: theme.colors.border.focus,
         },
     });
-    // The frame is only the press target; every fill and tint is on the drawn square (the chrome
-    // owner's contract). A filled well's fill is its own edge, so it draws no outline.
-    const resolveChrome = (state: Parameters<typeof chrome>[0]) => {
-        const resolved = chrome(state);
-        return fillColor === null ? resolved : { frame: resolved.frame, surface: { ...resolved.surface, borderWidth: 0 } };
-    };
     const minimumInteractiveTargetSize = Number.isFinite(props.minimumInteractiveTargetSize)
         ? Math.max(size, Math.round(props.minimumInteractiveTargetSize!))
         : null;
@@ -313,6 +312,7 @@ export function IconButton(props: Readonly<{
             accessibilityHint={props.disabled === true && props.disabledReason ? props.disabledReason : props.accessibilityHint}
             describedById={disabledReason ? descriptionId : undefined}
             disabled={props.disabled}
+            busy={props.busy}
             selected={props.selected}
             checked={props.checked}
             expanded={props.expanded}
@@ -331,7 +331,7 @@ export function IconButton(props: Readonly<{
             style={(state) => [
                 styles.pressFrame,
                 pressFrame,
-                resolveChrome(state).frame,
+                chrome(state).frame,
             ]}
             overlay={hasTooltip ? (state) => (
                 (state.hovered || state.focused) && !tooltipQuiet ? (Platform.OS === 'web' ? (
@@ -354,7 +354,7 @@ export function IconButton(props: Readonly<{
                 <View
                     testID={props.testID ? `${props.testID}-surface` : undefined}
                     style={[
-                        resolveChrome(state).surface,
+                        chrome(state).surface,
                     ]}
                 >
                     {disabledReason ? <Text nativeID={descriptionId} style={visuallyHiddenStyle}

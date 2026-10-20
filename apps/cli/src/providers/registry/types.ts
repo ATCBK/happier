@@ -16,10 +16,12 @@ import type { ProviderConnectionSecurityFingerprintV1 } from '@happier-dev/proto
 import type {
   ResolvedContributionProvenance,
   ResolvedProviderContribution,
+  ResolvedAgentContribution,
 } from '@/plugins/projection/registry/types';
 
 export type ProviderContributionRegistryView = Readonly<{
   providersByContributionKey: ReadonlyMap<string, ResolvedProviderContribution>;
+  agentDefinitionsById?: ReadonlyMap<string, ResolvedAgentContribution>;
   /**
    * Aggregate executable-registry revision for projection invalidation only.
    * It is not Provider executable currentness.

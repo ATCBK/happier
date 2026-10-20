@@ -6,7 +6,7 @@ import { readSessionPresentationCompletedRequests } from '@/sync/domains/session
 import { listPendingSessionRequests } from './listPendingSessionRequests';
 
 describe('pending request facts adapter', () => {
-    it('uses the strict public completion projection only for recipient presentation', () => {
+    it('uses stored public completions for recipients, ignoring additive fields but rejecting invalid known fields', () => {
         const requestId = 'permission-publicly-completed';
         const createdAt = 1_000;
         const messages: Message[] = [{
@@ -62,7 +62,7 @@ describe('pending request facts adapter', () => {
                 completedRequests: {},
             },
         });
-        const malformedRecipient = createSessionFixture({
+        const additiveRecipient = createSessionFixture({
             active: true,
             accessLevel: 'view',
             metadataLayoutVersion: 1,
@@ -72,6 +72,21 @@ describe('pending request facts adapter', () => {
             },
             agentState: null,
         });
+        const malformedRecipient = createSessionFixture({
+            ...additiveRecipient,
+            metadata: {
+                ...sharedMetadata,
+                path: '/private/path-must-not-pass',
+                publicAgentState: {
+                    completedRequests: {
+                        [requestId]: {
+                            ...completedRequests[requestId],
+                            status: 'invalid-status',
+                        },
+                    },
+                },
+            },
+        });
 
         expect(readSessionPresentationCompletedRequests(recipient)).toEqual(
             completedRequests,
@@ -80,6 +95,9 @@ describe('pending request facts adapter', () => {
         expect(listPendingSessionRequests(owner, messages)).toEqual([
             expect.objectContaining({ id: requestId, tool: 'Bash' }),
         ]);
+        expect(readSessionPresentationCompletedRequests(additiveRecipient)).toEqual(completedRequests);
+        expect(listPendingSessionRequests(additiveRecipient, messages)).toEqual([]);
+        expect(readSessionPresentationCompletedRequests(malformedRecipient)).toBeNull();
         expect(listPendingSessionRequests(malformedRecipient, messages)).toEqual([
             expect.objectContaining({ id: requestId, tool: 'Bash' }),
         ]);

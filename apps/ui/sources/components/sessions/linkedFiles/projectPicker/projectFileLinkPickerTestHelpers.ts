@@ -13,8 +13,6 @@ type InstallProjectFileLinkPickerCommonModuleMocksOptions = Readonly<{
     router?: ProjectFileLinkPickerModuleFactory;
     storage?: ProjectFileLinkPickerStorageModuleFactory;
     text?: ProjectFileLinkPickerModuleFactory;
-    typography?: ProjectFileLinkPickerModuleFactory;
-    uiText?: ProjectFileLinkPickerModuleFactory;
     unistyles?: ProjectFileLinkPickerModuleFactory;
 }>;
 
@@ -26,8 +24,6 @@ const projectFileLinkPickerModuleState = vi.hoisted(() => ({
         router: undefined as ProjectFileLinkPickerModuleFactory | undefined,
         storage: undefined as ProjectFileLinkPickerStorageModuleFactory | undefined,
         text: undefined as ProjectFileLinkPickerModuleFactory | undefined,
-        typography: undefined as ProjectFileLinkPickerModuleFactory | undefined,
-        uiText: undefined as ProjectFileLinkPickerModuleFactory | undefined,
         unistyles: undefined as ProjectFileLinkPickerModuleFactory | undefined,
     },
 }));
@@ -42,8 +38,6 @@ export function installProjectFileLinkPickerCommonModuleMocks(
         router: options.router,
         storage: options.storage,
         text: options.text,
-        typography: options.typography,
-        uiText: options.uiText,
         unistyles: options.unistyles,
     };
 
@@ -75,32 +69,6 @@ export function installProjectFileLinkPickerCommonModuleMocks(
 
         const { createExpoVectorIconsMock } = await import('@/dev/testkit/mocks/icons');
         return createExpoVectorIconsMock();
-    });
-
-    vi.mock('@/components/ui/text/Text', async () => {
-        const activeOptions = projectFileLinkPickerModuleState.options;
-        if (activeOptions.uiText) {
-            return await activeOptions.uiText();
-        }
-
-        return {
-            Text: 'Text',
-            TextInput: 'TextInput',
-        };
-    });
-
-    vi.mock('@/constants/Typography', async () => {
-        const activeOptions = projectFileLinkPickerModuleState.options;
-        if (activeOptions.typography) {
-            return await activeOptions.typography();
-        }
-
-        return {
-            Typography: {
-                default: () => ({}),
-                mono: () => ({}),
-            },
-        };
     });
 
     vi.mock('@/text', async () => {

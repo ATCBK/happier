@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 import { browserViewKey } from '@happier-dev/protocol/browser/view/key';
 import type { BrowserDiagnosticEventV1 } from '@happier-dev/protocol/browser/diagnostics/v1';
@@ -80,7 +81,8 @@ function selectSnapshotEventsForView(
 export function useBrowserDiagnosticsDaemonSnapshot(
     input: UseBrowserDiagnosticsDaemonSnapshotInput,
 ): void {
-    const enabled = input.enabled ?? true;
+    const presented = useLayoutPresentationActive();
+    const enabled = (input.enabled ?? true) && presented;
     const machineId = resolveMachineId(input.view);
     const serverId = normalizeId(input.serverId);
     const refreshIntervalMs = resolveRefreshIntervalMs(input.refreshIntervalMs);

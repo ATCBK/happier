@@ -73,6 +73,12 @@ describe('history maxima', () => {
 });
 
 describe('the Overview state (lab rv OS 1–6)', () => {
+  it('keeps the held sample stale while the first watch failure is slow', () => {
+    const held = sample(1);
+    expect(selectMachineVitalsOverviewView({ online: true, published: reporting,
+      state: { status: 'slow', snapshot: snapshot(held), stale: false },
+    })).toEqual({ kind: 'ready', sample: held, freshness: 'stale' });
+  });
   it('retains a failed read and its code without inferring support from absent publication metadata', () => {
     expect(selectMachineVitalsOverviewView({ online: true, published: null,
       state: { status: 'error', snapshot: null, stale: false, errorCode: 'action_failed' },

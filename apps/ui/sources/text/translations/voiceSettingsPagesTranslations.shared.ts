@@ -3,6 +3,7 @@
 export type VoiceSettingsPagesCopy = Readonly<{
   pages: Readonly<{
     search: Readonly<{
+      providerChatConfigured: string;
       chooseService: string;
       select: (params: { choice: string; control: string }) => string;
     }>;
@@ -250,6 +251,7 @@ export type VoiceSettingsPagesCopy = Readonly<{
 export const en: VoiceSettingsPagesCopy = {
   pages: {
     search: {
+      providerChatConfigured: 'Your configured Provider Chat controls the Agent and models.',
       chooseService: 'Choose a service to change this setting.',
       select: ({ choice, control }) => `Select ${choice} in ${control} to change this setting.`,
     },
@@ -408,7 +410,7 @@ export const en: VoiceSettingsPagesCopy = {
       talkToSessionDescription: 'You speak into the session you’re in; its own agent answers.',
       talkToAgent: 'A Voice agent',
       talkToAgentDescription: 'A Voice agent reads your sessions and acts on them for you.',
-      agentFeatureRequired: ({ feature }) => `Enable ${feature} in Settings → Features. Experimental features also need Experiments turned on.`,
+      agentFeatureRequired: ({ feature }) => `Enable ${feature} in Settings → Features.`,
       itMayTitle: 'It may',
       itMayReadOnly: 'Read only',
       itMayReadOnlyDescription: 'It reads your sessions and files and changes nothing.',

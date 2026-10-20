@@ -1,6 +1,8 @@
 import { removeAutomationMachineAssignmentsTx } from "@/app/automations/automationMachineAssignmentRemoval";
 import { type MachineKind, isPersistentMachine } from '@happier-dev/protocol/machines/machineKind';
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { isPlainMachineDataKeyMarker, machineStoredContentMatchesAccountMode } from "@happier-dev/protocol/machines/machineStoredContent";
+import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
 import {
     buildNewMachineUpdate,
     buildUpdateMachineUpdate,
@@ -11,7 +13,7 @@ import { afterTx, type Tx } from "@/storage/inTx";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { readMachineAccessKeySessionBindingsInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
 import { serializeMachineKeyBasis } from "./machineSerialization";
-import { readMachineDevcontainerChildInTx } from './managed/managedRows';
+import { acquireManagedMachinePublicationAccountsInTx, readMachineDevcontainerChildInTx } from './managed/managedRows';
 import { linkManagedEnrollmentInTx } from './managed/managedMutations';
 import type { ManagedEnrollmentCorrelationV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { resolveMachineAccessInTx } from './machineAccess';
@@ -26,6 +28,35 @@ function copyToArrayBufferBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
     const copy = new Uint8Array(bytes.byteLength);
     copy.set(bytes);
     return copy;
+}
+
+export class MachineStorageModeMismatchError extends Error {
+    readonly code = "machine_storage_mode_mismatch";
+
+    constructor() {
+        super("Machine content does not match the persisted Account encryption mode");
+        this.name = "MachineStorageModeMismatchError";
+    }
+}
+
+/** Normalize persistence only; callers must verify the complete signed proof first. */
+export function resolveMachineContentPublicKeyFingerprintForStorage(params: Readonly<{
+    dataEncryptionKey: string | Uint8Array | null | undefined;
+    contentPublicKeyFingerprint: string | null;
+}>): string | null {
+    return isPlainMachineDataKeyMarker(params.dataEncryptionKey) ? null : params.contentPublicKeyFingerprint;
+}
+
+/** Ordinary registration publishes its owner; managed linking also publishes controller/child recipients. */
+export async function acquireMachineRegistrationAccountsInTx(tx: Tx, input: Readonly<{
+    accountId: string; machineId: string; managedEnrollment?: ManagedEnrollmentCorrelationV1;
+}>): Promise<void> {
+    if (input.managedEnrollment) {
+        await acquireManagedMachinePublicationAccountsInTx(tx, input.managedEnrollment,
+            { additionalAccountIds: [input.accountId], additionalMachineIds: [input.machineId] });
+    } else {
+        await acquireAccountChangePublicationLocksInTx(tx, [input.accountId], { includeSingleAccount: true });
+    }
 }
 
 export async function createMachineWithInstallationIdentityInTx(
@@ -48,6 +79,25 @@ export async function createMachineWithInstallationIdentityInTx(
     machine: Awaited<ReturnType<Tx["machine"]["create"]>>;
     machineReplacement: MachineRegistrationReplacementResult | null;
 }>> {
+    await acquireMachineRegistrationAccountsInTx(tx, params);
+    // Persistent registration must recheck Account mode in its creation transaction;
+    // Runner content is admitted separately against its signed activation facts.
+    if (isPersistentMachine(params)) {
+        const account = await tx.account.findUnique({
+            where: { id: params.accountId },
+            select: { publicKey: true, encryptionMode: true, contentPublicKey: true, contentPublicKeySig: true },
+        });
+        const currentness = account ? deriveAccountEncryptionCurrentnessFromRow(account) : null;
+        if (currentness?.status !== "ready" || !machineStoredContentMatchesAccountMode({
+            mode: currentness.currentness.encryptionMode,
+            metadata: params.metadata,
+            ...(typeof params.daemonState === "string" ? { daemonState: params.daemonState } : {}),
+            dataEncryptionKey: params.dataEncryptionKey,
+        })) {
+            throw new MachineStorageModeMismatchError();
+        }
+    }
+
     const machine = await tx.machine.create({
         data: {
             id: params.machineId,
@@ -67,11 +117,14 @@ export async function createMachineWithInstallationIdentityInTx(
                 ? {
                     installationId: params.installationIdentity.installationId,
                     installationPublicKey: params.installationIdentity.installationPublicKey,
-                    contentPublicKeyFingerprint: params.installationIdentity.contentPublicKeyFingerprint,
                 }
-                : params.contentPublicKeyFingerprint
-                    ? { contentPublicKeyFingerprint: params.contentPublicKeyFingerprint }
-                    : {}),
+                : {}),
+            contentPublicKeyFingerprint: resolveMachineContentPublicKeyFingerprintForStorage({
+                dataEncryptionKey: params.dataEncryptionKey,
+                contentPublicKeyFingerprint: params.installationIdentity
+                    ? params.installationIdentity.contentPublicKeyFingerprint
+                    : params.contentPublicKeyFingerprint,
+            }),
             active: false,
         },
     });
@@ -100,7 +153,7 @@ export async function createMachineWithInstallationIdentityInTx(
     afterTx(tx, () => {
         // Legacy inventory subscribers cannot distinguish temporary Machines.
         if (isPersistentMachine(machine)) {
-            const newMachinePayload = buildNewMachineUpdate({ ...machine, devcontainerChild }, cursor, randomKeyNaked(12));
+            const newMachinePayload = buildNewMachineUpdate({ ...machine, devcontainerChild }, cursor.resolveCursor(), randomKeyNaked(12));
             eventRouter.emitUpdate({
                 userId: params.accountId,
                 payload: newMachinePayload,
@@ -110,7 +163,7 @@ export async function createMachineWithInstallationIdentityInTx(
 
         const updatePayload = buildUpdateMachineUpdate(
             machine.id,
-            cursor,
+            cursor.resolveCursor(),
             randomKeyNaked(12),
             { version: 1, value: params.metadata },
             undefined,
@@ -193,7 +246,7 @@ export async function revokeMachineInTx(
             userId: params.accountId,
             payload: buildUpdateMachineUpdate(
                 updated.id,
-                cursor,
+                cursor.resolveCursor(),
                 randomKeyNaked(12),
                 undefined,
                 undefined,

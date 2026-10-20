@@ -42,7 +42,7 @@ function codePointLength(value: string): number {
   return Array.from(value).length;
 }
 
-function boundedUtf8String(maxBytes: number, message: string): z.ZodMiniString {
+function boundedUtf8String(maxBytes: number, message: string): z.ZodMiniString<string> {
   return z.string().check(z.minLength(1), z.superRefine((value, context) => {
     if (utf8ByteLength(value) > maxBytes) {
       context.addIssue({ code: 'custom', message });
@@ -50,7 +50,7 @@ function boundedUtf8String(maxBytes: number, message: string): z.ZodMiniString {
   }));
 }
 
-function boundedCodePointString(maxCodePoints: number, message: string): z.ZodMiniString {
+function boundedCodePointString(maxCodePoints: number, message: string): z.ZodMiniString<string> {
   return z.string().check(z.minLength(1), z.superRefine((value, context) => {
     if (codePointLength(value) > maxCodePoints) {
       context.addIssue({ code: 'custom', message });

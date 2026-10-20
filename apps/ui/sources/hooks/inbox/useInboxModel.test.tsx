@@ -8,7 +8,8 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { SetSessionAttentionStandingRequestSchema, SetSessionAttentionStandingResponseSchema } from '@happier-dev/protocol/sessions/organization/standings';
 import { SessionReadStateSetResultV1Schema } from '@happier-dev/protocol/sessions/readState/actions';
 
-import { createPlainAccountEncryptionCurrentnessFixture, createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, createPlainAccountEncryptionCurrentnessFixture, createSessionFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization/keys';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { FeaturesResponseSchema, compilePluginJsonSchema, encodePluginCollectionLogicalValueV1, isValidPluginJsonSchemaValue,
@@ -27,17 +28,28 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import type { WorkflowRunListPage } from '@/sync/domains/workflows/workflowRunListActions';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
-import { useSessionManagedWorkflowRuns, type SessionManagedWorkflowRunsState } from '@/components/sessions/workState/useSessionManagedWorkflowRuns';
+import { useSessionManagedWorkflowRuns, type SessionManagedWorkflowRunsState } from '@/components/workflows/run/useContextManagedWorkflowRuns';
 import { projectWork, resolveWorkReadPresentation } from '@/components/sessions/work/workProjection';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
-import { createUsageNoticeArtifactFixture, usageNoticeFixture } from '@/dev/testkit/fixtures/usageNoticeFixtures';
+import { createAccountNoticeArtifactFixture, createUsageNoticeArtifactFixture, usageNoticeFixture } from '@/dev/testkit/fixtures/usageNoticeFixtures';
 import { AutomationDefinitionListItemSchema } from '@happier-dev/protocol/automations/automationApiV3';
 import { createAutomationDefinitionSummary } from '@/sync/domains/automations/automationDefinitionProjection';
 import { buildVoiceBrief, type VoiceBriefItem } from '@/voice/context/buildVoiceBrief';
 import { VoiceBriefList } from '@/components/voice/brief/VoiceBrief';
 import { Item } from '@/components/ui/lists/Item';
+import { DiscussionSummaryV1Schema, DiscussionMessageV1Schema } from '@happier-dev/protocol/discussions/models';
+import { DiscussionReadResponseV1Schema } from '@happier-dev/protocol/discussions/api';
+import { readRegisteredDiscussionRepository } from '@/sync/ops/discussions/discussionRepositoryRegistry';
 
 import { InboxModelProvider, useInboxModel, type InboxModel } from './useInboxModel';
+import { useInboxDiscussionSource } from './useInboxDiscussionSource';
+import { AppShellPluginUiProjectionValueProvider, type AppShellPluginUiProjectionValue } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { InboxSummaryProvider, useSharedInboxSummary, type InboxSummary } from './useInboxSummary';
+import { countInbox, countInboxNeedsYou } from '@/components/inbox/inboxCounts';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -49,6 +61,7 @@ const listRuns = vi.hoisted(() => vi.fn<(params: { filter?: Record<string, unkno
 const executed = vi.hoisted(() => [] as Array<{ actionId: string; input: unknown }>);
 const automationBoundary = vi.hoisted(() => ({ request: vi.fn() }));
 const collectionBoundary = vi.hoisted(() => ({ request: vi.fn() }));
+const discussionBoundary = vi.hoisted(() => ({ request: vi.fn() }));
 let appliedSnapshot: typeof import('@/sync/domains/server/serverRuntime')['getActiveServerSnapshot'];
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let disposeActionLoader: (() => void) | undefined;
@@ -83,6 +96,14 @@ async function renderModel(children?: React.ReactNode) {
     return screen;
 }
 
+function enableDiscussionReads() {
+    const base = createRootLayoutFeaturesResponse();
+    const features = FeaturesResponseSchema.parse({ ...base, features: { ...base.features,
+        sharing: { ...base.features.sharing, session: { enabled: true } },
+        sessions: { ...base.features.sessions, conversations: { enabled: true } } } });
+    primeServerFeaturesSnapshot({ snapshot: { status: 'ready', features } });
+}
+
 describe('useInboxModel work groups (ORC R-10)', () => {
     beforeAll(async () => {
         await loadSyncSingletonForTests();
@@ -99,6 +120,7 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         listRuns.mockReset();
         automationBoundary.request.mockReset();
         collectionBoundary.request.mockReset().mockResolvedValue(null);
+        discussionBoundary.request.mockReset().mockResolvedValue(null);
         automationBoundary.request.mockImplementation(async () => new Response(JSON.stringify({ runs: [], nextCursor: null }), { status: 200 }));
         const base = createRootLayoutFeaturesResponse();
         const features = FeaturesResponseSchema.parse({
@@ -139,6 +161,7 @@ describe('useInboxModel work groups (ORC R-10)', () => {
                 }) });
             }
             if (path.startsWith('/v1/plugins/data')) return collectionBoundary.request(path, init);
+            if (path.startsWith('/v1/discussions')) return discussionBoundary.request(path, init);
             return null;
         } });
         publishAppliedActiveServerSnapshot(appliedSnapshot());
@@ -167,6 +190,175 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         deleteServerFeaturesSnapshot();
         (await import('@/components/workflows/library/workflowLibraryReads')).resetWorkflowLibraryReadsForTests();
         (await import('@/sync/domains/scope/activeServerAccountScope')).retireActiveServerAccountScopeLifetime();
+    });
+
+    it.each(['retirement', 'unmount'] as const)('quietly cancels an Inbox Discussion refresh on %s', async reason => {
+        enableDiscussionReads();
+        const started = createDeferred<AbortSignal>();
+        discussionBoundary.request.mockImplementation((_path: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal;
+            if (!signal) throw new Error('Expected a cancellable Discussion read');
+            started.resolve(signal);
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        }));
+        const unhandled: unknown[] = [];
+        const recordUnhandled = (error: unknown) => { unhandled.push(error); };
+        process.on('unhandledRejection', recordUnhandled);
+        try {
+            const serverId = appliedSnapshot().serverId;
+            const hook = await renderHook(() => useInboxDiscussionSource(serverId));
+            const signal = await started.promise;
+            if (reason === 'unmount') await hook.unmount();
+            else await act(async () => {
+                const server = appliedSnapshot();
+                await TokenStorage.removeCredentialsForServerUrl(server.serverUrl, { serverId });
+            });
+            expect(signal.aborted).toBe(true);
+            await new Promise(resolve => setTimeout(resolve, 0));
+            expect(unhandled).toEqual([]);
+            if (reason === 'retirement') expect(hook.getCurrent().source).toBeNull();
+        } finally {
+            process.removeListener('unhandledRejection', recordUnhandled);
+        }
+    });
+
+    it('keeps a refused Inbox Discussion refresh visible through its source state', async () => {
+        enableDiscussionReads();
+        discussionBoundary.request.mockResolvedValue(Response.json({ error: 'discussion_read_denied' }, { status: 403 }));
+        const hook = await renderHook(() => useInboxDiscussionSource(appliedSnapshot().serverId));
+        await expect.poll(() => hook.getCurrent().errorCode).toBe('discussion_read_denied');
+        expect(hook.getCurrent().status).toBe('revoked');
+        expect(hook.getCurrent().coverage).toBe('partial');
+    });
+
+    it.each(['mention', 'decision'] as const)('keeps the unopened badge and opened %s row in agreement until its owner settles it', async type => {
+        listRuns.mockResolvedValue(page([]));
+        let lastReadSeq = 0;
+        let proposalOpen = true;
+        const message = DiscussionMessageV1Schema.parse({ id: 'mention-1', discussionId: 'doc-comments', localId: null,
+            seq: 1, authorAccountId: null, accountActor: null, producerV1: { v: 1, kind: 'agent', sessionId: 'inbox-bot' },
+            content: { t: 'plain', v: type === 'decision' ? { kind: 'doc_edit_proposal', proposal: {
+                target: { ref: { kind: 'doc', artifactId: 'plan', serverId: appliedSnapshot().serverId },
+                    revision: { headerVersion: 1, bodyVersion: 1 }, range: { start: 0, end: 6 }, quote: 'Before' },
+                baseRevision: { headerVersion: 1, bodyVersion: 1 }, before: 'Before', after: 'After', reason: 'Clarify',
+            } } : { v: 1, parts: [{ t: 'text', text: 'Review this passage' }] } },
+            mentionedAccountIds: ['account-a'], createdAt: 1 });
+        const summary = () => DiscussionSummaryV1Schema.parse({ id: 'doc-comments', ownerAccountId: 'account-a', encryptionMode: 'plain',
+            anchor: { kind: 'doc', doc: { ref: { kind: 'doc', artifactId: 'plan', serverId: appliedSnapshot().serverId },
+                revision: { headerVersion: 1, bodyVersion: 1 } } }, access: 'owner', keyReadiness: true, dataEncryptionKey: null,
+            creationLocalId: null, titleContent: { t: 'plain', v: { v: 1, title: 'Plan comments' } },
+            latestMessage: { id: message.id, localId: null, seq: 1, authorAccountId: null, accountActor: null, producerV1: null, createdAt: 1 },
+            messageSeq: 1, lastReadSeq, unreadCount: 1 - lastReadSeq, unreadMentionCount: 1 - lastReadSeq,
+            recentAuthorAccountIds: [], archivedAt: null, capabilities: { postMessages: true, rename: true, archive: true,
+                restore: false, askAgent: true, sendToSession: true, manageAccess: true, leave: false } });
+        discussionBoundary.request.mockImplementation(async (path: string, init?: RequestInit) => {
+            if (path === '/v1/discussions/attention') return Response.json({ discussions: (type === 'decision' ? proposalOpen : lastReadSeq === 0)
+                ? [{ discussion: summary(), occurrences: [{ message, type }] }] : [], nextCursor: null, incomplete: false });
+            if (path === '/v1/discussions') return Response.json({ discussions: [summary()], nextCursor: null });
+            if (path === '/v1/discussions/doc-comments') return Response.json({ discussion: summary() });
+            if (path === '/v1/discussions/doc-comments/messages') return Response.json({ messages: [message], hasMoreOlder: false, messageSeq: 1 });
+            if (path === '/v1/discussions/doc-comments/read') {
+                const body = JSON.parse(String(init?.body)) as { lastReadSeq: number };
+                lastReadSeq = body.lastReadSeq;
+                return Response.json(DiscussionReadResponseV1Schema.parse({ discussionId: 'doc-comments', lastReadSeq, didChange: true }));
+            }
+            return null;
+        });
+        enableDiscussionReads();
+        const bot = createSessionFixture({ id: 'inbox-bot', serverId: appliedSnapshot().serverId,
+            metadata: { name: 'Payments coordinator', path: '/work/payments', host: 'machine' } });
+        storage.setState({ sessions: { [bot.id]: bot } });
+        let badge: InboxSummary | null = null;
+        function Badge() { badge = useSharedInboxSummary(); return null; }
+        const chrome = await renderScreen(<InboxSummaryProvider><Badge /></InboxSummaryProvider>);
+        await vi.waitFor(() => expect(badge).toEqual({ count: 1, hasContent: true }));
+        const stableBadge = badge;
+        await act(async () => { storage.setState({ friends: {} }); });
+        expect(badge).toBe(stableBadge);
+        const screen = await renderModel();
+        const scope = storage.getState().profileScope!;
+        await vi.waitFor(() => expect(model!.discussionAttention.source?.entries).toHaveLength(1));
+        const repository = readRegisteredDiscussionRepository(scope, { serverId: scope.serverId });
+        expect(repository).not.toBeNull();
+        await vi.waitFor(() => expect(model!.items.some(item => item.source.kind === 'discussion')).toBe(true));
+        expect(repository!.getSnapshot().threads).toEqual({});
+        expect(discussionBoundary.request.mock.calls.filter(([path]) => path.includes('/messages'))).toEqual([]);
+        const row = model!.items.find(item => item.source.kind === 'discussion');
+        expect(row).toMatchObject({ type, view: type === 'decision' ? 'needs_you' : 'mentions', read: false,
+            pageRoute: `/discussions/doc-comments?serverId=${encodeURIComponent(scope.serverId)}&messageId=mention-1`,
+            focus: { kind: 'discussion', serverId: scope.serverId,
+            id: 'doc-comments', messageId: 'mention-1' }, discussion: { anchor: summary().anchor },
+            source: { displayName: 'Plan comments' }, author: { name: 'Payments coordinator' } });
+        expect(countInbox(model!)).toBe(1);
+        expect(countInboxNeedsYou(model!)).toBe(type === 'decision' ? 1 : 0);
+        expect(model!.discussionAttention.coverage).toBe('complete');
+        await act(async () => { storage.setState({ sessions: { [bot.id]: { ...bot, encryptionMode: 'e2ee',
+            encryptedContentAvailability: 'encrypted_content_unavailable' } } }); });
+        expect(model!.items.find(item => item.source.kind === 'discussion')?.author).toBeNull();
+        await act(async () => { await model!.markItemOpened(row!); });
+        if (type === 'decision') {
+            // Opening Needs you never marks it read. The Discussion's own visible-read
+            // owner may advance its cursor, but that is still not proposal disposition.
+            expect(lastReadSeq).toBe(0);
+            await act(async () => { await model!.discussionAttention.markOpened(row!); });
+            expect(lastReadSeq).toBe(1);
+            expect(model!.items.find(item => item.source.kind === 'discussion')).toMatchObject({ read: true, view: 'needs_you' });
+            expect(countInboxNeedsYou(model!)).toBe(1);
+            expect(badge).toEqual({ count: 1, hasContent: true });
+            proposalOpen = false;
+            await act(async () => { await repository!.refreshAttention(); });
+        } else expect(lastReadSeq).toBe(1);
+        expect(model!.items.filter(item => item.source.kind === 'discussion')).toEqual([]);
+        expect(countInbox(model!)).toBe(0);
+        expect(badge).toEqual({ count: 0, hasContent: false });
+        expect(executed.filter(item => item.actionId === 'session.read_state.set')).toEqual([]);
+        await screen.unmount();
+        await chrome.unmount();
+    });
+
+    it('names the loaded exact-Home approval requester and keeps wrong-Home or locked names unavailable', async () => {
+        listRuns.mockResolvedValue(page([]));
+        const serverId = appliedSnapshot().serverId;
+        const bot = createSessionFixture({ id: 'approval-bot', serverId,
+            metadata: { name: 'Payments coordinator', path: '/work/payments', host: 'machine' } });
+        const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+            createdBy: { surface: 'cli', sessionId: bot.id }, actionId: 'account.name.set', actionArgs: { name: 'Captain' }, summary: 'Change name',
+            executionOriginV1: { v: 1, authority: 'account_automation', surface: 'cli', caller: { kind: 'host' },
+                sessionId: bot.id, serverId, actionId: 'account.name.set', requestId: 'approval-source' } });
+        const artifact: DecryptedArtifact = { id: 'approval-source', isDecrypted: true, title: request.summary,
+            header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request),
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+        storage.setState({ sessions: { [bot.id]: bot }, artifacts: { [artifact.id]: artifact } });
+        const screen = await renderModel();
+        expect(model!.items.find(item => item.source.kind === 'approval')?.source.displayName).toBe('Payments coordinator');
+        await act(async () => { storage.setState({ sessions: { [bot.id]: { ...bot, serverId: 'another-home' } } }); });
+        expect(model!.items.find(item => item.source.kind === 'approval')?.source.displayName).toBeNull();
+        await act(async () => { storage.setState({ sessions: { [bot.id]: { ...bot, encryptionMode: 'e2ee',
+            encryptedContentAvailability: 'encrypted_content_unavailable' } } }); });
+        expect(model!.items.find(item => item.source.kind === 'approval')?.source.displayName).toBeNull();
+        await screen.unmount();
+    });
+
+    it('names plugin notices from the existing Account-scoped package projection and withdraws unavailable names', async () => {
+        listRuns.mockResolvedValue(page([]));
+        const notice = createAccountNoticeArtifactFixture({ header: { body: 'Review the change' } });
+        storage.setState({ artifacts: { [notice.id]: notice } });
+        const value: AppShellPluginUiProjectionValue = {
+            pluginUiProjection: { ...EMPTY_PLUGIN_UI_PROJECTION, installedPackagesById: { 'acme.review': {
+                id: 'acme.review', displayName: 'Acme Review', version: '1.0.0', enabled: true,
+                source: { kind: 'bundled', locator: '@acme/review' },
+            } } }, pluginBrowserProjection: null, phase: 'current', interactionEnabled: true, machineId: null,
+            serverId: appliedSnapshot().serverId, platform: 'web', accountLifetime: captureActiveServerAccountScopeLifetime(),
+            reloadConnectedAccountProjection: () => {}, clientExecutableActivation: { status: 'ready' }, reloadClientExecutables: () => {},
+        };
+        const render = (next: AppShellPluginUiProjectionValue) => <AppShellPluginUiProjectionValueProvider value={next}>
+            <InboxModelProvider><Probe /></InboxModelProvider>
+        </AppShellPluginUiProjectionValueProvider>;
+        const screen = await renderScreen(render(value));
+        expect(model!.items[0]).toMatchObject({ source: { displayName: 'Acme Review' }, author: null, excerpt: 'Review the change' });
+        await screen.update(render({ ...value, accountLifetime: null }));
+        expect(model!.items[0]?.source.displayName).toBeNull();
+        await screen.unmount();
     });
 
     it('projects only current Account-owned readable open usage notices without creating Sessions', async () => {
@@ -269,7 +461,7 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         const screen = await renderModel(<BriefRows onOpen={opened} />);
         expect(model?.automationAttentionItems).toEqual([expect.objectContaining({
             key: 'automation-run:pre-session', title: automation.name, run: expect.objectContaining({ producedSessionId: null }),
-            route: { pathname: '/automations/[id]/runs/[runId]', params: { id: 'automation-1', runId: 'pre-session' } },
+            route: expect.stringMatching(/^\/workflows\/runs\/pre-session\?target=occurrence&automationId=automation-1&serverId=/),
         })]);
         expect(model?.hasPrimaryAttention).toBe(true);
         expect(screen.findAllByType(Item).map(item => item.props.title)).toEqual([automation.name]);
@@ -314,7 +506,7 @@ describe('useInboxModel work groups (ORC R-10)', () => {
     it('reads a valid single-Home missing lead and refuses the real mixed-Home model rather than filtering it empty', async () => {
         listRuns.mockResolvedValue(page([]));
         const serverId = appliedSnapshot().serverId;
-        const first = createSessionFixture({ id: 'child', serverId, reportsTo: { sessionId: 'unknown-lead' } });
+        const first = createSessionFixture({ id: 'child', serverId, manager: { sessionId: 'unknown-lead' } });
         const foreign = createSessionFixture({ id: 'foreign', serverId: 'other-home' });
         const remindAt = Date.now() + 60_000;
         storage.setState({ sessions: { child: first }, sessionOrganizationAttentionStandingsBySessionKey: {

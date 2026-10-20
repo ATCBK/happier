@@ -16,8 +16,9 @@ import { decodeBase64 } from '@/encryption/base64';
 import { getRandomBytes } from '@/platform/cryptoRandom';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import { fetchAndApplySessionById, type SessionByIdEncryption } from '@/sync/engine/sessions/sessionById';
-import { fetchAccountEncryptionCurrentness } from '@/sync/api/account/apiAccountEncryptionMode';
+import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { fetchAndApplySessionById, type SessionByIdContentDemand, type SessionByIdEncryption, type SessionByIdPrefetchedRead } from '@/sync/engine/sessions/sessionById';
+import { fetchAccountEncryptionCurrentness, captureAccountEncryptionCurrentness } from '@/sync/api/account/apiAccountEncryptionMode';
 import { readSessionDetailAccessProjectionVersion } from '@/sync/api/session/sessionDetailAccessProjection';
 
 import {
@@ -44,16 +45,27 @@ export type SessionMetadataTupleWriterContext = Readonly<{
         SessionMetadataOwnerMigrationCurrentnessV1;
 }>;
 
-function createOperationAccountCurrentnessSource(params: Readonly<{
+export function createOperationAccountCurrentnessSource(params: Readonly<{
     credentials: AuthCredentials;
     request: (path: string, init: RequestInit) => Promise<Response>;
     initial?: AccountEncryptionCurrentnessResponse;
+    serverId?: string | null;
 }>) {
+    const observation = captureAccountEncryptionCurrentness(params.serverId);
+    const isCurrent = observation.isCurrent;
+    const assertCurrent = () => {
+        if (!isCurrent()) throw Object.assign(new Error('Account encryption currentness changed'),
+            { code: 'account_encryption_currentness_changed' });
+    };
     let currentness = params.initial;
     let inFlight: Promise<AccountEncryptionCurrentnessResponse> | null = null;
     return {
-        peek: () => currentness,
+        isCurrent,
+        assertCurrent,
+        dispose: observation.dispose,
+        peek: () => { assertCurrent(); return currentness; },
         read: async (): Promise<AccountEncryptionCurrentnessResponse> => {
+            assertCurrent();
             if (currentness) return currentness;
             if (!inFlight) {
                 inFlight = fetchAccountEncryptionCurrentness(
@@ -61,7 +73,9 @@ function createOperationAccountCurrentnessSource(params: Readonly<{
                     { request: params.request },
                 );
             }
-            currentness = await inFlight;
+            const observed = await inFlight;
+            assertCurrent();
+            currentness = observed;
             return currentness;
         },
     };
@@ -126,7 +140,7 @@ function resolveCurrentAccountOwnerMetadataMaterialSnapshot(params: Readonly<{
     return snapshot;
 }
 
-function getScopedSessionByIdEncryption(context: Readonly<{
+export function getScopedSessionByIdEncryption(context: Readonly<{
     decryptEncryptionKey: (value: string) => Promise<Uint8Array | null>;
     initializeSessions: SessionByIdEncryption['initializeSessions'];
     getSessionEncryption: (sessionId: string) => unknown;
@@ -198,6 +212,7 @@ function withMetadataTupleWriterContext<T extends Awaited<
     includeMetadataTupleMutationSnapshot?: boolean;
     credentials: AuthCredentials;
     accountCurrentness?: AccountEncryptionCurrentnessResponse;
+    accountCurrentnessSource: ReturnType<typeof createOperationAccountCurrentnessSource>;
     encryption: SessionByIdEncryption;
     sessionId: string;
 }>): T & Readonly<{
@@ -224,16 +239,21 @@ function withMetadataTupleWriterContext<T extends Awaited<
             `Session encryption is required to mutate metadata for ${params.sessionId}`,
         );
     }
-    const encryptPayload = async (payload: unknown) =>
-        params.result.session?.encryptionMode === 'plain'
+    const encryptPayload = async (payload: unknown) => {
+        params.accountCurrentnessSource.assertCurrent();
+        const encrypted = params.result.session?.encryptionMode === 'plain'
             ? JSON.stringify(payload)
             : await sessionEncryption!.encryptRaw!(payload);
+        params.accountCurrentnessSource.assertCurrent();
+        return encrypted;
+    };
     if (mutationSnapshot.mode === 'shared_editor') {
         return {
             ...params.result,
             metadataTupleWriterContext: {
                 encryptPayload,
                 encodeOwnerMetadata: () => {
+                    params.accountCurrentnessSource.assertCurrent();
                     throw new Error(
                         `Shared Session metadata cannot encode owner metadata for ${params.sessionId}`,
                     );
@@ -252,16 +272,19 @@ function withMetadataTupleWriterContext<T extends Awaited<
         metadataTupleWriterContext: {
             ...(mutationSnapshot.mode === 'legacy_owner'
                 ? {
-                    ownerMigrationCurrentness:
-                        resolveOwnerMigrationCurrentness({
+                    get ownerMigrationCurrentness() {
+                        params.accountCurrentnessSource.assertCurrent();
+                        return resolveOwnerMigrationCurrentness({
                             credentials: params.credentials,
                             accountCurrentness,
-                        }),
+                        });
+                    },
                 }
                 : {}),
             encryptPayload,
-            encodeOwnerMetadata: (ownerMetadata) =>
-                accountCurrentness.mode === 'plain'
+            encodeOwnerMetadata: (ownerMetadata) => {
+                params.accountCurrentnessSource.assertCurrent();
+                return accountCurrentness.mode === 'plain'
                     ? createPlainSessionOwnerMetadataEnvelopeV1(ownerMetadata)
                     : sealSessionOwnerMetadataEnvelopeV1({
                         material:
@@ -271,13 +294,16 @@ function withMetadataTupleWriterContext<T extends Awaited<
                             }).material,
                         ownerMetadata,
                         randomBytes: getRandomBytes,
-                    }),
+                    });
+            },
         },
     };
 }
 
 export async function fetchSessionByIdWithServerScope(params: Readonly<{
     sessionId: string;
+    prefetched?: SessionByIdPrefetchedRead;
+    contentDemand?: SessionByIdContentDemand;
     serverId?: string | null;
     activeCredentials: AuthCredentials;
     sessionKey?: string | null;
@@ -289,14 +315,19 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
     activeRequest: (path: string, init?: RequestInit, options?: ServerAccountRequestOptions) => Promise<Response>;
     applySessions: (sessions: AppliedSession[]) => void;
     getExistingSession?: (sessionId: string) => Session | null | undefined;
+    getCurrentSessionListRenderable?: (sessionId: string) => SessionListRenderableSession | null | undefined;
     log: { log: (message: string) => void };
     timeoutMs?: number;
     includeTurnsProjection?: boolean;
-    includeMetadataTupleMutationSnapshot?: boolean;
     authority?: ServerAccountRequestAuthority;
     accountCurrentness?: AccountEncryptionCurrentnessResponse;
     isCurrent?: () => boolean;
-}>): Promise<
+}> & (
+    | Readonly<{ includeMetadataTupleMutationSnapshot?: false;
+        accountCurrentnessSource?: ReturnType<typeof createOperationAccountCurrentnessSource> }>
+    | Readonly<{ includeMetadataTupleMutationSnapshot?: boolean;
+        accountCurrentnessSource: ReturnType<typeof createOperationAccountCurrentnessSource> }>
+)): Promise<
     Awaited<ReturnType<typeof fetchAndApplySessionById>>
     & Readonly<{
         metadataTupleWriterContext?: SessionMetadataTupleWriterContext;
@@ -305,6 +336,8 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
     if (params.sessionKey !== undefined) {
         return await fetchAndApplySessionById({
             sessionId: params.sessionId, serverId: params.serverId,
+            prefetched: params.prefetched,
+            contentDemand: params.contentDemand,
             credentials: params.activeCredentials, sessionKey: params.sessionKey,
             composerOptionsInput: params.composerOptionsInput ?? null,
             accountMode: params.accountMode,
@@ -312,12 +345,16 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
             sessionDataKeys: params.sessionDataKeys, sessionDataKeyEnvelopes: params.sessionDataKeyEnvelopes,
             request: params.activeRequest, requestAuthority: params.activeRequest,
             applySessions: params.applySessions, getExistingSession: params.getExistingSession,
+            getCurrentSessionListRenderable: params.getCurrentSessionListRenderable,
             log: params.log, timeoutMs: params.timeoutMs,
             includeTurnsProjection: params.includeTurnsProjection, isCurrent: params.isCurrent,
             accessProjectionVersion: 1,
         });
     }
     const currentSettings = storage.getState().settings;
+    // An unqualified request cannot establish a Home from mutable focus.
+    // Keep unknown provenance conservative instead of inventing authority.
+    const activeCurrentnessServerId = params.authority?.scope.serverId ?? params.serverId;
     const clientEncryptionRequirement = resolveUiClientEncryptionRequirement({
         syncedSettings: currentSettings,
         localSettings: currentSettings,
@@ -327,19 +364,23 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
         timeoutMs: params.timeoutMs,
     });
     const ownsContext = !params.authority;
+    let ownedAccountCurrentnessSource: ReturnType<typeof createOperationAccountCurrentnessSource> | undefined;
     try {
 
     if (context.scope === 'active') {
         const request = params.activeRequest;
         const accountCurrentnessSource =
-            createOperationAccountCurrentnessSource({
+            params.accountCurrentnessSource ?? (ownedAccountCurrentnessSource = createOperationAccountCurrentnessSource({
                 credentials: params.activeCredentials,
                 request,
                 initial: params.accountCurrentness,
-            });
+                serverId: activeCurrentnessServerId,
+            }));
         const activeEncryption = getScopedSessionByIdEncryption(params.activeEncryption ?? null);
         const result = await fetchAndApplySessionById({
             sessionId: params.sessionId,
+            prefetched: params.prefetched,
+            contentDemand: params.contentDemand,
             serverId: params.serverId ?? null,
             credentials: params.activeCredentials,
             accountCurrentness: accountCurrentnessSource.peek(),
@@ -351,13 +392,14 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
             requestAuthority: params.authority ?? request,
             applySessions: params.applySessions,
             getExistingSession: params.getExistingSession,
+            getCurrentSessionListRenderable: params.getCurrentSessionListRenderable,
             log: params.log,
             timeoutMs: params.timeoutMs,
             includeTurnsProjection: params.includeTurnsProjection,
             includeMetadataTupleMutationSnapshot:
                 params.includeMetadataTupleMutationSnapshot,
-            isCurrent: params.isCurrent,
-            accessProjectionVersion: readSessionDetailAccessProjectionVersion(params.serverId),
+            isCurrent: () => accountCurrentnessSource.isCurrent() && params.isCurrent?.() !== false,
+            accessProjectionVersion: params.prefetched ? params.prefetched.accessProjectionVersion : readSessionDetailAccessProjectionVersion(params.serverId),
             clientEncryptionRequirement,
         });
         if (
@@ -374,6 +416,7 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
                 params.includeMetadataTupleMutationSnapshot,
             credentials: params.activeCredentials,
             accountCurrentness: accountCurrentnessSource.peek(),
+            accountCurrentnessSource,
             encryption: activeEncryption,
             sessionId: params.sessionId,
         });
@@ -397,13 +440,16 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
             activeRequest: params.activeRequest,
         });
     const accountCurrentnessSource =
-        createOperationAccountCurrentnessSource({
+        params.accountCurrentnessSource ?? (ownedAccountCurrentnessSource = createOperationAccountCurrentnessSource({
             credentials: context.credentials,
             request,
             initial: params.accountCurrentness,
-        });
+            serverId: context.targetServerId,
+        }));
     const result = await fetchAndApplySessionById({
         sessionId: params.sessionId,
+        prefetched: params.prefetched,
+        contentDemand: params.contentDemand,
         serverId: context.targetServerId,
         credentials: context.credentials,
         accountCurrentness: accountCurrentnessSource.peek(),
@@ -415,13 +461,14 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
         requestAuthority: params.authority ?? request,
         applySessions: params.applySessions,
         getExistingSession: params.getExistingSession,
+        getCurrentSessionListRenderable: params.getCurrentSessionListRenderable,
         log: params.log,
         timeoutMs: params.timeoutMs,
         includeTurnsProjection: params.includeTurnsProjection,
         includeMetadataTupleMutationSnapshot:
             params.includeMetadataTupleMutationSnapshot,
-        isCurrent: params.isCurrent,
-        accessProjectionVersion: readSessionDetailAccessProjectionVersion(context.targetServerId),
+        isCurrent: () => accountCurrentnessSource.isCurrent() && params.isCurrent?.() !== false,
+        accessProjectionVersion: params.prefetched ? params.prefetched.accessProjectionVersion : readSessionDetailAccessProjectionVersion(context.targetServerId),
         clientEncryptionRequirement: scopedClientEncryptionRequirement,
     });
     if (
@@ -438,10 +485,12 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
             params.includeMetadataTupleMutationSnapshot,
         credentials: context.credentials,
         accountCurrentness: accountCurrentnessSource.peek(),
+        accountCurrentnessSource,
         encryption: scopedEncryption,
         sessionId: params.sessionId,
     });
     } finally {
+        ownedAccountCurrentnessSource?.dispose();
         if (ownsContext && context.scope === 'scoped') await context.release?.();
     }
 }

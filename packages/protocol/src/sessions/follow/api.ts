@@ -4,9 +4,16 @@ import { z } from 'zod/mini';
 import {
   AccountSessionFollowCapabilitiesV1Schema,
   AccountSessionFollowV1Schema,
+  AccountFollowRelationV1Schema,
+  OtherAccountFollowV1Schema,
   SessionAutoFollowPreferencesV1Schema,
   SessionFollowNotificationLevelSchema,
+  PersonalFollowOnceV1Schema,
+  type PersonalFollowOnceV1,
+  type SessionFollowNotificationLevel,
 } from './accountFollow.js';
+import { FollowPolicyV1Schema, type FollowPolicyV1 } from './sessionFollowPolicyV1.js';
+import { FollowListPageResultFieldsV1 } from './sessionFollowListV1.js';
 
 /**
  * The closed Follow failure vocabulary. Domain failures are mapped once in the
@@ -17,6 +24,8 @@ export const SESSION_FOLLOW_ERROR_CODES_V1 = Object.freeze([
   'invalid_parameters',
   'feature_unavailable',
   'session_not_found',
+  'source_not_found',
+  'source_unavailable',
   'account_inactive',
   'session_archived',
 ] as const);
@@ -47,17 +56,36 @@ export const GetSessionFollowResponseSchema = lazyZodSchema(() => z.strictObject
     voiceInitialSnapshotPending: z.boolean(),
   }));
 export type GetSessionFollowResponse = z.infer<typeof GetSessionFollowResponseSchema>;
+export const ListAccountSessionFollowsResponseV1Schema = lazyZodSchema(() => z.strictObject({ follows: z.array(AccountFollowRelationV1Schema), ...FollowListPageResultFieldsV1 }));
+export const GetOtherAccountFollowResponseV1Schema = lazyZodSchema(() => z.strictObject({ follow: z.nullable(OtherAccountFollowV1Schema) }));
+export const SetOtherAccountFollowResponseV1Schema = lazyZodSchema(() => z.strictObject({ changed: z.boolean(), follow: OtherAccountFollowV1Schema }));
+export type ListAccountSessionFollowsResponseV1 = z.infer<typeof ListAccountSessionFollowsResponseV1Schema>;
 
 /**
- * `PUT /v2/sessions/:sessionId/follow` sets `following = true` and atomically
- * replaces both preferences. Both fields are required because this is a
- * replacement, not a hidden read-modify-write, and `following` is never a
- * client-supplied field: `DELETE` is the explicit Unfollow.
+ * A policy edit establishes persistent Follow. A one-shot-only edit changes
+ * only convenience custody, preserving persistent interest, suppression,
+ * Voice and read progress. Legacy notificationLevel/includeInVoice remain an
+ * admitted replacement pair at this boundary; `following` is never input.
  */
+/** Shared mutation admission for the HTTP and executable Action schemas. */
+export function hasAccountSessionFollowMutationV1(value: Readonly<{
+  notificationLevel?: SessionFollowNotificationLevel;
+  includeInVoice?: boolean;
+  policy?: FollowPolicyV1;
+  once?: PersonalFollowOnceV1 | null;
+}>): boolean {
+  if (value.notificationLevel !== undefined) return value.includeInVoice !== undefined && value.policy === undefined;
+  if (value.policy !== undefined) return true;
+  return value.once !== undefined && value.includeInVoice === undefined;
+}
+
 export const SetSessionFollowRequestSchema = lazyZodSchema(() => z.strictObject({
-    notificationLevel: SessionFollowNotificationLevelSchema,
-    includeInVoice: z.boolean(),
-  }));
+    notificationLevel: z.optional(SessionFollowNotificationLevelSchema),
+    includeInVoice: z.optional(z.boolean()),
+    policy: z.optional(FollowPolicyV1Schema),
+    once: z.optional(z.nullable(PersonalFollowOnceV1Schema)),
+  }).check(z.refine(hasAccountSessionFollowMutationV1,
+    { message: 'A persistent policy or one-shot mutation is required' })));
 export type SetSessionFollowRequest = z.infer<typeof SetSessionFollowRequestSchema>;
 
 export const SetSessionFollowResponseSchema = lazyZodSchema(() => z.strictObject({
@@ -93,21 +121,22 @@ export type GetSessionAutoFollowPreferencesRequest = z.infer<
 >;
 
 /**
- * `PUT /v2/account/session-follow-preferences` replaces all four Booleans and
- * returns their canonical saved value. It performs no historical backfill.
+ * Replaces the four relationship defaults and patches any supplied creation
+ * policies. Omitted policies preserve saved choices; existing relations are unchanged.
  */
-export const SetSessionAutoFollowPreferencesRequestSchema = SessionAutoFollowPreferencesV1Schema;
+export const SetSessionAutoFollowPreferencesRequestSchema = lazyZodSchema(() => SessionAutoFollowPreferencesV1Schema);
 export type SetSessionAutoFollowPreferencesRequest = z.infer<
   typeof SetSessionAutoFollowPreferencesRequestSchema
 >;
 
-export const SessionAutoFollowPreferencesResponseSchema = SessionAutoFollowPreferencesV1Schema;
+export const SessionAutoFollowPreferencesResponseSchema = lazyZodSchema(() => SessionAutoFollowPreferencesV1Schema);
 export type SessionAutoFollowPreferencesResponse = z.infer<
   typeof SessionAutoFollowPreferencesResponseSchema
 >;
 
 export const SESSION_FOLLOW_HTTP_PATHS_V1 = Object.freeze({
   follow: '/v2/sessions/:sessionId/follow',
+  otherSource: '/v2/account/follows/sources/:sourceRef',
   preferences: '/v2/account/session-follow-preferences',
   voiceInclusions: '/v2/account/session-follow-voice-inclusions',
 });

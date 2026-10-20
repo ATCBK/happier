@@ -43,7 +43,7 @@ export async function publishSessionCreationInTx(
     // creating client receives its key with the Session rather than needing a
     // follow-up fetch.
     const dataEncryptionKey = projectViewerSessionDataKey(personalRow);
-    const cursor = await markAccountChanged(tx, {
+    const publication = await markAccountChanged(tx, {
         accountId: session.accountId,
         kind: "session",
         entityId: session.id,
@@ -53,7 +53,7 @@ export async function publishSessionCreationInTx(
             userId: session.accountId,
             payload: buildNewSessionUpdate(
                 { ...session, dataEncryptionKey },
-                cursor,
+                publication.resolveCursor(),
                 randomKeyNaked(12),
                 projection,
                 viewer,

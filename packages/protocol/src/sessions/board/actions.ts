@@ -375,9 +375,9 @@ export type SessionBoardApprovalRequestCreatedResultV1 = Readonly<
 type SessionBoardMutationRecoverySchemaV1<TId extends SessionBoardActionIdV1, TIntent extends z.ZodMiniType> = z.ZodMiniObject<{
   v: z.ZodMiniLiteral<1>;
   actionId: z.ZodMiniLiteral<TId>;
-  serverId: z.ZodMiniString;
-  sessionId: z.ZodMiniString;
-  requestBody: z.ZodMiniString;
+  serverId: z.ZodMiniString<string>;
+  sessionId: z.ZodMiniString<string>;
+  requestBody: z.ZodMiniString<string>;
   mutationRequest: typeof SessionBoardMutationV1Schema;
   intent: TIntent;
 }, z.core.$strict>;

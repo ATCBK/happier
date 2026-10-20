@@ -36,6 +36,21 @@ const runtimeState = {
 const translate = (key: string) => key;
 
 describe('stale session runner notice presentation', () => {
+    it.each(['eligibility', 'result'] as const)('offers Stop and Resume guidance for unsupported restart %s', source => {
+        const presentation = buildStaleSessionRunnerNoticePresentation({
+            runtimeState: source === 'eligibility' ? { ...runtimeState,
+                plannedRestart: { supported: true, eligible: false, disabledReason: 'restart_admission_unsupported' },
+            } : runtimeState,
+            operationStatus: source === 'result' ? { kind: 'result', result: { ok: false,
+                sessionId: 's1', status: 'restart_admission_unsupported', reasonCode: 'restart_admission_unsupported' } } : null,
+            translate,
+        });
+        expect(presentation?.banner).toMatchObject({
+            body: 'session.staleRunner.banner.stopAndResumeBody',
+            actionLabel: 'common.unavailable',
+            disabled: true,
+        });
+    });
     it('builds a warning banner and status badge for actionable stale runner state', () => {
         const presentation = buildStaleSessionRunnerNoticePresentation({
             runtimeState,

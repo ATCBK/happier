@@ -1,7 +1,7 @@
 import type { ProjectDefinitionWorkspace } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import type { RpcHandlerContext } from '@/api/rpc/types';
-import { readRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
+import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
 import { projectRuntimeAccountRowsInput } from '@/workspaces/projectAccountRows';
 import { readProjectRuntimeRequesterRefusal, type ProjectFiniteActionRuntime } from './projectFiniteAction';
 import { resolveProjectSetupAcceptedWorkspace } from './projectSetupAcceptedWorkspace';
@@ -12,6 +12,7 @@ import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 /** Passive review uses the same captured requester, current target, and native owner as execution. */
 export async function inspectProjectSetupFromRuntime(input: Readonly<{
     runtime: ProjectFiniteActionRuntime; ingress: RpcHandlerContext; workspace: ProjectDefinitionWorkspace; context: ActionExecutorContext;
+    reviewSetupConsent?: true;
 }>): Promise<ProjectSetupInspection> {
     const { runtime: authorityRuntime, ingress } = input;
     const runtime = { ...authorityRuntime, serverId: input.workspace.serverId };
@@ -34,10 +35,12 @@ export async function inspectProjectSetupFromRuntime(input: Readonly<{
         if (!await current()) return unknown('project_requester_credentials_unavailable');
         const inspection = await inspectProjectSetup({ workspace: association.workspace, projectAssociation: association,
             requester: { ...projectRuntimeAccountRowsInput(runtime), serverHttpBaseUrl: runtime.serverHttpBaseUrl },
-            purpose: 'setup', platform: { os: (runtime.platform ?? process.platform) === 'win32' ? 'windows' : runtime.platform ?? process.platform,
+            purpose: 'setup', approvalContext: input.context,
+            platform: { os: (runtime.platform ?? process.platform) === 'win32' ? 'windows' : runtime.platform ?? process.platform,
                 arch: runtime.arch ?? process.arch }, nativeIo: runtime.nativeIo, signal,
             ...(secretEnvironment ? { secretEnvironment } : {}), ...(runtime.configEnvironment ? { configEnvironment: runtime.configEnvironment } : {}),
-            ...(runtime.plugins ? { plugins: runtime.plugins } : {}), ...(runtime.successHomeDir ? { successHomeDir: runtime.successHomeDir } : {}) });
+            ...(runtime.plugins ? { plugins: runtime.plugins } : {}), ...(runtime.successHomeDir ? { successHomeDir: runtime.successHomeDir } : {}) },
+            input.reviewSetupConsent ? { reviewConsent: true } : undefined);
         return await current() ? inspection : unknown('project_requester_credentials_unavailable');
     } catch (error) {
         return unknown(error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : 'project_setup_requester_review_unavailable');

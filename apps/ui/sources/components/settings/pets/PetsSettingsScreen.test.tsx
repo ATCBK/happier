@@ -1,4 +1,9 @@
 import * as React from 'react';
+import { createServer } from 'node:http';
+import { Server } from 'socket.io';
+import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { socketRpcCodec } from '@happier-dev/sync-client';
 import { StyleSheet } from 'react-native';
 import {
     PET_DAEMON_RPC_METHODS,
@@ -45,7 +50,6 @@ const localSettingsState = vi.hoisted(() => ({
 const applySettingsSpy = vi.hoisted(() => vi.fn());
 const applyLocalSettingsSpy = vi.hoisted(() => vi.fn());
 const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
-const resetDesktopActivityOverlayPositionMock = vi.hoisted(() => vi.fn(async () => {}));
 const accountPetsState = vi.hoisted(() => ({
     current: {} as Record<string, AccountPetLibraryEntryV1>,
 }));
@@ -282,10 +286,6 @@ vi.mock('@/utils/platform/desktopHost', () => ({
     isDesktopHost: () => tauriDesktopState.current,
 }));
 
-vi.mock('@/activity/adapters/desktop/runtime/desktopActivityOverlayBridge', () => ({
-    resetDesktopActivityOverlayPosition: resetDesktopActivityOverlayPositionMock,
-}));
-
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({
@@ -366,6 +366,12 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 
 vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => createPassThroughModule(['DropdownMenu']));
 
+// Compile the full screen graph during collection; request-lifetime tests measure the running screen.
+await import('./PetsSettingsScreen');
+const realMachineRpc = await vi.importActual<typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc')>(
+    '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc',
+);
+
 function findAllSourceRows(screen: RenderScreenResult) {
     return screen.findAll((node) => {
         const testID = node.props?.testID;
@@ -444,7 +450,6 @@ describe('PetsSettingsScreen', () => {
         applySettingsSpy.mockClear();
         applyLocalSettingsSpy.mockClear();
         machineRpcWithServerScopeMock.mockReset();
-        resetDesktopActivityOverlayPositionMock.mockClear();
         upsertAccountPetSpy.mockClear();
         upsertLocalPetSourcesSpy.mockClear();
         removeLocalPetSourceSpy.mockClear();
@@ -615,21 +620,6 @@ describe('PetsSettingsScreen', () => {
         expect(screen.findByTestId('settings-pets-desktop-overlay-reset-position')).toBeNull();
     });
 
-    it('resets the existing desktop activity overlay position from the pet reset row', async () => {
-        const { PetsSettingsScreen } = await import('./PetsSettingsScreen');
-        const screen = await renderScreen(<PetsSettingsScreen />);
-
-        await screen.pressByTestIdAsync('settings-pets-desktop-overlay-reset-position');
-
-        expect(applyLocalSettingsSpy).toHaveBeenCalledWith({
-            desktopOverlayPlacementMode: 'anchored',
-            desktopOverlayAnchor: 'top_center',
-            desktopOverlayOffsetX: 0,
-            desktopOverlayOffsetY: 0,
-        });
-        expect(resetDesktopActivityOverlayPositionMock).toHaveBeenCalledTimes(1);
-    });
-
     it('lets desktop users choose attention-or-active overlay visibility for this device', async () => {
         const { PetsSettingsScreen } = await import('./PetsSettingsScreen');
         const screen = await renderScreen(<PetsSettingsScreen />);
@@ -727,6 +717,117 @@ describe('PetsSettingsScreen', () => {
 
         expect(screen.findByTestId('settings-pets-detect-codex-pets')?.props.loading).toBeFalsy();
         expect(screen.findByTestId('settings-pets-detected-source-blink-e2e-fixture')).not.toBeNull();
+    });
+
+    it('cancels unanswered discovery when superseded and recovers after changing targets back', async () => {
+        const signals: AbortSignal[] = [];
+        machineRpcWithServerScopeMock.mockImplementation(({ signal }: { signal?: AbortSignal }) => {
+            if (signal) signals.push(signal);
+            return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => {
+                reject(Object.assign(new Error('Cancelled'), { name: 'AbortError' }));
+            }, { once: true }));
+        });
+        const { PetsSettingsScreen } = await import('./PetsSettingsScreen');
+        const { requestCodexPetRefresh } = await import('./petSettingsCommandEvents');
+        const originalTarget = administrationTargetState.current;
+        const screen = await renderScreen(<PetsSettingsScreen />);
+        await act(async () => { requestCodexPetRefresh(); });
+        await act(async () => { requestCodexPetRefresh(); });
+        expect(signals).toHaveLength(2);
+        expect(signals[0]?.aborted).toBe(true);
+        expect(signals[1]?.aborted).toBe(false);
+        administrationTargetState.current = null;
+        await act(async () => { screen.update(<PetsSettingsScreen />); });
+        expect(signals[1]?.aborted).toBe(true);
+        administrationTargetState.current = originalTarget;
+        await act(async () => { screen.update(<PetsSettingsScreen />); });
+        expect(findSettingsItemByTestId(screen, 'settings-pets-detect-codex-pets')?.props.loading).toBeFalsy();
+
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({ ok: true, pets: [] });
+        await screen.pressByTestIdAsync('settings-pets-detect-codex-pets');
+        expect(screen.findByTestId('settings-pets-detected-codex-pets-empty')).not.toBeNull();
+        await act(async () => { requestCodexPetRefresh(); });
+        const lastSignal = signals.at(-1);
+        await act(async () => { screen.unmount(); });
+        expect(lastSignal?.aborted).toBe(true);
+    });
+
+    it('cancels unanswered discovery through real scoped transport and retries after target replacement', async () => {
+        tauriDesktopState.current = false;
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
+        const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+        const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
+        // Preserve the legacy screen harness, but keep the complete RPC owner real in this regression.
+        const transportFailures: unknown[] = [];
+        machineRpcWithServerScopeMock.mockImplementation(async (params: Parameters<typeof realMachineRpc.machineRpcWithServerScope>[0]) => {
+            try { return await realMachineRpc.machineRpcWithServerScope(params); }
+            catch (error) { transportFailures.push(error); throw error; }
+        });
+        const token = `header.${Buffer.from(JSON.stringify({ sub: 'pet-discovery-account' })).toString('base64url')}.signature`;
+        const credentialBoundary = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
+        const httpPaths: string[] = [];
+        const http = createServer((request, response) => {
+            httpPaths.push(request.url ?? '');
+            response.setHeader('content-type', 'application/json');
+            if (request.url === '/health' || request.url === '/v1/auth/ping') response.end('{}');
+            else if (request.url === '/v1/machines/machine-pets') response.end(JSON.stringify({ machine: {
+                id: 'machine-pets', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+            } }));
+            else if (request.url === '/v1/account/encryption') response.end(JSON.stringify({ mode: 'plain', updatedAt: 1 }));
+            else { response.statusCode = 404; response.end('{}'); }
+        });
+        const relay = new Server(http, { path: '/v1/updates/' });
+        const calls: SocketRpcRequestPayload[] = [];
+        const cancelled: string[] = [];
+        relay.on('connection', socket => {
+            socket.on(SOCKET_RPC_EVENTS.CANCEL, (payload: { requestId: string }) => cancelled.push(payload.requestId));
+            socket.on(SOCKET_RPC_EVENTS.CALL, async (packet: SocketRpcRequestPayload, ack: (value: unknown) => void) => {
+                calls.push(packet);
+                if (calls.length !== 3) return;
+                const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, packet.params, packet.method);
+                ack({ ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'plain' }, { ok: true, pets: [] }, decoded.callId) });
+            });
+        });
+        let screen: RenderScreenResult | null = null;
+        try {
+            await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve));
+            const address = http.address();
+            if (!address || typeof address === 'string') throw new Error('Missing discovery Home address');
+            const home = await upsertServerProfile({ serverUrl: `http://127.0.0.1:${address.port}`, name: 'Pet discovery cancellation' });
+            const target = { target: { serverIdentityId: 'pet-discovery-home', machineId: 'machine-pets' },
+                serverId: home.id, machine: { id: 'machine-pets' } };
+            administrationTargetState.current = target;
+            const { PetsSettingsScreen } = await import('./PetsSettingsScreen');
+            const { requestCodexPetRefresh } = await import('./petSettingsCommandEvents');
+            screen = await renderScreen(<PetsSettingsScreen />);
+            await act(async () => { void screen?.findByTestId('settings-pets-detect-codex-pets')?.props.onPress?.(); });
+            expect(machineRpcWithServerScopeMock).toHaveBeenCalledTimes(1);
+            await vi.waitFor(() => {
+                expect(transportFailures).toEqual([]);
+                expect({ calls: calls.length, httpPaths }).toMatchObject({ calls: 1 });
+            });
+            expect(calls[0]?.requestId).toEqual(expect.any(String));
+            await act(async () => { requestCodexPetRefresh(); });
+            await vi.waitFor(() => expect(calls).toHaveLength(2));
+            await vi.waitFor(() => expect(cancelled).toContain(calls[0]?.requestId));
+            administrationTargetState.current = null;
+            await act(async () => { screen?.update(<PetsSettingsScreen />); });
+            await vi.waitFor(() => expect(cancelled).toContain(calls[1]?.requestId));
+            administrationTargetState.current = target;
+            await act(async () => { screen?.update(<PetsSettingsScreen />); });
+            await screen.pressByTestIdAsync('settings-pets-detect-codex-pets');
+            await vi.waitFor(() => expect(screen?.findByTestId('settings-pets-detected-codex-pets-empty')).not.toBeNull());
+            expect(calls).toHaveLength(3);
+        } finally {
+            await act(async () => { screen?.unmount(); });
+            await serverScopedRpcSocketPool.stopAll();
+            serverScopedRpcSocketPool.resetForTests();
+            resetScopedMachineTransportCacheForTests();
+            http.closeAllConnections();
+            await new Promise<void>(resolve => relay.close(() => resolve()));
+            credentialBoundary.mockRestore();
+        }
     });
 
     it('does not apply discovery results after their Administration target stops being current', async () => {
@@ -1048,6 +1149,7 @@ describe('PetsSettingsScreen', () => {
             machineId: 'machine-pets',
             serverId: 'server-pets',
             method: PET_DAEMON_RPC_METHODS.DISCOVER_PACKAGES,
+            signal: expect.any(AbortSignal),
             payload: expect.objectContaining({
                 includeDetectedCodexHomes: true,
                 includeUserCodexHome: true,
@@ -1119,6 +1221,7 @@ describe('PetsSettingsScreen', () => {
             serverId: 'server-pets',
             method: PET_DAEMON_RPC_METHODS.IMPORT_LOCAL_PACKAGE,
             payload: { sourceKey: alternateDetectedPet.sourceKey },
+            signal: expect.any(AbortSignal),
         });
         expect(applyLocalSettingsSpy).toHaveBeenCalledWith({
             petsSelectedPetOverride: {
@@ -1184,6 +1287,36 @@ describe('PetsSettingsScreen', () => {
         expect(screen.findByTestId('settings-pets-select-source-local-blink-e2e-fixture')).toBeNull();
     });
 
+    it('cancels superseded imports and view-owned imports when the target changes', async () => {
+        featureState.syncEnabled = true;
+        const signals = new Map<string, AbortSignal[]>();
+        machineRpcWithServerScopeMock.mockImplementation(({ method, signal }: { method: string; signal?: AbortSignal }) => {
+            if (method === PET_DAEMON_RPC_METHODS.DISCOVER_PACKAGES) return Promise.resolve({ ok: true, pets: [detectedPet] });
+            if (method === PET_DAEMON_RPC_METHODS.READ_PREVIEW_ASSET) return Promise.resolve(null);
+            if (signal) signals.set(method, [...(signals.get(method) ?? []), signal]);
+            return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }));
+        });
+        const { PetsSettingsScreen } = await import('./PetsSettingsScreen');
+        const screen = await renderScreen(<PetsSettingsScreen />);
+        await screen.pressByTestIdAsync('settings-pets-detect-codex-pets');
+        await act(async () => {
+            void screen.findByTestId('settings-pets-use-on-this-device-blink-e2e-fixture')?.props.onPress?.();
+            void screen.findByTestId('settings-pets-use-on-this-device-blink-e2e-fixture')?.props.onPress?.();
+            void screen.findByTestId('settings-pets-import-to-account-blink-e2e-fixture')?.props.onPress?.();
+        });
+        const localSignals = signals.get(PET_DAEMON_RPC_METHODS.IMPORT_LOCAL_PACKAGE) ?? [];
+        expect(localSignals).toHaveLength(2);
+        expect(localSignals?.[0]?.aborted).toBe(true);
+        expect(localSignals?.[1]?.aborted).toBe(false);
+        administrationTargetState.current = null;
+        await act(async () => { screen.update(<PetsSettingsScreen />); });
+        expect(localSignals?.[1]?.aborted).toBe(true);
+        expect(signals.get(PET_DAEMON_RPC_METHODS.IMPORT_ACCOUNT_PACKAGE)?.[0]?.aborted).toBe(true);
+        expect(applySettingsSpy).not.toHaveBeenCalled();
+        expect(applyLocalSettingsSpy).not.toHaveBeenCalled();
+        expect(screen.findByTestId('settings-pets-import-local-daemon-error')).toBeNull();
+    });
+
     it('shows an error when a discovered daemon pet cannot be imported locally', async () => {
         machineRpcWithServerScopeMock.mockImplementation(({ method }: { method: string }) => {
             if (method === PET_DAEMON_RPC_METHODS.DISCOVER_PACKAGES) {
@@ -1230,6 +1363,7 @@ describe('PetsSettingsScreen', () => {
             serverId: 'server-pets',
             method: PET_DAEMON_RPC_METHODS.READ_PREVIEW_ASSET,
             payload: { sourceKey: importedLocalPetMetadata.sourceKey },
+            signal: expect.any(AbortSignal),
         });
         expect(screen.findByTestId('settings-pets-select-source-local-blink-e2e-fixture')).not.toBeNull();
         expect(screen.findByTestId('settings-pets-local-tile-blink-e2e-fixture')).not.toBeNull();
@@ -1285,11 +1419,29 @@ describe('PetsSettingsScreen', () => {
             serverId: 'server-pets',
             method: 'pets.forgetLocalPackage',
             payload: { sourceKey: importedLocalPetMetadata.sourceKey },
+            signal: expect.any(AbortSignal),
         });
         expect(removeLocalPetSourceSpy).toHaveBeenCalledWith(importedLocalPetMetadata.sourceKey);
         expect(applyLocalSettingsSpy).toHaveBeenCalledWith({
             petsSelectedPetOverride: { kind: 'inherit' },
         });
+    });
+
+    it('honors local removal while daemon cleanup is unanswered and cancels cleanup on unmount', async () => {
+        localPetSourcesState.current = { [importedLocalPetMetadata.sourceKey]: importedLocalPetMetadata };
+        let cleanupSignal: AbortSignal | undefined;
+        machineRpcWithServerScopeMock.mockImplementation(({ method, signal }: { method: string; signal?: AbortSignal }) => {
+            if (method !== PET_DAEMON_RPC_METHODS.FORGET_LOCAL_PACKAGE) return Promise.resolve(null);
+            cleanupSignal = signal;
+            return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }));
+        });
+        const { PetsSettingsScreen } = await import('./PetsSettingsScreen');
+        const screen = await renderScreen(<PetsSettingsScreen />);
+        await act(async () => { screen.findByTestId('settings-pets-remove-from-device-blink-e2e-fixture')?.props.onPress?.(); });
+        expect(removeLocalPetSourceSpy).toHaveBeenCalledWith(importedLocalPetMetadata.sourceKey);
+        expect(cleanupSignal?.aborted).toBe(false);
+        await act(async () => { screen.unmount(); });
+        expect(cleanupSignal?.aborted).toBe(true);
     });
 
     it('removes a persisted imported Codex pet without clearing a different local selection', async () => {
@@ -1477,6 +1629,7 @@ describe('PetsSettingsScreen', () => {
             serverId: 'server-pets',
             method: PET_DAEMON_RPC_METHODS.IMPORT_LOCAL_PACKAGE,
             payload: { sourceKey: detectedPet.sourceKey },
+            signal: expect.any(AbortSignal),
         });
     });
 
@@ -1509,6 +1662,7 @@ describe('PetsSettingsScreen', () => {
             machineId: 'machine-pets',
             serverId: 'server-pets',
             method: PET_DAEMON_RPC_METHODS.IMPORT_ACCOUNT_PACKAGE,
+            signal: expect.any(AbortSignal),
             payload: { sourceKey: detectedPet.sourceKey, petsSyncEnabled: true },
         });
     });

@@ -30,6 +30,7 @@ import {
   createActionExecutor,
   markSessionListQueryResultV1,
   type ActionExecutorDeps,
+  ApprovalRequestSchema,
 } from '@happier-dev/protocol';
 import { SessionBoardGetInputV1Schema } from '@happier-dev/protocol/sessions/board';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
@@ -40,6 +41,31 @@ import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCata
 import { createActionToolExecutorBridge } from './createActionToolExecutorBridge';
 
 describe('createActionToolExecutorBridge', () => {
+  it('binds an in-session capability change before creating its real approval request', async () => {
+    const approvals: unknown[] = [];
+    const executor = createActionExecutor({
+      ...createCliActionDeps({ token: 'test-token', sessionId: 'invoking-session', mode: 'plain', ctx: null }),
+      // Artifact persistence is the external boundary; discovery, binding,
+      // validation, approval policy and the request producer remain real.
+      approvalsCreate: async ({ request }) => {
+        approvals.push(ApprovalRequestSchema.parse(request));
+        return { artifactId: 'capability-approval' };
+      },
+    });
+    const bridge = createActionToolExecutorBridge({ surface: 'agent', executor: {
+      execute: (actionId, input, context) => executor.execute(actionId, input, { ...context,
+        serverId: 'fixture-home', actionCaller: { kind: 'host' } }),
+    } });
+    const input = { kind: 'skill', id: 'library-skill', state: 'on', reason: 'Read the project instructions' };
+    expect(await bridge.executeActionByToolName('action_execute', {
+      actionId: 'session.capabilities.set', input,
+    }, 'invoking-session', { actionRequestId: 'enable-skill' })).toMatchObject({
+      ok: true, result: { kind: 'approval_request_created', artifactId: 'capability-approval' },
+    });
+    expect(approvals).toEqual([expect.objectContaining({
+      actionId: 'session.capabilities.set', actionArgs: { ...input, sessionId: 'invoking-session' },
+    })]);
+  });
   it('refuses generic and previously admitted direct calls when current Action availability changes', async () => {
     // Session listing crosses the authenticated server boundary; admission and dispatch stay real.
     const sessionList = vi.fn(async () => markSessionListQueryResultV1({
@@ -135,6 +161,7 @@ describe('createActionToolExecutorBridge', () => {
       ok: false,
       errorCode: 'unsupported_action',
       error: 'unsupported_action:session.board.get',
+      details: { cause: 'caller_context_unavailable' },
     });
     expect(sessionBoardAction).not.toHaveBeenCalled();
 
@@ -422,6 +449,7 @@ describe('createActionToolExecutorBridge', () => {
       resolveCallerPermissionMode: () => 'yolo',
       resolveActiveTurnPermissionWitness: () => ({
         turnId: 'turn-active',
+        inputId: 'accepted-input',
         causalPermissionAuthority,
       }),
       executor: {
@@ -454,6 +482,7 @@ describe('createActionToolExecutorBridge', () => {
           callerPermissionMode: 'yolo',
           authority: 'account_automation',
           causalPermissionAuthority,
+          sessionInputSource: expect.objectContaining({ sourceTurnId: 'turn-active', sourceInputId: 'accepted-input' }),
         }),
       }),
     ]);

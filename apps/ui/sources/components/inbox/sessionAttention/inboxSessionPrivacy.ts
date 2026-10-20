@@ -2,8 +2,7 @@ import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessi
 
 import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import { t } from '@/text';
-import { getSessionName } from '@/utils/sessions/sessionUtils';
+import { getSessionName, readLockedSessionName } from '@/utils/sessions/sessionUtils';
 
 /**
  * Whether the Inbox may show this Session only as a status: its content cannot be read on this
@@ -17,5 +16,5 @@ export function isInboxSessionStatusOnly(session: Session, nowMs: number = Date.
 
 /** The one Inbox name for a Session: its title, or the locked name when only its status may show. */
 export function readInboxSessionTitle(session: Session, serverId: string | null, nowMs: number = Date.now()): string {
-    return isInboxSessionStatusOnly(session, nowMs) ? t('sessionBoard.item.locked.title') : getSessionName(session, serverId);
+    return isInboxSessionStatusOnly(session, nowMs) ? readLockedSessionName() : getSessionName(session, serverId);
 }

@@ -60,6 +60,9 @@ describe('Machine Defaults declarations and controller-local availability', () =
         const { Modal } = await import('@/modal');
         const alert = vi.spyOn(Modal, 'alert');
         onTestFinished(() => alert.mockRestore());
+        const { router } = await import('expo-router');
+        const push = vi.spyOn(router, 'push');
+        onTestFinished(() => push.mockRestore());
         const { MachineDefaultsView } = await import('./MachineDefaultsView');
         const screen = await renderScreen(<MachineDefaultsView />);
         await vi.waitFor(() => expect(screen.findByTestId('settings.machineDefaults.creationEnabled.switch')!.props.disabled).not.toBe(true));
@@ -77,11 +80,19 @@ describe('Machine Defaults declarations and controller-local availability', () =
         }
         expect(storage.getState().settings.managedMachineCreationEnabled).toBe(true);
         expect(storage.getState().settings.machineRetentionDefaultsV1).toEqual({ v: 1 });
-        await vi.waitFor(() => expect(alert).toHaveBeenCalledWith('Error', 'action_disabled'));
+        await vi.waitFor(() => expect(alert).toHaveBeenCalled());
+        const buttons = alert.mock.calls.at(-1)![2];
+        const openSettings = buttons?.find(button => button.style !== 'cancel');
+        expect(openSettings?.onPress).toEqual(expect.any(Function));
+        await act(async () => { openSettings!.onPress!(); });
+        expect(push).toHaveBeenCalledWith('/settings/actions/settings.set');
         expect(storage.getState().settingsScope).toEqual({ serverId: home.homes.build!.id, accountId: 'owner' });
         expect(fetch.mock.calls.filter(([url, init]) => new URL(String(url)).pathname === '/v2/account/settings'
             && init?.body !== undefined)).toEqual([]);
-        expect(home.requests.every(request => request.home === 'build' && request.accountId === 'owner')).toBe(true);
+        expect(home.requests.filter(request => request.home !== 'build'
+            // Public feature discovery is intentionally unauthenticated; Account reads and Actions are not.
+            || request.path !== '/v1/features' && request.accountId !== 'owner')
+            .map(({ home, accountId, path, method }) => ({ home, accountId, path, method }))).toEqual([]);
         alert.mockRestore();
         await screen.unmount();
     });
@@ -99,8 +110,8 @@ describe('Machine Defaults declarations and controller-local availability', () =
             if (request.path !== '/v1/actions/machines.provisioners.list') return undefined;
             const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.body);
             // A controller that is online but cannot answer its catalog: the others' names still arrive.
-            if (envelope.target.kind === 'machine' && envelope.target.machineId === 'failing-controller') return Response.json({ error: 'unavailable' }, { status: 503 });
-            const rows = envelope.target.kind === 'machine' && envelope.target.machineId === 'local-controller'
+            if (envelope.target?.kind === 'machine' && envelope.target.machineId === 'failing-controller') return Response.json({ error: 'unavailable' }, { status: 503 });
+            const rows = envelope.target?.kind === 'machine' && envelope.target.machineId === 'local-controller'
                 ? [provisioner('Local guest', 'local')] : [provisioner('Cloud service', 'cloud')];
             return Response.json({ v: 1, actionId: 'machines.provisioners.list', requestId: envelope.requestId,
                 execution: { ok: true, result: { provisioners: rows } } });
@@ -182,7 +193,7 @@ describe('Machine Defaults declarations and controller-local availability', () =
             if (request.path === '/v1/features' || request.path === '/v1/features/authenticated') return Response.json(features);
             if (request.path !== '/v1/actions/machines.provisioners.list') return undefined;
             const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.body);
-            if (envelope.target.kind === 'machine' && envelope.target.machineId === 'silent-controller') return silent;
+            if (envelope.target?.kind === 'machine' && envelope.target.machineId === 'silent-controller') return silent;
             return Response.json({ v: 1, actionId: 'machines.provisioners.list', requestId: envelope.requestId,
                 execution: { ok: true, result: { provisioners: [provisioner('Local guest', 'local')] } } });
         } });

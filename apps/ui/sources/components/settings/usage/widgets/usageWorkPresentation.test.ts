@@ -73,6 +73,16 @@ function evidence(
 }
 
 describe('Work display grouping of the canonical allocation', () => {
+  it('groups unnamed project identities once without changing allocation or money conservation', () => {
+    const work = allocateUsageOutcomes({ contributions: [contribution('a', 's1', 't1', 'known'),
+      contribution('b', 's1', 't2', 'opaque-a'), contribution('c', 's2', 't3', 'opaque-b')], evidence: [] });
+    const summary = summarizeUsageWork(work, { metric: 'tokens', costBasis: 'auto' }, new Set(['known']));
+    expect(summary.projects).toHaveLength(2);
+    expect(summary.projects.find(row => row.projectKey === null)).toMatchObject({ amount: 28,
+      unnamedProjectCount: 2, sessionIds: ['s1', 's2'] });
+    expect(summary.total).toBe(42);
+    expect(work.allocations.map(row => row.contribution.projectKey)).toEqual(['known', 'opaque-a', 'opaque-b']);
+  });
   it('selects a whole-call final for the complete Session without assigning it to an earlier PR turn', () => {
     const earlier: UsageWorkContribution = { ...contribution('earlier', 's1', 't1'), observedAtMs: 10,
       cost: { reportedUsd: 0, estimatedUsd: 1, currency: 'USD', costSource: 'pricing_estimate', reportedTotalId: 'final' } };

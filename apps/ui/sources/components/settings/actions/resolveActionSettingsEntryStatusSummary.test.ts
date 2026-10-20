@@ -44,6 +44,14 @@ describe('resolveActionSettingsEntryStatusSummary', () => {
             'settingsActions.status.external',
         ]);
     });
+    it('counts the in-app remote push as asking first when the Source Control preference asks, and as allowed when it does not', () => {
+        const settings = normalizeActionsSettings({ v: 1, actions: {} });
+        const targets = [target('contextual_ui', 'on', 'scm.remote.push')];
+        const human = (scmRemoteConfirmPolicy: unknown) => resolveActionSettingsEntryStatusSummary({ settings, actionId: 'scm.remote.push', targets, scmRemoteConfirmPolicy })
+            .audiences.find((audience) => audience.audience === 'human');
+        expect(human('always')).toMatchObject({ askFirstCount: 1, allowedCount: 0 });
+        expect(human('pull_only')).toMatchObject({ askFirstCount: 0, allowedCount: 1 });
+    });
     it('counts allowed, ask-first, off, and unavailable target states from one action entry', () => {
         const settings = normalizeActionsSettings({
             v: 1,
@@ -90,12 +98,11 @@ describe('resolveActionSettingsEntryStatusSummary', () => {
 
     /**
      * `session.responsibility.set` is a dangerous Action exposed on the in-app,
-     * Agent, MCP and CLI surfaces. Its in-app picker has no confirmation host of
-     * its own, so the policy's default confirmation applies there too
-     * (teams-lane-04/11-responsible-assignment.md §7.1); the summary reads that
-     * answer rather than assuming "default" means allowed.
+     * Agent, MCP and CLI surfaces. The present-user app edit is direct, while
+     * automation surfaces retain confirmation; the summary reads that policy
+     * answer rather than assuming every inherited default means allowed.
      */
-    it('reports every exposed surface of assignment as ask-first by default', () => {
+    it('reports assignment as direct for the present user and ask-first for automation', () => {
         const settings = normalizeActionsSettings({ v: 1, actions: {} });
 
         expect(resolveActionSettingsEntryStatusSummary({
@@ -108,8 +115,8 @@ describe('resolveActionSettingsEntryStatusSummary', () => {
                 target('cli', 'on', 'session.responsibility.set'),
             ],
         })).toMatchObject({
-            allowedCount: 0,
-            askFirstCount: 4,
+            allowedCount: 1,
+            askFirstCount: 3,
             offCount: 0,
             unavailableCount: 0,
         });

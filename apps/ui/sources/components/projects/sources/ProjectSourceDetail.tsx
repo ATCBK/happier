@@ -16,7 +16,7 @@ import { FieldValueItem } from '@/components/ui/forms/FieldValueItem';
 import { showProjectSourceShareSheet } from '@/components/sharing/projects/showProjectSourceShareSheet';
 import { Icon } from '@/components/ui/icons/Icon';
 import { KeyboardStickyFooter } from '@/components/ui/keyboardAvoidance/KeyboardStickyFooter';
-import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
+import { PagePinnedBar } from '@/components/ui/layout/PagePinnedBar';
 import {
   PageHeader,
   type PageHeaderMetaFact,
@@ -54,9 +54,9 @@ import type {
 } from './projectSourcesController';
 import { formatProjectSourceAddress } from './projectSourceAddress';
 import {
-  projectSourceDraftTitle,
   readSourceTeamId,
 } from './ProjectSourcesRail';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 
 function lastSegment(nameWithOwner: string): string {
   return nameWithOwner.split('/').filter(Boolean).pop() ?? nameWithOwner;
@@ -377,7 +377,6 @@ export const ProjectSourceDetail = React.memo(function ProjectSourceDetail(
   const machines = useAllMachines();
   // A phone reads the page as summaries that push their editor (lab `SOURCESp`), with Open pinned below.
   const compact = useViewportClass() === 'compact';
-  const insets = useChromeSafeAreaInsets();
   const [titleDraft, setTitleDraft] = React.useState<string | null>(null);
   const [addressError, setAddressError] = React.useState<string | null>(null);
   // Unconfirmed create (outcome unknown): a complete inspection of every Source decides whether Save may run again.
@@ -395,12 +394,13 @@ export const ProjectSourceDetail = React.memo(function ProjectSourceDetail(
       );
   }, [controller]);
 
+  const projectSourceDraftTitle = useCollectionDraftTitle();
   React.useEffect(() => {
     if (!props.creating) return undefined;
     if (!controller.getSnapshot().creationDraft) controller.beginCreate();
     projectSourceDraftTitle.publish('');
     return () => projectSourceDraftTitle.publish('');
-  }, [controller, props.creating]);
+  }, [controller, props.creating, projectSourceDraftTitle]);
 
   // A saved Source's editable fields read through the controller's draft once edited.
   const draft: ProjectSourceDraft | null = props.creating ? null : state.draft;
@@ -430,7 +430,7 @@ export const ProjectSourceDetail = React.memo(function ProjectSourceDetail(
 
   React.useEffect(() => {
     if (props.creating) projectSourceDraftTitle.publish(newName);
-  }, [newName, props.creating]);
+  }, [newName, props.creating, projectSourceDraftTitle]);
 
   const commitAddress = React.useCallback(
     (text: string) => {
@@ -720,6 +720,7 @@ export const ProjectSourceDetail = React.memo(function ProjectSourceDetail(
             value={addressText}
             placeholder={t('projects.sources.addressPlaceholder')}
             autoCapitalize="none"
+            autoComplete="off"
             autoFocus={props.creating}
             error={
               addressError ??
@@ -865,12 +866,14 @@ export const ProjectSourceDetail = React.memo(function ProjectSourceDetail(
       ) : null}
     </ItemList>
     {compact && current && !dirty ? (
-      <KeyboardStickyFooter style={[styles.phoneFooter, { borderTopColor: theme.colors.border.subtle, paddingBottom: Math.max(insets.bottom, 12) }]}>
-        <RoundButton
-          testID="projects.sources.detail.open"
-          title={t('projects.sources.open')}
-          onPress={() => props.onOpen(current)}
-        />
+      <KeyboardStickyFooter>
+        <PagePinnedBar>
+          <RoundButton
+            testID="projects.sources.detail.open"
+            title={t('projects.sources.open')}
+            onPress={() => props.onOpen(current)}
+          />
+        </PagePinnedBar>
       </KeyboardStickyFooter>
     ) : null}
     </View>
@@ -879,10 +882,5 @@ export const ProjectSourceDetail = React.memo(function ProjectSourceDetail(
 
 const styles = StyleSheet.create(() => ({
   page: { flex: 1, minHeight: 0 },
-  phoneFooter: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-  },
   count: { ...Typography.variant('meta'), fontVariant: ['tabular-nums'] },
 }));

@@ -13,7 +13,7 @@ import { resolveVoiceAdapterSurfaceCapabilities } from '@/voice/session/voiceAda
 import { voiceSessionManager } from '@/voice/session/voiceSession';
 import { getVoiceSessionLifecycleController } from '@/voice/session/voiceSessionLifecycleControllerStore';
 import { canDismissVoiceSessionFailedAttempt, dismissVoiceSessionEndedAttempt, getVoiceSessionEndedAttempt,
-    getVoiceSessionPresentedAttemptId, getVoiceSessionPresentedBinding } from '@/voice/session/voiceSessionStore';
+    getVoiceSessionPresentedAttemptId, getVoiceSessionPresentedBinding, getVoiceSessionRestartTarget } from '@/voice/session/voiceSessionStore';
 import { resolveVoiceBindingBySessionId } from '@/voice/binding/resolveVoiceBindingBySessionId';
 import { resolveVoiceExecutionMachinePresentationFromState } from '@/voice/credentials/useExecutionMachinePresentation';
 import { resolveVoiceStartAdmission, resolveCurrentVoiceRuntimePlatform } from '@/components/voice/surface/resolveVoiceStartAdmission';
@@ -70,6 +70,7 @@ async function readConversation(target: VoiceStartIntent = { kind: 'default' }):
         capabilities = resolveVoiceAdapterSurfaceCapabilities(providerId, voiceSettings);
     }
     const idleTarget = resolveVoiceIdleTarget({ intent: target, scopeDefault: voiceSettings.ui.scopeDefault,
+        restartTarget: getVoiceSessionRestartTarget(providerId, state.profileScope),
         allowsGlobalStart: capabilities?.allowsGlobalStart === true, focusedSessionAddress: getFocusedSessionAddress(),
         lastFocusedSessionAddress: useVoiceTargetStore.getState().lastFocusedSessionAddress });
     const admission = resolveVoiceStartAdmission({ bindingScope: idleTarget.kind,
@@ -138,7 +139,7 @@ async function readConversation(target: VoiceStartIntent = { kind: 'default' }):
 export async function executeVoiceConversationAction(
     actionId: VoiceConversationActionId,
     input: unknown,
-    deps: Readonly<{ navigate: (href: unknown) => void | Promise<void>; isCurrent?: () => boolean }>,
+    deps: Readonly<{ navigate: (href: unknown) => void | Promise<void>; isCurrent?: () => boolean; signal?: AbortSignal }>,
 ): Promise<Readonly<{ status: 'completed'; voice: VoiceConversationStatus }> | Readonly<{ status: 'unavailable'; code: string; voice: VoiceConversationStatus }>> {
     const parsed = VoiceConversationActionInputSchemas[actionId].safeParse(input);
     const current = await readConversation(parsed.success && 'target' in parsed.data ? parsed.data.target : undefined);
@@ -213,10 +214,16 @@ export async function executeVoiceConversationAction(
                 if (!current.voice.canHoldToTalk || !sessionId) return unavailable('voice_hold_unavailable');
                 const held = voiceSessionManager.beginHoldToTalk(sessionId);
                 if (!held) return unavailable('voice_hold_unavailable');
-                if (!await held.ready || deps.isCurrent?.() === false) {
-                    await held.cancel();
-                    return unavailable('voice_hold_unavailable');
-                }
+                // Retire a pending capture immediately; waiting for ready before cancel can reopen the mic after release.
+                const cancel = () => { void held.cancel().catch(() => undefined); };
+                deps.signal?.addEventListener('abort', cancel, { once: true });
+                try {
+                    if (deps.signal?.aborted) cancel();
+                    if (!await held.ready || deps.isCurrent?.() === false || deps.signal?.aborted) {
+                        await held.cancel();
+                        return unavailable('voice_hold_unavailable');
+                    }
+                } finally { deps.signal?.removeEventListener('abort', cancel); }
                 break;
             }
             case 'ui.voice_global.hold_release':

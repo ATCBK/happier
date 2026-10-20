@@ -1,12 +1,27 @@
+// @vitest-environment jsdom
+import { act } from 'react';
 import { describe, expect, it } from 'vitest';
+import { createPluginTestkit, createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev/plugin-sdk/testing';
+import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
 import type { PluginUiTargetedContributionsV1 } from '@happier-dev/plugin-sdk/ui';
 import {
   TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1,
   TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1,
   TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1,
+  TRIAGE_SOURCES_READ_CONFIGURED_ACTION_REF_V1,
+  TRIAGE_SOURCES_ADMINISTER_ACTION_REF_V1,
+  TriageSourceAdministrationActionInputV1Schema,
 } from '@happier-dev/triage-protocol/v1';
 
 import { planTriageConfigureSourceOffersV1 } from './configureSources.js';
+import {
+  activate as externalActivate,
+  manifest as externalManifest,
+  LEDGER_ACTION_IDS,
+  LEDGER_ACCOUNT_PURPOSE,
+  LEDGER_CONNECTED_ACCOUNT_ID,
+} from '../../../../../tests/fixtures/plugin-platform/out-of-tree-triage-source/src/index.mjs';
+import { renderSurface as externalSettingsSurface } from '../../../../../tests/fixtures/plugin-platform/out-of-tree-triage-source/src/settings.mjs';
 
 /**
  * Where a reader with nothing configured is sent.
@@ -19,6 +34,7 @@ import { planTriageConfigureSourceOffersV1 } from './configureSources.js';
  */
 
 const GENERATION = 'contributor-generation-a';
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 function contribution(input: Readonly<{
   pluginId: string;
@@ -69,6 +85,87 @@ function snapshot(contributions: readonly unknown[]): PluginUiTargetedContributi
 }
 
 describe('the way out of an unconfigured PRs & Issues', () => {
+  it('offers and mounts the external fixture’s page, then submits its discovered candidate through public administration', async () => {
+    const source = externalManifest.contributes.targetedPluginContributions.find(
+      (candidate) => candidate.target.pluginId === 'happier.triage',
+    );
+    expect(source).toBeDefined();
+    const offers = planTriageConfigureSourceOffersV1(snapshot([contribution({
+      pluginId: externalManifest.id,
+      contributionId: source.id,
+      descriptor: source.descriptor,
+    })]));
+    expect(offers).toEqual([{
+      destination: { pluginId: externalManifest.id, localId: 'ledger-sources' },
+      displayName: 'Acme Ledger',
+      kindNames: ['Changes', 'Tickets'],
+    }]);
+    const page = externalManifest.contributes.ui.settingsPages.find((candidate) => candidate.id === offers[0]?.destination.localId);
+    const renderer = externalManifest.contributes.ui.renderers.find((candidate) => candidate.id === page?.renderer);
+    expect(renderer).toMatchObject({ kind: 'reactNative', artifact: 'ledger-sources-native' });
+
+    const account = {
+      service: { pluginId: externalManifest.id, localId: LEDGER_CONNECTED_ACCOUNT_ID },
+      accountId: 'fixture-account',
+    };
+    const sourceKit = await createPluginTestkit({
+      manifest: externalManifest,
+      module: { activate: externalActivate },
+      services: {
+        connectedAccounts: {
+          listAccounts: async ({ purpose }) => {
+            expect(purpose).toBe(LEDGER_ACCOUNT_PURPOSE);
+            return { status: 'complete', accounts: [{
+              account, displayName: 'Ledger connection', state: 'connected',
+              connectedAccountOrigins: [], connectedAccountBases: [],
+            }] };
+          },
+        },
+      },
+    });
+    const administered: unknown[] = [];
+    let uiKit: Awaited<ReturnType<typeof createPluginUiTestkit>> | undefined;
+    try {
+      await act(async () => {
+        uiKit = await createPluginUiTestkit({
+          identity: { instanceId: 'external-settings', mountNonce: 'external-settings-1' },
+          authorPlugin: { id: externalManifest.id, version: externalManifest.version },
+          surface: externalSettingsSurface,
+          surfaceContext: createSurfaceContextFixture(),
+          adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+          handlers: {
+            executeAction: async ({ action, input }) => {
+              if (action.pluginId === externalManifest.id && action.localId === LEDGER_ACTION_IDS.listInstances) {
+                return await sourceKit.invokeAction(action.localId, input);
+              }
+              if (action.pluginId === TRIAGE_SOURCES_READ_CONFIGURED_ACTION_REF_V1.pluginId
+                && action.localId === TRIAGE_SOURCES_READ_CONFIGURED_ACTION_REF_V1.localId) {
+                return { kind: 'read', status: 'complete', instances: [] };
+              }
+              expect(action).toEqual(TRIAGE_SOURCES_ADMINISTER_ACTION_REF_V1);
+              administered.push(TriageSourceAdministrationActionInputV1Schema.parse(input));
+              return { kind: 'active', sourceInstanceId: '2f1c9c4e-8c1f-4a53-9c2a-4c9a7b1d3e05' };
+            },
+          },
+        });
+      });
+      await act(async () => {
+        await uiKit!.press(await uiKit!.getByRole('button', { name: 'Add acme/ledger to PRs & Issues' }));
+      });
+      expect(administered).toEqual([{
+        v: 1, kind: 'create', draft: {
+          v: 1,
+          binding: { purpose: LEDGER_ACCOUNT_PURPOSE, account },
+          localInstanceKey: 'acme/ledger', keyStability: 'stable',
+          configuration: { v: 1, token: 'space=acme/ledger' },
+          locator: { v: 1, displayLabel: 'acme/ledger' },
+        },
+      }]);
+    } finally {
+      await uiKit?.dispose();
+      await sourceKit.dispose();
+    }
+  });
   it('offers no source destination before an Account mount has an admitted contribution snapshot', () => {
     expect(planTriageConfigureSourceOffersV1(undefined)).toEqual([]);
   });
@@ -108,8 +205,7 @@ describe('the way out of an unconfigured PRs & Issues', () => {
   });
 
   it('offers nothing for a source that named no page', () => {
-    // Six source plugins ship a descriptor without one. Rendering a control for
-    // them would be a press that cannot go anywhere.
+    // A source may omit the optional page. A control must never invent a route.
     expect(planTriageConfigureSourceOffersV1(snapshot([
       contribution({
         pluginId: 'happier.sentry',

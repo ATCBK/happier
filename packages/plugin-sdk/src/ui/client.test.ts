@@ -191,9 +191,12 @@ describe('hosted-web plugin UI public client factory', () => {
         expect(context.signal.aborted).toBe(true);
     });
 
-    it('carries a hosted Composer mount ref privately without widening RenderContext', async () => {
+    it.each([
+        { kind: 'session', sessionId: 'session-composer' } as const,
+        { kind: 'discussion', discussionId: 'discussion-composer' } as const,
+    ])('carries a hosted $kind Composer mount ref privately without widening RenderContext', async (ref) => {
         let listener: ((message: unknown) => void) | undefined;
-        const composerRef = Object.freeze({ kind: 'session' as const, sessionId: 'session-composer' });
+        const composerRef = Object.freeze(ref);
         Reflect.set(globalThis, PLUGIN_UI_HOST_API_CLIENT_BOOTSTRAP_KEY, {
             authorPlugin: { id: 'com.acme.fixture', version: '1.0.0' },
             identity,

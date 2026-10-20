@@ -17,7 +17,7 @@ test('Metro compilation retires its scratch on success and failure without chang
     const scratch = await mkdtemp(path.join(tmpdir(), 'happier-browser-builder-test-'));
     const previous = { NODE_ENV: process.env.NODE_ENV, BABEL_ENV: process.env.BABEL_ENV,
         TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP };
-    process.env.NODE_ENV = 'test';
+    Object.assign(process.env, { NODE_ENV: 'test' });
     process.env.BABEL_ENV = 'test';
     process.env.TMPDIR = scratch;
     process.env.TMP = scratch;

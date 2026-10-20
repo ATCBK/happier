@@ -6,7 +6,7 @@ import { projectSessionList } from './projectSessionList';
 describe('Project Session roster admission', () => {
     it('filters admitted list membership and never revives foreign, private, locked, or cache-only rows', () => {
         const row = (id: string, overrides: Parameters<typeof createSessionFixture>[0] = {}) => buildSessionListRenderableFromSession(createSessionFixture({
-            id, owner: 'viewer', metadata: { path: '/repo', projectId: 'anchor' }, ...overrides,
+            id, owner: 'viewer', metadata: { path: '/repo', host: 'host', projectId: 'anchor' }, ...overrides,
         }));
         const rows = {
             own: row('own'), foreign: row('foreign', { owner: 'other' }),

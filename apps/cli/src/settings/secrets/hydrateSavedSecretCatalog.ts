@@ -1,8 +1,14 @@
+import type { SavedSecretOperationContextV1 } from './savedSecretOperationContext';
+import {
+  readRequestedSavedSecretOperationReferences,
+  readSavedSecretCatalogForOperation,
+  captureSavedSecretReferencesForOperation,
+  type SavedSecretCatalogRefreshInputV1,
+} from './savedSecretCatalogRead';
 import axios from 'axios';
 import { isDeepStrictEqual } from 'node:util';
 
-import { listSecretReferenceOverlayV1BindingNames, readSecretReferenceOverlayV1Reference } from '@happier-dev/protocol/profiles/secretReferenceOverlayV1';
-import { openEncryptedDataKeyEnvelopeV1, sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
+import { sealEncryptedDataKeyEnvelopeV1 } from "@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1";
 import { decryptSecretValueWithKeysV1 } from '@happier-dev/protocol/crypto/settingsSecretStringsV1';
 import { sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
 import { deriveSavedSecretImportResourceIdV1, promoteProfileEnvironmentVariableSavedSecretReferenceV1, promotePersonalSavedSecretReference,
@@ -24,14 +30,9 @@ import { openRemoteHostCatalogContentV1 } from '@happier-dev/protocol/remoteHost
 import { openNotificationChannelCatalogContentV1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
 import type { ProfileCatalogRecordV1, ProfileCatalogSnapshotV1 } from '@happier-dev/protocol/profiles/profileCatalogV1';
-import type { NotificationChannelCatalogSnapshotV1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
-import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
-import type { McpServerCatalogSnapshotV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
-import type { ProviderConnectionsCatalogSnapshotV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
-import type { ConnectedAccountCatalogSnapshotV1 } from '@happier-dev/protocol/connect/connectedAccountCatalogV1';
-import type { PromptLibraryCatalogSnapshotV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+
 import { loadPromptLibraryCatalogV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
-import type { ConnectedAccountCatalogKeyV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+
 import { loadAiLaunchProfileArtifacts, resolveProfileCatalogAuthorityV1, removeTransferredProfileSourcesV1, listTransferredProfileIdsV1,
   readEffectiveProfileSecretBindingsV1 } from '@happier-dev/protocol/profiles/read';
 import { AccountSettingsSchema } from '@happier-dev/protocol/account/settings/accountSettings';
@@ -42,16 +43,15 @@ import type { ArtifactSharingResourceV1 } from '@happier-dev/protocol/artifacts/
 import { deriveAccountMachineKeyFromRecoverySecret, type AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import tweetnacl from 'tweetnacl';
 import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
-import { SavedSecretResourceMaterialsResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
+
 import { SharedSavedSecretPromoteInputV1Schema, SharedSavedSecretPromoteOutputV1Schema,
   SharedSavedSecretCreateInputV1Schema, type SharedSavedSecretCreateInputV1,
   type SavedSecretReferenceCensusV1, type SavedSecretCatalogMutationsV1,
 } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
-import type { FeaturesResponse, SavedSecretResourceMaterialV1, SecretReferenceOverlayV1 } from '@happier-dev/protocol';
 
-import { decodeBase64, encodeBase64, getRandomBytes } from '@/api/encryption';
+import { encodeBase64, getRandomBytes } from "@/api/encryption";
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { prepareAccountSettingsV2Content, parseSettingsFromContent } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
 import { normalizeCliAccountSettingsHistoryAfterTransfer } from '@/settings/accountSettings/accountSettingsHistoryNormalization';
@@ -61,366 +61,21 @@ import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client
 import { createCliProfileStore, createCliProfileStoreForOperation } from '@/settings/profiles/profileStore';
 import { createCliProviderConnectionsStore, createCliProviderConnectionsStoreForOperation } from '@/providers/settings/catalogStore';
 import { createCliConnectedAccountCatalogStore } from '@/settings/connectedAccounts/connectedAccountCatalogStore';
-import { createCliRemoteHostStore, createCliRemoteHostStoreForOperation } from '@/settings/remoteHosts/remoteHostStore';
-import { createCliNotificationChannelStore } from '@/settings/notifications/notificationChannelStore';
 import { createCliPromptLibraryStore } from '@/settings/prompts/promptLibraryStore';
 import { openPromptLibraryContentV1, sealPromptLibraryContentV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { deriveSettingsSecretsReadKeysForCredentials } from './settingsSecretsKey';
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
-import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
+
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
-import { logger } from '@/ui/logger';
-import type { RpcHandlerContext } from '@/api/rpc/types';
-import {
-  beginActiveSavedSecretCatalogRefresh,
-  commitActiveSavedSecretCatalog,
-  getActiveAccountSettingsSnapshot,
-  getActiveAccountSettingsSnapshotLifetimeToken,
-  resolveActiveSavedSecretCatalogCollisionState,
-  withdrawActiveSavedSecretCatalog,
-  replaceSavedSecretCatalogInSnapshot,
-  withdrawSavedSecretCatalogInSnapshot,
-  type ActiveAccountSettingsSnapshot,
-  commitActiveAccountSettingsSnapshot,
-  commitActiveSavedSecretLegacyImport,
-  replaceSavedSecretLegacyImportInSnapshot,
-  replaceProfileCatalogInSnapshot,
-  replaceProviderConnectionsCatalogInSnapshot,
-  preserveAccountCatalogsInSnapshot,
-  replaceNotificationChannelCatalogInSnapshot,
-} from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+
+import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, type ActiveAccountSettingsSnapshot, commitActiveAccountSettingsSnapshot, commitActiveSavedSecretLegacyImport } from "@/settings/accountSettings/activeAccountSettingsSnapshot";
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { deriveKey } from '@/utils/deriveKey';
-import {
-  createSavedSecretMaterializerFromSnapshotV1,
-  readSavedSecretRevisionsFromSnapshotV1,
-  savedSecretOperationAdmissionReason,
-  type SavedSecretOperationAdmissionFailureReason,
-  type SavedSecretCatalogResourceInputV1,
-  type SavedSecretCatalogState,
-  type SavedSecretLegacyImportResultV1,
-} from './savedSecretCatalog';
+
+import { createSavedSecretMaterializerFromSnapshotV1, type SavedSecretLegacyImportResultV1 } from "./savedSecretCatalog";
 export { savedSecretOperationAdmissionStatus } from './savedSecretCatalog';
 export type { SavedSecretOperationAdmissionFailureReason } from './savedSecretCatalog';
 export type { SavedSecretLegacyImportResultV1 } from './savedSecretCatalog';
-
-export type HydratedSavedSecretCatalog = Readonly<{
-  resources: readonly SavedSecretCatalogResourceInputV1[];
-  state: Exclude<SavedSecretCatalogState, 'temporarily_unavailable'>;
-}>;
 type SharedSavedSecretPromoteInputV1 = ReturnType<typeof SharedSavedSecretPromoteInputV1Schema.parse>;
-
-export type SavedSecretOperationReferenceV1 = Readonly<{
-  ref: string;
-  revision?: number;
-}>;
-
-/** Invocation-owned Account custody; it never publishes to the daemon Account. */
-export type SavedSecretOperationContextV1 = Readonly<{
-  /** Existing authenticated Machine ingress, retained only in host-private invocation custody. */
-  machineAdmission?: Readonly<Pick<NonNullable<RpcHandlerContext['machineAdmission']>, 'actorAccountId' | 'custodianAccountId'>>;
-  credentials: StoredCredentials;
-  serverHttpBaseUrl: string;
-  readSnapshot(): ActiveAccountSettingsSnapshot | null;
-  isCurrent(): Promise<boolean>;
-  replaceAccountSettings(snapshot: ActiveAccountSettingsSnapshot): Promise<boolean>;
-  commitLegacyImportResult(input: Readonly<{ expectedSettingsVersion: number; result: SavedSecretLegacyImportResultV1 }>): Promise<boolean>;
-  commitProfileCatalog(input: Readonly<{ expectedSettingsVersion: number; catalog: ProfileCatalogSnapshotV1 }>): Promise<boolean>;
-  commitNotificationChannelCatalog(input: Readonly<{ expectedSettingsVersion: number; catalog: NotificationChannelCatalogSnapshotV1 }>): Promise<boolean>;
-  commitAcpCatalog(input: Readonly<{ catalog: AcpCatalogSnapshotV1 }>): Promise<boolean>;
-  commitMcpCatalog(catalog: McpServerCatalogSnapshotV1): Promise<boolean>;
-  subscribeMcpCatalog(listener: () => void): () => void;
-  commitProviderConnectionsCatalog(input: Readonly<{ expectedSettingsVersion: number; catalog: ProviderConnectionsCatalogSnapshotV1 }>): Promise<boolean>;
-  commitConnectedAccountCatalog(input: Readonly<{ key: ConnectedAccountCatalogKeyV1; catalog: ConnectedAccountCatalogSnapshotV1 }>): Promise<boolean>;
-  commitPromptLibraryCatalog(input: Readonly<{ expectedSettingsVersion: number; catalog: PromptLibraryCatalogSnapshotV1 }>): Promise<boolean>;
-  beginRefresh(): boolean;
-  commitCatalog(input: Readonly<{ resources: readonly SavedSecretCatalogResourceInputV1[]; state: SavedSecretCatalogState }>): boolean;
-  withdrawCatalog(): void;
-}>;
-
-export function createInvocationSavedSecretOperationContextV1(input: Readonly<{
-  machineAdmission?: SavedSecretOperationContextV1['machineAdmission'];
-  credentials: StoredCredentials;
-  snapshot: ActiveAccountSettingsSnapshot;
-  serverHttpBaseUrl: string;
-  isCurrent(): Promise<boolean>;
-}>): SavedSecretOperationContextV1 {
-  const scopeKey = input.snapshot.scopeKey;
-  if (!scopeKey || scopeKey !== resolveAccountSettingsScopeKeyForToken(input.credentials.token)) {
-    throw new Error('saved_secret_account_snapshot_unavailable');
-  }
-  let snapshot: ActiveAccountSettingsSnapshot | null = input.snapshot;
-  let acpRevision = snapshot.acpCatalog?.status === 'ready' && typeof snapshot.acpCatalog.revision === 'number'
-    ? snapshot.acpCatalog.revision : undefined;
-  let mcpRevision = snapshot.mcpServerCatalog?.status === 'ready' && typeof snapshot.mcpServerCatalog.revision === 'number'
-    ? snapshot.mcpServerCatalog.revision : undefined;
-  const mcpListeners = new Set<() => void>();
-  const notifyMcpCatalog = () => {
-    for (const listener of mcpListeners) {
-      try { listener(); } catch { logger.debug('[MCP] Captured catalog subscriber failed'); }
-    }
-  };
-  const isCurrent = async () => {
-    if (!snapshot) return false;
-    let current = false;
-    try { current = await input.isCurrent(); } catch { /* Unavailable admission retires material. */ }
-    if (!current && snapshot) {
-      withdrawSavedSecretCatalogInSnapshot(snapshot);
-      snapshot = null;
-      notifyMcpCatalog();
-      mcpListeners.clear();
-    }
-    return current && snapshot !== null;
-  };
-  const withdrawCatalog = () => {
-    if (snapshot) snapshot = withdrawSavedSecretCatalogInSnapshot(snapshot);
-  };
-  return Object.freeze({
-    ...(input.machineAdmission ? { machineAdmission: Object.freeze({
-      actorAccountId: input.machineAdmission.actorAccountId,
-      custodianAccountId: input.machineAdmission.custodianAccountId,
-    }) } : {}),
-    credentials: input.credentials,
-    serverHttpBaseUrl: input.serverHttpBaseUrl,
-    readSnapshot: () => snapshot,
-    isCurrent,
-    replaceAccountSettings: async (next: ActiveAccountSettingsSnapshot) => {
-      if (next.scopeKey !== scopeKey || !await isCurrent() || !snapshot) return false;
-      if (next.settingsVersion < snapshot.settingsVersion) return false;
-      if (next.settingsVersion === snapshot.settingsVersion) return true;
-      const resources = next.savedSecretResources ?? snapshot.savedSecretResources ?? [];
-      const catalog = replaceSavedSecretCatalogInSnapshot(snapshot, {
-        resources, state: next.savedSecretCatalogState ?? snapshot.savedSecretCatalogState ?? 'temporarily_unavailable',
-      });
-      snapshot = preserveAccountCatalogsInSnapshot(snapshot, { ...next,
-        savedSecretResources: catalog.savedSecretResources, savedSecretCatalogState: catalog.savedSecretCatalogState });
-      return true;
-    },
-    beginRefresh: () => { if (!snapshot) return false; withdrawCatalog(); return true; },
-    commitLegacyImportResult: async (result: Parameters<SavedSecretOperationContextV1['commitLegacyImportResult']>[0]) => {
-      if (!await isCurrent() || !snapshot || snapshot.settingsVersion !== result.expectedSettingsVersion) return false;
-      snapshot = replaceSavedSecretLegacyImportInSnapshot(snapshot, result.result);
-      return true;
-    },
-    commitProfileCatalog: async (profile: Parameters<SavedSecretOperationContextV1['commitProfileCatalog']>[0]) => {
-      if (!await isCurrent() || !snapshot || snapshot.settingsVersion !== profile.expectedSettingsVersion) return false;
-      snapshot = replaceProfileCatalogInSnapshot(snapshot, profile.catalog);
-      return await isCurrent() && snapshot !== null && snapshot.settingsVersion === profile.expectedSettingsVersion;
-    },
-    commitAcpCatalog: async ({ catalog }: Parameters<SavedSecretOperationContextV1['commitAcpCatalog']>[0]) => {
-      if (!await isCurrent() || !snapshot) return false;
-      if (catalog.status === 'ready' && catalog.revision === 'absent'
-        && (acpRevision !== undefined || catalog.sourceSettingsVersion !== snapshot.settingsVersion)) return false;
-      if (catalog.status === 'ready' && typeof catalog.revision === 'number') {
-        if (acpRevision !== undefined && catalog.revision < acpRevision) return false;
-        acpRevision = catalog.revision;
-      }
-      if (!isDeepStrictEqual(snapshot.acpCatalog, catalog)) snapshot = { ...snapshot, acpCatalog: catalog };
-      return true;
-    },
-    commitMcpCatalog: async (catalog: McpServerCatalogSnapshotV1) => {
-      if (!await isCurrent() || !snapshot) return false;
-      if (catalog.status === 'ready' && catalog.revision === 'absent'
-        && (mcpRevision !== undefined || catalog.sourceSettingsVersion !== snapshot.settingsVersion)) return false;
-      if (catalog.status === 'ready' && typeof catalog.revision === 'number') {
-        if (mcpRevision !== undefined && catalog.revision < mcpRevision) return false;
-        mcpRevision = catalog.revision;
-      }
-      if (!isDeepStrictEqual(snapshot.mcpServerCatalog, catalog)) {
-        snapshot = { ...snapshot, mcpServerCatalog: catalog };
-        notifyMcpCatalog();
-      }
-      return true;
-    },
-    subscribeMcpCatalog: (listener: () => void) => {
-      if (!snapshot) return () => undefined;
-      mcpListeners.add(listener);
-      return () => { mcpListeners.delete(listener); };
-    },
-    commitProviderConnectionsCatalog: async ({ catalog, expectedSettingsVersion }: Parameters<SavedSecretOperationContextV1['commitProviderConnectionsCatalog']>[0]) => {
-      if (!await isCurrent() || !snapshot) return false;
-      if ((catalog.status === 'ready' || catalog.status === 'partial') && catalog.revision === 'absent'
-        && snapshot.settingsVersion !== expectedSettingsVersion) return false;
-      if (!isDeepStrictEqual(snapshot.providerConnectionsCatalog, catalog)) snapshot = replaceProviderConnectionsCatalogInSnapshot(snapshot, catalog);
-      return true;
-    },
-    commitConnectedAccountCatalog: async ({ key, catalog }: Parameters<SavedSecretOperationContextV1['commitConnectedAccountCatalog']>[0]) => {
-      if (!await isCurrent() || !snapshot || catalog.status === 'ready' && catalog.record.key !== key) return false;
-      const facet = key === 'configurations' ? 'connectedConfigurationCatalog' : 'connectedPurposeCatalog';
-      if (!isDeepStrictEqual(snapshot[facet], catalog)) snapshot = { ...snapshot, [facet]: catalog };
-      return true;
-    },
-    commitNotificationChannelCatalog: async (notification: Parameters<SavedSecretOperationContextV1['commitNotificationChannelCatalog']>[0]) => {
-      if (!await isCurrent() || !snapshot || snapshot.settingsVersion !== notification.expectedSettingsVersion) return false;
-      snapshot = replaceNotificationChannelCatalogInSnapshot(snapshot, notification.catalog);
-      return await isCurrent() && snapshot !== null && snapshot.settingsVersion === notification.expectedSettingsVersion;
-    },
-    commitPromptLibraryCatalog: async ({ catalog, expectedSettingsVersion }: Parameters<SavedSecretOperationContextV1['commitPromptLibraryCatalog']>[0]) => {
-      if (!await isCurrent() || !snapshot || snapshot.settingsVersion !== expectedSettingsVersion) return false;
-      if (!isDeepStrictEqual(snapshot.promptLibraryCatalog, catalog)) snapshot = { ...snapshot, promptLibraryCatalog: catalog };
-      return true;
-    },
-    commitCatalog: (catalog: Parameters<SavedSecretOperationContextV1['commitCatalog']>[0]) => {
-      if (!snapshot) return false;
-      snapshot = replaceSavedSecretCatalogInSnapshot(snapshot, catalog);
-      return true;
-    },
-    withdrawCatalog,
-  });
-}
-
-export class SavedSecretOperationAdmissionError extends Error {
-  readonly reason: SavedSecretOperationAdmissionFailureReason;
-  readonly reference: string;
-
-  constructor(input: Readonly<{
-    reason: SavedSecretOperationAdmissionFailureReason;
-    reference: string;
-  }>) {
-    super(`Saved Secret operation reference is ${input.reason}`);
-    this.name = 'SavedSecretOperationAdmissionError';
-    this.reason = input.reason;
-    this.reference = input.reference;
-  }
-}
-
-type HealthySavedSecretResourceMaterialV1 = Extract<
-  SavedSecretResourceMaterialV1,
-  Readonly<{ resourceId: string }>
->;
-
-function isHealthySavedSecretResourceMaterialV1(
-  row: SavedSecretResourceMaterialV1,
-): row is HealthySavedSecretResourceMaterialV1 {
-  return 'resourceId' in row;
-}
-
-async function accountContentPrivateKey(token: string, suppliedCredentials?: StoredCredentials): Promise<Uint8Array | null> {
-  const credentials = suppliedCredentials ?? await readStoredCredentials().catch(() => null);
-  if (!credentials || credentials.token !== token || !credentials.encryption) return null;
-  return credentials.encryption.type === 'dataKey'
-    ? credentials.encryption.machineKey
-    : deriveKey(credentials.encryption.secret, 'Happy EnCoder', ['content']);
-}
-
-/** Hydrates through the admitted Account publication owner, active or invocation-local. */
-export async function hydrateSavedSecretCatalog(input: Readonly<{
-  token: string;
-  serverFeatures: FeaturesResponse | null;
-  signal?: AbortSignal;
-  operationContext?: SavedSecretOperationContextV1;
-}>): Promise<HydratedSavedSecretCatalog> {
-  const scopeKey = resolveAccountSettingsScopeKeyForToken(input.token);
-  const context = input.operationContext;
-  if (context && (context.credentials.token !== input.token || !await context.isCurrent())) {
-    throw new Error('saved_secret_account_lifetime_changed');
-  }
-  const snapshot = context ? context.readSnapshot() : getActiveAccountSettingsSnapshot();
-  const lifetimeToken = context ? null : getActiveAccountSettingsSnapshotLifetimeToken();
-  const commitCatalog = async (catalog: Readonly<{ resources: readonly SavedSecretCatalogResourceInputV1[]; state: SavedSecretCatalogState }>) => {
-    if (input.signal?.aborted) return false;
-    if (context) return await context.isCurrent() && context.commitCatalog(catalog);
-    return commitActiveSavedSecretCatalog({ scopeKey, lifetimeToken: lifetimeToken!, ...catalog });
-  };
-  // The Home's resource owner authorizes personal and granted material.
-  // Teams availability controls Team audiences, not private resource access.
-  if (!snapshot || snapshot.scopeKey !== scopeKey) throw new Error('saved_secret_account_snapshot_unavailable');
-  // A refresh is an authorization observation boundary. Keep display metadata
-  // for recovery, but retire all opened material before waiting on the Home.
-  // Listeners are woken once, by the refresh's outcome, and only when the
-  // authorized catalog changed.
-  if (!(context ? context.beginRefresh() : beginActiveSavedSecretCatalogRefresh({ scopeKey, lifetimeToken: lifetimeToken! }))) {
-    throw new Error('saved_secret_account_lifetime_changed');
-  }
-  let settled = false;
-  try {
-    const response = await axios.get(
-      `${context?.serverHttpBaseUrl ?? resolveServerHttpBaseUrl()}/v1/account/saved-secrets/resources/materials`,
-      {
-        headers: {
-          Authorization: `Bearer ${input.token}`,
-          ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
-        },
-        signal: input.signal,
-        timeout: 15_000,
-        validateStatus: () => true,
-      },
-    );
-    if (response.status === 404) {
-      const resources: readonly SavedSecretCatalogResourceInputV1[] = Object.freeze([]);
-      if (!await commitCatalog({ resources, state: 'ready' })) {
-        throw new Error('saved_secret_account_lifetime_changed');
-      }
-      settled = true;
-      return Object.freeze({ resources, state: 'ready' });
-    }
-    if (response.status < 200 || response.status >= 300) {
-      throw new Error(`saved_secret_catalog_http_${response.status}`);
-    }
-    const parsed = SavedSecretResourceMaterialsResponseV1Schema.parse(response.data);
-    // Corrupt rows intentionally expose only row-local repair metadata. They have
-    // no canonical resource reference or material envelope and therefore cannot
-    // participate in the CLI's materialization snapshot.
-    const materialRows = parsed.resources.filter(isHealthySavedSecretResourceMaterialV1);
-    const privateKey = materialRows.some((row) => row.encryptionMode === 'e2ee')
-      ? await accountContentPrivateKey(input.token, context?.credentials)
-      : null;
-    const resources: SavedSecretCatalogResourceInputV1[] = materialRows.map((row) => {
-      const resourceDataKey = row.encryptionMode === 'e2ee' && row.recipientEnvelope && privateKey
-        ? openEncryptedDataKeyEnvelopeV1({
-          envelope: decodeBase64(row.recipientEnvelope.encryptedDataKey),
-          recipientSecretKeyOrSeed: privateKey,
-        })
-        : null;
-      return {
-        resourceId: row.resourceId,
-        ownerAccountId: row.entry.ownerAccountId ?? '',
-        relationship: row.entry.relationship,
-        capabilities: { use: row.entry.capabilities.use },
-        displayName: row.entry.name,
-        kind: row.entry.kind ?? 'other',
-        encryptionMode: row.encryptionMode,
-        revision: row.entry.revision ?? 1,
-        storedContent: row.storedContent,
-        materialStatus: row.entry.materialStatus,
-        ...(resourceDataKey ? { resourceDataKey } : {}),
-      };
-    });
-    if (!await commitCatalog({ resources, state: 'ready' })) {
-      for (const resource of resources) resource.resourceDataKey?.fill(0);
-      throw new Error('saved_secret_account_lifetime_changed');
-    }
-    settled = true;
-    return Object.freeze({ resources: Object.freeze(resources), state: 'ready' });
-  } finally {
-    // Any unsettled refresh (transport failure, non-success or malformed Home
-    // answer, unopenable envelope) ends with the fail-closed state published.
-    if (!settled) {
-      if (context) context.withdrawCatalog();
-      else withdrawActiveSavedSecretCatalog({ scopeKey, lifetimeToken: lifetimeToken! });
-    }
-  }
-}
-
-/**
- * Refreshes the canonical shared-material snapshot at a Session/Execution Run
- * operation boundary. AccountChange is only a wake-up hint, so a launch must
- * not treat a previously hydrated row as current authorization after a missed
- * hint. Callers pass their canonical effective reference batch (or the
- * Execution Run's value-free overlay); personal-only batches stay entirely
- * within Account Settings and do not require a Home catalog request.
- */
-type SavedSecretCatalogRefreshInputV1 = Readonly<{
-  expectedScopeKey: string;
-  secretReferenceOverlay?: SecretReferenceOverlayV1;
-  references?: readonly SavedSecretOperationReferenceV1[];
-  signal?: AbortSignal;
-  /** Resource imports need an authoritative absence/tombstone observation before create. */
-  refreshCatalog?: boolean;
-  operationContext?: SavedSecretOperationContextV1;
-  /** Explicit editors pin their original source; unpinned demand loaders may rebase. */
-  sourceExpectation?: Readonly<{ mode: 'plain' | 'e2ee'; raw: Readonly<Record<string, unknown>>; version: number }>;
-}>;
 
 export async function refreshSavedSecretCatalogForOperation(input: SavedSecretCatalogRefreshInputV1): Promise<ActiveAccountSettingsSnapshot> {
   const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
@@ -436,132 +91,6 @@ export async function refreshSavedSecretCatalogForOperation(input: SavedSecretCa
   const snapshot = input.operationContext ? input.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
   if (!committed || !snapshot) throw new Error('saved_secret_account_lifetime_changed');
   return snapshot;
-}
-
-function readRequestedSavedSecretOperationReferences(input: SavedSecretCatalogRefreshInputV1): readonly SavedSecretOperationReferenceV1[] {
-  const secretReferenceOverlay = input.secretReferenceOverlay;
-  return Object.freeze([
-    ...(input.references ?? []),
-    ...(secretReferenceOverlay
-      ? listSecretReferenceOverlayV1BindingNames(secretReferenceOverlay)
-        .map((name) => readSecretReferenceOverlayV1Reference(
-          secretReferenceOverlay,
-          name,
-        ))
-        .filter((reference): reference is SavedSecretOperationReferenceV1 => reference !== null)
-      : []),
-  ]);
-}
-
-/** Read/admit only: composite dispatch and importer share this cut without recursively importing. */
-export async function readSavedSecretCatalogForOperation(input: SavedSecretCatalogRefreshInputV1): Promise<ActiveAccountSettingsSnapshot> {
-  const requestedReferences = readRequestedSavedSecretOperationReferences(input);
-  const context = input.operationContext;
-  if (context && !await context.isCurrent()) throw new Error('saved_secret_account_lifetime_changed');
-  const current = context ? context.readSnapshot() : getActiveAccountSettingsSnapshot();
-  if (!current || current.scopeKey !== input.expectedScopeKey) {
-    throw new Error('saved_secret_account_snapshot_unavailable');
-  }
-  const collisionRefs = new Set(
-    resolveActiveSavedSecretCatalogCollisionState(current).collisions.map((collision) => collision.ref),
-  );
-  for (const reference of requestedReferences) {
-    if (reference.revision !== undefined && collisionRefs.has(reference.ref)) {
-      throw new SavedSecretOperationAdmissionError({
-        reason: 'reference_collision_migration_required',
-        reference: reference.ref,
-      });
-    }
-  }
-  const sharedReferences = requestedReferences.filter(
-    (reference) => !collisionRefs.has(reference.ref)
-      && parseSavedSecretRefV1(reference.ref).kind === 'shared_resource',
-  );
-  if (sharedReferences.length === 0 && input.refreshCatalog !== true) return current;
-
-  const credentials = context?.credentials ?? await readStoredCredentials().catch(() => null);
-  if (
-    !credentials
-    || resolveAccountSettingsScopeKeyForToken(credentials.token)
-      !== input.expectedScopeKey
-  ) {
-    throw new Error('saved_secret_account_credentials_unavailable');
-  }
-  await hydrateSavedSecretCatalog({
-    token: credentials.token,
-    serverFeatures: await fetchServerFeaturesSnapshot({
-      serverUrl: context?.serverHttpBaseUrl ?? resolveServerHttpBaseUrl(),
-      token: credentials.token,
-      projection: 'authenticated',
-      ...(input.signal ? { signal: input.signal } : {}),
-    }).then((snapshot) => snapshot.status === 'ready' ? snapshot.features : null),
-    ...(input.signal ? { signal: input.signal } : {}),
-    ...(context ? { operationContext: context } : {}),
-  });
-  const refreshed = context ? context.readSnapshot() : getActiveAccountSettingsSnapshot();
-  if (
-    !refreshed
-    || refreshed.scopeKey !== input.expectedScopeKey
-    || refreshed.savedSecretCatalogState !== 'ready'
-  ) {
-    throw new Error('saved_secret_catalog_refresh_unavailable');
-  }
-  const materializer = createSavedSecretMaterializerFromSnapshotV1(refreshed,
-    context ? { isCurrent: () => context.readSnapshot() === refreshed } : undefined);
-  for (const reference of sharedReferences) {
-    if (resolveActiveSavedSecretCatalogCollisionState(refreshed).collisions.some(
-      (collision) => collision.ref === reference.ref,
-    )) {
-      throw new SavedSecretOperationAdmissionError({
-        reason: 'reference_collision_migration_required',
-        reference: reference.ref,
-      });
-    }
-    if (
-      reference.revision !== undefined
-      && !materializer.matchesSharedResourceRevision(reference.ref, reference.revision)
-    ) {
-      throw new SavedSecretOperationAdmissionError({
-        reason: 'reference_stale',
-        reference: reference.ref,
-      });
-    }
-    const resolved = materializer.resolve(reference.ref);
-    if (resolved.status !== 'ready') {
-      throw new SavedSecretOperationAdmissionError({
-        reason: savedSecretOperationAdmissionReason(resolved.status),
-        reference: reference.ref,
-      });
-    }
-  }
-  return refreshed;
-}
-
-/** Canonical row-write proof capture; it neither imports nor activates a domain. */
-export async function captureSavedSecretReferencesForOperation(input: Readonly<{
-  expectedScopeKey: string;
-  references: readonly string[];
-  operationContext?: SavedSecretOperationContextV1;
-  signal?: AbortSignal;
-}>): Promise<Readonly<{
-  referencedSavedSecretIds: string[];
-  savedSecretRevisions: { resourceId: string; expectedRevision: number }[];
-}>> {
-  input.signal?.throwIfAborted();
-  const references = [...new Set(input.references)];
-  const context = input.operationContext;
-  await readSavedSecretCatalogForOperation({ ...input, references: references.map(ref => ({ ref })) });
-  input.signal?.throwIfAborted();
-  if (context && !await context.isCurrent()) throw new Error('saved_secret_account_lifetime_changed');
-  const snapshot = context ? context.readSnapshot() : getActiveAccountSettingsSnapshot();
-  if (!snapshot || snapshot.scopeKey !== input.expectedScopeKey) throw new Error('saved_secret_account_snapshot_unavailable');
-  const captured = readSavedSecretRevisionsFromSnapshotV1(snapshot, references, context
-    ? { isCurrent: () => context.readSnapshot() === snapshot } : undefined);
-  if (captured.status !== 'ready') {
-    throw new Error('saved_secret_reference_revision_unavailable');
-  }
-  return { referencedSavedSecretIds: references, savedSecretRevisions: [...captured.resourcesByRef.values()]
-    .map(({ resourceId, revision }) => ({ resourceId, expectedRevision: revision })) };
 }
 
 type SavedSecretDomainReferenceCatalogsV1 = Pick<SavedSecretReferenceCatalogsV1,
@@ -1474,3 +1003,12 @@ export async function promoteSavedSecretResourceForOperation(input: Readonly<{
   }
   return { status: 'outcome_unknown' };
 }
+
+export type { SavedSecretOperationContextV1 } from '@/settings/secrets/savedSecretOperationContext';
+export { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/savedSecretOperationContext';
+export type { HydratedSavedSecretCatalog } from '@/settings/secrets/savedSecretCatalogRead';
+export type { SavedSecretOperationReferenceV1 } from '@/settings/secrets/savedSecretCatalogRead';
+export { SavedSecretOperationAdmissionError } from '@/settings/secrets/savedSecretCatalogRead';
+export { hydrateSavedSecretCatalog } from '@/settings/secrets/savedSecretCatalogRead';
+export { readSavedSecretCatalogForOperation } from '@/settings/secrets/savedSecretCatalogRead';
+export { captureSavedSecretReferencesForOperation } from '@/settings/secrets/savedSecretCatalogRead';

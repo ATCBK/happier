@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { BackendTargetRefV2Schema, normalizeBackendTargetRefV2InputToV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { SessionContinueWithReplayRequestSchema, SessionContinueWithReplayRpcParamsSchema } from '@happier-dev/protocol/sessions/continueWithReplay';
@@ -7,40 +7,33 @@ import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/
 import { SessionModelSelectionV1Schema } from '@happier-dev/protocol/providers/model-selection';
 import type { SessionContinueWithReplayRpcParams } from '@happier-dev/protocol';
 
-const SessionContinueWithReplayCompatIngressSchema = z
-  .preprocess(
-    normalizeLegacyContinueWithReplayRpcParamsInput,
-    z.object({
-      directory: z.string().min(1),
-      agent: z.string().min(1).optional(),
-      backendTarget: z.preprocess(normalizeBackendTargetRefV2InputToV2, BackendTargetRefV2Schema.optional()),
-      approvedNewDirectoryCreation: z.boolean().optional(),
-      permissionMode: z.string().optional(),
-      permissionModeUpdatedAt: z.number().finite().optional(),
-      modelId: z.string().optional(),
-      modelUpdatedAt: z.number().finite().optional(),
-      modelSelection: SessionModelSelectionV1Schema.optional(),
+const SessionContinueWithReplayCompatIngressSchema = z.pipe((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeLegacyContinueWithReplayRpcParamsInput), z.looseObject({
+      directory: z.string().check(z.minLength(1)),
+      agent: z.optional(z.string().check(z.minLength(1))),
+      backendTarget: (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeBackendTargetRefV2InputToV2), z.optional(BackendTargetRefV2Schema)),
+      approvedNewDirectoryCreation: z.optional(z.boolean()),
+      permissionMode: z.optional(z.string()),
+      permissionModeUpdatedAt: z.optional(z.number()),
+      modelId: z.optional(z.string()),
+      modelUpdatedAt: z.optional(z.number()),
+      modelSelection: z.optional(SessionModelSelectionV1Schema),
       replay: SessionContinueWithReplayRequestSchema,
-    }).passthrough(),
-  )
-  .superRefine((value, ctx) => {
+    })).check(z.superRefine((value, ctx) => {
     validateLegacyContinueWithReplayRpcParamsCompat(value, ctx);
     if (!value.agent && !value.backendTarget) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'backendTarget is required',
         path: ['backendTarget'],
       });
     }
-  })
-  .transform(({ agent: _agent, modelId, modelUpdatedAt, modelSelection, ...rest }, ctx) => {
+  })), z.transform(({ agent: _agent, modelId, modelUpdatedAt, modelSelection, ...rest }, ctx) => {
     const targetKey = rest.backendTarget ? buildBackendTargetKeyV2(rest.backendTarget) : null;
     if (modelSelection && (!targetKey || modelSelection.ref.agentTargetKey !== targetKey)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+      ctx.issues.push({
+        code: "custom",
         path: ['modelSelection', 'ref', 'agentTargetKey'],
-        message: 'Model selection agent target must match backendTarget',
-      });
+        message: 'Model selection agent target must match backendTarget', input: ctx.value });
       return z.NEVER;
     }
     const legacyModelId = typeof modelId === 'string' ? modelId.trim() : '';
@@ -52,14 +45,14 @@ const SessionContinueWithReplayCompatIngressSchema = z
       })
       : undefined);
     return { ...rest, ...(normalizedSelection ? { modelSelection: normalizedSelection } : {}) };
-  });
+  }));
 
 export function parseSessionContinueWithReplayRpcParamsCompatIngress(
   raw: unknown,
-): z.ZodSafeParseResult<SessionContinueWithReplayRpcParams> {
+): z.core.util.SafeParseResult<SessionContinueWithReplayRpcParams> {
   const compatParsed = SessionContinueWithReplayCompatIngressSchema.safeParse(raw);
   if (!compatParsed.success) {
-    return compatParsed as z.ZodSafeParseError<SessionContinueWithReplayRpcParams>;
+    return compatParsed as z.core.util.SafeParseError<SessionContinueWithReplayRpcParams>;
   }
   return SessionContinueWithReplayRpcParamsSchema.safeParse(compatParsed.data);
 }

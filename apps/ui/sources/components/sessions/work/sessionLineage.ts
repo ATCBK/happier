@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { useShallow } from 'zustand/react/shallow';
 
 import { getStorage } from '@/sync/domains/state/storage';
@@ -9,7 +10,7 @@ import type { SessionListRowStateByServerId } from '@/sync/domains/session/listi
 
 import { selectSessionRelationRecords } from './reportSubtree';
 
-/** A lead above a Session in the `reportsTo` tree (ORC §3.1), named as this device can name it. */
+/** A lead above a Session in the `manager` tree (ORC §3.1), named as this device can name it. */
 export type SessionLineageAncestor = Readonly<{
   sessionId: string;
   title: string;
@@ -18,11 +19,11 @@ export type SessionLineageAncestor = Readonly<{
 /** The immediate lead, worded identically in headers, breadcrumbs and peeks. */
 export function describeSessionLineage(lineage: readonly SessionLineageAncestor[]): string | null {
   const lead = lineage[lineage.length - 1];
-  return lead ? t('sessionWork.peek.reportsTo', { lead: lead.title }) : null;
+  return lead ? t('sessionWork.peek.manager', { lead: lead.title }) : null;
 }
 
 /**
- * The leads above a Session, root first, through `reportsTo` on the same Home (lab `session-E`: the
+ * The leads above a Session, root first, through `manager` on the same Home (lab `session-E`: the
  * breadcrumb and "Reports to"). Qualified list rows name unopened leads through the same relation
  * owner as Work. The walk ends at an unavailable lead; a transient cycle stops at its first repeat.
  */
@@ -35,13 +36,13 @@ export function readSessionLineage(
   const records = selectSessionRelationRecords(sessions, serverId, rowsByServerId);
   const ancestors: SessionLineageAncestor[] = [];
   const visited = new Set([sessionId]);
-  let leadId = records[sessionId]?.reportsTo?.sessionId ?? null;
+  let leadId = readSessionManagerSessionIdV1(records[sessionId]);
   while (leadId && !visited.has(leadId)) {
     const lead = records[leadId];
     if (!lead) break;
     visited.add(leadId);
     ancestors.unshift({ sessionId: leadId, title: getSessionName(lead) });
-    leadId = lead.reportsTo?.sessionId ?? null;
+    leadId = readSessionManagerSessionIdV1(lead);
   }
   return ancestors;
 }

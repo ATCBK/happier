@@ -15,7 +15,7 @@ import { lstat, readFile, realpath } from 'node:fs/promises';
 import { relative, resolve, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { isCanonicalAbsolutePathInsideRoot } from '@happier-dev/plugin-sdk/fs';
-import { parseGitComparisonOutput } from '@happier-dev/cli-common/scm/gitComparisonOutput';
+import { parseGitComparisonOutput } from '@happier-dev/plugin-sdk/scm';
 import type { ScmBackendContext } from '../types.js';
 import { normalizeCommitRef, normalizeRepoRootRelativePath, runScmCommand } from '../runtime.js';
 import { toRepoRootLiteralPathspec } from '../literalPathspec.js';

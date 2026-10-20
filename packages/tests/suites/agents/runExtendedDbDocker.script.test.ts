@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { spawnSync } from 'node:child_process';
+
+// Docker and Yarn are external process boundaries; exercise the real runner.
+vi.mock('node:child_process', () => ({ spawnSync: vi.fn() }));
 
 import * as runExtendedDbDockerScript from '../../scripts/run-extended-db-docker.mjs';
 import { parseArgs, resolveExtendedDbCommandTimeoutMs, resolveExtendedDbStepTimeoutMs } from '../../scripts/run-extended-db-docker.mjs';
@@ -8,6 +12,39 @@ type YarnInvocationResolver = (
   args: readonly string[],
   options?: Readonly<{ platform?: NodeJS.Platform; npmExecPath?: string; comspec?: string }>,
 ) => Readonly<{ command: string; args: string[]; windowsVerbatimArguments?: boolean }>;
+
+describe('extended-db container ownership', () => {
+  const originalSignals = new Map(['SIGINT', 'SIGTERM'].map(signal => [signal, process.listeners(signal)]));
+  afterEach(() => {
+    vi.mocked(spawnSync).mockReset();
+    for (const [signal, original] of originalSignals) {
+      for (const listener of process.listeners(signal)) if (!original.includes(listener)) process.removeListener(signal, listener);
+    }
+  });
+
+  it('cleans up only the exact container returned by its own successful docker run', async () => {
+    const id = 'a'.repeat(64);
+    vi.mocked(spawnSync).mockImplementation((command, args) => ({
+      status: 0, signal: null, pid: 1, output: [], stderr: '',
+      stdout: command !== 'docker' ? '' : args?.[0] === 'run' ? id
+        : args?.[0] === 'inspect' ? 'healthy' : args?.[0] === 'port' ? '127.0.0.1:54321' : '',
+    }));
+    await runExtendedDbDockerScript.main(['node', 'runner', '--db', 'postgres', '--mode', 'contract', '--name', 'c31-owned']);
+    const removals = vi.mocked(spawnSync).mock.calls.filter(([command, args]) => command === 'docker' && args?.[0] === 'rm');
+    expect(removals.map(([, args]) => args)).toEqual([['rm', '-f', id]]);
+  });
+
+  it('leaves an existing same-name container alone when docker run fails', async () => {
+    vi.mocked(spawnSync).mockImplementation((command, args) => ({
+      status: command === 'docker' && args?.[0] === 'run' ? 1 : 0,
+      signal: null, pid: 1, output: [], stdout: '', stderr: '',
+    }));
+    await expect(runExtendedDbDockerScript.main(['node', 'runner', '--db', 'postgres', '--name', 'c31-collision']))
+      .rejects.toThrow(/Command failed/);
+    expect(vi.mocked(spawnSync).mock.calls.filter(([command, args]) => command === 'docker' && args?.[0] === 'rm')
+      .map(([, args]) => args)).toEqual([]);
+  });
+});
 
 describe('extended-db docker script args', () => {
   it('parses valid args', () => {

@@ -23,6 +23,7 @@ import {
     retryPendingOutboxOperationV2 as retryPendingOutboxOperationV2Impl,
     restoreDiscardedPendingMessageV2 as restoreDiscardedPendingMessageV2Impl,
     serializePendingEnqueueBodyForServerWire,
+    sendPendingDeliveryAsNewV2,
     updatePendingMessageV2 as updatePendingMessageV2Impl,
     updatePendingRequestedActionV2,
 } from './pendingQueueV2';
@@ -279,6 +280,81 @@ describe('pendingQueueV2 error handling', () => {
             await mutation;
         }
     });
+
+    it.each(['requested-action', 'enqueue', 'retry', 'replacement-edit', 'send-as-new'] as const)(
+        'applies a removal snapshot started while the %s response body is loading', async (operation) => {
+            const sessionId = `s_pending_removal_during_${operation}_body`;
+            const localId = 'materialized-action-local-id';
+            const replacementLocalId = 'materialized-replacement-local-id';
+            const recipient = { kind: 'execution_run' as const, runId: 'run-body-delay' };
+            const rawRecord = { role: 'user' as const, content: { type: 'text' as const, text: 'already handled by the agent' }, meta: {} };
+            storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain' } })]);
+            storage.getState().upsertPendingMessage(sessionId, {
+                id: localId, localId, recipient, createdAt: 1, updatedAt: 1,
+                source: 'server_pending', deliveryStatus: 'accepted', pendingDeliveryStatus: 'server_queued',
+                text: rawRecord.content.text, rawRecord,
+            });
+            const encryption = await createPendingQueueEncryption({ sessionId });
+            const bodyStarted = createDeferred<void>();
+            const payload = {
+                didUpdate: true, didWrite: true, requestedAction: { v: 1, kind: 'enqueue' },
+                localId: replacementLocalId, newLocalId: replacementLocalId, pending: { localId, recipient },
+            };
+            const body = createDeferred<typeof payload>();
+            const snapshotStarted = createDeferred<void>();
+            const snapshot = createDeferred<Response>();
+            const successfulResponse = Response.json({ didUpdate: true });
+            successfulResponse.json = async () => {
+                bodyStarted.resolve();
+                return body.promise;
+            };
+            const enqueueParams = {
+                sessionId, localId, recipient, text: rawRecord.content.text, encryption, outboxScope,
+                serverWireMode: 'pending_input_v3' as const, targetMachineId: 'body-delay-machine',
+            };
+            if (operation === 'retry') {
+                await enqueuePendingMessageV2Impl({
+                    ...enqueueParams, request: async () => { throw new Error('lost enqueue response'); },
+                }).catch(() => undefined);
+            }
+            const request = async (_path: string, init?: RequestInit): Promise<Response> => {
+                if (init?.method === 'GET') {
+                    snapshotStarted.resolve();
+                    return (await snapshot.promise).clone();
+                }
+                return successfulResponse;
+            };
+            const mutation = operation === 'requested-action'
+                ? updatePendingRequestedActionV2({
+                    sessionId, localId, requestedAction: { v: 1, kind: 'enqueue' }, request, outboxScope,
+                })
+                : operation === 'enqueue'
+                    ? enqueuePendingMessageV2Impl({ ...enqueueParams, request })
+                    : operation === 'retry'
+                        ? retryPendingOutboxOperationV2Impl({ sessionId, localId, outboxScope, request, serverWireMode: 'pending_input_v3' })
+                        : operation === 'replacement-edit'
+                            ? updatePendingMessageV2({
+                                sessionId, pendingId: localId, replacementLocalId, text: 'edited input', encryption, request,
+                            })
+                            : sendPendingDeliveryAsNewV2({
+                                sessionId, pendingId: localId, encryption, request, outboxScope,
+                                isOutboxScopeCurrent: isCurrentPendingScope,
+                            });
+            await bodyStarted.promise;
+            const refresh = fetchAndApplyPendingMessagesV2Impl({
+                sessionId, recipient, encryption, request, outboxScope,
+                isOutboxScopeCurrent: isCurrentPendingScope,
+            });
+            await snapshotStarted.promise;
+            body.resolve(payload);
+            // Send-as-new awaits its own coalesced refresh after validating the identity.
+            if (operation !== 'send-as-new') await mutation;
+            snapshot.resolve(Response.json({ pending: [] }));
+            await Promise.all([mutation, refresh]);
+
+            expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([]);
+        },
+    );
 
     it('clears discarded messages when the pending fetch fails', async () => {
         const sessionId = 's_test';

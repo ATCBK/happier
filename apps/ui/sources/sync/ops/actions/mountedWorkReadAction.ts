@@ -3,6 +3,7 @@ import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/
 import { resolveWorkReadPresentation, type WorkItem, type WorkProjection } from '@/components/sessions/work/workProjection';
 import type { InboxModel } from '@/hooks/inbox/useInboxModel';
 import type { InboxWorkItem } from '@/activity/presentation/buildInboxWorkGroups';
+import type { InboxItem } from '@/components/inbox/inboxItems';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
@@ -13,17 +14,43 @@ type WorkReadOwner = MountedOwner & Readonly<{
         managedRuns: Readonly<{ phase: 'idle' | 'loading' | 'loaded' | 'failed'; refreshFailed: boolean }> }>;
 }>;
 type InboxReadOwner = MountedOwner & Readonly<{ read: () => InboxModel }>;
+type MountedReadAddress = Readonly<{ scope: ServerAccountScope; actionId: 'session.work.get' | 'inbox.get'; sessionId?: string }>;
 
 // Answering-client addresses only: these retain neither another projection nor another source.
 const workOwners = new Set<WorkReadOwner>();
 const inboxOwners = new Set<InboxReadOwner>();
+const addressListeners = new Set<() => void>();
+let mountedReadAddresses: readonly MountedReadAddress[] = [];
+function publishMountedReadAddresses(): void {
+    const next: MountedReadAddress[] = [];
+    for (const owner of workOwners) if (!next.some(address => address.actionId === 'session.work.get'
+        && address.sessionId === owner.sessionId && areServerAccountScopesEqual(address.scope, owner.scope))) {
+        next.push({ scope: owner.scope, actionId: 'session.work.get', sessionId: owner.sessionId });
+    }
+    for (const owner of inboxOwners) if (!next.some(address => address.actionId === 'inbox.get'
+        && areServerAccountScopesEqual(address.scope, owner.scope))) next.push({ scope: owner.scope, actionId: 'inbox.get' });
+    if (next.length === mountedReadAddresses.length && next.every((address, index) => {
+        const previous = mountedReadAddresses[index];
+        return previous?.actionId === address.actionId && previous.sessionId === address.sessionId
+            && areServerAccountScopesEqual(previous.scope, address.scope);
+    })) return;
+    mountedReadAddresses = next;
+    for (const listener of addressListeners) listener();
+}
+export const getMountedWorkReadAddresses = (): readonly MountedReadAddress[] => mountedReadAddresses;
+export function subscribeMountedWorkReadOwners(listener: () => void): () => void {
+    addressListeners.add(listener);
+    return () => { addressListeners.delete(listener); };
+}
 export function registerMountedWorkReadOwner(owner: WorkReadOwner): () => void {
     workOwners.add(owner);
-    return () => { workOwners.delete(owner); };
+    publishMountedReadAddresses();
+    return () => { workOwners.delete(owner); publishMountedReadAddresses(); };
 }
 export function registerMountedInboxReadOwner(owner: InboxReadOwner): () => void {
     inboxOwners.add(owner);
-    return () => { inboxOwners.delete(owner); };
+    publishMountedReadAddresses();
+    return () => { inboxOwners.delete(owner); publishMountedReadAddresses(); };
 }
 
 function workItem(item: WorkItem) {
@@ -53,6 +80,21 @@ function inboxItem(item: InboxWorkItem, scope: ServerAccountScope) {
         ...(item.link.observedAt === undefined ? {} : { pullRequestObservedAt: item.link.observedAt }) };
     if (item.kind === 'snoozed') return { kind: item.kind, ...address, remindAt: item.remindAt };
     return { kind: item.kind, ...address };
+}
+
+function canonicalInboxItem(item: InboxItem, scope: ServerAccountScope) {
+    if (!areServerProfileIdentifiersEquivalent(item.source.serverId, scope.serverId)
+        || !areServerProfileIdentifiersEquivalent(item.focus.serverId, scope.serverId)) return null;
+    if (item.discussion && (item.discussion.accountId !== scope.accountId
+        || item.focus.kind !== 'discussion'
+        || item.discussion.messageRef.messageId !== item.focus.messageId
+        || item.discussion.messageRef.discussion.discussionId !== item.source.id
+        || !areServerProfileIdentifiersEquivalent(item.discussion.messageRef.discussion.serverId, scope.serverId))) return null;
+    return { key: item.key, producer: item.producer, type: item.type, view: item.view, title: item.title,
+        context: item.context, createdAt: item.createdAt, read: item.read, focus: item.focus,
+        pageRoute: item.pageRoute, source: item.source,
+        ...(item.question ? { question: item.question } : {}),
+        ...(item.discussion ? { discussion: item.discussion } : {}) };
 }
 
 export const invokeMountedWorkRead: NonNullable<ActionExecutorDeps['appShellAction']> = async ({ actionId, input, context }) => {
@@ -93,6 +135,11 @@ export const invokeMountedWorkRead: NonNullable<ActionExecutorDeps['appShellActi
     if (model.spansHomes) return { status: 'unavailable' };
     const audienceScope = model.source.audienceScopes?.get(scope.serverId);
     if (audienceScope && !areServerAccountScopesEqual(audienceScope, scope)) return { status: 'unavailable' };
+    if (model.discussionAttention.source && !areServerAccountScopesEqual(model.discussionAttention.source.scope, scope)) {
+        return { status: 'unavailable' };
+    }
+    const items = model.items.map(item => canonicalInboxItem(item, scope));
+    if (items.some(item => item === null)) return { status: 'unavailable' };
     if (model.workGroups.some(group => group.items.some(item => item.kind === 'workflow_run'))
         && (!model.workflowAttention.serverId
             || !areServerProfileIdentifiersEquivalent(model.workflowAttention.serverId, scope.serverId))) return { status: 'unavailable' };
@@ -119,9 +166,11 @@ export const invokeMountedWorkRead: NonNullable<ActionExecutorDeps['appShellActi
         return { key: group.key, root, items };
     });
     if (groups.some(value => value === null)) return { status: 'unavailable' };
-    const result = AppShellActionOutputSchemas[actionId].parse({ status: 'ready', groups,
+    const result = AppShellActionOutputSchemas[actionId].parse({ status: 'ready', groups, items,
+        coverage: { discussions: model.discussionAttention.coverage },
         approvalIds: model.openApprovals.map(artifact => artifact.id),
         usageNoticeIds: model.openUsageNotices.map(entry => entry.artifact.id),
+        accountNoticeIds: model.openAccountNotices.map(entry => entry.artifact.id),
         friendRequestIds: model.friendRequests.map(request => request.id),
         automationRunIds: model.automationAttentionItems.map(item => item.run.id),
         readySessions,

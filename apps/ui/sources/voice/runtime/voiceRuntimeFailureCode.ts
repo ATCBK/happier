@@ -1,4 +1,6 @@
 import { log } from '@/log';
+import { readRpcErrorCode } from '@/sync/runtime/rpcErrors';
+import { isVoiceTextTurnRejectedBeforeEffectError } from '@/voice/session/types';
 import type {
   VoiceConversationSessionMetadataCommitReason,
 } from '@/voice/persistence/voiceConversationSession';
@@ -114,10 +116,17 @@ export function readSafeVoiceRuntimeFailureDiagnosticReason(
 
 export function readSafeVoiceRuntimeFailureCode(error: unknown): string | null {
   if (!error || typeof error !== 'object') return null;
-  const code = (error as Readonly<{ code?: unknown }>).code;
-  if (typeof code !== 'string') return null;
-  const normalized = code.trim();
-  return SAFE_VOICE_RUNTIME_FAILURE_CODE_PATTERN.test(normalized) ? normalized : null;
+  // Pending custody needs the definite pre-effect envelope; recovery and safe
+  // diagnostics need the acquisition refusal it wraps, without its private prose.
+  const cause = isVoiceTextTurnRejectedBeforeEffectError(error) ? error.cause : null;
+  for (const candidate of [cause, error]) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    const code = readRpcErrorCode(candidate) ?? (candidate as Readonly<{ code?: unknown }>).code;
+    if (typeof code !== 'string') continue;
+    const normalized = code.trim();
+    if (SAFE_VOICE_RUNTIME_FAILURE_CODE_PATTERN.test(normalized)) return normalized;
+  }
+  return null;
 }
 
 export function normalizeVoiceRuntimeFailureCode(code: unknown): string {

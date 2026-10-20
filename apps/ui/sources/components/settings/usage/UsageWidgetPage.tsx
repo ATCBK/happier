@@ -8,7 +8,7 @@ import {
   type WidgetAreaLayoutSummaryV1,
   type WidgetSurfaceRefV1,
 } from '@happier-dev/protocol/widgets';
-import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_ICON_BUTTON_SIZE, HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { CurrentUiContextCommandsProvider } from '@/components/appShell/currentUiContext/CurrentUiContextCommands';
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
@@ -37,6 +37,7 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import { buildUsageAnalyticsViewModel } from '@/sync/api/account/usageAnalytics';
 import { formatUsageObservedAt } from '@/sync/domains/usage/usageCalendarPresentation';
 import { t } from '@/text';
+import { SkeletonRows } from '@/components/ui/lists/SkeletonRows';
 import { UsageFilterBar } from './UsageFilterBar';
 import { useUsageWidgetPageFilters } from './useUsageWidgetPageFilters';
 import { UsageDrillProvider, usageDrillFromPageFilters } from './usageDrill';
@@ -62,7 +63,7 @@ import {
   useUsageWidgetBatchSlices,
   useUsageWidgetBatchInventorySlice,
 } from './widgets/usageWidgetBatch';
-import { describeUsagePagePendingSources, readUsageCoverageGaps, readUsagePageAsOfMs } from './widgets/usageBodyKit';
+import { describeUsagePageFailedSources, describeUsagePagePendingSources, readUsageCoverageGaps, readUsagePageAsOfMs } from './widgets/usageBodyKit';
 
 const PRESET_ICON: Readonly<Record<UsageWidgetPresetId, IconName>> = {
   overview: 'squares-four',
@@ -462,24 +463,13 @@ function UsagePageDocument(
     [],
   );
   const preset = ready?.preset ?? null;
-  const waitingLayout = React.useMemo(() => ({ ...layout, state: { status: 'loading' as const } }), [layout]);
 
-  // The cold inventory and layout start together. Admit the list before any
-  // data body, so the page never publishes a temporary preset-only tab strip.
-  // A warm mount already has its Account's acknowledged inventory.
-  if (layouts.state.status === 'loading') return (
-    <>
-      <UsagePageHeader slices={[]} query={null} {...(props.sessionId ? { sessionId: props.sessionId } : {})} />
-      <WidgetArea port={props.port} layout={waitingLayout} context={props.context} geometry="grid"
-        title={t('usage.board.page.title')} surfaceName={t('usage.board.page.title')}
-        dashboard={{ addLabel: t('usage.board.page.addWidget'), emptyTitle: t('usage.board.page.emptyView') }} testID="usage-area" />
-    </>
-  );
-
+  // The selected document admits its widgets independently; the inventory only
+  // admits the view switcher. Hold that switcher's room while its names arrive.
   return (
     <>
       <UsagePageHeader slices={slices} query={null} {...(props.sessionId ? { sessionId: props.sessionId } : {})} />
-      <WidgetAreaLayoutBar
+      {layouts.state.status !== 'loading' ? <WidgetAreaLayoutBar
         layouts={tabViews}
         selectedId={selectedLayoutId}
         onSelect={(value) => {
@@ -489,7 +479,8 @@ function UsagePageDocument(
         actions={actions}
         labels={labels}
         testID="usage-views"
-      />
+      /> : <SkeletonRows rows={1} lines={1} rowHeight={HAPPIER_ICON_BUTTON_SIZE}
+        geometry={{ insetStart: 0, insetEnd: 0, glyphColumn: 0, gap: 0 }} accessibilityLabel={labels.list} testID="usage-views.loading" />}
       <UsageFilterBar
         page={page}
         slices={slices}
@@ -548,7 +539,12 @@ function UsagePageHeader(
   const facts = React.useMemo((): PageHeaderMetaFact[] => {
     // A source still being read is one cause for the whole page: said here once, never in each body.
     const pending = describeUsagePagePendingSources(props.slices);
-    const reading = pending ? [{ key: 'reading', text: pending }] : [];
+    // A failed shared read is one cause too: said here once, and every body inherits it quietly.
+    const failed = describeUsagePageFailedSources(props.slices);
+    const reading = [
+      ...(failed ? [{ key: 'failed', icon: 'warning' as const, text: failed, testID: 'usage-page.header.failed' }] : []),
+      ...(pending ? [{ key: 'reading', text: pending }] : []),
+    ];
     const accounting = props.slices.find(
       (slice) => slice.accounting,
     )?.accounting;

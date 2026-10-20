@@ -4,7 +4,7 @@ import { act } from 'react-test-renderer';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { ProjectAccountRowMutationRequestV1Schema, type ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { ProjectAccountRowMutationRequestV1Schema, ProjectAccountWorkspaceRefV1Schema, type ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { computeWorkspaceSyncPolicyDigest, WorkspaceSyncRelationshipV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import { readNewSessionDraftProjectionFromRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { SessionAuthoringOpenResultV1Schema } from '@happier-dev/protocol/plugins/ui';
@@ -199,9 +199,9 @@ describe('Projects model Action admission', () => {
         rows.push({ key: targetKey, revision: 0, content: { t: 'plain', v: { key: targetKey, value: target } } },
             { key: graphKey, revision: 0, content: { t: 'plain', v: { key: graphKey, value: { relationships: [relationship] } } } });
         const sourceContent = rows[0]?.content;
-        if (sourceContent?.t !== 'plain') throw new Error('Expected a plain source workspace fixture');
+        if (sourceContent?.t !== 'plain' || sourceContent.v.key.kind !== 'workspace-ref') throw new Error('Expected a plain source workspace fixture');
         applyProjectAccountRowsFixture(storage, {
-            workspaceRefs: [sourceContent.v.value, target],
+            workspaceRefs: [ProjectAccountWorkspaceRefV1Schema.parse(sourceContent.v.value), target],
             relationships: [relationship],
         });
         const before = [...rows];

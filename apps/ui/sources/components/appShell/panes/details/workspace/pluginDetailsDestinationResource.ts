@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { PluginUiInstanceKeyV1Schema, type PluginUiDestinationReferenceV1, type PluginUiInstanceKeyV1 } from '@happier-dev/protocol/plugins/ui';
 import { PersistedPluginUiDestinationReferenceV1Schema } from '../../model/selectedPaneDestination';
 import type { DetailsTab } from './detailsWorkspaceTypes';
@@ -22,7 +22,7 @@ export const PluginDetailsDestinationResourceV1Schema = z.object({
     kind: z.literal(PLUGIN_DETAILS_DESTINATION_RESOURCE_KIND),
     destination: PersistedPluginUiDestinationReferenceV1Schema,
     instanceKey: z.optional(PluginUiInstanceKeyV1Schema),
-}).strip();
+});
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return value !== null && typeof value === 'object' && !Array.isArray(value);

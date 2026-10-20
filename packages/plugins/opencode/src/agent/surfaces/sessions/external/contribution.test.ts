@@ -189,6 +189,7 @@ describe('OpenCode public External Sessions contribution', () => {
           directory: '/tmp/project',
         },
         accountingSource: {
+          accountingSources: ['opencode-native-accounting'],
           resourceKey: expect.stringMatching(/^opencode-resource-v2:external:[A-Za-z0-9_-]{43}$/u),
           changeObservation: 'observe_resource',
         },
@@ -248,6 +249,7 @@ describe('OpenCode public External Sessions contribution', () => {
           managedEndpoint: true,
         },
         accountingSource: {
+          accountingSources: ['opencode-native-accounting'],
           resourceKey: expect.stringMatching(/^opencode-resource-v2:managed:[A-Za-z0-9_-]{43}$/u),
           changeObservation: 'observe_resource',
         },

@@ -5,7 +5,9 @@
 
 import fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { isDeepStrictEqual } from 'node:util';
-import { z } from 'zod';
+import { z } from 'zod/mini';
+import { SessionFollowOccurrenceNotificationSchema, type SessionFollowOccurrenceNotification } from './sessions/sessionActivityChangedContract';
+import { SessionActivityChangedResponseSchema, type SessionActivityChangedResult } from './sessions/sessionActivityChangedContract';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { configuration } from '@/configuration';
 import { DoctorSnapshotResourceVitalsSchema, type DoctorSnapshotResourceVitals } from '@happier-dev/protocol/diagnostics/doctorSnapshot';
@@ -35,6 +37,8 @@ import {
 import { getDaemonAgentInstallJobOwner } from '@/capabilities/installJobs/agentInstallJobOwner';
 import { DaemonAgentInstallStartRequestSchema, DaemonAgentInstallStartResponseSchema, DaemonAgentInstallReadRequestSchema, DaemonAgentInstallReadResponseSchema, DaemonAgentInstallCancelRequestSchema, DaemonAgentInstallCancelResponseSchema, DaemonAgentInstallListRequestSchema, DaemonAgentInstallListResponseSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
 import { isUnattestedPublicV1RunnerRolloutMutation } from './plannedRunnerRestart/restartSessionRunnerOnCurrentRuntime';
+import { SESSION_RUNNER_RESTART_ADMISSION_CURRENT_PATH, SessionRunnerRestartAdmissionIdentitySchema,
+  SessionRunnerRestartAdmissionCurrentSchema } from './plannedRunnerRestart/sessionRunnerRestartAdmission';
 import { Metadata, type SessionCreationOutcome } from '@/api/types';
 import { CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_HEADER } from '@happier-dev/protocol/connect/connected-account-request-auth';
 import {
@@ -62,7 +66,9 @@ import {
   ConnectedServiceRunRejectedStartResultSchema,
   type ConnectedServiceRunRejectedStartHandler,
   ConnectedServiceRunMaterializeRequestSchema,
+  ConnectedServiceRunMaterializeSuccessResponseSchema,
   ConnectedServiceRunReleaseRequestSchema,
+  ConnectedServiceRunReleaseResultSchema,
   ConnectedServiceRunGenerationCurrentRequestSchema,
   ExecutionRunConnectedServicesRegistrationV1Schema,
   type ConnectedServiceRunMaterializationHandler,
@@ -88,7 +94,7 @@ import { continueSessionWithReplay } from '@/session/replay/continueWithReplay';
 import { parseSessionContinueWithReplayRpcParamsCompatIngress } from '@/session/replay/continueWithReplayCompatIngress';
 import { getSessionHostBridge } from '@/agent/runtime/bridges/session/SessionHostBridge';
 import { SessionConnectedServiceAuthSwitchRpcParamsSchema } from '@happier-dev/protocol/connect/sessionConnectedServiceAuthSwitch';
-import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
+import { createProviderErrorV1, ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
 import { ConnectedServiceCredentialRevisionV1Schema, ConnectedServiceUsageSourceV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
 import { ConnectedServiceAuthGroupIdSchema, ConnectedServiceIdSchema, ConnectedServiceProfileIdSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { CONNECTED_ACCOUNT_REQUEST_AUTH_FAILURE_PATH, CONNECTED_ACCOUNT_REQUEST_AUTH_ERROR_HTTP_STATUS_V1, CONNECTED_ACCOUNT_REQUEST_AUTH_LOOKUP_PATH, CONNECTED_ACCOUNT_REQUEST_AUTH_QUOTA_FAILURE_PATH, ConnectedAccountAuthFailureRequestV1Schema, ConnectedAccountQuotaFailureRequestV1Schema, ConnectedAccountRequestAuthErrorResponseV1Schema, ConnectedAccountRequestAuthFailureSuccessResponseV1Schema, ConnectedAccountRequestAuthLookupRequestV1Schema, ConnectedAccountRequestAuthLookupSuccessResponseV1Schema, getConnectedAccountRequestAuthErrorHttpStatusV1 } from '@happier-dev/protocol/connect/connected-account-request-auth';
@@ -179,6 +185,11 @@ import { sanitizeConnectedServiceRuntimeFailureClassification } from './connecte
 import { ConnectedServiceRuntimeAuthRefreshSelectionSchema, ConnectedServiceRuntimeAuthRefreshServiceIdSchema } from './connectedServices/runtimeAuthRefreshAuthorization';
 
 export type AgentRuntimeDaemonServiceRoutes = Readonly<{
+  /** The live Session Run owner verifies child occurrence and active turn. */
+  authorizeExecutionRunAction?(
+    operation: Extract<AgentRuntimeDaemonServiceRequestV1['operation'], { kind: 'action.execute' }>,
+    context: Readonly<{ sessionId: string; trackedSession: TrackedSession; signal: AbortSignal }>,
+  ): Promise<boolean>;
   dispatch(
     request: AgentRuntimeDaemonServiceRequestV1,
     context: Readonly<{
@@ -255,9 +266,13 @@ const DEFAULT_DAEMON_CONTROL_BODY_LIMIT_BYTES = 8 * 1024 * 1024;
 const DAEMON_CONTROL_BODY_LIMIT_BYTES_ENV_KEY = 'HAPPIER_DAEMON_CONTROL_BODY_LIMIT_BYTES';
 const E2E_DAEMON_CONTROL_PORT_ENV_KEY = 'HAPPIER_E2E_DAEMON_CONTROL_PORT';
 const DAEMON_DIST_CLOSURE_FINGERPRINT_PATTERN = /^[a-f0-9]{16}$/;
-const DaemonDistClosureFingerprintSchema = z.string().regex(DAEMON_DIST_CLOSURE_FINGERPRINT_PATTERN);
+const DaemonDistClosureFingerprintSchema = z.string().check(z.regex(DAEMON_DIST_CLOSURE_FINGERPRINT_PATTERN));
 type DaemonSelfRestartRequest = Readonly<{
   successorDistClosureFingerprint?: string;
+  successorServerUrls?: Readonly<{
+    serverUrl: string;
+    webappUrl: string;
+  }>;
 }>;
 type DaemonExternalActionApi = Readonly<{
   currentServerId: string;
@@ -295,8 +310,8 @@ function resolveDaemonControlListenPort(env: NodeJS.ProcessEnv): number {
 // Session SDK callbacks carry non-authoritative launch hints. Its incumbent ingress drops
 // extras; Run identity envelopes use the same canonical schema with strict unknown handling.
 const SessionConnectedServiceRuntimeAuthRefreshSelectionSchema = z.discriminatedUnion('kind', [
-  ConnectedServiceRuntimeAuthRefreshSelectionSchema.options[0].strip(),
-  ConnectedServiceRuntimeAuthRefreshSelectionSchema.options[1].strip(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(ConnectedServiceRuntimeAuthRefreshSelectionSchema._zod.def.options[0]),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(ConnectedServiceRuntimeAuthRefreshSelectionSchema._zod.def.options[1]),
 ]);
 
 
@@ -501,7 +516,7 @@ function findAgentRuntimeDaemonServiceAuthorizedSession(
           tracked.agentRuntimeDaemonServiceCapabilityHash,
       })
     );
-    return authorized ? tracked : null;
+    if (authorized) return tracked;
   }
   return null;
 }
@@ -622,11 +637,11 @@ type SpawnNonceAdmissionResult =
 // Success remains shape-compatible with released runners; failure is a strict
 // terminal counterpart on the same authenticated callback and carries no
 // Session/metadata truth because no Session was created or rejoined.
-const SessionStartedFailureReportSchema = z.object({
+const SessionStartedFailureReportSchema = z.strictObject({
   result: z.literal('failure'),
-  spawnNonce: z.string().trim().min(1),
+  spawnNonce: z.string().check(z.trim(), z.minLength(1)),
   errorDetail: SessionCreationTerminalSpawnErrorDetailSchema,
-}).strict();
+});
 
 const SessionStartedReportSchema = z.union([
   SessionStartedSuccessReportSchema,
@@ -714,7 +729,7 @@ export function createDaemonControlApp({
   readDoctorResourceVitals?: () => DoctorSnapshotResourceVitals;
   readPluginCatalogProjection?: () => import('@/plugins/daemon/catalogProjection').DaemonPluginCatalogProjection;
   prepareStopSession?: (trackedSession: TrackedSession) => Promise<void> | void;
-  stopSession: (sessionId: string) => Promise<StopSessionResult>;
+  stopSession: (sessionId: string, intent?: 'explicit_stop', signal?: AbortSignal) => Promise<StopSessionResult>;
   spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
   requestShutdown: () => void;
   beforeShutdown?: () => Promise<void>;
@@ -728,7 +743,7 @@ export function createDaemonControlApp({
     reconcileCanonicalReadiness?: (tracked: TrackedSession) => Promise<void>,
     sessionCreationOutcome?: SessionCreationOutcome,
   ) => void | Promise<void>;
-  onSessionActivityChanged?: (sessionId: string) => void;
+  onSessionActivityChanged?: (sessionId: string | null, followOccurrence?: SessionFollowOccurrenceNotification) => void | SessionActivityChangedResult | Promise<void | SessionActivityChangedResult>;
   /**
    * Settles the existing PID-correlated spawn waiter for a strict terminal
    * creation failure. It is intentionally separate from ordinary Session
@@ -1168,7 +1183,7 @@ export function createDaemonControlApp({
   });
   typed.post('/doctor/vitals', {
     onRequest: requireAuth,
-    schema: { body: z.object({}).strict(), response: { 200: DoctorSnapshotResourceVitalsSchema.nullable() } },
+    schema: { body: z.strictObject({}), response: { 200: z.nullable(DoctorSnapshotResourceVitalsSchema) } },
   }, async () => readDoctorResourceVitals?.() ?? null);
   typed.post('/agents/install/start', {
     onRequest: requireAuth,
@@ -1359,7 +1374,7 @@ export function createDaemonControlApp({
   };
 
   typed.post(EXECUTION_RUN_ADMISSION_PATH, {
-    schema: { body: z.object({}).strict(), response: { 200: ExecutionRunDaemonAdmissionResponseSchema, 401: authSchema401 } },
+    schema: { body: z.strictObject({}), response: { 200: ExecutionRunDaemonAdmissionResponseSchema, 401: authSchema401 } },
     preHandler: requireRunMaterializeAuth,
   }, async () => admissionDrain.isQuiescing()
     ? { admitted: false as const, reason: admissionDrain.isFinalShutdown() ? 'daemon_shutting_down' as const : 'daemon_draining' as const }
@@ -1436,8 +1451,8 @@ export function createDaemonControlApp({
       response: {
         200: z.object({
           status: z.literal('ok'),
-          runtimeId: z.string().min(1).optional(),
-          distClosureFingerprint: DaemonDistClosureFingerprintSchema.optional(),
+          runtimeId: z.optional(z.string().check(z.minLength(1))),
+          distClosureFingerprint: z.optional(DaemonDistClosureFingerprintSchema),
         }),
         401: authSchema401,
       }
@@ -1610,14 +1625,14 @@ export function createDaemonControlApp({
   typed.post('/connected-service-auth/session/refresh-runtime-auth', {
     schema: {
       body: z.object({
-        sessionId: z.string().trim().min(1),
+        sessionId: z.string().check(z.trim(), z.minLength(1)),
         serviceId: ConnectedServiceRuntimeAuthRefreshServiceIdSchema,
-        refreshAttemptId: z.string().trim().min(1),
+        refreshAttemptId: z.string().check(z.trim(), z.minLength(1)),
         selection: SessionConnectedServiceRuntimeAuthRefreshSelectionSchema,
-        planType: z.string().trim().min(1).nullable().optional(),
-        failingAccessTokenFingerprint: z.string().trim().min(1).nullable().optional(),
+        planType: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+        failingAccessTokenFingerprint: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
         expectedCredentialRevision: ConnectedServiceCredentialRevisionV1Schema,
-        reason: z.string().trim().min(1).nullable().optional(),
+        reason: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
       }),
       response: {
         200: z.object({ ok: z.literal(true), result: ConnectedServiceDaemonAuthBridgeRefreshResultSchema }),
@@ -1843,11 +1858,21 @@ export function createDaemonControlApp({
     return await handleSessionRunnerStatusV2Get({ sessionId: request.body.sessionId });
   });
 
+  typed.post(SESSION_RUNNER_RESTART_ADMISSION_CURRENT_PATH, {
+    schema: { body: SessionRunnerRestartAdmissionIdentitySchema,
+      response: { 200: SessionRunnerRestartAdmissionCurrentSchema, 401: authSchema401 } },
+    preHandler: requireAuth,
+  }, async request => {
+    const { expectedPid, requestId } = request.body;
+    const attempt = getChildren().find(tracked => (tracked.sessionRunnerPid ?? tracked.pid) === expectedPid)?.plannedRestartAdmission;
+    return { current: Boolean(attempt && attempt.requestId === requestId && !attempt.signal.aborted) };
+  });
+
   // Session reports itself after creation
   typed.post('/session-activity-changed', {
     schema: {
-      body: z.object({ sessionId: z.string().min(1) }).strict(),
-      response: { 200: z.object({ ok: z.literal(true) }).strict(), 401: authSchema401,
+      body: z.strictObject({ sessionId: z.nullable(z.string().check(z.minLength(1))), followOccurrence: z.optional(SessionFollowOccurrenceNotificationSchema) }),
+      response: { 200: SessionActivityChangedResponseSchema, 401: authSchema401,
         503: daemonShuttingDownRouteResponseSchema },
     },
     preHandler: requireAuth,
@@ -1856,8 +1881,16 @@ export function createDaemonControlApp({
       reply.code(503);
       return daemonShuttingDownResponse();
     }
-    if (getChildren().some(tracked => tracked.happySessionId === request.body.sessionId)) {
-      onSessionActivityChanged?.(request.body.sessionId);
+    const occurrence = request.body.followOccurrence;
+    const runOriginal = occurrence && 'original' in occurrence ? occurrence.original : undefined;
+    if (runOriginal || getChildren().some(tracked => tracked.happySessionId === request.body.sessionId)) {
+      if (runOriginal ? runOriginal.source.kind === 'workflow_run' || runOriginal.source.sessionId === request.body.sessionId
+        : !occurrence || 'sourceSessionId' in occurrence && occurrence.sourceSessionId === request.body.sessionId) {
+        const result = await onSessionActivityChanged?.(request.body.sessionId, request.body.followOccurrence);
+        if (result?.personalFollow?.sourceSessionId === request.body.sessionId) {
+          return { ok: true as const, personalFollow: result.personalFollow };
+        }
+      }
     }
     return { ok: true as const };
   });
@@ -1993,31 +2026,31 @@ export function createDaemonControlApp({
   typed.post('/connected-service-runtime-auth/failure', {
     schema: {
       body: z.object({
-        reportId: z.string().min(1).max(256).optional(),
-        originDaemonExecutionGenerationV1: z.string().min(1).max(256).optional(),
-        sessionId: z.string().min(1),
-        switchesThisTurn: z.number().int().nonnegative().optional(),
-        resumePromptMode: SessionUsageLimitRecoveryResumePromptModeV1Schema.optional(),
-        classification: z.object({
+        reportId: z.optional(z.string().check(z.minLength(1), z.maxLength(256))),
+        originDaemonExecutionGenerationV1: z.optional(z.string().check(z.minLength(1), z.maxLength(256))),
+        sessionId: z.string().check(z.minLength(1)),
+        switchesThisTurn: z.optional(z.number().check(z.int(), z.nonnegative())),
+        resumePromptMode: z.optional(SessionUsageLimitRecoveryResumePromptModeV1Schema),
+        classification: z.looseObject({
           kind: ConnectedServiceRuntimeAuthFailureKindSchema,
-          serviceId: z.string().min(1),
-          profileId: z.string().nullable(),
-          groupId: z.string().nullable(),
-          resetsAtMs: z.number().nullable(),
-          planType: z.string().nullable(),
-          rateLimits: z.unknown().nullable(),
+          serviceId: z.string().check(z.minLength(1)),
+          profileId: z.nullable(z.string()),
+          groupId: z.nullable(z.string()),
+          resetsAtMs: z.nullable(z.number()),
+          planType: z.nullable(z.string()),
+          rateLimits: z.nullable(z.unknown()),
           source: z.enum(['structured_provider_error', 'stable_provider_message', 'provider_runtime_marker']),
-        }).passthrough(),
+        }),
       }),
       response: {
         200: z.object({
           ok: z.literal(true),
           result: z.unknown(),
-          resumePromptMode: SessionUsageLimitRecoveryResumePromptModeV1Schema.optional(),
-          recoveryReceipt: z.object({
-            reportId: z.string().min(1).max(256),
-            attemptId: z.string().min(1).max(256),
-          }).optional(),
+          resumePromptMode: z.optional(SessionUsageLimitRecoveryResumePromptModeV1Schema),
+          recoveryReceipt: z.optional(z.object({
+            reportId: z.string().check(z.minLength(1), z.maxLength(256)),
+            attemptId: z.string().check(z.minLength(1), z.maxLength(256)),
+          })),
         }),
         401: authSchema401,
         400: z.object({
@@ -2333,8 +2366,8 @@ export function createDaemonControlApp({
   typed.post('/connected-service-usage-limit/wait-resume-cancel', {
     schema: {
       body: z.object({
-        sessionId: z.string().min(1),
-        attemptId: z.string().trim().min(1),
+        sessionId: z.string().check(z.minLength(1)),
+        attemptId: z.string().check(z.trim(), z.minLength(1)),
       }),
       response: {
         200: z.object({ ok: z.literal(true), result: z.unknown() }),
@@ -2404,12 +2437,12 @@ export function createDaemonControlApp({
 	  typed.post('/provider-account-usage-snapshot', {
     schema: {
       body: z.object({
-        sessionId: z.string().min(1),
+        sessionId: z.string().check(z.minLength(1)),
         snapshot: ProviderAccountUsageSnapshotV1Schema,
-        source: ConnectedServiceUsageSourceV1Schema.optional(),
-        deriveCredentialFingerprintFromSource: z.literal(true).optional(),
-        credentialFingerprint: z.string().regex(/^sha256:[a-f0-9]{8}$/u).nullable().optional(),
-        policyDisposition: z.literal('evidence_only').optional(),
+        source: z.optional(ConnectedServiceUsageSourceV1Schema),
+        deriveCredentialFingerprintFromSource: z.optional(z.literal(true)),
+        credentialFingerprint: z.optional(z.nullable(z.string().check(z.regex(/^sha256:[a-f0-9]{8}$/u)))),
+        policyDisposition: z.optional(z.literal('evidence_only')),
       }),
       response: {
         200: z.object({
@@ -2474,7 +2507,7 @@ export function createDaemonControlApp({
 	  typed.post('/provider-account-usage-adoption', {
 	    schema: {
 	      body: z.object({
-	        sessionId: z.string().min(1),
+	        sessionId: z.string().check(z.minLength(1)),
 	        adoption: ProviderAccountUsageAdoptionV1Schema,
 	      }),
 	      response: {
@@ -2539,22 +2572,13 @@ export function createDaemonControlApp({
     schema: {
       body: ConnectedServiceRunMaterializeRequestSchema,
       response: {
-        200: z.object({
-          ok: z.literal(true),
-          result: z.object({
-            activationId: z.string().uuid(),
-            env: z.record(z.string(), z.string()),
-            unsetEnvKeys: z.array(z.string()).optional(),
-            connectedServicesBindings: z.unknown(),
-            registration: ExecutionRunConnectedServicesRegistrationV1Schema,
-          }),
-        }),
+        200: ConnectedServiceRunMaterializeSuccessResponseSchema,
         401: authSchema401,
         403: z.object({
           ok: z.literal(false),
           errorCode: z.enum([CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.blocked, CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.modelUnavailable]),
-          modelId: z.string().optional(),
-          errorMessage: z.string().optional(),
+          modelId: z.optional(z.string()),
+          errorMessage: z.optional(z.string()),
         }),
         501: z.object({
           ok: z.literal(false),
@@ -2571,32 +2595,49 @@ export function createDaemonControlApp({
         errorCode: CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.unavailable,
       };
     }
-    const result = await materializeConnectedServicesForExecutionRun(request.body);
-    if (!result.ok) {
-      reply.code(403);
+    const lifetime = createDaemonControlRequestLifetime(request, reply);
+    try {
+      const result = await materializeConnectedServicesForExecutionRun(request.body, lifetime.signal);
+      if (!result.ok) {
+        reply.code(403);
+        return {
+          ok: false as const,
+          errorCode: result.errorCode,
+          ...('modelId' in result && result.modelId ? { modelId: result.modelId } : {}),
+          ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
+        };
+      }
       return {
-        ok: false as const,
-        errorCode: result.errorCode,
-        ...('modelId' in result && result.modelId ? { modelId: result.modelId } : {}),
-        ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
+        ok: true as const,
+        result: {
+          activationId: result.activationId,
+          env: { ...result.env },
+          connectedServicesBindings: result.connectedServicesBindings,
+          registration: result.registration,
+        },
       };
+    } finally {
+      // Keep materialization cancellation live through response delivery.
+      // Write completion ends this transport's cancellation lifetime; it does
+      // not establish runner receipt. An interrupted write aborts the exact entry.
+      const disposeLifetime = () => {
+        lifetime.dispose();
+        reply.raw.removeListener('finish', disposeLifetime);
+        reply.raw.removeListener('close', disposeLifetime);
+      };
+      if (reply.raw.writableFinished || reply.raw.destroyed) disposeLifetime();
+      else {
+        reply.raw.once('finish', disposeLifetime);
+        reply.raw.once('close', disposeLifetime);
+      }
     }
-    return {
-      ok: true as const,
-      result: {
-        activationId: result.activationId,
-        env: { ...result.env },
-        connectedServicesBindings: result.connectedServicesBindings,
-        registration: result.registration,
-      },
-    };
   });
 
   typed.post(CONNECTED_SERVICE_RUN_REFRESH_RUNTIME_AUTH_PATH, {
     schema: {
       body: ConnectedServiceRunRuntimeAuthRefreshRequestSchema,
       response: {
-        200: z.object({ ok: z.literal(true), result: ConnectedServiceDaemonAuthBridgeRefreshResultSchema }).strict(),
+        200: z.strictObject({ ok: z.literal(true), result: ConnectedServiceDaemonAuthBridgeRefreshResultSchema }),
         401: authSchema401,
       },
     },
@@ -2663,20 +2704,20 @@ export function createDaemonControlApp({
   });
 
   // Execution-run release: unregister the run from the canonical runtime registry and run retained
-  // materialization cleanup. Best-effort at run end — a missing handler is a bounded no-op so
-  // run teardown never blocks on daemon wiring.
+  // materialization cleanup. A failed cleanup retains exact custody for a later
+  // release or runner exit; unavailable wiring cannot report successful cleanup.
   typed.post(CONNECTED_SERVICE_RUN_RELEASE_PATH, {
     schema: {
       body: ConnectedServiceRunReleaseRequestSchema,
       response: {
-        200: z.object({ ok: z.literal(true), released: z.boolean() }),
+        200: ConnectedServiceRunReleaseResultSchema,
         401: authSchema401,
       },
     },
     preHandler: requireRunMaterializeAuth,
   }, async (request) => {
     if (!releaseConnectedServicesForExecutionRun) {
-      return { ok: true as const, released: false };
+      return { ok: false as const, errorCode: 'connected_service_run_cleanup_unavailable' as const };
     }
     return await releaseConnectedServicesForExecutionRun(request.body);
   });
@@ -2752,9 +2793,9 @@ export function createDaemonControlApp({
   typed.post('/local-services/inventory/labels/patch', {
     schema: {
       body: z.object({
-        inventoryId: z.string().trim().min(1),
-        label: z.object({ text: z.string().trim().min(1).max(200) }),
-        source: z.enum(['user', 'plugin']).optional().default('user'),
+        inventoryId: z.string().check(z.trim(), z.minLength(1)),
+        label: z.object({ text: z.string().check(z.trim(), z.minLength(1), z.maxLength(200)) }),
+        source: z._default(z.optional(z.enum(['user', 'plugin'])), 'user'),
       }),
       response: {
         200: z.object({ ok: z.literal(true) }),
@@ -3014,6 +3055,19 @@ export function createDaemonControlApp({
       || request.body.operation.kind === 'action.execute'
         ? request.body.operation.witness
         : null;
+    const childAction = request.body.operation.kind === 'action.execute' && request.body.operation.executionRun
+      ? request.body.operation : null;
+    let childActionAuthorized = false;
+    const authorizeChild = agentRuntimeDaemonServices.authorizeExecutionRunAction;
+    if (childAction && trackedAuthority && authorizeChild) {
+      const lifetime = createDaemonControlRequestLifetime(request, reply);
+      try {
+        childActionAuthorized = await lifetime.run(() => authorizeChild(childAction, {
+          sessionId: request.body.context.sessionId, trackedSession: trackedAuthority.tracked, signal: lifetime.signal,
+        }));
+      } catch { childActionAuthorized = false; }
+      finally { lifetime.dispose(); }
+    }
     const turnWitnessIsCurrent = (
       subject: ForegroundDaemonServiceSubject | null = foregroundSubject,
     ): boolean => {
@@ -3023,6 +3077,7 @@ export function createDaemonControlApp({
         && witness.agentStartCaller.sessionId !== request.body.context.sessionId) {
         return false;
       }
+      if (childAction) return childActionAuthorized;
       const foregroundAdmission =
         subject?.readAdmission() ?? null;
       const trackedWitnessAuthorized = trackedAuthority
@@ -3153,6 +3208,25 @@ export function createDaemonControlApp({
             isCurrent,
           },
       );
+    } catch (error) {
+      if (request.body.operation.kind === 'model_transition.authorize') {
+        const providerError = ProviderErrorV1Schema.safeParse(error);
+        if (providerError.success) {
+          return {
+            ok: false as const,
+            error: { code: providerError.data.code, message: providerError.data.code },
+          };
+        }
+      }
+      logger.warnLocalFile(
+        '[CONTROL SERVER] Agent runtime daemon service request failed',
+        {
+          route: AGENT_RUNTIME_DAEMON_SERVICES_PATH,
+          sessionId: request.body.context.sessionId,
+          error,
+        },
+      );
+      throw error;
     } finally {
       reply.raw.removeListener('close', onClientClose);
     }
@@ -3373,7 +3447,7 @@ export function createDaemonControlApp({
         200: z.unknown(),
         400: z.object({ ok: z.literal(false), errorCode: z.string(), error: z.string() }),
         401: authSchema401,
-        503: z.object({ ok: z.literal(false), errorCode: z.string(), error: z.string() }).passthrough(),
+        503: z.looseObject({ ok: z.literal(false), errorCode: z.string(), error: z.string() }),
       },
     },
     preHandler: requireAuth,
@@ -3408,7 +3482,7 @@ export function createDaemonControlApp({
       response: {
         200: z.unknown(),
         401: authSchema401,
-        503: z.object({ ok: z.literal(false), errorCode: z.string(), error: z.string() }).passthrough(),
+        503: z.looseObject({ ok: z.literal(false), errorCode: z.string(), error: z.string() }),
       },
     },
     preHandler: requireAuth,
@@ -3427,7 +3501,7 @@ export function createDaemonControlApp({
         200: z.unknown(),
         400: z.object({ ok: z.literal(false), errorCode: z.string(), error: z.string() }),
         401: authSchema401,
-        503: z.object({ ok: z.literal(false), errorCode: z.string(), error: z.string() }).passthrough(),
+        503: z.looseObject({ ok: z.literal(false), errorCode: z.string(), error: z.string() }),
       },
     },
     preHandler: requireAuth,
@@ -3460,7 +3534,7 @@ export function createDaemonControlApp({
         200: z.unknown(),
         400: z.object({ ok: z.literal(false), errorCode: z.string(), error: z.string() }),
         401: authSchema401,
-        503: z.object({ ok: z.literal(false), errorCode: z.string(), error: z.string() }).passthrough(),
+        503: z.looseObject({ ok: z.literal(false), errorCode: z.string(), error: z.string() }),
       },
     },
     preHandler: requireAuth,
@@ -3498,7 +3572,7 @@ export function createDaemonControlApp({
         200: z.unknown(),
         400: z.object({ ok: z.literal(false), errorCode: z.string(), error: z.string() }),
         401: authSchema401,
-        503: z.object({ ok: z.literal(false), errorCode: z.string(), error: z.string() }).passthrough(),
+        503: z.looseObject({ ok: z.literal(false), errorCode: z.string(), error: z.string() }),
       },
     },
     preHandler: requireAuth,
@@ -3541,11 +3615,14 @@ export function createDaemonControlApp({
       }
     },
     preHandler: requireAuth,
-  }, async (request) => {
+  }, async (request, reply) => {
     const { sessionId } = request.body;
 
     logger.debug(`[CONTROL SERVER] Stop session request: ${sessionId}`);
-    return await stopSession(sessionId);
+    const lifetime = createDaemonControlRequestLifetime(request, reply);
+    try {
+      return await lifetime.run(() => stopSession(sessionId, 'explicit_stop', lifetime.signal));
+    } finally { lifetime.dispose(); }
   });
 
   // Spawn new session
@@ -3555,9 +3632,9 @@ export function createDaemonControlApp({
       response: {
         200: z.object({
           success: z.boolean(),
-          sessionId: z.string().optional(),
-          sessionCreationOutcome: SessionCreationOutcomeSchema.optional(),
-          approvedNewDirectoryCreation: z.boolean().optional()
+          sessionId: z.optional(z.string()),
+          sessionCreationOutcome: z.optional(SessionCreationOutcomeSchema),
+          approvedNewDirectoryCreation: z.optional(z.boolean())
         }),
         202: z.object({
           success: z.literal(false),
@@ -3568,9 +3645,9 @@ export function createDaemonControlApp({
         401: authSchema401,
         409: z.object({
           success: z.boolean(),
-          requiresUserApproval: z.boolean().optional(),
-          actionRequired: z.string().optional(),
-          directory: z.string().optional()
+          requiresUserApproval: z.optional(z.boolean()),
+          actionRequired: z.optional(z.string()),
+          directory: z.optional(z.string())
         }),
         503: z.object({
           success: z.literal(false),
@@ -3719,7 +3796,7 @@ export function createDaemonControlApp({
     schema: {
       body: z.object({
         spawnNonce: z.string(),
-        timeoutMs: z.number().int().nonnegative().optional(),
+        timeoutMs: z.optional(z.number().check(z.int(), z.nonnegative())),
       }),
       response: {
         200: SpawnSessionNonceControlResponseSchema,
@@ -3807,21 +3884,21 @@ export function createDaemonControlApp({
       response: {
         200: z.object({
           success: z.boolean(),
-          sessionId: z.string().optional(),
-          approvedNewDirectoryCreation: z.boolean().optional(),
+          sessionId: z.optional(z.string()),
+          approvedNewDirectoryCreation: z.optional(z.boolean()),
         }),
         400: z.object({
           success: z.boolean(),
           error: z.string(),
-          errorCode: z.string().optional(),
+          errorCode: z.optional(z.string()),
         }),
         401: authSchema401,
         403: authSchema401,
         409: z.object({
           success: z.boolean(),
-          requiresUserApproval: z.boolean().optional(),
-          actionRequired: z.string().optional(),
-          directory: z.string().optional(),
+          requiresUserApproval: z.optional(z.boolean()),
+          actionRequired: z.optional(z.string()),
+          directory: z.optional(z.string()),
         }),
         503: z.object({
           success: z.literal(false),
@@ -3830,8 +3907,8 @@ export function createDaemonControlApp({
         }),
         500: z.object({
           success: z.boolean(),
-          error: z.string().optional(),
-          errorCode: z.string().optional(),
+          error: z.optional(z.string()),
+          errorCode: z.optional(z.string()),
         }),
       },
     },
@@ -3920,14 +3997,15 @@ export function createDaemonControlApp({
 
   typed.post('/restart', {
     schema: {
-      body: z
-        .object({
-          stopSessions: z.boolean().optional(),
-          restartSessionRunners: z.boolean().optional(),
-          successorDistClosureFingerprint: DaemonDistClosureFingerprintSchema.optional(),
-        })
-        .strict()
-        .nullish(),
+      body: z.nullish(z.strictObject({
+          stopSessions: z.optional(z.boolean()),
+          restartSessionRunners: z.optional(z.boolean()),
+          successorDistClosureFingerprint: z.optional(DaemonDistClosureFingerprintSchema),
+          successorServerUrls: z.optional(z.strictObject({
+            serverUrl: z.string().check(z.url()),
+            webappUrl: z.string().check(z.url()),
+          })),
+        })),
       response: {
         202: z.object({
           status: z.enum(['restarting', 'already_restarting']),
@@ -3985,6 +4063,9 @@ export function createDaemonControlApp({
           ...(request.body?.successorDistClosureFingerprint
             ? { successorDistClosureFingerprint: request.body.successorDistClosureFingerprint }
             : {}),
+          ...(request.body?.successorServerUrls
+            ? { successorServerUrls: request.body.successorServerUrls }
+            : {}),
         });
       } catch (error) {
         logger.debug('[CONTROL SERVER] Daemon self-restart request failed; keeping current daemon alive', error);
@@ -3998,12 +4079,9 @@ export function createDaemonControlApp({
   // Stop daemon
   typed.post('/stop', {
     schema: {
-      body: z
-        .object({
-          stopSessions: z.boolean().optional(),
-        })
-        .strict()
-        .nullish(),
+      body: z.nullish(z.strictObject({
+          stopSessions: z.optional(z.boolean()),
+        })),
       response: {
         200: z.object({
           status: z.string()
@@ -4014,7 +4092,7 @@ export function createDaemonControlApp({
     preHandler: requireAuth,
   }, async (request) => {
     const stopSessions = request.body?.stopSessions === true;
-    admissionDrain.beginShutdown();
+    admissionDrain.beginTemporaryDrain();
     logger.debug('[CONTROL SERVER] Stop daemon request received', {
       stopSessions,
     });
@@ -4049,8 +4127,13 @@ export function createDaemonControlApp({
           logger.debug(`[CONTROL SERVER] Failed to stop session ${id}`, error);
         }
       }
-      if (!cleanupComplete) return { status: 'session_cleanup_incomplete' };
+      if (!cleanupComplete) {
+        admissionDrain.resume();
+        return { status: 'session_cleanup_incomplete' };
+      }
     }
+
+    admissionDrain.beginShutdown();
 
     // Give time for response to arrive
     setTimeout(() => {
@@ -4154,7 +4237,7 @@ export function startDaemonControlServer({
   readDoctorResourceVitals?: () => DoctorSnapshotResourceVitals;
   readPluginCatalogProjection?: () => import('@/plugins/daemon/catalogProjection').DaemonPluginCatalogProjection;
   prepareStopSession?: (trackedSession: TrackedSession) => Promise<void> | void;
-  stopSession: (sessionId: string) => Promise<StopSessionResult>;
+  stopSession: (sessionId: string, intent?: 'explicit_stop', signal?: AbortSignal) => Promise<StopSessionResult>;
   spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
   requestShutdown: () => void;
   beforeShutdown?: () => Promise<void>;
@@ -4168,7 +4251,7 @@ export function startDaemonControlServer({
     reconcileCanonicalReadiness?: (tracked: TrackedSession) => Promise<void>,
     sessionCreationOutcome?: SessionCreationOutcome,
   ) => void | Promise<void>;
-  onSessionActivityChanged?: (sessionId: string) => void;
+  onSessionActivityChanged?: (sessionId: string | null, followOccurrence?: SessionFollowOccurrenceNotification) => void | SessionActivityChangedResult | Promise<void | SessionActivityChangedResult>;
   onSessionStartupFailure?: (input: Readonly<{
     spawnNonce: string;
     errorDetail: SessionCreationTerminalSpawnErrorDetail;

@@ -1,3 +1,4 @@
+import { lazyZodSchema } from '@happier-dev/protocol/lazyZodSchema';
 import { NonBlankOpaqueIdentifierSchema } from '@happier-dev/protocol/strings/opaqueIdentifier';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { createHash } from 'node:crypto';
@@ -5,7 +6,7 @@ import { join } from 'node:path';
 
 import type { AgentId } from '@happier-dev/agents';
 import type { AgentNativeResumeIdentityV1 } from '@happier-dev/protocol';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
     readProtectedLocalStateFile,
@@ -47,16 +48,16 @@ function buildAgentNativeResumeRecordFingerprint(
  * AgentState, PID, permission, cursor, request, or transcript content is
  * retained.
  */
-const StoredLocalAgentResumeRecordV1Schema = z.object({
+const StoredLocalAgentResumeRecordV1Schema = z.strictObject({
     v: z.literal(1),
 
     // Scoping. The filename is a hash, so these two are the only proof the file
     // belongs to the requested pair; the reader rejects a mismatch below.
-    happierSessionId: z.string().trim().min(1),
-    agentId: z.string().trim().min(1),
+    happierSessionId: z.string().check(z.trim(), z.minLength(1)),
+    agentId: z.string().check(z.trim(), z.minLength(1)),
 
     // What to resume: the Agent's own conversation id, in its catalog's terms.
-    vendorResumeId: NonBlankOpaqueIdentifierSchema.check(z.maxLength(512)),
+    vendorResumeId: lazyZodSchema(() => NonBlankOpaqueIdentifierSchema.check(z.maxLength(512))),
 
     /**
      * Transcript head at this Agent's departure — the boundary its own
@@ -73,8 +74,8 @@ const StoredLocalAgentResumeRecordV1Schema = z.object({
      * inside SEALED content and `fromAgentId` is not server-queryable, while
      * this record is already read on return.
      */
-    departureSeqInclusive: z.number().int().nonnegative(),
-}).strict();
+    departureSeqInclusive: z.number().check(z.int(), z.nonnegative()),
+});
 
 type StoredLocalAgentResumeRecordV1 = z.infer<typeof StoredLocalAgentResumeRecordV1Schema>;
 

@@ -4,8 +4,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 import {
     SESSION_AGENT_TRANSITION_DIVIDER_LOCAL_ID_PREFIX,
-    SESSION_DISCUSSION_AGENT_POST_EVENT_V1,
-    SESSION_DISCUSSION_REQUEST_MAX_UTF8_BYTES_V1,
+    DISCUSSION_AGENT_POST_EVENT_V1,
+    DISCUSSION_REQUEST_MAX_UTF8_BYTES_V1,
 } from "@happier-dev/protocol";
 
 import { createSessionPublisherPresence } from "@/app/presence/sessionPublisherPresence";
@@ -20,7 +20,7 @@ import { createPresentUserSessionAccessAuthentication } from "@/app/session/acce
 import { applySessionTurnMutation } from "@/app/session/sessionWriteService";
 import { deriveSessionSystemRecordAddressKeys } from "@/app/session/systemRecords/sessionSystemRecordAddressKeys";
 import { encodeSessionSystemRecordRevision } from "@/app/session/systemRecords/sessionSystemRecordRevision";
-import { createSessionDiscussion } from "@/app/session/discussions/mutations";
+import { createDiscussion } from "@/app/discussions/mutations";
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
@@ -98,6 +98,7 @@ describe("session update handler on SQLite", () => {
             },
         });
         const socket = createAuthenticatedFakeSocket();
+        vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
         sessionUpdateHandler(
             owner.id,
             socket as never,
@@ -118,25 +119,43 @@ describe("session update handler on SQLite", () => {
         );
 
         const acknowledgements: unknown[] = [];
-        await getSocketHandler(socket, "session-runtime-activity-snapshot")({
-            sessionId: session.id,
-            mutationId: `runtime-activity-snapshot:${session.id}`,
-            snapshot: { state: "unknown", activeCount: 0 },
-        }, (value: unknown) => acknowledgements.push(value));
+        // Logging is the output boundary; publisher custody and SQLite stay real.
+        const trace = vi.spyOn(logger, 'info').mockImplementation(() => undefined);
+        try {
+            await getSocketHandler(socket, "session-runtime-activity-snapshot")({
+                sessionId: session.id,
+                mutationId: `runtime-activity-snapshot:${session.id}`,
+                snapshot: { state: "unknown", activeCount: 0 },
+            }, (value: unknown) => acknowledgements.push(value));
 
-        expect(acknowledgements).toEqual([expect.objectContaining({
-            status: "unchanged",
-            sessionId: session.id,
-            mutationId: `runtime-activity-snapshot:${session.id}`,
-            projection: expect.objectContaining({
-                state: "unknown",
-                activeCount: 0,
-            }),
-        })]);
-        await expect(db.session.findUniqueOrThrow({
-            where: { id: session.id },
-            select: { active: true },
-        })).resolves.toEqual({ active: true });
+            expect(acknowledgements).toEqual([expect.objectContaining({
+                status: "unchanged",
+                sessionId: session.id,
+                mutationId: `runtime-activity-snapshot:${session.id}`,
+                projection: expect.objectContaining({
+                    state: "unknown",
+                    activeCount: 0,
+                }),
+            })]);
+            await expect(db.session.findUniqueOrThrow({
+                where: { id: session.id },
+                select: { active: true },
+            })).resolves.toEqual({ active: true });
+            const records = trace.mock.calls.map(([record]) => record).filter(
+                (record): record is Record<string, unknown> => typeof record === 'object' && record !== null,
+            );
+            const ingress = records.find(record => record?.phase === 'socket.session-runtime-activity-snapshot');
+            expect(ingress).toEqual(expect.objectContaining({
+                sessionId: session.id, requestId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
+            }));
+            expect(records).toEqual(expect.arrayContaining([
+                expect.objectContaining({ phase: 'session.runtime_activity.commit', requestId: ingress?.requestId }),
+                expect.objectContaining({ phase: 'session.runtime_activity.publish', requestId: ingress?.requestId }),
+            ]));
+        } finally {
+            trace.mockRestore();
+            vi.unstubAllEnvs();
+        }
     });
 
     it("posts Agent Discussion provenance only through the exact current Session publisher", async () => {
@@ -164,10 +183,9 @@ describe("session update handler on SQLite", () => {
         await db.accessKey.create({
             data: { accountId: owner.id, machineId, sessionId: session.id, data: "encrypted" },
         });
-        const created = await createSessionDiscussion({
+        const created = await createDiscussion({
             authentication,
             actorAccountId: owner.id,
-            sessionId: session.id,
             request: {
                 creationLocalId: `discussion-${randomUUID()}`,
                 titleContent: { t: "plain", v: { v: 1, title: "Runtime" } },
@@ -194,7 +212,13 @@ describe("session update handler on SQLite", () => {
         );
 
         const beforeClaim: unknown[] = [];
-        await getSocketHandler(socket, SESSION_DISCUSSION_AGENT_POST_EVENT_V1)({
+        const atomicCreate = { v: 1 as const, operation: 'create' as const, sessionId: session.id, toolCallId: 'create-tool', request: {
+            creationLocalId: `agent-create-${randomUUID()}`,
+            titleContent: { t: 'plain' as const, v: { v: 1, title: 'Atomic runtime creation' } },
+            firstMessage: { localId: `first-${randomUUID()}`, content: { t: 'plain' as const, v: { v: 1, parts: [{ t: 'text', text: 'Agent first post' }] } }, mentionedAccountIds: [] },
+        } };
+        await getSocketHandler(socket, DISCUSSION_AGENT_POST_EVENT_V1)(atomicCreate, (value: unknown) => beforeClaim.push(value));
+        await getSocketHandler(socket, DISCUSSION_AGENT_POST_EVENT_V1)({
             v: 1,
             sessionId: session.id,
             discussionId: created.value.discussion.id,
@@ -204,10 +228,10 @@ describe("session update handler on SQLite", () => {
                 mentionedAccountIds: [],
             },
         }, (value: unknown) => beforeClaim.push(value));
-        expect(beforeClaim).toEqual([{ ok: false, v: 1, error: "session_discussion_post_denied" }]);
+        expect(beforeClaim).toEqual(Array.from({ length: 2 }, () => ({ ok: false, v: 1, error: "discussion_post_denied" })));
 
         const overBudget: unknown[] = [];
-        await getSocketHandler(socket, SESSION_DISCUSSION_AGENT_POST_EVENT_V1)({
+        await getSocketHandler(socket, DISCUSSION_AGENT_POST_EVENT_V1)({
             v: 1,
             sessionId: session.id,
             discussionId: created.value.discussion.id,
@@ -217,14 +241,14 @@ describe("session update handler on SQLite", () => {
                     t: "plain",
                     v: {
                         v: 1,
-                        parts: [{ t: "text", text: "x".repeat(SESSION_DISCUSSION_REQUEST_MAX_UTF8_BYTES_V1) }],
+                        parts: [{ t: "text", text: "x".repeat(DISCUSSION_REQUEST_MAX_UTF8_BYTES_V1) }],
                     },
                 },
                 mentionedAccountIds: [],
             },
         }, (value: unknown) => overBudget.push(value));
-        expect(overBudget).toEqual([{ ok: false, v: 1, error: "session_discussion_invalid_content" }]);
-        expect(await db.sessionDiscussionMessage.count({ where: { localId: "agent-over-budget" } })).toBe(0);
+        expect(overBudget).toEqual([{ ok: false, v: 1, error: "discussion_invalid_content" }]);
+        expect(await db.discussionMessage.count({ where: { localId: "agent-over-budget" } })).toBe(0);
 
         await getSocketHandler(socket, "session-runtime-activity-snapshot")({
             sessionId: session.id,
@@ -232,8 +256,42 @@ describe("session update handler on SQLite", () => {
             snapshot: { state: "idle", activeCount: 0 },
         }, () => {});
 
+        const atomicAcknowledgements: unknown[] = [];
+        for (let retry = 0; retry < 2; retry++) await getSocketHandler(socket, DISCUSSION_AGENT_POST_EVENT_V1)(atomicCreate,
+            (value: unknown) => atomicAcknowledgements.push(value));
+        expect(atomicAcknowledgements).toHaveLength(2);
+        expect(atomicAcknowledgements[0]).toMatchObject({ v: 1, ok: true, value: {
+            discussion: { messageSeq: 1 }, firstMessage: { seq: 1, producerV1: {
+                v: 1, kind: 'agent', sessionId: session.id, toolCallId: 'create-tool',
+            } },
+        } });
+        expect(atomicAcknowledgements[1]).toEqual(atomicAcknowledgements[0]);
+        const atomicRow = await db.discussion.findUniqueOrThrow({ where: { createdByAccountId_creationLocalId: {
+            createdByAccountId: owner.id, creationLocalId: atomicCreate.request.creationLocalId,
+        } } });
+        expect(await db.discussionParticipant.count({ where: { discussionId: atomicRow.id } })).toBe(0);
+        expect(await db.discussionMessage.count({ where: { discussionId: atomicRow.id } })).toBe(1);
+
+        const nonParticipant: unknown[] = [];
+        await getSocketHandler(socket, DISCUSSION_AGENT_POST_EVENT_V1)({
+            v: 1,
+            sessionId: session.id,
+            discussionId: created.value.discussion.id,
+            request: {
+                localId: "agent-without-participant",
+                content: { t: "plain", v: { v: 1, parts: [{ t: "text", text: "Not invited" }] } },
+                mentionedAccountIds: [],
+            },
+        }, (value: unknown) => nonParticipant.push(value));
+        expect(nonParticipant).toEqual([{ ok: false, v: 1, error: "discussion_post_denied" }]);
+        expect(await db.discussionMessage.count({ where: { localId: "agent-without-participant" } })).toBe(0);
+
+        await db.discussionParticipant.create({
+            data: { discussionId: created.value.discussion.id, participantSlotId: session.id, sessionId: session.id, answerPolicy: "when_addressed" },
+        });
+
         const acknowledgements: unknown[] = [];
-        await getSocketHandler(socket, SESSION_DISCUSSION_AGENT_POST_EVENT_V1)({
+        await getSocketHandler(socket, DISCUSSION_AGENT_POST_EVENT_V1)({
             v: 1,
             sessionId: session.id,
             discussionId: created.value.discussion.id,
@@ -1244,7 +1302,11 @@ describe("session update handler on SQLite", () => {
         });
     });
 
-    it("returns a typed retry ACK when provider acceptance cannot acquire a transaction", async () => {
+    it.each([
+        { event: 'pending-delivery-accepted-v1', code: 'P2028' },
+        { event: 'pending-materialize-next', code: 'P2024' },
+        { event: 'pending-materialize-next', code: 'P2010' },
+    ])("preserves the recovery outcome for $event ($code)", async ({ event, code }) => {
         const owner = await db.account.create({
             // A Session-owning Account is current: terminal turn settlement
             // takes the canonical Account transition fence.
@@ -1294,22 +1356,31 @@ describe("session update handler on SQLite", () => {
 
         const previousMaxRetries = process.env.HAPPIER_DB_TX_MAX_RETRIES;
         process.env.HAPPIER_DB_TX_MAX_RETRIES = "0";
-        const acquisitionError = Object.assign(
-            new Error("Transaction API error: Unable to start a transaction in the given time."),
-            { code: "P2028", meta: { error: "Unable to start a transaction in the given time." } },
+        const transactionError = Object.assign(
+            new Error(code === 'P2010' ? 'private-sql-fixture' : "Transaction API error: Unable to start a transaction in the given time."),
+            { code, meta: code === 'P2010' ? { code: '57014', message: 'private-sql-fixture' }
+                : { error: "Unable to start a transaction in the given time." } },
         );
         const originalTransaction = db.$transaction;
-        const transaction = vi.fn().mockRejectedValueOnce(acquisitionError);
+        const transaction = vi.fn().mockRejectedValueOnce(transactionError);
+        const diagnostic = vi.spyOn(logger, 'error').mockImplementation(() => {});
         // Prisma's overloaded transaction boundary cannot be represented by one Vitest mock signature.
         db.$transaction = transaction as unknown as typeof db.$transaction;
         const unavailableAcknowledgements: unknown[] = [];
         try {
-            await getSocketHandler(socket, "pending-delivery-accepted-v1")({
-                v: 1,
-                sessionId: session.id,
-                localId: "pending-1",
-            }, (value: unknown) => unavailableAcknowledgements.push(value));
+            await getSocketHandler(socket, event)(event === 'pending-materialize-next'
+                ? { sid: session.id, deliveryState: 'provider', deliveryTiming: 'after_foreground_ready', foregroundState: 'ready' }
+                : { v: 1, sessionId: session.id, localId: 'pending-1' },
+            (value: unknown) => unavailableAcknowledgements.push(value));
+            if (code === 'P2010') {
+                expect(diagnostic).toHaveBeenCalledWith(expect.objectContaining({
+                    module: 'websocket', event: 'pending-materialization-failed', phase: 'materialization',
+                    sessionId: session.id, errorCode: 'P2010', sqlState: '57014',
+                }), expect.any(String));
+                expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('private-sql-fixture');
+            }
         } finally {
+            diagnostic.mockRestore();
             db.$transaction = originalTransaction;
             if (previousMaxRetries === undefined) {
                 delete process.env.HAPPIER_DB_TX_MAX_RETRIES;
@@ -1320,9 +1391,9 @@ describe("session update handler on SQLite", () => {
 
         expect(unavailableAcknowledgements).toEqual([{
             ok: false,
-            error: "transaction-unavailable",
-            retryAfterMs: 1_000,
-            correlationId: expect.stringMatching(/^[A-Za-z0-9_.:-]{1,160}$/u),
+            error: code === 'P2010' ? 'internal' : "transaction-unavailable",
+            ...(code === 'P2010' ? {} : { retryAfterMs: 1_000 }),
+            ...(event === 'pending-delivery-accepted-v1' ? { correlationId: expect.stringMatching(/^[A-Za-z0-9_.:-]{1,160}$/u) } : {}),
         }]);
         await expect(db.sessionMessage.count({ where: { sessionId: session.id } })).resolves.toBe(0);
 

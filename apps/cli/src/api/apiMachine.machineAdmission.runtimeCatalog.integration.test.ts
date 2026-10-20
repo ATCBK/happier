@@ -1,6 +1,6 @@
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
-import axios, { AxiosHeaders } from 'axios';
+import axios, { AxiosHeaders, type AxiosRequestConfig } from 'axios';
 import { socketRpcCodec } from '@happier-dev/sync-client';
 import { MACHINE_PLAIN_DATA_KEY_MARKER, encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 import { MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1, MachineUpdateOperationProtocolCapabilitiesRequestV1Schema,
@@ -71,11 +71,16 @@ vi.mock('@/daemon/identity/store', async (importOriginal) => ({
   readInstallationIdentityIfExistsSync: () => identityStore.identity,
 }));
 
-function createMachine(): Machine {
+function readHttpHeaders(headers: AxiosRequestConfig['headers']): AxiosHeaders {
+  return AxiosHeaders.from(Object.fromEntries(Object.entries(headers ?? {}).filter(([, value]) => value !== undefined)));
+}
+
+function createMachine(encryptionMode: 'plain' | 'e2ee' = 'e2ee'): Machine {
   return {
     id: 'machine-1',
-    encryptionKey: new Uint8Array(32).fill(1),
-    encryptionVariant: 'legacy',
+    ...(encryptionMode === 'plain' ? { encryptionMode } : {
+      encryptionKey: new Uint8Array(32).fill(1), encryptionVariant: 'legacy' as const,
+    }),
     metadata: null,
     metadataVersion: 0,
     daemonState: null,
@@ -118,7 +123,7 @@ describe('ApiMachineClient machine admission transport', () => {
 
   it.each([1, 2] as const)('accepts a delayed V%s admission ACK within the caller budget without replay', async version => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => { vi.useRealTimers(); });
     const client = new ApiMachineClient('token', createMachine());
     const socket = createApiSessionSocketStub({ connected: true, emitWithAck: (_event, raw) => {
       const payload = raw as { localId: string };
@@ -159,7 +164,7 @@ describe('ApiMachineClient machine admission transport', () => {
   it.each(['matching V2 target', 'changed V2 target', 'ordinary matching V2 input', 'ordinary changed V2 input'] as const)(
     'checks the original encrypted Project target at actual chosen-child admission: %s', async variant => {
       installWorkspaceHomeFeaturesBoundary(workspaceTransportHomeId);
-      onTestFinished(() => vi.unstubAllGlobals());
+      onTestFinished(() => { vi.unstubAllGlobals(); });
       const [project, encryption, signing, sourcePacket, execution, accountCipher] = await Promise.all([
         import('@happier-dev/protocol/projects/openProjectV1'), import('@happier-dev/protocol/actions/externalActionEncryption'),
         import('@happier-dev/protocol/actions/externalActionExecutionAuthorization'), import('@happier-dev/protocol/socketRpc'),
@@ -349,13 +354,13 @@ describe('ApiMachineClient machine admission transport', () => {
         if (url.endsWith('/v2/account/settings')) return { status: 200, data: { content: settingsContent, version: 1 } };
         if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: { mode: 'plain', version: 1,
           signingKeyFingerprint: null, contentKeyFingerprint: null, settingsVersion: 1, updatedAt: 1 } };
-        const http = AxiosHeaders.from(config?.headers);
+        const http = readHttpHeaders(config?.headers);
         if (url.endsWith('/machines/source-parent') && (http.has(headers.EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER)
           || http.get('Authorization') === `Bearer ${actorCredentials.token}`)) {
           forbiddenParentReads.push(url);
           throw Object.assign(new Error('machine_access_denied'), { response: { status: 403, data: { error: 'machine_access_denied' } } });
         }
-        if (url.endsWith('/machines/source-child') && AxiosHeaders.from(config?.headers).has(headers.EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER)) {
+        if (url.endsWith('/machines/source-child') && readHttpHeaders(config?.headers).has(headers.EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER)) {
           return { status: 200, data: { machine: { id: 'source-child', active: true, installationId: fixture.childInstallationId,
             devcontainerChild: fixture.projection, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
             metadataVersion: 1, daemonStateVersion: 0, daemonState: null,
@@ -368,7 +373,7 @@ describe('ApiMachineClient machine admission transport', () => {
       readAdditionalHttpPostResponse: async (url, body, config) => {
         if (preparingChosenRequester) requesterAdmissionReads.push({ method: 'POST', path: new URL(url).pathname });
         if (url.includes('/v1/account/project-rows/')) {
-          const http = AxiosHeaders.from(config?.headers);
+          const http = readHttpHeaders(config?.headers);
           if (url.endsWith('/mutate') && http.get('Authorization') === `Bearer ${fixture.credentials.token}`) {
             custodianProjectRowMutationRequests += 1;
             const mutation = ProjectAccountRowMutationRequestV1Schema.parse(body);
@@ -392,7 +397,7 @@ describe('ApiMachineClient machine admission transport', () => {
           return installed;
         }
         if (url.endsWith('/projects.open/execution-authorization/verify')) {
-          const http = AxiosHeaders.from(config?.headers);
+          const http = readHttpHeaders(config?.headers);
           expect(signing.verifyExternalActionMachineRequestV1({ authorizationToken: root.token, effectActionId: 'projects.open',
             target: root.binding.target, installationId: fixture.targetChildInstallationId, requestId: root.binding.requestId, method: 'POST',
             path: new URL(url).pathname, body, publicKey: targetKey.publicKey,
@@ -457,7 +462,9 @@ describe('ApiMachineClient machine admission transport', () => {
             credentials: fixture.credentials, serverId: fixture.serverId }));
           await fixture.settleProjects();
           try {
-            return { ok: true, result: await sourceReceiver!.handleRequest({ ...raw, workspaceSyncSourceExecution: packet,
+            return { ok: true, result: await sourceReceiver!.handleRequest({ ...raw, method: packet.method,
+              requestId: packet.requestId, params: packet.params, workspaceSyncSourceExecution: packet,
+              workspaceSyncSourceRouting: routing, externalActionExecution: signed,
               machineAdmission: routing.sourceContext!.machineAdmission, callerAuthority: routing.sourceContext!.callerAuthority,
               callerInputAuthorization: root }) };
           } finally {
@@ -489,7 +496,9 @@ describe('ApiMachineClient machine admission transport', () => {
     const publicMethod = `${fixture.targetChildRef.machineId}:${RPC_METHODS.PROJECTS_OPEN}`;
     const { sealExternalActionRequesterAccountContextV1 } = await import('@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1');
     const { encodeStoredCredentials } = await import('@/persistence');
-    const sealed = sealExternalActionRequesterAccountContextV1({ authorization: root, credentials: encodeStoredCredentials(actorCredentials),
+    const sealed = sealExternalActionRequesterAccountContextV1({ authorization: root, credentials: {
+      ...encodeStoredCredentials(actorCredentials), token: actorCredentials.token,
+    },
       purpose: { kind: 'machine_rpc', method: publicMethod, params: input }, installationPublicKey: targetKey.publicKey, randomBytes: tweetnacl.randomBytes });
     const makeReceiver = (machineId: string, installationId: string, key: typeof targetKey, credentials: typeof actorCredentials) =>
       new RpcHandlerManager({ scopePrefix: machineId, localMachineId: machineId, encryptionMode: 'plain', logger: (message, fields) => {
@@ -528,7 +537,7 @@ describe('ApiMachineClient machine admission transport', () => {
     sourceReceiver = makeReceiver(fixture.sourceRef.machineId, fixture.controller.installationId, parentKey, fixture.credentials);
     const chosenTarget = makeReceiver(fixture.targetChildRef.machineId, fixture.targetChildInstallationId, targetKey, actorCredentials);
     const targetClient = runWithServerHttpBaseUrl('https://bind-child-home.invalid', () =>
-      new ApiMachineClient(actorCredentials.token, { ...createMachine(), id: fixture.targetChildRef.machineId, encryptionMode: 'plain' }));
+      new ApiMachineClient(actorCredentials.token, { ...createMachine('plain'), id: fixture.targetChildRef.machineId }));
     const targetSocket = socketIo();
     Reflect.set(targetSocket, 'connected', true);
     Reflect.set(targetClient, 'socket', targetSocket);
@@ -727,11 +736,11 @@ describe('ApiMachineClient machine admission transport', () => {
     registerMachineWorkspaceSyncRpcHandlers({ rpcHandlerManager: receiver, service: fixture.parent.workspaceSync });
     parentCredentials = fixture.credentials;
     parentClient = new ApiMachineClient(fixture.credentials.token,
-      { ...createMachine(), id: fixture.sourceRef.machineId, encryptionMode: 'plain' });
+      { ...createMachine('plain'), id: fixture.sourceRef.machineId });
     const parentSocket = socketIo();
     Reflect.set(parentSocket, 'connected', true);
     Reflect.set(parentClient, 'socket', parentSocket);
-    const client = new ApiMachineClient(fixture.credentials.token, { ...createMachine(), id: fixture.childRef.machineId, encryptionMode: 'plain' });
+    const client = new ApiMachineClient(fixture.credentials.token, { ...createMachine('plain'), id: fixture.childRef.machineId });
     Reflect.set(client, 'socket', createApiSessionSocketStub({ connected: true, emitWithAck: async (_event, raw) => {
       if (!raw || typeof raw !== 'object' || !('method' in raw) || typeof raw.method !== 'string' || !('params' in raw)
         || !('requestId' in raw) || typeof raw.requestId !== 'string') throw new Error('Missing installed SOURCE carrier');
@@ -745,7 +754,7 @@ describe('ApiMachineClient machine admission transport', () => {
         publicKey: childKey.publicKey, signature: execution.machineSignature })).toBe(true);
       identityStore.identity = parentIdentity;
       try {
-        sourceResponse = await receiver.handleRequest({ ...raw, machineAdmission: admission,
+        sourceResponse = await receiver.handleRequest({ ...raw, method: raw.method, requestId: raw.requestId, machineAdmission: admission,
           callerAuthority, ...(callerInputConstraints ? { callerInputConstraints } : {}),
           callerInputAuthorization: root, workspaceSyncSourceRouting: routing });
         return { ok: true, result: sourceResponse };
@@ -880,7 +889,7 @@ describe('ApiMachineClient machine admission transport', () => {
         await writeCredentialsTokenOnlyForServerId(guestProfileId, { token: daemonToken });
         expect(await readStoredCredentials()).toMatchObject({ token: daemonToken, encryption: null, credentialProvenance: 'stored_session' });
         const client = new ApiMachineClient(daemonToken,
-          { ...createMachine(), id: fixture.childRef.machineId, encryptionMode: 'plain' }, undefined,
+          { ...createMachine('plain'), id: fixture.childRef.machineId }, undefined,
           { workspaceSyncHandoffAdapter: fixture.child.handoffAdapter });
         const root = rootKind === 'ordinary Account' ? undefined : ExternalActionExecutionAuthorizationV1Schema.parse({
           v: 1, token: 'home-verified-public-handoff-root', binding: {
@@ -1001,7 +1010,7 @@ describe('ApiMachineClient machine admission transport', () => {
     });
     vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => Response.json({ features: {},
       capabilities: { serverIdentity: { serverIdentityId: fixture.managedChild.homeId } } })));
-    const client = new ApiMachineClient(fixture.credentials.token, { ...createMachine(), id: fixture.childRef.machineId, encryptionMode: 'plain' });
+    const client = new ApiMachineClient(fixture.credentials.token, { ...createMachine('plain'), id: fixture.childRef.machineId });
     let sourcePhaseRequested = false;
     Reflect.set(client, 'socket', createApiSessionSocketStub({ connected: true, emitWithAck: async (_event, raw) => {
       if (!raw || typeof raw !== 'object' || !('method' in raw) || typeof raw.method !== 'string' || !('params' in raw)) throw new Error('Missing private SOURCE request');
@@ -1097,7 +1106,7 @@ describe('ApiMachineClient machine admission transport', () => {
         expect(guestHome).toMatchObject({ profileId: guestProfileId, homeServerIdentityId: homeId });
         const credentials = { token: [Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url'),
           Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url'), 'fixture-signature'].join('.'), encryption: null };
-        const client = new ApiMachineClient(credentials.token, { ...createMachine(), id: 'target-child', encryptionMode: 'plain' });
+        const client = new ApiMachineClient(credentials.token, { ...createMachine('plain'), id: 'target-child' });
         const qualifier = homeId;
         const request = HandoffTargetReplacementPreflightV1Schema.parse({ v: 1, operationId: 'profile-preflight', serverId: qualifier,
           machineId: 'target-child', targetPath: '/child/workspace' });
@@ -1149,7 +1158,7 @@ describe('ApiMachineClient machine admission transport', () => {
       publicKey: Buffer.from(key.publicKey).toString('base64url'), privateKey: Buffer.from(key.secretKey).toString('base64url') };
     const credentials = { token: [Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url'),
       Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url'), 'fixture-signature'].join('.'), encryption: null };
-    const client = new ApiMachineClient(credentials.token, { ...createMachine(), id: 'target-child', encryptionMode: 'plain' });
+    const client = new ApiMachineClient(credentials.token, { ...createMachine('plain'), id: 'target-child' });
     const admission = { actorAccountId: 'shared-actor', custodianAccountId: 'owner', machineId: 'target-child',
       installationId: 'target-child-installation', role: 'use' as const, encryptionMode: 'plain' as const };
     const origin = { v: 1 as const, caller: { kind: 'session' as const, sessionId: 'source-session', starterDepth: 1, turnDepth: 1 },
@@ -1294,7 +1303,7 @@ describe('ApiMachineClient machine admission transport', () => {
       // endpoint cannot be guessed from an untrusted handler result.
       return { type: 'not_required' };
     });
-    const client = new ApiMachineClient(credentials.token, { ...createMachine(), id: targetAdmission.machineId, encryptionMode: 'plain' });
+    const client = new ApiMachineClient(credentials.token, { ...createMachine('plain'), id: targetAdmission.machineId });
     Reflect.set(client, 'socket', createApiSessionSocketStub({ connected: true, emitWithAck: async (_event, raw) => {
       if (!raw || typeof raw !== 'object' || !('method' in raw) || typeof raw.method !== 'string'
         || !('params' in raw) || !('requestId' in raw) || typeof raw.requestId !== 'string'
@@ -1310,7 +1319,8 @@ describe('ApiMachineClient machine admission transport', () => {
       forwarded = true;
       identityStore.identity = parentIdentity;
       try {
-        return { ok: true, result: await receiver.handleRequest({ ...raw, machineAdmission: targetAdmission,
+        return { ok: true, result: await receiver.handleRequest({ ...raw, method: raw.method, requestId: raw.requestId, machineAdmission: targetAdmission,
+          externalActionExecution: execution,
           callerAuthority: 'account_automation', callerInputConstraints: constraints, callerInputAuthorization: root,
           workspaceSyncSourceWriterTargetRouting: routing, workspaceSyncTargetRouting: targetRouting }) };
       } finally { identityStore.identity = childIdentity; }
@@ -1416,7 +1426,7 @@ describe('ApiMachineClient machine admission transport', () => {
       effects += 1;
       return { type: 'not_required' };
     });
-    const client = new ApiMachineClient(credentials.token, { ...createMachine(), id: 'physical-writer', encryptionMode: 'plain' });
+    const client = new ApiMachineClient(credentials.token, { ...createMachine('plain'), id: 'physical-writer' });
     Reflect.set(client, 'socket', createApiSessionSocketStub({ connected: true, emitWithAck: async (_event, raw) => {
       if (!raw || typeof raw !== 'object' || !('method' in raw) || typeof raw.method !== 'string'
         || !('params' in raw) || !('requestId' in raw) || typeof raw.requestId !== 'string'
@@ -1438,8 +1448,9 @@ describe('ApiMachineClient machine admission transport', () => {
       identityStore.identity = { version: 1, installationId: 'target-installation', createdAt: 1,
         publicKey: Buffer.from(target.publicKey).toString('base64url'), privateKey: Buffer.from(target.secretKey).toString('base64url') };
       try {
-        const result = await receiver.handleRequest({ ...raw, machineAdmission: { ...admission,
+        const result = await receiver.handleRequest({ ...raw, method: raw.method, requestId: raw.requestId, machineAdmission: { ...admission,
           machineId: 'target-child', installationId: 'target-installation' }, callerInputAuthorization: root,
+          externalActionExecution: proof,
           callerAuthority: 'account_automation', callerInputConstraints: constraints,
           workspaceSyncSourceWriterTargetRouting: routing });
         return { ok: true, result };
@@ -1489,7 +1500,7 @@ describe('ApiMachineClient machine admission transport', () => {
     } });
     const grant = 'grant' in authorization.binding ? authorization.binding.grant : null;
     if (!grant) throw new Error('PAT boundary must retain its canonical grant');
-    const client = new ApiMachineClient(credentials.token, { ...createMachine(), id: 'child', encryptionMode: 'plain' });
+    const client = new ApiMachineClient(credentials.token, { ...createMachine('plain'), id: 'child' });
     const policyInput = { v: 1 as const, selection: 'all_files' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };
     const input = { operationId: 'signed-move', accountServerId: workspaceTransportHomeId, sourceSessionId: 'session-1',
       action: { kind: 'copy_once' as const, contentPolicy: { ...policyInput, policyDigest: computeWorkspaceSyncPolicyDigest(policyInput) } },
@@ -1577,7 +1588,7 @@ describe('ApiMachineClient machine admission transport', () => {
       publicKey: Buffer.from(key.publicKey).toString('base64url'), privateKey: Buffer.from(key.secretKey).toString('base64url') };
     const credentials = { token: [Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url'),
       Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url'), 'fixture-signature'].join('.'), encryption: null };
-    const client = new ApiMachineClient(credentials.token, { ...createMachine(), id: 'child', encryptionMode: 'plain' });
+    const client = new ApiMachineClient(credentials.token, { ...createMachine('plain'), id: 'child' });
     const admission = { actorAccountId: 'shared-actor', custodianAccountId: 'owner', machineId: 'child',
       installationId: 'child-installation', role: 'use' as const, encryptionMode: 'plain' as const };
     const policyInput = { v: 1 as const, selection: 'all_files' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };

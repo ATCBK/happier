@@ -185,7 +185,7 @@ describe('updateExistingSessionAutomationTemplateMessage', () => {
                 v: 1,
                 updatedAt: 456,
                 ref: {
-                    agentTargetKey: 'backend:review-bot:configured:review-bot',
+                    agentTargetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot',
                     providerConnectionId: null,
                     modelId: 'gpt-5',
                 },

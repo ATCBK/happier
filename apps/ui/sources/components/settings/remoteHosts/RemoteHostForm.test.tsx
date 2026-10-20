@@ -121,7 +121,7 @@ await import('./RemoteHostForm');
 describe('RemoteHostEditorSections', () => {
     it('keeps the exact unsaved host identity across manual retry while a new editor owns a different identity', async () => {
         const { useRemoteHostEditor } = await import('./RemoteHostForm');
-        const first = await renderHook(({ host }: { host: RemoteHost | null }) => useRemoteHostEditor({ remoteHost: host,
+        const first = await renderHook<ReturnType<typeof useRemoteHostEditor>, { host: RemoteHost | null }>(({ host }) => useRemoteHostEditor({ remoteHost: host,
             localOverrides: null, secretMaterialAllowed: false }), { initialProps: { host: null } });
         await act(async () => first.getCurrent().setState(current => ({ ...current, name: 'Retry host',
             sshDraft: { ...current.sshDraft, username: 'root', host: 'example.test' } })));

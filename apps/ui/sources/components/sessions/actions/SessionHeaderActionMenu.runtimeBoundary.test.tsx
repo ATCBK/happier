@@ -232,10 +232,10 @@ describe('SessionHeaderActionMenu real runtime boundaries', () => {
             ...storage.getState().sessions.sess_1!,
             metadata: { path: '/workspace', host: 'projection.local' },
         };
-        storage.setState({
-            settings: settingsParse({ voice }),
-            sessions: { [session.id]: session, [carrier.id]: carrier },
-        });
+        // Keep the Home's bootstrap echo consistent with the locally selected Voice settings.
+        homes.replaceAccountSettings('focused', { settings: { voice }, version: 2 });
+        storage.getState().applySettingsLocal({ voice: settingsParse({ voice }).voice });
+        storage.setState({ sessions: { [session.id]: session, [carrier.id]: carrier } });
         // A live per-Session binding is not the global control identity, and
         // an inactive carrier is not an active reusable Voice system session.
         voiceSessionBindingStore.getState().bind({
@@ -256,6 +256,8 @@ describe('SessionHeaderActionMenu real runtime boundaries', () => {
         });
         await flushHookEffects();
         expect(teleportItem()).toBeDefined();
-        expect(boundary.socket.emitWithAck).not.toHaveBeenCalled();
+        // Connection restoration may publish presence; merely discovering the
+        // Voice action must not dispatch an RPC to the Agent.
+        expect(boundary.socket.emitWithAck.mock.calls.filter(([event]) => event === SOCKET_RPC_EVENTS.CALL)).toEqual([]);
     });
 });

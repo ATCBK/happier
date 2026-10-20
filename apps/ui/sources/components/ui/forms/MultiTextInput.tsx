@@ -12,8 +12,9 @@ import {
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { TextInput } from '@/components/ui/text/Text';
+import { useGlassBackedInk } from '@/components/ui/glass/glassBackedInk';
 import { normalizeKeyboardKeyPressEvent, type KeyPressEvent as KeyboardKeyPressEvent } from '@/keyboard/events';
-import { useLocalSetting } from '@/sync/store/hooks';
+import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 import { recordLargeTextInputDiagnostic } from '@/utils/system/userInteractionDiagnostics';
 import {
     normalizeNativeMultiTextInputMaxHeight,
@@ -64,6 +65,8 @@ export interface MultiTextInputProps {
     value: string;
     onChangeText: (text: string) => void;
     placeholder?: string;
+    /** The placeholder's ink: a theme token, which backed glass steps up like any quiet ink. Defaults to `input.placeholder`. */
+    placeholderTextColor?: string;
     testID?: string;
     maxHeight?: number;
     autoFocus?: boolean;
@@ -246,6 +249,7 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
     } = props;
 
     const { theme } = useUnistyles();
+    const placeholderInk = useGlassBackedInk()(props.placeholderTextColor ?? theme.colors.input.placeholder);
     const uiFontScale = normalizeUiFontScale(useLocalSetting('uiFontScale'));
     const normalizedMaxHeight = normalizeNativeMultiTextInputMaxHeight(maxHeight);
     const resolvedLineHeight = resolveNativeLineHeight({
@@ -440,7 +444,7 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
                     maxHeight: normalizedMaxHeight,
                 }}
                 placeholder={placeholder}
-                placeholderTextColor={theme.colors.input.placeholder}
+                placeholderTextColor={placeholderInk}
                 value={value}
                 onChangeText={handleTextChange}
                 onContentSizeChange={handleContentSizeChange}

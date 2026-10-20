@@ -8,6 +8,8 @@ import {
     resetChatListHarness,
 } from '@/dev/testkit/harness/chatListHarness';
 import { installChatListHarnessCommonModuleMocks } from '@/dev/testkit/harness/chatListHarnessModuleMocks';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { isBundledAgentId, readRuntimeCapabilitiesForSession, resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -103,10 +105,17 @@ vi.mock('@/sync/sync', async () => (
 
 const { ChatList } = await import('./ChatList');
 
+function rollbackChatListElement() {
+    const session = chatListHarnessState.sessionState;
+    const agentId = resolveAgentIdFromSessionMetadata(session.metadata);
+    const publication = agentId && isBundledAgentId(agentId)
+        ? readRuntimeCapabilitiesForSession({ agentId, metadata: session.metadata }) : null;
+    return <ChatList session={{ ...session, metadata: { ...session.metadata,
+        ...(publication ? { agentRuntimeCapabilitiesV1: publication } : {}),
+    } }} sessionSurfaceKey={JSON.stringify(['test-server', 'session-1'])} />;
+}
 function renderRollbackChatListSession() {
-    return renderChatList(
-        <ChatList session={{ ...chatListHarnessState.sessionState }} sessionSurfaceKey={JSON.stringify(['test-server', 'session-1'])} />,
-    );
+    return renderChatList(rollbackChatListElement());
 }
 
 function rollbackEligibleTurnStarts(startSeqs: readonly number[]): Record<string, unknown> {
@@ -121,17 +130,16 @@ describe('ChatList rollback action', () => {
         capturedMessageViewProps = [];
         buildChatListItemsMock.mockClear();
         chatListHarnessState.sessionPendingState = { messages: [], discarded: [], isLoaded: true };
-        chatListHarnessState.sessionState = {
+        chatListHarnessState.sessionState = createSessionFixture({
             id: 'session-1',
             seq: 4,
             active: true,
-            metadata: { flavor: 'codex', codexBackendMode: 'appServer' },
-            accessLevel: null,
+            metadata: { ...createSessionFixture().metadata!, flavor: 'codex', codexBackendMode: 'appServer' },
             canApprovePermissions: true,
             agentState: null,
             presence: 'online',
             thinking: false,
-        };
+        });
         chatListHarnessState.settingValues.transcriptGroupToolCalls = false;
         chatListHarnessState.settingValues.transcriptTurnToolCallsGroupStrategy = 'consecutive_tools';
         chatListHarnessState.settingValues.toolViewTimelineChromeMode = 'cards';
@@ -231,7 +239,7 @@ describe('ChatList rollback action', () => {
             ...chatListHarnessState.sessionState,
             ...rollbackEligibleTurnStarts([1]),
         };
-        await screen.update(<ChatList session={{ ...chatListHarnessState.sessionState }} sessionSurfaceKey={JSON.stringify(['test-server', 'session-1'])} />);
+        await screen.update(rollbackChatListElement());
 
         const after = requireCapturedLegendListProps();
         expect(after.data).toBe(before.data);
@@ -337,7 +345,7 @@ describe('ChatList rollback action', () => {
             metadata: { flavor: 'codex', codexBackendMode: 'appServer' },
         };
 
-        await screen.update(<ChatList session={{ ...chatListHarnessState.sessionState }} sessionSurfaceKey={JSON.stringify(['test-server', 'session-1'])} />);
+        await screen.update(rollbackChatListElement());
 
         expect(requireCapturedLegendListProps().renderItem).toBe(firstRenderItem);
 

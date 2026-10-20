@@ -164,6 +164,42 @@ describe('registered session-state durable mutation persistence', () => {
         await expect(loadSessionClientDurableMutationDeadLetters(sessionId)).resolves.toEqual([]);
     });
 
+    it.each([
+        { actionId: 'session.notes.set', input: { sessionId: 'sess-role-edit', notes: 'New Notes' } },
+        { actionId: 'session.role.set', input: { sessionId: 'sess-role-edit', answersWorkerQuestions: false } },
+    ] as const)('round trips a $actionId edit intent and preserves newer neighboring fields at replay', async (sessionRoleEdit) => {
+        const sessionId = 'sess-role-edit';
+        const mutation = { ...createRegisteredSessionStateFieldMutation({ sessionId, fieldId: 'intent.sessionRoles',
+            source: 'ui', op: { kind: 'set', value: { overrides: {}, sessionRoles: {}, notes: 'New Notes' } } }),
+            sessionRoleEdit };
+        await saveSessionClientDurableMutationOutbox(sessionId, [{ kind: 'registered_session_state_field',
+            mutationId: mutation.mutationId, payload: mutation, createdAt: 100, attempts: 0, nextAttemptAt: 0 }]);
+        const [loaded] = await loadSessionClientDurableMutationOutbox(sessionId);
+        expect(loaded?.kind).toBe('registered_session_state_field');
+        if (loaded?.kind !== 'registered_session_state_field') throw new Error('Role edit journal was not restored');
+        const replayed = applyRegisteredSessionStateFieldMutationToMetadata({ ...createTestMetadata(), work: {
+            sessionRolesV1: { roleId: 'builder', inheritedFrom: 'lead',
+                overrides: { scout: { roleId: 'scout', workspaceWrites: 'deny' } }, sessionRoles: {}, notes: 'Newer notes' },
+        } }, loaded.payload);
+        expect(replayed.work?.sessionRolesV1).toEqual({ roleId: 'builder', inheritedFrom: 'lead',
+            overrides: { scout: { roleId: 'scout', workspaceWrites: 'deny' } }, sessionRoles: {},
+            notes: sessionRoleEdit.actionId === 'session.notes.set' ? 'New Notes' : 'Newer notes',
+            ...(sessionRoleEdit.actionId === 'session.role.set' ? { answersWorkerQuestions: false } : {}),
+        });
+        await expect(loadSessionClientDurableMutationDeadLetters(sessionId)).resolves.toEqual([]);
+    });
+
+    it.each(['foreign-session', 'foreign-field', 'unknown-edit'])('rejects a misbound %s Role edit journal', kind => {
+        const sessionId = 'sess-role-edit';
+        const mutation = createRegisteredSessionStateFieldMutation({ sessionId, fieldId: 'intent.sessionRoles',
+            source: 'ui', op: { kind: 'set', value: { overrides: {}, sessionRoles: {}, notes: 'New Notes' } } });
+        const payload = { ...mutation, ...(kind === 'foreign-field' ? { fieldId: 'intent.role', op: { kind: 'set', value: 'builder' } } : {}),
+            sessionRoleEdit: { actionId: kind === 'unknown-edit' ? 'session.unknown' : 'session.notes.set',
+                input: { sessionId: kind === 'foreign-session' ? 'another-session' : sessionId, notes: 'New Notes' } } };
+        expect(parseRuntimeSessionClientDurableMutation({ kind: 'registered_session_state_field', mutationId: mutation.mutationId,
+            payload, createdAt: 100, attempts: 0, nextAttemptAt: 0 }, sessionId, true).mutations).toEqual([]);
+    });
+
     it('preserves a retained queued Role memory reference in the canonical Session stack on replay', async () => {
         const sessionId = 'sess-retained-role-context';
         // 68edc1dab944 roleActions.ts persisted this carrier on notes/configuration edits.

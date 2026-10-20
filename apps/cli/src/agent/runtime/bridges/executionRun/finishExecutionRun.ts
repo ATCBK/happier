@@ -31,6 +31,8 @@ import { buildExecutionRunConnectedServicesCleanupReceipt } from './connectedSer
 import type { ReviewRunCommentService } from '@/agent/executionRuns/profiles/review/reviewComments';
 import { materializeReviewFindings } from './materializeReviewFindings';
 import { projectExecutionRunPublicState } from './publicState';
+import { projectExecutionRunError } from './errors';
+import { createExecutionRunOccurrenceWitnessRegistry, projectExecutionRunInputTurns } from './runOccurrenceWitness';
 
 // The same running state claims terminalization without exposing a terminal fact
 // before its required ReviewComment writes. This replaces the old early status claim.
@@ -127,12 +129,25 @@ export async function finishExecutionRun(args: Readonly<{
     }
   } catch (error) { terminalizationError = error; }
   const controller = args.controllers.get(args.runId);
+  // Approval replay compares occurrence identity after settlement too. Capture
+  // the canonical projection before controller retirement removes its witness.
+  const inputTurns = projectExecutionRunInputTurns({
+    runId: args.runId, retained: existing.inputTurns, controller,
+    reader: createExecutionRunOccurrenceWitnessRegistry(args.controllers).reader,
+  });
   const workflowRunId = controller?.kind === 'backend'
     ? controller.workflowRunId ?? controller.workflowObservation?.workflowRunId : undefined;
-  const projected = await materializeReviewFindings({ run: existing, toolResult, structuredMeta,
+  // Closing a retained runtime can settle the exact output already published by
+  // its last turn. Reusing that host-owned object must not repeat comment writes.
+  const reusesPublishedResult = args.next.status === 'succeeded' && toolResult.output !== undefined
+    && toolResult.output === existing.latestToolResult && structuredMeta === existing.structuredMeta;
+  const projected: Awaited<ReturnType<typeof materializeReviewFindings>> = reusesPublishedResult
+    ? { toolResult, structuredMeta }
+    : await materializeReviewFindings({ run: existing, toolResult, structuredMeta,
     expectFindings: args.next.status === 'succeeded' || (args.next.status === 'failed'
       && (args.structuredMeta?.kind === 'review_findings.v2' || args.structuredMeta?.kind === 'review_findings.v1')),
-    reviewComments: args.reviewComments, workflowRunId });
+    reviewComments: args.reviewComments, workflowRunId,
+    workflowScope: controller?.kind === 'backend' ? controller.workflowScope : undefined });
   const materialization = projected.materialization;
   toolResult = projected.toolResult;
   structuredMeta = projected.structuredMeta;
@@ -148,10 +163,12 @@ export async function finishExecutionRun(args: Readonly<{
 
   let updated: ExecutionRunState = {
     ...existing,
+    terminalOccurrenceId: terminalEventId,
+    ...(inputTurns ? { inputTurns } : {}),
     status: materialization && materialization.status !== 'materialized' ? 'failed' : args.next.status,
     summary: args.next.summary ?? existing.summary,
     finishedAtMs: args.next.finishedAtMs,
-    ...(args.next.error ? { error: args.next.error } : {}),
+    error: args.next.error,
     ...(materialization && materialization.status !== 'materialized'
       ? { error: { code: 'review_comment_materialization_failed', message: 'Review findings could not all be persisted' } }
       : {}),
@@ -173,7 +190,9 @@ export async function finishExecutionRun(args: Readonly<{
     }
     return base;
   })();
-  if (!terminalizationError && shouldMaterializeInTranscript) {
+  // Retirement reuses a turn already published by the host. Republishing it
+  // would hold durable settlement and native cleanup behind a retiring Home.
+  if (!terminalizationError && shouldMaterializeInTranscript && !reusesPublishedResult) {
     try {
       await args.sendAcp(
         args.parentProvider,
@@ -207,7 +226,7 @@ export async function finishExecutionRun(args: Readonly<{
         summary: args.next.status === 'failed' ? updated.summary : message,
         error: args.next.status === 'failed' && updated.error
           ? updated.error
-          : { code: 'execution_run_failed', message },
+          : projectExecutionRunError(terminalizationError),
       };
     }
   }
@@ -250,7 +269,7 @@ export async function finishExecutionRun(args: Readonly<{
   } as const;
 
   const markerWritePromise = args.enqueueMarkerWrite(args.runId, async (): Promise<void> => {
-    await retainExecutionRunState(updated, terminalEventId);
+    await retainExecutionRunState(updated, parentWorkerUpdate ? terminalEventId : undefined);
     if (parentWorkerUpdate) {
       await retainExecutionRunWorkerUpdate({ ...parentWorkerUpdate,
         ...(updated.requesterWorkAttributionV1 ? { requesterWorkAttributionV1: updated.requesterWorkAttributionV1 } : {}),

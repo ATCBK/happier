@@ -9,7 +9,7 @@ import { asProtocolZod } from '../actions/internalProtocolZodAdapter.js';
 import { PluginUiInstanceKeyV1Schema } from './semanticCommands.js';
 
 // Keep the existing anchor vocabulary and refinements, with closed routing ingress.
-const OriginFileAnchorV1Schema = lazyZodSchema(() => z.union(WorkspaceAnchorV1Schema._zod.def.options.map(option => option.strict())));
+const OriginFileAnchorV1Schema = lazyZodSchema(() => z.union(WorkspaceAnchorV1Schema._zod.def.options.map(option => (<T extends zMini.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(option))));
 
 /** Original destination, independent of the editable execution placement. */
 export const PluginUiNewSessionSeedOriginV1Schema = lazyZodSchema(() => z.strictObject({

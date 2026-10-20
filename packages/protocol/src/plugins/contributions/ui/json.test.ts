@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import Ajv from 'ajv';
 
 import { PluginHostedWebBridgeEnvelopeV1Schema } from '../../ui/hostedWebBridge.js';
 import {
@@ -6,6 +7,9 @@ import {
   PluginUiLaunchInputV1Schema,
 } from '../../ui/semanticCommands.js';
 import { PluginUiJsonValueV1Schema } from './json.js';
+import { PluginJsonValueV2Schema } from '../jsonSchema.js';
+import { CurrentUiContextSnapshotV1Schema } from '../../ui/currentUiContext.js';
+import { zodSchemaToJsonSchemaObject } from '../../../actions/actionInputJsonSchema.js';
 
 function nestedArray(depth: number): unknown {
   let value: unknown = null;
@@ -26,6 +30,54 @@ function hostedBridgeEnvelope(payload: unknown): unknown {
 }
 
 describe('PluginUiJsonValueV1Schema', () => {
+  it('projects the existing serialized JSON vocabulary for current-context Actions without changing strict admission', () => {
+    const accessor = Object.create(null) as Record<string, unknown>;
+    let getterRead = false;
+    Object.defineProperty(accessor, 'value', {
+      enumerable: true,
+      get: () => { getterRead = true; return 'not JSON data'; },
+    });
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    for (const invalid of [accessor, cycle, new Date(), Number.NaN]) {
+      const result = PluginUiJsonValueV1Schema.safeParse(invalid);
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error.issues[0]).toMatchObject({
+        code: 'custom', path: [], message: 'Plugin UI descriptor values must be JSON-serializable.',
+      });
+      const nested = CurrentUiContextSnapshotV1Schema.safeParse({
+        navigation: { area: 'session', screen: 'review' }, commands: [], detail: invalid,
+      });
+      expect(nested.success).toBe(false);
+      if (!nested.success) expect(nested.error.issues[0]).toMatchObject({
+        code: 'custom', path: ['detail'], message: 'Plugin UI descriptor values must be JSON-serializable.',
+      });
+    }
+    expect(getterRead).toBe(false);
+
+    const target = { target: 'draft-7' } as const;
+    const advertisedUiValue = new Ajv({ strict: false }).compile(
+      zodSchemaToJsonSchemaObject(PluginUiJsonValueV1Schema, target),
+    );
+    const advertisedJsonValue = new Ajv({ strict: false }).compile(
+      zodSchemaToJsonSchemaObject(PluginJsonValueV2Schema, target),
+    );
+    for (const value of [null, true, 7, 'text', [null, { nested: [true] }], { label: 'selection' }]) {
+      expect(advertisedUiValue(value)).toBe(advertisedJsonValue(value));
+      expect(advertisedUiValue(value)).toBe(true);
+    }
+    const actionOutput = zodSchemaToJsonSchemaObject(CurrentUiContextSnapshotV1Schema, target);
+    expect(actionOutput).toMatchObject({
+      type: 'object',
+      properties: { navigation: { type: 'object' }, detail: expect.any(Object) },
+    });
+    expect(JSON.parse(JSON.stringify(actionOutput))).toEqual(actionOutput);
+    expect(new Ajv({ strict: false }).compile(actionOutput)({
+      navigation: { area: 'session', screen: 'review' },
+      detail: { nested: [null, true, 7, 'selection'] },
+      commands: [],
+    })).toBe(true);
+  });
   it('handles deeply nested ordinary JSON without a public traversal quota', () => {
     const deep = nestedArray(12_000);
     let result: { success: boolean } | undefined;

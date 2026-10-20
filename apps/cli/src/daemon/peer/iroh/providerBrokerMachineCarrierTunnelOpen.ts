@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
+import { z } from 'zod/mini';
 
 import { encodeProviderBrokerAuthorityV1, encodeProviderBrokerAuthorityV2, IrohProviderBrokerHandshakeSchema, ProviderBrokerOpenResponseV1Schema, ProviderBrokerAccountOpenResponseV2Schema, SignedProviderBrokerRouteGrantV1Schema, SignedProviderBrokerRouteGrantV2Schema, type SignedProviderBrokerRouteGrantV2, type ProviderBrokerAccountOpenResponseV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
@@ -31,7 +32,7 @@ type BrokerTunnel = Readonly<{
   close(): Promise<void>;
 }>;
 type BrokerOpenResponse = ProviderBrokerOpenResponseV1 | ProviderBrokerAccountOpenResponseV2;
-const BrokerOpenResponseSchema = ProviderBrokerOpenResponseV1Schema.or(ProviderBrokerAccountOpenResponseV2Schema);
+const BrokerOpenResponseSchema = z.union([ProviderBrokerOpenResponseV1Schema, ProviderBrokerAccountOpenResponseV2Schema]);
 type BrokerAuthority = Extract<ProviderBrokerOpenResponseV1, { ok: true }>['authority'] | SignedProviderBrokerRouteGrantV2;
 function brokerAuthorityBinding(authority: BrokerAuthority) {
   return authority.payload.v === 2

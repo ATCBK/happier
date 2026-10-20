@@ -19,6 +19,7 @@ import {
     machinePresetCollectionHref,
     machinePresetCollectionRowKey,
     isMachineCollectionRowSelected,
+    managedMachineConsentKey,
 } from './machineCollectionModel';
 
 function managed(id: string, overrides: Partial<ManagedMachineV1> = {}): ManagedMachineV1 {
@@ -130,10 +131,41 @@ describe('buildMachineCollection', () => {
         expect(collection.sections.find(section => section.rows.includes(row!))?.archived).toBe(true);
         expect(machineCollectionHref(row!)).toBe('/settings/machines/managed/retired?serverId=a');
     });
+    it('counts machines, never recipes or retired created machines, so the header agrees with its groups', () => {
+        const preset: ManagedMachinePresetV1 = { id: 'recipe', homeId: 'home-a', revision: 1, name: 'Build recipe',
+            owner: { kind: 'account', accountId: 'owner' }, recipe: managed('m').launch, controller: managed('m').controller };
+        const collection = buildMachineCollection({ groups: [group('a', [machine('mine'), machine('other')])], groupedByHome: false,
+            managedByServerId: { a: [managed('pending'), managed('retired', { archivedAt: 0 })] }, presetsByServerId: { a: [preset] } });
+        const liveRows = collection.sections.filter(section => !section.archived).flatMap(section => section.rows);
+        expect(liveRows).toHaveLength(3);
+        expect(collection.machineCount).toBe(3);
+    });
+    it('says the list is still settling while a machine has not yet read its name, instead of naming it "Loading…"', () => {
+        const ready = buildMachineCollection({ groups: [group('a', [machine('mine')])], groupedByHome: false });
+        expect(ready.namesPending).toBe(false);
+        const hydrating = buildMachineCollection({ groups: [group('a', [machine('mine'), machine('new', { metadata: null, availability: undefined })])], groupedByHome: false });
+        expect(hydrating.namesPending).toBe(true);
+    });
     it('titles the machines Happier created, beside your own machines', () => {
         const collection = buildMachineCollection({ groups: [group('a', [machine('mine')])], groupedByHome: false,
             managedByServerId: { a: [managed('pending')] } });
         expect(collection.sections.map(section => section.title)).toEqual([t('machines.destinations.yours'), t('machines.destinations.created')]);
+    });
+    it('says a creation is waiting on the user while its installer holds their consent', () => {
+        const input = { groups: [group('a', [])], groupedByHome: false, managedByServerId: { a: [managed('pending'), managed('other')] } };
+        const presence = (collection: ReturnType<typeof buildMachineCollection>) => Object.fromEntries(collection.sections
+            .flatMap(section => section.rows).map(row => [row.kind === 'managed' ? row.managedId : row.machineId, row.presence]));
+        const waiting = presence(buildMachineCollection({ ...input, awaitingConsent: new Set([managedMachineConsentKey('a', 'pending')]) }));
+        expect(waiting.pending).toBe(t('approvals.waitingForYou'));
+        expect(waiting.other).toBe(presence(buildMachineCollection(input)).other);
+        expect(presence(buildMachineCollection(input)).pending).not.toBe(t('approvals.waitingForYou'));
+    });
+    it('gives an ended created machine one short rail word while its full line stays the presence (UIR5c)', () => {
+        const collection = buildMachineCollection({ groups: [group('a', [])], groupedByHome: false,
+            managedByServerId: { a: [managed('ended', { allocation: 'confirmed-absent', creationState: 'canceled' }), managed('live')] } });
+        const rows = collection.sections.flatMap(section => section.rows);
+        expect(rows.find(row => row.managedId === 'ended')).toMatchObject({ presence: t('managedPower.resourceAbsent'), presenceWord: t('managedPower.ended') });
+        expect(rows.find(row => row.managedId === 'live')).not.toHaveProperty('presenceWord');
     });
     it('names preset audiences from the exact Home and owner rather than the operation label', () => {
         const preset: ManagedMachinePresetV1 = { id: 'recipe', homeId: 'home-a', revision: 1, name: 'Build recipe',

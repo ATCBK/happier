@@ -6,6 +6,8 @@ import {
     PluginManifestV2Schema,
     VoiceProviderContributionSchema,
 } from '@happier-dev/protocol';
+import { prepareDefaultProviderStateSharingChangeV1, readProviderStateSharingRiskAgentIdsV1 } from '@happier-dev/protocol/actions/settings/providerStateSharingMutations';
+import { ConnectedServicesProviderStateSharingSettingsV1Schema } from '@happier-dev/protocol/account/settings/connected-services';
 
 import type {
     AgentCliAuthContributionV1,
@@ -145,12 +147,12 @@ describe('declarative plugin workflows', () => {
         const plugin = definePlugin({
             id: 'com.acme.execution-default',
             version: '1.0.0',
-            executionTarget: { default: 'installation' },
+            executionTarget: { default: 'installation', autoPick: false },
         });
-        expect(plugin.manifest.executionTarget).toEqual({ default: 'installation' });
+        expect(plugin.manifest.executionTarget).toEqual({ default: 'installation', autoPick: false });
         const parsed = parsePluginManifest(plugin.manifest);
         expect(parsed.ok).toBe(true);
-        if (parsed.ok) expect(parsed.manifest.executionTarget).toEqual({ default: 'installation' });
+        if (parsed.ok) expect(parsed.manifest.executionTarget).toEqual({ default: 'installation', autoPick: false });
         const omitted = definePlugin({ id: 'com.acme.no-execution-default', version: '1.0.0' });
         expect(omitted.manifest).not.toHaveProperty('executionTarget');
     });
@@ -183,7 +185,7 @@ describe('declarative plugin roles', () => {
             name: 'Security reviewer', instructions: 'Review security boundaries.',
             engine: { agentTargetKey: 'agent:codex', effort: 'high' },
             runsAs: { kind: 'background_run' as const, intent: 'review' as const },
-            workspaceWrites: 'deny' as const, secondOpinion: 'off' as const, enabled: true,
+            workspaceWrites: 'deny' as const, secondOpinion: 'off' as const, canDelegateToOtherRoles: true, enabled: true,
         };
         const plugin = definePlugin({
             id: 'com.acme.roles', version: '1.0.0', displayName: 'Review roles',
@@ -1401,7 +1403,7 @@ describe('definePlugin', () => {
                     'issue-control': defineComposerControl({
                         label: 'Issue',
                         icon: 'error',
-                        scopes: ['workflowAuthoring'],
+                        scopes: ['workflowAuthoring', 'discussion'],
                         interaction: {
                             kind: 'attachmentPicker',
                             attachment: 'issue',
@@ -1429,7 +1431,7 @@ describe('definePlugin', () => {
                     warning: defineComposerRegion({
                         placement: 'beforeComposer',
                         renderer: 'warning-surface',
-                        scopes: ['workflowAuthoring'],
+                        scopes: ['workflowAuthoring', 'discussion'],
                     }),
                 },
             },
@@ -1488,7 +1490,7 @@ describe('definePlugin', () => {
             id: 'issue-control',
             label: 'Issue',
             icon: 'error',
-            scopes: ['workflowAuthoring'],
+            scopes: ['workflowAuthoring', 'discussion'],
             interaction: {
                 kind: 'attachmentPicker',
                 attachment: 'issue',
@@ -1515,7 +1517,7 @@ describe('definePlugin', () => {
             id: 'warning',
             placement: 'beforeComposer',
             renderer: { renderer: 'warning-surface' },
-            scopes: ['workflowAuthoring'],
+            scopes: ['workflowAuthoring', 'discussion'],
         }]);
         const emitted = JSON.parse(JSON.stringify(plugin.manifest));
         expect(emitted.contributes.composerReferences).toEqual(plugin.manifest.contributes.composerReferences);
@@ -2537,19 +2539,18 @@ describe('definePlugin', () => {
                 }),
             })]),
             stateSharingDescriptor: Object.freeze({
-                providerSupportStatus: 'unsupported' as const,
+                providerSupportStatus: 'supported' as const,
                 config: Object.freeze({
-                    supported: false,
-                    modes: Object.freeze(['isolated'] as const),
+                    supported: true,
+                    modes: Object.freeze(['linked', 'isolated'] as const),
                     entries: Object.freeze([]),
-                    unavailableReason: 'not_implemented' as const,
                 }),
                 state: Object.freeze({
-                    supported: false,
-                    modes: Object.freeze(['isolated'] as const),
+                    supported: true,
+                    modes: Object.freeze(['shared', 'isolated'] as const),
                     entries: Object.freeze([]),
+                    sharedStatePrivacyRiskAcknowledgementRequired: true,
                     symlinkUnavailableDegradePolicy: 'degrade_to_isolated' as const,
-                    unavailableReason: 'not_implemented' as const,
                 }),
                 authIsolation: Object.freeze({
                     mode: 'process_env' as const,
@@ -2601,6 +2602,26 @@ describe('definePlugin', () => {
         });
         const register = vi.fn();
 
+        // Cold catalogs carry the same public capability and consent facts as
+        // the executable descriptor, without publishing native-home entries.
+        expect(plugin.manifest.contributes.agents?.[0]?.capabilities).toMatchObject({
+            providerStateSharing: {
+                config: { supported: true, modes: ['linked', 'isolated'] },
+                state: { supported: true, modes: ['shared', 'isolated'],
+                    sharedStatePrivacyRiskAcknowledgementRequired: true },
+            },
+        });
+        const manifest = PluginManifestV2Schema.parse(plugin.manifest);
+        expect(manifest.contributes.agents?.[0]?.capabilities).toEqual(plugin.manifest.contributes.agents?.[0]?.capabilities);
+        const sharingSettings = ConnectedServicesProviderStateSharingSettingsV1Schema.parse({
+            v: 1, defaults: { configMode: 'linked', stateMode: 'isolated' }, byAgentId: {}, acknowledgedRisksByAgentId: {},
+        });
+        const preparation = await prepareDefaultProviderStateSharingChangeV1(sharingSettings, true, {
+            readProviderStateSharingRiskAgentIds: () => readProviderStateSharingRiskAgentIdsV1(
+                (manifest.contributes.agents ?? []).map(agent => ({ agentId: `${manifest.id}/${agent.id}`,
+                    capability: agent.capabilities.providerStateSharing }))),
+        });
+        expect(preparation).toEqual({ status: 'confirmation_required', agentIds: ['example.complete-agent-registration/assistant'] });
         await plugin.activate({ agents: { register } } as never);
 
         expect(register).toHaveBeenCalledWith('assistant', completeFactory, {

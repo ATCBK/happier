@@ -18,6 +18,7 @@ import type {
     BrowserDiagnosticsObjectInspectorEntry,
 } from './BrowserDiagnosticsEvalConsole';
 import {
+    advanceBrowserDiagnosticsGeneration,
     applyBrowserDiagnosticEvents,
     createBrowserDiagnosticsUiStore,
     selectBrowserDiagnosticsEventCount,
@@ -28,6 +29,11 @@ import {
 
 import type { BrowserDiagnosticsEngineBridgeConfig } from '../frame/types';
 import type { BrowserDiagnosticsInteractionControls } from './BrowserDiagnosticsInteractionPanel';
+import { createFrontDoorActionExecute, type FrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import type { BrowserRuntimeDiagnosticsAdapter } from '@/sync/domains/browser/actions/runtimeActionExecutor';
+import { BrowserDiagnosticsEvalRequestV1Schema, BrowserDiagnosticsGetPropertiesRequestV1Schema,
+    BrowserDiagnosticsReleaseObjectGroupRequestV1Schema, BrowserDiagnosticsElementPickerRequestV1Schema } from '@happier-dev/protocol/browser/diagnostics/v1';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 const DEFAULT_COLLECTOR_VERSION = '1.0.0';
 
@@ -50,6 +56,27 @@ type BrowserDiagnosticsPendingRequests = Readonly<{
     elementPickerRequest?: BrowserDiagnosticsElementPickerRequestV1;
 }>;
 
+type PendingDiagnosticsResult = Readonly<{
+    request: BrowserDiagnosticsPendingRequests;
+    settle: (result: unknown) => void;
+    dispose: () => void;
+}>;
+
+function projectPendingRequests(pending: Iterable<PendingDiagnosticsResult>): BrowserDiagnosticsPendingRequests {
+    let next: BrowserDiagnosticsPendingRequests = {};
+    for (const { request } of pending) {
+        next = {
+            evalRequest: next.evalRequest ?? request.evalRequest,
+            getPropertiesRequest: next.getPropertiesRequest ?? request.getPropertiesRequest,
+            releaseObjectGroupRequest: next.releaseObjectGroupRequest ?? request.releaseObjectGroupRequest,
+            // Cancelling a picker must reach the engine while its start is still awaiting a selection.
+            elementPickerRequest: request.elementPickerRequest?.action === 'cancel'
+                ? request.elementPickerRequest : next.elementPickerRequest ?? request.elementPickerRequest,
+        };
+    }
+    return next;
+}
+
 export type BrowserDiagnosticsEvalCommandInput = Readonly<{
     expression: string;
     timeoutMs?: number;
@@ -71,6 +98,7 @@ export type BrowserDiagnosticsRuntimeProjection = Readonly<{
     hasRenderableDiagnostics?: boolean;
     bridge?: BrowserDiagnosticsEngineBridgeConfig | null;
     interaction?: BrowserDiagnosticsInteractionControls;
+    runtimeAdapter?: BrowserRuntimeDiagnosticsAdapter;
     requestEval: (input: BrowserDiagnosticsEvalCommandInput) => boolean;
     requestGetProperties: (input: BrowserDiagnosticsGetPropertiesCommandInput) => boolean;
     requestReleaseObjectGroup: (input: BrowserDiagnosticsReleaseObjectGroupCommandInput) => boolean;
@@ -79,6 +107,9 @@ export type BrowserDiagnosticsRuntimeProjection = Readonly<{
 export type UseBrowserDiagnosticsRuntimeInput = Readonly<{
     view: BrowserControlViewState | null;
     enabled?: boolean;
+    actionExecute?: (...args: Parameters<FrontDoorActionExecute>) => ReturnType<FrontDoorActionExecute>;
+    actionContext?: Parameters<FrontDoorActionExecute>[2];
+    isCurrent?: () => boolean;
     /** The same collector identity is needed by automation even with diagnostics hidden. */
     automationEnabled?: boolean;
     parentOrigin?: string | null;
@@ -181,6 +212,9 @@ export function useBrowserDiagnosticsRuntime(
         Readonly<Record<string, BrowserDiagnosticsObjectInspectorEntry>>
     >({});
     const requestOrdinalRef = React.useRef(0);
+    const pendingResults = React.useRef(new Map<string, PendingDiagnosticsResult>());
+    const unavailable = React.useMemo(() => ({ ok: false, errorCode: 'runtime_action_disabled', error: 'runtime_action_disabled:browser:browser_diagnostics_unavailable' } as const), []);
+    const actionExecute = React.useMemo(() => input.actionExecute ?? createFrontDoorActionExecute(), [input.actionExecute]);
     const viewKey = runtimeViewKey(input.view);
     // The injected engine bridge is the local owner present on this device; full console fidelity is
     // the local-owner default (plan rule #3). Agent/remote egress is redacted by the classifier SSOT.
@@ -219,6 +253,10 @@ export function useBrowserDiagnosticsRuntime(
     const browserSessionId = input.view?.browserSessionId;
     const viewId = input.view?.viewId;
     const navigationGeneration = input.view?.navigationGeneration;
+    React.useEffect(() => {
+        if (browserSessionId === undefined || viewId === undefined || navigationGeneration === undefined) return;
+        eventSource.setState((current) => advanceBrowserDiagnosticsGeneration(current, { browserSessionId, viewId, navigationGeneration }), true);
+    }, [eventSource, browserSessionId, viewId, navigationGeneration]);
     const injected = !!input.view && canAttachInjectedDiagnostics(input.view, input.automationEnabled === true);
     const desktopInjected = !!input.view && !injected && canAttachDesktopInjectedDiagnostics(input.view);
     const requiresOriginHandshake = input.view?.engineKind === 'webIframe';
@@ -284,6 +322,90 @@ export function useBrowserDiagnosticsRuntime(
         && !!input.view
         && (canAttachInjectedDiagnostics(input.view) || canAttachDesktopInjectedDiagnostics(input.view));
 
+    const currentRef = React.useRef({ input, interactionEnabled, bridgeBase, interactionSupported });
+    currentRef.current = { input, interactionEnabled, bridgeBase, interactionSupported };
+    const settleResult = React.useCallback((requestId: string, result: unknown) => {
+        const pending = pendingResults.current.get(requestId);
+        if (!pending) return;
+        pendingResults.current.delete(requestId);
+        pending.dispose();
+        pending.settle(result);
+        setPendingRequests(projectPendingRequests(pendingResults.current.values()));
+    }, []);
+    const diagnostics = React.useMemo<BrowserRuntimeDiagnosticsAdapter>(() => ({ execute: async args => {
+        const current = currentRef.current;
+        const view = current.input.view;
+        const request = args.input as Record<string, unknown>;
+        if (!view || current.input.isCurrent?.() === false || !current.bridgeBase || !current.interactionSupported
+            || (!current.interactionEnabled && args.actionId !== 'browser.diagnostics.releaseObjectGroup')
+            || request.browserSessionId !== view.browserSessionId || request.viewId !== view.viewId
+            || request.navigationGeneration !== view.navigationGeneration || request.tier !== 'injectedPage'
+            || args.context.signal?.aborted) return unavailable;
+        const { browserSessionId: _browserSessionId, ...engineRequest } = request;
+        const requestId = request.evalRequestId ?? request.propertyRequestId ?? request.releaseRequestId ?? request.pickerRequestId;
+        if (typeof requestId !== 'string' || pendingResults.current.has(requestId)) return unavailable;
+        let pendingRequest: BrowserDiagnosticsPendingRequests;
+        switch (args.actionId) {
+                case 'browser.diagnostics.eval': {
+                    const evalRequest = BrowserDiagnosticsEvalRequestV1Schema.parse(engineRequest);
+                    setEvalEntries(entries => {
+                        const entry = { evalRequestId: evalRequest.evalRequestId, expression: evalRequest.expression,
+                            objectGroupId: evalRequest.objectGroupId, status: 'pending' as const };
+                        return entries.some(current => current.evalRequestId === entry.evalRequestId)
+                            ? entries.map(current => current.evalRequestId === entry.evalRequestId ? entry : current)
+                            : [...entries, entry];
+                    });
+                    pendingRequest = { evalRequest };
+                    break;
+                }
+                case 'browser.diagnostics.getProperties':
+                    pendingRequest = { getPropertiesRequest: BrowserDiagnosticsGetPropertiesRequestV1Schema.parse(engineRequest) };
+                    break;
+                case 'browser.diagnostics.releaseObjectGroup':
+                    pendingRequest = { releaseObjectGroupRequest: BrowserDiagnosticsReleaseObjectGroupRequestV1Schema.parse(engineRequest) };
+                    break;
+                case 'browser.diagnostics.elementPicker.start':
+                case 'browser.diagnostics.elementPicker.cancel':
+                    if (args.actionId === 'browser.diagnostics.elementPicker.start') setPickerActive(true);
+                    pendingRequest = { elementPickerRequest: BrowserDiagnosticsElementPickerRequestV1Schema.parse(engineRequest) };
+                    break;
+                default: return unavailable;
+        }
+        return await new Promise(resolve => {
+            const onAbort = () => settleResult(requestId, { ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' });
+            pendingResults.current.set(requestId, { request: pendingRequest, settle: resolve, dispose: () => args.context.signal?.removeEventListener('abort', onAbort) });
+            args.context.signal?.addEventListener('abort', onAbort, { once: true });
+            setPendingRequests(projectPendingRequests(pendingResults.current.values()));
+        });
+    } }), [settleResult, unavailable]);
+    React.useEffect(() => () => {
+        for (const requestId of pendingResults.current.keys()) settleResult(requestId, unavailable);
+    }, [viewKey, settleResult, unavailable]);
+
+    const dispatchUi = React.useCallback((actionId: Parameters<FrontDoorActionExecute>[0], request: BrowserDiagnosticsEvalRequestV1 | BrowserDiagnosticsGetPropertiesRequestV1 | BrowserDiagnosticsReleaseObjectGroupRequestV1 | BrowserDiagnosticsElementPickerRequestV1) => {
+        const view = input.view;
+        if (!view) return;
+        const showRefusal = (errorCode: string) => {
+            if (!currentRef.current.interactionEnabled || currentRef.current.input.isCurrent?.() === false
+                || runtimeViewKey(currentRef.current.input.view) !== runtimeViewKey(view)) return;
+            if ('evalRequestId' in request) setEvalEntries(entries => {
+                const entry = { evalRequestId: request.evalRequestId, expression: request.expression,
+                    objectGroupId: request.objectGroupId, status: 'blocked' as const, errorCode };
+                return entries.some(current => current.evalRequestId === request.evalRequestId)
+                    ? entries.map(current => current.evalRequestId === request.evalRequestId ? entry : current)
+                    : [...entries, entry];
+            });
+            if ('propertyRequestId' in request) setObjectProperties(entries => ({ ...entries,
+                [request.objectId]: { status: 'failed', properties: [], errorCode } }));
+        };
+        void actionExecute(actionId, { ...request, browserSessionId: view.browserSessionId }, {
+            surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, ...input.actionContext,
+        }).then(result => {
+            if (!result.ok) showRefusal(result.errorCode);
+            else if (ActionApprovalRequestCreatedResultSchema.safeParse(result.result).success) showRefusal('approval_request_created');
+        }, () => showRefusal('action_failed'));
+    }, [actionExecute, input.actionContext, input.view]);
+
     const nextRequestId = React.useCallback((prefix: string): string | null => {
         const view = input.view;
         if (!view) return null;
@@ -314,15 +436,9 @@ export function useBrowserDiagnosticsRuntime(
             objectGroupId,
             diagnosticsInteractionEnabled: true,
         };
-        // Record a pending console entry so the local owner sees the in-flight expression immediately;
-        // `handleEvalResult` resolves it in place when the result arrives (DEV-3).
-        setEvalEntries((current) => [
-            ...current,
-            { evalRequestId, expression: requestInput.expression, objectGroupId, status: 'pending' },
-        ]);
-        setPendingRequests((current) => ({ ...current, evalRequest: request }));
+        dispatchUi('browser.diagnostics.eval', request);
         return true;
-    }, [getInteractiveView, nextRequestId]);
+    }, [dispatchUi, getInteractiveView, nextRequestId]);
 
     const requestGetProperties = React.useCallback((requestInput: BrowserDiagnosticsGetPropertiesCommandInput): boolean => {
         const view = getInteractiveView();
@@ -340,9 +456,9 @@ export function useBrowserDiagnosticsRuntime(
             objectGroupId: requestInput.objectGroupId,
             diagnosticsInteractionEnabled: true,
         };
-        setPendingRequests((current) => ({ ...current, getPropertiesRequest: request }));
+        dispatchUi('browser.diagnostics.getProperties', request);
         return true;
-    }, [getInteractiveView, nextRequestId]);
+    }, [dispatchUi, getInteractiveView, nextRequestId]);
 
     const requestReleaseObjectGroup = React.useCallback((requestInput: BrowserDiagnosticsReleaseObjectGroupCommandInput): boolean => {
         const view = getInteractiveView();
@@ -359,9 +475,9 @@ export function useBrowserDiagnosticsRuntime(
             objectGroupId: requestInput.objectGroupId,
             diagnosticsInteractionEnabled: true,
         };
-        setPendingRequests((current) => ({ ...current, releaseObjectGroupRequest: request }));
+        dispatchUi('browser.diagnostics.releaseObjectGroup', request);
         return true;
-    }, [getInteractiveView, nextRequestId]);
+    }, [dispatchUi, getInteractiveView, nextRequestId]);
 
     const startElementPicker = React.useCallback(() => {
         const view = getInteractiveView();
@@ -378,9 +494,8 @@ export function useBrowserDiagnosticsRuntime(
             action: 'start',
             diagnosticsInteractionEnabled: true,
         };
-        setPickerActive(true);
-        setPendingRequests((current) => ({ ...current, elementPickerRequest: request }));
-    }, [getInteractiveView, nextRequestId]);
+        dispatchUi('browser.diagnostics.elementPicker.start', request);
+    }, [dispatchUi, getInteractiveView, nextRequestId]);
 
     const cancelElementPicker = React.useCallback(() => {
         const view = getInteractiveView();
@@ -397,16 +512,12 @@ export function useBrowserDiagnosticsRuntime(
             action: 'cancel',
             diagnosticsInteractionEnabled: true,
         };
-        setPendingRequests((current) => ({ ...current, elementPickerRequest: request }));
-    }, [getInteractiveView, nextRequestId]);
+        dispatchUi('browser.diagnostics.elementPicker.cancel', request);
+    }, [dispatchUi, getInteractiveView, nextRequestId]);
 
     const handleEvalResult = React.useCallback((result: BrowserDiagnosticsEvalResultV1) => {
-        setPendingRequests((current) => (
-            current.evalRequest?.evalRequestId === result.evalRequestId ? (() => {
-                const { evalRequest: _evalRequest, ...next } = current;
-                return next;
-            })() : current
-        ));
+        if (!pendingResults.current.has(result.evalRequestId)) return;
+        settleResult(result.evalRequestId, result);
         // DEV-3: store the result on its console entry instead of discarding it.
         setEvalEntries((current) => current.map((entry) => (
             entry.evalRequestId === result.evalRequestId
@@ -418,7 +529,7 @@ export function useBrowserDiagnosticsRuntime(
                 }
                 : entry
         )));
-    }, []);
+    }, [settleResult]);
 
     const expandObject = React.useCallback((objectId: string, objectGroupId: string): boolean => {
         // Mark the node loading first so the inspector renders a spinner even if the request is async.
@@ -437,12 +548,8 @@ export function useBrowserDiagnosticsRuntime(
     }, [requestGetProperties]);
 
     const handlePropertiesResult = React.useCallback((result: BrowserDiagnosticsGetPropertiesResultV1) => {
-        setPendingRequests((current) => (
-            current.getPropertiesRequest?.propertyRequestId === result.propertyRequestId ? (() => {
-                const { getPropertiesRequest: _getPropertiesRequest, ...next } = current;
-                return next;
-            })() : current
-        ));
+        if (!pendingResults.current.has(result.propertyRequestId)) return;
+        settleResult(result.propertyRequestId, result);
         // DEV-4: store the expanded properties keyed by objectId so the inspector tree renders them.
         setObjectProperties((current) => ({
             ...current,
@@ -450,32 +557,31 @@ export function useBrowserDiagnosticsRuntime(
                 ? { status: 'loaded', properties: result.properties }
                 : { status: 'failed', properties: [], ...(result.errorCode ? { errorCode: result.errorCode } : {}) },
         }));
-    }, []);
+    }, [settleResult]);
 
     const handleReleaseObjectGroupResult = React.useCallback((result: BrowserDiagnosticsReleaseObjectGroupResultV1) => {
-        setPendingRequests((current) => (
-            current.releaseObjectGroupRequest?.releaseRequestId === result.releaseRequestId ? (() => {
-                const { releaseObjectGroupRequest: _releaseObjectGroupRequest, ...next } = current;
-                return next;
-            })() : current
-        ));
-    }, []);
+        if (!pendingResults.current.has(result.releaseRequestId)) return;
+        settleResult(result.releaseRequestId, result);
+    }, [settleResult]);
 
     const onElementPickerResultBridge = input.onElementPickerResult;
     const handleElementPickerResult = React.useCallback((result: BrowserDiagnosticsElementPickerResultV1) => {
-        setPendingRequests((current) => (
-            current.elementPickerRequest?.pickerRequestId === result.pickerRequestId ? (() => {
-                const { elementPickerRequest: _elementPickerRequest, ...next } = current;
-                return next;
-            })() : current
-        ));
+        if (!pendingResults.current.has(result.pickerRequestId)) return;
+        settleResult(result.pickerRequestId, result);
+        if (result.status === 'cancelled') {
+            for (const [requestId, pending] of pendingResults.current) {
+                if (pending.request.elementPickerRequest?.action === 'start') {
+                    settleResult(requestId, { ...result, pickerRequestId: requestId });
+                }
+            }
+        }
         if (result.status === 'selected' || result.status === 'cancelled' || result.status === 'blocked' || result.status === 'failed') {
             setPickerActive(false);
         }
         // Bridge a selected element to the host (→ annotation captureElement). Non-selected results
         // are forwarded too so the host can clear any pending picker UI; the host helper no-ops them.
         onElementPickerResultBridge?.(result);
-    }, [onElementPickerResultBridge]);
+    }, [onElementPickerResultBridge, settleResult]);
 
     const bridge = React.useMemo<BrowserDiagnosticsEngineBridgeConfig | null>(() => {
         if (!bridgeBase) return null;
@@ -532,12 +638,13 @@ export function useBrowserDiagnosticsRuntime(
             onDisableInteraction: () => {
                 // Release the live object group on the page, then clear local console/inspector state.
                 const view = input.view;
+                currentRef.current.interactionEnabled = false;
+                for (const requestId of pendingResults.current.keys()) settleResult(requestId, unavailable);
                 if (view) {
                     requestReleaseObjectGroup({ objectGroupId: defaultObjectGroupId(view) });
                 }
                 setInteractionEnabled(false);
                 setPickerActive(false);
-                setPendingRequests({});
                 setEvalEntries([]);
                 setObjectProperties({});
             },
@@ -556,7 +663,9 @@ export function useBrowserDiagnosticsRuntime(
         pickerActive,
         requestEval,
         requestReleaseObjectGroup,
+        settleResult,
         startElementPicker,
+        unavailable,
     ]);
 
     const readAvailability = React.useCallback(() => !!bridge || !!(browserSessionId && viewId
@@ -571,10 +680,11 @@ export function useBrowserDiagnosticsRuntime(
             hasRenderableDiagnostics,
             bridge,
             interaction,
+            ...(bridgeBase && interactionSupported ? { runtimeAdapter: diagnostics } : {}),
             requestEval,
             requestGetProperties,
             requestReleaseObjectGroup,
         };
     }, [input.enabled, input.automationEnabled, input.view, eventSource, hasRenderableDiagnostics, bridge, interaction,
-        requestEval, requestGetProperties, requestReleaseObjectGroup]);
+        requestEval, requestGetProperties, requestReleaseObjectGroup, bridgeBase, interactionSupported, diagnostics]);
 }

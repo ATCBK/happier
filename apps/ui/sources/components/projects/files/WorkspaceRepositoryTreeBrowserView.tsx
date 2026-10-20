@@ -1,3 +1,4 @@
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 import { useRepositoryTreeBrowserState } from '@/hooks/workspaces/files/repositoryTreeBrowserState';
 import { RepositoryTreeVisibilityControl } from '@/components/workspaces/files/repositoryTree/RepositoryTreeVisibilityControl';
 import * as React from 'react';
@@ -26,7 +27,7 @@ import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprov
 import { createActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { usePaneHeaderSlotContent } from '@/components/appShell/panes/paneHeaderSlot';
+import { usePaneHeaderSlotContent, type PaneHeaderLine } from '@/components/appShell/panes/paneHeaderSlot';
 import { CheckoutReachabilityLine, CheckoutReachabilityScope, useCheckoutReachability } from '@/components/workspaces/reachability/checkoutReachability';
 import { useIsWidgetFrameBody } from '@/components/widgets/frame/widgetFrameBody';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
@@ -93,6 +94,8 @@ export type WorkspaceRepositoryTreeBrowserViewProps = Readonly<{
     rootHeading?: React.ReactNode;
     machineName?: string | null;
     createMenuPlacement?: 'toolbar' | 'paneHeader';
+    /** With `paneHeader` placement: what this pane is about, on the pane header's live line beside the + menu. */
+    paneHeaderLine?: PaneHeaderLine | null;
     onRefreshScm?: () => void;
     scrollProps?: Pick<ScrollViewProps, 'onLayout' | 'onContentSizeChange' | 'onScroll' | 'scrollEventThrottle'>;
     scrollOverlay?: React.ReactNode;
@@ -125,8 +128,8 @@ export type WorkspaceRepositoryTreeBrowserViewProps = Readonly<{
 const FILL_BODY_STYLE = { flex: 1, minHeight: 0 } as const;
 const COMPOSED_BODY_STYLE = { flexGrow: 0, flexShrink: 1, minHeight: 0 } as const;
 
-function BrowserHeaderAction(props: Readonly<{ action: React.ReactNode }>) {
-    usePaneHeaderSlotContent(React.useMemo(() => ({ action: props.action }), [props.action]));
+function BrowserPaneHeader(props: Readonly<{ action: React.ReactNode; line?: PaneHeaderLine | null }>) {
+    usePaneHeaderSlotContent(React.useMemo(() => ({ action: props.action, line: props.line }), [props.action, props.line]));
     return null;
 }
 
@@ -290,16 +293,28 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
     const createHostRef = React.useRef({ workspaceScope, folderPath: folderPage?.path, enabled: allowCreateActions });
     createHostRef.current = { workspaceScope, folderPath: folderPage?.path, enabled: allowCreateActions };
     const mounted = React.useRef(true);
+    const createRequestRef = React.useRef<AbortController | null>(null);
+    // The write a New file / New folder started and has not yet heard back from; a Machine under load
+    // can take minutes, and nothing else on screen says it is still going.
+    const [pendingCreateSignal, setPendingCreateSignal] = React.useState<AbortSignal | null>(null);
     React.useEffect(() => {
         mounted.current = true;
         return () => { mounted.current = false; };
     }, []);
+    React.useEffect(() => () => {
+        createRequestRef.current?.abort();
+        createRequestRef.current = null;
+    }, [accountScope?.serverId, accountScope?.accountId, workspaceScope, folderPage?.path, allowCreateActions]);
     const captureCreateLifetime = React.useCallback(() => {
+        createRequestRef.current?.abort();
+        const controller = new AbortController();
+        createRequestRef.current = controller;
         const lifetime = captureActiveServerAccountScopeLifetime();
         const host = createHostRef.current;
         return {
             scope: lifetime?.scope,
-            isCurrent: () => mounted.current && (!lifetime || lifetime.isCurrent())
+            signal: controller.signal,
+            isCurrent: () => !controller.signal.aborted && mounted.current && (!lifetime || lifetime.isCurrent())
                 && createHostRef.current.enabled
                 && createHostRef.current.workspaceScope === host.workspaceScope
                 && createHostRef.current.folderPath === host.folderPath,
@@ -310,6 +325,15 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
         expandedPaths,
         onExpandedPathsChange: setExpandedPaths,
     });
+
+    const whileCreating = React.useCallback(async <T,>(signal: AbortSignal, write: Promise<T>): Promise<T> => {
+        setPendingCreateSignal(signal);
+        try {
+            return await write;
+        } finally {
+            if (mounted.current) setPendingCreateSignal((current) => (current === signal ? null : current));
+        }
+    }, []);
 
     const createFile = React.useCallback(() => {
         if (!allowCreateActions) return;
@@ -336,7 +360,13 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
                 revealPath(path);
                 (props.onOpenFilePinned ?? props.onOpenFile)(path);
             };
-            const res = await workspaceWriteFile(workspaceScope, path, '', null);
+            let res: Awaited<ReturnType<typeof workspaceWriteFile>>;
+            try {
+                res = await whileCreating(lifetime.signal, workspaceWriteFile(workspaceScope, path, '', null, { signal: lifetime.signal }));
+            } catch (error) {
+                if (lifetime.isCurrent()) Modal.alert(t('common.error'), error instanceof Error ? error.message : t('files.createFileFailed'));
+                return;
+            }
             if (!lifetime.isCurrent()) return;
             if (!res.success) {
                 if (res.errorCode === 'approval_required' && res.approvalArtifactId) {
@@ -357,7 +387,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
             }
             complete();
         })();
-    }, [captureCreateLifetime, actionApproval.requestApproval, allowCreateActions, props.onOpenFile, props.onOpenFilePinned, refresh, setExpandedPaths, workspaceScope, revealPath]);
+    }, [captureCreateLifetime, whileCreating, actionApproval.requestApproval, allowCreateActions, props.onOpenFile, props.onOpenFilePinned, refresh, setExpandedPaths, workspaceScope, revealPath]);
 
     const createFolder = React.useCallback((parentDir?: string) => {
         if (!allowCreateActions) return;
@@ -385,7 +415,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
                 setExpandedPaths(nextExpanded.includes(directoryPath) ? nextExpanded : [...nextExpanded, directoryPath]);
                 refresh();
             };
-            const res = await workspaceCreateDirectory(workspaceScope, directoryPath);
+            const res = await whileCreating(lifetime.signal, workspaceCreateDirectory(workspaceScope, directoryPath));
             if (!lifetime.isCurrent()) return;
             if (!res.success) {
                 if (res.errorCode === 'approval_required' && res.approvalArtifactId) {
@@ -407,7 +437,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
 
             complete();
         })();
-    }, [captureCreateLifetime, actionApproval.requestApproval, allowCreateActions, refresh, setExpandedPaths, workspaceScope, revealPath]);
+    }, [captureCreateLifetime, whileCreating, actionApproval.requestApproval, allowCreateActions, refresh, setExpandedPaths, workspaceScope, revealPath]);
 
     const transfers = useWorkspaceFileTransfers({
         workspaceScope,
@@ -603,19 +633,20 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
     const createMenu = React.useMemo(() => (
         <RepositoryTreeCreateMenu
             createEnabled={allowCreateActions}
+            createPending={pendingCreateSignal !== null}
             uploadEnabled={transferActionsAvailable}
             isWeb={Platform.OS === 'web'}
             uploadDestinationLabel={uploadDestinationDir || rootLabel}
             onSelect={selectCreateMenuItem}
         />
-    ), [allowCreateActions, transferActionsAvailable, uploadDestinationDir, rootLabel, selectCreateMenuItem]);
+    ), [allowCreateActions, pendingCreateSignal, transferActionsAvailable, uploadDestinationDir, rootLabel, selectCreateMenuItem]);
     const showAllFiles = React.useCallback(() => setShowChangedOnly(false), [setShowChangedOnly]);
     const composed = folderPage && !widget ? folderPage.compose ?? null : null;
     // What is waiting on an approval, named. A composed page carries it in its own bar (no row pushes
     // the page down); every other host shows the sheet row above the tree.
     const openActionApproval = React.useCallback(() => {
         if (!actionApproval.approvalId) return;
-        router.push(`/inbox/approvals/${encodeURIComponent(actionApproval.approvalId)}?serverId=${encodeURIComponent(workspaceScope.serverId)}`);
+        router.push(buildApprovalHref(actionApproval.approvalId, workspaceScope.serverId));
     }, [actionApproval.approvalId, router, workspaceScope.serverId]);
     const approvalNotice = (presentation: 'row' | 'inline') => (
         <ActionApprovalPendingNotice presentation={presentation} message={t('approvals.status.open')}
@@ -725,7 +756,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
         <CheckoutReachabilityScope scope={workspaceScope}>
         <View style={{ flex: 1, minHeight: 0 }}>
             {actionApproval.approvalId && !composed ? approvalNotice('row') : null}
-            {props.createMenuPlacement === 'paneHeader' ? <BrowserHeaderAction action={createMenu} /> : null}
+            {props.createMenuPlacement === 'paneHeader' ? <BrowserPaneHeader action={createMenu} line={props.paneHeaderLine} /> : null}
             {(showSearchBar || folderPage) && !widget && !composed ? (
                 <RepositoryTreeToolbar
                     testIDPrefix={props.createMenuPlacement === 'paneHeader' ? 'repository-tree' : 'workspace-repository-tree'}

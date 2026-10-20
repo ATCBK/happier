@@ -4,9 +4,8 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
 import { resolveSessionPersonalAttentionForViewer } from '@/sync/domains/session/readState/sessionViewerAttention';
 import { isUnreadContentAttentionReason } from '@/sync/domains/session/readState/sessionViewer';
-import { getSessionName, getSessionSubtitle } from '@/utils/sessions/sessionUtils';
+import { getSessionName, getSessionSubtitle, readLockedSessionName } from '@/utils/sessions/sessionUtils';
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
-import { t } from '@/text';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import {
     presentSessionPersonalAttentionReason,
@@ -16,6 +15,7 @@ import {
 
 import type { SessionActivityAttention } from './activityAttentionTypes';
 import { isSessionAdmittedToPersonalActivity } from './isSessionAdmittedToPersonalActivity';
+import type { FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 
 export function buildSessionActivityAttention(params: Readonly<{
     session: Session;
@@ -24,9 +24,10 @@ export function buildSessionActivityAttention(params: Readonly<{
     nowMs?: number;
     /** Count/status consumers use the same facts without private display details. */
     presentation?: 'detail' | 'summary';
+    followRulePolicies?: readonly FollowPolicyV1[];
 }>): SessionActivityAttention {
     const nowMs = params.nowMs ?? Date.now();
-    const personal = resolveSessionPersonalAttentionForViewer(params.session, nowMs, params.sessionMessages);
+    const personal = resolveSessionPersonalAttentionForViewer(params.session, nowMs, params.sessionMessages, params.followRulePolicies);
     const personalReasons = personal.reasons.filter((reason) => {
         if (reason === 'unread' || reason === 'unread_discussion' || reason === 'ready_after_read') return params.sessionOptions?.showUnread !== false;
         if (reason === 'permission_required') return params.sessionOptions?.showPendingPermissionRequests !== false;
@@ -42,7 +43,7 @@ export function buildSessionActivityAttention(params: Readonly<{
     // notification-preview ceiling (it sees no recipient envelope, so it cannot vouch); off-app
     // surfaces apply it themselves (`buildActivitySurfaceViewModel`).
     const mayShowPrivateContent = isSessionAwarenessContentReadableV1(awareness.encryption);
-    const admitted = isSessionAdmittedToPersonalActivity(params.session);
+    const admitted = isSessionAdmittedToPersonalActivity(params.session, params.followRulePolicies);
     const operational = admitted ? awareness.operational.primary : 'none';
     const operationalAttentionState = resolveSessionListAttentionState({
         operational,
@@ -67,7 +68,7 @@ export function buildSessionActivityAttention(params: Readonly<{
         awareness,
         sessionId: params.session.id,
         ...(address ? { address, serverId: address.serverId } : null),
-        title: !includeDisplayDetails ? '' : mayShowPrivateContent ? getSessionName(params.session) : t('sessionBoard.item.locked.title'),
+        title: !includeDisplayDetails ? '' : mayShowPrivateContent ? getSessionName(params.session) : readLockedSessionName(),
         subtitle: includeDisplayDetails && mayShowPrivateContent ? getSessionSubtitle(params.session) : '',
         attentionState,
         personalAttention: {
@@ -76,6 +77,7 @@ export function buildSessionActivityAttention(params: Readonly<{
             needsAttention: personal.needsAttention && personalReasons.length > 0,
             primary: personalReasons[0] ?? null,
         },
+        ...(params.followRulePolicies?.length ? { followRulePolicies: params.followRulePolicies } : {}),
         hasAttention: personal.needsAttention && personalReasons.length > 0,
         priority: resolveSessionListAttentionRank(attentionState),
         lastTurnCompletedAt: params.session.lastTurnCompletedAt ?? null,

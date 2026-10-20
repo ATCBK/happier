@@ -41,7 +41,11 @@ async function pressAlertChoice(tree: renderer.ReactTestRenderer, label: string)
         && node.props.accessibilityLabel?.includes(label));
     expect(choice).toHaveLength(1);
     await act(async () => choice[0].props.onPress());
-    expectNoAlert(tree);
+    // The real provider retains the dismissed dialog through its exit motion.
+    await vi.waitFor(async () => {
+        await act(async () => {});
+        expectNoAlert(tree);
+    });
 }
 
 describe('ExitPlanToolView', () => {

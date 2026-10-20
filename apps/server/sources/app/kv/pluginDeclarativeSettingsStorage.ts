@@ -8,8 +8,10 @@ import { buildPluginDeclarativeSettingsPhysicalKey } from "./accountScopedKv";
 import {
     mutateReservedAccountScopedKvRowInTx,
     readReservedAccountScopedKvRowInTx,
+    readReservedAccountScopedKvRowMutationConflict,
     type ReservedAccountScopedKvRowDomain,
     type ReservedAccountScopedKvRowMutationResult,
+    type ReservedAccountScopedKvRowMutationInTxResult,
     type ReservedAccountScopedKvRowReadResult,
 } from "./reservedAccountScopedKvRow";
 
@@ -80,7 +82,7 @@ export async function readPluginDeclarativeSettings(
 export async function mutatePluginDeclarativeSettingsInTx(
     tx: Tx,
     input: PluginDeclarativeSettingsMutation,
-): Promise<PluginDeclarativeSettingsMutationResult> {
+): Promise<ReservedAccountScopedKvRowMutationInTxResult> {
     return await mutateReservedAccountScopedKvRowInTx(tx, {
         accountId: input.accountId,
         physicalKey: buildPluginDeclarativeSettingsPhysicalKey(input.pluginId),
@@ -107,6 +109,12 @@ export async function mutatePluginDeclarativeSettingsInTx(
 export async function mutatePluginDeclarativeSettings(
     input: PluginDeclarativeSettingsMutation,
 ): Promise<PluginDeclarativeSettingsMutationResult> {
-    return await inTx(async (tx) =>
-        await mutatePluginDeclarativeSettingsInTx(tx, input));
+    try {
+        return await inTx(async (tx) =>
+            await mutatePluginDeclarativeSettingsInTx(tx, input));
+    } catch (error) {
+        const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+        if (conflict) return conflict;
+        throw error;
+    }
 }

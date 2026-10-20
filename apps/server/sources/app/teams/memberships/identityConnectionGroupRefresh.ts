@@ -1,15 +1,24 @@
 import { db } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";
+import type { AccountAdmissionIntent } from "@/app/encryption/accountSessionOwnerMetadataFence";
 
 import { applyExternalGroupContributionInTx } from "./externalFacts";
 import { sessionHistoryAccessOf } from "./sessionHistory";
-import { withTeamSessionAccessEffectsInTx } from "./sessionAccessEffects";
+import { acquireTeamMutationAccountAdmissionInTx, withTeamSessionAccessEffectsInTx } from "./sessionAccessEffects";
 
 type GroupBinding = Readonly<{
     id: string;
     teamGroupId: string;
     externalGroupId: string;
 }>;
+
+async function readBindings(reader: Pick<Tx, "teamExternalGroupBinding">, input: Readonly<{ teamId: string; connectionId: string }>) {
+    return await reader.teamExternalGroupBinding.findMany({
+        where: { teamId: input.teamId, teamIdentityConnectionId: input.connectionId },
+        orderBy: { id: "asc" },
+        select: { id: true, teamGroupId: true, externalGroupId: true },
+    });
+}
 
 /**
  * The one comparison between a configured external Group key and a provider's
@@ -46,30 +55,32 @@ export async function prepareIdentityConnectionGroupRefresh(input: Readonly<{
     observeActiveExternalGroupIds: (
         configuredExternalGroupIds: readonly string[],
     ) => Promise<ReadonlySet<string> | null>;
-}>): Promise<Readonly<{ applyInTx: (tx: Tx) => Promise<void> }> | null> {
-    const bindings = await db.teamExternalGroupBinding.findMany({
-        where: {
-            teamId: input.teamId,
-            teamIdentityConnectionId: input.connectionId,
-        },
-        orderBy: { id: "asc" },
-        select: { id: true, teamGroupId: true, externalGroupId: true },
-    });
+}>): Promise<Readonly<{
+    acquireAdmissionInTx: (tx: Tx, options: Readonly<{ additionalAccountIds?: readonly string[]; intent: AccountAdmissionIntent }>) => Promise<void>;
+    applyInTx: (tx: Tx) => Promise<void>;
+}> | null> {
+    const bindings = await readBindings(db, input);
     const activeExternalGroupIds = await input.observeActiveExternalGroupIds(
         bindings.map((binding) => binding.externalGroupId),
     );
     if (activeExternalGroupIds === null) return null;
 
     return {
-        applyInTx: async (tx) => {
-            const currentBindings = await tx.teamExternalGroupBinding.findMany({
-                where: {
-                    teamId: input.teamId,
-                    teamIdentityConnectionId: input.connectionId,
+        acquireAdmissionInTx: async (tx, options) => {
+            const currentBindings = await readBindings(tx, input);
+            await acquireTeamMutationAccountAdmissionInTx(tx, {
+                teamId: input.teamId,
+                accountIds: [input.accountId, ...(options.additionalAccountIds ?? [])],
+                affectedAccountIds: [input.accountId],
+                membershipChange: {
+                    kind: "teamGroupMembership", teamId: input.teamId,
+                    teamGroupIds: sameBindings(bindings, currentBindings) ? currentBindings.map(binding => binding.teamGroupId) : [],
                 },
-                orderBy: { id: "asc" },
-                select: { id: true, teamGroupId: true, externalGroupId: true },
+                intent: options.intent,
             });
+        },
+        applyInTx: async (tx) => {
+            const currentBindings = await readBindings(tx, input);
             if (!sameBindings(bindings, currentBindings)) return;
             const membership = await tx.teamMembership.findUnique({
                 where: {
@@ -84,7 +95,6 @@ export async function prepareIdentityConnectionGroupRefresh(input: Readonly<{
                 // The contribution owner below classifies each current row. A
                 // replay starts retained and is upgraded only if one binding
                 // creates the first effective Group relationship.
-                origin: "retained_lifecycle",
                 accountIds: [input.accountId],
                 change: {
                     kind: "teamGroupMembership",

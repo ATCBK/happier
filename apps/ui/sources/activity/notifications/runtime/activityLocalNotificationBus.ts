@@ -2,15 +2,17 @@ import type { Message } from "@happier-dev/session-core/messages";
 import type { ActivitySequenceEventReferenceV1, AgentRequestKind } from '@happier-dev/protocol';
 import { normalizeSessionAddress, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import type { SessionFollowStalledOccurrenceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceOccurrenceV1';
 
 type ActivitySessionUpdateNotification = Readonly<{
     address: SessionAddress;
     messages?: Message[];
 } & (
     | { event: 'human_message'; committedSequence: ActivitySequenceEventReferenceV1; sourceAccountId: string }
-    | { event: 'message'; committedSequence: ActivitySequenceEventReferenceV1 }
+    | { event: 'message'; committedSequence: ActivitySequenceEventReferenceV1;
+        followEvent?: Readonly<{ kind: 'goal_changed' | 'update_posted' }> }
     | { event: 'failed' | 'cancelled'; turnId: string }
-    | { event: 'source_unavailable' }
+    | { event: 'source_unavailable'; stalledOccurrence?: SessionFollowStalledOccurrenceV1 }
 )>;
 
 export type ActivityLocalNotificationEvent =

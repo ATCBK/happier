@@ -129,7 +129,11 @@ function serialize(container: HTMLElement, width: number): string {
             ? Array.from(rules).map((rule) => rule.cssText).join('\n')
             : element.textContent ?? '';
     }).join('\n');
-    return `<!doctype html><html><head><meta charset="utf-8"><style>${styles}</style>`
+    // The live document owns theme variables and input modality. Preserve its
+    // root attributes through the browser boundary, using the DOM's serializer.
+    const html = container.ownerDocument.documentElement.cloneNode(false) as HTMLElement;
+    const openingHtml = html.outerHTML.replace(/<\/html>$/u, '');
+    return `<!doctype html>${openingHtml}<head><meta charset="utf-8"><style>${styles}</style>`
         + '<style>html,body{margin:0;font-family:Inter,Arial,sans-serif;-webkit-font-smoothing:antialiased}</style>'
         + `</head><body><div id="root" style="display:flex;flex-direction:column;width:${width}px">${container.innerHTML}</div></body></html>`;
 }

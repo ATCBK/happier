@@ -1,11 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPluginInstallationReviewFixture } from '@happier-dev/protocol/testing/pluginInstallationReviewFixture';
+import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { resolveApprovalRequestApproveAdmission } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 
 const settingsAdministration = vi.hoisted(() => ({
   execute: vi.fn(),
 }));
+const pluginChange = vi.hoisted(() => ({
+  request: vi.fn(),
+  decide: vi.fn(),
+  ensure: vi.fn(async () => undefined),
+}));
 
 vi.mock('@/plugins/settings/administration', () => ({
   executePluginSettingsAdministrationAction: settingsAdministration.execute,
+}));
+vi.mock('@/daemon/controlClient', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/daemon/controlClient')>(),
+  requestDaemonPluginChange: pluginChange.request,
+  decideDaemonPluginChange: pluginChange.decide,
+}));
+vi.mock('@/daemon/ensureDaemon', () => ({
+  ensureDaemonRunningForSessionCommand: pluginChange.ensure,
 }));
 
 import { createCliActionDeps } from './createCliActionDeps';
@@ -13,6 +29,165 @@ import { createCliActionDeps } from './createCliActionDeps';
 describe('createCliActionDeps plugin caller forwarding', () => {
   beforeEach(() => {
     settingsAdministration.execute.mockReset();
+    pluginChange.request.mockReset();
+    pluginChange.decide.mockReset();
+    pluginChange.ensure.mockClear();
+  });
+
+  it('composes a daemon-evaluated plugin review into the approval Artifact preview', async () => {
+    const review = createPluginInstallationReviewFixture({
+      pluginId: 'acme.archive',
+      displayName: 'Acme Archive',
+      source: { kind: 'archive', locator: '/tmp/acme-archive.tgz', integrity: 'sha512-exact', integrityBasis: 'observed' },
+      updateChannel: { kind: 'archive', locator: '/tmp/acme-archive.tgz' },
+      requiredHostAccess: [{
+        id: 'network', capability: 'network', reason: 'Call the service.',
+        authorizationClass: 'cooperativeDisclosure',
+        normalizedScope: { targets: [{ kind: 'fixedOrigin', origin: 'https://example.test' }] },
+      }],
+    });
+    pluginChange.request.mockResolvedValue({
+      kind: 'reviewRequired',
+      reviewKind: 'installation',
+      pendingChangeId: 'pending-archive-review',
+      reason: 'firstInstall',
+      currentVersion: null,
+      authorityExpansion: [],
+      review,
+    });
+    const credentials = {
+      token: 'header.eyJzdWIiOiJhY2NvdW50In0.signature',
+      encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) },
+    };
+    const deps = createCliActionDeps({
+      token: credentials.token,
+      credentials,
+      sessionId: 'plugin-global',
+      mode: 'plain',
+      ctx: null,
+    });
+
+    const preview = await deps.buildApprovalPreview?.({
+      actionId: 'plugins.install',
+      input: { path: '/tmp/acme-archive.tgz', kind: 'archive' },
+      context: { surface: 'agent', actionCaller: { kind: 'host' } },
+      defaultPreview: {
+        actionId: 'plugins.install',
+        actionArgs: { path: '/tmp/acme-archive.tgz', kind: 'archive' },
+        summary: 'Install plugin',
+      },
+    });
+    expect(preview).toMatchObject({
+      pluginInstall: {
+        permissionsDisclosure: 'daemonEvaluated',
+        pendingReview: {
+          pendingChangeId: 'pending-archive-review',
+          review: { pluginId: 'acme.archive', requiredHostAccess: review.requiredHostAccess },
+        },
+      },
+    });
+    const request = ApprovalRequestV2Schema.parse({
+      v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1, createdBy: { surface: 'agent' },
+      actionId: 'plugins.install', actionArgs: { path: '/tmp/acme-archive.tgz', kind: 'archive' },
+      summary: 'Install plugin', preview,
+      executionOriginV1: { v: 1, authority: 'account_automation', caller: { kind: 'host' },
+        requestId: 'review-projection', surface: 'agent', serverId: 'home', actionId: 'plugins.install' },
+    });
+    const admission = resolveApprovalRequestApproveAdmission(JSON.parse(JSON.stringify(request)));
+    expect(admission.status).toBe('available');
+    expect(admission.presentation.rows).toContainEqual(expect.objectContaining({
+      path: 'preview.pluginInstall.pendingReview.review',
+      entries: expect.arrayContaining([expect.objectContaining({ label: 'Display name', value: 'Acme Archive' })]),
+    }));
+    expect(pluginChange.request).toHaveBeenCalledWith({
+      kind: 'installArchive',
+      locator: '/tmp/acme-archive.tgz',
+    });
+    expect(pluginChange.decide).not.toHaveBeenCalled();
+  });
+
+  it('does not resolve the Session workspace while preparing a development install review', async () => {
+    const review = createPluginInstallationReviewFixture({
+      source: { kind: 'path', locator: '/tmp/acme-dev' },
+      updateChannel: { kind: 'path', locator: '/tmp/acme-dev', development: true },
+    });
+    pluginChange.request.mockResolvedValue({
+      kind: 'reviewRequired',
+      reviewKind: 'installation',
+      pendingChangeId: 'pending-development-review',
+      reason: 'firstInstall',
+      currentVersion: null,
+      authorityExpansion: [],
+      review,
+    });
+    let pathReads = 0;
+    const deps = createCliActionDeps({
+      token: 'token',
+      sessionId: 'plugin-session',
+      mode: 'plain',
+      ctx: null,
+      rawSession: {
+        get path() {
+          pathReads += 1;
+          return '/workspace';
+        },
+      },
+    });
+
+    await expect(deps.buildApprovalPreview?.({
+      actionId: 'plugins.install',
+      input: { path: '/tmp/acme-dev', dev: true },
+      context: { surface: 'agent', actionCaller: { kind: 'host' } },
+      defaultPreview: { actionId: 'plugins.install', actionArgs: { path: '/tmp/acme-dev', dev: true }, summary: 'Install plugin' },
+    })).resolves.toMatchObject({
+      pluginInstall: {
+        permissionsDisclosure: 'daemonEvaluated',
+        pendingReview: { pendingChangeId: 'pending-development-review' },
+      },
+    });
+    expect(pathReads).toBe(0);
+  });
+
+  it('returns the daemon preparation failure instead of a source-only approval preview', async () => {
+    pluginChange.request.mockResolvedValue({ kind: 'failed', code: 'registry_unavailable', message: 'Registry is unavailable' });
+    const deps = createCliActionDeps({ token: 'token', sessionId: 'cli-global', mode: 'plain', ctx: null });
+    await expect(deps.buildApprovalPreview?.({ actionId: 'plugins.install', input: { kind: 'npm', path: '@acme/external' },
+      context: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } },
+      defaultPreview: { actionId: 'plugins.install', actionArgs: { kind: 'npm', path: '@acme/external' }, summary: 'Install plugin' },
+    })).resolves.toMatchObject({ ok: false, errorCode: 'registry_unavailable', error: 'Registry is unavailable' });
+    expect(pluginChange.decide).not.toHaveBeenCalled();
+  });
+
+  it.each(['npm', 'archive'] as const)('prepares and executes a remote %s install without reading a Session workspace', async kind => {
+    let workspaceReads = 0;
+    const deps = createCliActionDeps({
+      token: 'token', sessionId: 'cli-global', mode: 'plain', ctx: null,
+      rawSession: { get path() { workspaceReads += 1; return '/unrelated-session'; } },
+    });
+    const input = { kind, path: kind === 'npm' ? '@acme/plugin' : '/tmp/acme-plugin.tgz', dryRun: true };
+    const context = { surface: 'ui' as const, authority: 'present_user' as const, actionCaller: { kind: 'host' as const } };
+    await expect(deps.buildApprovalPreview?.({ actionId: 'plugins.install', input, context,
+      defaultPreview: { actionId: 'plugins.install', actionArgs: input, summary: 'Install plugin' },
+    })).resolves.toMatchObject({ pluginInstall: { ok: true, source: { kind } } });
+    await expect(deps.pluginsDevLoopAction?.({ actionId: 'plugins.install', input, context }))
+      .resolves.toMatchObject({ ok: true, kind: 'plugins_install', dryRun: true });
+    expect(workspaceReads).toBe(0);
+  });
+
+  it('prepares an installed review independently of Session workspace metadata', async () => {
+    const kind = 'installed';
+    const review = createPluginInstallationReviewFixture();
+    pluginChange.request.mockResolvedValue({ kind: 'reviewRequired', reviewKind: 'installation',
+      pendingChangeId: 'remote-review', reason: 'firstInstall', currentVersion: null, authorityExpansion: [], review });
+    let workspaceReads = 0;
+    const deps = createCliActionDeps({ token: 'token', sessionId: 'cli-global', mode: 'plain', ctx: null,
+      rawSession: { get path() { workspaceReads += 1; return '/unrelated-session'; } },
+    });
+    await expect(deps.buildApprovalPreview?.({ actionId: 'plugins.install', input: { source: { kind, pluginId: review.pluginId } },
+      context: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } },
+      defaultPreview: { actionId: 'plugins.install', actionArgs: { source: { kind, pluginId: review.pluginId } }, summary: 'Install plugin' },
+    })).resolves.toMatchObject({ pluginInstall: { source: { kind } } });
+    expect(workspaceReads).toBe(0);
   });
 
   it('preserves the canonical host-stamped caller for Settings administration', async () => {

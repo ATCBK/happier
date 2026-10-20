@@ -263,7 +263,13 @@ async function readJsonResponse(response: Response, maxBytes: number, signal: Ab
         signal,
     });
     const text = new TextDecoder('utf-8', { fatal: true }).decode(body);
-    return JSON.parse(text) as unknown;
+    try {
+        return JSON.parse(text) as unknown;
+    } catch (cause) {
+        // Parser diagnostics can quote the untrusted body. Finalize/cleanup
+        // callers keep their existing outcome normalization around this error.
+        throw new Error('Direct import chunk returned an unsupported response', { cause });
+    }
 }
 
 async function readFinalizeRecoveryRequiredResponse(
@@ -309,9 +315,10 @@ export async function abortPreparedDirectImportSessionViaMachineRpc(params: Read
     uploadId: string;
     timeoutMs?: number | null;
     filesystemRootPath?: string;
+    signal?: AbortSignal | null;
 }>): Promise<Readonly<{ aborted: boolean | null }>> {
     const timeoutMs = resolveDirectTransferRequestTimeoutMs(params.timeoutMs);
-    const cleanupRequestSignal = createDirectTransferRequestAbortSignal({ timeoutMs });
+    const cleanupRequestSignal = createDirectTransferRequestAbortSignal({ timeoutMs, signal: params.signal });
     try {
         if (params.filesystemRootPath) {
             const response = FilesystemTransferCancelOutputSchema.parse(await callFilesystemTransferAction({
@@ -369,6 +376,7 @@ export async function abortOwnedDirectImportSession(params: Readonly<{
     timeoutMs?: number | null;
     filesystemRootPath?: string;
     preparedSession?: Pick<PreparedDirectImportSession, 'baseUrls' | 'request'>;
+    signal?: AbortSignal | null;
 }>): Promise<DirectImportPrepareFailure | null> {
     try {
         if (params.filesystemRootPath) {
@@ -378,7 +386,7 @@ export async function abortOwnedDirectImportSession(params: Readonly<{
             if (path.at(-1) !== params.uploadId || !path.join('/').includes('/machine-transfers/direct/imports/')) {
                 return createDirectImportCleanupFailure(new Error('Prepared import capability does not match the owned transfer'));
             }
-            const deadline = createDirectTransferRequestAbortSignal({ timeoutMs: resolveDirectTransferRequestTimeoutMs(params.timeoutMs) });
+            const deadline = createDirectTransferRequestAbortSignal({ timeoutMs: resolveDirectTransferRequestTimeoutMs(params.timeoutMs), signal: params.signal });
             try {
                 const response = await (params.preparedSession?.request ?? runtimeFetch)(buildDirectImportEndpoint(baseUrl, 'abort'), {
                     method: 'POST', credentials: 'same-origin', signal: deadline.signal,

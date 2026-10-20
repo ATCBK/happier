@@ -67,6 +67,11 @@ async function renderGate(surface?: 'destination') {
 }
 
 describe('WorkflowsGate', () => {
+    it('keeps a one-shot occurrence readable when only Automations are enabled', async () => {
+        await publishFeatures(false, true);
+        const screen = await renderScreen(<WorkflowsGate surface="occurrence"><Allowed /></WorkflowsGate>);
+        expect(screen.findAllByProps({ testID: 'workflows-allowed-child' })).toHaveLength(1);
+    });
     it('fails closed while the decisions are unresolved', async () => {
         const response = createDeferred<void>();
         homes.answer(serverId, '/v1/features', { body: createRootLayoutFeaturesResponse(), respondAfter: response.promise });

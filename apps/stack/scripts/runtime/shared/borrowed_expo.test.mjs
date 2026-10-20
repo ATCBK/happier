@@ -5,11 +5,14 @@ import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { prepareSourceRuntimeReload } from '../launch/prepareSourceRuntimeReload.mjs';
+import { getDaemonEnv } from '../../daemon.mjs';
+import { buildServerRuntimeEnv } from '../../utils/server/server_env.mjs';
 import test from 'node:test';
 
 import {
   buildBorrowedExpoUiUrl,
   isBorrowedExpoConsumer,
+  projectBorrowedExpoWebappEnv,
   projectBorrowedExpoRuntime,
   resolveBorrowedExpoLogPath,
   resolveBorrowedExpoRuntime,
@@ -50,7 +53,7 @@ async function resolveRemoteBorrowedExpoForTest(t, { metroRunning }) {
   };
   const projected = await resolveBorrowedExpoRuntime(query, boundary);
 
-  return { projected, probedPorts, setReachable(value) { reachable = value; },
+  return { projected, probedPorts, query, boundary, setReachable(value) { reachable = value; },
     refresh: () => resolveBorrowedExpoRuntime(query, boundary) };
 }
 
@@ -74,6 +77,45 @@ test('source restart admits runtime work while borrowed Expo is unavailable', as
     repoDir: process.cwd(), args: ['--no-dev-targets', '--no-server', '--server-url=http://127.0.0.1:3005', '--no-daemon'], env });
   assert.equal(prepared.ui, null);
   assert.equal(prepared.remote, false);
+});
+
+test('borrowed Expo projects the consumer UI origin without replacing an explicit webapp URL', async t => {
+  const { query, boundary, setReachable } = await resolveRemoteBorrowedExpoForTest(t, { metroRunning: true });
+  const projected = await projectBorrowedExpoWebappEnv({
+    ...query,
+    consumerStackName: 'agent-qa-embed',
+  }, boundary);
+
+  assert.equal(projected.HAPPIER_WEBAPP_URL, 'http://happier-agent-qa-embed.localhost:19364');
+  const serverEnv = buildServerRuntimeEnv({
+    baseEnv: projected,
+    serverPort: 43005,
+    publicServerUrl: 'http://happier-agent-qa-embed.localhost:43005',
+  });
+  const daemonEnv = getDaemonEnv({
+    baseEnv: projected,
+    cliHomeDir: join(query.env.HAPPIER_STACK_STORAGE_DIR, 'agent-qa-embed', 'cli'),
+    internalServerUrl: 'http://127.0.0.1:43005',
+    publicServerUrl: 'http://happier-agent-qa-embed.localhost:43005',
+    stackName: 'agent-qa-embed',
+    cliIdentity: 'default',
+  });
+  assert.equal(serverEnv.HAPPIER_WEBAPP_URL, projected.HAPPIER_WEBAPP_URL);
+  assert.equal(daemonEnv.HAPPIER_WEBAPP_URL, projected.HAPPIER_WEBAPP_URL);
+
+  const explicit = await projectBorrowedExpoWebappEnv({
+    ...query,
+    consumerStackName: 'agent-qa-embed',
+    env: { ...query.env, HAPPIER_WEBAPP_URL: 'https://explicit.example.test' },
+  }, boundary);
+  assert.equal(explicit.HAPPIER_WEBAPP_URL, 'https://explicit.example.test');
+
+  setReachable(false);
+  const degraded = await projectBorrowedExpoWebappEnv({
+    ...query,
+    consumerStackName: 'agent-qa-embed',
+  }, boundary);
+  assert.equal(degraded.HAPPIER_WEBAPP_URL, 'http://happier-agent-qa-embed.localhost:19364');
 });
 
 test('borrowed Expo rejects non-canonical producer names before resolving managed paths', async () => {

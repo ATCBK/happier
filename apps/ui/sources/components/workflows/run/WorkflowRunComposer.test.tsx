@@ -2,21 +2,23 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { t } from '@/text';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import type { WorkflowInputDefinition } from '@happier-dev/protocol/workflows/workflowV1';
 import { createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { resolveRoleSelectionV1 } from '@happier-dev/protocol';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { teamSummaryFixture, teamPolicyFixture, teamCapabilitiesFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import { resetTeamsSnapshotsForTests } from '@/sync/store/teams/teamsSnapshots';
-import { publishAppliedActiveServerRuntimeAvailability, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { publishAppliedActiveServerRuntimeAvailability } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { ArtifactAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { PromptLibraryRowsListResponseV1Schema, sealPromptLibraryContentV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent, WorkflowRunRecipientCensusResponseV1Schema, materializeWorkflowAcceptedSnapshotV1, sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const appliedHome = vi.hoisted(() => ({ serverId: 'server-a', serverUrl: 'https://server-a.example' }));
 
@@ -33,6 +35,7 @@ vi.mock('@/utils/web/radixCjs', async () => {
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
 // The harness installs network leaves before the real UI binds its scoped transport.
 const { KeyboardShortcutProvider, useKeyboardCommand } = await import('@/keyboard');
 const { ModalProvider } = await import('@/modal/ModalProvider');
@@ -79,6 +82,7 @@ async function mount(initial: React.ComponentProps<typeof WorkflowRunComposer>['
 describe('workflow composer admission', () => {
     let restorePopoverGlobals: (() => void) | undefined;
     let disposeLoader: (() => void) | undefined;
+    let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
     let previousState = getStorage().getState();
     beforeEach(async () => {
         previousState = getStorage().getState();
@@ -86,7 +90,7 @@ describe('workflow composer admission', () => {
         await home.reset();
         disposeLoader = await installRealActionExecutorModuleLoader();
         appliedHome.serverUrl = `https://workflow-composer-${crypto.randomUUID()}.test`;
-        appliedHome.serverId = await home.addHome({ name: 'Workflow Home', serverUrl: appliedHome.serverUrl, accountId: 'account-a' });
+        appliedHome.serverId = await home.addHome({ name: 'Workflow Home', serverUrl: appliedHome.serverUrl, accountId: 'account-a', currentAccount: true });
         // Grant reads reopen their Artifact through the real sync codec before disclosure.
         await home.artifacts(appliedHome.serverId).handle('/v1/artifacts', { method: 'POST', body: JSON.stringify({
             id: 'saved-workflow', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
@@ -102,17 +106,63 @@ describe('workflow composer admission', () => {
             }) }],
         }) });
         restorePopoverGlobals = withPopoverWebGlobals();
-        getStorage().setState({ profileScope: { serverId: appliedHome.serverId, accountId: 'account-a' }, settingsScope: { serverId: appliedHome.serverId, accountId: 'account-a' } });
-        publishAppliedActiveServerSnapshot({ ...appliedHome, generation: 1 });
+        connection = await restoreServerAccountForTest({ serverUrl: appliedHome.serverUrl, accountId: 'account-a',
+            credentials: { token: createAccountTokenForTests('account-a', { currentAccount: true }) }, request: home.request });
     });
     afterEach(async () => {
         await standardCleanup();
+        await connection?.dispose();
+        connection = undefined;
         publishAppliedActiveServerRuntimeAvailability(false);
         restorePopoverGlobals?.();
         await home.reset();
         disposeLoader?.();
         disposeLoader = undefined;
         getStorage().setState(previousState);
+    });
+    it.each([undefined, { serverId: 'other-home', sessionId: 'explicit-review-session' }])(
+        'binds origin Session input defaults without replacing an explicit target (%j)', async (explicit) => {
+            const originSession = { serverId: appliedHome.serverId, sessionId: 'origin-session' };
+            const onRun = vi.fn();
+            const reviewInputs: readonly WorkflowInputDefinition[] = [{ name: 'reviewSession', valueType: 'json', required: true,
+                inputType: { hostType: 'session' }, defaultFrom: 'origin_session' }];
+            const screen = await renderScreen(<WorkflowRunComposer inputs={reviewInputs} originSession={originSession}
+                values={explicit ? { reviewSession: explicit } : {}} onChangeValues={() => {}}
+                onRun={onRun} onCancel={() => {}} />);
+            expect(screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(false);
+            await screen.pressByTestIdAsync('workflow-run-inputs-run');
+            expect(onRun).toHaveBeenCalledWith({ reviewSession: explicit ?? originSession });
+        });
+    it('requires an explicit Session when an origin default has no Session context', async () => {
+        const onRun = vi.fn();
+        const screen = await renderScreen(<WorkflowRunComposer inputs={[{ name: 'reviewSession', valueType: 'json', required: true,
+            inputType: { hostType: 'session' }, defaultFrom: 'origin_session' }]}
+            values={{}} onChangeValues={() => {}} onRun={onRun} onCancel={() => {}} />);
+        expect(screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(true);
+        await screen.pressByTestIdAsync('workflow-run-inputs-run');
+        expect(onRun).not.toHaveBeenCalled();
+    });
+    it('offers the participant picker on demand and reads a chosen Session by name, not as JSON', async () => {
+        const participant = { kind: 'session', session: { serverId: appliedHome.serverId, sessionId: 'reviewer-session' } } as const;
+        const screen = await renderScreen(<WorkflowRunComposer inputs={[{ name: 'reviewer', valueType: 'json', required: true,
+            inputType: { hostType: 'agentParticipant' } }, { name: 'brief', valueType: 'string', required: true }]}
+            serverId={appliedHome.serverId} values={{ reviewer: participant }} onChangeValues={() => {}} onRun={vi.fn()} onCancel={() => {}} />);
+        // Closed, the start form mounts no participant control (no listing or machine reads).
+        expect(screen.findAllByTestId('workflow-run-inputs-reviewer-picker')).toHaveLength(0);
+        await screen.pressByTestIdAsync('workflow-run-inputs-inputs-chip');
+        const pickers = screen.findAllByTestId('workflow-run-inputs-reviewer-picker');
+        expect(pickers.length).toBeGreaterThan(0);
+        expect(pickers.some((node) => node.props.reading === 'session.collaboration.discussion.participants.session')).toBe(true);
+        expect(screen.findAllByTestId('workflow-run-inputs-reviewer').some((node) => typeof node.props.value === 'string'
+            && node.props.value.includes('reviewer-session'))).toBe(false);
+    });
+    it('reads a built-in\'s inputs in its own words wherever the form opens, without each caller passing them', async () => {
+        const screen = await renderScreen(<WorkflowRunComposer inputs={[{ name: 'focus', valueType: 'string', required: false, default: 'Review it' },
+            { name: 'maxRounds', valueType: 'number', required: false, default: 3 }]}
+            optionsConsumer={{ kind: 'workflow', workflow: 'builtin:review-and-converge' }}
+            values={{}} onChangeValues={() => {}} onRun={() => {}} onCancel={() => {}} />);
+        await screen.pressByTestIdAsync('workflow-run-inputs-inputs-chip');
+        expect(screen.getTextContent()).toContain(t('workflows.builtins.reviewAndConverge.rounds'));
     });
     it('renders and opens a custom Where control in the wrapped composer', async () => {
         const where = { ...createExecutionRunStartContentChip({ key: 'review-where', icon: 'folder',
@@ -306,6 +356,16 @@ describe('workflow composer admission', () => {
             onChangeValues={() => {}} onRun={() => {}} onCancel={() => {}} definition={definition} />);
         expect(screen.findByTestId('workflow-run-inputs-roles-chip')).not.toBeNull();
     });
+    it('never asks for what the host binds: Another round fills the previous round, a trigger its fingerprint', async () => {
+        const onRun = vi.fn();
+        const screen = await renderScreen(<WorkflowRunComposer inputs={[{ name: 'diffFingerprint', valueType: 'string', required: false },
+            { name: 'request', valueType: 'string', required: true },
+            { name: 'previousRoundContext', valueType: 'json', required: false, default: null }]}
+            values={{ request: 'Plan the release' }} onChangeValues={() => {}} onRun={onRun} onCancel={() => {}} />);
+        expect(screen.findAllByTestId('workflow-run-inputs-inputs-chip')).toHaveLength(0);
+        await screen.pressByTestIdAsync('workflow-run-inputs-run');
+        expect(onRun).toHaveBeenCalledWith({ request: 'Plan the release', previousRoundContext: null });
+    });
     it('keeps the needed-inputs chip visible when the missing field is the sole main text input', async () => {
         const screen = await renderScreen(<WorkflowRunComposer inputs={[{ name: 'brief', valueType: 'string', required: true }]}
             values={{}} onChangeValues={() => {}} onRun={() => {}} onCancel={() => {}} />);
@@ -370,6 +430,24 @@ describe('workflow composer admission', () => {
         await act(async () => { executeCommand('workflow.run'); });
         expect(onRun).not.toHaveBeenCalled();
         await screen.update(content({ brief: 'Release' }));
+        await act(async () => { executeCommand('workflow.run'); });
+        expect(onRun).toHaveBeenCalledWith({ brief: 'Release' });
+    });
+
+    it('names the run key once: hung from a trigger that already shows it, Start keeps the command but drops its hint', async () => {
+        getStorage().getState().applySettingsLocal({ keyboardShortcutsV2Enabled: true });
+        const onRun = vi.fn();
+        let executeCommand: ReturnType<typeof useKeyboardCommand> = () => false;
+        function Commands() { executeCommand = useKeyboardCommand(); return null; }
+        const screen = await renderScreen(
+            <KeyboardShortcutProvider handlers={{}}>
+                <WorkflowRunComposer inputs={[{ name: 'brief', valueType: 'string', required: true }]} triggerNamesShortcut
+                    values={{ brief: 'Release' }} onChangeValues={() => {}} onRun={onRun} onCancel={() => {}} />
+                <Commands />
+            </KeyboardShortcutProvider>,
+        );
+        expect(screen.findByTestId('workflow-run-inputs-shortcut')).toBeNull();
+        const { act } = await import('react-test-renderer');
         await act(async () => { executeCommand('workflow.run'); });
         expect(onRun).toHaveBeenCalledWith({ brief: 'Release' });
     });

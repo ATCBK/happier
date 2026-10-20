@@ -2,6 +2,8 @@ import { AcpConfigOptionOverridesV1Schema } from '@happier-dev/protocol/sessions
 import { AgentExecutionTargetV1Schema, type AgentExecutionTargetV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import { SessionAuthoringValueV1Schema } from '@happier-dev/protocol/sessions/authoring/index';
 import { SessionIdentityAdditionsV1Schema } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
+import { projectDiscussionModelParticipantLaunchV1 } from '@happier-dev/protocol/discussions/participants';
+import type { ExecutableParticipantSelectionV1 } from '@happier-dev/protocol/discussions/executableParticipants';
 import { SessionPromptStackV1Schema } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 import { readSessionInstructionsAuthoringDraft } from '@/sync/domains/state/sessionInstructionsDraft';
 import {
@@ -1062,6 +1064,16 @@ export function buildSessionServerStartSpawnDraftV1FromAuthoringDraft(
     });
 }
 
+/** Read-only model picking uses the same selected setup as ordinary Session authoring. */
+export function buildExecutableModelParticipantSelectionFromAuthoringDraft(
+    params: SessionServerStartSpawnDraftFromAuthoringParams & Readonly<{ secretReferenceOverlay?: SecretReferenceOverlayV1 }>,
+): Extract<ExecutableParticipantSelectionV1, { kind: 'model' }> {
+    return { kind: 'model', launch: projectDiscussionModelParticipantLaunchV1({
+        ...buildSessionServerStartSpawnDraftV1FromAuthoringDraft(params),
+        ...(params.secretReferenceOverlay ? { secretReferenceOverlay: params.secretReferenceOverlay } : {}),
+    }) };
+}
+
 /** Explicit no-effect edits preserve every other field in the strict source recipe. */
 export type SessionServerStartSpawnDraftEdits = Readonly<Partial<Pick<
     SessionServerStartSpawnDraftV1,
@@ -1069,7 +1081,16 @@ export type SessionServerStartSpawnDraftEdits = Readonly<Partial<Pick<
     | 'allowedTools' | 'unlistedTools' | 'organizationPlacement'
     | 'profileId' | 'modelSelection' | 'capabilitySelection' | 'connectedServices'
     | 'agentModeId' | 'configuration'
->>>;
+>> & {
+    sessionConfigOptionOverrides?: SessionAuthoringDraft['sessionConfigOptionOverrides'];
+}>;
+
+function buildServerStartConfigurationOptions(overrides: SessionAuthoringDraft['sessionConfigOptionOverrides']) {
+    return Object.fromEntries(Object.entries(overrides?.overrides ?? {}).map(([key, override]) => [
+        key,
+        { value: override.value, updatedAtMs: Math.max(0, Math.floor(override.updatedAt)) },
+    ]));
+}
 
 export function applySessionServerStartSpawnDraftEdits(params: Readonly<{
     draft: SessionServerStartSpawnDraftV1;
@@ -1077,15 +1098,27 @@ export function applySessionServerStartSpawnDraftEdits(params: Readonly<{
     configurationUpdatedAtMs: number;
 }>): SessionServerStartSpawnDraftV1 {
     const draft = SessionServerStartSpawnDraftV1Schema.parse(params.draft);
-    const next = { ...draft, ...params.edits };
+    const { sessionConfigOptionOverrides, ...edits } = params.edits;
+    const next = { ...draft, ...edits };
     if (params.edits.agentTarget && next.modelSelection) {
         next.modelSelection = {
             ...next.modelSelection,
             ref: { ...next.modelSelection.ref, agentTargetKey: buildBackendTargetKeyV2(params.edits.agentTarget) },
         };
     }
+    const updatedAtMs = Math.max(0, Math.floor(params.configurationUpdatedAtMs));
+    if ('sessionConfigOptionOverrides' in params.edits) {
+        next.configuration = {
+            ...(next.configuration ?? {
+                mode: { value: next.agentModeId ?? null, updatedAtMs },
+                model: { value: next.modelSelection?.ref.modelId ?? null,
+                    updatedAtMs: next.modelSelection?.updatedAt ?? updatedAtMs },
+                permissionIntent: { value: next.permissionMode ?? 'default', updatedAtMs },
+            }),
+            options: buildServerStartConfigurationOptions(sessionConfigOptionOverrides ?? null),
+        };
+    }
     if (next.configuration) {
-        const updatedAtMs = Math.max(0, Math.floor(params.configurationUpdatedAtMs));
         next.configuration = {
             ...next.configuration,
             ...(params.edits.permissionMode !== undefined && params.edits.permissionMode !== draft.permissionMode
@@ -1097,22 +1130,19 @@ export function applySessionServerStartSpawnDraftEdits(params: Readonly<{
                     updatedAtMs: params.edits.modelSelection?.updatedAt ?? updatedAtMs } } : {}),
         };
     }
-    return SessionServerStartSpawnDraftV1Schema.parse(next);
+    // An explicit undefined edit clears an optional choice. Omit the property
+    // in the settled recipe so it also satisfies the Host API's JSON boundary.
+    return SessionServerStartSpawnDraftV1Schema.parse(
+        Object.fromEntries(Object.entries(next).filter(([, value]) => value !== undefined)),
+    );
 }
 
 /** The ordinary start and managed continuation share every target-independent authored field. */
 function resolveSessionAuthoringSpawnInput(params: SessionServerStartSpawnDraftFromAuthoringParams) {
     const fields = resolveSharedSessionAuthoringSpawnFields(params.draft);
     const updatedAtMs = Math.max(0, Math.floor(params.configurationUpdatedAtMs));
-    const optionOverrides = fields.sessionConfigOptionOverrides?.overrides ?? {};
     const terminal = buildStrictV2TerminalFromAuthoringDraft(params.draft);
-    const options = Object.fromEntries(Object.entries(optionOverrides).map(([key, override]) => [
-        key,
-        {
-            value: override.value,
-            updatedAtMs: Math.max(0, Math.floor(override.updatedAt)),
-        },
-    ]));
+    const options = buildServerStartConfigurationOptions(fields.sessionConfigOptionOverrides ?? null);
 
     if (!params.draft.agentTarget) {
         throw new Error('New Session authoring draft requires agentTarget');
@@ -1121,6 +1151,8 @@ function resolveSessionAuthoringSpawnInput(params: SessionServerStartSpawnDraftF
         ...(fields.sessionName ? { title: fields.sessionName } : {}),
         ...(fields.initialSessionFacts === undefined ? {} : { identity: fields.initialSessionFacts }),
         ...(fields.memoryEnabled === undefined ? {} : { memoryEnabled: fields.memoryEnabled }),
+        ...(params.draft.primaryTeamId ? { primaryTeamId: params.draft.primaryTeamId } : {}),
+        ...(params.draft.teamCredentialBindings !== undefined ? { teamCredentialBindings: params.draft.teamCredentialBindings } : {}),
         ...(fields.promptStack === undefined ? {} : { promptStack: fields.promptStack }),
         directory: fields.directory,
         organizationPlacement: normalizeOrganizationPlacement(params.draft.organizationPlacement),
@@ -1298,8 +1330,6 @@ function resolveSessionAuthoringCreationInput(params: SessionSpawnNewInputFromAu
         ...(params.sourceContext ? { sourceContext: params.sourceContext } : {}),
         ...(params.secretReferenceOverlay ? { secretReferenceOverlay: params.secretReferenceOverlay } : {}),
         ...(params.draft.access?.grants.length ? { initialAccess: params.draft.access } : {}),
-        ...(params.draft.primaryTeamId ? { primaryTeamId: params.draft.primaryTeamId } : {}),
-        ...(params.draft.teamCredentialBindings !== undefined ? { teamCredentialBindings: params.draft.teamCredentialBindings } : {}),
         ...(params.draft.initialTriggers?.length ? { initialTriggers: params.draft.initialTriggers } : {}),
     };
 }
@@ -1469,6 +1499,8 @@ export function buildPersistedNewSessionDraftFromAuthoringDraft(params: Readonly
         ...(params.draft.directoryKind === 'managed' ? { directoryKind: 'managed' as const } : {}),
         organizationPlacement: params.draft.organizationPlacement,
         ...(params.draft.access !== undefined ? { access: params.draft.access } : {}),
+        ...(params.draft.primaryTeamId !== undefined ? { primaryTeamId: params.draft.primaryTeamId } : {}),
+        ...(params.draft.teamCredentialBindings !== undefined ? { teamCredentialBindings: params.draft.teamCredentialBindings } : {}),
         ...(params.draft.initialTriggers !== undefined ? { initialTriggers: params.draft.initialTriggers } : {}),
         ...(targetServerId ? { targetServerId } : {}),
         ...(windowsRemoteSessionLaunchModeOverride ? { windowsRemoteSessionLaunchModeOverride } : {}),

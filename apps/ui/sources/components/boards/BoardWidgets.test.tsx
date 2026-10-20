@@ -13,7 +13,10 @@ import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoard
 import { createEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropRuntime';
 import { buildAccountWidgetAddSections } from '@/components/widgets/add/accountWidgetAddSections';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
+import { t } from '@/text';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
+import { AppShellPluginUiProjectionValueProvider, type AppShellPluginUiProjectionValue } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { UniversalSearchRuntimeProvider } from '@/components/appShell/search/UniversalSearchRuntimeContext';
 
 import { BoardByStatus } from './byStatus/BoardByStatus';
@@ -150,8 +153,10 @@ describe('WorkBoard widgets', () => {
         const render: BoardCanvasWidgetRender = (widget, state) => <View testID={`frame:${widget.placement.instance.id}`}>
             {state.active !== false ? <RuntimeBody id={widget.placement.instance.id} /> : null}{state.grip}
         </View>;
-        const screen = await renderScreen(<BoardCanvas cards={[]} widgets={canvasWidgets(board)} renderWidget={render}
-            positionsByItemRef={board.positionsByItemRef} snap binding={canvasBinding(b, [])} onOpen={() => {}} />);
+        const retainedLayout = { current: null };
+        const canvasProps = { cards: [], widgets: canvasWidgets(board), renderWidget: render,
+            positionsByItemRef: board.positionsByItemRef, snap: true, binding: canvasBinding(b, []), onOpen: () => {}, retainedLayout };
+        const screen = await renderScreen(<BoardCanvas {...canvasProps} />);
         await act(async () => {
             screen.findHostByTestId('board-canvas')!.props.onLayout({ nativeEvent: { layout: { width: 900, height: 200 } } });
             for (const placed of [top, bottom]) {
@@ -162,6 +167,13 @@ describe('WorkBoard widgets', () => {
         });
         expect([...demanded]).toEqual(['top']);
         expect(screen.findHostByTestId('frame:bottom')).not.toBeNull();
+        // Phone replaces Canvas with By status. On returning, retained visible
+        // bodies must render before another asynchronous layout event; distant
+        // bodies must remain suspended under the same viewport policy.
+        await screen.update(<></>);
+        expect([...demanded]).toEqual([]);
+        await screen.update(<BoardCanvas {...canvasProps} />);
+        expect([...demanded]).toEqual(['top']);
         // Keyboard focus continues demanding its card, even while its frame is outside the window.
         await act(async () => { screen.findHostByTestId(`board-canvas-organize:${keyOf(bottom)}`)!.props.onFocus(); });
         expect([...demanded]).toEqual(['top', 'bottom']);
@@ -201,6 +213,32 @@ describe('WorkBoard widgets', () => {
         await layout(BOARD_CANVAS_METRICS.cardWidthPx + BOARD_CANVAS_METRICS.paddingPx * 2);
         expect(widthsAround(`board-canvas-widget:${keyOf(board.widgets![1]!)}`)).not.toContain(twoCards);
         expect(b.board().widgets?.[1]?.size).toBe('full');
+    });
+
+    it('titles an unnamed installed copy by its kind once the projection has settled without its plugin, and only a pending projection shows the loading line', async () => {
+        const { widgetProjectionOf } = await import('@/dev/testkit/fixtures/pluginWidgetProjectionFixtures');
+        const placed = placement(copy('gone'));
+        const b = boardStore(boardWith([placed]));
+        await b.store.refresh();
+        const base = { pluginUiProjection: widgetProjectionOf([]), pluginBrowserProjection: null, interactionEnabled: true, machineId: null,
+            serverId: scope.serverId, platform: 'web' as const, accountLifetime: captureActiveServerAccountScopeLifetime(),
+            clientExecutableActivation: { status: 'ready' as const }, reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {} };
+        const titleOf = async (phase: AppShellPluginUiProjectionValue['phase']) => {
+            const screen = await renderScreen(
+                <AppShellPluginUiProjectionValueProvider value={{ ...base, phase } satisfies AppShellPluginUiProjectionValue}>
+                    <BoardWidgetCard boardId="b1" placement={placed} scope={null} descriptor={null} size={placed.size}
+                        index={0} count={1} dispatch={b.store.queue.dispatch} active testID="board-widget:gone" />
+                </AppShellPluginUiProjectionValueProvider>, { wrapper: Wrapper });
+            const loading = screen.findAll(node => node.props?.accessibilityLabel === t('common.loading')).length > 0;
+            const text = screen.getTextContent();
+            await act(async () => { screen.tree.unmount(); });
+            return { loading, text };
+        };
+        const settled = await titleOf('current');
+        expect(settled.loading).toBe(false);
+        expect(settled.text).toContain(t('boards.widgets.kind'));
+        const pending = await titleOf('establishing');
+        expect(pending.loading).toBe(true);
     });
 
     it('places a widget with the shared grip keyboard and accessibility controls, saving its qualified key and keeping the work card', async () => {

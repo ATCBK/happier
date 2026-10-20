@@ -52,23 +52,28 @@ describe('resolveTranscriptEventEmphasisByMessageId', () => {
 });
 
 describe('resolveTranscriptHostWakeCountByMessageId', () => {
-    const update = (workerId: string) => ({
+    const update = (workerId: string): Extract<Extract<Message, { kind: 'agent-event' }>['event'], { type: 'worker-update' }> => ({
         type: 'worker-update', update: {
             v: 1, workerKind: 'session', workerId, ownerState: 'settled', wake: 'finished',
             headline: 'Finished', canInspect: false,
         },
-    }) as Extract<Message, { kind: 'agent-event' }>['event'];
+    });
     const agentText = (id: string): Message => ({
         kind: 'agent-text', localId: null, id, createdAt: 1, text: 'Reply', isThinking: false,
     } as Message);
 
-    it('counts each run of worker updates once, on the update that opens the wake', () => {
-        const messages = [
-            eventMessage('a', update('w1')),
-            eventMessage('b', update('w2')),
+    it('counts only cards linked to a batch with proven accepted wake evidence', () => {
+        const messages: Message[] = [
+            { ...eventMessage('batch', { type: 'message', message: 'Follow changed' }),
+                localId: 'session-follow-wake:batch-1', followDeliveryProjection: { status: 'woke', reason: null } },
+            eventMessage('a', { ...update('w1'), followWakeEventLocalId: 'session-follow-wake:batch-1' }),
+            eventMessage('b', { ...update('w2'), followWakeEventLocalId: 'session-follow-wake:batch-1' }),
             eventMessage('c', update('w3')),
             agentText('reply'),
-            eventMessage('d', update('w4')),
+            { ...eventMessage('quiet-batch', { type: 'message', message: 'Follow changed' }),
+                localId: 'session-follow-wake:quiet', followDeliveryProjection: { status: 'next_turn', reason: null } },
+            eventMessage('quiet-card', { ...update('w5'), followWakeEventLocalId: 'session-follow-wake:quiet' }),
+            eventMessage('d', { ...update('w4'), followWakeEventLocalId: 'session-follow-wake:unaccepted' }),
             eventMessage('other', { type: 'message', message: 'Unrelated' }),
         ];
         const counts = resolveTranscriptHostWakeCountByMessageId({
@@ -76,6 +81,16 @@ describe('resolveTranscriptHostWakeCountByMessageId', () => {
             messagesById: Object.fromEntries(messages.map((message) => [message.id, message])),
         });
 
-        expect(counts).toEqual({ a: 3, d: 1 });
+        expect(counts).toEqual({ a: 2 });
+    });
+
+    it('recognizes a single accepted worker card that is itself the batch event', () => {
+        const card: Message = { ...eventMessage('single', {
+            ...update('w1'), followWakeEventLocalId: 'session-follow-wake:single',
+        }), localId: 'session-follow-wake:single',
+            followDeliveryProjection: { status: 'woke', reason: null } };
+        expect(resolveTranscriptHostWakeCountByMessageId({
+            messageIdsOldestFirst: [card.id], messagesById: { [card.id]: card },
+        })).toEqual({ single: 1 });
     });
 });

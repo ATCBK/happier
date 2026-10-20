@@ -136,6 +136,20 @@ function createBaseSession(overrides: Partial<Session> = {}): Session {
     };
 }
 
+it('carries an opened Session explanation beside the runtime-derived status', async () => {
+    const { getSessionStatus } = await import('./sessionUtils');
+    const nowMs = 1_700_000_000_000;
+    const session = createBaseSession({ activeAt: nowMs, metadata: { path: '/workspace', host: 'dev' } });
+    const baseline = getSessionStatus(session, nowMs);
+    const explained = getSessionStatus({ ...session, metadata: { ...session.metadata!,
+        work: { statusReason: 'Waiting for the build' } } }, nowMs);
+    expect(explained).toMatchObject({ statusReason: 'Waiting for the build',
+        awareness: { statusReason: 'Waiting for the build' } });
+    expect(explained.state).toBe(baseline.state);
+    expect(explained.statusText).toBe(baseline.statusText);
+    expect(explained.awareness.operational).toEqual(baseline.awareness.operational);
+});
+
 function createPendingUserMessage(overrides: Partial<PendingMessage> = {}): PendingMessage {
     return {
         id: 'pending-first-turn',
@@ -156,6 +170,20 @@ function createPendingUserMessage(overrides: Partial<PendingMessage> = {}): Pend
 }
 
 describe('shared transient session titles', () => {
+    it('can name a freshly authorized snapshot without adopting a cached same-id title', async () => {
+        const { getSessionName, readSessionNameIfNamed } = await import('./sessionUtils');
+        const session = createBaseSession({ serverId: 'home-a', metadata: { path: '/project', host: 'devbox' } });
+        const cached = createSessionListRenderableSessionFixture({
+            id: session.id, metadata: { path: '/private', summaryText: 'Previous Account private title' },
+        });
+        storage.setState({
+            sessionListRowsByServerId: { 'home-a': { [session.id]: cached } },
+            sessions: { [session.id]: { ...session, metadata: { path: '/private', host: 'old-host', machineId: 'old-machine' } } },
+        });
+        expect(getSessionName(session, 'home-a')).toBe('Previous Account private title');
+        expect(readSessionNameIfNamed(session, 'home-a', { snapshotOnly: true })).toBe('project');
+    });
+
     it('names full Sessions and their roster/list/Talk rows consistently before a summary arrives', async () => {
         const { getSessionName } = await import('./sessionUtils');
         const session = createBaseSession({

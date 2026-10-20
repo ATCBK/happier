@@ -3,6 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createPluginInstallationReviewFixture } from '@happier-dev/protocol/testing/pluginInstallationReviewFixture';
 import { captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';
+import { buildActionExecuteResultFromRecordedApprovalExecution, createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import type { ActionCliExecutionDeps } from '@/cli/actions/executeCommand';
+import { executePluginDevLoopAction } from '@/plugins/devLoop/actions';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 const daemon = vi.hoisted(() => ({
   ensureRunning: vi.fn(async () => undefined),
@@ -32,6 +37,82 @@ vi.mock('@/terminal/prompts/promptConfirmYesNo', () => ({
 }));
 
 import { handlePluginsCommand } from './plugins';
+
+function authenticatedActionDeps(options: Readonly<{ approve?: boolean }> = {}): Partial<ActionCliExecutionDeps> {
+  let storedRequest: Parameters<NonNullable<Parameters<typeof createActionExecutor>[0]['approvalsCreate']>>[0]['request'] | null = null;
+  const executor = createActionExecutor({
+    ...createUnavailableActionTransportDeps(),
+    pluginsDevLoopAction: async (args) => await executePluginDevLoopAction(args),
+    buildApprovalPreview: async ({ defaultPreview }) => ({
+      ...defaultPreview,
+      pluginInstall: {
+        permissionsDisclosure: 'daemonEvaluated',
+        pendingReview: reviewRequired,
+      },
+    }),
+    approvalsCreate: async ({ request }) => {
+      storedRequest = request;
+      return { artifactId: 'plugins-command-approval' };
+    },
+    approvalsGet: async () => storedRequest,
+    approvalsUpdate: async ({ request }) => {
+      storedRequest = request;
+      return { ok: true };
+    },
+    isApprovalExecutionOriginCurrent: async () => true,
+  });
+  return {
+    readCredentialsFn: async () => ({
+      token: 'header.eyJzdWIiOiJhY2NvdW50In0.signature',
+      encryption: null,
+    }),
+    getServerProfileFn: async () => ({
+      id: 'cloud',
+      name: 'Home',
+      serverUrl: 'https://api.example.test',
+      webappUrl: 'https://app.example.test',
+      createdAt: 1,
+      updatedAt: 1,
+      lastUsedAt: 1,
+    }),
+    createExecutorFn: async () => ({
+      execute: async (actionId, input, context) => {
+        const result = await executor.execute(actionId, input, {
+          ...context,
+          authority: 'present_user',
+          actionCaller: { kind: 'host' },
+          runtimeAccountId: 'account',
+          executionRunTargetMachineId: 'machine-1',
+          serverId: 'cloud',
+          serverIdentityId: 'server-identity-1',
+        });
+        if (options.approve === false || !result.ok) return result;
+        const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
+        if (!approval.success) return result;
+        const decided = await executor.execute('approval.request.decide', {
+          artifactId: approval.data.artifactId,
+          decision: 'approve',
+        }, {
+          surface: 'ui',
+          authority: 'present_user',
+          actionCaller: { kind: 'host' },
+          runtimeAccountId: 'account',
+          serverId: 'cloud',
+          serverIdentityId: 'server-identity-1',
+        });
+        if (!decided.ok || !decided.result || typeof decided.result !== 'object'
+          || !('execution' in decided.result) || !decided.result.execution) return decided;
+        if (!storedRequest) throw new Error('Expected the recorded approval request');
+        const execution = buildActionExecuteResultFromRecordedApprovalExecution(storedRequest);
+        if (!execution) throw new Error('Expected the recorded approval execution');
+        return execution;
+      },
+      async resolveSessionTarget() {
+        throw new Error('Unexpected Session target');
+      },
+    }),
+  };
+}
 
 const reviewRequired = {
   kind: 'reviewRequired' as const,
@@ -65,9 +146,43 @@ afterEach(() => {
 });
 
 describe('plugins command daemon mutations', () => {
+  it('hands a development review to the ordinary install approval owner', async () => {
+    const output = captureStdoutJsonOutput();
+    try {
+      await handlePluginsCommand(['dev', '/tmp/acme-dev', '--sdk-registry', 'https://registry.example.test', '--json'], {
+        ensureDaemon: async () => undefined,
+        controlPluginDevelopment: async () => ({
+          kind: 'failed', code: 'plugin_dev_reviewRequired',
+          message: 'Plugin development preparation failed', status: { roots: [], plugins: [] },
+        }),
+        actionExecutionDeps: authenticatedActionDeps({ approve: false }),
+      });
+      expect(output.json()).toMatchObject({
+        ok: true, kind: 'plugins_install',
+        data: { kind: 'approval_request_created', artifactId: 'plugins-command-approval' },
+      });
+      expect(daemon.decideChange).not.toHaveBeenCalled();
+    } finally { output.restore(); }
+  });
+
+  it.each(['enable', 'disable', 'rollback', 'update'] as const)('routes %s through Action approval before requesting a daemon change', async command => {
+    daemon.requestChange.mockResolvedValue({ kind: 'committed', pluginId: 'acme.sample', desiredGeneration: null, appliedGeneration: null, pendingSurfaces: [] });
+    const output = captureStdoutJsonOutput();
+    try {
+      await handlePluginsCommand([command, 'acme.sample', '--json'], {
+        isInteractiveTerminal: () => false,
+        actionExecutionDeps: authenticatedActionDeps({ approve: false }),
+      });
+      expect(output.json()).toMatchObject({ ok: true, data: { kind: 'approval_request_created' } });
+      expect(daemon.requestChange).not.toHaveBeenCalled();
+      expect(daemon.confirm).not.toHaveBeenCalled();
+      expect(daemon.decideChange).not.toHaveBeenCalled();
+    } finally { output.restore(); }
+  });
+
   it('enumerates outstanding plugin reviews with their daemon-issued ids', async () => {
     daemon.readCatalog.mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
-    daemon.listChanges.mockResolvedValue({ changes: [reviewRequired] });
+    daemon.listChanges.mockResolvedValue({ kind: 'available', changes: [reviewRequired] });
     const output = captureStdoutJsonOutput();
     try {
       await handlePluginsCommand(['list', '--json']);
@@ -524,21 +639,22 @@ describe('plugins command daemon mutations', () => {
     }
   });
 
-  it('keeps a headless archive review pending without fabricating approval', async () => {
+  it('keeps a headless archive install in the Action approval Inbox without fabricating approval', async () => {
     daemon.requestChange.mockResolvedValue(reviewRequired);
     const output = captureStdoutJsonOutput();
     try {
-      await handlePluginsCommand(['install', '/tmp/acme-sample.tgz', '--json']);
-
-      expect(daemon.ensureRunning).toHaveBeenCalledTimes(1);
-      expect(daemon.requestChange).toHaveBeenCalledWith({
-        kind: 'installArchive', locator: '/tmp/acme-sample.tgz',
+      await handlePluginsCommand(['install', '/tmp/acme-sample.tgz', '--json'], {
+        actionExecutionDeps: authenticatedActionDeps({ approve: false }),
       });
+
+      expect(daemon.ensureRunning).not.toHaveBeenCalled();
+      expect(daemon.requestChange).not.toHaveBeenCalled();
       expect(daemon.confirm).not.toHaveBeenCalled();
       expect(daemon.decideChange).not.toHaveBeenCalled();
       expect(output.json()).toMatchObject({
-        ok: false,
-        error: { code: 'review_required', pendingChangeId: 'pending-1' },
+        ok: true,
+        kind: 'plugins_install',
+        data: { kind: 'approval_request_created', artifactId: 'plugins-command-approval' },
       });
     } finally {
       output.restore();
@@ -554,7 +670,9 @@ describe('plugins command daemon mutations', () => {
     });
     const output = captureStdoutJsonOutput();
     try {
-      await handlePluginsCommand(['install', '/tmp/acme-private-plugin', '--json']);
+      await handlePluginsCommand(['install', '@acme/private-plugin', '--kind', 'npm', '--json'], {
+        actionExecutionDeps: authenticatedActionDeps(),
+      });
 
       expect(output.json()).toMatchObject({
         ok: false,
@@ -571,109 +689,87 @@ describe('plugins command daemon mutations', () => {
     }
   });
 
-  it('cancels an unexpected non-JSON path review without prompting or fabricating approval', async () => {
+  it('keeps a non-JSON archive install in the Action approval Inbox without prompting or fabricating approval', async () => {
     daemon.requestChange.mockResolvedValue(reviewRequired);
     // Pending-review guidance names the invoking invoker; pin the documented
     // default lane instead of inheriting the test runner's argv-derived one.
     const envScope = createEnvKeyScope(['HAPPIER_CLI_INVOKER_NAME']);
     envScope.patch({ HAPPIER_CLI_INVOKER_NAME: 'happier' });
-    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
     try {
-      await handlePluginsCommand(['install', '/tmp/acme-sample'], {
+      await handlePluginsCommand(['install', '/tmp/acme-sample.tgz'], {
         isInteractiveTerminal: () => false,
+        actionExecutionDeps: authenticatedActionDeps({ approve: false }),
       });
 
-      expect(daemon.requestChange).toHaveBeenCalledWith({
-        kind: 'installPath', locator: '/tmp/acme-sample',
-      });
+      expect(daemon.requestChange).not.toHaveBeenCalled();
       expect(daemon.confirm).not.toHaveBeenCalled();
-      expect(daemon.decideChange).toHaveBeenCalledWith({
-        pendingChangeId: 'pending-1',
-        decision: 'cancel',
-      });
-      expect(error.mock.calls.flat().join('\n')).toContain(
-        'The daemon review did not match the exact local path named by the install command.',
-      );
+      expect(daemon.decideChange).not.toHaveBeenCalled();
+      expect(log.mock.calls.flat().join('\n')).toContain('approval requested: plugins-command-approval');
     } finally {
       envScope.restore();
     }
   });
 
   it('routes legacy install --dev directly through daemon development control without installation review', async () => {
-    const controlPluginDevelopment = vi.fn(async () => ({
-      kind: 'status' as const,
-      status: {
-        roots: [{
-          kind: 'explicit' as const,
-          rootPath: '/tmp/acme-dev',
-          trusted: true,
-          persisted: true,
-        }],
-        plugins: [],
-      },
-    }));
+    daemon.requestChange.mockResolvedValue({
+      kind: 'committed',
+      pluginId: 'acme.dev',
+      desiredGeneration: 'generation-1',
+      appliedGeneration: 'generation-1',
+      pendingSurfaces: [],
+    });
     const installOutput = captureStdoutJsonOutput();
     try {
       await handlePluginsCommand(['install', '/tmp/acme-dev', '--dev', '--json'], {
-        controlPluginDevelopment,
+        actionExecutionDeps: authenticatedActionDeps(),
       });
 
       expect(installOutput.json()).toMatchObject({
         ok: true,
         kind: 'plugins_install',
         data: {
-          rootPath: '/tmp/acme-dev',
-          status: {
-            roots: [expect.objectContaining({ rootPath: '/tmp/acme-dev' })],
-          },
+          outcome: 'applied',
+          change: expect.objectContaining({ pluginId: 'acme.dev' }),
         },
       });
     } finally {
       installOutput.restore();
     }
     expect(daemon.ensureRunning).toHaveBeenCalledOnce();
-    expect(controlPluginDevelopment).toHaveBeenCalledWith({
-      kind: 'registerExplicit',
-      rootPath: '/tmp/acme-dev',
+    expect(daemon.requestChange).toHaveBeenCalledWith({
+      kind: 'development',
+      sourceRootPath: '/tmp/acme-dev',
     });
-    expect(daemon.requestChange).not.toHaveBeenCalled();
     expect(daemon.readStatus).not.toHaveBeenCalled();
     expect(daemon.decideChange).not.toHaveBeenCalled();
   });
 
-  it('rejects a pending change explicitly by id without minting approval evidence', async () => {
+  it('refuses the retired private pending-change decision command', async () => {
     daemon.readStatus.mockResolvedValue({
       kind: 'reviewRequired', reviewKind: 'installation', reason: 'firstInstall', currentVersion: null, authorityExpansion: [],
       pendingChangeId: 'pending-1',
       review: createPluginInstallationReviewFixture(),
     });
-    daemon.decideChange.mockResolvedValue({ kind: 'cancelled' });
     const output = captureStdoutJsonOutput();
     try {
       await handlePluginsCommand(['change', 'reject', 'pending-1', '--json']);
 
       expect(output.json()).toMatchObject({
-        ok: true,
-        kind: 'plugins_change_decision',
-        data: {
-          outcome: 'rejected',
-          pendingChangeId: 'pending-1',
-          result: { kind: 'cancelled' },
-        },
+        ok: false,
+        kind: 'plugins_change_reject',
+        error: { code: 'unknown_subcommand' },
       });
     } finally {
       output.restore();
     }
 
     expect(daemon.requestChange).not.toHaveBeenCalled();
-    expect(daemon.decideChange).toHaveBeenCalledWith({
-      pendingChangeId: 'pending-1',
-      decision: 'cancel',
-    });
+    expect(daemon.decideChange).not.toHaveBeenCalled();
   });
 
-  it.each(['enable', 'disable', 'uninstall', 'rollback'] as const)(
+  it.each(['enable', 'disable', 'uninstall', 'rollback', 'update'] as const)(
     'routes %s through the daemon with no ad-hoc review or reload',
     async (kind) => {
       // `daemon_unavailable` is the control client's real ambiguous transport
@@ -681,9 +777,17 @@ describe('plugins command daemon mutations', () => {
       daemon.requestChange.mockResolvedValue({ kind: 'unavailable', code: 'daemon_unavailable' });
       const output = captureStdoutJsonOutput();
       try {
-        await handlePluginsCommand([kind, 'acme.sample', '--json']);
+        await handlePluginsCommand([
+          kind,
+          'acme.sample',
+          ...(kind === 'uninstall' ? ['--delete-data', '--yes'] : []),
+          '--json',
+        ], { actionExecutionDeps: authenticatedActionDeps() });
 
-        expect(daemon.requestChange).toHaveBeenCalledWith({ kind, pluginId: 'acme.sample' });
+        expect(daemon.requestChange).toHaveBeenCalledWith({
+          kind: kind === 'uninstall' ? 'uninstallAndDeleteData' : kind,
+          pluginId: 'acme.sample',
+        });
         expect(daemon.decideChange).not.toHaveBeenCalled();
         expect(output.json()).toMatchObject({ ok: false, error: { code: 'outcome_unknown' } });
       } finally {
@@ -702,7 +806,9 @@ describe('plugins command daemon mutations', () => {
     });
     const output = captureStdoutJsonOutput();
     try {
-      await handlePluginsCommand(['install', '/tmp/acme-sample', '--json']);
+      await handlePluginsCommand(['install', '/tmp/acme-sample.tgz', '--json'], {
+        actionExecutionDeps: authenticatedActionDeps(),
+      });
 
       expect(output.json()).toMatchObject({
         ok: false,

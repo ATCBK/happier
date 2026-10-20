@@ -48,7 +48,7 @@ import { useUnsavedDraftNavigationGuard } from '@/utils/navigation/useUnsavedDra
 
 import { teamDetailPath, teamsDirectoryPath } from './teamsRoutes';
 import { TeamLogoPicker } from './TeamLogoPicker';
-import { publishTeamCreateDraftName } from './collection/teamCreateDraftName';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 
 const OWNER_AVATAR_SIZE = 32;
 
@@ -229,10 +229,11 @@ export const TeamCreateScreen = React.memo(function TeamCreateScreen(props: Read
     const { theme } = useUnistyles();
 
     // The collection's draft row is titled as the name is typed, and cleared when the draft closes.
+    const { publish: publishTeamCreateDraftName } = useCollectionDraftTitle();
     React.useEffect(() => {
         publishTeamCreateDraftName(name);
-    }, [name]);
-    React.useEffect(() => () => publishTeamCreateDraftName(''), []);
+    }, [name, publishTeamCreateDraftName]);
+    React.useEffect(() => () => publishTeamCreateDraftName(''), [publishTeamCreateDraftName]);
     const submissionInFlightRef = React.useRef(false);
 
     // A single eligible Home is preselected but still displayed.

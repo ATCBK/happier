@@ -25,7 +25,7 @@ function createRegistrar() {
 }
 
 describe('registerSessionRollbackRpcHandler', () => {
-  it('routes checkpoint code rollback from a partial runtime facet without requiring conversation rollback', async () => {
+  it('routes host checkpoint code rollback without requiring an Agent conversation rollback facet', async () => {
     const { handlers, registrar } = createRegistrar();
     const checkpointCodeRollback = vi.fn(async () => ({
       status: 'applied' as const,
@@ -34,11 +34,8 @@ describe('registerSessionRollbackRpcHandler', () => {
       receipts: [],
       diagnostics: [],
     }));
-    const runtime = {
-      checkpointCodeRollback,
-    };
-
-    registerSessionRollbackRpcHandler(registrar, () => resolveSessionRollbackRuntimeFacet(runtime));
+    expect(resolveSessionRollbackRuntimeFacet({ checkpointCodeRollback })).toBeNull();
+    registerSessionRollbackRpcHandler(registrar, () => ({ checkpointCodeRollback }));
 
     const request = {
       v: 1,

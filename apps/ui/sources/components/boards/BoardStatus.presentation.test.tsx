@@ -52,6 +52,7 @@ installMessageViewCommonModuleMocks({
 });
 vi.unmock('@/components/ui/icons/Icon');
 vi.unmock('@/components/ui/avatar/Avatar');
+vi.mock('@/sync/sync', async () => ({ sync: (await import('@/dev/testkit/mocks/sync')).createSessionListHydrationSyncBoundary() }));
 vi.mock('react-native-reanimated', async () => {
     const { createReanimatedModuleMock } = await import('@/dev/testkit/mocks/reanimated');
     const web = await vi.importActual<typeof import('react-native-web')>('react-native-web');
@@ -98,7 +99,8 @@ const { t } = await import('@/text');
 const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
 const { Text: CaptureText } = await vi.importActual<typeof import('react-native-web')>('react-native-web');
 const { buildInboxWorkGroups } = await import('@/activity/presentation/buildInboxWorkGroups');
-const { InboxWorkGroupSection, groupInboxWorkSheets } = await import('@/components/inbox/workGroups/InboxWorkGroupSection');
+const { InboxContent } = await import('@/components/inbox/InboxContent');
+const { buildInboxItems } = await import('@/components/inbox/inboxItems');
 const { createInboxAttentionFixture } = await import('@/dev/testkit/fixtures/inboxFixtures');
 const { workflowRunRowFromSummary } = await import('@/sync/store/domains/workflowRuns');
 const { ItemList } = await import('@/components/ui/lists/ItemList');
@@ -120,7 +122,7 @@ it.each(variants)('renders the STATUS source surfaces ($dark / $width)', async v
     const machine = createMachineFixture({ id: 'mac', active: true, activeAt: now,
         metadata: { ...createMachineFixture().metadata!, displayName: 'MacBook Pro' } });
     const pending = createSessionFixture({ id: 'payments', serverId: home.id, active: true, presence: 'online', activeAt: now,
-        reportsTo: { sessionId: 'lead' },
+        manager: { sessionId: 'lead' },
         metadata: { ...createSessionFixture().metadata!, name: 'Payments rollout', flavor: 'claude', machineId: machine.id,
             path: '/Users/alice/projects/payments', homeDir: '/Users/alice', host: 'MacBook Pro' },
         agentState: { requests: { approval: { tool: 'Bash', arguments: {}, createdAt: now } }, completedRequests: {} } });
@@ -150,7 +152,7 @@ it.each(variants)('renders the STATUS source surfaces ($dark / $width)', async v
         reportSessions: [pending, locked].map(session => toWorkReportSessionSource(session, now)),
         agentEntries: [], workflowHeadlineRuns: [], managedRuns: [], ownTriggerRunIds: new Set(),
         describeAgentStatus: () => '', describeProgress: () => '' });
-    const map = projectSessionWorkMap({ leadSessionId: 'lead', leadTitle: 'Release lead', projection });
+    const map = projectSessionWorkMap({ managerSessionId: 'lead', leadTitle: 'Release lead', projection });
     const canvasCards = [...cards, ...Array.from({ length: 7 }, (_, index) => ({ ...cards[0]!,
         key: JSON.stringify(['session', home.id, `filtered-${index}`]), title: `Filtered work ${index + 1}`,
         ref: { kind: 'session' as const, qualifiedId: { serverId: home.id, id: `filtered-${index}` } }, picked: false }))];
@@ -174,29 +176,36 @@ it.each(variants)('renders the STATUS source surfaces ($dark / $width)', async v
     const invocations = [createWorkflowInvocationIndexFixture({ id: 'root' }), createWorkflowInvocationIndexFixture({
         id: 'held', parentRecordId: 'root', sequence: '1', lifecycle: 'waiting_for_review' })];
     const noop = () => {};
-    // Inbox (lab `inbox-I1`): a lead with a stalled worker and a pull request to land, a run that is its
-    // own root, and loose sessions (one to land, one snoozed). Real builder, sections and rows.
+    // Inbox (lab `inbox-I1`, `P4`): a run waiting for review (Needs you), then a stalled worker, two
+    // pull requests to land and a snoozed session (Updates). Real work-group builder, item model, sections and rows.
     const inboxSession = (id: string, name: string, extra: Record<string, unknown> = {}) => createSessionFixture({ id, serverId: home.id,
         active: true, presence: 'online', activeAt: now, updatedAt: now - 4 * 60_000, ...extra,
         metadata: { ...createSessionFixture().metadata!, name, flavor: 'claude', machineId: machine.id, path: '/Users/alice/projects/payments',
             homeDir: '/Users/alice', host: 'MacBook Pro' } });
-    const inboxLead = inboxSession('rollout', 'Payments v2 rollout', { reports: { total: 3, working: 1, needsYou: 1, stalled: 1 } });
-    const inboxStalled = inboxSession('ledger', 'Backfill intent ledger', { reportsTo: { sessionId: 'rollout' }, presence: 'offline', active: false });
-    const inboxRunbook = inboxSession('runbook', 'Support runbook for retries', { reportsTo: { sessionId: 'rollout' } });
+    const inboxLead = inboxSession('rollout', 'Payments v2 rollout', { managedSessions: { total: 3, working: 1, needsYou: 1, stalled: 1 } });
+    const inboxStalled = inboxSession('ledger', 'Backfill intent ledger', { manager: { sessionId: 'rollout' }, presence: 'offline', active: false });
+    const inboxRunbook = inboxSession('runbook', 'Support runbook for retries', { manager: { sessionId: 'rollout' } });
     const inboxModal = inboxSession('modal', 'Fix settings modal remount');
     const inboxPricing = inboxSession('pricing', 'Pricing page copy');
     const inboxSessions = new Map([inboxLead, inboxStalled, inboxRunbook, inboxModal, inboxPricing].map(session => [session.id, session]));
-    const inboxGroups = groupInboxWorkSheets(buildInboxWorkGroups({ sessionEntries: [],
-        workflowRuns: [workflowRunRowFromSummary(createWorkflowRunSummaryFixture({ id: 'release', state: 'interrupted', machineId: machine.id,
+    const inboxWorkGroups = buildInboxWorkGroups({ sessionEntries: [],
+        workflowRuns: [workflowRunRowFromSummary(createWorkflowRunSummaryFixture({ id: 'release', state: 'waiting_for_review', machineId: machine.id,
             updatedAt: new Date(now - 6 * 60_000).toISOString() }), { kind: 'available', value: { title: 'Prepare the 0.3 release' } } as never)],
         automationRuns: [], automationServerId: home.id, openApprovals: [], stalledSessions: [inboxStalled],
         landings: [
-            { session: inboxRunbook, link: { sessionId: 'runbook', serverId: home.id, number: 2490, title: 'Support runbook for retries', state: 'open' } },
-            { session: inboxModal, link: { sessionId: 'modal', serverId: home.id, number: 2493, title: 'Keep the settings modal mounted', state: 'open' } },
+            { session: inboxRunbook, link: { sessionId: 'runbook', serverId: home.id, number: 2490, url: 'https://github.com/acme/payments/pull/2490', title: 'Support runbook for retries', state: 'open' } },
+            { session: inboxModal, link: { sessionId: 'modal', serverId: home.id, number: 2493, url: 'https://github.com/acme/payments/pull/2493', title: 'Keep the settings modal mounted', state: 'open' } },
         ],
         snoozed: [{ session: inboxPricing, remindAt: now + 3 * 3_600_000 }],
-        resolveSession: id => inboxSessions.get(id), resolveOriginRunId: () => null }));
-    const inboxModel = { ...createInboxAttentionFixture(home.id), spansHomes: false, settle: async () => {}, setReminder: async () => {} } as never;
+        resolveSession: id => inboxSessions.get(id), resolveOriginRunId: () => null });
+    const inboxSessionPresentation = { sessionsNeedingAttention: [], readySessions: [], markAllReadTargets: [], pendingRequestHydrationTargets: [] };
+    const inboxModel = { ...createInboxAttentionFixture(home.id), spansHomes: false, settle: async () => {}, setReminder: async () => {},
+        workGroups: inboxWorkGroups, sessionPresentation: inboxSessionPresentation,
+        items: buildInboxItems({ workGroups: inboxWorkGroups, sessionPresentation: inboxSessionPresentation,
+            workflowServerId: home.id, accountServerId: home.id, notices: [] }),
+        openApprovals: [], openUsageNotices: [], friendRequests: [], actionOperationEntries: [], targetBySessionAddress: new Map(),
+        pendingReadKeys: new Set(), markAllPending: false, isLoading: false, hasPrimaryAttention: true, showCaughtUp: false,
+        markRead: async () => {}, resolveActionOperation: noop, dismissUsageNotice: async () => {} } as never;
     const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
         <UniversalSearchRuntimeProvider value={{ open: noop, buildCommands: () => [] }}>
             <main>
@@ -209,11 +218,11 @@ it.each(variants)('renders the STATUS source surfaces ($dark / $width)', async v
                     <SessionWorkMapView map={map} projection={projection} testIDPrefix="capture-work" onOpenItem={noop} /></div></section>
                 <section id="inbox"><h2>Inbox</h2><div style={{ width: capture.width === 390 ? 390 : 1000 }}><ItemList testID="capture-inbox">
                     <PageHeader title={t('tabs.inbox')} description={t('inbox.work.pageDescription')} actions={capture.width === 390 ? undefined
-                        : <SegmentedTabBar tabs={[{ id: 'needs_you', label: t('inbox.work.tabs.needsYou'), count: '5' },
-                            { id: 'updates', label: t('inbox.work.tabs.updates') }]} activeTabId="needs_you" onSelectTab={noop} />} />
-                    {inboxGroups.map((group, index) => <InboxWorkGroupSection key={group.key} group={group} model={inboxModel}
-                        identityDisplay="agentLogo" presentation="screen" spacingBefore={index === 0 ? 'following' : 'separated'}
-                        navigate={noop} />)}</ItemList></div></section>
+                        : <SegmentedTabBar tabs={[{ id: 'needs_you', label: t('inbox.work.tabs.needsYou'), count: '1' },
+                            { id: 'updates', label: t('inbox.work.tabs.updates') },
+                            { id: 'mentions', label: t('inbox.work.tabs.mentions') }]} activeTabId="needs_you" onSelectTab={noop} />} />
+                    <InboxContent model={inboxModel} presentation="screen" view="needs_you" /></ItemList>
+                    <ItemList testID="capture-inbox-updates"><InboxContent model={inboxModel} presentation="screen" view="updates" /></ItemList></div></section>
                 <section id="home"><h2>Home</h2><HubStatusLineView working={0} needsYou={1} home={() => <CaptureText
                     style={{ color: (capture.dark ? darkTheme : lightTheme).colors.text.secondary }}>Personal Home</CaptureText>} />
                     <HubAttentionList items={[{ key: 'sessions', mark: null, title: t('homeIndex.sessionsAwaitingResponse', { count: 1 }),

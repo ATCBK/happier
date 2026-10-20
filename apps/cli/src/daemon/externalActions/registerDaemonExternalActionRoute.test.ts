@@ -39,6 +39,7 @@ import {
 import type { DaemonPatVerifier } from '../auth/daemonPatVerifier';
 import type { ExternalActionExecutor, ResolveExternalActionTarget } from './executeExternalAction';
 import { registerDaemonExternalActionRoute } from './registerDaemonExternalActionRoute';
+import { SessionStatusActionResultV1Schema } from '@happier-dev/protocol/sessions/control/contract';
 
 const PAT = `hap_v1_2c67deea-5ae7-4706-9ad6-b5b992df1cba_${'A'.repeat(43)}`;
 
@@ -84,19 +85,24 @@ function createDeepExternalActionResult(depth = 12_000): unknown {
   return result;
 }
 
-function createExactLimitMultibyteResponseResult(): string {
+function createSessionStatusResult(title: string) {
+  return SessionStatusActionResultV1Schema.parse({ session: { id: 'session-1', createdAt: 0, updatedAt: 0,
+    active: false, activeAt: 0, encryption: null, title } });
+}
+
+function createExactLimitMultibyteResponseResult() {
   const emptyResponse = {
     v: 1,
     actionId: 'session.status.get',
     requestId: 'response-limit',
-    execution: { ok: true, result: '' },
+    execution: { ok: true, result: createSessionStatusResult('a') },
   } as const;
-  const fixedBytes = measureExternalActionResponseEnvelopeUtf8BytesV1(emptyResponse);
+  const fixedBytes = measureExternalActionResponseEnvelopeUtf8BytesV1(emptyResponse) - 1;
   const multibyteMarker = 'é';
   const markerBytes = Buffer.byteLength(multibyteMarker, 'utf8');
-  return 'a'.repeat(
+  return createSessionStatusResult('a'.repeat(
     EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES - fixedBytes - markerBytes,
-  ) + multibyteMarker;
+  ) + multibyteMarker);
 }
 
 function externalActionJsonPayloadWithByteLength(byteLength: number): string {
@@ -144,7 +150,7 @@ describe('registerDaemonExternalActionRoute', () => {
     let current = false;
     const app = await createApp({
       executor: createActionExecutor({ ...createUnavailableActionTransportDeps(), sessionSpawnNew }),
-      resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'daemon-token' } }),
+      resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'daemon-token', encryption: null } }),
       mintExecutionAuthorization: async () => ({ ok: true, authorization }),
       externalActionMachineRequestPrivateKey: tweetnacl.sign.keyPair().secretKey,
       resolveInstallationId: () => 'installation-1',
@@ -255,6 +261,7 @@ describe('registerDaemonExternalActionRoute', () => {
             accountId: 'account-1',
             principalId: 'principal-1',
             credentialId: 'credential-1',
+            grant: API_TOKEN_FULL_GRANT_V1,
           },
         }),
       );
@@ -354,7 +361,7 @@ describe('registerDaemonExternalActionRoute', () => {
         actionId: 'memory.search',
         input: actionInput,
         surface: 'cli',
-        authority: 'present_user',
+        authority: undefined,
         caller: undefined,
       },
       {
@@ -433,10 +440,11 @@ describe('registerDaemonExternalActionRoute', () => {
 
   it('serializes exact response bytes, projects one extra byte, and stays usable through the Fastify adapter', async () => {
     const exactLimitResult = createExactLimitMultibyteResponseResult();
+    const followUpResult = createSessionStatusResult('usable');
     const execute = vi.fn<ExternalActionExecutor['execute']>()
       .mockResolvedValueOnce({ ok: true, result: exactLimitResult })
-      .mockResolvedValueOnce({ ok: true, result: `${exactLimitResult}a` })
-      .mockResolvedValueOnce({ ok: true, result: { carrier: 'usable' } });
+      .mockResolvedValueOnce({ ok: true, result: createSessionStatusResult(`${exactLimitResult.session.title}a`) })
+      .mockResolvedValueOnce({ ok: true, result: followUpResult });
     const app = await createApp({ executor: { execute } });
     const request = {
       method: 'POST' as const,
@@ -475,7 +483,7 @@ describe('registerDaemonExternalActionRoute', () => {
       const followUp = await app.inject(request);
       expect(followUp.statusCode).toBe(200);
       expect(followUp.json()).toMatchObject({
-        execution: { ok: true, result: { carrier: 'usable' } },
+        execution: { ok: true, result: followUpResult },
       });
       expect(execute).toHaveBeenCalledTimes(3);
     } finally {

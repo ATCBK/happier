@@ -116,7 +116,7 @@ export function consumeWebServerUrlOverrideFromLocation(params: Readonly<{
 }
 
 export async function bootstrapActiveServerFromWebLocation(
-    opts: Readonly<{ scope?: 'device' | 'tab' }> = {},
+    opts: Readonly<{ scope?: 'device' | 'tab'; activateUnknownInIsolatedRealm?: boolean }> = {},
 ): Promise<WebServerUrlOverride | null> {
     const override = readWebServerUrlOverrideFromLocation();
     if (!override) return null;
@@ -151,6 +151,15 @@ export async function bootstrapActiveServerFromWebLocation(
             } catch {
                 // The URL intent remains for the mounted flow to handle.
             }
+        } else if (opts.activateUnknownInIsolatedRealm === true) {
+            // Callers may opt in only when their realm isolates profile storage and independently
+            // admits authority. The embed does both: its profile store is in-memory and its bridge
+            // supplies the scoped credential after public feature discovery.
+            await upsertAndActivateServer({
+                serverUrl: desired,
+                source: 'url',
+                scope: opts.scope ?? 'device',
+            });
         }
     }
 

@@ -1,12 +1,13 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import type { BundledPluginPublicationFailure } from '@/plugins/validation/diagnostics/types';
 
 const { publicationFailures } = vi.hoisted(() => ({ publicationFailures: [{
   packageName: '@happier-dev/plugins-broken',
   pluginId: 'happier.broken',
   diagnostic: { code: 'plugin_package_build_failed', message: 'Missing staged export ./dist/index.js' },
-}] }));
+}] satisfies readonly BundledPluginPublicationFailure[] }));
 
 // Filesystem publication is an external boundary; bundled manifest ingestion
 // and the current catalog remain real. This source process does not admit dist failures.

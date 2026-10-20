@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { SessionStateBinding } from '../_types.js';
 
 /** A private presentation choice, arbitrated only by the Account metadata CAS. */
@@ -12,7 +12,7 @@ export const transcriptToolCallsBinding: SessionStateBinding<'view.transcriptToo
     return { value: typeof value === 'boolean' ? value : null, updatedAt: null };
   },
   write: (metadata, update) => {
-    const value = z.boolean().nullable().parse(update.value);
+    const value = z.nullable(z.boolean()).parse(update.value);
     const work = metadata.work && typeof metadata.work === 'object' ? metadata.work : {};
     const storedViewPreferences = 'viewPreferences' in work ? work.viewPreferences : undefined;
     const currentViewPreferences: Record<string, unknown> = {

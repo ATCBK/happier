@@ -43,8 +43,12 @@ export const InboxSessionAttentionGroupCard = React.memo(function InboxSessionAt
     userActionRequests: readonly PendingPermissionRequest[];
     showDivider?: boolean;
     onBeforeNavigate?: () => void;
+    /** State, age and menu of the row this card draws; the same ones the session row beside it shows. */
+    row?: React.ComponentProps<typeof InboxSessionAttentionHeader>['row'];
 }>) {
     const router = useRouter();
+    const resumeAbort = React.useRef<AbortController | null>(null);
+    React.useEffect(() => () => resumeAbort.current?.abort(), [props.serverId, props.session.id]);
     // On the Inbox page the card is one of the sheet's rows: it draws the sheet's own full-width hairline.
     const pageSection = useHappierPageSection();
     const statusOnly = isInboxSessionStatusOnly(props.session);
@@ -82,6 +86,9 @@ export const InboxSessionAttentionGroupCard = React.memo(function InboxSessionAt
             return;
         }
         setResumeFailed(false);
+        resumeAbort.current?.abort();
+        const abort = new AbortController();
+        resumeAbort.current = abort;
         try {
             const state = storage.getState();
             const target = readMachineControlTargetForSession(
@@ -96,7 +103,9 @@ export const InboxSessionAttentionGroupCard = React.memo(function InboxSessionAt
                 serverId: props.serverId ?? undefined,
                 accountLifetime: lifetime,
                 accountSettings: state.settings,
+                signal: abort.signal,
             });
+            if (abort.signal.aborted) return;
             if (lifetime && !lifetime.isCurrent()) throw new Error('account_changed');
             const options = getPendingQueueWakeResumeOptions({
                 sessionId: props.session.id,
@@ -111,13 +120,14 @@ export const InboxSessionAttentionGroupCard = React.memo(function InboxSessionAt
             if (!options) throw new Error('resume_unavailable');
             const result = await resumeSession({
                 ...options,
+                executionAuthority: 'present_user',
                 serverId: props.serverId ?? undefined,
                 ...(props.serverId ? { preferRequestedMachineTarget: true, preferScopedMachineRpc: true } : {}),
             });
             if (result.type === 'error') throw new Error('resume_failed');
             openSession();
         } catch {
-            setResumeFailed(true);
+            if (!abort.signal.aborted) setResumeFailed(true);
         }
     }, [openSession, ownerMetadata, props.serverId, props.session]);
 
@@ -133,6 +143,7 @@ export const InboxSessionAttentionGroupCard = React.memo(function InboxSessionAt
                 machineLabel={statusOnly ? null : getMachineDisplayName(machine)}
                 pathLabel={props.contextLine ?? null}
                 onOpenSession={openSession}
+                row={props.row}
             />
 
             {/* A card whose requests cannot be shown yet is its header row alone, with no empty band under it. */}

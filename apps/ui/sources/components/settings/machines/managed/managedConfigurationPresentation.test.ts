@@ -88,7 +88,13 @@ describe('one managed configuration receipt projection', () => {
             localized: (_pluginId, value) => typeof value === 'string' ? value : value.fallback });
         // A cloud receipt names the place before the image; the size and its dimensions are the spec line.
         expect(receipt.facts.filter(fact => ['size', 'image', 'location', 'duration'].includes(fact.id)).map(fact => fact.value)).toEqual(['West', 'Linux', '2 hours']);
-        expect(receipt.spec).toBe(`Small · ${t('managedMachines.receipt.cores', { count: 2 })}`);
+        expect(receipt.spec).toBe(`Small · ${t('managedMachines.receipt.cores', { count: 2 }).replace(/ /g, '\u00a0')}`);
+    });
+    it('does not repeat the machine name when a local size is titled with it (UIR5c)', () => {
+        const receipt = buildManagedConfigurationReceipt({ launch, providerTitle: 'Compute', reviewedFacts: { ...reviewedFacts,
+            nativeFacts: { size: { id: 'own', title: launch.name, cpuCores: 2 } } },
+            localized: (_pluginId, value) => typeof value === 'string' ? value : value.fallback });
+        expect(receipt.spec).toBe(t('managedMachines.receipt.cores', { count: 2 }).replace(/ /g, '\u00a0'));
     });
     it('keeps captured launch identity and exact price provenance independent from later live choices', () => {
         const receipt = buildManagedConfigurationReceipt({ launch, reviewedFacts, providerTitle: 'Compute', controllerName: 'Captured controller' });
@@ -122,7 +128,7 @@ describe('one managed configuration receipt projection', () => {
     it('meters a local size against what its computer reported free, and says what it leaves (RV-C F13)', () => {
         const receipt = buildManagedConfigurationReceipt({ launch, providerTitle: 'Lume', controllerName: 'MacBook Pro', reviewedFacts: { ...localFacts,
             localResources: { observedAt: 5, availableCpuCores: 12, availableMemoryBytes: 36 * 2 ** 30 } } });
-        expect(receipt.spec).toBe(`Medium · ${t('managedMachines.receipt.cores', { count: 6 })} · 16 GB · 137 GB`);
+        expect(receipt.spec).toBe(`Medium · ${t('managedMachines.receipt.cores', { count: 6 }).replace(/ /g, '\u00a0')} · 16\u00a0GB · 137\u00a0GB`);
         // A local VM names what it runs before where it is.
         expect(receipt.facts[0]).toMatchObject({ id: 'image', value: 'macOS Tahoe' });
         expect(receipt.cost).toEqual({ kind: 'local', computer: 'MacBook Pro', meters: [

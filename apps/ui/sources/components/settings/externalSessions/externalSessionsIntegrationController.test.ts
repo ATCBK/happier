@@ -104,7 +104,7 @@ describe('externalSessionsIntegrationController', () => {
             machineId: 'machine-1',
             agent,
             expectedPreviewId: refreshedPreviewId,
-        });
+        }, expect.any(Function), expect.any(Function));
         expect(refresh).toHaveBeenCalledWith(integration);
     });
 
@@ -163,7 +163,7 @@ describe('externalSessionsIntegrationController', () => {
             machineId: 'machine-1',
             agent,
             expectedPreviewId: refreshedPreviewId,
-        });
+        }, expect.any(Function), expect.any(Function));
         expect(refresh).not.toHaveBeenCalled();
     });
 
@@ -263,7 +263,7 @@ describe('externalSessionsIntegrationController', () => {
         expect(applyStatus).toHaveBeenCalledOnce();
     });
 
-    it('obtains and confirms one install preview in the same Review and Install action', async () => {
+    it('obtains one install preview and hands its presenter to the admitted install transport', async () => {
         const status = vi.fn<ExternalSessionsHookManagementTransport['status']>()
             .mockResolvedValue({
                 ok: true,
@@ -317,13 +317,15 @@ describe('externalSessionsIntegrationController', () => {
             intent: 'install_preview',
             agent,
         });
+        expect(confirm).not.toHaveBeenCalled();
+        await install.mock.calls[0]?.[1]?.();
         expect(confirm).toHaveBeenCalledWith(installPreview);
         expect(install).toHaveBeenCalledWith({
             machineId: 'machine-1',
             serverId: 'server-1',
             agent,
             expectedPreviewId: previewId,
-        });
+        }, expect.any(Function), expect.any(Function));
         expect(applyStatus).toHaveBeenCalledOnce();
         expect(applyStatus).toHaveBeenCalledWith(integration, {
             state: 'installed_enabled',
@@ -332,7 +334,7 @@ describe('externalSessionsIntegrationController', () => {
         expect(refresh).not.toHaveBeenCalled();
     });
 
-    it('requests a new invocation-local preview after cancellation', async () => {
+    it('retains the exact fresh preview for each invocation-local presenter', async () => {
         const status = vi.fn<ExternalSessionsHookManagementTransport['status']>()
             .mockResolvedValueOnce({
                 ok: true,
@@ -393,15 +395,18 @@ describe('externalSessionsIntegrationController', () => {
         await operations.reviewAndInstall(integration, confirm);
 
         expect(status).toHaveBeenCalledTimes(2);
+        expect(confirm).not.toHaveBeenCalled();
+        await install.mock.calls[0]?.[1]?.();
+        await install.mock.calls[1]?.[1]?.();
         expect(confirm).toHaveBeenNthCalledWith(1, installPreview);
         expect(confirm).toHaveBeenNthCalledWith(2, refreshedInstallPreview);
-        expect(install).toHaveBeenCalledOnce();
+        expect(install).toHaveBeenCalledTimes(2);
         expect(install).toHaveBeenCalledWith({
             machineId: 'machine-1',
             agent,
             expectedPreviewId: refreshedPreviewId,
-        });
-        expect(applyStatus).toHaveBeenCalledOnce();
+        }, expect.any(Function), expect.any(Function));
+        expect(applyStatus).toHaveBeenCalledTimes(2);
         expect(applyStatus).toHaveBeenCalledWith(integration, {
             state: 'installed_enabled',
             installationId: 'installation-current',
@@ -789,7 +794,9 @@ describe('externalSessionsIntegrationController', () => {
             });
         const transport = {
             status,
-            install: vi.fn(),
+            install: vi.fn<ExternalSessionsHookManagementTransport['install']>().mockResolvedValue({
+                ok: true, status: { state: 'installed_enabled', installationId: 'installation-current' },
+            }),
             disable: vi.fn(),
             enable: vi.fn(),
             uninstall: vi.fn(),
@@ -821,6 +828,8 @@ describe('externalSessionsIntegrationController', () => {
         await act(async () => {
             await hook.getCurrent().operations!.reviewAndInstall(rowB, confirmB);
         });
+        expect(confirmB).not.toHaveBeenCalled();
+        await transport.install.mock.calls[0]?.[1]?.();
         expect(confirmB).toHaveBeenCalledWith(refreshedInstallPreview);
 
         previewA.resolve({
@@ -831,6 +840,8 @@ describe('externalSessionsIntegrationController', () => {
         });
         await act(async () => await reviewA);
 
+        expect(confirmA).not.toHaveBeenCalled();
+        await transport.install.mock.calls[1]?.[1]?.();
         expect(confirmA).toHaveBeenCalledWith(installPreview);
         await hook.unmount();
     });
@@ -868,7 +879,9 @@ describe('externalSessionsIntegrationController', () => {
             });
         const transport = {
             status,
-            install: vi.fn(),
+            install: vi.fn<ExternalSessionsHookManagementTransport['install']>().mockResolvedValue({
+                ok: true, status: { state: 'installed_enabled', installationId: 'installation-current' },
+            }),
             disable: vi.fn(),
             enable: vi.fn(),
             uninstall: vi.fn(),
@@ -899,6 +912,8 @@ describe('externalSessionsIntegrationController', () => {
         await act(async () => {
             await operations.reviewAndInstall(integration, secondConfirm);
         });
+        expect(secondConfirm).not.toHaveBeenCalled();
+        await transport.install.mock.calls[0]?.[1]?.();
         expect(secondConfirm).toHaveBeenCalledWith(refreshedInstallPreview);
 
         stalePreview.resolve({
@@ -919,7 +934,7 @@ describe('externalSessionsIntegrationController', () => {
         expect(hook.getCurrent().integrations?.[0]).not.toHaveProperty(
             'installPreview',
         );
-        expect(transport.install).not.toHaveBeenCalled();
+        expect(transport.install).toHaveBeenCalledOnce();
         await hook.unmount();
     });
 
@@ -1090,6 +1105,7 @@ describe('externalSessionsIntegrationController', () => {
             intent: 'passive_inventory',
             cursor: 'page-2',
             limit: 50,
+            signal: expect.any(AbortSignal),
         });
         expect(hook.getCurrent().loadingMoreInventory).toBe(true);
 
@@ -1483,7 +1499,9 @@ describe('externalSessionsIntegrationController', () => {
                 localId: 'removed',
             },
             installationId: 'installation-removed',
-        });
+            serverId: undefined,
+            signal: expect.any(AbortSignal),
+        }, expect.any(Function));
         expect(hook.getCurrent().integrations).toEqual([
             expect.objectContaining({
                 installationId: 'installation-current',
@@ -1710,7 +1728,7 @@ describe('externalSessionsIntegrationController', () => {
             serverId: 'server-1',
             agent,
             installationId: 'installation-current',
-        });
+        }, expect.any(Function));
         expect(applyStatus).toHaveBeenCalledWith(integration, {
             state: 'installed_enabled',
             installationId: 'installation-current',
@@ -1758,7 +1776,7 @@ describe('externalSessionsIntegrationController', () => {
             serverId: 'server-1',
             agent,
             installationId: 'installation-current',
-        });
+        }, expect.any(Function));
         expect(applyStatus).toHaveBeenCalledWith(integration, {
             state: 'not_installed',
         });
@@ -2438,7 +2456,8 @@ describe('externalSessionsIntegrationController', () => {
             serverId: 'server-1',
             agent,
             installationId: 'installation-a',
-        });
+            signal: expect.any(AbortSignal),
+        }, expect.any(Function));
         const refreshed = hook.getCurrent().integrations!;
         expect(status).toHaveBeenCalledTimes(1);
         expect(refreshed).toHaveLength(2);
@@ -2463,6 +2482,7 @@ describe('externalSessionsIntegrationController', () => {
             intent: 'installation_recheck',
             agent,
             installationId: 'installation-b',
+            signal: expect.any(AbortSignal),
         });
         expect(hook.getCurrent().integrations).toHaveLength(2);
 
@@ -2666,6 +2686,7 @@ describe('externalSessionsIntegrationController', () => {
             intent: 'passive_inventory',
             agent,
             limit: 50,
+            signal: expect.any(AbortSignal),
         });
         await flushHookEffects({ cycles: 2, turns: 2 });
         expect(status).toHaveBeenCalledTimes(1);
@@ -2688,6 +2709,7 @@ describe('externalSessionsIntegrationController', () => {
             intent: 'installation_recheck',
             agent,
             installationId: 'installation-current',
+            signal: expect.any(AbortSignal),
         });
 
         await hook.rerender({

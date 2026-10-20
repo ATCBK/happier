@@ -1,9 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { buildDismissedThisComputerSetupIntent, fromRecord } from './pendingSetupIntent.shared';
+import { readStorageScopeFromEnv, scopedStorageId } from '@/utils/system/storageScope';
 
-async function importFresh() {
-    vi.resetModules();
+installDisconnectedServerSocketBoundary();
+const accountConnections: Array<Awaited<ReturnType<typeof serveAccountHomes>>> = [];
+await loadSyncSingletonForTests();
+
+async function importFresh(options: Readonly<{ restart?: boolean }> = {}) {
+    // Ordinary cases retain the app-owned Sync and its storage handles. Only
+    // the persistence-reload assertion needs a new module graph.
+    if (options.restart) {
+        for (const connection of accountConnections.splice(0).reverse()) await connection.dispose();
+        vi.resetModules();
+    }
     return await import('./pendingSetupIntent');
 }
 
@@ -26,18 +38,17 @@ async function applyActiveServer(serverUrl: string) {
 }
 
 async function activateServerAccount(serverUrl: string, accountId: string) {
-    const { createServerAccountScope } = await import('@/sync/domains/scope/serverAccountScope');
-    const { storage } = await import('@/sync/domains/state/storage');
-
-    const server = await applyActiveServer(serverUrl);
-    const scope = createServerAccountScope(server.id, accountId);
-    expect(scope).not.toBeNull();
-    if (!scope) throw new Error('Expected Account scope');
-    storage.getState().activateProfileScope(scope);
-    await storage.getState().activateSettingsScope(scope);
+    const connection = await serveAccountHomes({
+        homes: [{ key: 'intent', serverUrl, accountId }],
+        route: () => undefined,
+    });
+    accountConnections.push(connection);
+    const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+    expect(getActiveServerAccountScope()).toEqual({ serverId: connection.homes.intent!.id, accountId });
 }
 
 async function activateServerWithoutAccount(serverUrl: string) {
+    for (const connection of accountConnections.splice(0).reverse()) await connection.dispose();
     const { storage } = await import('@/sync/domains/state/storage');
 
     await applyActiveServer(serverUrl);
@@ -62,6 +73,11 @@ describe('pendingSetupIntent', () => {
     afterEach(async () => {
         const { clearPendingSetupIntent } = await importFresh();
         clearPendingSetupIntent();
+        for (const connection of accountConnections.splice(0).reverse()) await connection.dispose();
+        // Native backing outlives a module reload and stores every Account's
+        // records. Clear this test's SDK store, including previously focused scopes.
+        const { MMKV } = await import('react-native-mmkv');
+        new MMKV({ id: scopedStorageId('pending-setup-intent', readStorageScopeFromEnv()) }).clearAll();
         vi.restoreAllMocks();
     });
 
@@ -90,24 +106,27 @@ describe('pendingSetupIntent', () => {
 
     it('expires and removes a pending setup intent older than the TTL', async () => {
         const writtenAtMs = 1_700_000_000_000;
-        const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(writtenAtMs);
         const { getPendingSetupIntent, setPendingSetupIntent } = await importFresh();
-
         await activateServerAccount('https://relay.example.test', 'account-a');
-        setPendingSetupIntent({
-            branch: 'thisComputer',
-            phase: 'awaiting_auth',
-            relayUrl: 'https://relay.example.test/',
-        });
-        expect(getPendingSetupIntent()).not.toBeNull();
+        // The fixed wall clock belongs to the synchronous TTL reads, not to
+        // real Account restoration, transport deadlines or background Sync.
+        const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(writtenAtMs);
+        try {
+            setPendingSetupIntent({
+                branch: 'thisComputer',
+                phase: 'awaiting_auth',
+                relayUrl: 'https://relay.example.test/',
+            });
+            expect(getPendingSetupIntent()).not.toBeNull();
+            nowSpy.mockReturnValue(writtenAtMs + (24 * 60 * 60 * 1000) + 1);
+            expect(getPendingSetupIntent()).toBeNull();
+        } finally { nowSpy.mockRestore(); }
 
-        nowSpy.mockReturnValue(writtenAtMs + (24 * 60 * 60 * 1000) + 1);
-        expect(getPendingSetupIntent()).toBeNull();
-
-        nowSpy.mockReturnValue(writtenAtMs);
-        const reloaded = await importFresh();
+        const reloaded = await importFresh({ restart: true });
         await activateServerAccount('https://relay.example.test', 'account-a');
-        expect(reloaded.getPendingSetupIntent()).toBeNull();
+        const reloadedClock = vi.spyOn(Date, 'now').mockReturnValue(writtenAtMs);
+        try { expect(reloaded.getPendingSetupIntent()).toBeNull(); }
+        finally { reloadedClock.mockRestore(); }
     });
 
     it('returns a stable pending setup intent reference while the serialized record is unchanged', async () => {

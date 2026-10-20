@@ -68,7 +68,7 @@ describe('createSessionOrganizationDomain', () => {
     it('does not replay an older pending reminder over a newer confirmed reminder when another write fails', () => {
         const harness = createHarness();
         const first = harness.get().setSessionAttentionStandingOptimistic('srv-a', 's1', { sessionId: 's1', standing: true, remindAt: 2_000, updatedAt: 2 });
-        const unrelated = harness.get().setSessionPinOptimistic('srv-a', 's2', { sessionId: 's2', pinnedAt: 3, sortKey: null });
+        const unrelated = harness.get().setSessionPinOptimistic('srv-a', 's2', { sessionId: 's2', pinnedAt: 3, sortKey: null, listPinned: true, railPinned: false });
         const latest = { sessionId: 's1', standing: true, remindAt: 5_000, updatedAt: 5 };
         const last = harness.get().setSessionAttentionStandingOptimistic('srv-a', 's1', latest);
         const key = buildSessionOrganizationSessionKey('srv-a', 's1');
@@ -262,7 +262,7 @@ describe('createSessionOrganizationDomain', () => {
         for (const [index, address] of addresses.entries()) {
             harness.get().applySessionOrganizationSnapshot(address.serverId, emptySnapshot({
                 version: 1,
-                pins: [{ sessionId: address.sessionId, pinnedAt: index + 1, sortKey: null }],
+                pins: [{ sessionId: address.sessionId, pinnedAt: index + 1, sortKey: null, listPinned: true, railPinned: false }],
                 folderAssignments: [{ sessionId: address.sessionId, folderId: `folder-${index}` }],
                 tagAssignments: [{ sessionId: address.sessionId, tagIds: [`tag-${index}`] }],
                 attentionStandings: [{ sessionId: address.sessionId, standing: true, updatedAt: index + 1 }],

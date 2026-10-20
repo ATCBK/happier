@@ -5,19 +5,23 @@ import { SessionStoredMessageContentSchema } from '../messages/sessionStoredMess
 import { SessionMessageAccountActorV1Schema } from '../messages/sessionMessageAccountActorV1.js';
 import { SessionMessageRoleSchema } from '../messages/sessionMessageRole.js';
 import { SESSION_TRANSCRIPT_MAX_PAGE_ROWS_V1 } from '../messages/sessionTranscriptPageLimits.js';
+import { SessionRuntimeIssueV1Schema } from '../control/runtimeIssueV1.js';
+import { TurnIdSchema } from '../idsV1.js';
+import { PendingLocalIdSchema } from '../pending/pendingLocalId.js';
 
 export const SESSION_FOLLOW_SOURCE_PROJECTION_MAX_PAGE_ROWS_V1 = SESSION_TRANSCRIPT_MAX_PAGE_ROWS_V1;
 
 export const SessionFollowSourceProjectionRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   sourceSessionId: z.string().check(z.trim(), z.minLength(1)),
-  edgeKind: z.optional(z.literal('reports_to')),
+  localInputId: z.optional(PendingLocalIdSchema),
+  relation: z._default(z.enum(['follower', 'manager']), 'follower'),
   attachedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
-  readMode: z.optional(z.enum(['incremental', 'initial_current_snapshot'])),
+  readMode: z.optional(z.literal('incremental')),
   afterTranscriptSeq: z.number().check(z.int(), z.minimum(0)),
   observedTranscriptSeq: z.number().check(z.int(), z.minimum(0)),
   limit: z.number().check(z.int(), z.minimum(1), z.maximum(SESSION_FOLLOW_SOURCE_PROJECTION_MAX_PAGE_ROWS_V1)),
-}).check(z.refine((value) => value.afterTranscriptSeq <= value.observedTranscriptSeq), z.refine((value) => (value.edgeKind === 'reports_to') === (value.attachedAt !== undefined), { path: ['attachedAt'] }), z.refine((value) => value.readMode !== 'initial_current_snapshot' || value.edgeKind === 'reports_to', { path: ['readMode'] })));
+}).check(z.refine((value) => value.afterTranscriptSeq <= value.observedTranscriptSeq), z.refine((value) => (value.relation === 'manager') === (value.attachedAt !== undefined), { path: ['attachedAt'] }), z.refine(value => !value.localInputId || value.relation === 'follower', { path: ['localInputId'] })));
 
 export const SessionFollowSourceProjectionV1Schema = lazyZodSchema(() => z.strictObject({
   id: z.string().check(z.trim(), z.minLength(1)),
@@ -32,11 +36,14 @@ export const SessionFollowSourceProjectionV1Schema = lazyZodSchema(() => z.stric
   thinking: z.boolean(),
   thinkingAt: z.nullable(z.number().check(z.int())),
   latestTurnStatus: z.nullable(z.string()),
+  latestTurnId: z.optional(z.nullable(TurnIdSchema)),
+  lastRuntimeIssue: z.optional(z.nullable(SessionRuntimeIssueV1Schema)),
   latestTurnStatusObservedAt: z.nullable(z.number().check(z.int())),
   latestReadyEventSeq: z.nullable(z.number().check(z.int())),
   latestReadyEventAt: z.nullable(z.number().check(z.int())),
   meaningfulActivityAt: z.nullable(z.number().check(z.int())),
   agentStateVersion: z.number().check(z.int(), z.minimum(0)),
+  agentState: z.optional(z.nullable(z.string())),
   pendingReviewRuns: z.optional(z.number().check(z.int(), z.nonnegative())),
   pendingPermissionRequestCount: z.optional(z.number().check(z.int(), z.minimum(0))),
   pendingUserActionRequestCount: z.optional(z.number().check(z.int(), z.minimum(0))),

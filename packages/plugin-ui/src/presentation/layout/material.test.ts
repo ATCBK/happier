@@ -20,6 +20,12 @@ describe('surface finish policy', () => {
     expect(happierSurfaceGradientWebStyle(gradient)).toEqual({ backgroundImage: 'linear-gradient(180deg, transparent 30%, rgba(0, 0, 0, 0.024) 100%)', backgroundClip: 'padding-box' });
     expect(happierSurfaceGradientWebStyle(null)).toBeNull();
   });
+  it('paints a banded finish only in a fixed-height strip along its edge', () => {
+    expect(happierSurfaceGradientWebStyle({ ...gradient, locations: [0, 1], band: { edge: 'bottom', height: 32 } })).toEqual({
+      backgroundImage: 'linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.024) 100%)', backgroundClip: 'padding-box',
+      backgroundSize: '100% 32px', backgroundPosition: 'bottom', backgroundRepeat: 'no-repeat',
+    });
+  });
 });
 
 describe('material background paint', () => {

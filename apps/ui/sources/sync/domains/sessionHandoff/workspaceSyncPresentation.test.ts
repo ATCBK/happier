@@ -52,6 +52,10 @@ describe('workspaceSyncPresentation', () => {
         expect(resolveWorkspaceSyncErrorTranslationKey('workspace_sync_update_required')).toBe('workspaceSync.error.updateRequired');
         expect(resolveWorkspaceSyncErrorTranslationKey('workspace_sync_partial_route_blocked')).toBe('sessionHandoff.failure.partialLinked');
         expect(resolveWorkspaceSyncErrorTranslationKey('engine_problems')).toBe('workspaceSync.error.needsAttention');
+        // A pause or resume refused while the controller is still settling the link (observed live on nl3).
+        expect(resolveWorkspaceSyncErrorTranslationKey('relationship_not_ready')).toBe('workspaceSync.error.needsAttention');
+        expect(resolveWorkspaceSyncErrorTranslationKey('workspace_root_in_use')).toBe('workspaceSync.error.needsAttention');
+        expect(resolveWorkspaceSyncErrorTranslationKey('peer_unavailable')).toBe('workspaceSync.error.machineOffline');
         expect(resolveWorkspaceSyncErrorTranslationKey('future-error')).toBeNull();
         expect(resolveWorkspaceSyncErrorTranslationKey(null)).toBeNull();
     });

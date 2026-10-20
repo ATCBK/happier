@@ -4,7 +4,8 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 import type { AgentExecutionRunOpenRequest, AgentExecutionRunRuntimeContextV1, AgentRuntime } from '@happier-dev/plugin-sdk/agents/runtime';
 import { ExecutionRunScmCommitMessageResultV1Schema } from '@happier-dev/protocol/execution/runs/startRequest';
 import { isScmPatchBoundToPath } from '@happier-dev/protocol/scm';
-import { createLocalScmRepositoryFixture, runScmExecutable } from '@/scm/contracts/scmBackendContractFixtures';
+import { accountSettingsParse } from '@happier-dev/protocol';
+import { createLocalScmRepositoryFixture, runScmExecutable } from '@/testkit/scm/scmBackendContractFixtures';
 import type { ExecutionRunController } from '@/agent/executionRuns/controllers/types';
 import { VoiceAgentManager } from '@/agent/voice/agent/VoiceAgentManager';
 import type { ExecutionRunManagerStartParams, ExecutionRunState } from '../../executionRunTypes';
@@ -41,7 +42,7 @@ async function verifyNativeCommitMessageRun({ permissionMode, include, literalPa
     opens.push({ request, context });
     expect(await context.services.interactions.requestApproval({
       kind: 'approval', title: 'Read a repository file', subject: { kind: 'tool', name: 'Read', input: { file_path: join(fixture.rootPath, fixture.trackedPath) } },
-    })).toMatchObject({ status: 'rejected' });
+    })).toMatchObject({ kind: 'approval', status: 'declined' });
     return {
       async send() { return { status: 'admitted' as const }; },
       async stop() { return { status: 'requested' as const }; },
@@ -95,7 +96,8 @@ async function verifyNativeCommitMessageRun({ permissionMode, include, literalPa
         const lease = { pluginId: 'acme.commit', pluginVersion: '1.0.0', agentId: 'acme.commit/agents/default',
           localAgentId: 'default', occurrenceId: options.controllerOccurrenceId, isCurrent: () => true };
         return createNativeAgentExecutionRunHostRuntime({ runtime, lease, supportsResume: false,
-          options: { ...options, cwd: fixture.rootPath, scope: 'detached' },
+          options: { ...options, cwd: fixture.rootPath, scope: 'detached',
+            accountSettings: options.accountSettings == null ? options.accountSettings : accountSettingsParse(options.accountSettings) },
           createExecutionRunContext: createNativeAgentExecutionRunContextLeaseFactory({ lease,
             runId: options.runId, controllerOccurrenceId: options.controllerOccurrenceId, callId: options.callId,
             sidechainId: options.sidechainId, runtimeRegistry: null, directory: fixture.rootPath,

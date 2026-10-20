@@ -640,7 +640,7 @@ describe('handleNewMessageSocketUpdate', () => {
         });
     });
 
-    it('keeps a terminal latest turn projection when a stale task_started message replays', async () => {
+    it.each(['completed', 'waiting'] as const)('keeps an ended %s turn projection when a stale task_started message replays', async status => {
         const { params, applySessions } = buildHarness({
             updateData: buildUpdate({
                 sid: 's1',
@@ -663,7 +663,7 @@ describe('handleNewMessageSocketUpdate', () => {
                 encryptionMode: 'plain',
                 updatedAt: 2_000,
                 thinking: false,
-                latestTurnStatus: 'completed',
+                latestTurnStatus: status,
             } as Session),
         });
 
@@ -671,7 +671,7 @@ describe('handleNewMessageSocketUpdate', () => {
 
         expect(applySessions.mock.calls[0]?.[0]?.[0]).toMatchObject({
             id: 's1',
-            latestTurnStatus: 'completed',
+            latestTurnStatus: status,
             thinking: false,
         });
     });

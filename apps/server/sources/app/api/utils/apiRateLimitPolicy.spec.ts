@@ -1,3 +1,4 @@
+import Fastify from "fastify";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
@@ -17,11 +18,20 @@ const dbAccountFindUniqueMock = vi.hoisted(() => vi.fn());
 vi.mock("@/storage/db", async () => {
     const { createDbTransactionMock } = await import("@/app/api/testkit/dbMocks");
     const db = {
+        // PostgreSQL read-only transactions issue SET TRANSACTION READ ONLY at this DB boundary.
+        $executeRaw: vi.fn(async () => 0),
         account: {
             findUnique: dbAccountFindUniqueMock,
         },
     };
     return { db: createDbTransactionMock(() => db).wrapDb(db) };
+});
+vi.mock("@/storage/prisma", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("@/storage/prisma")>();
+    const { createDbTransactionMock } = await import("@/app/api/testkit/dbMocks");
+    const { db } = await import("@/storage/db");
+    // SQLite read snapshots use a separate persistent connection boundary.
+    return { ...actual, withSqliteReadSnapshot: createDbTransactionMock(() => db).readSnapshot };
 });
 
 const previousMasterSecret = process.env.HANDY_MASTER_SECRET;
@@ -76,13 +86,75 @@ describe("apiRateLimitPolicy", () => {
         );
     });
 
-    it("parses HAPPIER_SERVER_TRUST_PROXY as a boolean or hop count", () => {
-        expect(resolveApiTrustProxy({})).toBeUndefined();
-        expect(resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "true" })).toBe(true);
-        expect(resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "1" })).toBe(1);
-        expect(resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "false" })).toBe(false);
-        expect(resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "0" })).toBe(0);
-        expect(resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "2" })).toBe(2);
+    it.each([
+        { value: undefined, expected: "ip:203.0.113.9" },
+        { value: "false", expected: "ip:203.0.113.9" },
+        { value: "true", expected: "ip:198.51.100.7" },
+    ])("preserves proxy keyword $value behavior", async ({ value, expected }) => {
+        const app = Fastify({ trustProxy: resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: value }) });
+        const key = createApiRateLimitKeyGenerator({}, { strategy: "ip-only" });
+        app.get("/key", async (request) => ({
+            key: await key(request),
+            ips: request.ips,
+            hostname: request.hostname,
+            protocol: request.protocol,
+        }));
+        try {
+            const response = await app.inject({ method: "GET", url: "/key", remoteAddress: "203.0.113.9", headers: {
+                host: "origin.example",
+                "x-forwarded-for": "198.51.100.7",
+                "x-forwarded-host": "forwarded.example",
+                "x-forwarded-proto": "https",
+            } });
+            expect(response.json()).toEqual({
+                key: expected,
+                ...(value === "true" ? { ips: ["203.0.113.9", "198.51.100.7"] } : {}),
+                hostname: value === "true" ? "forwarded.example" : "origin.example",
+                protocol: value === "true" ? "https" : "http",
+            });
+        } finally {
+            await app.close();
+        }
+    });
+
+    it("uses forwarded client details only when the connecting peer is a listed proxy", async () => {
+        const app = Fastify({ trustProxy: resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "10.0.0.0/8, 127.0.0.1, ::1" }) });
+        const keyGen = createApiRateLimitKeyGenerator({}, { strategy: "ip-only" });
+        app.get("/key", async (request) => ({ key: await keyGen(request), host: request.host, protocol: request.protocol }));
+
+        try {
+            for (const remoteAddress of ["10.1.2.3", "127.0.0.1", "::1", "::ffff:10.1.2.3"]) {
+                const res = await app.inject({
+                    method: "GET", url: "/key", remoteAddress,
+                    headers: { host: "origin.test", "x-forwarded-for": "198.51.100.7", "x-forwarded-host": "proxy.test", "x-forwarded-proto": "https" },
+                });
+                expect(res.json()).toEqual({ key: "ip:198.51.100.7", host: "proxy.test", protocol: "https" });
+            }
+            const direct = await app.inject({
+                method: "GET", url: "/key", remoteAddress: "203.0.113.9",
+                headers: { host: "origin.test", "x-forwarded-for": "198.51.100.7", "x-forwarded-host": "spoofed.test", "x-forwarded-proto": "https" },
+            });
+            expect(direct.json()).toEqual({ key: "ip:203.0.113.9", host: "origin.test", protocol: "http" });
+            const chain = await app.inject({
+                method: "GET", url: "/key", remoteAddress: "10.1.2.3",
+                headers: { "x-forwarded-for": "198.51.100.7, 203.0.113.9, 10.2.3.4" },
+            });
+            expect(chain.json().key).toBe("ip:203.0.113.9");
+        } finally {
+            await app.close();
+        }
+    });
+
+    it("rejects a HAPPIER_SERVER_TRUST_PROXY hop count instead of trusting nothing", () => {
+        for (const hops of ["0", "1", "2"]) {
+            expect(() => resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: hops })).toThrow(
+                /HAPPIER_SERVER_TRUST_PROXY.*addresses or CIDRs/,
+            );
+        }
+    });
+
+    it("fails startup for an invalid proxy list instead of silently ignoring it", () => {
+        expect(() => resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "10.0.0.0/8,invalid-proxy" })).toThrow();
     });
 
     it("keys an ordinary signed bearer by its verified account id (not by the raw Authorization header)", async () => {

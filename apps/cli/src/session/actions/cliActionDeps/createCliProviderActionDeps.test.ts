@@ -1,3 +1,4 @@
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import axios from 'axios';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -20,6 +21,7 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { createCliActionExecutorFromCredentials } from '../createCliActionExecutorFromCredentials';
 import { createCliProviderActionExecuteV1 } from './createCliProviderActionDeps';
+import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 
 describe('Provider default preference Action at its Account Settings boundary', () => {
   const originalRequirement = configuration.clientEncryptionRequirement;
@@ -31,6 +33,28 @@ describe('Provider default preference Action at its Account Settings boundary', 
     resetInMemoryAccountSettingsContextForTests();
     Object.assign(configuration, { clientEncryptionRequirement: originalRequirement, activeServerDir: originalActiveServerDir });
     if (directory) { await rm(directory, { recursive: true, force: true }); directory = undefined; }
+  });
+
+  it('lets the projection owner settle a slow source as a typed partial result rather than a transport timeout', async () => {
+    const failure = createProviderErrorV1('provider_endpoint_unavailable', { machineId: 'machine-a', connectionId: 'slow' });
+    // Machine RPC is the system boundary. Its default acknowledgement cutoff
+    // competes with the Provider's containing operation budget unless withdrawn.
+    const execute = createCliProviderActionExecuteV1({
+      credentials: { token: 'projection-account', encryption: null }, serverId: 'provider-home',
+      serverHttpBaseUrl: 'https://provider-projection.test',
+      callMachineAction: async input => {
+        if (!('timeoutMs' in input) || input.timeoutMs !== null) {
+          throw Object.assign(new Error('Machine RPC acknowledgement timed out'), { code: 'MACHINE_RPC_TIMEOUT' });
+        }
+        return { status: 'success', agentTargetKey: 'agent:happier.agent.claude/claude', groups: [],
+          refreshFailures: [{ connectionId: 'slow', error: failure }] };
+      },
+    });
+    await expect(execute({ actionId: 'providers.models.projection', input: {
+      machineId: 'machine-a', agentTargetKey: 'agent:happier.agent.claude/claude',
+    } }, { surface: 'cli', serverId: 'provider-home' })).resolves.toMatchObject({ ok: true, result: {
+      status: 'success', refreshFailures: [{ connectionId: 'slow', error: failure }],
+    } });
   });
 
   it.each([
@@ -160,7 +184,7 @@ describe('Provider default preference Action at its Account Settings boundary', 
       submitted.push(request);
       throw Object.assign(new Error('Dispatched request lost its acknowledgement'), { code: 'ECONNRESET' });
     });
-    const executor = createActionExecutor({
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
       providerActionExecute: createCliProviderActionExecuteV1({ credentials: { token: 'provider-default-token', encryption: null },
         serverId: 'provider-home', serverHttpBaseUrl: serverUrl,
         callMachineAction: async () => { throw new Error('Default preference must not consult a daemon'); },

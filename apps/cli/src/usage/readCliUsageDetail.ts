@@ -57,6 +57,8 @@ export async function readCliUsageDetail(input: Readonly<{
         query, sessions: candidates, contributions: accounting.get(getUsageQueryKey(query)),
     })]));
     const intervalSessionIds = new Set([...idsByQuery.values()].flat());
+    const transcriptSessionIds = new Set(evidenceQueries.filter(query => query.includeTranscriptEvidence)
+        .flatMap(query => idsByQuery.get(getUsageQueryKey(query)) ?? []));
     const workQueries = input.queries.filter(query => query.includeWorkEvidence);
     const workSessionIds = workQueries.flatMap(query => accounting.get(getUsageQueryKey(query))
         ?.flatMap(row => row.sessionId !== null && row.turnId !== null ? [row.sessionId] : []) ?? []);
@@ -90,7 +92,7 @@ export async function readCliUsageDetail(input: Readonly<{
                 await input.assertCurrent();
                 let messages: OpenedUsageMessage[] | undefined;
                 let messagesComplete = false;
-                if (intervalSessionIds.has(sessionId)) try {
+                if (transcriptSessionIds.has(sessionId)) try {
                     const page = await fetchSessionMessagesPage({ sessionId, scope: 'all', roles: ['user', 'agent', 'event'],
                         requestJson: path => input.read(path), signal: input.signal });
                     await input.assertCurrent();
@@ -142,8 +144,10 @@ export async function readCliUsageDetail(input: Readonly<{
         howYouWork: evidenceQueries.map(query => ({ query, asOfMs: input.nowMs,
             detail: projectUsageQueryWorkEvidence({ query,
                 sessions: (idsByQuery.get(getUsageQueryKey(query)) ?? []).flatMap(id => sessions.has(id) ? [sessions.get(id)!.session] : []),
-                openedMessages: new Map([...sessions].flatMap(([id, row]) => row.messages === undefined ? [] : [[id, row.messages]])),
-                completeMessageSessionIds: new Set([...sessions].filter(([, row]) => row.messagesComplete).map(([id]) => id)),
+                ...(query.includeTranscriptEvidence ? {
+                    openedMessages: new Map([...sessions].flatMap(([id, row]) => row.messages === undefined ? [] : [[id, row.messages]])),
+                    completeMessageSessionIds: new Set([...sessions].filter(([, row]) => row.messagesComplete).map(([id]) => id)),
+                } : {}),
                 contributions: accounting.get(getUsageQueryKey(query)),
             }),
         })),

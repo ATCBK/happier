@@ -121,7 +121,9 @@ function createContext(input: Readonly<{
                 observeForSelf: () => ({
                     readCurrent: async () => ({ contributions: [{
                         contributor: { pluginId: SOURCE.pluginId, contributionId: SOURCE.localId },
-                        descriptor: { purpose: 'triage-source', kinds: [{ id: 'pull-request' }] },
+                        descriptor: { v: 1, purpose: 'triage-source', displayName: 'Example source', kinds: [
+                            { id: 'pull-request', workflowSubject: 'pullRequest', displayName: 'Pull request' },
+                        ] }, operations: {},
                     } as unknown as TriageAdmittedSourceV1] }),
                     dispose: () => {},
                 }),

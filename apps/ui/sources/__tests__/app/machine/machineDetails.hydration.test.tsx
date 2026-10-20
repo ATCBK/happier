@@ -25,6 +25,7 @@ const network = await initializeMachineDetailsRuntimeForTests();
 const disposeActionExecutorLoader = await installRealActionExecutorModuleLoader();
 afterAll(disposeActionExecutorLoader);
 const MachineDetailScreen = (await import('@/components/machines/page/MachinePageScreen')).MachinePageScreen;
+const { MachineSubPageScreen } = await import('@/components/machines/page/MachineSubPageScreen');
 
 let home: Awaited<ReturnType<typeof arrangeMachineDetailsHomeForTests>> | undefined;
 let deferred: ReturnType<typeof createDeferred<readonly Machine[]>> | undefined;
@@ -137,9 +138,10 @@ describe('MachineDetailScreen canonical Stop fallback', () => {
                 serverUrl: `https://machine-stop-${settlement}.example.test`, machines: [machine], sessions: [session],
                 settings: { actionsSettingsV1 },
             });
+            routeParams.current = { id: machine.id, page: 'work' };
             let focusedServerId: string | undefined;
             if (settlement === 'route-home') {
-                routeParams.current = { id: machine.id, serverId: home.home.id };
+                routeParams.current = { id: machine.id, serverId: home.home.id, page: 'work' };
                 const focused = await network.addHome('https://machine-stop-focused-elsewhere.example.test', 'focused-account');
                 focusedServerId = focused.id;
                 const { setActiveServerId, getActiveServerId } = await import('@/sync/domains/server/serverProfiles');
@@ -172,7 +174,7 @@ describe('MachineDetailScreen canonical Stop fallback', () => {
                     : {};
                 return await socketRpcCodec.encodeResponse({ mode: 'plain' }, response, decoded.callId);
             });
-            const screen = await home.render(MachineDetailScreen);
+            const screen = await home.render(MachineSubPageScreen);
             await vi.waitFor(() => expect(screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' }).length).toBeGreaterThan(0));
             await act(async () => {
                 await screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' })[0]!.props.onPress();
@@ -287,11 +289,11 @@ describe('MachineDetailScreen hydration', () => {
             JSON.stringify({ machines: home.storage.getState().machines, scope: home.storage.getState().profileScope,
                 lists: home.storage.getState().machineListByServerId })).toBe('Offline Machine');
         const screen = await home.render(MachineDetailScreen);
-        await vi.waitFor(() => expect(screen.findByTestId('machine-detail-unavailable')).not.toBeNull());
+        await vi.waitFor(() => expect(screen.findByTestId('machine-vitals-offline')).not.toBeNull());
         deferred = createDeferred<readonly Machine[]>();
         home.state.readMachines = () => deferred!.promise;
         const beforeRequests = home.state.machineListRequests;
-        const action = () => screen.findAllByProps({ testID: 'machine-detail-unavailable' })[0]!.props.action;
+        const action = () => screen.findAllByProps({ testID: 'machine-vitals-offline' })[0]!.props.action;
         const refreshing = () => screen.tree.root.findAll(node => Boolean(node.props.refreshControl))[0]!.props.refreshControl.props.refreshing;
         expect(action().loading).toBeFalsy();
         await act(async () => { action().onPress(); await flushHookEffects({ cycles: 1, turns: 1 }); });

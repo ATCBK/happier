@@ -12,6 +12,8 @@ export type CommandMenuItem = Readonly<{
     /** Optional section header. When consecutive items share a group, no divider between them. */
     group?: string;
     icon?: React.ReactNode;
+    /** Shown with its description as the reason, announced disabled, and never selectable. */
+    disabled?: true;
     /** Static height override (defaults to a primitive-owned constant). */
     rowHeight?: number;
     /** Optional escape hatch: render the row contents yourself instead of icon+label+description. */
@@ -49,6 +51,8 @@ export type CommandMenuProps = Readonly<{
     gap?: number;
     /** Optional explicit Popover boundary override. Passing null intentionally disables context boundary clamping. */
     boundaryRef?: React.RefObject<any> | null;
+    /** A view the menu never covers (see `Popover.clearanceRef`). */
+    clearanceRef?: React.RefObject<any>;
     /** Native keyboard occlusion supplied by the host when it already owns canonical keyboard metrics. */
     keyboardBottomInset?: number;
     /** Popover edge padding forwarded to the positioning primitive. */

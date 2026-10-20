@@ -44,7 +44,10 @@ export async function createAccountServerWorkspaceWorkerPreferenceClient(input: 
   }
   if (!await isCurrent()) return null;
   let mode: Awaited<ReturnType<typeof readAccountEncryptionModeOnce>>;
-  try { mode = await readAccountEncryptionModeOnce({request: () => request('/v1/account/encryption')}); }
+  try { mode = await readAccountEncryptionModeOnce({
+    scope: { token: input.token, serverBaseUrl: input.serverHttpBaseUrl, signal: input.signal },
+    request: () => request('/v1/account/encryption'),
+  }); }
   catch { return null; }
   if (mode.kind !== 'resolved' || !await isCurrent()) return null;
   let material: AccountScopedCryptoMaterial | null = null;

@@ -1,11 +1,12 @@
 import { DEFAULT_LANGUAGE, SUPPORTED_LANGUAGE_CODES, SUPPORTED_LANGUAGES, getLanguageEnglishName, getLanguageNativeName, type SupportedLanguage } from './_all';
 import type { Translations } from './_types';
-import { getDeviceLocales } from './deviceLocales';
+import { commitPreferredLanguage, getPreferredLanguage, normalizePreferredLanguage, resolveLanguageFromDeviceLocales } from './preferredLanguage';
 import { preloadLocaleBundle, readLocaleBundle } from './localeBundlesSync';
 import type { BundledPluginTranslationKey } from './bundledPluginTranslations.generated';
 import { BUNDLED_PLUGIN_TRANSLATION_KEYS } from './bundledPluginTranslationKeys.generated';
 
 export { DEFAULT_LANGUAGE, SUPPORTED_LANGUAGE_CODES, SUPPORTED_LANGUAGES, getLanguageEnglishName, getLanguageNativeName, type SupportedLanguage };
+export { getPreferredLanguage, resolveSupportedLanguageFromTag, subscribePreferredLanguage } from './preferredLanguage';
 
 type TranslationFunction = (...args: any[]) => string;
 type TranslationLeaf = string | TranslationFunction;
@@ -49,85 +50,10 @@ export type TranslationKeyNoParams = {
     [K in TranslationKey]: TranslationParams<K> extends never ? K : never;
 }[TranslationKey];
 
-let preferredLanguageOverride: SupportedLanguage | null = null;
 let requestedLanguageOverride: SupportedLanguage | null = null;
-let cachedDeviceLanguage: SupportedLanguage | null = null;
-const preferredLanguageListeners = new Set<() => void>();
-
-/** Observe committed UI language changes; loading an alternate locale does not activate it. */
-export function subscribePreferredLanguage(listener: () => void): () => void {
-    preferredLanguageListeners.add(listener);
-    return () => { preferredLanguageListeners.delete(listener); };
-}
-
-function commitPreferredLanguage(override: SupportedLanguage | null): void {
-    const previous = resolveActiveLanguage();
-    preferredLanguageOverride = override;
-    // The web document states the language it shows, so assistive technology reads it in the right
-    // voice and the browser can hyphenate a word wider than its column instead of cutting it.
-    if (typeof document !== 'undefined' && document.documentElement) document.documentElement.lang = resolveActiveLanguage();
-    if (resolveActiveLanguage() !== previous) {
-        for (const listener of preferredLanguageListeners) listener();
-    }
-}
 
 function isTranslationFunction(value: unknown): value is TranslationFunction {
     return typeof value === 'function';
-}
-
-function isSupportedLanguage(value: string): value is SupportedLanguage {
-    return (SUPPORTED_LANGUAGE_CODES as readonly string[]).includes(value);
-}
-
-function normalizeDeviceLanguageCode(languageCode: string | null | undefined, languageScriptCode: string | null | undefined): SupportedLanguage | null {
-    if (typeof languageCode !== 'string') return null;
-
-    const normalizedLanguageCode = languageCode.trim().toLowerCase();
-    if (!normalizedLanguageCode) return null;
-
-    if (normalizedLanguageCode === 'zh') {
-        const normalizedScript = typeof languageScriptCode === 'string' ? languageScriptCode.trim().toLowerCase() : '';
-        if (normalizedScript === 'hant') return 'zh-Hant';
-        if (normalizedScript === 'hans') return 'zh-Hans';
-        return 'zh-Hans';
-    }
-
-    return isSupportedLanguage(normalizedLanguageCode) ? normalizedLanguageCode : null;
-}
-
-/** Resolve an explicit language tag; unlike device selection, an unknown language has no fallback. */
-export function resolveSupportedLanguageFromTag(languageTag: string): SupportedLanguage | null {
-    let canonical: string | undefined;
-    try {
-        // Hermes exposes this API, but not Intl.Locale/maximize.
-        canonical = Intl.getCanonicalLocales(languageTag.trim())[0];
-    } catch {
-        return null;
-    }
-    if (!canonical) return null;
-    const [languageCode, ...subtags] = canonical.split('-');
-    if (languageCode !== 'zh') return normalizeDeviceLanguageCode(languageCode, null);
-    const script = /^[A-Z][a-z]{3}$/u.test(subtags[0] ?? '') ? subtags[0] : undefined;
-    if (script && script !== 'Hans' && script !== 'Hant') return null;
-    const chineseScript = script ?? (subtags.some((subtag) => ['TW', 'HK', 'MO'].includes(subtag)) ? 'Hant' : 'Hans');
-    return normalizeDeviceLanguageCode(languageCode, chineseScript);
-}
-
-function resolveLanguageFromDeviceLocales(): SupportedLanguage {
-    if (cachedDeviceLanguage) return cachedDeviceLanguage;
-    for (const locale of getDeviceLocales()) {
-        const resolved = normalizeDeviceLanguageCode(locale.languageCode ?? null, locale.languageScriptCode ?? null);
-        if (resolved) {
-            cachedDeviceLanguage = resolved;
-            return resolved;
-        }
-    }
-    cachedDeviceLanguage = DEFAULT_LANGUAGE;
-    return DEFAULT_LANGUAGE;
-}
-
-function resolveActiveLanguage(): SupportedLanguage {
-    return preferredLanguageOverride ?? resolveLanguageFromDeviceLocales();
 }
 
 function getTranslationTree(language: SupportedLanguage): TranslationNode {
@@ -147,7 +73,7 @@ function getValueAtPath(root: TranslationNode, key: string): unknown {
 }
 
 function resolveRawTranslationValue(key: string): unknown {
-    const activeLanguage = resolveActiveLanguage();
+    const activeLanguage = getPreferredLanguage();
     const activeValue = getValueAtPath(getTranslationTree(activeLanguage) as TranslationNode, key);
     if (activeValue !== undefined) return activeValue;
 
@@ -224,16 +150,6 @@ export function setPreferredLanguageFromSettings(value: unknown): void {
     if (readLocaleBundle(language)) commitPreferredLanguage(requestedLanguageOverride);
 }
 
-function normalizePreferredLanguage(value: unknown): SupportedLanguage | null {
-    if (typeof value === 'string') {
-        const trimmed = value.trim();
-        if (trimmed && isSupportedLanguage(trimmed)) {
-            return trimmed;
-        }
-    }
-    return null;
-}
-
 /** Explicit requests (such as a voice language) load copy without changing the UI locale. */
 export async function preloadTranslations(language?: SupportedLanguage): Promise<void> {
     if (language) {
@@ -259,8 +175,21 @@ export function areTranslationsReadyForSettings(value: unknown): boolean {
     return readLocaleBundle(normalizePreferredLanguage(value) ?? resolveLanguageFromDeviceLocales()) !== undefined;
 }
 
-export function getPreferredLanguage(): SupportedLanguage {
-    return resolveActiveLanguage();
+/**
+ * Common nouns that stand in for a name inside sentences ("this machine" while a machine's details are
+ * locked). Mid-sentence they keep the locale's lowercase; a sentence that starts with one capitalizes it.
+ */
+const SENTENCE_COMMON_NOUN_KEYS = ['machine.thisMachineInSentence'] as const;
+
+function capitalizeLeadingCommonNoun(text: string, params: unknown): string {
+    if (!params || typeof params !== 'object') return text;
+    for (const nounKey of SENTENCE_COMMON_NOUN_KEYS) {
+        const noun = resolveStringValue(nounKey);
+        if (noun && text.startsWith(noun) && Object.values(params).includes(noun)) {
+            return noun.charAt(0).toLocaleUpperCase() + text.slice(1);
+        }
+    }
+    return text;
 }
 
 export function t<K extends TranslationKey>(
@@ -269,7 +198,7 @@ export function t<K extends TranslationKey>(
 ): string {
     const callable = resolveCallableTranslation(key);
     if (callable) {
-        return callable(params[0] as never);
+        return capitalizeLeadingCommonNoun(callable(params[0] as never), params[0]);
     }
     return resolveStringValue(key);
 }

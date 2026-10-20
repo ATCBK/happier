@@ -11,6 +11,89 @@ import { resolveCurrentSessionRecipientAccountIdsBySessionInTx } from "./session
 import type { SessionAccessAuthentication } from "./sessionAccessAuthentication";
 import type { VerifiedEphemeralSessionRunnerPrincipal } from "@happier-dev/protocol/ephemeralRunner/principal";
 import { readRunnerActivationAuthenticationInTx } from "@/app/ephemeralRunner/activationAuthentication";
+import { resolveResourceGrantAccessFromFacts, resolveResourceGrantAudienceFromFacts,
+    type ResourceGrantStorageAdapter, type ResourceGrantAccess } from '@/app/teams/resourceGrantAccess';
+
+/** Structural audience and credential-qualified caller access have separate owners. */
+export interface ResourceContextStorageAdapter extends ResourceGrantStorageAdapter {
+    resolveConfigurerAccessInTx(tx: Tx, input: Readonly<{
+        resourceId: string; actorAccountId: string; authentication: SessionAccessAuthentication;
+    }>): Promise<ResourceGrantAccess | null>;
+    /** Resources without public publication (such as Discussion) omit this port. */
+    hasPublicAudienceInTx?(tx: Tx, resourceId: string): Promise<boolean>;
+}
+
+export type ContextDisclosureResource =
+    | Readonly<{ kind: 'session'; sessionId: string }>
+    | Readonly<{ kind: 'resource'; resourceId: string; adapter: ResourceContextStorageAdapter }>;
+export type ResourceContextInjectionDecision = Readonly<{ ok: true }> | Extract<SessionContextInjectionDecision, { ok: false }>;
+
+/** Content disclosure shares Session Follow's custody, public-link and audience policy. */
+export async function mayInjectResourceContextInTx(tx: Tx, input: Readonly<{
+    configuringAccountId: string;
+    authentication: SessionAccessAuthentication;
+    source: ContextDisclosureResource;
+    destination: ContextDisclosureResource;
+}>): Promise<ResourceContextInjectionDecision> {
+    // A content disclosure can use its own Session as destination (for example
+    // its trusted Discussion publisher). Follow self-links remain forbidden by
+    // the Follow entry point; same-Session content still checks all facts below.
+    if (input.source.kind === 'session' && input.destination.kind === 'session'
+        && input.source.sessionId !== input.destination.sessionId) {
+        const decision = await mayInjectSessionContextInTx(tx, { configuringAccountId: input.configuringAccountId,
+            authentication: input.authentication, sourceSessionId: input.source.sessionId, destinationSessionId: input.destination.sessionId });
+        return decision.ok ? { ok: true } : decision;
+    }
+    const sourceSessionId = input.source.kind === 'session' ? input.source.sessionId : null;
+    const destinationSessionId = input.destination.kind === 'session' ? input.destination.sessionId : null;
+    const sessionIds = [...new Set([sourceSessionId, destinationSessionId].filter((id): id is string => id !== null))];
+    const [sourceResource, destinationResource, sessions] = await Promise.all([
+        input.source.kind === 'resource' ? input.source.adapter.readAccessFactsInTx(tx, input.source.resourceId) : null,
+        input.destination.kind === 'resource' ? input.destination.adapter.readAccessFactsInTx(tx, input.destination.resourceId) : null,
+        sessionIds.length ? tx.session.findMany({ where: { id: { in: sessionIds } },
+            select: { id: true, accountId: true, publicShare: { select: { expiresAt: true } } } }) : [],
+    ]);
+    const sourceSession = sessions.find(session => session.id === sourceSessionId);
+    const destinationSession = sessions.find(session => session.id === destinationSessionId);
+    if ((input.source.kind === 'resource' ? !sourceResource : !sourceSession)
+        || (input.destination.kind === 'resource' ? !destinationResource : !destinationSession)) return { ok: false, reason: 'unavailable' };
+
+    const configuringSessionAccess = await resolveEffectiveSessionAccessForSessionsInTx(tx, {
+        accountId: input.configuringAccountId, sessionIds, authentication: input.authentication,
+    });
+    const [sourceAccess, destinationAccess] = await Promise.all([
+        input.source.kind === 'resource' ? input.source.adapter.resolveConfigurerAccessInTx(tx, {
+            resourceId: input.source.resourceId, actorAccountId: input.configuringAccountId, authentication: input.authentication,
+        }) : null,
+        input.destination.kind === 'resource' ? input.destination.adapter.resolveConfigurerAccessInTx(tx, {
+            resourceId: input.destination.resourceId, actorAccountId: input.configuringAccountId, authentication: input.authentication,
+        }) : null,
+    ]);
+    const configurerMayRead = sourceResource ? sourceAccess !== null
+        : sourceSession !== undefined && configuringSessionAccess.get(sourceSession.id)?.capabilities.readTranscript === true;
+    const configurerMayWrite = destinationResource ? destinationAccess !== null && destinationAccess.level !== 'view'
+        : destinationSession !== undefined && configuringSessionAccess.get(destinationSession.id)?.capabilities.submitAgentInput === true;
+    if (!configurerMayRead || !configurerMayWrite) return { ok: false, reason: 'configurer_not_allowed' };
+
+    const audience = destinationResource ? resolveResourceGrantAudienceFromFacts(destinationResource)
+        : destinationSession ? (await resolveCurrentSessionRecipientAccountIdsBySessionInTx(tx, { sessionIds: [destinationSession.id] }))
+            .get(destinationSession.id) ?? [] : [];
+    const runtimeAccountId = destinationSession?.accountId;
+    const accounts = [...new Set([...audience, ...(runtimeAccountId ? [runtimeAccountId] : [])])];
+    const readableAccounts = sourceResource
+        ? new Set(accounts.filter(accountId => resolveResourceGrantAccessFromFacts(sourceResource, accountId) !== null))
+        : sourceSession ? new Set([...await resolveStructuralSessionAccessForAccountsInTx(tx, {
+            sessionId: sourceSession.id, accountIds: accounts,
+        })].filter(([, access]) => access?.capabilities.readTranscript === true).map(([accountId]) => accountId)) : new Set<string>();
+    const destinationPublic = input.destination.kind === 'resource'
+        ? await input.destination.adapter.hasPublicAudienceInTx?.(tx, input.destination.resourceId) ?? false
+        : destinationSession !== undefined && isPublicSessionShareActive(destinationSession.publicShare);
+    return evaluateContextDisclosurePair({
+        runtimeMayReadSource: runtimeAccountId === undefined || readableAccounts.has(runtimeAccountId),
+        destinationPublic,
+        audienceMayReadSource: audience.every(accountId => readableAccounts.has(accountId)),
+    });
+}
 
 export type SessionContextInjectionDecision =
     | Readonly<{ ok: true; destinationRuntimeAccountId: string }>
@@ -39,10 +122,20 @@ function evaluateSessionContextPair(destination: DestinationSession, facts: Read
     runtimeMayReadSource: boolean;
     audienceMayReadSource: boolean;
 }>): SessionContextInjectionDecision {
+    const decision = evaluateContextDisclosurePair({ ...facts, destinationPublic: isPublicSessionShareActive(destination.publicShare) });
+    return decision.ok ? { ok: true, destinationRuntimeAccountId: destination.accountId } : decision;
+}
+
+/** One disclosure policy for Session and resource adapters; content keys are checked separately. */
+function evaluateContextDisclosurePair(facts: Readonly<{
+    runtimeMayReadSource: boolean;
+    audienceMayReadSource: boolean;
+    destinationPublic: boolean;
+}>): ResourceContextInjectionDecision {
     if (!facts.runtimeMayReadSource) return { ok: false, reason: "destination_runtime_not_allowed" };
-    if (isPublicSessionShareActive(destination.publicShare)) return { ok: false, reason: "destination_public" };
+    if (facts.destinationPublic) return { ok: false, reason: "destination_public" };
     if (!facts.audienceMayReadSource) return { ok: false, reason: "destination_audience_broader" };
-    return { ok: true, destinationRuntimeAccountId: destination.accountId };
+    return { ok: true };
 }
 
 /** Pairwise policy over transaction-loaded custody, separate from the author. */

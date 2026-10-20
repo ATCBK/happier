@@ -7,6 +7,13 @@ import type { BoardCard } from '../model/boardCards';
 import { BoardSettingsButton } from './BoardSettingsPopover';
 import { Switch } from '@/components/ui/forms/Switch';
 import { act } from 'react-test-renderer';
+import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { InjectedAuthProvider } from '@/auth/context/AuthContext';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { Modal } from '@/modal';
+import { useDispatchWorkBoardIntent, useWorkBoardSaveState } from '../model/useWorkBoards';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, buildWorkBoardArtifactHeaderV1, encodePlainArtifactStoredContent } from '@happier-dev/protocol';
 
 afterEach(() => {
     standardCleanup();
@@ -20,6 +27,49 @@ const layout = { createNodeMock: () => ({
 }) };
 
 describe('Board settings picked items', () => {
+    it.each(['applied', 'refused', 'canceled'] as const)('settles a confirmed delete through the Action before leaving (%s)', async disposition => {
+        const board = createWorkBoardV1({ id: 'delete-board', name: 'Delete me' });
+        const home = await createPlainArtifactHomeFixture('https://board-delete.test', { accountId: 'owner', currentAccount: true,
+            handleRequest: async (path, init) => {
+                if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 0 });
+                if (path.startsWith(`/v1/artifacts/${board.id}`) && init?.method === 'DELETE' && disposition === 'refused')
+                    return Response.json({ error: 'artifact_access_denied' }, { status: 403 });
+                return null;
+            },
+        });
+        home.boundary.replaceStoredRow({ id: board.id, header: encodePlainArtifactStoredContent(buildWorkBoardArtifactHeaderV1(board)),
+            body: encodePlainArtifactStoredContent({ body: JSON.stringify(board) }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain', publicAudience: 'none' });
+        const credentials = await TokenStorage.getCredentialsForServerUrl(home.home.serverUrl);
+        const confirmation = vi.spyOn(Modal, 'confirm').mockResolvedValue(disposition !== 'canceled');
+        let departures = 0;
+        let leftBeforeAcknowledgement = false;
+        let saveState: ReturnType<typeof useWorkBoardSaveState> | undefined;
+        function Settings() {
+            const dispatch = useDispatchWorkBoardIntent();
+            saveState = useWorkBoardSaveState();
+            return <BoardSettingsButton board={board}
+                homes={{ activeServerId: home.home.id, mountedServerIds: [home.home.id], isHomeMounted: () => true }}
+                pickedCards={[]} canvasAvailable dispatch={dispatch} onRemoveItem={() => {}}
+                onDeleted={() => { departures++; leftBeforeAcknowledgement = home.boundary.read(board.id) !== null; }}
+                open onOpenChange={() => {}} onAddByHand={() => {}} />;
+        }
+        try {
+            const screen = await renderScreen(<InjectedAuthProvider credentials={credentials}><Settings /></InjectedAuthProvider>, layout);
+            await screen.pressByTestIdAsync('board-settings.delete');
+            await waitForHomeGovernance(() => {
+                if (disposition === 'applied') expect(home.boundary.read(board.id)).toBeNull();
+                else if (disposition === 'refused') expect(saveState?.failure).toMatchObject({ intent: { kind: 'delete', boardId: board.id }, reason: 'unavailable' });
+                else expect(confirmation).toHaveBeenCalledTimes(1);
+            });
+            expect(confirmation).toHaveBeenCalledTimes(1);
+            expect(departures).toBe(disposition === 'applied' ? 1 : 0);
+            expect(leftBeforeAcknowledgement).toBe(false);
+            expect(home.requests.filter(request => request.method === 'DELETE' && request.path.startsWith(`/v1/artifacts/${board.id}`)))
+                .toHaveLength(disposition === 'canceled' ? 0 : 1);
+            if (disposition !== 'applied') expect(home.boundary.read(board.id)).not.toBeNull();
+        } finally { await standardCleanup(); await home.dispose(); confirmation.mockRestore(); }
+    });
     it('keeps settings short and removes picks through a separate navigable list', async () => {
         const cards: BoardCard[] = Array.from({ length: 40 }, (_, index) => {
             const ref = { kind: 'workflow' as const, qualifiedId: { serverId: 'home', id: `w${index}` } };
@@ -28,7 +78,7 @@ describe('Board settings picked items', () => {
         });
         const remove = vi.fn();
         vi.useFakeTimers();
-        const dispatch = vi.fn();
+        const dispatch = vi.fn(async () => ({ status: 'applied' as const, boards: { v: 1 as const, boards: [] } }));
         const screen = await renderScreen(<BoardSettingsButton
             board={{ ...createWorkBoardV1({ id: 'board', name: 'Board' }), source: { picked: cards.map(card => card.ref) } }}
             homes={{ activeServerId: null, mountedServerIds: [], isHomeMounted: () => false }}

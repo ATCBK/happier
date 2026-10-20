@@ -167,7 +167,8 @@ export function useScrollEdgeFades(params: UseScrollEdgeFadesParams) {
         recompute();
     }, [recompute]);
 
-    return {
+    // One handle until something it reports changes: consumers key effects (DOM listeners, observers) on it.
+    return React.useMemo(() => ({
         canScrollX: canScroll.x,
         canScrollY: canScroll.y,
         visibility,
@@ -175,5 +176,5 @@ export function useScrollEdgeFades(params: UseScrollEdgeFadesParams) {
         onContentSizeChange,
         onScroll,
         onMomentumScrollEnd,
-    } as const;
+    }) as const, [canScroll.x, canScroll.y, visibility, onViewportLayout, onContentSizeChange, onScroll, onMomentumScrollEnd]);
 }

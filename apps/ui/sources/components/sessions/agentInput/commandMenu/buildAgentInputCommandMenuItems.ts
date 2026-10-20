@@ -39,6 +39,7 @@ export function buildAgentInputCommandMenuItems(
             label: suggestion.label ?? suggestion.text,
             description: suggestion.description,
             group: suggestion.group ?? t(kind.sectionTitleKey),
+            ...(suggestion.disabled ? { disabled: true as const } : {}),
             icon: component ? undefined : suggestion.icon ?? kind.icon?.(),
             rowHeight: suggestion.rowHeight,
             renderRow: component ? () => React.createElement(component) : undefined,

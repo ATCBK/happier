@@ -8,7 +8,14 @@ import type {
 import { DEFAULT_BROWSER_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/browserCapabilities';
 import { browserViewKey } from '@happier-dev/protocol/browser/view/key';
 import { simulatorCaptureStreamFamilyV1 } from '@happier-dev/protocol/devices/simulator/v1';
+import {
+    DaemonBrowserRecordingStartResultV1Schema,
+    DaemonBrowserRecordingStopResultV1Schema,
+    DaemonBrowserRecordingTerminalResultV1Schema,
+} from '@happier-dev/protocol/browser/recording/v1';
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 
 import type { BrowserShellRecordingState } from '@/components/browser/BrowserShell';
 import type { BrowserRecordingStartControlRequest } from '@/components/browser/recording';
@@ -23,11 +30,6 @@ import {
     isBrowserRecordingCaptureSourceAvailable,
     useDesktopBrowserRecordingReverseCaptureHandler,
 } from '@/sync/domains/browser/recording/reverseCaptureAvailability';
-import {
-    cancelBrowserRecordingViaMachineRpc,
-    startBrowserRecordingViaMachineRpc,
-    stopBrowserRecordingViaMachineRpc,
-} from '@/sync/domains/browser/recording/machineRpc';
 import { useServerFeaturesSnapshotForServerId } from '@/sync/domains/features/featureDecisionRuntime';
 import { Modal } from '@/modal';
 import { t } from '@/text';
@@ -180,14 +182,26 @@ export function useSessionBrowserRecordingRuntime(
 ): SessionBrowserRecordingRuntime | null {
     const [state, setState] = React.useState(createBrowserRecordingState);
     const startInFlightByViewIdRef = React.useRef(new Set<string>());
+    const presented = useLayoutPresentationActive();
+    const requestScope = React.useRef<AbortController | null>(null);
     const snapshot = useServerFeaturesSnapshotForServerId(params.serverId ?? null, {
         enabled: params.enabled && params.recordingCapabilities == null,
     });
 
     React.useEffect(() => {
         setState(createBrowserRecordingState());
-        startInFlightByViewIdRef.current.clear();
-    }, [params.scopeKey]);
+    }, [params.scopeKey, params.sessionId, params.machineId, params.serverId]);
+
+    React.useEffect(() => {
+        if (!params.enabled || !presented) return;
+        const controller = new AbortController();
+        requestScope.current = controller;
+        startInFlightByViewIdRef.current = new Set();
+        return () => {
+            controller.abort();
+            if (requestScope.current === controller) requestScope.current = null;
+        };
+    }, [params.scopeKey, params.sessionId, params.machineId, params.serverId, params.enabled, presented]);
 
     const sessionId = params.sessionId;
     const onUnavailable = params.onUnavailable;
@@ -197,7 +211,8 @@ export function useSessionBrowserRecordingRuntime(
     const serverId = typeof params.serverId === 'string' && params.serverId.trim().length > 0
         ? params.serverId.trim()
         : null;
-    const enabled = params.enabled && machineId != null;
+    const { execute, isCurrent, ready } = useMountedActionExecution(serverId, { openOnRequest: true, retainInvocation: true });
+    const enabled = params.enabled && machineId != null && presented && ready;
     const nowMs = params.nowMs ?? Date.now;
     const recordingCapabilities = params.recordingCapabilities
         ?? readRecordingCapabilitiesFromSnapshot(snapshot.status === 'ready' ? snapshot.features.capabilities.browser : null);
@@ -232,8 +247,11 @@ export function useSessionBrowserRecordingRuntime(
 
     const onStartRecording = React.useCallback(async (request: BrowserRecordingStartControlRequest) => {
         if (!enabled || !machineId) return;
-        if (startInFlightByViewIdRef.current.has(request.viewId)) return;
-        startInFlightByViewIdRef.current.add(request.viewId);
+        const signal = requestScope.current?.signal;
+        if (!signal || signal.aborted) return;
+        const pending = startInFlightByViewIdRef.current;
+        if (pending.has(request.viewId)) return;
+        pending.add(request.viewId);
         const startedAtMs = nowMs();
         const captureSource = resolveCaptureSource(request, machineId);
         const captureSourceAvailable = resolveRequestCaptureSourceAvailable({
@@ -267,89 +285,107 @@ export function useSessionBrowserRecordingRuntime(
                 return;
             }
 
-            const result = await startBrowserRecordingViaMachineRpc({
-                machineId,
-                serverId,
-                input: {
-                    browserSessionId: request.browserSessionId,
-                    viewId: request.viewId,
-                    profileId: request.profileId,
-                    targetKind: request.targetKind,
-                    adapterKind: request.adapterKind,
-                    renderEngineKind: request.renderEngineKind,
-                    captureKind: request.captureKind,
-                    fidelity: request.fidelity,
-                    navigationGeneration: request.navigationGeneration,
-                    mimeType: request.mimeType,
-                    retentionClass: request.retentionClass,
-                    policyState: request.policyState,
-                    startedAtMs,
-                    recordingId: local.recordingId,
-                    mediaTarget: {
-                        sessionId,
-                        messageLocalId: buildRecordingMessageLocalId(request.viewId, startedAtMs),
-                    },
-                    captureSource,
+            const result = await execute('browser.recording.start', {
+                browserSessionId: request.browserSessionId,
+                viewId: request.viewId,
+                profileId: request.profileId,
+                targetKind: request.targetKind,
+                adapterKind: request.adapterKind,
+                renderEngineKind: request.renderEngineKind,
+                captureKind: request.captureKind,
+                fidelity: request.fidelity,
+                navigationGeneration: request.navigationGeneration,
+                mimeType: request.mimeType,
+                retentionClass: request.retentionClass,
+                policyState: request.policyState,
+                startedAtMs,
+                recordingId: local.recordingId,
+                mediaTarget: {
+                    sessionId,
+                    messageLocalId: buildRecordingMessageLocalId(request.viewId, startedAtMs),
                 },
+                captureSource,
+            }, {
+                signal,
+                defaultSessionId: sessionId,
+                externalActionTarget: { kind: 'machine', machineId },
             });
-            const recording = result.ok ? readRecordingFromDaemonResult(result.result) : null;
-            if (result.ok && result.result.status === 'unavailable') {
-                onUnavailable?.(mapDaemonUnavailableReasonToUi(result.result.reason));
+            if (signal.aborted || !isCurrent()) return;
+            const parsed = result.ok ? DaemonBrowserRecordingStartResultV1Schema.safeParse(result.result) : null;
+            if (!parsed?.success) return;
+            const recording = readRecordingFromDaemonResult(parsed.data);
+            if (parsed.data.status === 'unavailable') {
+                onUnavailable?.(mapDaemonUnavailableReasonToUi(parsed.data.reason));
                 return;
             }
             if (recording) {
                 setState((current) => applyBrowserRecordingSessionSnapshot(current, recording));
             }
+        } catch {
+            // A refused or unavailable start never creates a local active recording.
         } finally {
-            startInFlightByViewIdRef.current.delete(request.viewId);
+            pending.delete(request.viewId);
         }
     }, [
         enabled,
+        execute,
+        isCurrent,
         machineId,
         nativeViewCaptureHandlerRegistered,
         nowMs,
         onUnavailable,
         recordingCapabilities,
-        serverId,
         sessionId,
         state,
     ]);
 
     const onStopRecording = React.useCallback(async (recording: BrowserRecordingSessionV1) => {
         if (!enabled || !machineId) return;
-        const result = await stopBrowserRecordingViaMachineRpc({
-            machineId,
-            serverId,
-            recordingId: recording.recordingId,
-            navigationGenerationEnd: recording.navigationGenerationEnd ?? recording.navigationGenerationStart,
-            stoppedAtMs: nowMs(),
-        });
-        const updated = result.ok ? readRecordingFromDaemonResult(result.result) : null;
-        if (updated) {
-            setState((current) => applyBrowserRecordingSessionSnapshot(current, updated));
+        const signal = requestScope.current?.signal;
+        if (!signal || signal.aborted) return;
+        try {
+            const result = await execute('browser.recording.stop', {
+                recordingId: recording.recordingId,
+                navigationGenerationEnd: recording.navigationGenerationEnd ?? recording.navigationGenerationStart,
+                stoppedAtMs: nowMs(),
+            }, { signal, defaultSessionId: sessionId, externalActionTarget: { kind: 'machine', machineId } });
+            if (signal.aborted || !isCurrent()) return;
+            const parsed = result.ok ? DaemonBrowserRecordingStopResultV1Schema.safeParse(result.result) : null;
+            const updated = parsed?.success ? readRecordingFromDaemonResult(parsed.data) : null;
+            if (updated) {
+                setState((current) => applyBrowserRecordingSessionSnapshot(current, updated));
+            }
+            if (!parsed?.success || parsed.data.status === 'unavailable' || parsed.data.status === 'failed') {
+                presentBrowserRecordingActionFailure('stop');
+            }
+        } catch {
+            if (!signal.aborted && isCurrent()) presentBrowserRecordingActionFailure('stop');
         }
-        if (!result.ok || result.result.status === 'unavailable' || result.result.status === 'failed') {
-            presentBrowserRecordingActionFailure('stop');
-        }
-    }, [enabled, machineId, nowMs, serverId]);
+    }, [enabled, execute, isCurrent, machineId, nowMs, sessionId]);
 
     const onCancelRecording = React.useCallback(async (recording: BrowserRecordingSessionV1) => {
         if (!enabled || !machineId) return;
-        const result = await cancelBrowserRecordingViaMachineRpc({
-            machineId,
-            serverId,
-            recordingId: recording.recordingId,
-            atMs: nowMs(),
-            reason: 'user_canceled',
-        });
-        const updated = result.ok ? readRecordingFromDaemonResult(result.result) : null;
-        if (updated) {
-            setState((current) => applyBrowserRecordingSessionSnapshot(current, updated));
+        const signal = requestScope.current?.signal;
+        if (!signal || signal.aborted) return;
+        try {
+            const result = await execute('browser.recording.cancel', {
+                recordingId: recording.recordingId,
+                atMs: nowMs(),
+                reason: 'user_canceled',
+            }, { signal, defaultSessionId: sessionId, externalActionTarget: { kind: 'machine', machineId } });
+            if (signal.aborted || !isCurrent()) return;
+            const parsed = result.ok ? DaemonBrowserRecordingTerminalResultV1Schema.safeParse(result.result) : null;
+            const updated = parsed?.success ? readRecordingFromDaemonResult(parsed.data) : null;
+            if (updated) {
+                setState((current) => applyBrowserRecordingSessionSnapshot(current, updated));
+            }
+            if (!parsed?.success || parsed.data.status === 'unavailable' || parsed.data.status === 'failed') {
+                presentBrowserRecordingActionFailure('discard');
+            }
+        } catch {
+            if (!signal.aborted && isCurrent()) presentBrowserRecordingActionFailure('discard');
         }
-        if (!result.ok || result.result.status === 'unavailable' || result.result.status === 'failed') {
-            presentBrowserRecordingActionFailure('discard');
-        }
-    }, [enabled, machineId, nowMs, serverId]);
+    }, [enabled, execute, isCurrent, machineId, nowMs, sessionId]);
 
     return React.useMemo(() => {
         if (!enabled) return null;

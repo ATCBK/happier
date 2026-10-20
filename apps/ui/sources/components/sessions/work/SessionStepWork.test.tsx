@@ -6,7 +6,7 @@ import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
+import { workflowRunRowFromSummary, workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
 import { t } from '@/text';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
@@ -122,11 +122,11 @@ describe('SessionStepWork (lab session-F)', () => {
             await vi.waitFor(() => expect(homes.requestsFor(runStoragePath)).toHaveLength(2));
             await vi.waitFor(async () => {
                 await act(async () => {});
-                expect(storage.getState().workflowRunsById[runId]?.summary?.state).toBe('paused');
+                expect(storage.getState().workflowRunsById[workflowRunStoreKey(runId)]?.summary?.state).toBe('paused');
             });
             expect(screen.findByTestId('session-work-step-run')?.props.children).toBe(t('workflows.contentUnavailable'));
             await act(async () => { release?.(); });
-            expect(storage.getState().workflowRunsById[runId]?.summary?.state).toBe('paused');
+            expect(storage.getState().workflowRunsById[workflowRunStoreKey(runId)]?.summary?.state).toBe('paused');
             await screen.unmount();
         } finally { release?.(); act(() => { storage.setState(previous); publishAppliedActiveServerSnapshot(applied, available); }); }
     });

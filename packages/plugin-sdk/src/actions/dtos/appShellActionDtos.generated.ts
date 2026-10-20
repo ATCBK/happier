@@ -30,6 +30,9 @@ export type AppShellActionInputById = {
             kind: 'session';
             sessionId: string;
         } | {
+            kind: 'discussion';
+            discussionId: string;
+        } | {
             kind: 'newSession';
             instanceId: string;
         } | {
@@ -63,7 +66,7 @@ export type AppShellActionResultById = {
         status: 'opened';
         draftId: string;
     } | {
-        status: 'unavailable' | 'missing';
+        status: 'missing' | 'unavailable';
     };
     readonly "session.draft.append": {
         status: 'unavailable';
@@ -191,6 +194,160 @@ export type AppShellActionResultById = {
                 remindAt: number;
             })[];
         }[];
+        items: {
+            key: string;
+            producer: 'live' | 'notice';
+            type: 'approval' | 'decision' | 'blocked' | 'update' | 'mention';
+            view: 'needs_you' | 'updates' | 'mentions';
+            title: string;
+            context: string | null;
+            createdAt: number;
+            read: boolean;
+            pageRoute: string;
+            source: {
+                kind: string;
+                id: string;
+                serverId: string;
+                displayName?: string | null | undefined;
+            };
+            focus: {
+                kind: 'session';
+                serverId: string;
+                id: string;
+                jumpSeq?: number | undefined;
+            } | {
+                kind: 'approval';
+                serverId: string;
+                id: string;
+            } | {
+                kind: 'notice';
+                serverId: string;
+                id: string;
+            } | {
+                kind: 'workflow_run';
+                serverId: string;
+                id: string;
+                invocationId?: string | undefined;
+            } | {
+                kind: 'automation_run';
+                serverId: string;
+                id: string;
+                automationId: string;
+            } | {
+                kind: 'discussion';
+                serverId: string;
+                id: string;
+                messageId: string;
+            };
+            question?: {
+                mode: 'wait' | 'continue';
+                lasting: boolean;
+                requestId: string;
+                currentHandler: {
+                    kind: 'person';
+                } | {
+                    kind: 'session';
+                    address: {
+                        serverId: string;
+                        sessionId: string;
+                    };
+                };
+                assumption?: string | undefined;
+                type?: 'decision' | 'blocked' | undefined;
+                reason?: string | undefined;
+            } | undefined;
+            discussion?: {
+                accountId: string;
+                messageRef: {
+                    kind: 'discussion';
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                };
+                seq: number;
+                anchor: {
+                    kind: 'session';
+                    sessionId: string;
+                    messageId?: string | undefined;
+                } | {
+                    kind: 'doc';
+                    doc: {
+                        ref: {
+                            artifactId: string;
+                            kind: 'doc';
+                            serverId: string;
+                        };
+                        revision: {
+                            headerVersion: number;
+                            bodyVersion: number;
+                        };
+                    };
+                } | {
+                    kind: 'task';
+                    entry: Readonly<{
+                        source: Readonly<{
+                            pluginId: string;
+                            localId: string;
+                        }>;
+                        kindId: string;
+                        collisionScope: string;
+                        entryId: string;
+                    }>;
+                } | null;
+                replyTarget?: {
+                    kind: 'task';
+                    entry: Readonly<{
+                        source: Readonly<{
+                            pluginId: string;
+                            localId: string;
+                        }>;
+                        kindId: string;
+                        collisionScope: string;
+                        entryId: string;
+                    }>;
+                } | {
+                    kind: 'doc_passage';
+                    doc: {
+                        ref: {
+                            artifactId: string;
+                            kind: 'doc';
+                            serverId: string;
+                        };
+                        revision: {
+                            headerVersion: number;
+                            bodyVersion: number;
+                        };
+                    };
+                } | {
+                    kind: 'message';
+                    messageId: string;
+                } | undefined;
+                proposalDisposition?: {
+                    state: 'open';
+                } | {
+                    state: 'accepted';
+                    acceptedRevision: {
+                        headerVersion: number;
+                        bodyVersion: number;
+                    };
+                    decidedBy: {
+                        accountId: string;
+                        atMs: number;
+                    };
+                } | {
+                    state: 'declined';
+                    decidedBy: {
+                        accountId: string;
+                        atMs: number;
+                    };
+                } | undefined;
+            } | undefined;
+        }[];
+        coverage: {
+            discussions: 'unavailable' | 'complete' | 'partial';
+        };
         approvalIds: string[];
         usageNoticeIds: string[];
         friendRequestIds: string[];
@@ -206,6 +363,7 @@ export type AppShellActionResultById = {
         }[];
         isLoading: boolean;
         refreshFailed: boolean;
+        accountNoticeIds?: string[] | undefined;
     };
     readonly "inbox.mark_all_read": {
         results: {
@@ -215,7 +373,7 @@ export type AppShellActionResultById = {
         }[];
     };
     readonly "session.draft.delete": {
-        status: 'unavailable' | 'deleted' | 'missing' | 'launch_custody';
+        status: 'missing' | 'unavailable' | 'deleted' | 'launch_custody';
     };
     readonly "session.draft.directory.set": {
         status: 'unavailable' | 'applied';

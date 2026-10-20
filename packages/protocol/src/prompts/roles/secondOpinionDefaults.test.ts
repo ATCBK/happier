@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildBackendTargetKeyV2 } from '../../backends/targets/backendTargetRefV2.js';
 import { resolveRoleSelectionV1 } from './resolveRoleSelectionV1.js';
+import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '../../agents/executionTargetV1.js';
 
 const caller = buildBackendTargetKeyV2({ kind: 'backend', backendId: 'codex' });
 const other = buildBackendTargetKeyV2({ kind: 'backend', backendId: 'claude' });
@@ -16,8 +17,9 @@ describe('Second opinion start defaults', () => {
   });
 
   it('does not treat a configured variant of the caller as another Agent family', () => {
-    const variant = buildBackendTargetKeyV2({ kind: 'backend', backendId: 'codex', configuredBackendId: 'alternate-login' });
-    const resolved = resolveRoleSelectionV1({ roleId: 'second_opinion', defaultEngine: { agentTargetKey: caller },
+    const configuredCaller = buildBackendTargetKeyV2({ kind: 'agent', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId: 'caller' });
+    const variant = buildBackendTargetKeyV2({ kind: 'agent', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId: 'alternate-login' });
+    const resolved = resolveRoleSelectionV1({ roleId: 'second_opinion', defaultEngine: { agentTargetKey: configuredCaller },
       availableAgentTargetKeys: [variant, other],
     });
     expect(resolved).toMatchObject({ ok: true, selection: { engine: { agentTargetKey: other } } });

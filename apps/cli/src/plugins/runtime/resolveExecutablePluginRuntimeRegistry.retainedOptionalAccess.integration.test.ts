@@ -30,6 +30,7 @@ import { resolveExecutablePluginRuntimeRegistry } from './resolveExecutablePlugi
 
 const PLUGIN_ID = 'acme.retained-optional-access';
 const AGENT_ID = 'retained-optional-agent';
+const QUALIFIED_AGENT_ID = `${PLUGIN_ID}/${AGENT_ID}`;
 const STABLE_ACCOUNT_ACCESS_ID = 'stable-account';
 const OPTIONAL_ACCOUNT_ACCESS_ID = 'retained-optional-account';
 const SESSION_ID = 'session-retained-optional';
@@ -114,6 +115,13 @@ async function writePluginSource(input: Readonly<{
                     id: AGENT_ID,
                     title: `Retained optional Agent ${input.version}`,
                     runtime: { kind: 'custom' },
+                    connectedAccounts: [{
+                        service: input.accountServiceId,
+                        purpose: input.requestAuthPurpose,
+                        required: false,
+                        credentialKinds: ['token'],
+                        materializationKinds: ['httpHeaders'],
+                    }],
                     primary: 'sessions',
                     capabilities: {
                         sessions: {
@@ -337,7 +345,7 @@ describe('retained Agent optional HostAccess', () => {
                 localId: AGENT_ID,
             }]);
             const binding = gRegistry.agentRuntimesByAgentId
-                .get(AGENT_ID)
+                .get(QUALIFIED_AGENT_ID)
                 ?.sessionRunnerFactoryBinding;
             if (!binding) {
                 throw new Error('Expected retained G Agent runner binding');
@@ -414,11 +422,11 @@ describe('retained Agent optional HostAccess', () => {
                 family: 'agents',
                 localId: AGENT_ID,
             }]);
-            const currentHAgent = hRegistry.contributes.agentDefinitionsById.get(AGENT_ID);
-            if (!currentHAgent?.catalogEntry) {
+            const currentHAgent = await hRegistry.acquireAgentCatalogEntry?.(QUALIFIED_AGENT_ID);
+            if (!currentHAgent) {
                 throw new Error('Expected current H Agent catalog entry');
             }
-            expect(currentHAgent.catalogEntry.connectedAccountRequestAuthUses).toMatchObject([{
+            expect(currentHAgent.connectedAccountRequestAuthUses).toMatchObject([{
                 purpose: 'request-auth-h',
             }]);
             const acquireRetainedGContributions =
@@ -427,6 +435,10 @@ describe('retained Agent optional HostAccess', () => {
             if (!acquireRetainedGContributions) {
                 throw new Error('Expected exact retained G Agent purpose contributions');
             }
+            await expect(acquireRetainedGContributions({
+                binding,
+                pluginHardRevocationRevision: 1,
+            })).resolves.toBeNull();
             const retainedGContributions = await acquireRetainedGContributions({
                 binding,
                 pluginHardRevocationRevision: 0,
@@ -435,7 +447,7 @@ describe('retained Agent optional HostAccess', () => {
             if (!retainedGContributions) {
                 throw new Error('Expected retained G Agent purpose contributions');
             }
-            const retainedGAgent = retainedGContributions.contributes.agentDefinitionsById.get(AGENT_ID);
+            const retainedGAgent = retainedGContributions.contributes.agentDefinitionsById.get(QUALIFIED_AGENT_ID);
             if (!retainedGAgent?.catalogEntry) {
                 throw new Error('Expected retained G Agent catalog entry');
             }
@@ -445,6 +457,7 @@ describe('retained Agent optional HostAccess', () => {
             expect(retainedGContributions.contributes.actions).toEqual([]);
             expect(retainedGContributions.contributes.agents).toHaveLength(1);
             expect(retainedGContributions.isCurrent()).toBe(true);
+            await retainedGContributions.release();
             await retainedGContributions.release();
             expect(retainedGContributions.isCurrent()).toBe(false);
             const createRetainedThroughH =

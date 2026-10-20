@@ -1,19 +1,21 @@
 import {
   isPluginError,
   PluginError,
-  arePluginMachineMaterializationRefsEqual,
   arePluginMachineExecutionOriginsEqual,
+  getPluginMachineExecutionOriginRef,
   type JsonValue,
+  type PluginMachineMaterializationRefV1,
   type PluginInvocationContext,
 } from '@happier-dev/plugin-sdk';
 import { pluginJsonValuesEqual } from '@happier-dev/plugin-sdk/protocol';
 import type { PluginAccountStorageScope } from '@happier-dev/plugin-sdk/storage';
 import { PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1 } from '@happier-dev/plugin-sdk/collections';
-import { isPluginActionApprovalRequestCreated } from '@happier-dev/plugin-sdk/actions';
+import { arePluginMachineExecutionRoutingsEqual, isPluginActionApprovalRequestCreated } from '@happier-dev/plugin-sdk/actions';
 import type {
   AdmittedTargetedOperationExecutionHandle,
   PluginActionResultById,
   PluginMachineExecutionOriginV1,
+  PluginMachineExecutionRoutingV1,
 } from '@happier-dev/plugin-sdk/actions';
 import {
   ConversationBindingReadResultV1Schema,
@@ -28,6 +30,7 @@ import {
   ConversationProviderConnectionStopInputV1Schema,
   ConversationProviderConnectionStopResultV1Schema,
   ConversationProviderSetupOutcomeV1Schema,
+  ConversationProviderSetupRemediationResultV1Schema,
   ConversationPrincipalResolveInputV1Schema,
   ConversationPrincipalResolveResultV1Schema,
   SessionPullRequestBindingInputV1Schema,
@@ -61,6 +64,8 @@ import {
   type ConversationProviderConnectionStopInputV1,
   type ConversationConnectionPrepareInputV1,
   type ConversationConnectionPrepareResultV1,
+  type ConversationConnectionSetupRemediateInputV1,
+  type ConversationProviderSetupRemediationResultV1,
   type ConversationSessionProjectionBaselineAcceptInputV1,
   type ConversationSessionProjectionBaselineAcceptResultV1,
   type ConversationConnectionUpdateInputV1,
@@ -107,6 +112,12 @@ import {
   finalizeConversationConnectionDeleteWithoutProviderStop,
   finalizeConversationConnectionTransferWithoutProviderStop,
   freezeConversationConnectionTransportOrigin,
+  getConversationConnectionTransportOrigin,
+  getConversationConnectionExecutionRouting,
+  areConversationConnectionTransportOriginsEqual,
+  isConversationPendingEndpointRetarget,
+  type ConversationPendingProviderStopV1,
+  type ConversationPendingEndpointRetargetIntentV1,
   hasAcceptedConversationTransferLoss,
   recordConversationConnectionHistoryGap,
   recordConversationConnectionProviderReadiness,
@@ -120,7 +131,6 @@ import {
   type ConversationConnectionTransportOriginV1,
   type ConversationConnectionStopConfirmationResultV1,
   type ConversationDeleteStopRequestV1,
-  type ConversationPendingOldTransportStopV1,
   type ConversationTransferStopRequestV1,
 } from './connectionLifecycle.js';
 import {
@@ -226,6 +236,7 @@ type ConversationConnectionSetupAndTestInput = Pick<
 type CurrentProvider = Readonly<{
   pluginId: string;
   setup: AdmittedTargetedOperationExecutionHandle;
+  setupRemediation: AdmittedTargetedOperationExecutionHandle | undefined;
   connectionTest: AdmittedTargetedOperationExecutionHandle;
   observationsPoll: AdmittedTargetedOperationExecutionHandle | undefined;
   connectionStop: AdmittedTargetedOperationExecutionHandle | undefined;
@@ -263,7 +274,7 @@ type ProviderConnectionPreparation =
   | Readonly<{
     kind: 'ready';
     setup: ConversationProviderSetupResultV1;
-    transportOrigin: ConnectionTransportOrigin;
+    transportOrigin: PluginMachineExecutionOriginV1;
   }>;
 type ProviderConnectionSetup =
   | ConversationProviderSetupRemediationV1
@@ -389,11 +400,11 @@ async function readCurrentBindingResolutionConnection(input: Readonly<{
   const row = await input.collection.get(input.connectionId, { signal: input.signal });
   assertNotAborted(input.signal);
   if (row === null) return bindingResolutionUnavailable('connectionNotFound');
-  if (row.revision !== input.expectedConnectionRevision) return bindingResolutionStale();
   const connection = readConversationConnectionUpdateRow({
     row,
     connectionId: input.connectionId,
   });
+  if (connection.configurationRevision !== input.expectedConnectionRevision) return bindingResolutionStale();
   if (connection.lifecycle.deletionState !== 'none') {
     return bindingResolutionUnavailable('connectionDeleting');
   }
@@ -617,7 +628,7 @@ async function resolveBindingEndpointCandidates(input: Readonly<{
     }),
     {
       signal: input.context.signal,
-      expectedExecutionOrigin: connectionRead.connection.transportOrigin,
+      expectedExecutionRouting: getConversationConnectionExecutionRouting(connectionRead.connection.transportOrigin, connectionRead.connection.providerPluginId),
     },
   );
   assertNotAborted(input.context.signal);
@@ -708,7 +719,7 @@ async function resolveBindingPrincipalCandidatesForEndpoint(input: Readonly<{
     }),
     {
       signal: input.context.signal,
-      expectedExecutionOrigin: connectionRead.connection.transportOrigin,
+      expectedExecutionRouting: getConversationConnectionExecutionRouting(connectionRead.connection.transportOrigin, connectionRead.connection.providerPluginId),
     },
   );
   assertNotAborted(input.context.signal);
@@ -787,17 +798,26 @@ async function resolveBindingAudienceSelection(input: Readonly<{
   if (endpointResolution.kind !== 'endpointSelected') return endpointResolution;
   const endpoint = endpointResolution.endpoint;
 
-  const principalResolution = await resolveBindingPrincipalCandidatesForEndpoint({
-    connectionId: input.connectionId,
-    expectedConnectionRevision: input.expectedConnectionRevision,
-    endpoint,
-    witness: endpointResolution.witness,
-    query: input.principalSelection.query,
-    context: input.context,
-  });
-  if (principalResolution.kind !== 'principalCandidates') return principalResolution;
+  const resolutions = new Map<string, Extract<BindingPrincipalResolution, { kind: 'principalCandidates' }>>();
+  let witness = endpointResolution.witness;
   const allowedPrincipalIds: string[] = [];
   for (const selection of input.principalSelection.selected) {
+    const query = selection.query ?? input.principalSelection.query;
+    let principalResolution = resolutions.get(query);
+    if (principalResolution === undefined) {
+      const resolution = await resolveBindingPrincipalCandidatesForEndpoint({
+        connectionId: input.connectionId,
+        expectedConnectionRevision: input.expectedConnectionRevision,
+        endpoint,
+        witness,
+        query,
+        context: input.context,
+      });
+      if (resolution.kind !== 'principalCandidates') return resolution;
+      principalResolution = resolution;
+      resolutions.set(query, resolution);
+      witness = resolution.witness;
+    }
     const principal = principalResolution.candidates.find((candidate) => (
       candidate.id === selection.id && candidate.kind === selection.kind
     ));
@@ -808,7 +828,7 @@ async function resolveBindingAudienceSelection(input: Readonly<{
     kind: 'ready',
     endpoint,
     allowedPrincipalIds,
-    witness: principalResolution.witness,
+    witness,
     ...(endpointResolution.sharedEndpointInputModes === undefined
       ? {}
       : { sharedEndpointInputModes: endpointResolution.sharedEndpointInputModes }),
@@ -1116,11 +1136,13 @@ function readCommittedTransferReplacementState(input: Readonly<{
     })) {
     return 'none';
   }
-  if (input.row.revision === input.transferInput.expectedRevision + 1
+  if (input.current.configurationRevision === input.transferInput.expectedRevision + 1
     && pending !== null
-    && pending.stopRequest.reason === 'transfer'
-    && pending.stopRequest.connectionId === input.transferInput.connectionId
-    && pending.stopRequest.authorityEpoch === input.current.lifecycle.authorityEpoch) {
+    && (isConversationPendingEndpointRetarget(pending)
+      ? pending.transferAuthorityEpoch === input.current.lifecycle.authorityEpoch
+      : pending.stopRequest.reason === 'transfer'
+        && pending.stopRequest.connectionId === input.transferInput.connectionId
+        && pending.stopRequest.authorityEpoch === input.current.lifecycle.authorityEpoch)) {
     return 'marked';
   }
   // A transfer whose predecessor needs no provider stop commits in one retained
@@ -1129,8 +1151,8 @@ function readCommittedTransferReplacementState(input: Readonly<{
   // second revision before its response was lost.
   return pending === null
     && isJsonRecord(transport)
-    && (input.row.revision === input.transferInput.expectedRevision + 1
-      || input.row.revision === input.transferInput.expectedRevision + 2)
+    && (input.current.configurationRevision === input.transferInput.expectedRevision + 1
+      || input.current.configurationRevision === input.transferInput.expectedRevision + 2)
     ? 'settled'
     : 'none';
 }
@@ -1140,13 +1162,13 @@ function isLostResponseCommittedTransfer(input: Readonly<{
   current: ConversationConnectionUpdateRow;
   transferInput: ConversationConnectionTransferInputV1;
   /** The placement this request's selected provider setup actually resolved. */
-  requestedTransportOrigin: ConnectionTransportOrigin;
+  requestedTransportOrigin: PluginMachineExecutionOriginV1;
 }>): boolean {
   const state = readCommittedTransferReplacementState(input);
   return state === 'marked'
-    || (state === 'settled' && arePluginMachineExecutionOriginsEqual(
+    || (state === 'settled' && areConversationConnectionTransportOriginsEqual(
       input.current.transportOrigin,
-      input.requestedTransportOrigin,
+      getConversationConnectionTransportOrigin(input.requestedTransportOrigin),
     ));
 }
 
@@ -1164,45 +1186,18 @@ function isCurrentUnacceptedTransferResume(input: Readonly<{
 }>): boolean {
   const pending = input.current.lifecycle.pendingOldTransportStop;
   const transport = own(input.current.payload, 'transport');
-  if (pending === null
-    || input.row.revision !== input.transferInput.expectedRevision
-    || input.current.lifecycle.authorityEpoch !== input.transferInput.expectedAuthorityEpoch
-    || input.current.lifecycle.deletionState !== 'none'
-    || pending.acceptedPossibleLoss
-    || pending.stopRequest.reason !== 'transfer'
-    || pending.stopRequest.connectionId !== input.transferInput.connectionId
-    || pending.predecessorTransportKind !== 'durablePush'
-    || pending.endpointRetarget !== 'pending'
-    || pending.overlapSafety !== 'safe'
-    || pending.stopRequest.authorityEpoch !== input.current.lifecycle.authorityEpoch
-    || pending.predecessorCheckpointedPollInvocation.authorityEpoch >= Number.MAX_SAFE_INTEGER
-    || pending.predecessorCheckpointedPollInvocation.authorityEpoch + 1
-      !== input.current.lifecycle.authorityEpoch
-    || pending.predecessorCheckpointedPollInvocation.connectionRevision >= input.row.revision
-    || !arePluginMachineExecutionOriginsEqual(
-      pending.predecessorCheckpointedPollInvocation.transportOrigin,
-      pending.transportOrigin,
-    )
-    || pending.transportOrigin.materializationRef.pluginId !== input.current.providerPluginId
-    || input.current.transportOrigin.materializationRef.pluginId !== input.current.providerPluginId
-    || input.transferInput.selectedTransport !== 'durablePush'
-    || input.transferInput.endpointContinuation !== undefined
-    || !isRequestedTransferAlreadyCurrent({
-      current: input.current,
-      transferInput: input.transferInput,
-    })
-    || !isJsonRecord(transport)
-    || transport.kind !== 'durablePush'
-    || !isJsonRecord(transport.webhookContributionRef)
-    || transport.webhookContributionRef.pluginId !== input.current.providerPluginId
-    || typeof transport.webhookContributionRef.localId !== 'string'
-    || typeof transport.webhookEndpointId !== 'string'
-    || transport.webhookSourceInstanceId
-      !== conversationConnectionWebhookSourceInstanceIdV1(input.transferInput.connectionId)) {
-    return false;
-  }
-  const immutableIdentity = readTransferImmutableConnectionIdentity(input.current);
-  return pending.stopRequest.providerConnectionKey === immutableIdentity.providerConnectionKey;
+  return isConversationPendingEndpointRetarget(pending)
+    && input.current.configurationRevision === input.transferInput.expectedRevision
+    && input.current.lifecycle.authorityEpoch === input.transferInput.expectedAuthorityEpoch
+    && input.current.lifecycle.deletionState === 'none'
+    && pending.transferAuthorityEpoch === input.current.lifecycle.authorityEpoch
+    && input.transferInput.selectedTransport === 'durablePush'
+    && input.transferInput.endpointContinuation === undefined
+    && isRequestedTransferAlreadyCurrent({ current: input.current, transferInput: input.transferInput })
+    && isJsonRecord(transport) && transport.kind === 'durablePush'
+    && transport.webhookEndpointId === pending.webhookEndpointId
+    && transport.webhookSourceInstanceId === pending.webhookSourceInstanceId
+    && pluginJsonValuesEqual(transport.webhookContributionRef, pending.webhookContributionRef);
 }
 
 function assertTransferStartAccepted(input: ReturnType<typeof startConversationConnectionTransfer>): Extract<
@@ -1247,7 +1242,7 @@ function hasExactCurrentStopRequest(input: Readonly<{
   connectionId: string;
   payload: JsonRecord;
   authorityEpoch: number;
-  pendingOldTransportStop: ConversationPendingOldTransportStopV1;
+  pendingOldTransportStop: ConversationPendingProviderStopV1;
 }>): boolean {
   const { stopRequest } = input.pendingOldTransportStop;
   if (stopRequest.reason !== 'delete') return false;
@@ -1349,7 +1344,7 @@ function projectConversationBinding(input: Readonly<{
 }
 
 function readPairingConnectionFacts(current: ConversationConnectionUpdateRow): Readonly<{
-  materialization: ConnectionTransportOrigin['materializationRef'];
+  executionOrigin: PluginMachineExecutionRoutingV1;
   destinationLabel: string;
   pairingDeepLinkTemplate?: string;
 }> {
@@ -1364,11 +1359,7 @@ function readPairingConnectionFacts(current: ConversationConnectionUpdateRow): R
   }
   const label = own(integrationPrincipal, 'label');
   return {
-    materialization: {
-      pluginId: current.transportOrigin.materializationRef.pluginId,
-      machineId: current.transportOrigin.materializationRef.machineId,
-      materializationId: current.transportOrigin.materializationRef.materializationId,
-    },
+    executionOrigin: getConversationConnectionExecutionRouting(current.transportOrigin, current.providerPluginId),
     destinationLabel: typeof label === 'string' ? label : integrationPrincipalId,
     ...(pairingDeepLinkTemplate === undefined ? {} : { pairingDeepLinkTemplate }),
   };
@@ -1643,12 +1634,16 @@ async function writeConversationPairingBinding(
   assertNotAborted(context.signal);
   const connectionRow = await collection.get(input.connectionId, { signal: context.signal });
   assertNotAborted(context.signal);
-  if (connectionRow === null || connectionRow.revision !== input.expectedConnectionRevision) {
+  if (connectionRow === null) {
     return { kind: 'staleConnectionRevision' };
   }
   const connection = readConversationConnectionUpdateRow({ row: connectionRow, connectionId: input.connectionId });
+  if (connection.configurationRevision !== input.expectedConnectionRevision) return { kind: 'staleConnectionRevision' };
   if (connection.lifecycle.deletionState !== 'none') return { kind: 'staleConnectionRevision' };
-  if (!arePluginMachineMaterializationRefsEqual(connection.transportOrigin.materializationRef, input.materialization)) {
+  if (!arePluginMachineExecutionRoutingsEqual(
+    getConversationConnectionExecutionRouting(connection.transportOrigin, connection.providerPluginId),
+    input.executionOrigin,
+  )) {
     return { kind: 'wrongMaterialization' };
   }
   // Pairing proposals freeze only a caller precondition. Recheck it after the
@@ -1684,8 +1679,15 @@ async function writeConversationPairingBinding(
     target: candidate.binding.target,
     context,
   });
+  const finalCurrent = await readCurrentBindingResolutionConnection({
+    collection,
+    connectionId: input.connectionId,
+    expectedConnectionRevision: input.expectedConnectionRevision,
+    signal: context.signal,
+  });
+  if (finalCurrent.kind !== 'current') return { kind: 'staleConnectionRevision' };
   const result = await collection.batch([
-    { kind: 'assert', rowId: input.connectionId, expectedRevision: input.expectedConnectionRevision },
+    { kind: 'assert', rowId: input.connectionId, expectedRevision: finalCurrent.row.revision },
     { kind: 'put', value: candidate.row, expectedRevision: 'absent' },
     ...(projectionFrontier === null
       ? []
@@ -1719,13 +1721,10 @@ export function createConversationPairingManagementHandlers(pairing: Conversatio
       if (connectionRow === null) {
         throw pluginError('channels_pairing_connection_not_found', 'Pairing connection does not exist.');
       }
-      if (connectionRow.revision !== createInput.expectedConnectionRevision) {
+      const connection = readConversationConnectionUpdateRow({ row: connectionRow, connectionId: createInput.connectionId });
+      if (connection.configurationRevision !== createInput.expectedConnectionRevision) {
         throw pluginError('channels_pairing_connection_conflict', 'Pairing creation requires the current connection revision.', true);
       }
-      const connection = readConversationConnectionUpdateRow({
-        row: connectionRow,
-        connectionId: createInput.connectionId,
-      });
       if (connection.lifecycle.deletionState !== 'none') {
         throw pluginError('channels_pairing_connection_delete_in_progress', 'Pairing cannot begin while its connection deletion is in progress.');
       }
@@ -1755,7 +1754,7 @@ export function createConversationPairingManagementHandlers(pairing: Conversatio
         connectionId: createInput.connectionId,
         expectedConnectionRevision: createInput.expectedConnectionRevision,
         pairingRequestId: createInput.pairingRequestId,
-        materialization: facts.materialization,
+        executionOrigin: facts.executionOrigin,
         destinationLabel: facts.destinationLabel,
         ...(facts.pairingDeepLinkTemplate === undefined
           ? {}
@@ -2076,6 +2075,7 @@ function connectionRows(input: Readonly<{
     [CHANNEL_STATE_FIELD.createdAt]: input.now,
     [CHANNEL_STATE_FIELD.updatedAt]: input.now,
     payload: {
+      configurationRevision: 1,
       providerPluginId: input.providerPluginId,
       providerContributionSelection: {
         contributionId: input.createInput.providerSelection.contributor.contributionId,
@@ -2239,6 +2239,7 @@ function providerFromSelectedContribution(input: Awaited<
   return {
     pluginId: input.contributor.pluginId,
     setup: input.operations.setup,
+    setupRemediation: input.operations.setupRemediation,
     connectionTest: input.operations.connectionTest,
     observationsPoll: input.operations.observationsPoll,
     connectionStop: input.operations.connectionStop,
@@ -2261,11 +2262,9 @@ async function readCurrentSelectedProvider(input: Readonly<{
 function assertProviderExecutionOrigin(input: Readonly<{
   provider: CurrentProvider;
   executionOrigin: PluginMachineExecutionOriginV1;
-  operation: 'setup' | 'connectionTest';
+  operation: 'setup' | 'setupRemediation' | 'connectionTest';
 }>): void {
-  const ref = 'materializationRef' in input.executionOrigin
-    ? input.executionOrigin.materializationRef
-    : input.executionOrigin.sourceRef;
+  const ref = getPluginMachineExecutionOriginRef(input.executionOrigin);
   if (ref.pluginId === input.provider.pluginId) return;
   throw pluginError(
     'channels_connection_execution_origin_provider_mismatch',
@@ -2306,7 +2305,7 @@ async function runProviderSetup(input: Readonly<{
   provider: CurrentProvider;
   providerSetupInput: JsonValue;
   credentialRef: ConversationConnectionPrepareInputV1['credentialRef'];
-  expectedExecutionOrigin?: ConnectionTransportOrigin;
+  expectedExecutionRouting?: PluginMachineExecutionRoutingV1;
 }>): Promise<ProviderConnectionSetup> {
   assertNotAborted(input.context.signal);
   const setupExecution = await input.context.services.actions.executeAdmittedTargetedOperationWithExecutionOrigin(
@@ -2318,7 +2317,7 @@ async function runProviderSetup(input: Readonly<{
       // the stripped provider input. A carrier-bound targeted Action may only
       // reconstruct that same reference before the provider parser runs.
       expectedSelectedConnectedAccountRef: input.credentialRef,
-      ...(input.expectedExecutionOrigin === undefined ? {} : { expectedExecutionOrigin: input.expectedExecutionOrigin }),
+      ...(input.expectedExecutionRouting === undefined ? {} : { expectedExecutionRouting: input.expectedExecutionRouting }),
     },
   );
   const outcome = parseProviderSetupOutcome(setupExecution.result);
@@ -2398,13 +2397,7 @@ async function runProviderSetupAndTest(input: Readonly<{
       'Provider setup requires remediation before connection creation.',
     );
   }
-  // Provider callers, pairing, and webhook targets require exact materialized
-  // transport authority. Source-backed setup can describe safe preparation
-  // facts, but it cannot create or replace a retained connection transport.
-  if (!('materializationRef' in prepared.transportOrigin)) {
-    return { kind: 'notReady', reason: 'unsupported' };
-  }
-  const transportOrigin = freezeConversationConnectionTransportOrigin(prepared.transportOrigin);
+  const transportOrigin = prepared.transportOrigin;
   if (!prepared.setup.supportedTransports.includes(input.setupInput.selectedTransport)) {
     return { kind: 'notReady', reason: 'unsupported' };
   }
@@ -2440,10 +2433,7 @@ async function runProviderSetupAndTest(input: Readonly<{
     executionOrigin: testExecution.executionOrigin,
     operation: 'connectionTest',
   });
-  if (!('materializationRef' in testExecution.executionOrigin)) {
-    return { kind: 'notReady', reason: 'unsupported' };
-  }
-  const testTransportOrigin = freezeConversationConnectionTransportOrigin(testExecution.executionOrigin);
+  const testTransportOrigin = testExecution.executionOrigin;
   if (!arePluginMachineExecutionOriginsEqual(transportOrigin, testTransportOrigin)) {
     throw pluginError(
       'channels_connection_execution_origin_mismatch',
@@ -2524,6 +2514,27 @@ export async function prepareConversationConnectionForInvocation(
   };
 }
 
+/** The selected provider owns the repair; Channels owns its public intent. */
+export async function remediateConversationConnectionSetupForInvocation(
+  input: JsonValue,
+  context: PluginInvocationContext,
+): Promise<ConversationProviderSetupRemediationResultV1> {
+  const remediationInput = admittedActionInput<ConversationConnectionSetupRemediateInputV1>(input);
+  const provider = await readCurrentSelectedProvider({ context, selection: remediationInput.providerSelection });
+  if (provider.setupRemediation === undefined) {
+    throw pluginError('channels_connection_setup_remediation_unavailable', 'The selected provider has no current setup remediation operation.');
+  }
+  assertNotAborted(context.signal);
+  const execution = await context.services.actions.executeAdmittedTargetedOperationWithExecutionOrigin(
+    provider.setupRemediation,
+    remediationInput.providerRemediationInput,
+    { signal: context.signal, expectedSelectedConnectedAccountRef: remediationInput.credentialRef },
+  );
+  assertNotAborted(context.signal);
+  assertProviderExecutionOrigin({ provider, executionOrigin: execution.executionOrigin, operation: 'setupRemediation' });
+  return ConversationProviderSetupRemediationResultV1Schema.parse(execution.result);
+}
+
 /** One retained-row CAS owner for the lifecycle-only management operations. */
 async function mutateConversationConnectionLifecycle(input: Readonly<{
   connectionId: string;
@@ -2559,15 +2570,15 @@ async function stopDisabledConversationConnectionTransport(
   const collection = requireChannelsAccountStorage(context).collection(CHANNEL_STATE_COLLECTION);
   const row = await collection.get(connectionId, { signal: context.signal });
   assertNotAborted(context.signal);
-  if (row === null || row.revision !== result.revision) return result;
+  if (row === null) return result;
   const current = readConversationConnectionUpdateRow({ row, connectionId });
+  if (current.configurationRevision !== result.revision) return result;
   const transport = own(current.payload, 'transport');
   if (!isJsonRecord(transport) || transport.kind !== 'socket'
     || current.lifecycle.enabled
     || current.lifecycle.deletionState !== 'none'
     || current.lifecycle.pendingOldTransportStop !== null
-    || current.lifecycle.authorityEpoch !== result.authorityEpoch
-    || current.transportOrigin.materializationRef.pluginId !== current.providerPluginId) {
+    || current.lifecycle.authorityEpoch !== result.authorityEpoch) {
     return result;
   }
   const provider = await readCurrentProviderContributionForPersistedSelection({
@@ -2601,7 +2612,7 @@ async function stopDisabledConversationConnectionTransport(
   try {
     await context.services.actions.executeAdmittedTargetedOperationWithExecutionOrigin(stop, stopRequest, {
       signal: context.signal,
-      expectedExecutionOrigin: current.transportOrigin,
+      expectedExecutionRouting: getConversationConnectionExecutionRouting(current.transportOrigin, current.providerPluginId),
     });
     assertNotAborted(context.signal);
   } catch (cause) {
@@ -2641,9 +2652,11 @@ export async function updateConversationConnectionForInvocation(
 }
 
 /**
- * A blocked provider poll can be retried only by the user holding the exact
+ * A failed provider poll can be retried only by the user holding the exact
  * current connection revision and authority epoch. This clears no other
- * lifecycle field and deliberately performs no provider Action.
+ * lifecycle field and deliberately performs no provider Action. Automatic
+ * backoff may replace a blocked failure while its human approval is pending;
+ * that bookkeeping does not invalidate consent for the same connection.
  */
 export async function retryConversationConnectionPollForInvocation(
   input: JsonValue,
@@ -2654,23 +2667,26 @@ export async function retryConversationConnectionPollForInvocation(
   assertNotAborted(context.signal);
   const row = await collection.get(request.connectionId, { signal: context.signal });
   assertNotAborted(context.signal);
-  if (row === null || row.revision !== request.expectedRevision) {
+  if (row === null) {
     throw pluginError(
       'channels_connection_poll_retry_conflict',
-      'The blocked connection poll state changed before retry.',
+      'The connection poll state changed before retry.',
       true,
     );
   }
   const current = readConversationConnectionUpdateRow({ row, connectionId: request.connectionId });
   if (
-    current.lifecycle.authorityEpoch !== request.authorityEpoch
-    || current.lifecycle.pollFailure?.phase !== 'blocked'
+    current.configurationRevision !== request.expectedRevision
+    || current.lifecycle.authorityEpoch !== request.authorityEpoch
   ) {
     throw pluginError(
       'channels_connection_poll_retry_conflict',
-      'The blocked connection poll state changed before retry.',
+      'The connection poll state changed before retry.',
       true,
     );
+  }
+  if (current.lifecycle.pollFailure === null) {
+    return { kind: 'retryScheduled', connectionId: request.connectionId, revision: current.configurationRevision, authorityEpoch: request.authorityEpoch };
   }
   const value = withConversationConnectionLifecycle({
     row,
@@ -2689,7 +2705,7 @@ export async function retryConversationConnectionPollForInvocation(
     if (result.status === 'conflict') {
       throw pluginError(
         'channels_connection_poll_retry_conflict',
-        'The blocked connection poll state changed before retry.',
+        'The connection poll state changed before retry.',
         true,
       );
     }
@@ -2704,7 +2720,7 @@ export async function retryConversationConnectionPollForInvocation(
     return {
       kind: 'retryScheduled',
       connectionId: request.connectionId,
-      revision: persistedRevision,
+      revision: current.configurationRevision,
       authorityEpoch: request.authorityEpoch,
     };
   }
@@ -2713,13 +2729,14 @@ export async function retryConversationConnectionPollForInvocation(
   if (reread !== null) {
     const settled = readConversationConnectionUpdateRow({ row: reread, connectionId: request.connectionId });
     if (
-      settled.lifecycle.authorityEpoch === request.authorityEpoch
+      settled.configurationRevision === request.expectedRevision
+      && settled.lifecycle.authorityEpoch === request.authorityEpoch
       && settled.lifecycle.pollFailure === null
     ) {
       return {
         kind: 'retryScheduled',
         connectionId: request.connectionId,
-        revision: reread.revision,
+        revision: settled.configurationRevision,
         authorityEpoch: request.authorityEpoch,
       };
     }
@@ -2753,13 +2770,14 @@ export async function retestConversationConnectionForInvocation(
   assertNotAborted(context.signal);
   const row = await collection.get(request.connectionId, { signal: context.signal });
   assertNotAborted(context.signal);
-  if (row === null || row.revision !== request.expectedRevision) {
+  if (row === null) {
     throw conversationConnectionRetestConflict();
   }
   const current = readConversationConnectionUpdateRow({ row, connectionId: request.connectionId });
   // Deleting, disabled, and mid-transfer connections have no current transport
   // to re-observe, and the readiness owner would refuse the result anyway.
-  if (current.lifecycle.authorityEpoch !== request.authorityEpoch
+  if (current.configurationRevision !== request.expectedRevision
+    || current.lifecycle.authorityEpoch !== request.authorityEpoch
     || current.lifecycle.deletionState !== 'none'
     || current.lifecycle.pendingOldTransportStop !== null
     || !current.lifecycle.enabled) {
@@ -2805,7 +2823,7 @@ export async function retestConversationConnectionForInvocation(
   const execution = await context.services.actions.executeAdmittedTargetedOperationWithExecutionOrigin(
     connectionTest,
     testRequest,
-    { signal: context.signal, expectedExecutionOrigin: current.transportOrigin },
+    { signal: context.signal, expectedExecutionRouting: getConversationConnectionExecutionRouting(current.transportOrigin, current.providerPluginId) },
   );
   assertNotAborted(context.signal);
   let testResult: ReturnType<typeof ConversationConnectionTestResultV1Schema.parse>;
@@ -2860,13 +2878,10 @@ export async function retestConversationConnectionForInvocation(
     provider: providerFromSelectedContribution(provider),
     providerSetupInput: current.providerSetupInput,
     credentialRef: testRequest.credentialRef,
-    expectedExecutionOrigin: current.transportOrigin,
+    expectedExecutionRouting: getConversationConnectionExecutionRouting(current.transportOrigin, current.providerPluginId),
   });
   if (prepared.kind === 'requiresRemediation') {
     throw pluginError('channels_connection_setup_requires_remediation', 'Provider setup requires remediation before connection retest.');
-  }
-  if (!arePluginMachineExecutionOriginsEqual(prepared.transportOrigin, current.transportOrigin)) {
-    throw conversationConnectionRetestConflict();
   }
   if (prepared.setup.providerConnectionKey !== retainedIdentity.providerConnectionKey
     || prepared.setup.integrationPrincipal.id !== retainedIdentity.integrationPrincipalId) {
@@ -2926,9 +2941,9 @@ export async function retestConversationConnectionForInvocation(
     ...reread.current,
     payload: withProviderDeclaredConnectionCapabilities(reread.current.payload, prepared.setup),
   };
-  const revision = transition.kind === 'rejoined'
+  const persisted = transition.kind === 'rejoined'
     && pluginJsonValuesEqual(refreshedCurrent.payload, reread.current.payload)
-    ? reread.row.revision
+    ? { configurationRevision: reread.current.configurationRevision }
     : await persistConversationConnectionLifecycle({
       collection,
       row: reread.row,
@@ -2939,7 +2954,7 @@ export async function retestConversationConnectionForInvocation(
   return {
     kind: 'ready',
     connectionId: request.connectionId,
-    revision,
+    revision: persisted.configurationRevision,
     authorityEpoch: request.authorityEpoch,
   };
 }
@@ -2957,14 +2972,15 @@ async function rereadConversationConnectionRetestAuthority(input: Readonly<{
     signal: input.context.signal,
   });
   assertNotAborted(input.context.signal);
-  if (row === null || row.revision !== input.request.expectedRevision) {
+  if (row === null) {
     throw conversationConnectionRetestConflict();
   }
   const current = readConversationConnectionUpdateRow({
     row,
     connectionId: input.request.connectionId,
   });
-  if (current.lifecycle.authorityEpoch !== input.request.authorityEpoch
+  if (current.configurationRevision !== input.request.expectedRevision
+    || current.lifecycle.authorityEpoch !== input.request.authorityEpoch
     || current.lifecycle.deletionState !== 'none'
     || current.lifecycle.pendingOldTransportStop !== null
     || !current.lifecycle.enabled) {
@@ -3013,15 +3029,12 @@ async function persistConversationConnectionLifecycle(input: Readonly<{
   current: ConversationConnectionUpdateRow;
   lifecycle: ConversationConnectionLifecycleStateV1;
   operation: string;
-}>, context: PluginInvocationContext): Promise<number> {
+}>, context: PluginInvocationContext): Promise<Readonly<{ revision: number; configurationRevision: number }>> {
+  const value = withConversationConnectionLifecycle({ row: input.row, current: input.current, lifecycle: input.lifecycle });
   const result = await input.collection.batch([
     {
       kind: 'put',
-      value: withConversationConnectionLifecycle({
-        row: input.row,
-        current: input.current,
-        lifecycle: input.lifecycle,
-      }),
+      value,
       expectedRevision: input.row.revision,
     },
   ], { signal: context.signal });
@@ -3043,7 +3056,7 @@ async function persistConversationConnectionLifecycle(input: Readonly<{
       true,
     );
   }
-  return persisted.revision;
+  return { revision: persisted.revision, configurationRevision: value.payload.configurationRevision };
 }
 
 function deleteResult(input: Readonly<{
@@ -3059,7 +3072,7 @@ function deleteResult(input: Readonly<{
     revision: input.revision,
     authorityEpoch: input.lifecycle.authorityEpoch,
     acceptedPossibleLoss: input.acceptedPossibleLoss
-      ?? (input.lifecycle.pendingOldTransportStop?.acceptedPossibleLoss === true),
+      ?? (input.lifecycle.pendingOldTransportStop !== null && !isConversationPendingEndpointRetarget(input.lifecycle.pendingOldTransportStop) && input.lifecycle.pendingOldTransportStop.acceptedPossibleLoss),
   };
 }
 
@@ -3079,7 +3092,8 @@ type FrozenOldTransportStopResult =
  */
 async function executeFrozenOldTransportStop(input: Readonly<{
   context: PluginInvocationContext;
-  pendingOldTransportStop: ConversationPendingOldTransportStopV1;
+  providerPluginId: string;
+  pendingOldTransportStop: ConversationPendingProviderStopV1;
 }>): Promise<FrozenOldTransportStopResult> {
   const provider = await readCurrentProviderContributionForPersistedSelection({
     context: {
@@ -3089,7 +3103,7 @@ async function executeFrozenOldTransportStop(input: Readonly<{
     // A retained connection can already point at a replacement contribution.
     // Deferred stop custody is instead exactly the frozen old origin and
     // contributor/generation selection.
-    providerPluginId: input.pendingOldTransportStop.transportOrigin.materializationRef.pluginId,
+    providerPluginId: input.providerPluginId,
     providerContributionSelection: input.pendingOldTransportStop.providerContributionSelection,
   });
   const stop = provider.operations.connectionStop;
@@ -3099,7 +3113,7 @@ async function executeFrozenOldTransportStop(input: Readonly<{
     input.pendingOldTransportStop.stopRequest,
     {
       signal: input.context.signal,
-      expectedExecutionOrigin: input.pendingOldTransportStop.transportOrigin,
+      expectedExecutionRouting: getConversationConnectionExecutionRouting(input.pendingOldTransportStop.transportOrigin, input.providerPluginId),
     },
   );
   assertNotAborted(input.context.signal);
@@ -3124,7 +3138,8 @@ async function readCurrentFrozenOldTransportStopForEffect(input: Readonly<{
   pendingRevision: number;
   reason: 'delete' | 'transfer';
 }>, context: PluginInvocationContext): Promise<Readonly<{
-  pendingOldTransportStop: ConversationPendingOldTransportStopV1;
+  pendingOldTransportStop: ConversationPendingProviderStopV1;
+  providerPluginId: string;
   lifecycle: ConversationConnectionLifecycleStateV1;
 }>> {
   const conflictCode = `channels_connection_${input.reason}_stop_currentness_conflict`;
@@ -3141,10 +3156,10 @@ async function readCurrentFrozenOldTransportStopForEffect(input: Readonly<{
   const pendingOldTransportStop = current.lifecycle.pendingOldTransportStop;
   if (
     pendingOldTransportStop === null
+    || isConversationPendingEndpointRetarget(pendingOldTransportStop)
     || pendingOldTransportStop.acceptedPossibleLoss
     || pendingOldTransportStop.stopRequest.reason !== input.reason
     || pendingOldTransportStop.stopRequest.authorityEpoch !== current.lifecycle.authorityEpoch
-    || current.providerPluginId !== pendingOldTransportStop.transportOrigin.materializationRef.pluginId
   ) {
     throw pluginError(
       conflictCode,
@@ -3154,6 +3169,7 @@ async function readCurrentFrozenOldTransportStopForEffect(input: Readonly<{
   }
   return {
     pendingOldTransportStop,
+    providerPluginId: current.providerPluginId,
     lifecycle: current.lifecycle,
   };
 }
@@ -3167,10 +3183,11 @@ async function settleCurrentConnectionStopProof(input: Readonly<{
   connectionId: string;
   pendingRevision: number;
   reason: 'delete' | 'transfer';
-  frozenStopRequest: ConversationPendingOldTransportStopV1['stopRequest'];
+  frozenStopRequest: ConversationPendingProviderStopV1['stopRequest'];
 }>, context: PluginInvocationContext): Promise<Readonly<{
   kind: 'deleteFinalizing' | 'transportStopConfirmed';
   revision: number;
+  configurationRevision: number;
   lifecycle: ConversationConnectionLifecycleStateV1;
 }>> {
   const expectedKind = input.reason === 'delete' ? 'deleteFinalizing' : 'transportStopConfirmed';
@@ -3195,7 +3212,7 @@ async function settleCurrentConnectionStopProof(input: Readonly<{
       true,
     );
   }
-  const revision = await persistConversationConnectionLifecycle({
+  const persisted = await persistConversationConnectionLifecycle({
     collection: input.collection,
     row,
     current,
@@ -3204,7 +3221,7 @@ async function settleCurrentConnectionStopProof(input: Readonly<{
   }, context);
   return {
     kind: transition.kind,
-    revision,
+    ...persisted,
     lifecycle: transition.connection,
   };
 }
@@ -3219,6 +3236,7 @@ type FrozenOldTransportStopOutcome =
   | Readonly<{
     kind: 'settled';
     revision: number;
+    configurationRevision: number;
     lifecycle: ConversationConnectionLifecycleStateV1;
   }>
   | Readonly<{
@@ -3250,6 +3268,7 @@ async function runFrozenOldTransportStopForCommittedCustody(input: Readonly<{
   const stopResult = await executeFrozenOldTransportStop({
     context,
     pendingOldTransportStop: currentStop.pendingOldTransportStop,
+    providerPluginId: currentStop.providerPluginId,
   });
   if (stopResult.kind === 'stopUnavailable' || stopResult.kind === 'pending') {
     return { kind: stopResult.kind, lifecycle: currentStop.lifecycle };
@@ -3271,6 +3290,7 @@ async function runFrozenOldTransportStopForCommittedCustody(input: Readonly<{
   return {
     kind: 'settled',
     revision: settled.revision,
+    configurationRevision: settled.configurationRevision,
     lifecycle: settled.lifecycle,
   };
 }
@@ -3292,37 +3312,38 @@ export async function deleteConversationConnectionForInvocation(
   if (row === null) {
     throw pluginError('channels_connection_delete_not_found', 'Connection deletion target does not exist.');
   }
-  if (row.revision !== deleteInput.expectedRevision) {
+  const current = readConversationConnectionUpdateRow({ row, connectionId: deleteInput.connectionId });
+  if (current.configurationRevision !== deleteInput.expectedRevision) {
     throw pluginError(
       'channels_connection_delete_conflict',
       'Connection deletion requires the current retained row revision.',
       true,
     );
   }
-  const current = readConversationConnectionUpdateRow({ row, connectionId: deleteInput.connectionId });
   if (current.lifecycle.deletionState === 'finalizingDelete') {
     return deleteResult({
       kind: 'rejoined',
       connectionId: deleteInput.connectionId,
-      revision: row.revision,
+      revision: current.configurationRevision,
       lifecycle: current.lifecycle,
     });
   }
   if (current.lifecycle.deletionState === 'pendingStopReconciliation') {
     const frozen = current.lifecycle.pendingOldTransportStop;
-    if (frozen === null || frozen.stopRequest.reason !== 'delete') {
+    if (frozen === null || isConversationPendingEndpointRetarget(frozen) || frozen.stopRequest.reason !== 'delete') {
       throw pluginError('channels_connection_delete_corrupt', 'Pending connection deletion lost its exact old-stop custody.');
     }
     return deleteResult({
       kind: 'rejoined',
       connectionId: deleteInput.connectionId,
-      revision: row.revision,
+      revision: current.configurationRevision,
       lifecycle: current.lifecycle,
     });
   }
 
   let pending = current.lifecycle;
   let pendingRevision = row.revision;
+  let pendingConfigurationRevision = current.configurationRevision;
   if (current.lifecycle.deletionState === 'none') {
     const start = startConversationConnectionDelete({
       current: current.lifecycle,
@@ -3365,22 +3386,24 @@ export async function deleteConversationConnectionForInvocation(
       return deleteResult({
         kind: 'rejoined',
         connectionId: deleteInput.connectionId,
-        revision: row.revision,
+        revision: current.configurationRevision,
         lifecycle: start.connection,
       });
     }
     pending = start.connection;
-    pendingRevision = await persistConversationConnectionLifecycle({
+    const persisted = await persistConversationConnectionLifecycle({
       collection,
       row,
       current,
       lifecycle: pending,
       operation: 'channels_connection_delete',
     }, context);
+    pendingRevision = persisted.revision;
+    pendingConfigurationRevision = persisted.configurationRevision;
   }
 
   const frozen = pending.pendingOldTransportStop;
-  if (frozen === null || frozen.stopRequest.reason !== 'delete') {
+  if (frozen === null || isConversationPendingEndpointRetarget(frozen) || frozen.stopRequest.reason !== 'delete') {
     throw pluginError('channels_connection_delete_corrupt', 'Pending connection deletion lost its exact old-stop custody.');
   }
   if (frozen.predecessorTransportKind === 'checkpointedPull') {
@@ -3390,7 +3413,7 @@ export async function deleteConversationConnectionForInvocation(
     return deleteResult({
       kind: 'deletePending',
       connectionId: deleteInput.connectionId,
-      revision: pendingRevision,
+      revision: pendingConfigurationRevision,
       lifecycle: pending,
     });
   }
@@ -3422,7 +3445,7 @@ export async function deleteConversationConnectionForInvocation(
         true,
       );
     }
-    const revision = await persistConversationConnectionLifecycle({
+    const persisted = await persistConversationConnectionLifecycle({
       collection,
       row: pendingRow,
       current: pendingCurrent,
@@ -3432,7 +3455,7 @@ export async function deleteConversationConnectionForInvocation(
     return deleteResult({
       kind: 'deleteFinalizing',
       connectionId: deleteInput.connectionId,
-      revision,
+      revision: persisted.configurationRevision,
       lifecycle: detachment.connection,
     });
   }
@@ -3453,7 +3476,7 @@ export async function deleteConversationConnectionForInvocation(
     return deleteResult({
       kind: 'deletePending',
       connectionId: deleteInput.connectionId,
-      revision: pendingRevision,
+      revision: pendingConfigurationRevision,
       lifecycle: outcome.lifecycle,
     });
   }
@@ -3467,7 +3490,7 @@ export async function deleteConversationConnectionForInvocation(
   return deleteResult({
     kind: 'deleteFinalizing',
     connectionId: deleteInput.connectionId,
-    revision: outcome.revision,
+    revision: outcome.configurationRevision,
     lifecycle: outcome.lifecycle,
   });
 }
@@ -3500,7 +3523,7 @@ async function repairOwedTransferEndpointRetarget(input: Readonly<{
   return deleteResult({
     kind: 'rejoined',
     connectionId: input.connectionId,
-    revision: repaired.revision,
+    revision: repaired.configurationRevision,
     lifecycle: repaired.lifecycle,
   });
 }
@@ -3525,12 +3548,13 @@ export async function abandonConversationConnectionForInvocation(
     throw pluginError('channels_connection_abandon_not_found', 'Connection abandon target does not exist.');
   }
   const current = readConversationConnectionUpdateRow({ row, connectionId: abandonInput.connectionId });
-  if (row.revision !== abandonInput.expectedRevision) {
+  if (current.configurationRevision !== abandonInput.expectedRevision) {
     const pending = current.lifecycle.pendingOldTransportStop;
     const isImmediateAcceptedTransferRetry = abandonInput.expectedRevision < Number.MAX_SAFE_INTEGER
-      && row.revision === abandonInput.expectedRevision + 1
+      && current.configurationRevision === abandonInput.expectedRevision + 1
       && hasAcceptedConversationTransferLoss(current.lifecycle)
       && pending !== null
+      && !isConversationPendingEndpointRetarget(pending)
       && pending.stopRequest.connectionId === abandonInput.connectionId
       && pending.stopRequest.authorityEpoch < Number.MAX_SAFE_INTEGER
       && current.lifecycle.authorityEpoch === pending.stopRequest.authorityEpoch + 1;
@@ -3538,7 +3562,7 @@ export async function abandonConversationConnectionForInvocation(
       return deleteResult({
         kind: 'rejoined',
         connectionId: abandonInput.connectionId,
-        revision: row.revision,
+        revision: current.configurationRevision,
         lifecycle: current.lifecycle,
       });
     }
@@ -3549,7 +3573,7 @@ export async function abandonConversationConnectionForInvocation(
     );
   }
   const pending = current.lifecycle.pendingOldTransportStop;
-  if (pending?.stopRequest.connectionId !== abandonInput.connectionId) {
+  if (!isConversationPendingEndpointRetarget(pending) && pending?.stopRequest.connectionId !== abandonInput.connectionId) {
     throw pluginError(
       'channels_connection_abandon_not_pending',
       'Connection abandon requires an exact pending old-transport stop request.',
@@ -3559,7 +3583,7 @@ export async function abandonConversationConnectionForInvocation(
     current: current.lifecycle,
   });
   if (transition.kind === 'staleAuthority') {
-    if (pending?.stopRequest.reason === 'transfer' && pending.acceptedPossibleLoss) {
+    if (pending !== null && !isConversationPendingEndpointRetarget(pending) && pending.stopRequest.reason === 'transfer' && pending.acceptedPossibleLoss) {
       throw pluginError(
         'channels_connection_abandon_conflict',
         'Connection abandon retained an incoherent accepted transfer marker.',
@@ -3582,11 +3606,11 @@ export async function abandonConversationConnectionForInvocation(
     return deleteResult({
       kind: 'rejoined',
       connectionId: abandonInput.connectionId,
-      revision: row.revision,
+      revision: current.configurationRevision,
       lifecycle: transition.connection,
     });
   }
-  const revision = await persistConversationConnectionLifecycle({
+  const persisted = await persistConversationConnectionLifecycle({
     collection,
     row,
     current,
@@ -3596,7 +3620,7 @@ export async function abandonConversationConnectionForInvocation(
   return deleteResult({
     kind: transition.kind === 'transferAbandoned' ? 'rejoined' : 'deleteFinalizing',
     connectionId: abandonInput.connectionId,
-    revision,
+    revision: persisted.configurationRevision,
     lifecycle: transition.connection,
     acceptedPossibleLoss: transition.kind === 'transferAbandoned' ? true : undefined,
   });
@@ -3677,6 +3701,7 @@ export async function reportConversationTransportFactForInvocation(
 
   const pending = current.lifecycle.pendingOldTransportStop;
   if (pending === null
+    || isConversationPendingEndpointRetarget(pending)
     || !hasCurrentConversationTransportCaller({
       caller: context.caller,
       providerPluginId: current.providerPluginId,
@@ -3735,9 +3760,8 @@ export async function recordConversationCheckpointedPollHistoryGapForInvocation(
   if (
     !isJsonRecord(transport)
     || transport.kind !== 'checkpointedPull'
-    || !('materializationRef' in input.executionOrigin)
-    || current.providerPluginId !== input.executionOrigin.materializationRef.pluginId
-    || !arePluginMachineExecutionOriginsEqual(current.transportOrigin, input.executionOrigin)
+    || current.providerPluginId !== getPluginMachineExecutionOriginRef(input.executionOrigin).pluginId
+    || !areConversationConnectionTransportOriginsEqual(current.transportOrigin, getConversationConnectionTransportOrigin(input.executionOrigin))
   ) return 'staleAuthority';
 
   const transition = recordConversationConnectionHistoryGap({
@@ -3770,7 +3794,7 @@ export async function recordConversationCheckpointedPollHistoryGapForInvocation(
 export async function confirmConversationCheckpointedPollStopForInvocation(input: Readonly<{
   connectionId: string;
   capturedInvocation?: ConversationCheckpointedPollInvocationBasisV1;
-  frozenStopRequest?: ConversationPendingOldTransportStopV1['stopRequest'];
+  frozenStopRequest?: ConversationPendingProviderStopV1['stopRequest'];
 }>, context: PluginInvocationContext): Promise<'deleteFinalizing' | 'transportStopConfirmed' | 'ineligible'> {
   const collection = requireChannelsAccountStorage(context).collection(CHANNEL_STATE_COLLECTION);
   assertNotAborted(context.signal);
@@ -3782,7 +3806,7 @@ export async function confirmConversationCheckpointedPollStopForInvocation(input
   const transport = own(current.payload, 'transport');
   const pending = current.lifecycle.pendingOldTransportStop;
   const captured = input.capturedInvocation;
-  const predecessor = pending?.predecessorCheckpointedPollInvocation;
+  const predecessor = pending !== null && !isConversationPendingEndpointRetarget(pending) ? pending.predecessorCheckpointedPollInvocation : undefined;
   const hasCapturedProof = captured !== undefined
     && input.frozenStopRequest !== undefined
     && Number.isSafeInteger(captured.connectionRevision)
@@ -3790,22 +3814,23 @@ export async function confirmConversationCheckpointedPollStopForInvocation(input
     && Number.isSafeInteger(captured.authorityEpoch)
     && captured.authorityEpoch >= 1
     && pending !== null
+    && !isConversationPendingEndpointRetarget(pending)
     && predecessor !== undefined
     && captured.connectionRevision === predecessor.connectionRevision
     && captured.authorityEpoch === predecessor.authorityEpoch
-    && arePluginMachineExecutionOriginsEqual(captured.transportOrigin, predecessor.transportOrigin)
+    && areConversationConnectionTransportOriginsEqual(captured.transportOrigin, predecessor.transportOrigin)
     && pending.stopRequest.authorityEpoch === predecessor.authorityEpoch + 1
-    && arePluginMachineExecutionOriginsEqual(pending.transportOrigin, predecessor.transportOrigin)
+    && areConversationConnectionTransportOriginsEqual(pending.transportOrigin, predecessor.transportOrigin)
     && pluginJsonValuesEqual(pending.stopRequest, input.frozenStopRequest);
   const hasFreshDeleteProof = captured === undefined
     && input.frozenStopRequest === undefined
     && isJsonRecord(transport)
     && transport.kind === 'checkpointedPull'
     && pending !== null
+    && !isConversationPendingEndpointRetarget(pending)
     && pending.stopRequest.reason === 'delete'
     && pending.overlapSafety === current.lifecycle.overlapSafety
-    && current.providerPluginId === current.transportOrigin.materializationRef.pluginId
-    && arePluginMachineExecutionOriginsEqual(current.transportOrigin, pending.transportOrigin)
+    && areConversationConnectionTransportOriginsEqual(current.transportOrigin, pending.transportOrigin)
     && hasExactCurrentStopRequest({
       connectionId: input.connectionId,
       payload: current.payload,
@@ -3814,8 +3839,8 @@ export async function confirmConversationCheckpointedPollStopForInvocation(input
     });
   if (
     pending === null
+    || isConversationPendingEndpointRetarget(pending)
     || pending.acceptedPossibleLoss
-    || current.providerPluginId !== pending.transportOrigin.materializationRef.pluginId
     || (!hasCapturedProof && !hasFreshDeleteProof)
   ) return 'ineligible';
 
@@ -3870,19 +3895,18 @@ export async function settleConversationProviderExclusiveCheckpointedPollReplace
     || !isJsonRecord(transport)
     || transport.kind !== 'checkpointedPull'
     || replayContinuity !== 'checkpointed'
-    || !('materializationRef' in input.executionOrigin)
-    || current.providerPluginId !== input.executionOrigin.materializationRef.pluginId
-    || !arePluginMachineExecutionOriginsEqual(current.transportOrigin, input.executionOrigin)
+    || current.providerPluginId !== getPluginMachineExecutionOriginRef(input.executionOrigin).pluginId
+    || !areConversationConnectionTransportOriginsEqual(current.transportOrigin, getConversationConnectionTransportOrigin(input.executionOrigin))
   ) return { kind: 'staleAuthority' };
 
   const pending = current.lifecycle.pendingOldTransportStop;
   if (
     pending === null
+    || isConversationPendingEndpointRetarget(pending)
     || pending.acceptedPossibleLoss
     || pending.stopRequest.reason !== 'transfer'
     || pending.overlapSafety !== 'providerExclusive'
     || pending.stopRequest.authorityEpoch !== current.lifecycle.authorityEpoch
-    || current.providerPluginId !== pending.transportOrigin.materializationRef.pluginId
   ) return { kind: 'notApplicable' };
 
   const transition = confirmConversationConnectionStop({
@@ -3892,14 +3916,14 @@ export async function settleConversationProviderExclusiveCheckpointedPollReplace
   if (transition.kind !== 'transportStopConfirmed') return { kind: 'notApplicable' };
 
   try {
-    const revision = await persistConversationConnectionLifecycle({
+    const persisted = await persistConversationConnectionLifecycle({
       collection,
       row,
       current,
       lifecycle: transition.connection,
       operation: 'channels_provider_exclusive_checkpointed_poll_replacement_settlement',
     }, context);
-    return { kind: 'settled', revision };
+    return { kind: 'settled', revision: persisted.revision };
   } catch (cause) {
     if (
       isPluginError(cause)
@@ -3940,7 +3964,8 @@ function finalizingDeleteIsAuthorized(current: ConversationConnectionUpdateRow):
   return current.lifecycle.deletionState === 'finalizingDelete'
     && !current.lifecycle.enabled
     && (pending === null || (
-      pending.acceptedPossibleLoss
+      !isConversationPendingEndpointRetarget(pending)
+      && pending.acceptedPossibleLoss
       && pending.stopRequest.reason === 'delete'
     ));
 }
@@ -4641,12 +4666,12 @@ export async function createConversationBindingForInvocation(
       ? {
         kind: 'put' as const,
         value: connectionRowForPersistence.value,
-        expectedRevision: createInput.expectedConnectionRevision,
+        expectedRevision: connectionRowForPersistence.revision,
       }
       : {
         kind: 'assert' as const,
         rowId: createInput.connectionId,
-        expectedRevision: createInput.expectedConnectionRevision,
+        expectedRevision: connectionRowForPersistence.revision,
       },
     { kind: 'put', value: candidate.row, expectedRevision: 'absent' },
     ...(projectionFrontier === null
@@ -4779,15 +4804,16 @@ export async function manageSessionPullRequestBindingForInvocation(input: JsonVa
   const connectionId = connectionResult.connectionId;
   const row = await collection.get(connectionId, { signal: context.signal });
   if (row === null) throw pluginError('channels_pr_link_connection_missing', 'The PR conversation connection is unavailable.', true);
+  const { configurationRevision } = readConversationConnectionUpdateRow({ row, connectionId });
   const query = `https://github.com/${request.pullRequest.repository}/pull/${request.pullRequest.number}`;
-  const endpoints = await resolveConversationBindingForInvocation({ kind: 'endpoint', connectionId, expectedConnectionRevision: row.revision, query, kinds: ['githubPullRequest'] }, context);
+  const endpoints = await resolveConversationBindingForInvocation({ kind: 'endpoint', connectionId, expectedConnectionRevision: configurationRevision, query, kinds: ['githubPullRequest'] }, context);
   if (endpoints.kind !== 'endpointCandidates' || endpoints.candidates.length !== 1 || endpoints.candidates[0]?.kind !== 'githubPullRequest') throw pluginError('channels_pr_link_endpoint_unavailable', 'The exact PR endpoint is unavailable.', true);
   const endpoint = endpoints.candidates[0];
   if (endpoint.pullRequest === undefined) throw pluginError('channels_pr_link_endpoint_identity_missing', 'The provider did not authenticate the PR identity.');
   if (!pluginJsonValuesEqual(endpoint.pullRequest, request.pullRequest)) throw pluginError('channels_pr_link_endpoint_identity_mismatch', 'The authenticated PR endpoint does not match the requested PR.');
   const endpointSelection = { query, kinds: ['githubPullRequest'], selected: { kind: endpoint.kind, audience: endpoint.audience, id: endpoint.id, ...(endpoint.parentId === undefined ? {} : { parentId: endpoint.parentId }) } };
   const principalQuery = setup.integrationPrincipal.label ?? setup.integrationPrincipal.id;
-  const principals = await resolveConversationBindingForInvocation({ kind: 'principal', connectionId, expectedConnectionRevision: row.revision, endpointSelection, query: principalQuery }, context);
+  const principals = await resolveConversationBindingForInvocation({ kind: 'principal', connectionId, expectedConnectionRevision: configurationRevision, endpointSelection, query: principalQuery }, context);
   if (principals.kind !== 'principalCandidates') throw pluginError('channels_pr_link_principal_unavailable', 'The native SCM principal is unavailable.', true);
   const principal = principals.candidates.find((candidate) => candidate.id === setup.integrationPrincipal.id);
   if (principal === undefined) throw pluginError('channels_pr_link_principal_unavailable', 'The provider did not authenticate the selected SCM principal.', true);
@@ -4798,7 +4824,7 @@ export async function manageSessionPullRequestBindingForInvocation(input: JsonVa
     kind: 'automation', automationId: request.target.automationId, policy: { resultDelivery: 'none' },
     scopedTrigger: { sessionId: request.sessionId, triggerId: request.target.triggerId, triggerRevision: request.target.triggerRevision, triggerKind: request.target.triggerKind, principalPolicy: 'repositoryWriters', pullRequest: endpoint.pullRequest },
   };
-  const binding = await createConversationBindingForInvocation({ connectionId, expectedConnectionRevision: row.revision, endpointSelection, principalSelection: { query: principalQuery, selected: [{ id: principal.id, kind: principal.kind }] }, target, allowBotSenders: principal.kind === 'bot', inputMode: 'allAllowedMessages', inboundDebounceMs: 0, enabled: request.target !== undefined }, context);
+  const binding = await createConversationBindingForInvocation({ connectionId, expectedConnectionRevision: configurationRevision, endpointSelection, principalSelection: { query: principalQuery, selected: [{ id: principal.id, kind: principal.kind }] }, target, allowBotSenders: principal.kind === 'bot', inputMode: 'allAllowedMessages', inboundDebounceMs: 0, enabled: request.target !== undefined }, context);
   if (binding.kind !== 'created') throw pluginError('channels_pr_link_binding_not_ready', 'The PR binding could not be attached.', true);
   if (request.target !== undefined) await disableSessionPullRequestTriggerBindings({ sessionId: request.sessionId, triggerId: request.target.triggerId, triggerRevision: request.target.triggerRevision, exceptBindingId: binding.binding.id }, context);
   return { kind: 'attached', bindingId: binding.binding.id };
@@ -4861,7 +4887,7 @@ async function mutateConversationBinding(
   let audience: BindingAudienceResolution | null = null;
   const audienceSelection = updateInput.audienceSelection;
   if (audienceSelection !== undefined) {
-    if (connectionRow.revision !== audienceSelection.expectedConnectionRevision) {
+    if (connection.configurationRevision !== audienceSelection.expectedConnectionRevision) {
       return bindingResolutionStale();
     }
     audience = await resolveBindingAudienceSelection({
@@ -4880,6 +4906,7 @@ async function mutateConversationBinding(
   let target = current.binding.target;
   if (
     updateInput.target !== undefined
+    || (audience !== null && current.binding.target.kind === 'threadRouter')
     || (
       updateInput.enabled === true
       && !current.binding.enabled
@@ -4959,6 +4986,7 @@ async function mutateConversationBinding(
     assertNotAborted(context.signal);
     projectionFrontierExpectedRevision = existingFrontier?.revision ?? 'absent';
   }
+  let connectionRowForPersistence: StateRow;
   if (audience !== null) {
     // A resolver witness ceases to authorize persistence when a subsequent
     // Automation verification or Session-baseline effect changes its current
@@ -4966,17 +4994,29 @@ async function mutateConversationBinding(
     const finalCurrent = await rereadBindingResolutionAfterProviderEffect({
       collection,
       connectionId: current.binding.connectionId,
-      expectedConnectionRevision: connectionRow.revision,
+      expectedConnectionRevision: connection.configurationRevision,
       context,
       providerBefore: audience.witness,
     });
     if (finalCurrent.kind !== 'current') return finalCurrent;
+    connectionRowForPersistence = finalCurrent.row;
+  } else {
+    const finalCurrent = await readCurrentBindingResolutionConnection({
+      collection,
+      connectionId: current.binding.connectionId,
+      expectedConnectionRevision: connection.configurationRevision,
+      signal: context.signal,
+    });
+    if (finalCurrent.kind !== 'current') {
+      throw pluginError(`${operation}_conflict`, 'Binding mutation requires the current connection configuration.', true);
+    }
+    connectionRowForPersistence = finalCurrent.row;
   }
   const result = await commitConversationBindingMutation({
     collection,
     row,
     current,
-    connectionRow,
+    connectionRow: connectionRowForPersistence,
     binding: transition.binding,
     updatedAt: Date.now(),
     additionalMutations: projectionFrontier === null
@@ -5269,7 +5309,7 @@ export async function createConversationConnectionForInvocation(
     createInput,
     providerPluginId: providerForPersistence.pluginId,
     setup: prepared.setup,
-    transportOrigin: prepared.transportOrigin,
+    transportOrigin: getConversationConnectionTransportOrigin(prepared.transportOrigin),
     connectionId,
   });
 }
@@ -5288,6 +5328,15 @@ function readDurablePushWebhookContribution(
   return webhookContribution;
 }
 
+/** Generic webhook endpoints are addressed by an installed materialization. */
+function readWebhookTargetMaterialization(origin: PluginMachineExecutionOriginV1): PluginMachineMaterializationRefV1 {
+  if ('materializationRef' in origin) return origin.materializationRef;
+  throw pluginError(
+    'channels_connection_webhook_materialization_unavailable',
+    'The webhook endpoint owner requires an installed target materialization.',
+  );
+}
+
 /**
  * The first durable-push call of a create or transfer journey. It persists
  * nothing and holds no transaction: it returns the journey's final connection
@@ -5298,7 +5347,7 @@ function readDurablePushWebhookContribution(
 async function prepareEndpointRequiredConnectionJourney(input: Readonly<{
   connectionId: string;
   setup: ConversationProviderSetupResultV1;
-  transportOrigin: ConnectionTransportOrigin;
+  transportOrigin: PluginMachineExecutionOriginV1;
 }>): Promise<ConversationConnectionEndpointRequiredResult> {
   const attempt = mintConversationConnectionWebhookEndpointAttemptIdentity({
     connectionId: input.connectionId,
@@ -5308,7 +5357,7 @@ async function prepareEndpointRequiredConnectionJourney(input: Readonly<{
     facts: {
       connectionId: input.connectionId,
       webhookContribution: readDurablePushWebhookContribution(input.setup),
-      targetMaterialization: input.transportOrigin.materializationRef,
+      targetMaterialization: readWebhookTargetMaterialization(input.transportOrigin),
     },
     webhookEndpointSetup: CONVERSATION_CONNECTION_WEBHOOK_ENDPOINT_ENSURE_SETUP_V1,
   });
@@ -5377,7 +5426,7 @@ async function continueDurablePushConnectionCreation(input: Readonly<{
   connectionId: string;
   providerPluginId: string;
   setup: ConversationProviderSetupResultV1;
-  transportOrigin: ConnectionTransportOrigin;
+  transportOrigin: PluginMachineExecutionOriginV1;
   continuation: NonNullable<ConversationConnectionCreateInputV1['endpointContinuation']>;
 }>): Promise<ConversationConnectionCreateResult> {
   const continuation = input.continuation;
@@ -5393,7 +5442,7 @@ async function continueDurablePushConnectionCreation(input: Readonly<{
     context: input.context,
     webhookEndpointId,
     webhookContribution: readDurablePushWebhookContribution(input.setup),
-    targetMaterialization: input.transportOrigin.materializationRef,
+    targetMaterialization: readWebhookTargetMaterialization(input.transportOrigin),
     sourceInstanceId,
   });
   assertNotAborted(input.context.signal);
@@ -5423,7 +5472,7 @@ async function continueDurablePushConnectionCreation(input: Readonly<{
     createInput: input.createInput,
     providerPluginId: input.providerPluginId,
     setup: input.setup,
-    transportOrigin: input.transportOrigin,
+    transportOrigin: getConversationConnectionTransportOrigin(input.transportOrigin),
     connectionId: input.connectionId,
     webhookEndpoint: {
       webhookContributionRef: readDurablePushWebhookContribution(input.setup),
@@ -5456,7 +5505,7 @@ async function admitDurablePushTransferEndpointContinuation(input: Readonly<{
   context: PluginInvocationContext;
   connectionId: string;
   setup: ConversationProviderSetupResultV1;
-  transportOrigin: ConnectionTransportOrigin;
+  transportOrigin: PluginMachineExecutionOriginV1;
   continuation: NonNullable<ConversationConnectionTransferInputV1['endpointContinuation']>;
 }>): Promise<ConversationConnectionWebhookEndpoint> {
   if (input.continuation.connectionId !== input.connectionId) {
@@ -5473,7 +5522,7 @@ async function admitDurablePushTransferEndpointContinuation(input: Readonly<{
     context: input.context,
     webhookEndpointId,
     webhookContribution,
-    targetMaterialization: input.transportOrigin.materializationRef,
+    targetMaterialization: readWebhookTargetMaterialization(input.transportOrigin),
     sourceInstanceId: conversationConnectionWebhookSourceInstanceIdV1(input.connectionId),
   });
   assertNotAborted(input.context.signal);
@@ -5492,12 +5541,6 @@ function assertTransferProviderPluginIdentity(input: Readonly<{
     throw pluginError(
       'channels_connection_transfer_identity_mismatch',
       'Connection transfer cannot change the retained provider plugin identity; create a new connection instead.',
-    );
-  }
-  if (input.current.transportOrigin.materializationRef.pluginId !== input.current.providerPluginId) {
-    throw pluginError(
-      'channels_connection_transfer_corrupt',
-      'Connection transfer found a retained provider origin that does not match its provider identity.',
     );
   }
 }
@@ -5548,7 +5591,7 @@ function transferConnectionValue(input: Readonly<{
   webhookEndpoint?: ConversationConnectionWebhookEndpoint;
   lifecycle: ConversationConnectionLifecycleStateV1;
   now: number;
-}>): JsonRecord {
+}>): ReturnType<typeof withConversationConnectionLifecycle> {
   const {
     pairingDeepLinkTemplate: _oldPairingDeepLinkTemplate,
     outboundTextLimit: _oldOutboundTextLimit,
@@ -5569,7 +5612,7 @@ function transferConnectionValue(input: Readonly<{
       },
       providerSetupInput: input.transferInput.providerSetupInput,
       credentialRef: input.transferInput.credentialRef,
-      transportOrigin: input.prepared.transportOrigin,
+      transportOrigin: getConversationConnectionTransportOrigin(input.prepared.transportOrigin),
       transport: input.webhookEndpoint === undefined
         ? { kind: input.transferInput.selectedTransport }
         : {
@@ -5600,7 +5643,7 @@ function transferConnectionValue(input: Readonly<{
       contributionId: input.transferInput.providerSelection.contributor.contributionId,
     },
     providerSetupInput: input.transferInput.providerSetupInput,
-    transportOrigin: input.prepared.transportOrigin,
+    transportOrigin: getConversationConnectionTransportOrigin(input.prepared.transportOrigin),
   };
   return withConversationConnectionLifecycle({
     row: input.row,
@@ -5623,12 +5666,13 @@ async function settleTransferOldTransportStop(input: Readonly<{
   collection: ChannelStateCollection;
   connectionId: string;
   pendingRevision: number;
+  configurationRevision: number;
   authorityEpoch: number;
 }>, context: PluginInvocationContext): Promise<ConversationConnectionTransferResult> {
   const pendingResult: ConversationConnectionTransferResult = {
     kind: 'transferPendingOldStop',
     connectionId: input.connectionId,
-    revision: input.pendingRevision,
+    revision: input.configurationRevision,
     authorityEpoch: input.authorityEpoch,
   };
   let outcome: FrozenOldTransportStopOutcome;
@@ -5647,7 +5691,7 @@ async function settleTransferOldTransportStop(input: Readonly<{
     ? {
       kind: 'transferred',
       connectionId: input.connectionId,
-      revision: outcome.revision,
+      revision: outcome.configurationRevision,
       authorityEpoch: input.authorityEpoch,
     }
     : pendingResult;
@@ -5675,6 +5719,7 @@ async function runCommittedTransferEndpointRetarget(input: Readonly<{
   pendingRevision: number;
 }>, context: PluginInvocationContext): Promise<Readonly<{
   revision: number;
+  configurationRevision: number;
   lifecycle: ConversationConnectionLifecycleStateV1;
 }>> {
   const row = await input.collection.get(input.connectionId, { signal: context.signal });
@@ -5688,30 +5733,30 @@ async function runCommittedTransferEndpointRetarget(input: Readonly<{
   }
   const current = readConversationConnectionUpdateRow({ row, connectionId: input.connectionId });
   const pending = current.lifecycle.pendingOldTransportStop;
-  if (pending === null
-    || pending.stopRequest.reason !== 'transfer'
-    || pending.endpointRetarget !== 'pending'
-    || pending.stopRequest.authorityEpoch !== current.lifecycle.authorityEpoch) {
+  if (!isConversationPendingEndpointRetarget(pending)
+    || pending.transferAuthorityEpoch !== current.lifecycle.authorityEpoch) {
     throw pluginError(
       'channels_connection_transfer_endpoint_retarget_conflict',
       'Connection transfer no longer retains a committed endpoint-retarget intent.',
       true,
     );
   }
-  const endpoint = readDurablePushTransferEndpoint({
-    current,
-    connectionId: input.connectionId,
-  });
+  const endpoint = readDurablePushTransferEndpoint({ current, connectionId: input.connectionId });
+  if (endpoint.webhookEndpointId !== pending.webhookEndpointId
+    || endpoint.webhookSourceInstanceId !== pending.webhookSourceInstanceId
+    || !pluginJsonValuesEqual(endpoint.webhookContributionRef, pending.webhookContributionRef)) {
+    throw pluginError('channels_connection_transfer_endpoint_retarget_conflict', 'Connection endpoint differs from its retained retarget intent.', true);
+  }
   await convergeConversationConnectionWebhookEndpointTarget({
     context,
     // The frozen replacement authority epoch is the one identity of this
     // transfer attempt, so every resume carries the same intent ordering and
     // an older attempt can never move the endpoint back.
-    transferAuthorityEpoch: pending.stopRequest.authorityEpoch,
+    transferAuthorityEpoch: pending.transferAuthorityEpoch,
     webhookEndpointId: readCanonicalConversationWebhookEndpointId(endpoint.webhookEndpointId),
     webhookContribution: endpoint.webhookContributionRef,
     sourceInstanceId: endpoint.webhookSourceInstanceId,
-    nextTargetMaterialization: current.transportOrigin.materializationRef,
+    nextTargetMaterialization: pending.targetMaterialization,
   });
   assertNotAborted(context.signal);
   const settled = finalizeConversationConnectionTransferWithoutProviderStop({
@@ -5725,14 +5770,14 @@ async function runCommittedTransferEndpointRetarget(input: Readonly<{
       true,
     );
   }
-  const revision = await persistConversationConnectionLifecycle({
+  const persisted = await persistConversationConnectionLifecycle({
     collection: input.collection,
     row,
     current,
     lifecycle: settled.connection,
     operation: 'channels_connection_transfer_endpoint_retarget',
   }, context);
-  return { revision, lifecycle: settled.connection };
+  return { ...persisted, lifecycle: settled.connection };
 }
 
 /**
@@ -5745,6 +5790,7 @@ async function settleTransferPendingEndpointRetarget(input: Readonly<{
   collection: ChannelStateCollection;
   connectionId: string;
   pendingRevision: number;
+  configurationRevision: number;
   authorityEpoch: number;
 }>, context: PluginInvocationContext): Promise<ConversationConnectionTransferResult> {
   let repaired: Awaited<ReturnType<typeof runCommittedTransferEndpointRetarget>>;
@@ -5759,14 +5805,14 @@ async function settleTransferPendingEndpointRetarget(input: Readonly<{
     return {
       kind: 'transferPendingOldStop',
       connectionId: input.connectionId,
-      revision: input.pendingRevision,
+      revision: input.configurationRevision,
       authorityEpoch: input.authorityEpoch,
     };
   }
   return {
     kind: 'transferred',
     connectionId: input.connectionId,
-    revision: repaired.revision,
+    revision: repaired.configurationRevision,
     authorityEpoch: input.authorityEpoch,
   };
 }
@@ -5783,17 +5829,18 @@ async function rejoinCommittedConversationConnectionTransfer(input: Readonly<{
     return {
       kind: 'transferred',
       connectionId: input.connectionId,
-      revision: input.row.revision,
+      revision: input.current.configurationRevision,
       authorityEpoch: input.current.lifecycle.authorityEpoch,
     };
   }
   // The committed row already names the replacement transport, so only the
   // frozen slot can say what was retired and what that predecessor still owes.
-  if (pending.endpointRetarget === 'pending') {
+  if (isConversationPendingEndpointRetarget(pending)) {
     return await settleTransferPendingEndpointRetarget({
       collection: input.collection,
       connectionId: input.connectionId,
       pendingRevision: input.row.revision,
+      configurationRevision: input.current.configurationRevision,
       authorityEpoch: input.current.lifecycle.authorityEpoch,
     }, context);
   }
@@ -5804,7 +5851,7 @@ async function rejoinCommittedConversationConnectionTransfer(input: Readonly<{
     return {
       kind: 'transferPendingOldStop',
       connectionId: input.connectionId,
-      revision: input.row.revision,
+      revision: input.current.configurationRevision,
       authorityEpoch: input.current.lifecycle.authorityEpoch,
     };
   }
@@ -5812,6 +5859,7 @@ async function rejoinCommittedConversationConnectionTransfer(input: Readonly<{
     collection: input.collection,
     connectionId: input.connectionId,
     pendingRevision: input.row.revision,
+    configurationRevision: input.current.configurationRevision,
     authorityEpoch: input.current.lifecycle.authorityEpoch,
   }, context);
 }
@@ -5934,7 +5982,7 @@ export async function transferConversationConnectionForInvocation(
   }
   const current = readConversationConnectionUpdateRow({ row, connectionId: transferInput.connectionId });
   if (
-    row.revision !== transferInput.expectedRevision
+    current.configurationRevision !== transferInput.expectedRevision
     || current.lifecycle.authorityEpoch !== transferInput.expectedAuthorityEpoch
   ) {
     const committed = readCommittedTransferReplacementState({ row, current, transferInput });
@@ -5999,7 +6047,9 @@ export async function transferConversationConnectionForInvocation(
   if (!endpointResumeCandidate) {
     assertTransferStartAccepted(startConversationConnectionTransfer({
       current: current.lifecycle,
-      pendingOldTransportStop: {
+      pendingOldTransportStop: requiresEndpointRetarget && isConversationPendingEndpointRetarget(current.lifecycle.pendingOldTransportStop)
+        ? { ...current.lifecycle.pendingOldTransportStop, transferAuthorityEpoch: current.lifecycle.authorityEpoch + 1 }
+        : {
         predecessorCheckpointedPollInvocation: {
           connectionRevision: row.revision,
           authorityEpoch: current.lifecycle.authorityEpoch,
@@ -6009,7 +6059,7 @@ export async function transferConversationConnectionForInvocation(
         providerContributionSelection: current.providerContributionSelection,
         stopRequest: initialFrozenOldStopRequest,
         predecessorTransportKind: oldTransport,
-        endpointRetarget: requiresEndpointRetarget ? 'pending' : 'notRequired',
+        endpointRetarget: 'notRequired',
       },
       replacement: {
         enabled: current.lifecycle.enabled,
@@ -6032,7 +6082,7 @@ export async function transferConversationConnectionForInvocation(
   const postSetupRow = preparation.row;
   const postSetupCurrent = preparation.current;
   if (
-    postSetupRow.revision !== transferInput.expectedRevision
+    postSetupCurrent.configurationRevision !== transferInput.expectedRevision
     || postSetupCurrent.lifecycle.authorityEpoch !== transferInput.expectedAuthorityEpoch
   ) {
     if (isLostResponseCommittedTransfer({
@@ -6068,7 +6118,7 @@ export async function transferConversationConnectionForInvocation(
       current: postSetupCurrent,
       transferInput,
     })
-    && arePluginMachineExecutionOriginsEqual(postSetupCurrent.transportOrigin, prepared.transportOrigin)) {
+    && areConversationConnectionTransportOriginsEqual(postSetupCurrent.transportOrigin, getConversationConnectionTransportOrigin(prepared.transportOrigin))) {
     return await rejoinCommittedConversationConnectionTransfer({
       collection,
       connectionId: transferInput.connectionId,
@@ -6077,11 +6127,11 @@ export async function transferConversationConnectionForInvocation(
     }, context);
   }
   if (isRequestedTransferAlreadyCurrent({ current: postSetupCurrent, transferInput })
-    && arePluginMachineExecutionOriginsEqual(postSetupCurrent.transportOrigin, prepared.transportOrigin)) {
+    && areConversationConnectionTransportOriginsEqual(postSetupCurrent.transportOrigin, getConversationConnectionTransportOrigin(prepared.transportOrigin))) {
     return {
       kind: 'rejoined',
       connectionId: transferInput.connectionId,
-      revision: postSetupRow.revision,
+      revision: postSetupCurrent.configurationRevision,
       authorityEpoch: postSetupCurrent.lifecycle.authorityEpoch,
     };
   }
@@ -6145,9 +6195,18 @@ export async function transferConversationConnectionForInvocation(
   const historyGap = checkpointFence === undefined
     ? incumbent.lifecycle.historyGap ?? { reportedAt: now, reason: 'providerHistoryUnavailable' as const }
     : null;
+  const retainedEndpoint = requiresEndpointRetarget
+    ? readDurablePushTransferEndpoint({ current: incumbent, connectionId: transferInput.connectionId })
+    : undefined;
+  const endpointIntent: ConversationPendingEndpointRetargetIntentV1 | undefined = retainedEndpoint === undefined ? undefined : {
+    kind: 'endpointRetarget',
+    ...retainedEndpoint,
+    targetMaterialization: readWebhookTargetMaterialization(prepared.transportOrigin),
+    transferAuthorityEpoch: incumbent.lifecycle.authorityEpoch + 1,
+  };
   const lifecycleStart = assertTransferStartAccepted(startConversationConnectionTransfer({
     current: incumbent.lifecycle,
-    pendingOldTransportStop: {
+    pendingOldTransportStop: endpointIntent ?? {
       predecessorCheckpointedPollInvocation: {
         connectionRevision: incumbentRow.revision,
         authorityEpoch: incumbent.lifecycle.authorityEpoch,
@@ -6157,7 +6216,7 @@ export async function transferConversationConnectionForInvocation(
       providerContributionSelection: incumbent.providerContributionSelection,
       stopRequest: frozenOldStopRequest,
       predecessorTransportKind: oldTransport,
-      endpointRetarget: requiresEndpointRetarget ? 'pending' : 'notRequired',
+      endpointRetarget: 'notRequired',
     },
     replacement: {
       enabled: incumbent.lifecycle.enabled,
@@ -6172,10 +6231,7 @@ export async function transferConversationConnectionForInvocation(
     // deferred until the row CAS below has committed the recoverable intent,
     // so a lost or conflicting write can never leave the generic endpoint
     // delivering to a target the retained connection does not name.
-    durablePushEndpoint = readDurablePushTransferEndpoint({
-      current: incumbent,
-      connectionId: transferInput.connectionId,
-    });
+    durablePushEndpoint = retainedEndpoint;
   } else if (transferInput.selectedTransport === 'durablePush') {
     if (transferInput.endpointContinuation === undefined || oldTransport === 'durablePush') {
       throw pluginError(
@@ -6228,9 +6284,7 @@ export async function transferConversationConnectionForInvocation(
   assertTransferProviderPluginIdentity({ current: incumbent, providerPluginId: providerForPersistence.pluginId });
   assertTransferImmutableConnectionIdentity({ current: incumbent, setup: prepared.setup });
 
-  const mutations: ChannelStateBatchMutation[] = [{
-    kind: 'put',
-    value: transferConnectionValue({
+  const value = transferConnectionValue({
       row: incumbentRow,
       current: incumbent,
       transferInput,
@@ -6239,7 +6293,10 @@ export async function transferConversationConnectionForInvocation(
       webhookEndpoint: durablePushEndpoint,
       lifecycle: settledLifecycle,
       now,
-    }),
+    });
+  const mutations: ChannelStateBatchMutation[] = [{
+    kind: 'put',
+    value,
     expectedRevision: incumbentRow.revision,
   }];
   if (checkpointFence !== undefined) {
@@ -6273,6 +6330,7 @@ export async function transferConversationConnectionForInvocation(
       collection,
       connectionId: transferInput.connectionId,
       pendingRevision: persisted.revision,
+      configurationRevision: value.payload.configurationRevision,
       authorityEpoch: lifecycleStart.connection.authorityEpoch,
     }, context);
   }
@@ -6283,7 +6341,7 @@ export async function transferConversationConnectionForInvocation(
     return {
       kind: 'transferPendingOldStop',
       connectionId: transferInput.connectionId,
-      revision: persisted.revision,
+      revision: value.payload.configurationRevision,
       authorityEpoch: lifecycleStart.connection.authorityEpoch,
     };
   }
@@ -6291,7 +6349,7 @@ export async function transferConversationConnectionForInvocation(
     return {
       kind: 'transferred',
       connectionId: transferInput.connectionId,
-      revision: persisted.revision,
+      revision: value.payload.configurationRevision,
       authorityEpoch: settledLifecycle.authorityEpoch,
     };
   }
@@ -6299,6 +6357,7 @@ export async function transferConversationConnectionForInvocation(
     collection,
     connectionId: transferInput.connectionId,
     pendingRevision: persisted.revision,
+    configurationRevision: value.payload.configurationRevision,
     authorityEpoch: lifecycleStart.connection.authorityEpoch,
   }, context);
 }

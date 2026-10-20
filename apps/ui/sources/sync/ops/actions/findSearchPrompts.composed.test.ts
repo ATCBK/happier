@@ -6,10 +6,12 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DEFAULT_MEMORY_SETTINGS } from '@happier-dev/protocol/memory/memorySettings';
 import { MemoryStatusV1Schema } from '@happier-dev/protocol/memory/memoryStatus';
 import { MemorySearchResultV1Schema } from '@happier-dev/protocol/memory/memorySearch';
+import { ComposerSnapshotV1Schema } from '@happier-dev/protocol/plugins/ui/composer';
 import { DaemonWorkspaceFileSearchRequestSchema, DaemonWorkspaceFileSearchResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
 import { ExternalSessionCandidateMatchV1Schema, ExternalSessionsCandidatesListRequestSchema,
     ExternalSessionsCandidatesListResponseSchema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
-import { createDeferred, standardCleanup } from '@/dev/testkit';
+import { createDeferred, PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE, standardCleanup } from '@/dev/testkit';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installSessionActionFixture, installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
@@ -24,6 +26,7 @@ let answerRpc: Parameters<typeof installSessionActionRpcBoundary>[0] = () => { t
 const requests = installSessionActionRpcBoundary(request => answerRpc(request));
 await loadSyncSingletonForTests();
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+const { registerSessionComposerPresentationTarget } = await import('@/components/sessions/presentation/sessionComposerPresentationTargets');
 const { getActionSpec } = await import('@happier-dev/protocol/actions/actionSpecs');
 const { searchConversations } = await import('@/sync/domains/search/searchConversations');
 const { storage } = await import('@/sync/domains/state/storage');
@@ -55,15 +58,76 @@ afterEach(async () => {
 });
 
 describe('FSP search production composition', () => {
-    it('keeps picker MCP admission unavailable without a mounted composer', async () => {
+    it('returns native failures beside successful hits through the registered Action and strict Agent/MCP contract', async () => {
+        const projection = PluginProjectionV2Schema.parse({ ...PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE,
+            agentsById: Object.fromEntries(['failed', 'healthy'].map(id => [`acme.${id}`, {
+                id: `acme.${id}`, title: id, identity: { pluginId: 'acme.review', localId: id },
+                externalSessions: { agent: { pluginId: 'acme.review', localId: id }, generation: PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE.generation,
+                    operations: { listCandidates: true, resolveLinkIdentity: true, pageTranscript: true, readAfterTranscript: true },
+                    sources: [{ sourceKind: id, contentSearch: true, schema: { fields: [{ name: 'kind', kind: 'literal', value: id }] },
+                        key: { segments: [{ kind: 'literal', value: id }] }, instances: [{ kind: 'default', constants: {} }] }],
+                },
+            }])) });
+        homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
+            experiments: true, featureToggles: { 'memory.search': true },
+        } }, version: 1 } });
+        answerRpc = request => {
+            if (request.method.endsWith(`:${RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE}`)) return { protocolVersion: 1, projection };
+            if (request.method.endsWith(`:${RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET}`)) return DEFAULT_MEMORY_SETTINGS;
+            expect(request.method).toBe(`fsp-machine:${RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST}`);
+            const input = ExternalSessionsCandidatesListRequestSchema.parse(request.params);
+            return ExternalSessionsCandidatesListResponseSchema.parse(input.source.kind === 'failed'
+                ? { ok: false, errorCode: 'agent_error', retryable: true, error: 'private native path' }
+                : { ok: true, candidates: [{ remoteSessionId: 'healthy-hit', updatedAtMs: 1,
+                    match: { snippet: 'needle', sourceItemId: 'message', messageIndex: 0 } }], contentCoverage: 'complete' });
+        };
+        const action = await createDefaultActionExecutor().execute('search.conversations', {
+            machineIds: ['fsp-machine'], mode: 'standard', retryUnreachableMachines: true,
+            query: { v: 1, query: 'needle', mode: 'auto', scope: { type: 'global' }, corpora: ['external_transcripts'] },
+        }, { surface: 'ui', serverId, expectedAccountId: 'fsp-account' });
+        expect(action).toMatchObject({ ok: true, result: { hits: [{ agentId: 'acme.healthy' }], failures: [{ machineId: 'fsp-machine',
+            agentId: 'acme.failed', sourceKey: 'failed', errorCode: 'agent_error', retryable: true }] } });
+        if (!action.ok || !action.result || typeof action.result !== 'object') throw new Error('Search Action unavailable');
+        const spec = getActionSpec('search.conversations');
+        expect(spec.outputSchema!.parse(action.result)).toEqual(action.result);
+        expect(spec.outputSchema!.safeParse({ ...action.result, failures: [{ machineId: 'fsp-machine', agentId: 'acme.failed',
+            sourceKey: 'failed', errorCode: 'agent_error', retryable: 'true' }] }).success).toBe(false);
+        expect(spec).toMatchObject({ surfaces: { agent: true, mcp: true }, bindings: { mcpToolName: 'search_conversations' } });
+    });
+    it('keeps picker MCP admission scoped to the mounted composer and retires it on unmount', async () => {
         const executor = createDefaultActionExecutor();
-        const result = await executor.execute('ui.prompts.picker.open', {}, {
+        const context = {
             surface: 'mcp', serverId, expectedAccountId: 'fsp-account',
-        });
+        } as const;
+        const result = await executor.execute('ui.prompts.picker.open', {}, context);
         expect(result).toEqual({ ok: true, result: { status: 'noEligibleComposer' } });
         if (!result.ok) throw new Error('Picker Action unavailable');
         expect(getActionSpec('ui.prompts.picker.open').outputSchema!.parse(result.result))
             .toEqual({ status: 'noEligibleComposer' });
+        const snapshot = ComposerSnapshotV1Schema.parse({ revision: 1,
+            ref: { kind: 'session', sessionId: 'mounted-session' }, text: 'Private draft',
+            references: [], attachments: [], layout: 'wrap',
+            capabilities: { text: true, references: false, attachments: false, submit: true },
+            state: { focused: true, editable: true, submittable: true, submitting: false, running: false },
+        });
+        let pickerOpen = false;
+        const unregister = registerSessionComposerPresentationTarget({ serverId, sessionId: 'mounted-session' }, {
+            readRevision: () => snapshot.revision,
+            replace: () => { throw new Error('Opening the picker must not edit the draft'); },
+            readSnapshot: () => snapshot,
+            readScope: () => ({ serverId, accountId: 'fsp-account' }),
+            // The mounted input is the UI boundary; registry, admission and executor stay real.
+            openPromptPicker: () => { pickerOpen = true; return true; },
+        });
+        try {
+            const opened = await executor.execute('ui.prompts.picker.open', { composerRef: snapshot.ref }, context);
+            expect(opened).toEqual({ ok: true, result: { status: 'opened', composerRef: snapshot.ref } });
+            expect(pickerOpen).toBe(true);
+            if (!opened.ok) throw new Error('Mounted picker Action unavailable');
+            expect(getActionSpec('ui.prompts.picker.open').outputSchema!.parse(opened.result)).toEqual(opened.result);
+        } finally { unregister(); }
+        expect(await executor.execute('ui.prompts.picker.open', { composerRef: snapshot.ref }, context))
+            .toEqual({ ok: true, result: { status: 'noEligibleComposer' } });
     });
     it('recovers an unreachable Machine only on explicit retry through the registered search Action', async () => {
         const machine = { ...createPlainMachineRowFixture({ id: 'fsp-machine', accountId: 'fsp-account' }),

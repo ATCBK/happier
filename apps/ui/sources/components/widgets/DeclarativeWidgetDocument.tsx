@@ -10,7 +10,7 @@ import { useWidgetPresentation } from '@happier-dev/plugin-ui';
 import { PluginContextualResourceState, PluginContextualResourceStoreProvider, type PluginContextualResourceBinding } from '@/components/plugins/surfaces/PluginContextualResourceStoreProvider';
 import { projectDeclarativeDataResourceSnapshot, resolveDeclarativeDataResourceBinding,
     type DeclarativeDataSourceProjection } from '@/components/plugins/surfaces/declarativeDataSource';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { readDeclarativeText, renderDeclarativeNode, type DeclarativeNodeRenderContext } from '@/components/plugins/shared/declarativeNodes';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
@@ -21,7 +21,7 @@ import type { PluginUiProjectionCurrentness } from '@/sync/domains/plugins/ui/us
 import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { randomUUID } from '@/platform/randomUUID';
-import { WidgetSnapshotCaptureContext } from './definitions/widgetSnapshotCapture';
+import { useDeclarativeWidgetSnapshotCapture, type WidgetSnapshotCapture } from './definitions/widgetSnapshotCapture';
 import { UnavailableInstalledWidget } from './InstalledWidgetSurface';
 
 export type DeclarativeWidgetDocumentProps = Readonly<{
@@ -184,7 +184,7 @@ function DataFreshnessLine(props: Readonly<{ testID: string }>): React.ReactElem
 export function DeclarativeWidgetDocument(props: DeclarativeWidgetDocumentProps): React.ReactElement {
     const { theme } = useUnistyles();
     const widgetPresentation = useWidgetPresentation();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const [mountInstanceKey] = React.useState(randomUUID);
     const parsed = React.useMemo(() => PluginDeclarativeDocumentV1Schema.safeParse(props.document), [props.document]);
     const context: DeclarativeNodeRenderContext = { colors: theme.colors, presentationTheme, widgetPresentation,
@@ -192,18 +192,15 @@ export function DeclarativeWidgetDocument(props: DeclarativeWidgetDocumentProps)
         markdownProfile: 'widget', resolveAction: () => null, renderField: () => null, renderCollectionList: () => null };
     const [freshness] = React.useState(createDataFreshnessStore);
     // Post a snapshot reads exactly what this document shows, only when the person asks for it.
-    const snapshotSlot = React.useContext(WidgetSnapshotCaptureContext);
     const document = parsed.success ? parsed.data : null;
-    React.useEffect(() => (snapshotSlot && document ? snapshotSlot.register({
-        read: () => {
+    const readSnapshot = React.useMemo(() => document ? (): WidgetSnapshotCapture => {
             const reports = [...freshness.getSnapshot()];
             return { document, frozenByPath: new Map(reports.map(([path, report]) => [path, report.shown])),
                 digests: reports.flatMap(([, report]) => (report.digest ? [report.digest] : [])),
-                current: reports.every(([, report]) => report.state === 'fresh'),
+                current: props.isCurrent() && props.accountLifetime.isCurrent() && reports.every(([, report]) => report.state === 'fresh'),
                 refresh: () => Promise.all(reports.map(([, report]) => report.refresh())) };
-        },
-        subscribe: freshness.subscribe,
-    }) : undefined), [document, freshness, snapshotSlot]);
+        } : null, [document, freshness, props.isCurrent, props.accountLifetime]);
+    useDeclarativeWidgetSnapshotCapture(readSnapshot, freshness.subscribe);
     const renderDataNode = (value: Readonly<Record<string, unknown>>, path: string): React.ReactNode => {
         const { path: _path, order: _order, ...authored } = value;
         const node = PluginDeclarativeNodeV2Schema.safeParse(authored);

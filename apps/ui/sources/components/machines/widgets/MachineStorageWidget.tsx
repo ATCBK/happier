@@ -10,7 +10,7 @@ import type { MachineResourceReasonV1 } from '@happier-dev/protocol/machines/res
 import type { WidgetSizeV1 } from '@happier-dev/protocol/widgets';
 import type { StorageItemV1 } from '@happier-dev/protocol/storage/storageV1';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { usageSignatureAccent } from '@/components/settings/usage/usageAccent';
 import { beginMachinePageTabIntent } from '@/components/machines/page/machinePageIntent';
 import type { MachinePageTabParams } from '@/components/machines/page/machinePageTabQuery';
@@ -22,7 +22,7 @@ import { describeStorageCategoryFacts } from '@/components/machines/storage/stor
 import { useStorageCollect } from '@/components/machines/storage/StorageCollectToggle';
 import { StorageItemRow } from '@/components/machines/storage/StorageItemRow';
 import { StoragePileDock } from '@/components/machines/storage/StoragePileDock';
-import { describeStorageVerdict } from '@/components/machines/storage/storageReasonPresentation';
+import { describeStorageVerdict, storageEvidenceLabel } from '@/components/machines/storage/storageReasonPresentation';
 import { StorageVolumeRow } from '@/components/machines/storage/StorageVolumes';
 import {
   orderStorageCategories,
@@ -562,7 +562,7 @@ function StorageCapacityLegend(
 ) {
   const language = usePreferredLanguage();
   const { theme } = useUnistyles();
-  const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const pluginTheme = usePluginUiTheme(theme);
   const { volume, canGoBytes, measuring } = props.view;
   const parts = resolveStorageVolumeParts(volume);
   const segments = React.useMemo(
@@ -896,7 +896,7 @@ function StorageWidgetEasyRows(
           key={item.itemId}
           testID={`${props.testID}.easy.${item.itemId}`}
           title={item.title}
-          evidence={item.evidence.join(' · ')}
+          evidence={item.evidence.map(storageEvidenceLabel).join(' · ')}
           bytes={item.size.allocatedBytes}
           atLeast={item.size.atLeast}
           largest={largest}

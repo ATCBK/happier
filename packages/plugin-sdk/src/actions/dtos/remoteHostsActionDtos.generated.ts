@@ -222,6 +222,7 @@ export type RemoteHostsActionInputById = {
             tunnelKey: string;
         };
     };
+    readonly "remote_hosts.tunnel.list": Record<string, never>;
 };
 export type RemoteHostsActionResultById = {
     readonly "remote_hosts.list": {
@@ -990,5 +991,60 @@ export type RemoteHostsActionResultById = {
         status: 'connected';
     } | {
         status: 'released';
+    };
+    readonly "remote_hosts.tunnel.list": {
+        status: 'conflict';
+        revision: number;
+    } | {
+        status: 'unavailable';
+        reason: string;
+    } | {
+        status: 'outcome_unknown';
+    } | {
+        status: 'task_started';
+        taskId: string;
+    } | {
+        status: 'completed';
+        taskId: string;
+        result: {
+            protocolVersion: 1;
+            taskId: string;
+            ok: true;
+            data?: SystemTaskJsonValue | undefined;
+        } | {
+            protocolVersion: 1;
+            taskId: string;
+            ok: false;
+            error: {
+                code: string;
+                message: string;
+            };
+        };
+    } | {
+        status: 'outcome_unknown';
+        taskId: string;
+    } | {
+        status: 'connected';
+    } | {
+        status: 'listed';
+        native: {
+            leases: {
+                leaseId: string;
+                key: string;
+                remoteHostId: string;
+                channelMode: 'loopback-port';
+                purpose: 'server-http' | 'server-websocket' | 'relay-runtime';
+                status: 'starting' | 'ready' | 'degraded' | 'failed' | 'stopped';
+                startedAt: string;
+                localUrl?: string | undefined;
+                expiresAt?: string | undefined;
+            }[];
+            platformLimitations: {
+                id: string;
+                severity: 'error' | 'info' | 'warning';
+                reason: 'authentication-failed' | 'foreground-only' | 'host-key-mismatch' | 'host-key-rejected' | 'host-key-untrusted' | 'loopback-bind-failed' | 'native-module-unavailable' | 'remote-service-unreachable' | 'platform-suspended' | 'network-captive-portal';
+                message: string;
+            }[];
+        };
     };
 };

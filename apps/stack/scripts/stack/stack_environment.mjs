@@ -3,7 +3,7 @@ import { join, posix, win32 } from 'node:path';
 import { ensureDir, readTextOrEmpty } from '../utils/fs/ops.mjs';
 import { createEnvFileExclusive, ensureEnvFileUpdated } from '../utils/env/env_file.mjs';
 import { parseEnvToObject } from '../utils/env/dotenv.mjs';
-import { getWorkspaceDir, resolveStackEnvPath } from '../utils/paths/paths.mjs';
+import { getRepoDir, getWorkspaceDir, resolveStackEnvPath } from '../utils/paths/paths.mjs';
 import { stackExistsSync } from '../utils/stack/stacks.mjs';
 import {
   STACK_WRAPPER_CLEAR_UNPREFIXED_KEYS,
@@ -29,11 +29,13 @@ import { assertCanonicalManagedStackName } from '../utils/stack/names.mjs';
 import { resolveStackServerEndpoint } from '../utils/server/urls.mjs';
 import { createListenerOwnershipObservationScope } from '../utils/server/listener_ownership.mjs';
 import { resolveSharedDatabaseSourceProvider } from '../utils/server/effective_db_provider.mjs';
+import { projectBorrowedExpoWebappEnv } from '../runtime/shared/borrowed_expo.mjs';
 
 const readExistingEnv = readTextOrEmpty;
 
 const FOREIGN_STACK_CALLER_KEYS = [
   'HAPPIER_STACK_RUNTIME_MODE',
+  'HAPPIER_STACK_PREPARED_SOURCE_RELOAD',
   'HAPPIER_STACK_EXPO_DEV_PORT',
   'HAPPIER_STACK_EXPO_DEV_PORT_STRATEGY',
   'HAPPIER_STACK_EXPO_DEV_PORT_BASE',
@@ -130,6 +132,12 @@ export async function withStackEnv({
     // One-shot overrides (e.g. --repo=...) win over stack env file.
     ...extraEnv,
   };
+  // Preparation belongs to the caller's checkout, including transient --repo
+  // selections. A stack name alone cannot attest a different checkout.
+  if (process.env.HAPPIER_STACK_REPO_DIR?.trim()
+      && getRepoDir(null, process.env) !== getRepoDir(null, env)) {
+    delete env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD;
+  }
   env = applyStackActiveServerScopeEnv({
     env,
     stackName,
@@ -197,6 +205,17 @@ export async function withStackEnv({
     if (runtimeState?.ephemeral) {
       env.HAPPIER_STACK_EPHEMERAL_PORTS = '1';
     }
+  }
+
+  // Subsequent commands consume the UI selection made by startup, including
+  // daemon preflight. The API origin is not the borrowed web-app origin.
+  if (runtimeState?.sourceUi === 'borrowed') {
+    env = await projectBorrowedExpoWebappEnv({
+      rootDir: getRepoDir(null, env),
+      consumerStackName: stackName,
+      producerStackName: env.HAPPIER_STACK_EXPO_SOURCE_STACK,
+      env,
+    });
   }
 
   return await fn({ env, envPath, stackEnv, runtimeStatePath, runtimeState });

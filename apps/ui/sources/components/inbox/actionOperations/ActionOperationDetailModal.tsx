@@ -26,6 +26,8 @@ import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { useSessionAudienceContext } from '@/hooks/teams/useSessionAudienceContext';
 import { useSessionListHomeObservations } from '@/sync/store/hooks';
+import { useManagedMachineName } from '@/components/approvals/approvalReferenceReading';
+import { TechnicalDetailsDisclosure } from '@/components/ui/lists/TechnicalDetailsDisclosure';
 
 import {
     describeActionOperationStatusLabel,
@@ -117,28 +119,31 @@ export const ActionOperationDetailModal = React.memo(function ActionOperationDet
         exactServerId,
         exactServerId && sessionId ? sessionId : '',
     );
+    const projectCommandRef = operation ? readActionOperationOutputAttachment(operation.snapshot) : null;
     const machine = useServerScopedMachine(
-        exactServerId,
-        exactServerId ? operation?.snapshot.scope.machineId ?? '' : '',
+        projectCommandRef?.serverId ?? exactServerId,
+        projectCommandRef?.machineId ?? (exactServerId ? operation?.snapshot.scope.machineId ?? '' : ''),
     );
     const sessionAddresses = React.useMemo(() => exactServerId && sessionId
         ? [{ serverId: exactServerId, sessionId }]
         : [], [exactServerId, sessionId]);
     const audienceContext = useSessionAudienceContext(sessionAddresses);
     const homeObservations = useSessionListHomeObservations();
-    const projectCommandRef = operation ? readActionOperationOutputAttachment(operation.snapshot) : null;
-    const projectCommandMachine = useServerScopedMachine(projectCommandRef?.serverId ?? null, projectCommandRef?.machineId ?? '');
-    const projectCommandMachineName = projectCommandMachine ? getMachineDisplayName(projectCommandMachine) ?? null : null;
+    const projectCommandMachineName = projectCommandRef && machine ? getMachineDisplayName(machine) ?? null : null;
+    // A managed power operation runs on its controller but concerns the managed guest, which the Machine row names.
+    const managedMachineName = useManagedMachineName(exactServerId,
+        operation?.snapshot.domainRef?.kind === 'managedMachine' ? operation.snapshot.domainRef.id : null);
     const [resumePending, setResumePending] = React.useState(false);
     const [resumeFeedback, setResumeFeedback] = React.useState<string | null>(null);
-    const mountedRef = React.useRef(true);
+    const resumeControllerRef = React.useRef<AbortController | null>(null);
 
     React.useEffect(() => {
-        mountedRef.current = true;
+        setResumePending(false);
+        setResumeFeedback(null);
         return () => {
-            mountedRef.current = false;
+            resumeControllerRef.current?.abort();
         };
-    }, []);
+    }, [props.operationId, props.serverId]);
 
     React.useEffect(() => {
         props.setChrome?.({
@@ -172,6 +177,7 @@ export const ActionOperationDetailModal = React.memo(function ActionOperationDet
         snapshot,
         session,
         machine,
+        managedMachineName,
         serverProfile: operation.serverId ? getServerProfileById(operation.serverId) : null,
         audienceScope: operation.serverId ? audienceContext.scopes.get(operation.serverId) : null,
         homeObservation: operation.serverId ? homeObservations[operation.serverId] ?? null : null,
@@ -194,31 +200,36 @@ export const ActionOperationDetailModal = React.memo(function ActionOperationDet
         if (detail.nextAction?.kind !== 'resume_handoff' || resumePending) return;
         setResumePending(true);
         setResumeFeedback(null);
+        const controller = new AbortController();
+        resumeControllerRef.current?.abort();
+        resumeControllerRef.current = controller;
+        const isCurrentRequest = () => !controller.signal.aborted && resumeControllerRef.current === controller;
         void resumeActionOperationHandoff({
             serverId: operation.serverId,
             handoffId: detail.nextAction.handoffId,
             sessionId: detail.nextAction.sessionId,
             targetMachineId: detail.nextAction.targetMachineId,
+            signal: controller.signal,
         }).then((result) => {
-            if (!mountedRef.current) return;
+            if (!isCurrentRequest()) return;
             setResumeFeedback(result.kind === 'requested'
                 ? t('inbox.actionOperations.recovery.resumeRequested')
                 : result.kind === 'not_available'
                     ? t('inbox.actionOperations.recovery.resumeNoLongerAvailable')
                     : result.message);
         }).catch(() => {
-            if (mountedRef.current) {
+            if (isCurrentRequest()) {
                 setResumeFeedback(t('inbox.actionOperations.recovery.resumeFailed'));
             }
         }).finally(() => {
-            if (mountedRef.current) setResumePending(false);
+            if (isCurrentRequest()) setResumePending(false);
         });
     };
 
     return (
         <View style={styles.body}>
             <View accessibilityLiveRegion="polite" style={styles.hero}>
-                {!terminal && observation === 'available' ? (
+                {!terminal && observation === 'available' && status.label.kind === 'host' && status.label.value !== 'outcome_uncertain' ? (
                     <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                 ) : (
                     <Icon
@@ -229,7 +240,8 @@ export const ActionOperationDetailModal = React.memo(function ActionOperationDet
                 )}
                 <View style={styles.heroCopy}>
                     <Text style={[styles.status, status.tone === 'danger' ? styles.danger : undefined]}>
-                        {describeActionOperationStatusLabel({ kind: 'host', value: snapshot.state })}
+                        {describeActionOperationStatusLabel(status.label.kind === 'host' && status.label.value === 'outcome_uncertain'
+                            ? status.label : { kind: 'host', value: snapshot.state })}
                     </Text>
                     {showStatusDetail ? <Text style={styles.progress}>{statusLabel}</Text> : null}
                     {snapshot.progress?.kind === 'determinate' ? (
@@ -255,7 +267,7 @@ export const ActionOperationDetailModal = React.memo(function ActionOperationDet
                     mode="info"
                     title={t('inbox.actionOperations.machine')}
                     subtitle={joinHappierFacts(
-                        sourceContext.machineTitle ?? snapshot.scope.machineId,
+                        sourceContext.machineTitle ?? projectCommandRef?.machineId ?? snapshot.scope.machineId,
                         sessionId ? null : sourceContext.contextLine,
                     )}
                 />
@@ -366,23 +378,27 @@ export const ActionOperationDetailModal = React.memo(function ActionOperationDet
                             mode="info"
                             title={row.label}
                             subtitle={row.value}
+                            subtitleLines={0}
                         />
                     ))}
                 </ItemGroup>
             ) : null}
 
-            {detail.errorSummary.length > 0 ? (
+            {detail.failure ? (
                 <ItemGroup title={t('common.error')}>
-                    {detail.errorSummary.map((row) => (
-                        <Item
-                            key={row.label}
-                            testID={`action-operation-error.${row.label}`}
-                            mode="info"
-                            title={row.label}
-                            subtitle={row.value}
-                            destructive={true}
+                    <Item
+                        testID="action-operation-failure"
+                        mode="info"
+                        title={detail.failure.reason}
+                        titleLines={0}
+                    />
+                    {detail.failure.technicalLines.length > 0 ? (
+                        <TechnicalDetailsDisclosure
+                            testID="action-operation-technical-details"
+                            title={t('approvals.technicalDetails')}
+                            lines={detail.failure.technicalLines}
                         />
-                    ))}
+                    ) : null}
                 </ItemGroup>
             ) : null}
 

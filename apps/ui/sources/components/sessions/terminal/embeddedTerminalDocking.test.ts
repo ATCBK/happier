@@ -71,6 +71,7 @@ describe('embeddedTerminalDocking', () => {
             openDetailsTab: vi.fn(),
             replaceDetailsTab: vi.fn(),
             setDetailsTabState: vi.fn(),
+            patchDetailsTabState: vi.fn(),
             pinDetailsTab: vi.fn(),
             unpinDetailsTab: vi.fn(),
             closeDetails: vi.fn(),

@@ -99,6 +99,7 @@ const ROOT_RUNTIME_EXPORTS = [
     'ScmComparisonSourceSchema',
     'ScmHistoryEntriesInputV1Schema',
     'ScmHistoryEntriesResponseSchema',
+    'ScmHostingProviderKindProtocolSchema',
     'ScmOperationOutcomeSchema',
     'ScmRefreshPolicySchema',
     'ScmRepositoryProvisioningFailureResponseSchema',
@@ -154,6 +155,7 @@ const ROOT_TYPE_EXPORTS = [
     'ScmChangeDiscardRequest',
     'ScmChangeDiscardResponse',
     'ScmCloneProtocol',
+    'ProtocolScmHostingProviderKind',
     'ScmCommitBackoutRequest',
     'ScmCommitBackoutResponse',
     'ScmCommitUndoLastRequest',
@@ -280,8 +282,10 @@ const ROOT_TYPE_EXPORTS = [
     'ScmWorktreeEnrichmentEntry',
     'ScmWorktreePruneRequest',
     'ScmWorktreePruneResponse',
+    'ScmWorktreeReinstateRequest',
     'ScmWorktreeRemoveRequest',
     'ScmWorktreeRemoveResponse',
+    'ScmWorktreeRetireRequest',
     'ScmWorktreesEnrichmentRequest',
     'ScmWorktreesEnrichmentResponse',
     ...TRANSITIVE_DECLARATION_CLOSURE_TYPES,
@@ -572,6 +576,15 @@ type LegacyCloneProtocol = never; /* @sdk-negative-type-case-end */
 }
 
 describe('SCM package-local projections', () => {
+    it('embeds the canonical hosting kind grammar without a feature-owned forge list', () => {
+        const request = defineProtocolObject({ kind: rootScm.ScmHostingProviderKindProtocolSchema }, { policy: 'closed' });
+        for (const kind of ['github', 'custom', 'unknown']) {
+            expect(request.parse({ kind })).toEqual({ kind });
+        }
+        expect(request.safeParse({ kind: 'unregistered-forge-kind' }).success).toBe(false);
+        expect(request.safeParse({ kind: 'custom', extraAuthority: true }).success).toBe(false);
+        expect(rootScm.ScmHostingProviderKindProtocolSchema).toBe(protocolScm.ScmHostingProviderKindProtocolSchema);
+    });
     it('embeds the canonical comparison source as a closed portable protocol value', () => {
         const request = defineProtocolObject({ source: rootScm.ScmComparisonSourceSchema }, { policy: 'closed' });
         const source = { kind: 'pullRequest', locator: { providerId: 'source-plugin', repository: 'owner/repo', number: 17,
@@ -599,7 +612,11 @@ describe('SCM package-local projections', () => {
     it('exposes exactly the approved source surface', () => {
         const program = createSdkProgram();
         expect(moduleExportNames(program, 'src/scm/projections.ts')).toEqual(ROOT_EXPORTS);
-        expect(moduleExportNames(program, 'src/scm/index.ts')).toEqual(ROOT_EXPORTS);
+        expect(moduleExportNames(program, 'src/scm/index.ts')).toEqual([...ROOT_EXPORTS,
+            'GitFileLineage', 'GitTemporaryIndex', 'GitTemporaryIndexCommand', 'GitTemporaryIndexCommandAdapter',
+            'GitTemporaryIndexCommandResult', 'GitTemporaryIndexFailure', 'GitTemporaryIndexSeed',
+            'createGitTemporaryIndex', 'parseGitComparisonOutput', 'resolveGitIndexPath',
+        ].sort());
     }, 120_000);
 
     it('preserves representative canonical runtime identities without wrappers', () => {

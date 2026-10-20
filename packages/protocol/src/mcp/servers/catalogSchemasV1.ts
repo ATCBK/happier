@@ -115,7 +115,7 @@ export type McpServerCatalogMutationV1 = Exclude<z.infer<typeof McpServerCatalog
 
 const unavailableReasons = ['account-not-found', 'account-inconsistent', 'account-mode-mismatch',
   'encryption-material-unavailable', 'invalid-stored-content', 'invalid-reference', 'unauthorized', 'forbidden',
-  'unsupported', 'unreachable', 'scope-retired', 'cancelled', 'source-version-conflict', 'authority-not-confirmed'] as const;
+  'unsupported', 'unreachable', 'database_transaction_conflict_exhausted', 'scope-retired', 'cancelled', 'source-version-conflict', 'authority-not-confirmed'] as const;
 
 export type McpServerCatalogUnavailableReasonV1 = typeof unavailableReasons[number];
 

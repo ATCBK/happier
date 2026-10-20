@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { log } from "@/utils/logging/log";
 import { inTx } from "@/storage/inTx";
 import { type Fastify } from "../../types";
@@ -8,7 +8,7 @@ import { AccountStoredContentUpgradeRequiredV1Schema } from '@happier-dev/protoc
 import {
     enforceProfilePreservingSettingsWriterCompatibilityForHttpRequest,
 } from "@/app/clientCompatibility/accountStoredContentCompatibility";
-import { writeAccountSettingsInTx } from "@/app/accountSettings/writeAccountSettingsInTx";
+import { AccountSettingsPublicationConflict, writeAccountSettingsInTx } from "@/app/accountSettings/writeAccountSettingsInTx";
 import {
     deriveAccountEncryptionCurrentnessFromRow,
 } from "@/app/encryption/accountContentKeyAdmission";
@@ -34,7 +34,7 @@ export function registerAccountSettingsRoutes(app: Fastify): void {
         schema: {
             response: {
                 200: z.object({
-                    settings: z.string().nullable(),
+                    settings: z.nullable(z.string()),
                     settingsVersion: z.number()
                 }),
                 400: z.object({ error: z.literal("plain_account_requires_settings_v2") }),
@@ -94,8 +94,8 @@ export function registerAccountSettingsRoutes(app: Fastify): void {
         bodyLimit: ACCOUNT_SETTINGS_V2_UPDATE_REQUEST_MAX_UTF8_BYTES,
         schema: {
             body: z.object({
-                settings: z.string().nullable(),
-                expectedVersion: z.number().int().min(0)
+                settings: z.nullable(z.string()),
+                expectedVersion: z.number().check(z.int(), z.minimum(0))
             }),
             response: {
                 200: z.union([z.object({
@@ -105,7 +105,7 @@ export function registerAccountSettingsRoutes(app: Fastify): void {
                     success: z.literal(false),
                     error: z.literal('version-mismatch'),
                     currentVersion: z.number(),
-                    currentSettings: z.string().nullable()
+                    currentSettings: z.nullable(z.string())
                 })]),
                 400: z.object({ error: z.literal("plain_account_requires_settings_v2") }),
                 403: PresentUserRequiredResponseSchema,
@@ -133,7 +133,10 @@ export function registerAccountSettingsRoutes(app: Fastify): void {
                 accountId: userId,
                 expectedVersion,
                 next: { kind: "v1", settings },
-            }));
+            })).catch((error: unknown) => {
+                if (error instanceof AccountSettingsPublicationConflict) return error.result;
+                throw error;
+            });
 
             if (result.status === "account_not_found") {
                 return reply.code(500).send({
@@ -283,7 +286,10 @@ export function registerAccountSettingsRoutes(app: Fastify): void {
                     content,
                     ...(admittedRemoteAlertPolicy === undefined ? {} : { remoteAlertPolicy: admittedRemoteAlertPolicy }),
                 },
-            }));
+            })).catch((error: unknown) => {
+                if (error instanceof AccountSettingsPublicationConflict) return error.result;
+                throw error;
+            });
 
             if (result.status === "account_not_found") return reply.code(500).send({ error: "internal" });
             if (result.status === "storage_unavailable") {

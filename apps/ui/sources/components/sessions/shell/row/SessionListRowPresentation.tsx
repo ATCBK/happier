@@ -98,7 +98,9 @@ const styles = StyleSheet.create((theme) => ({
     subtitle: { ...Typography.variant('meta'), color: theme.colors.text.secondary,   },
     subtitleCompact: resolveSessionListRowStatusTextMetrics('compact'),
     subtitleMinimal: resolveSessionListRowStatusTextMetrics('minimal'),
-    trailing: { marginLeft: theme.space.s8, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
+    // The slot yields before the title does: a long status word truncates at two fifths of the row so two Runs or
+    // Sessions with different names never collapse to the same clipped title.
+    trailing: { marginLeft: theme.space.s8, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', flexShrink: 1, minWidth: 0, maxWidth: '40%' },
     // The row's press target: everything left of the trailing slot, the row's full height.
     pressTarget: { flex: 1, minWidth: 0, alignSelf: 'stretch', flexDirection: 'row', alignItems: 'center' },
 }));
@@ -217,3 +219,35 @@ export function SessionListRowSubtitle({ density, readableNativePhoneMinimal, te
         style,
     ]} />;
 }
+
+/**
+ * Content that belongs to the compact row above it (a Bot's readiness in the roster): it starts on the
+ * row's title edge, past the identity mark, so it reads as part of that row rather than a new one.
+ */
+export function SessionListCompactRowFooter(props: Readonly<{
+    children: React.ReactNode;
+    /** The row's divider moves below its footer, so the pair reads as one row. */
+    separator?: boolean;
+    testID?: string;
+}>) {
+    return (
+        <View
+            testID={props.testID}
+            style={[compactRowFooterStyles.footer, props.separator ? compactRowFooterStyles.separator : null]}
+        >
+            {props.children}
+        </View>
+    );
+}
+
+const compactRowFooterStyles = StyleSheet.create((theme) => ({
+    footer: {
+        // The compact row's side border + padding, identity slot and content gap.
+        paddingLeft: 2 + theme.space.s12 + SESSION_LIST_ROW_IDENTITY_METRICS.compact.slotSize + theme.space.s12,
+        paddingRight: 2 + theme.space.s12,
+        // Tucks under the row's own last line instead of starting a new row's rhythm.
+        marginTop: -theme.space.s8,
+        paddingBottom: theme.space.s10,
+    },
+    separator: { borderBottomWidth: 1, borderBottomColor: theme.colors.border.default },
+}));

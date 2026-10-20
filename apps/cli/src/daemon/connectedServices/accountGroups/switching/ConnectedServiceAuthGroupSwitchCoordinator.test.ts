@@ -2498,7 +2498,7 @@ describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
           return { ok: true, mode: 'hot_apply' };
         },
       });
-      const common = { serviceId: 'openai-codex', groupId: 'main', reason: 'usage_limit', observedProfileId: 'primary' };
+      const common = { serviceId: 'openai-codex', groupId: 'main', reason: 'usage_limit' as const, observedProfileId: 'primary' };
       const owner = coordinator.switchAfterClassifiedFailure({
         ...common, sessionId: 'owner', providerLimitId: ownerProviderLimitId, sessionSwitchesThisHour: ownerSwitchesThisHour,
       });

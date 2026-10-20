@@ -14,10 +14,10 @@ import { resolveAbsolutePathFromWorkingDirectory } from '@/utils/path/expandHome
 import type {
   PluginChangeDecision,
   PluginChangeDecisionResult,
-  PluginChangeListResult,
   PluginChangeRequest,
   PluginChangeRequestResult,
   PluginChangeStatusResult,
+  PluginPendingChangeEntry,
   PluginResourceSelection,
 } from './changeContract';
 
@@ -93,7 +93,9 @@ export function describeUserPluginChangeFailure(result: Exclude<UserPluginChange
 
 export type UserPluginChangeStatusResult = PluginChangeStatusResult;
 
-export type UserPluginChangeListResult = PluginChangeListResult;
+export type UserPluginChangeListResult =
+  | Readonly<{ kind: 'available'; changes: readonly PluginPendingChangeEntry[] }>
+  | Readonly<{ kind: 'unavailable'; code: string }>;
 
 export type UserPluginChangeApproval = 'prompt' | 'none' | 'explicitNonInteractiveTrust';
 
@@ -375,11 +377,8 @@ export async function readUserPluginChangeStatus(
 /**
  * Lists the daemon's outstanding plugin-change decisions.
  *
- * This is the discovery half of the rejoin pair: {@link readUserPluginChangeStatus}
- * needs an id the caller already holds, which a client that did not start the
- * change never has. An Agent may prepare a change, but only a present user can
- * decide it, so the decision has to be findable from the app without the Agent
- * handing an id over out of band.
+ * This is internal custody/status discovery. User-facing installation decisions
+ * go through ordinary approval Artifacts and Action policy, not this raw list.
  *
  * Unlike the by-id read it deliberately does NOT start the daemon. Pending
  * changes are in-memory and daemon-lifetime, so a stopped daemon holds none;
@@ -390,10 +389,10 @@ export async function listUserPluginChanges(
   dependencies: Readonly<{
     listChanges?: (
       options?: Readonly<{ signal?: AbortSignal }>,
-    ) => Promise<PluginChangeListResult>;
+    ) => Promise<UserPluginChangeListResult>;
   }> = {},
 ): Promise<UserPluginChangeListResult> {
-  if (input.signal?.aborted) return { changes: [] };
+  if (input.signal?.aborted) return { kind: 'unavailable', code: 'cancelled' };
   const listChanges = dependencies.listChanges ?? listDaemonPluginChanges;
   return input.signal ? await listChanges({ signal: input.signal }) : await listChanges();
 }

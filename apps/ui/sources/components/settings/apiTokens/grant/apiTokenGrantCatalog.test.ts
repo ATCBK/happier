@@ -39,6 +39,27 @@ describe('grant model options', () => {
         expect(provider.description).toBe('OpenRouter · Work');
     });
 
+    it('never offers a native automatic placeholder as a finite grant model', () => {
+        const providerDefault = ref({ agentTargetKey: AGENT, providerConnectionId: 'conn_default', modelId: 'default' });
+        const options = buildApiTokenGrantModelOptions({
+            agentTargetKey: AGENT,
+            nativeModels: [
+                { id: 'default', name: 'Default' },
+                { id: 'claude-sonnet-4-5', name: 'Claude Sonnet' },
+            ],
+            providerGroups: [{ ...OPENROUTER, rows: [{
+                ref: providerDefault,
+                descriptor: { id: providerDefault.modelId, name: 'Provider default' },
+            }] }],
+            granted: null,
+        });
+
+        expect(options.map((option) => option.ref)).toEqual([
+            { agentTargetKey: AGENT, providerConnectionId: null, modelId: 'claude-sonnet-4-5' },
+            providerDefault,
+        ]);
+    });
+
     it('keeps a granted model this computer does not offer, so it can still be seen and removed', () => {
         const missing = ref({ agentTargetKey: AGENT, providerConnectionId: 'conn_gone', modelId: 'old-model' });
         const options = buildApiTokenGrantModelOptions({

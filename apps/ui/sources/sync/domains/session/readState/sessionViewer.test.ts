@@ -1,4 +1,19 @@
 import { describe, expect, it } from 'vitest';
+import { resolveSessionPersonalAttentionForViewer } from './sessionViewerAttention';
+import { createSessionFixture, createSessionAccessFixture, createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+
+it('admits only the fulfilled one-shot request still present at the real request owner', () => {
+    const session = createSessionFixture({ active: true, access: createSessionAccessFixture('edit'),
+        viewer: createSessionViewerFixture({ follow: { follows: false, notificationLevel: 'none',
+            onceDelivery: { event: 'user_action_required', requestId: 'once-request', agentStateVersion: 1 } } }),
+        agentState: { requests: { 'once-request': { kind: 'user_action', tool: 'AskUserQuestion', arguments: {}, createdAt: 1 } } },
+    });
+    expect(resolveSessionPersonalAttentionForViewer(session, 2).primary).toBe('user_action_required');
+    expect(isSessionPersonallyTrackedForViewer(session)).toBe(false);
+    expect(resolveSessionPersonalAttentionForViewer({ ...session, agentState: { requests: {
+        'later-request': { kind: 'user_action', tool: 'AskUserQuestion', arguments: {}, createdAt: 2 },
+    } } }, 3).needsAttention).toBe(false);
+});
 
 import {
     hasUnreadActivityForSessionViewer,

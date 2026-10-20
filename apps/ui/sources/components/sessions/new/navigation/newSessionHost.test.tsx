@@ -44,9 +44,31 @@ describe('newSessionHost', () => {
         expect(surface.demanded).toBe(true);
         expect(surface.navigation.embedded).toBe(false);
 
-        surface.navigation.openDraft({ draftId: 'next', draftOrigin: 'ordinary' }, 'replace');
+        surface.navigation.openDraft({ draftId: 'next', draftOrigin: 'ordinary' });
         expect(routeBoundary.replace).toHaveBeenCalledWith({ pathname: '/new', params: { draftId: 'next', draftOrigin: 'ordinary' } });
         await hook.unmount();
+    });
+
+    it('starts another draft in the current New Session route without stacking dialogs', async () => {
+        const routes: unknown[] = ['/session/existing', {
+            pathname: '/new', params: { draftId: 'route-draft' },
+        }];
+        // Expo navigation is the external boundary: model its retained route stack.
+        routeBoundary.push.mockImplementation((href: unknown) => { routes.push(href); });
+        routeBoundary.replace.mockImplementation((href: unknown) => { routes[routes.length - 1] = href; });
+        const hook = await renderHook(useHostSurface);
+        try {
+            hook.getCurrent().navigation.openDraft({ draftId: 'fresh-1', draftOrigin: 'ordinary' });
+            hook.getCurrent().navigation.openDraft({ draftId: 'fresh-2', draftOrigin: 'ordinary' });
+
+            expect(routes).toEqual(['/session/existing', {
+                pathname: '/new', params: { draftId: 'fresh-2', draftOrigin: 'ordinary' },
+            }]);
+        } finally {
+            routeBoundary.push.mockReset();
+            routeBoundary.replace.mockReset();
+            await hook.unmount();
+        }
     });
 
     it('embedded, keeps params in the host, pushes the created session and reports the hand-off', async () => {
@@ -84,7 +106,7 @@ describe('newSessionHost', () => {
         expect(routeBoundary.replace).not.toHaveBeenCalled();
         expect(onHandedOff).toHaveBeenCalledOnce();
 
-        surface.navigation.openDraft({ draftId: 'fresh', draftOrigin: 'ordinary' }, 'push');
+        surface.navigation.openDraft({ draftId: 'fresh', draftOrigin: 'ordinary' });
         expect(openDraft).toHaveBeenCalledWith({ draftId: 'fresh', draftOrigin: 'ordinary' });
         expect(routeBoundary.push).toHaveBeenCalledTimes(1);
         await hook.unmount();

@@ -3,6 +3,8 @@ import { configDefaults, defineConfig } from 'vitest/config';
 import { resolve } from 'node:path';
 
 import dotenv from 'dotenv';
+import { fileURLToPath } from 'node:url';
+import { createTestHomeEnvironment } from '../../scripts/testing/testHomeEnvironment.mjs';
 import { resolveVitestFeatureTestExcludeGlobs } from '../../scripts/testing/featureTestGating';
 
 const testEnv = dotenv.config({
@@ -16,9 +18,10 @@ export default defineConfig({
     environment: 'node',
     testTimeout: 30_000,
     hookTimeout: 30_000,
-    setupFiles: ['./src/configureZodLocale.ts'],
+    setupFiles: [fileURLToPath(new URL('../../scripts/testing/vitestHomeSetup.mjs', import.meta.url)), './src/configureZodLocale.ts', './src/vitestHomeGuard.ts'],
+    sequence: { setupFiles: 'list' },
     include: ['src/**/*.slow.test.ts'],
-    exclude: [...configDefaults.exclude, ...resolveVitestFeatureTestExcludeGlobs({ ...process.env, ...testEnv })],
+    exclude: [...configDefaults.exclude, '**/._*', ...resolveVitestFeatureTestExcludeGlobs({ ...process.env, ...testEnv })],
     globalSetup: ['./src/test-setup.slow.ts'],
     coverage: {
       provider: 'v8',
@@ -35,6 +38,7 @@ export default defineConfig({
       ...process.env,
       ...testEnv,
       HAPPIER_FEATURE_POLICY_ENV: '',
+      ...createTestHomeEnvironment().env,
     },
   },
   resolve: {

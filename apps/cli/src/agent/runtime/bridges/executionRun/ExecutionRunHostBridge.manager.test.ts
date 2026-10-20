@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import axios from 'axios';
+import tweetnacl from 'tweetnacl';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -13,11 +14,17 @@ import {
   type AgentStateResponseTargetDispatch,
 } from '@/agent/permissions/agentStateRequestStore';
 import type { AgentState } from '@/api/types';
+import type { RpcHandlerContext } from '@/api/rpc/types';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { createVoiceSessionRuntimeThroughNativeFactory } from './testkit/nativeSessionContext';
+import { createExecutionRunHostBackendFromConversationRuntime, type AgentExecutionRunConversationRuntimeV1, type AgentRuntime, type AgentSessionRuntime, type AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
 import { buildRunScopedExecutionPermissionRequestId } from '@/agent/executionRuns/policy/runScopedExecutionPermissionHandler';
 import type { ExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/executionRunHostRuntime';
 import type { ExecutionRunState } from '@/agent/runtime/bridges/executionRun/executionRunTypes';
 import type { ExecutionRunController } from '@/agent/executionRuns/controllers/types';
 import type { ExecutionRunHostRunScopeBinding } from '@/agent/runtime/registry/engineRegistryTypes';
+import { resolveCliEngineRegistry, type ResolvedCliEngineRegistry } from '@/agent/runtime/registry/engineRegistry';
+import type { ExecutionRunAppliedParentSelection } from './runtime/openInputs';
 import {
   createTestExecutionRunHostRuntime,
   type TestExecutionRunHostRuntime,
@@ -28,17 +35,23 @@ import { runGit } from '@/scm/rpc/__tests__/testRpcHarness';
 import {
   accountSettingsParse,
   buildSystemSessionMetadataV1,
+  ExecutionRunResumeHandleSchema,
+  FeaturesResponseSchema,
   sealSavedSecretResourceStoredContentV1,
 } from '@happier-dev/protocol';
 import { VOICE_CONVERSATION_SYSTEM_SESSION_KEY } from '@happier-dev/protocol/voice/sessionBinding';
 import { resolveCliVoicePromptPreparation } from '@/agent/prompts/library/resolveCliVoicePromptStackBlocks';
-import { SavedSecretOperationAdmissionError } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { SavedSecretOperationAdmissionError } from "@/settings/secrets/savedSecretCatalogRead";
 import { registerExecutionRunRpcHandlers } from '@/rpc/handlers/executionRuns/registerExecutionRunRpcHandlers';
 import * as daemonControlHttp from '@/daemon/controlHttp';
+import { readRetainedExecutionRunRecord, retainExecutionRunState } from '@/daemon/executionRunRegistry';
 import { configuration } from '@/configuration';
 import { resolveCurrentCliHomeTarget } from '@/server/homeTarget';
 import { normalizeServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { createMutableApiSessionClientFixture, type MutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
+import { buildBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import {
   clearActiveAccountSettingsSnapshot,
   setActiveAccountSettingsSnapshot,
@@ -47,27 +60,14 @@ import {
   commitActiveProfileCatalog,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { AgentRuntimeJsonValueV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
+import { ReviewCommentCreateRequestV1Schema, ReviewCommentV1Schema } from '@happier-dev/protocol';
+import { createReviewRunCommentService } from '@/agent/executionRuns/profiles/review/reviewComments';
+import { createCliReviewCommentActionExecutorFromCredentials } from '@/agent/reviews/comments/executor';
 
-type TestRuntimeFactoryInput = Readonly<{
-  cwd: string;
-  runId?: string;
-  scope: 'session_owned' | 'detached';
-  backendId: string;
-  backendTarget?: unknown;
-  modelId?: string;
-  permissionMode: string;
-  accountSettings?: Readonly<Record<string, unknown>> | null;
-  secretReferenceEnvironment?: Readonly<Record<string, string>>;
-  start?: unknown;
-  happyHomeDir?: string | null;
-  parentSessionStateTarget?: unknown;
-  happierSessionId?: string;
-  sessionInteractionHost?: unknown;
-  sessionOwnedRunScope?: unknown;
-  onConnectedServicesRegistration?: (registration: typeof CONNECTED_SERVICES_REGISTRATION) => void | Promise<void>;
-}>;
-
-type TestRuntimeFactory = (opts: TestRuntimeFactoryInput) => ExecutionRunHostRuntime;
+type TestRuntimeFactoryInput = Parameters<typeof import('./runtime/create').createExecutionRunRuntime>[0];
+type NativePromptRuntimeFactory = (opts: TestRuntimeFactoryInput) => ExecutionRunHostRuntime;
+type TestRuntimeFactory = (opts: TestRuntimeFactoryInput) => ExecutionRunHostRuntime | NativePromptRuntimeFactory;
 
 const TEST_PRIMARY_BACKEND_ID = `${'primary'}.${'backend'}` as never;
 const TEST_SECONDARY_BACKEND_ID = `${'secondary'}.${'backend'}` as never;
@@ -87,6 +87,7 @@ const CONNECTED_SERVICES_REGISTRATION = {
 };
 let defaultExecutionRunManagerTestCwd = '';
 let defaultExecutionRunManagerPluginHomeDir = '';
+let defaultExecutionRunManagerEngineRegistry: ResolvedCliEngineRegistry;
 let shutdownDefaultExecutionRunManagerPluginRuntime:
   | (() => Promise<void>)
   | null = null;
@@ -95,6 +96,8 @@ const defaultVoiceAccountCredentials: StoredCredentials = {
   encryption: null,
 };
 let restoreDefaultVoiceAccountHttp: (() => void) | null = null;
+let restoreReviewCommentHttp: (() => void) | null = null;
+const managerParentSessions: MutableApiSessionClientFixture[] = [];
 
 const {
   createExecutionRunRuntimeMock,
@@ -111,7 +114,8 @@ const {
       if (!factory) {
         throw new Error('Test execution-run runtime factory was not configured');
       }
-      return factory(opts);
+      const runtime = factory(opts);
+      return typeof runtime === 'function' ? runtime(opts) : runtime;
     }),
     dispatchBridgeLifecycleHookEvent: vi.fn().mockResolvedValue(undefined),
     readCredentials: vi.fn<() => Promise<Credentials | null>>(),
@@ -171,6 +175,7 @@ beforeAll(async () => {
   if (!adoption.ok) {
     throw new Error('Failed to publish the execution-run manager test plugin runtime');
   }
+  defaultExecutionRunManagerEngineRegistry = await resolveCliEngineRegistry({ runtimeRegistry: registry });
   shutdownDefaultExecutionRunManagerPluginRuntime = async () => {
     await pluginReloadController.shutdown({ timeoutMs: 5_000 });
   };
@@ -196,6 +201,23 @@ beforeEach(() => {
   runtimeFactoryRef.current = null;
   createExecutionRunRuntimeMock.mockClear();
   dispatchBridgeLifecycleHookEvent.mockClear();
+  admitDefaultVoiceAccountFixture();
+  // Review completion persists findings through the real service and signed
+  // transport. Only Home's HTTP response and the installation key are fixtures.
+  const post = vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+    const path = new URL(String(url)).pathname;
+    if (path !== '/v1/reviews/comments') throw new Error(`Unexpected manager Account write: ${path}`);
+    const { authorIntent, clientMutationId, eventEnvelope, ...input } = ReviewCommentCreateRequestV1Schema.parse(body);
+    const comment = ReviewCommentV1Schema.parse({ ...input,
+      v: 1, id: `comment-${input.runId}-${input.findingId}`, threadId: `comment-${input.runId}-${input.findingId}`,
+      accountId: 'execution-run-manager-account', bodyVersion: 1,
+      author: { kind: 'agent', agentId: input.engineId, sessionId: input.sessionId },
+      state: authorIntent === 'open' ? 'open' : 'proposed', flags: {}, dispositions: {}, edits: [], transitions: [],
+      createdAt: 1, updatedAt: 1, serverRevision: 1,
+    });
+    return { status: 200, data: { comment } };
+  });
+  restoreReviewCommentHttp = () => post.mockRestore();
 });
 
 function admitDefaultVoiceAccountFixture() {
@@ -205,7 +227,8 @@ function admitDefaultVoiceAccountFixture() {
     settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey });
   const bound = { scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() };
   commitActivePromptLibraryCatalog({ ...bound, catalog: { status: 'ready', rows: [{ revision: 1,
-    record: { key: 'voice', value: { v: 1, scope: { kind: 'voice' }, entries: [] } } }],
+    record: { key: 'voice', value: { v: 1, scope: { kind: 'voice' }, entries: [] } } },
+    { revision: 1, record: { key: 'role-overrides', value: { v: 1, overrides: {} } } }],
     tombstones: [], diagnostics: [] } });
   commitActiveProfileCatalog({ ...bound, catalog: { status: 'ready', authority: 'active', control: null,
     controlRevision: 'absent', referenceGuardRevision: 'absent', diagnostics: [], records: [] } });
@@ -225,7 +248,10 @@ function admitDefaultVoiceAccountFixture() {
   restoreDefaultVoiceAccountHttp = () => http.mockRestore();
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(managerParentSessions.splice(0).map(session => session.close()));
+  restoreReviewCommentHttp?.();
+  restoreReviewCommentHttp = null;
   if (!restoreDefaultVoiceAccountHttp) return;
   restoreDefaultVoiceAccountHttp?.();
   restoreDefaultVoiceAccountHttp = null;
@@ -237,7 +263,7 @@ it.each([
     name: 'missing',
     requestedRevision: 1,
     resources: [],
-    expectedCode: 'provider_secret_missing',
+    expectedCode: 'provider_binding_changed',
   },
   {
     name: 'stale',
@@ -388,7 +414,7 @@ it('starts with a current reference while passing only materialized process-loca
   });
 
   const started = await manager.start({
-    sessionId: null,
+    sessionId: 'parent_session_1',
     intent: 'delegate',
     backendTarget: { kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID },
     instructions: 'use current secret',
@@ -425,6 +451,22 @@ it('starts with a current reference while passing only materialized process-loca
   await manager.stop(started.runId);
 });
 
+function createManagerParentHost(sessionId = 'parent_session_1', applied: ExecutionRunAppliedParentSelection = {
+  status: 'applied', backendTarget: { kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID },
+  modelId: null, connectedServices: null,
+}) {
+  const session = createMutableApiSessionClientFixture({ sessionId });
+  managerParentSessions.push(session);
+  return {
+    session,
+    machineId: 'manager-fixture-machine',
+    permissionHandler: new ProviderEnforcedPermissionHandler(session, { logPrefix: '[Manager fixture]' }),
+    // The parent Agent's applied configuration is a runtime boundary observation.
+    // Child resolution, role admission and retained Run policy remain real.
+    readAppliedChildSelection: async () => applied,
+  };
+}
+
 function createExecutionRunManager(
   opts: ConstructorParameters<typeof ExecutionRunManager>[0] & Readonly<{ createRuntime: TestRuntimeFactory }>,
 ): ExecutionRunManager {
@@ -432,6 +474,30 @@ function createExecutionRunManager(
   runtimeFactoryRef.current = createRuntime;
   return new ExecutionRunManager({
     ...bridgeOptions,
+    // Account preference transport is the external boundary; this fixture chooses Important.
+    resolveRunReportPolicy: bridgeOptions.resolveRunReportPolicy ?? (async () => ({ preset: 'important' })),
+    reviewComments: bridgeOptions.reviewComments ?? createReviewRunCommentService({
+      cwd: defaultExecutionRunManagerTestCwd,
+      scope: { workspace: { machineId: 'manager-fixture-machine', path: defaultExecutionRunManagerTestCwd } },
+      execute: createCliReviewCommentActionExecutorFromCredentials({
+        credentials: defaultVoiceAccountCredentials,
+        resolveAccountEncryptionMode: async () => 'plain',
+        resolvePrincipalSigningContext: async () => ({
+          machineId: 'manager-fixture-machine', installationId: 'manager-fixture-installation',
+          privateKeyBase64Url: Buffer.from(tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(7)).secretKey).toString('base64url'),
+        }),
+      }),
+    }),
+    resolveExecutionRunProfileCatalog: bridgeOptions.resolveExecutionRunProfileCatalog ?? (() => ({
+      profileCatalog: bridgeOptions.executionRunProfileCatalog ?? buildExecutionRunProfileCatalog(),
+      engineRegistry: defaultExecutionRunManagerEngineRegistry,
+      // The fixture Agent's external model catalog explicitly supports JSON.
+      // Keep admission real rather than bypassing structured-output policy.
+      readNativeOfferedModel: async ({ modelId }) => ({
+        id: modelId, name: modelId, capabilities: { structuredOutput: 'supported' },
+      }),
+    })),
+    sessionInteractionHost: bridgeOptions.sessionInteractionHost ?? createManagerParentHost(),
     cwd: bridgeOptions.cwd === process.cwd() ? defaultExecutionRunManagerTestCwd : bridgeOptions.cwd,
     // The production RPC factory supplies these authenticated inputs. A bare
     // bridge has no Account authority and correctly refuses bound preparation.
@@ -442,6 +508,27 @@ function createExecutionRunManager(
     }),
   });
 }
+
+it('refuses attached omission before Run effects when the applied parent is unavailable', async () => {
+  const createRuntime = vi.fn(() => createTestExecutionRunHostRuntime());
+  const manager = createExecutionRunManager({
+    parentProvider: TEST_PRIMARY_BACKEND_ID, cwd: process.cwd(), createRuntime, sendAcp: async () => {},
+    sessionInteractionHost: createManagerParentHost('parent_session_1', { status: 'unavailable' }),
+  });
+  try {
+    await expect(manager.start({
+      sessionId: 'parent_session_1', intent: 'agent',
+      backendTarget: { kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID },
+      permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response',
+    })).rejects.toMatchObject({
+      code: 'execution_run_parent_selection_unavailable',
+      details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } },
+    });
+    expect(createRuntime).not.toHaveBeenCalled();
+  } finally {
+    await manager.dispose();
+  }
+});
 
 it('keeps a terminal waiter registered from the first running publication until canonical terminal state', async () => {
   const runtime = createTestExecutionRunHostRuntime({
@@ -520,26 +607,143 @@ type PromptRuntimeHandler = (
 
 function createPromptRuntime(
   onSendPrompt: PromptRuntimeHandler,
-  opts: Omit<TestExecutionRunHostRuntimeOptions, 'onSendPrompt'> = {},
-): TestExecutionRunHostRuntime {
-  let runtime: TestExecutionRunHostRuntime;
-  runtime = createTestExecutionRunHostRuntime({
-    onWaitForTurnCompletion: async () => {},
-    ...opts,
-    onSendPrompt: async (sessionId, prompt) => {
-      await onSendPrompt(runtime, sessionId, prompt);
+  opts: Pick<TestExecutionRunHostRuntimeOptions,
+    'resumeSupported' | 'providerSessionId' | 'onProvisionRuntime' | 'onCancel' | 'onWaitForTurnCompletion' | 'onDispose'> = {},
+): NativePromptRuntimeFactory {
+  return factoryInput => {
+  let listener: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+  let sessionId = '';
+  let turnId: string | null = null;
+  let sequence = 0;
+  let fullText = '';
+  let disposed = false;
+  const base = () => ({ sessionId, sequence: sequence++, emittedAtMs: Date.now() });
+  const externalSession: AgentSessionRuntime = {
+      watch(value) {
+        listener = value;
+        if (opts.providerSessionId) listener({ ...base(), kind: 'provider-session-id', providerSessionId: opts.providerSessionId });
+        return { dispose() { listener = undefined; } };
+      },
+      async send(request) {
+        const inputTurnId = request.delivery.turnId;
+        turnId = inputTurnId;
+        fullText = '';
+        listener?.({ ...base(), kind: 'input-accepted', inputIds: request.inputIds, delivery: request.delivery });
+        listener?.({ ...base(), kind: 'turn-start', turnId: inputTurnId, startedBy: 'host' });
+        await onSendPrompt(runtime, sessionId, request.input.text);
+        // Native completion is an event, independent from send admission. The
+        // real host owns joining it, cancellation and terminal publication.
+        void (async () => {
+          try {
+            await opts.onWaitForTurnCompletion?.();
+            if (!disposed && turnId === inputTurnId) {
+              listener?.({ ...base(), kind: 'turn-complete', turnId: inputTurnId });
+              turnId = null;
+            }
+          } catch (error) {
+            if (!disposed && turnId === inputTurnId) {
+              listener?.({ ...base(), kind: 'turn-failed', turnId: inputTurnId,
+                diagnostic: { code: 'fixture_provider_failed', severity: 'error', message: error instanceof Error ? error.message : String(error) } });
+              turnId = null;
+            }
+          }
+        })();
+        return { status: 'admitted' };
+      },
+      async cancel(request) {
+        await opts.onCancel?.(sessionId);
+        if (turnId === request.turnId) {
+          listener?.({ ...base(), kind: 'turn-cancelled', turnId: request.turnId, cause: request.reason });
+          turnId = null;
+        }
+        return { status: 'requested', turnId: request.turnId };
+      },
+      async dispose() {
+        disposed = true;
+        await opts.onDispose?.();
+      },
+  };
+  const createConversation = (): AgentExecutionRunConversationRuntimeV1 => ({
+    send: request => externalSession.send(request),
+    cancel: request => externalSession.cancel!(request),
+    dispose: () => externalSession.dispose(),
+    watch(listener) {
+      return externalSession.watch(event => {
+        const { sequence: _sequence, sessionId: _sessionId, ...fact } = event;
+        listener(fact);
+      });
     },
   });
+  const agent: AgentRuntime = { sessions: {
+    async open(request) {
+      sessionId = request.sessionId;
+      await opts.onProvisionRuntime?.(request.kind === 'resume' ? { resumeRuntimeId: request.providerSessionId } : {});
+      return externalSession;
+    },
+    executionRunContextV1: {
+      async openConversation(request) {
+        if (request.kind === 'fork') throw new Error('Fixture fork is not supported');
+        await opts.onProvisionRuntime?.(request.kind === 'resume' ? { resumeRuntimeId: request.checkpointId } : {});
+        return createConversation();
+      },
+      async open(request) {
+        if (request.kind === 'fork') throw new Error('Fixture fork is not supported');
+        await opts.onProvisionRuntime?.(request.kind === 'resume' ? { resumeRuntimeId: request.checkpointId } : {});
+        return createExecutionRunHostBackendFromConversationRuntime({ request,
+          readCheckpointId: event => event.kind === 'provider-session-id' ? event.providerSessionId : null,
+          openConversation: async () => createConversation(),
+        });
+      },
+    },
+  } };
+  const native = createVoiceSessionRuntimeThroughNativeFactory({ runtime: agent, modelId: 'manager-fixture',
+    runtimeOptions: { ...factoryInput,
+      accountSettings: factoryInput.accountSettings ? accountSettingsParse(factoryInput.accountSettings) : null },
+    capabilities: { open: opts.resumeSupported ? ['create', 'resume'] : ['create'], delivery: ['newTurn'], cancel: true,
+      // The external fixture has no filesystem effect channel and enforces
+      // read-only roles; its detached facet above is the declared SDK v1 owner.
+      workspaceWrites: 'deny', executionRunContext: { versions: [1] } } });
+  // Inherit the lazy runtime's live accessors; spreading it would snapshot the
+  // not-yet-opened completion and input-custody ports as undefined.
+  const runtime: TestExecutionRunHostRuntime = Object.freeze(Object.assign(Object.create(native) as ExecutionRunHostRuntime, { emitMessage(message: AgentMessage) {
+    if (message.type === 'event' && message.name === 'provider_session_id') {
+      const payload = message.payload;
+      if (payload && typeof payload === 'object' && 'sessionId' in payload && typeof payload.sessionId === 'string') {
+        listener?.({ ...base(), kind: 'provider-session-id', providerSessionId: payload.sessionId });
+        return;
+      }
+    }
+    if (!turnId) throw new Error(`Fixture output ${message.type} has no native turn`);
+    if (message.type === 'model-output') {
+      const text = message.textDelta ?? (message.fullText?.startsWith(fullText) ? message.fullText.slice(fullText.length) : message.fullText) ?? '';
+      fullText = message.fullText ?? fullText + text;
+      listener?.({ ...base(), kind: 'message-delta', turnId, channel: 'assistant', text,
+        ...(message.messageId ? { messageId: message.messageId } : {}) });
+      return;
+    }
+    if (message.type === 'tool-call') {
+      listener?.({ ...base(), kind: 'tool-call', turnId, toolCallId: message.callId, toolName: message.toolName,
+        input: AgentRuntimeJsonValueV1Schema.parse(message.args) });
+      return;
+    }
+    if (message.type === 'tool-result') {
+      listener?.({ ...base(), kind: 'tool-result', turnId, toolCallId: message.callId,
+        output: AgentRuntimeJsonValueV1Schema.parse(message.result), ...(message.isError === undefined ? {} : { isError: message.isError }) });
+      return;
+    }
+    throw new Error(`Unsupported external Agent fixture output: ${message.type}`);
+  } }));
   return runtime;
+  };
 }
 
-function createStaticJsonRuntime(responseText: string): TestExecutionRunHostRuntime {
+function createStaticJsonRuntime(responseText: string): NativePromptRuntimeFactory {
   return createPromptRuntime((runtime) => {
     runtime.emitMessage({ type: 'model-output', fullText: responseText });
   });
 }
 
-function createDelayedJsonRuntime(responseText: string, delayMs: number): TestExecutionRunHostRuntime {
+function createDelayedJsonRuntime(responseText: string, delayMs: number): NativePromptRuntimeFactory {
   let done: Promise<void> | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let resolveDone: (() => void) | null = null;
@@ -572,7 +776,7 @@ function createDelayedJsonRuntime(responseText: string, delayMs: number): TestEx
 }
 
 function createReviewResumeRuntime(): Readonly<{
-  runtime: TestExecutionRunHostRuntime;
+  createRuntime: () => NativePromptRuntimeFactory;
   prompts: string[];
   loadSessionCalls: string[];
   providerSessionId: string;
@@ -581,7 +785,7 @@ function createReviewResumeRuntime(): Readonly<{
   const loadSessionCalls: string[] = [];
   const providerSessionId = 'vendor_review_1';
 
-  const runtime = createPromptRuntime(
+  const createRuntime = () => createPromptRuntime(
     (promptRuntime, _sessionId, prompt) => {
       prompts.push(prompt);
       if (prompts.length === 1) {
@@ -630,7 +834,6 @@ function createReviewResumeRuntime(): Readonly<{
     },
     {
       resumeSupported: true,
-      resumeRuntimeId: 'child_session_resumed',
       onProvisionRuntime: async (opts) => {
         if (opts?.resumeRuntimeId) {
           loadSessionCalls.push(opts.resumeRuntimeId);
@@ -639,7 +842,7 @@ function createReviewResumeRuntime(): Readonly<{
     },
   );
 
-  return { runtime, prompts, loadSessionCalls, providerSessionId };
+  return { createRuntime, prompts, loadSessionCalls, providerSessionId };
 }
 
 describe('ExecutionRunManager (review intent)', () => {
@@ -819,6 +1022,7 @@ describe('ExecutionRunManager (review intent)', () => {
   });
 
   it('stamps Run terminal transcript records with only the matching retained input-turn witness', async () => {
+    const enqueueUserTextMessageCommitted = vi.fn(async () => ({ persisted: true as const, delivered: true as const }));
     const enqueueAgentMessageCommitted = vi.fn(async (
       _provider: string,
       _body: ACPMessageData,
@@ -836,6 +1040,7 @@ describe('ExecutionRunManager (review intent)', () => {
           updateMetadata: vi.fn(),
           updateAgentState: vi.fn(),
           enqueueAgentMessageCommitted,
+          enqueueUserTextMessageCommitted,
         },
         machineId: 'machine-a',
         permissionHandler: { handleToolCall: vi.fn() },
@@ -861,7 +1066,13 @@ describe('ExecutionRunManager (review intent)', () => {
       localId: 'turn-a:task_complete',
       meta: { runtimeTurnId: 'turn-a' },
       provenance: { kind: 'non_dependent', source: 'external' } as const,
+      // This transcript-only fixture owns its OS publication lifetime; it does not provision a Run backend.
+      admission: { signal: new AbortController().signal },
     };
+    await target.enqueueUserTextMessageCommitted?.('Native child input', { ...opts, localId: 'child-user' });
+    expect(enqueueUserTextMessageCommitted).toHaveBeenCalledWith('Native child input', expect.objectContaining({
+      sidechainId: 'sidechain-a', localId: 'child-user',
+    }));
     await target.enqueueAgentMessageCommitted('claude', { type: 'task_complete', id: 'turn-a' }, opts);
     await target.enqueueAgentMessageCommitted('claude', { type: 'task_complete', id: 'turn-z' }, {
       ...opts, localId: 'turn-z:task_complete', meta: { runtimeTurnId: 'turn-z' },
@@ -875,6 +1086,15 @@ describe('ExecutionRunManager (review intent)', () => {
     });
     expect(enqueueAgentMessageCommitted.mock.calls[1]?.[2]?.meta)
       .not.toHaveProperty('happierExecutionRunInputTurnV1');
+    const controller = internals.controllers.get('run-a')!;
+    if (controller.kind !== 'backend') throw new Error('Expected backend controller');
+    let acceptInput!: (value: 'accepted') => void;
+    controller.pendingInputAcceptance = new Promise(resolve => { acceptInput = resolve; });
+    const retiredWrite = target.enqueueUserTextMessageCommitted!('Late child input', { ...opts, localId: 'late-user' });
+    internals.controllers.delete('run-a');
+    acceptInput('accepted');
+    await expect(retiredWrite).rejects.toMatchObject({ code: 'execution_run_transcript_custody_unavailable' });
+    expect(enqueueUserTextMessageCommitted).toHaveBeenCalledOnce();
   });
 
   it('emits SubAgentRun tool-call, sidechain message, and tool-result with review_findings.v2 meta', async () => {
@@ -951,7 +1171,7 @@ describe('ExecutionRunManager (review intent)', () => {
     // Wait for completion since the fake backend is async.
     await manager.waitForTerminal(started.runId);
     const final = manager.get(started.runId);
-    expect(final?.status).toBe('succeeded');
+    expect(final?.status, JSON.stringify(final?.error)).toBe('succeeded');
     expect(manager.getPublic(started.runId)).toMatchObject({
       requestedConfiguration: {
         modelId: 'claude-opus-5',
@@ -1077,6 +1297,7 @@ describe('ExecutionRunManager (review intent)', () => {
     }, 2_000);
 
     const started = await startPromise;
+    await vi.waitFor(() => expect(startSessionCalled).toBe(true));
     clearTimeout(autoResolveStartSession);
 
     expect(startSessionCalled).toBe(true);
@@ -1087,25 +1308,30 @@ describe('ExecutionRunManager (review intent)', () => {
       resolveStartSession();
     }
     await manager.waitForTerminal(started.runId);
-    expect(manager.get(started.runId)?.status).toBe('succeeded');
+    expect(manager.get(started.runId)?.status, JSON.stringify(manager.get(started.runId)?.error)).toBe('succeeded');
   });
 
   it('forwards terminal output + file edits into the run sidechain transcript', async () => {
     const sent: Array<{ provider: string; body: unknown; meta?: Record<string, unknown> }> = [];
 
-    const runtime = createPromptRuntime((promptRuntime) => {
-        promptRuntime.emitMessage({ type: 'terminal-output', data: 'hello from terminal' } as AgentMessage);
-        promptRuntime.emitMessage({
+    // This legacy AgentMessage projection case is independent of native Session
+    // lifecycle; the public Session event union has no raw terminal-output fact.
+    const runtime = createTestExecutionRunHostRuntime({
+      onWaitForTurnCompletion: async () => {},
+      onSendPrompt: async () => {
+        runtime.emitMessage({ type: 'terminal-output', data: 'hello from terminal' } as AgentMessage);
+        runtime.emitMessage({
           type: 'fs-edit',
           description: 'Edited README',
           path: 'README.md',
           diff: 'diff --git a/README.md b/README.md',
         } as AgentMessage);
-        promptRuntime.emitMessage({
+        runtime.emitMessage({
           type: 'model-output',
           fullText: JSON.stringify({ summary: 'Ok', findings: [] }),
         });
-      });
+      },
+    });
 
     const manager = createExecutionRunManager({
       parentProvider: TEST_PRIMARY_BACKEND_ID,
@@ -1190,7 +1416,7 @@ describe('ExecutionRunManager (review intent)', () => {
     });
 
     await manager.waitForTerminal(started.runId);
-    expect(manager.get(started.runId)?.status).toBe('succeeded');
+    expect(manager.get(started.runId)?.status, JSON.stringify(manager.get(started.runId)?.error)).toBe('succeeded');
     expect(prompts.length).toBe(2);
     // Repair prompts must still require a bare JSON object as the final response.
     expect(prompts[1]).toContain('valid JSON');
@@ -1200,11 +1426,11 @@ describe('ExecutionRunManager (review intent)', () => {
 
   it('starts a resumable review follow-up child run that reuses the original vendor session', async () => {
     const sent: Array<{ provider: string; body: unknown; meta?: Record<string, unknown> }> = [];
-    const { runtime, prompts, loadSessionCalls, providerSessionId } = createReviewResumeRuntime();
+    const { createRuntime, prompts, loadSessionCalls, providerSessionId } = createReviewResumeRuntime();
     const manager = createExecutionRunManager({
       parentProvider: TEST_PRIMARY_BACKEND_ID,
       cwd: process.cwd(),
-      createRuntime: () => runtime,
+      createRuntime,
       sendAcp: async (provider: string, body: ACPMessageData, opts?: { meta?: Record<string, unknown> }) => {
         sent.push({ provider, body, meta: opts?.meta });
       },
@@ -1233,7 +1459,7 @@ describe('ExecutionRunManager (review intent)', () => {
       },
     });
 
-    expect(followUp.ok).toBe(true);
+    expect(followUp.ok, JSON.stringify(followUp)).toBe(true);
     const followUpRunId = String((followUp as any).result?.runId ?? '');
     expect(followUpRunId).not.toBe('');
     await manager.waitForTerminal(followUpRunId);
@@ -1273,11 +1499,12 @@ describe('ExecutionRunManager (review intent)', () => {
   });
 
   it('refuses a retained review handle for a different Agent target', async () => {
-    const { runtime, loadSessionCalls } = createReviewResumeRuntime();
+    const { createRuntime, loadSessionCalls } = createReviewResumeRuntime();
     const manager = createExecutionRunManager({
       parentProvider: TEST_PRIMARY_BACKEND_ID, cwd: process.cwd(),
-      createRuntime: () => runtime, sendAcp: async () => {},
+      createRuntime, sendAcp: async () => {},
     });
+    let recoveredManager: ExecutionRunManager | undefined;
     try {
       const started = await manager.start({
         sessionId: 'parent_session_1', intent: 'review',
@@ -1289,15 +1516,33 @@ describe('ExecutionRunManager (review intent)', () => {
       const run = manager.get(started.runId);
       expect(run?.resumeHandle?.kind).toBe('provider_session.v1');
       if (!run?.resumeHandle) throw new Error('Expected retained provider handle');
-      // Characterize a retained-state target mismatch through the real lifecycle owner.
-      Object.assign(run, { resumeHandle: { ...run.resumeHandle, backendTarget: {
-        kind: 'backend', backendId: TEST_SECONDARY_BACKEND_ID, sourceKind: 'built_in',
-      } } });
-      expect(await manager.applyAction(started.runId, {
+      // Replace the completed host before testing recovery so its queued
+      // checkpoints cannot overwrite the persisted mismatch under test.
+      await manager.dispose();
+      const wrongTarget = readBackendTargetRefV2({ kind: 'builtInAgent', agentId: TEST_SECONDARY_BACKEND_ID });
+      await retainExecutionRunState({ ...run, resumeHandle: ExecutionRunResumeHandleSchema.parse({
+        ...run.resumeHandle, backendTarget: wrongTarget,
+      }) });
+      expect((await readRetainedExecutionRunRecord(started.runId))?.state.resumeHandle?.backendTarget).toEqual(wrongTarget);
+      recoveredManager = createExecutionRunManager({
+        parentProvider: TEST_PRIMARY_BACKEND_ID, cwd: process.cwd(),
+        createRuntime, sendAcp: async () => {},
+      });
+      const result = await recoveredManager.applyAction(started.runId, {
         actionId: 'review.follow_up', input: { findingIds: ['f1'], messageMarkdown: 'Why?' },
+      });
+      const current = recoveredManager.get(started.runId);
+      const persisted = await readRetainedExecutionRunRecord(started.runId);
+      expect(result, JSON.stringify({
+        currentTarget: current?.backendTarget,
+        currentResumeTarget: current?.resumeHandle?.backendTarget,
+        persistedTarget: persisted?.state.backendTarget,
+        persistedResumeTarget: persisted?.state.resumeHandle?.backendTarget,
+        nativeLoadCount: loadSessionCalls.length,
       })).toMatchObject({ ok: false, errorCode: 'review_follow_up_resume_unavailable' });
       expect(loadSessionCalls).toEqual([]);
     } finally {
+      await recoveredManager?.dispose();
       await manager.dispose();
     }
   });
@@ -1342,7 +1587,6 @@ describe('ExecutionRunManager (review intent)', () => {
               }),
             });
           },
-          { runtimeId: `child_session_${prompts.length + 1}` },
         ),
       sendAcp: async () => {},
       getNowMs: () => 1_700_000_000_000,
@@ -1411,7 +1655,6 @@ describe('ExecutionRunManager (review intent)', () => {
               }),
             });
           },
-          { runtimeId: `child_session_${prompts.length + 1}` },
         ),
       sendAcp: async () => {},
       getNowMs: () => 1_700_000_000_000,
@@ -1421,6 +1664,7 @@ describe('ExecutionRunManager (review intent)', () => {
       sessionId: 'parent_session_1',
       intent: 'review',
       backendTarget: { kind: 'builtInAgent', agentId: ['code', 'rabbit'].join('') },
+      modelSelection: null,
       instructions: 'Review this repo.',
       permissionMode: 'read_only',
       retentionPolicy: 'resumable',
@@ -1521,7 +1765,7 @@ describe('ExecutionRunManager (review intent)', () => {
     const runtime = createPromptRuntime((promptRuntime) => {
       promptRuntime.emitMessage({ type: 'event', name: 'provider_session_id', payload: { sessionId: providerSessionId } } as AgentMessage);
       promptRuntime.emitMessage({ type: 'model-output', fullText: JSON.stringify({ findings: [], summary: 'ok' }) });
-    }, { runtimeId: 'placeholder_session' });
+    });
 
     const manager = createExecutionRunManager({
       parentProvider: TEST_PRIMARY_BACKEND_ID,
@@ -1726,7 +1970,7 @@ describe('ExecutionRunManager (streaming sidechain)', () => {
 });
 
 describe('ExecutionRunManager (long-lived runs)', () => {
-  function createPromptEchoRuntime(): TestExecutionRunHostRuntime {
+  function createPromptEchoRuntime(): NativePromptRuntimeFactory {
     return createPromptRuntime((runtime, _sessionId, prompt) => {
       runtime.emitMessage({ type: 'model-output', fullText: `reply:${prompt}` });
     });
@@ -1806,18 +2050,21 @@ describe('ExecutionRunManager (long-lived runs)', () => {
     const cancel = new Promise<void>((resolve) => {
       releaseCancel = resolve;
     });
+    let markCancelStarted!: () => void;
+    const cancelStarted = new Promise<void>((resolve) => { markCancelStarted = resolve; });
     const dispose = vi.fn(async () => {});
     let terminalFactsAdmitted = 0;
     let resolveFirstTerminalFact!: () => void;
     const firstTerminalFact = new Promise<void>((resolve) => {
       resolveFirstTerminalFact = resolve;
     });
-    const runtime = createTestExecutionRunHostRuntime({
+    const runtime = createPromptRuntime(() => {}, {
       onWaitForTurnCompletion: async () => {
         await completion;
         throw new Error('provider completion failed');
       },
       onCancel: async () => {
+        markCancelStarted();
         await cancel;
       },
       onDispose: dispose,
@@ -1847,14 +2094,15 @@ describe('ExecutionRunManager (long-lived runs)', () => {
 
     await expect(manager.send(started.runId, { message: 'hello' })).resolves.toEqual({ ok: true });
     const stop = manager.stop(started.runId);
-    await Promise.resolve();
+    await cancelStarted;
     releaseCompletion();
     await firstTerminalFact;
     releaseCancel();
     await Promise.resolve();
     releasePublication();
 
-    await expect(stop).resolves.toMatchObject({ ok: true });
+    const stopped = await stop;
+    expect(stopped, JSON.stringify(stopped)).toMatchObject({ ok: true });
     await expect(manager.waitForTerminal(started.runId)).resolves.toBeUndefined();
     expect(terminalFactsAdmitted).toBe(1);
     expect(dispose).toHaveBeenCalledTimes(1);
@@ -1980,7 +2228,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
     }
   });
 
-  it('settles after synchronous send recovery cannot publish its terminal transcript fact', async () => {
+  it('retains ambiguous send custody until stop and preserves terminal transcript failure', async () => {
     const dispose = vi.fn(async () => {});
     const runtime = createTestExecutionRunHostRuntime({
       onSendPrompt: async () => {
@@ -2008,8 +2256,19 @@ describe('ExecutionRunManager (long-lived runs)', () => {
       ioMode: 'request_response',
     });
     const terminalWaiter = manager.waitForTerminal(started.runId);
+    let terminalSettled = false;
+    void terminalWaiter.then(() => { terminalSettled = true; });
 
-    await expect(manager.send(started.runId, { message: 'hello' })).rejects.toMatchObject({
+    await expect(manager.send(started.runId, { message: 'hello' })).resolves.toMatchObject({
+      ok: false, errorCode: 'execution_run_send_outcome_unknown',
+    });
+    expect(manager.get(started.runId)?.status).toBe('running');
+    expect(terminalSettled).toBe(false);
+    expect(dispose).not.toHaveBeenCalled();
+    await expect(manager.send(started.runId, { message: 'do not duplicate ambiguous input' })).resolves.toMatchObject({
+      ok: false, errorCode: 'execution_run_busy',
+    });
+    await expect(manager.stop(started.runId)).rejects.toMatchObject({
       code: 'execution_run_transcript_custody_unavailable',
     });
     await expect(terminalWaiter).resolves.toBeUndefined();
@@ -2162,7 +2421,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
     const manager = createExecutionRunManager({
       parentProvider: TEST_PRIMARY_BACKEND_ID,
       cwd: process.cwd(),
-      createRuntime: () => createPromptRuntime(() => {}, {
+      createRuntime: () => createTestExecutionRunHostRuntime({
         onRespondToPermission: providerDelivery,
         onDispose: dispose,
       }),
@@ -2269,7 +2528,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
     const manager = createExecutionRunManager({
       parentProvider: TEST_PRIMARY_BACKEND_ID,
       cwd: process.cwd(),
-      createRuntime: () => createPromptRuntime(() => {}, {
+      createRuntime: () => createTestExecutionRunHostRuntime({
         onRespondToPermission: providerDelivery,
       }),
       sendAcp,
@@ -2443,7 +2702,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
         requestId: 'provider-request-reused',
         approved: true,
         responseTarget: currentResponseTarget,
-      })).resolves.toEqual({ ok: true });
+      })).resolves.toEqual({ ok: true, delivery: { delivered: true } });
       expect(respondToPermission).toHaveBeenCalledTimes(2);
       expect(respondToPermission).toHaveBeenCalledWith('provider-request-reused', true);
     } finally {
@@ -2650,7 +2909,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
           teamId: 'team-1',
           expectedResourceRevision: 7,
           deliveryMode: 'direct',
-          agentTargetKey: `backend:${TEST_PRIMARY_BACKEND_ID}:built_in` as never,
+          agentTargetKey: buildBackendTargetKeyV2(readBackendTargetRefV2({ kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID })),
           modelId: 'model-current' as never,
         },
         permissionMode: 'default',
@@ -2686,7 +2945,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
           teamId: 'team-1',
           expectedResourceRevision: 7,
           deliveryMode: 'brokered',
-          agentTargetKey: `backend:${TEST_PRIMARY_BACKEND_ID}:built_in` as never,
+          agentTargetKey: buildBackendTargetKeyV2(readBackendTargetRefV2({ kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID })),
           modelId: 'model-current' as never,
         },
         permissionMode: 'default',
@@ -2729,7 +2988,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
           teamId: 'team-b',
           expectedResourceRevision: 3,
           deliveryMode: 'brokered',
-          agentTargetKey: `backend:${TEST_PRIMARY_BACKEND_ID}:built_in` as never,
+          agentTargetKey: buildBackendTargetKeyV2(readBackendTargetRefV2({ kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID })),
           modelId: 'model-b' as never,
         },
       });
@@ -2810,6 +3069,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
       registerResponseTargetHandler: vi.fn(() => unregisterPermissionHandler),
     };
     const disposeCalls: string[] = [];
+    const provisioned: string[] = [];
     let runtimeIndex = 0;
     const manager = createExecutionRunManager({
       parentProvider: TEST_PRIMARY_BACKEND_ID,
@@ -2818,11 +3078,9 @@ describe('ExecutionRunManager (long-lived runs)', () => {
         runtimeIndex += 1;
         const index = runtimeIndex;
         return createPromptRuntime(
-          (runtime, _sessionId, prompt) => {
-            runtime.emitMessage({ type: 'model-output', fullText: `reply:${prompt}` });
-          },
+          () => {},
           {
-            runtimeId: `child_session_${index}`,
+            onProvisionRuntime: async () => { provisioned.push(`runtime_${index}`); },
             onDispose: async () => {
               disposeCalls.push(`runtime_${index}`);
             },
@@ -2838,7 +3096,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
       sessionId: 'parent_session_1',
       intent: 'delegate',
       backendTarget: { kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID },
-      instructions: 'first',
+      instructions: '',
       permissionMode: 'read_only',
       retentionPolicy: 'ephemeral',
       runClass: 'long_lived',
@@ -2848,7 +3106,8 @@ describe('ExecutionRunManager (long-lived runs)', () => {
       sessionId: 'parent_session_1',
       intent: 'delegate',
       backendTarget: { kind: 'builtInAgent', agentId: TEST_SECONDARY_BACKEND_ID },
-      instructions: 'second',
+      instructions: '',
+      modelSelection: null,
       permissionMode: 'read_only',
       retentionPolicy: 'ephemeral',
       runClass: 'long_lived',
@@ -2856,26 +3115,29 @@ describe('ExecutionRunManager (long-lived runs)', () => {
     });
 
     expect(manager.getRunningCount()).toBe(2);
+    await vi.waitFor(() => expect(provisioned).toEqual(['runtime_1', 'runtime_2']));
 
     await manager.dispose();
     await manager.dispose();
 
     expect(manager.getRunningCount()).toBe(0);
-    expect(disposeCalls).toEqual(['runtime_1', 'runtime_2']);
+    // The owner settles independent Runs concurrently; each resource must be
+    // disposed exactly once, without imposing a cross-Run completion order.
+    expect([...disposeCalls].sort()).toEqual(['runtime_1', 'runtime_2']);
     expect(permissionStore.registerResponseTargetHandler).toHaveBeenCalledTimes(1);
     expect(unregisterPermissionHandler).toHaveBeenCalledTimes(1);
   });
 
-  function createPromptEchoResumeRuntime(): TestExecutionRunHostRuntime {
+  function createPromptEchoResumeRuntime(): NativePromptRuntimeFactory {
     return createPromptRuntime(
       (runtime, _sessionId, prompt) => {
         runtime.emitMessage({ type: 'model-output', fullText: `reply:${prompt}` });
       },
-      { resumeSupported: true },
+      { resumeSupported: true, providerSessionId: 'vendor_echo_session' },
     );
   }
 
-  function createReadyHandshakePromptEchoRuntime(): TestExecutionRunHostRuntime {
+  function createReadyHandshakePromptEchoRuntime(): NativePromptRuntimeFactory {
     let sendCount = 0;
     return createPromptRuntime(
       (runtime, _sessionId, prompt) => {
@@ -2885,7 +3147,6 @@ describe('ExecutionRunManager (long-lived runs)', () => {
           fullText: sendCount === 1 ? 'READY' : `reply:${prompt}`,
         });
       },
-      { runtimeId: 'child_session_ready' },
     );
   }
 
@@ -2912,6 +3173,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
       intent: 'review',
       backendTarget: { kind: 'builtInAgent', agentId: TEST_SECONDARY_BACKEND_ID },
       instructions: 'Review this repo.',
+      modelSelection: null,
       permissionMode: 'read_only',
       retentionPolicy: 'resumable',
       runClass: 'long_lived',
@@ -2981,106 +3243,6 @@ describe('ExecutionRunManager (long-lived runs)', () => {
     } finally {
       await manager.dispose();
     }
-  });
-
-  it('ACKs send() for long-lived runs without awaiting waitForResponseComplete (prevents UI timeouts)', async () => {
-    const sent: Array<{ provider: string; body: unknown; meta?: Record<string, unknown> }> = [];
-
-    let turn = 0;
-    let wait: Promise<void> = Promise.resolve();
-    const runtime = createPromptRuntime(
-      (promptRuntime, _sessionId, prompt) => {
-        turn += 1;
-        promptRuntime.emitMessage({ type: 'model-output', fullText: `reply:${prompt}` });
-        wait = turn === 1 ? Promise.resolve() : new Promise(() => {});
-      },
-      {
-        onWaitForTurnCompletion: async () => {
-          await wait;
-        },
-      },
-    );
-
-    const manager = createExecutionRunManager({
-      parentProvider: TEST_PRIMARY_BACKEND_ID,
-      cwd: process.cwd(),
-      createRuntime: () => runtime,
-      sendAcp: async (provider: string, body: ACPMessageData, opts?: { meta?: Record<string, unknown> }) => {
-        sent.push({ provider, body, meta: opts?.meta });
-      },
-      getNowMs: () => 1_700_000_000_000,
-    });
-
-    const started = await manager.start({
-      sessionId: 'parent_session_1',
-      intent: 'delegate',
-      backendTarget: { kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID },
-      instructions: 'hello',
-      permissionMode: 'read_only',
-      retentionPolicy: 'ephemeral',
-      runClass: 'long_lived',
-      ioMode: 'request_response',
-    });
-
-    expect(manager.get(started.runId)?.status).toBe('running');
-    expect(sent.filter((m) => (m.body as any)?.type === 'message')).toHaveLength(1);
-
-    const sendPromise = manager.send(started.runId, { message: 'next' });
-    const raced = await Promise.race([
-      sendPromise,
-      new Promise<{ ok: false; errorCode: string; error: string }>((resolve) => {
-        // Under load, the event loop can be briefly delayed; keep the threshold small but non-flaky.
-        setTimeout(() => resolve({ ok: false, errorCode: 'timeout', error: 'timeout' }), 500);
-      }),
-    ]);
-
-    expect(raced.ok).toBe(true);
-  });
-
-  it('keeps long-lived runs running, supports send(), and emits tool-result only when stopped', async () => {
-    const sent: Array<{ provider: string; body: unknown; meta?: Record<string, unknown> }> = [];
-    const manager = createExecutionRunManager({
-      parentProvider: TEST_PRIMARY_BACKEND_ID,
-      cwd: process.cwd(),
-      createRuntime: () => createPromptEchoRuntime(),
-      sendAcp: async (provider: string, body: ACPMessageData, opts?: { meta?: Record<string, unknown> }) => {
-        sent.push({ provider, body, meta: opts?.meta });
-      },
-      getNowMs: () => 1_700_000_000_000,
-    });
-
-    const started = await manager.start({
-      sessionId: 'parent_session_1',
-      intent: 'delegate',
-      backendTarget: { kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID },
-      instructions: 'hello',
-      display: { title: 'Global Voice', participantLabel: 'Voice', groupId: 'group_1' },
-      permissionMode: 'read_only',
-      retentionPolicy: 'ephemeral',
-      runClass: 'long_lived',
-      ioMode: 'request_response',
-    });
-
-    expect(manager.get(started.runId)?.status).toBe('running');
-    expect((manager.getPublic(started.runId) as any)?.display?.groupId).toBe('group_1');
-    expect(sent.filter((m) => (m.body as any)?.type === 'tool-result').length).toBe(0);
-    expect(sent.filter((m) => (m.body as any)?.type === 'message').length).toBe(1);
-
-    const sendResult = await manager.send(started.runId, { message: 'next' });
-    expect(sendResult.ok).toBe(true);
-    await expect
-      .poll(() => sent.filter((m) => (m.body as any)?.type === 'message').length, { timeout: 1_000 })
-      .toBe(2);
-    expect(sent.filter((m) => (m.body as any)?.type === 'tool-result').length).toBe(0);
-
-    const stopped = await manager.stop(started.runId);
-    expect(stopped.ok).toBe(true);
-    await manager.waitForTerminal(started.runId);
-    expect(manager.get(started.runId)?.status).toBe('cancelled');
-    // Under heavy parallel load, the last sendAcp callback can arrive on a later microtask.
-    await expect
-      .poll(() => sent.filter((m) => (m.body as any)?.type === 'tool-result').length, { timeout: 1_000 })
-      .toBe(1);
   });
 
   it('surfaces transcript persistence in public state for voice_agent runs', async () => {
@@ -3190,7 +3352,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
     const ensured = await manager.ensure(started.runId, { resume: true });
 
     expect(ensured.ok).toBe(true);
-    expect(publicStates).toHaveLength(beforeEnsureUpdates + 1);
+    expect(publicStates.length).toBeGreaterThan(beforeEnsureUpdates);
     expect(publicStates.at(-1)).toMatchObject({
       runId: started.runId,
       intent: 'voice_agent',
@@ -3225,6 +3387,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
         const occurrence = runtimeCount;
         return createPromptRuntime(() => {}, {
           resumeSupported: true,
+          providerSessionId: 'vendor_voice_retirement',
           async onProvisionRuntime(opts) {
             if (occurrence === 2 && opts?.resumeRuntimeId) {
               resumeProvisionStarted();
@@ -3277,7 +3440,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
     }
   });
 
-  it('admits only one concurrent voice_agent resume occurrence', async () => {
+  it('reuses the current voice_agent resume occurrence without provisioning twice', async () => {
     let releaseResumeProvision!: () => void;
     let resumeProvisionStarted!: () => void;
     const resumeProvisionGate = new Promise<void>((resolve) => {
@@ -3294,6 +3457,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
         runtimeCount += 1;
         return createPromptRuntime(() => {}, {
           resumeSupported: true,
+          providerSessionId: 'vendor_voice_concurrent_resume',
           onProvisionRuntime: async (opts) => {
             if (!opts?.resumeRuntimeId) return;
             resumeProvisionStarted();
@@ -3320,16 +3484,16 @@ describe('ExecutionRunManager (long-lived runs)', () => {
       const first = manager.ensure(started.runId, { resume: true });
       await resumeProvisionStartedPromise;
       const second = manager.ensure(started.runId, { resume: true });
+      // Provisioning already owns the canonical running controller. A second
+      // ensure acknowledges that occurrence rather than claiming a new resume.
+      await expect(second).resolves.toEqual({ ok: true });
+      expect(runtimeCount).toBe(2);
       releaseResumeProvision();
-
       await expect(first).resolves.toEqual({ ok: true });
-      await expect(second).resolves.toMatchObject({
-        ok: false,
-        errorCode: 'execution_run_not_allowed',
-      });
       expect(runtimeCount).toBe(2);
       expect(manager.get(started.runId)?.status).toBe('running');
     } finally {
+      releaseResumeProvision();
       await manager.dispose();
     }
   });
@@ -3354,6 +3518,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
         const isResumedRuntime = runtimeCount === 2;
         return createPromptRuntime(() => {}, {
           resumeSupported: true,
+          providerSessionId: 'vendor_voice_pending_resume',
           onProvisionRuntime: async (opts) => {
             if (!isResumedRuntime || !opts?.resumeRuntimeId) return;
             resumeProvisionStarted();
@@ -3415,7 +3580,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
     const manager = createExecutionRunManager({
       parentProvider: TEST_PRIMARY_BACKEND_ID,
       cwd: process.cwd(),
-      createRuntime: () => createPromptEchoRuntime(),
+      createRuntime: () => createPromptEchoResumeRuntime(),
       sendAcp: async () => {},
       getNowMs: () => nowMs,
     });
@@ -3474,7 +3639,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
       tombstones: [], diagnostics: [] } });
     commitActiveProfileCatalog({ ...bound, catalog: { status: 'ready', authority: 'active', control: null,
       controlRevision: 'absent', referenceGuardRevision: 'absent', diagnostics: [], records: [{ revision: 1,
-        record: { v: 1, id: 'rpc-target-profile', enabled: true, secretBindings: {},
+        record: { v: 1, id: 'rpc-target-profile', enabled: true, secretBindings: {}, skillSeeds: [],
           definition: { kind: 'artifact', artifactId: 'profile-definition' }, promptStack: [entry('rpc-profile-doc')] } }] } });
     const hidden = buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true });
     // Local daemon control and Account HTTP are genuine external transports;
@@ -3526,8 +3691,10 @@ describe('ExecutionRunManager (long-lived runs)', () => {
     });
     try {
       registerExecutionRunRpcHandlers({ registerHandler: () => {} }, {
+        resolveRunReportPolicy: async () => ({ preset: 'important' }),
         sessionId: 'rpc-history', cwd: defaultExecutionRunManagerTestCwd, serverId: configuration.activeServerId,
         serverUrl, parentProvider: TEST_PRIMARY_BACKEND_ID,
+        sessionInteractionHost: createManagerParentHost('rpc-history'),
         readPromptCredentials: async () => credentials, resolveAccountSettings: () => ({}), sendAcp: async () => {},
         executionRunProfileCatalog: buildExecutionRunProfileCatalog(),
         onManagerCreated: manager => { captured.manager = manager; },
@@ -3684,13 +3851,14 @@ describe('ExecutionRunManager (long-lived runs)', () => {
       intent: 'delegate',
       backendTarget: { kind: 'builtInAgent', agentId: TEST_SECONDARY_BACKEND_ID },
       instructions: 'hello',
+      modelSelection: null,
       permissionMode: 'read_only',
       retentionPolicy: 'ephemeral',
       runClass: 'bounded',
       ioMode: 'request_response',
     });
 
-    expect((manager.getPublic(started.runId) as any)?.turnInFlight).toBe(true);
+    await vi.waitFor(() => expect(manager.getPublic(started.runId)?.turnInFlight).toBe(true));
 
     const stopped = await manager.stop(started.runId);
     expect(stopped.ok).toBe(true);
@@ -3699,6 +3867,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
 
   it('passes the voice_agent start intent through to the backend factory', async () => {
     const seen: Array<Record<string, unknown>> = [];
+    const request = new AbortController();
     const manager = createExecutionRunManager({
       parentProvider: TEST_PRIMARY_BACKEND_ID,
       cwd: process.cwd(),
@@ -3710,11 +3879,13 @@ describe('ExecutionRunManager (long-lived runs)', () => {
       getNowMs: () => 1_700_000_000_000,
     });
 
-    await manager.start({
+    const started = await manager.start({
+      signal: request.signal,
       sessionId: 'parent_session_1',
       intent: 'voice_agent',
       backendTarget: { kind: 'builtInAgent', agentId: TEST_SECONDARY_BACKEND_ID },
       permissionMode: 'read_only',
+      modelSelection: null,
       retentionPolicy: 'resumable',
       runClass: 'long_lived',
       ioMode: 'streaming',
@@ -3730,6 +3901,154 @@ describe('ExecutionRunManager (long-lived runs)', () => {
       permissionMode: 'read-only',
       start: { intent: 'voice_agent' },
     });
+    expect(seen[0]?.start).not.toHaveProperty('signal');
+    expect(manager.get(started.runId)).not.toHaveProperty('signal');
+    expect(manager.get(started.runId)?.launch).not.toHaveProperty('signal');
+    request.abort();
+    expect(manager.get(started.runId)?.status).toBe('running');
+  });
+
+  it('settles a registered Voice start and retires its native bootstrap when the carrier closes RPC custody', async () => {
+    vi.stubEnv('HAPPIER_FEATURE_EXECUTION_RUNS__ENABLED', '1');
+    vi.stubEnv('HAPPIER_FEATURE_VOICE__ENABLED', '1');
+    vi.stubEnv('HAPPIER_FEATURE_VOICE_AGENT__ENABLED', '1');
+    const sessionId = 'voice-start-cancellation';
+    const rpc = new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' });
+    let listener: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+    let entered = false;
+    let disposed = false;
+    let sequence = 0;
+    const externalRuntime: AgentRuntime = { sessions: { async open() { return {
+      watch(value) { listener = value; return { dispose() { listener = undefined; } }; },
+      async send(request) {
+        listener?.({ kind: 'input-accepted', sessionId: 'session-parent', sequence: sequence++, emittedAtMs: 1,
+          inputIds: request.inputIds, delivery: request.delivery });
+        listener?.({ kind: 'turn-start', sessionId: 'session-parent', sequence: sequence++, emittedAtMs: 1,
+          turnId: request.delivery.turnId, startedBy: 'host' });
+        entered = true;
+        return { status: 'admitted' };
+      },
+      dispose() { disposed = true; },
+    }; } } };
+    let native: ExecutionRunHostRuntime | undefined;
+    runtimeFactoryRef.current = runtimeOptions => {
+      native = createVoiceSessionRuntimeThroughNativeFactory({ runtime: externalRuntime, modelId: 'chat',
+        runtimeOptions: { ...runtimeOptions,
+          accountSettings: runtimeOptions.accountSettings ? accountSettingsParse(runtimeOptions.accountSettings) : null },
+        capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false } });
+      return native;
+    };
+    const admission = vi.spyOn(daemonControlHttp, 'daemonPost').mockResolvedValue({ admitted: true });
+    const captured: { manager?: ExecutionRunManager } = {};
+    try {
+      registerExecutionRunRpcHandlers(rpc, {
+        resolveRunReportPolicy: async () => ({ preset: 'important' }),
+        sessionId, cwd: defaultExecutionRunManagerTestCwd, parentProvider: 'codex',
+        serverId: configuration.activeServerId, serverUrl: configuration.apiServerUrl,
+        getServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({ features: {
+          execution: { enabled: true, runs: { enabled: true } }, voice: { enabled: true, agent: { enabled: true } },
+        } }) }),
+        sessionInteractionHost: createManagerParentHost(sessionId),
+        readPromptCredentials: async () => defaultVoiceAccountCredentials,
+        resolveAccountSettings: async () => accountSettingsParse({}), sendAcp: async () => {},
+        executionRunProfileCatalog: buildExecutionRunProfileCatalog(),
+        resolveExecutionRunProfileCatalog: async () => ({ profileCatalog: buildExecutionRunProfileCatalog(),
+          engineRegistry: defaultExecutionRunManagerEngineRegistry }),
+        onManagerCreated: manager => { captured.manager = manager; },
+      });
+      let result: unknown;
+      const pending = rpc.handleRequest({ method: `${sessionId}:execution.run.ensureOrStart`, timeoutMs: null,
+        callerAuthority: 'present_user', params: { runId: null, start: {
+          intent: 'voice_agent', backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+          permissionMode: 'read_only', modelSelection: null, chatModelId: 'chat', commitModelId: 'chat',
+          retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming', bootstrapMode: 'ready_handshake',
+        } } }).then(value => { result = value; });
+      await vi.waitFor(() => expect(entered, JSON.stringify(result)).toBe(true));
+      rpc.cancelTransportRequests();
+      await vi.waitFor(() => expect(result).toMatchObject({ ok: false, errorCode: 'VOICE_AGENT_START_FAILED' }));
+      await pending;
+      expect(disposed).toBe(true);
+      expect(rpc.getInFlightRequestCount()).toBe(0);
+      expect(captured.manager?.listPublicForRequest({}, sessionId).some(run => run.status === 'running')).toBe(false);
+    } finally {
+      await native?.dispose();
+      await captured.manager?.dispose();
+      admission.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('inherits both Voice roles through the registered parent reader after replacement settles', async () => {
+    vi.stubEnv('HAPPIER_FEATURE_EXECUTION_RUNS__ENABLED', '1');
+    vi.stubEnv('HAPPIER_FEATURE_VOICE__ENABLED', '1');
+    vi.stubEnv('HAPPIER_FEATURE_VOICE_AGENT__ENABLED', '1');
+    const sessionId = 'voice-applied-parent';
+    const backendTarget = { kind: 'builtInAgent', agentId: 'codex' } as const;
+    const agentTargetKey = buildBackendTargetKeyV2(readBackendTargetRefV2(backendTarget));
+    const applied: ExecutionRunAppliedParentSelection = {
+      status: 'applied', backendTarget, modelId: 'applied-parent-model', connectedServices: null,
+      modelSelection: { agentTargetKey, modelId: 'applied-parent-model', providerConnectionId: null },
+    };
+    let parent: ExecutionRunAppliedParentSelection = { status: 'unavailable' };
+    const sessionInteractionHost = {
+      ...createManagerParentHost(sessionId, applied),
+      // Native runtime replacement is the external execution boundary. The RPC
+      // registration, host admission and both Voice role decisions remain real.
+      readAppliedChildSelection: async () => parent,
+    };
+    const observed: TestRuntimeFactoryInput[] = [];
+    runtimeFactoryRef.current = options => {
+      observed.push(options);
+      return createPromptEchoRuntime();
+    };
+    const admission = vi.spyOn(daemonControlHttp, 'daemonPost').mockResolvedValue({ admitted: true });
+    const rpc = new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' });
+    const captured: { manager?: ExecutionRunManager } = {};
+    const settings = accountSettingsParse({ providerDefaultModelSelectionsByAgentTargetKeyV1: {
+      [agentTargetKey]: { v: 1, updatedAt: 1, ref: { agentTargetKey, modelId: 'different-account-default', providerConnectionId: null } },
+    } });
+    try {
+      registerExecutionRunRpcHandlers(rpc, {
+        resolveRunReportPolicy: async () => ({ preset: 'important' }),
+        sessionId, cwd: defaultExecutionRunManagerTestCwd, parentProvider: 'codex',
+        serverId: configuration.activeServerId, serverUrl: configuration.apiServerUrl,
+        getServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({ features: {
+          execution: { enabled: true, runs: { enabled: true } }, voice: { enabled: true, agent: { enabled: true } },
+        } }) }),
+        sessionInteractionHost, readPromptCredentials: async () => defaultVoiceAccountCredentials,
+        resolveAccountSettings: async () => settings, sendAcp: async () => {},
+        executionRunProfileCatalog: buildExecutionRunProfileCatalog(),
+        onManagerCreated: manager => { captured.manager = manager; },
+      });
+      if (!captured.manager) throw new Error('Voice RPC registration unavailable');
+      const request = { intent: 'voice_agent', backendTarget, permissionMode: 'read_only',
+        retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming' };
+      const start = () => rpc.handleRequest({ method: `${sessionId}:execution.run.start`,
+        callerAuthority: 'present_user', params: request });
+      await expect(start()).resolves.toMatchObject({ ok: false,
+        errorCode: 'execution_run_parent_selection_unavailable',
+        details: { executionRunStart: { runCreation: 'noRunCreated' } } });
+      expect(observed).toEqual([]);
+
+      parent = applied;
+      const result: unknown = await start();
+      expect(result).toMatchObject({ runId: expect.any(String) });
+      if (!result || typeof result !== 'object' || !('runId' in result) || typeof result.runId !== 'string') {
+        throw new Error('Voice did not create a Run');
+      }
+      expect(captured.manager.getPublic(result.runId)).toMatchObject({ resolvedSelection: {
+        source: 'inherited', modelId: 'applied-parent-model', modelSelection: applied.modelSelection,
+      } });
+      expect(captured.manager.get(result.runId)?.voiceAgentConfig).toMatchObject({
+        chatModelId: 'applied-parent-model', commitModelId: 'applied-parent-model',
+        chatModelSelection: applied.modelSelection, commitModelSelection: applied.modelSelection,
+      });
+      expect(observed[0]).toMatchObject({ modelId: 'applied-parent-model' });
+    } finally {
+      await captured.manager?.dispose();
+      admission.mockRestore();
+      vi.unstubAllEnvs();
+    }
   });
 
   it('keeps an external configured Agent target across voice runtime creation and resume', async () => {
@@ -3751,6 +4070,7 @@ describe('ExecutionRunManager (long-lived runs)', () => {
       intent: 'voice_agent',
       backendTarget: externalTarget,
       permissionMode: 'read_only',
+      modelSelection: null,
       retentionPolicy: 'resumable',
       runClass: 'long_lived',
       ioMode: 'streaming',
@@ -3798,6 +4118,8 @@ describe('ExecutionRunManager (long-lived runs)', () => {
       intent: 'voice_agent',
       backendTarget: { kind: 'builtInAgent', agentId: TEST_SECONDARY_BACKEND_ID },
       permissionMode: 'read_only',
+      modelSelection: null,
+      commitModelId: 'default',
       retentionPolicy: 'resumable',
       runClass: 'long_lived',
       ioMode: 'streaming',

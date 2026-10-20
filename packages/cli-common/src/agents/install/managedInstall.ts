@@ -4,7 +4,8 @@ import { chmod, copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from '
 import { createRequire } from 'node:module';
 
 import type { AgentCliInstallPlatform, AgentCliManagedInstallSpec } from '@happier-dev/agents';
-import { fetchGitHubLatestRelease } from '@happier-dev/release-runtime';
+import { fetchGitHubLatestRelease, fetchGitHubReleaseByTag } from '@happier-dev/release-runtime';
+import { GitHubReleaseRateLimitError } from '@happier-dev/release-runtime/github';
 
 import { execFileWithDeadline, resolveWindowsCommandInvocation } from '../../process/index.js';
 
@@ -30,6 +31,7 @@ import {
 
 export type ManagedInstallDeps = Readonly<{
   fetchGitHubLatestRelease?: typeof fetchGitHubLatestRelease;
+  fetchGitHubReleaseByTag?: typeof fetchGitHubReleaseByTag;
   downloadGitHubReleaseAsset?: typeof downloadGitHubReleaseAsset;
   extractGitHubReleaseAsset?: typeof extractGitHubReleaseAsset;
   ensureManagedPnpmCommand?: typeof ensureManagedPnpmCommand;
@@ -462,15 +464,23 @@ async function resolveManagedBinaryAsset(params: Readonly<{
 }>): Promise<Readonly<{ name: string; url: string; digest: string | null }>> {
   let release: unknown;
   try {
-    release = await (params.deps.fetchGitHubLatestRelease ?? fetchGitHubLatestRelease)({
+    const releaseRequest = {
       githubRepo: params.managedInstall.githubRepo,
       userAgent: 'happier-cli',
       githubToken: params.env.GITHUB_TOKEN,
       signal: params.signal,
-    });
+    };
+    release = params.managedInstall.releaseTag === undefined
+      ? await (params.deps.fetchGitHubLatestRelease ?? fetchGitHubLatestRelease)(releaseRequest)
+      : await (params.deps.fetchGitHubReleaseByTag ?? fetchGitHubReleaseByTag)({
+        ...releaseRequest,
+        tag: params.managedInstall.releaseTag,
+        assetsOnly: true,
+      });
   } catch (error) {
     params.signal?.throwIfAborted();
-    throw new AgentCliDownloadError('download-failed', error instanceof Error ? error.message : String(error), { cause: error });
+    throw new AgentCliDownloadError(error instanceof GitHubReleaseRateLimitError ? 'rate-limited' : 'download-failed',
+      error instanceof Error ? error.message : String(error), { cause: error });
   }
 
   const assets = normalizeGitHubReleaseAssets(release);

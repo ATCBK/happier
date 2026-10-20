@@ -4,6 +4,7 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
+import { resolveItemGroupHeaderHorizontalInsetPx } from '@/components/ui/lists/itemGroupSpacing';
 
 import { buildSelectionListSectionHeaderGridA11yProps } from './buildSelectionListOptionA11yProps';
 import { SELECTION_LIST_CARD_CONTENT_INSET_PX } from './_constants';
@@ -36,6 +37,8 @@ export type SelectionListSectionHeaderProps = Readonly<{
      * width stays stable as numbers tick.
      */
     count?: number;
+    /** The title is a path or identifier, set in the mono role. */
+    monoTitle?: boolean;
     /** Optional section-owned action rendered at the trailing edge. */
     rightAccessory?: React.ReactNode;
     /** The section's one quiet destination, drawn as a text link at the trailing edge. */
@@ -100,6 +103,17 @@ const stylesheet = StyleSheet.create((theme) => ({
     cardContainer: {
         paddingHorizontal: SELECTION_LIST_CARD_CONTENT_INSET_PX,
     },
+    // Section presentation: the title starts where a grouped `ItemGroup` title does, in its type role.
+    sectionContainer: {
+        paddingHorizontal: resolveItemGroupHeaderHorizontalInsetPx(),
+    },
+    sectionLabel: {
+        ...Typography.variant('body', 'medium'),
+    },
+    // Paths are mono (DESIGN.md), one step quieter than the proportional label.
+    monoLabel: {
+        ...Typography.mono(),
+    },
     count: {
         color: theme.colors.text.tertiary,
         fontSize: Platform.select({ ios: 13, default: 12 }),
@@ -116,7 +130,8 @@ export function SelectionListSectionHeader(
     props: SelectionListSectionHeaderProps,
 ): React.ReactElement | null {
     const styles = stylesheet;
-    const isCard = React.useContext(SelectionListOptionPresentationContext) === 'card';
+    const presentation = React.useContext(SelectionListOptionPresentationContext);
+    const isCard = presentation === 'card';
     if (props.title === undefined || props.title.length === 0) return null;
     const title = props.title;
     // In `grid` mode the header's own box becomes the row's single cell, so the
@@ -133,10 +148,10 @@ export function SelectionListSectionHeader(
     const header = (
         <View
             testID={props.testID}
-            style={[styles.container, isCard ? styles.cardContainer : null, props.containerStyle]}
+            style={[styles.container, isCard ? styles.cardContainer : null, presentation === 'section' ? styles.sectionContainer : null, props.containerStyle]}
             {...(gridAria === null ? {} : (gridAria.cell as unknown as Record<string, never>))}
         >
-            <Text style={styles.label}>{title}</Text>
+            <Text style={[styles.label, presentation === 'section' ? styles.sectionLabel : null, props.monoTitle ? styles.monoLabel : null]}>{title}</Text>
             {typeof props.count === 'number' ? (
                 <Text style={[styles.count, Typography.tabular()]}>{String(props.count)}</Text>
             ) : null}

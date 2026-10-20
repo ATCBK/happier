@@ -10,6 +10,7 @@ import { getActiveServerHomeCarrier, getServerProfileById } from '@/sync/domains
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { createServerUrlComparableKey } from '@/sync/domains/server/url/serverUrlCanonical';
 import { t } from '@/text';
+import { admitInternalRouteHref } from '@/utils/path/routeUtils';
 
 import { AuthenticatedAccountEntryRouteSurface } from './AuthenticatedAccountEntryRouteSurface';
 import { parseAuthenticatedAccountEntryRoute, type AuthenticatedAccountEntryRequest } from './authenticatedAccountEntryRoute';
@@ -95,7 +96,7 @@ export default function HomesSignInRoute() {
                 request={request}
                 routeParams={params}
                 transport={transport}
-                onExit={(returnTo) => router.replace(returnTo)}
+                onExit={(returnTo) => router.replace(admitInternalRouteHref(returnTo))}
             />
         </BaseModal>
     );

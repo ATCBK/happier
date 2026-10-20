@@ -38,13 +38,11 @@ native_command_policy_base() {
   policy_localCompile='0'
   policy_requiredTools=''
   policy_selfPublisher='0'
+  policy_compilerLeaf='0'
   policy_workspaceLock=''
   policy_preparationBuildMode='strict'
   if { [ "$policy_hasScript" = '1' ]; }; then
     policy_bootstrap='1'
-  fi
-  if { [ "$policy_workspace" = '@happier-dev/cli' ]; }; then
-    policy_componentOverride='apps/cli'
   fi
   if { [ "$policy_command" = 'git' ]; }; then
     policy_placement='primary-only'
@@ -92,6 +90,9 @@ native_command_policy_base() {
     policy_kind='typecheck'
     policy_workerTool='typescript-native'
   fi
+  if { [ "$policy_command" = 'node' ] || [ "$policy_command" = 'nodejs' ]; } && { [ "$policy_entryRepositoryPath" = 'packages/tests/scripts/run-extended-db-docker.mjs' ]; }; then
+    policy_requiredTools='docker'
+  fi
   if { [ "$policy_command" = 'node' ] || [ "$policy_command" = 'nodejs' ]; } && { [ "$policy_entry" = 'buildTypeScriptPackageDist.mjs' ] || [ "$policy_entry" = 'build.mjs' ]; }; then
     policy_validation='1'
     policy_bootstrap='1'
@@ -103,10 +104,13 @@ native_command_policy_base() {
   if { [ "$policy_command" = 'node' ] || [ "$policy_command" = 'nodejs' ]; } && { [ "$policy_entryRepositoryPath" = 'scripts/workspaces/buildTypeScriptPackageDist.mjs' ] || [ "$policy_entryRepositoryPath" = 'packages/cli-common/scripts/build.mjs' ] || [ "$policy_entryRepositoryPath" = 'apps/cli/scripts/build.mjs' ]; }; then
     policy_selfPublisher='1'
   fi
+  if { [ "$policy_command" = 'node' ] || [ "$policy_command" = 'nodejs' ]; } && { [ "$policy_entryRepositoryPath" = 'scripts/workspaces/runTypeScriptCli.mjs' ] || [ "$policy_entryRepositoryPath" = 'apps/server/scripts/runTypeScriptCli.mjs' ]; }; then
+    policy_compilerLeaf='1'
+  fi
   if { [ "$policy_command" = 'node' ] || [ "$policy_command" = 'nodejs' ]; } && { [ "$policy_entryRepositoryPath" = 'packages/plugin-sdk/scripts/bundleWorkspaceDeps.mjs' ]; } && { [ "$policy_declarations" = '1' ]; } && { [ "$policy_runScript" = '1' ]; }; then
     policy_selfPublisher='1'
   fi
-  if { [ "$policy_command" = 'node' ] || [ "$policy_command" = 'nodejs' ]; } && { [ "$policy_entryRepositoryPath" = 'apps/cli/scripts/buildSharedDeps.mjs' ]; }; then
+  if { [ "$policy_command" = 'node' ] || [ "$policy_command" = 'nodejs' ]; } && { [ "$policy_entryRepositoryPath" = 'apps/cli/scripts/buildSharedDeps.mjs' ] || [ "$policy_entryRepositoryPath" = 'apps/server/scripts/buildSharedDeps.mjs' ] || [ "$policy_entryRepositoryPath" = 'packages/plugins/triage/scripts/ensureTypecheckDeclarationPrerequisites.mjs' ]; }; then
     policy_validation='1'
     policy_bootstrap='1'
     policy_heavyClass='compilation'
@@ -195,7 +199,7 @@ native_command_policy_base() {
     policy_kind='runtime'
     policy_componentOverride='apps/stack'
   fi
-  if { [ "$policy_command" = 'node' ] || [ "$policy_command" = 'nodejs' ]; } && { [ "$policy_nativeTest" = '1' ]; } && { [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/dev_targets/remote_dependency_bootstrap.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/dev_targets/remote_validation_preparation.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/proc/workspace_build_admission.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/test/test_process.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/dev_targets/remote_commands.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/build/build_source_runtime.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/runtime/shared/pending_source_start.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/runtime/launch/resolveLaunchSpecs.test.mjs' ]; }; then
+  if { [ "$policy_command" = 'node' ] || [ "$policy_command" = 'nodejs' ]; } && { [ "$policy_nativeTest" = '1' ]; } && { [ "$policy_nativeTestPath" = 'apps/ui/scripts/runVitestShards.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/ui/scripts/activitySurfacesValidationContract.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/dev_targets/remote_dependency_bootstrap.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/dev_targets/remote_validation_preparation.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/proc/workspace_build_admission.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/test/test_process.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/dev_targets/remote_commands.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/build/build_source_runtime.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/runtime/shared/pending_source_start.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/runtime/launch/resolveLaunchSpecs.test.mjs' ]; }; then
     policy_kind='source-test'
   fi
   if { [ "$policy_command" = 'node' ] || [ "$policy_command" = 'nodejs' ]; } && { [ "$policy_nativeTest" = '1' ]; } && { [ "$policy_sourceCondition" = '1' ]; } && { [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/dev/expo_dev_crash_supervision.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/preferred_execution_launcher.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/dev_targets/service_placement.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/dev_targets_cmd.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/daemon_start_verification.integration.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/stack/stack_daemon_command.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/stack/stack_daemon_runtime_provenance.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/stack_daemon_cmd.integration.test.mjs' ] || [ "$policy_nativeTestPath" = 'apps/stack/scripts/utils/stack/daemonControlClient.test.mjs' ]; }; then
@@ -404,17 +408,27 @@ native_command_policy_finish() {
   if { [ "$policy_kind" = 'runtime' ]; } && { [ "$policy_component" = 'apps/cli' ]; } && { [ "$policy_script" = 'test' ] || [ "$policy_script" = 'test:local' ] || [ "$policy_script" = 'test:unit' ] || [ "$policy_script" = 'test:unit:local' ] || [ "$policy_script" = 'test:unit:vitest' ] || [ "$policy_script" = 'test:unit:vitest:local' ]; } && { [ "$policy_config" = 'vitest.config.ts' ]; } && { [ "$policy_resolverOverride" = '0' ]; }; then
     policy_kind='source-test'
   fi
-  if { [ "$policy_kind" = 'runtime' ]; } && { [ "$policy_runnerKnown" = '1' ]; } && { [ "$policy_component" = 'apps/cli' ] || [ "$policy_component" = 'apps/ui' ] || [ "$policy_component" = 'packages/sdk' ] || [ "$policy_component" = 'packages/plugin-ui' ] || [ "$policy_component" = 'packages/plugins/triage' ] || [ "$policy_component" = 'packages/channels-protocol' ] || [ "$policy_component" = 'packages/email-transports-protocol' ] || [ "$policy_component" = 'packages/plugins/channels' ] || [ "$policy_component" = 'packages/plugins/channel-email' ] || [ "$policy_component" = 'packages/plugins/channel-telegram' ] || [ "$policy_component" = 'packages/plugins/channel-discord' ] || [ "$policy_component" = 'packages/plugins/scm-github' ]; } && { [ "$policy_config" = 'vitest.config.ts' ]; } && { [ "$policy_resolverOverride" = '0' ]; }; then
+  if { [ "$policy_kind" = 'runtime' ]; } && { [ "$policy_runnerKnown" = '1' ]; } && { [ "$policy_component" = 'apps/cli' ] || [ "$policy_component" = 'apps/ui' ] || [ "$policy_component" = 'apps/server' ] || [ "$policy_component" = 'packages/sdk' ] || [ "$policy_component" = 'packages/plugin-ui' ] || [ "$policy_component" = 'packages/plugins/triage' ] || [ "$policy_component" = 'packages/channels-protocol' ] || [ "$policy_component" = 'packages/email-transports-protocol' ] || [ "$policy_component" = 'packages/plugins/channels' ] || [ "$policy_component" = 'packages/plugins/channel-email' ] || [ "$policy_component" = 'packages/plugins/channel-telegram' ] || [ "$policy_component" = 'packages/plugins/channel-discord' ] || [ "$policy_component" = 'packages/plugins/scm-github' ] || [ "$policy_component" = 'packages/plugins/app-context' ] || [ "$policy_component" = 'packages/plugins/inspector' ] || [ "$policy_component" = 'packages/plugins/linear' ] || [ "$policy_component" = 'packages/plugins/jira' ] || [ "$policy_component" = 'packages/plugins/sentry' ] || [ "$policy_component" = 'packages/plugins/posthog' ] || [ "$policy_component" = 'packages/plugins/claude' ]; } && { [ "$policy_config" = 'vitest.config.ts' ]; } && { [ "$policy_resolverOverride" = '0' ]; }; then
     policy_kind='source-test'
   fi
   if { [ "$policy_kind" = 'runtime' ]; } && { [ "$policy_runnerKnown" = '1' ]; } && { [ "$policy_component" = 'apps/cli' ]; } && { [ "$policy_config" = 'vitest.source.integration.config.ts' ]; } && { [ "$policy_resolverOverride" = '0' ]; }; then
     policy_kind='source-test'
   fi
-  if { [ "$policy_kind" = 'runtime' ]; } && { [ "$policy_runnerKnown" = '1' ]; } && { [ "$policy_component" = 'apps/ui' ]; } && { [ "$policy_config" = 'vitest.integration.config.ts' ]; } && { [ "$policy_resolverOverride" = '0' ]; }; then
+  if { [ "$policy_kind" = 'source-test' ]; } && { [ "$policy_component" = 'apps/cli' ]; } && { [ "$policy_workerTool" = 'vitest' ]; }; then
+    policy_workspaceLock=''
+    policy_requiredTools=''
+  fi
+  if { [ "$policy_kind" = 'source-test' ]; } && { [ "$policy_component" = 'apps/cli' ]; } && { [ "$policy_workerTool" = 'vitest' ]; } && { [ "$policy_config" = 'vitest.config.ts' ]; } && { [ "$policy_generatorCheck" = '0' ]; } && { [ "$policy_testFileSelected" = '0' ]; }; then
+    policy_heavyClass='compilation'
+  fi
+  if { [ "$policy_kind" = 'runtime' ]; } && { [ "$policy_runnerKnown" = '1' ]; } && { [ "$policy_component" = 'apps/ui' ] || [ "$policy_component" = 'apps/server' ]; } && { [ "$policy_config" = 'vitest.integration.config.ts' ]; } && { [ "$policy_resolverOverride" = '0' ]; }; then
     policy_kind='source-test'
   fi
   if { [ "$policy_heavyClass" = 'compilation' ] || [ "$policy_heavyClass" = 'compilation-ui' ] || [ "$policy_heavyClass" = 'compilation-cli' ] || [ "$policy_heavyClass" = 'compilation-server' ] || [ "$policy_heavyClass" = 'package-dist' ] || [ "$policy_heavyClass" = 'runtime-build' ]; }; then
     policy_localCompile='1'
+  fi
+  if [ "$policy_kind" = source-test ] && [ "$policy_workerTool" = vitest ] && [ "$policy_generatorCheck" = 0 ]; then
+    policy_requiredTools=$(node "${projection_command_policy:-$repo_root/apps/stack/scripts/utils/dev_targets/remote_commands.mjs}" --source-test-tools "$repo_root" "$policy_component" "$policy_requiredTools") || return $?
   fi
 }
 native_package_manager() { case "$1" in npm|npx|pnpm|yarn) return 0 ;; *) return 1 ;; esac; }
@@ -443,6 +457,7 @@ native_command_basename() {
   native_basename=${native_basename##*/}
 }
 native_node_entry() {
+  native_node_prefix_count=$#
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -455,6 +470,7 @@ native_node_entry() {
       *) break ;;
     esac
   done
+  native_node_prefix_count=$((native_node_prefix_count - $#))
   native_entry_path=${1-}
   native_command_basename "$native_entry_path"; policy_entry=$native_basename
 }
@@ -493,11 +509,11 @@ native_try_admission_payload() {
         [ "$#" -gt 0 ] || return 1
         # Positional custody preserves this wrapper's class through recursion.
         set -- "$native_wrapper_class" "$@"
-        native_resolve_admission_payload "$@"
+        native_resolve_admission_payload "$@" || return 2
         [ "$policy_bootstrap" = 1 ] || return 1
         policy_admissionWrapper=1
         policy_admissionClass=$1
-        native_command_policy_finish
+        native_command_policy_finish || return 2
         return 0
         ;;
       *) return 1 ;;
@@ -511,7 +527,11 @@ resolve_native_command_policy() {
   case "${1-}" in --script=*) native_script=${1#--script=}; shift; [ "${1-}" = -- ] && shift; set -- corepack yarn -s "$native_script" "$@" ;; esac
   native_command_basename "${1-}"; policy_command=$native_basename
   if [ "$policy_command" = hstack-exec ] && [ "${2-}" = --heavyweight-admission ]; then
-    if native_try_admission_payload "$@"; then return; fi
+    if native_try_admission_payload "$@"; then return
+    else
+      native_wrapper_status=$?
+      [ "$native_wrapper_status" -eq 1 ] || return "$native_wrapper_status"
+    fi
     # An unsupported payload retains the original wrapper's policy.
     native_command_basename "${1-}"; policy_command=$native_basename
   fi
@@ -520,6 +540,7 @@ resolve_native_command_policy() {
   native_manager_cwd=; native_project=; policy_mode=write
   policy_nativeTest=0; policy_config=vitest.config.ts; policy_resolverOverride=0
   policy_nativeLoader=0
+  policy_testFileSelected=0
   policy_project=; policy_projectPaths=; policy_workerRequest=0
   policy_noCheck=0
   policy_declarations=0; policy_runScript=0
@@ -539,6 +560,7 @@ resolve_native_command_policy() {
   policy_stackScope=0
   case "$policy_component" in apps/stack|apps/stack/*) policy_stackScope=1 ;; esac
   native_entry_path=${2-}
+  native_node_prefix_count=0
   case "$policy_command" in
     node|nodejs) native_node_entry "$@" ;;
     *) if [ "${2-}" = --experimental-strip-types ]; then policy_stripTypes=1; native_entry_path=${3-}; native_command_basename "$native_entry_path"; policy_entry=$native_basename; fi ;;
@@ -579,11 +601,18 @@ resolve_native_command_policy() {
       --mode=*) policy_mode=${native_arg#--mode=} ;;
     esac
     case "$native_arg" in apps/stack/*|./apps/stack/*|*/apps/stack/*) policy_stackScope=1 ;; esac
+    case "$native_arg" in
+      -*) ;;
+      *.test.js|*.test.ts|*.test.mjs|*.test.mts|*.test.cjs|*.test.cts|*.test.jsx|*.test.tsx|*.spec.js|*.spec.ts|*.spec.mjs|*.spec.mts|*.spec.cjs|*.spec.cts|*.spec.jsx|*.spec.tsx) policy_testFileSelected=1 ;;
+    esac
   done
   native_normalize_path "$policy_config"; policy_config=$native_result
   policy_project=$native_project
   policy_nativeTestPath=; native_test_count=0; native_test_component=; native_test_component_mixed=0
+  native_test_argument_index=0
   for native_arg in "$@"; do
+    native_test_argument_index=$((native_test_argument_index + 1))
+    [ "$native_test_argument_index" -gt "$native_node_prefix_count" ] || continue
     case "$native_arg" in -*) continue ;; *.mjs|*.cjs|*.js|*.ts|*.mts|*.cts) ;; *) continue ;; esac
     native_normalize_path "$native_arg"; native_test_path=$native_result
     case "$native_test_path" in "$repo_root"/*) native_test_path=${native_test_path#"$repo_root"/} ;; *) native_normalize_path "$policy_component/$native_test_path"; native_test_path=$native_result ;; esac
@@ -634,7 +663,7 @@ resolve_native_command_policy() {
   [ -n "$policy_componentOverride" ] && policy_component=$policy_componentOverride
   if [ -z "$policy_componentOverride" ] && [ "$policy_componentFromNative" = 1 ] && [ -n "$native_test_component" ]; then policy_component=$native_test_component; fi
   case "$policy_component" in packages/*) policy_packageComponent=1 ;; *) policy_packageComponent=0 ;; esac
-  native_command_policy_finish
+  native_command_policy_finish || return $?
   case "$policy_command:$policy_nativeTest:$policy_nativeLoader" in
     node:1:0|nodejs:1:0)
       if [ -n "$policy_nativeTestPath" ] && [ -f "$repo_root/$policy_nativeTestPath" ]; then

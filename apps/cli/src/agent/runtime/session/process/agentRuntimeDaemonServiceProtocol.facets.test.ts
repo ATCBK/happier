@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { projectAgentRuntimeDaemonServiceTurnWitnessV1 } from './agentRuntimeDaemonServiceTurnWitness';
 
 import {
   AgentRuntimeDaemonServiceRequestV1Schema,
@@ -25,6 +26,17 @@ function request(operation: unknown) {
 }
 
 describe('Agent runtime daemon-owned session facets protocol', () => {
+  it('transports the exact host request cause with its turn admission witness', () => {
+    const actionRequestAttributionV1 = { requestRef: 'input-1',
+      requester: { serverId: 'home', accountId: 'bob' },
+      persona: { serverId: 'home', sessionId: 'session-1' }, origin: null };
+    const projected = projectAgentRuntimeDaemonServiceTurnWitnessV1({ ...witness, actionRequestAttributionV1 });
+    const envelope = AgentRuntimeDaemonServiceRequestV1Schema.parse(request({
+      kind: 'turn.admission.authorize', requestId: 'input-1', witness: projected,
+    }));
+    expect(envelope.operation).toMatchObject({ witness: { actionRequestAttributionV1 } });
+  });
+
   it('uses only the rotating bearer and Session identity for daemon-service context', () => {
     const base = request({
       kind: 'voice.authority.snapshot',
@@ -43,6 +55,20 @@ describe('Agent runtime daemon-owned session facets protocol', () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it('admits Plugin service subscription polling through the complete daemon-service envelope', () => {
+    expect(AgentRuntimeDaemonServiceRequestV1Schema.parse(request({
+      kind: 'plugin_services.subscription.next_v1',
+      requestId: 'plugin-subscription-next-1',
+      invocationId: 'invocation-1',
+      subscriptionId: 'subscription-1',
+    })).operation).toEqual({
+      kind: 'plugin_services.subscription.next_v1',
+      requestId: 'plugin-subscription-next-1',
+      invocationId: 'invocation-1',
+      subscriptionId: 'subscription-1',
+    });
   });
 
   it('admits one strict runner-owned session-open attestation', () => {

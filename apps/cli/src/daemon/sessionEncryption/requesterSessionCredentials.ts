@@ -1,6 +1,9 @@
+import { readRequesterHomeWithinActionLifetime, rethrowRequesterHomeReadFailure, requesterCurrentnessCheckpoint, type RequesterCurrentnessObservation } from './requesterCurrentness';
+
 import { join } from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { isDeepStrictEqual } from 'node:util';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { SessionRequesterBootstrapCredentialsV1Schema } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import type { SessionRequesterBootstrapV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
@@ -8,28 +11,37 @@ import { readSessionAccessProjectionRoleV1 } from '@happier-dev/protocol/session
 import { configuration } from '@/configuration';
 import { bindRequesterSessionCredentialScope, decodeStoredCredentials, encodeStoredCredentials, type StoredCredentials } from '@/persistence';
 import { fetchAccountProfile } from '@/api/accountProfile';
-import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
-import { normalizeServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { fetchAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentness';
+import { acquireRequesterAccountEncryptionCurrentness, readRequesterAccountEncryptionCurrentness, waitForObservation,
+  isRequesterAccountEncryptionCurrentnessObserved, sameRequesterAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentnessObservation';
+import { normalizeServerHttpBaseUrl, resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
 import { ensureSessionMachineAccessKeyBinding } from '@/api/session/ensureSessionMachineAccessKeyBinding';
 import { tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
 import { SessionCreationCorrespondenceV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
 import { readPrivateOwnerFile, writePrivateOwnerFile, replacePrivateBearerFile, removePrivateBearerFile } from '../privateBearerFile';
-import { RequesterWorkAttributionV1Schema, type RequesterWorkAttributionV1 } from '../lifecycle/requesterWorkAttribution';
+import { RequesterWorkAttributionV1Schema, isCustodianMachineAdmission, type RequesterWorkAttributionV1 } from '../lifecycle/requesterWorkAttribution';
 import type { RpcHandlerContext } from '@/api/rpc/types';
 import { bootstrapAccountSettingsContext, type AccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import type { ApiClient } from '@/api/api';
 import type { ExecuteSpawnSessionRequestParams } from '../startup/executeSpawnSessionRequest';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { createInvocationSavedSecretOperationContextV1, type SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1, type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
+import { createRequesterAccountSettingsPublication } from '@/settings/accountSettings/requesterAccountSettingsPublication';
 import type { ConnectedServiceQualifiedAuthGroupApi } from '../connectedServices/resolveConnectedServiceAuthForSpawn';
 import type { QualifiedConnectedAccountEstablishedRuntimeOwner } from '../connectedServices/qualifiedConnectedAccountEstablishedRuntimeOwner';
 import type { RequesterAccountActionAuthorizationInput } from './requesterAccountActionProjection';
 import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
+import { readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
-import { verifyMachineRpcAdmissionCurrent } from '@/api/machine/machineRpcAuthorization';
+import { readMachineRpcAdmissionCurrentOrThrow } from '@/api/machine/machineRpcAuthorization';
 import { listProtectedLocalStateDirectory } from '@/utils/fs/protectedLocalState';
+import { logger } from '@/utils/logger';
+import { performance } from 'node:perf_hooks';
+
+import type { TrackedSession } from '../types';
+import { readWebLatencyTracePoint, timeWebLatencyPhase } from "../externalActions/webLatencyTrace";
 
 /** Existing requester projection owner; private Account ports stay on the admitted authorization carrier. */
 export async function projectRequesterAccountActionAuthorization(
@@ -49,9 +61,12 @@ import type { ConnectedServiceRuntimeRegistry } from '../connectedServices/runti
 /** Exact live Session Account ports; owned by ordinary daemon Session lifecycle, never serialized. */
 export type RequesterSessionRuntimeContext = Readonly<{
   bootstrap: AdmittedRequesterSessionBootstrap;
-  /** Includes admission, saved-secret custody and this runtime's retirement. */
-  isCurrent(): Promise<boolean>;
+  /** One observation of admission, custody and retirement; signal cancels, never selects retry policy. */
+  isCurrent(signal?: AbortSignal): Promise<boolean>;
   api: ApiClient;
+  sessionFollowRuleCache: ReturnType<typeof import('@/agent/runtime/session/follow/accountSessionFollowRuleCache').createAccountSessionFollowRuleCache>;
+  /** The incumbent daemon observer binds the exact destination's source wake. */
+  bindSessionFollowSourceReconciliation(reconcile: (sourceSessionId: string | null) => Promise<void>, signal: AbortSignal): void;
   readAccountSettingsSnapshot(): ActiveAccountSettingsSnapshot;
   readAccountLaunchProfiles(): Promise<Awaited<ReturnType<typeof import('@/settings/profiles/readProfilesFromAccountSettings').readAccountLaunchProfiles>>>;
   subscribeAccountSettingsSnapshot(listener: () => void): () => void;
@@ -76,25 +91,134 @@ export type RequesterSessionRuntimeContext = Readonly<{
   | 'activateSessionPurposeBindings' | 'activatePurposeBindings'>;
 
 export type ResolveRequesterSessionRuntimeContext = (
-  sessionId: string, attribution?: RequesterWorkAttributionV1,
+  sessionId: string, attribution?: RequesterWorkAttributionV1, signal?: AbortSignal,
+  onPreparationRefused?: (bootstrap: AdmittedRequesterSessionBootstrap) => Promise<void>,
 ) => Promise<RequesterSessionRuntimeContext | null>;
+
+/** The daemon's one tracked/recovered requester selection and publication owner. */
+export function createRequesterSessionRuntimeContextResolver(input: Readonly<{
+  trackedSessions: ReadonlyMap<number, TrackedSession>;
+  getCreateRuntime(): ((bootstrap: AdmittedRequesterSessionBootstrap, signal?: AbortSignal) => Promise<RequesterSessionRuntimeContext | null>) | null;
+  recoverBootstrap(input: Readonly<{ sessionId: string; attribution?: RequesterWorkAttributionV1; tracked: boolean; signal?: AbortSignal;
+    onSessionReadRefused?: () => void }>): Promise<AdmittedRequesterSessionBootstrap | null>;
+}>): ResolveRequesterSessionRuntimeContext {
+  const pidToTrackedSession = input.trackedSessions;
+  return async (sessionId, attribution, signal, onPreparationRefused) => {
+    if (signal?.aborted) return null;
+    // Exited runners no longer lend requester authority. Inactive operations
+    // still recover their own temporary context through the same custody path.
+    const tracked = [...pidToTrackedSession.values()].find(candidate => candidate.happySessionId === sessionId
+      && candidate.reportMarkerCustody?.retiring !== true);
+    const context = tracked?.requesterSessionRuntimeContext;
+    if (!context && !input.getCreateRuntime()) return null;
+    let stamp = tracked?.requesterWorkAttributionV1 ?? tracked?.spawnOptions?.requesterWorkAttributionV1
+      ?? context?.bootstrap.attribution ?? attribution;
+    if (stamp && attribution && !isDeepStrictEqual(stamp, attribution)) return null;
+    let sessionReadRefused = false;
+    const recoverBootstrap = (observeRefusal = true) => input.recoverBootstrap({ sessionId, ...(stamp ? { attribution: stamp } : {}), tracked: tracked !== undefined,
+      ...(signal ? { signal } : {}),
+      ...(onPreparationRefused && observeRefusal ? { onSessionReadRefused: () => { sessionReadRefused = true; } } : {}) });
+    const settlePreparationRefusal = async () => {
+      if (!sessionReadRefused || !onPreparationRefused || signal?.aborted) return;
+      // A failed read is not authority. Only a newly verified bootstrap may
+      // report that refusal; persistent unreadability keeps activation waiting.
+      const current = await recoverBootstrap(false);
+      if (!current) return;
+      try { if (!signal?.aborted && await current.isCurrent(signal)) await onPreparationRefused(current); }
+      finally { await current.dispose(); }
+    };
+    const coldBootstrap = !context ? await recoverBootstrap() : null;
+    stamp ??= coldBootstrap?.attribution;
+    if (!stamp) { await settlePreparationRefusal(); return null; }
+    const stillOwnsTrackedContext = (expected: RequesterSessionRuntimeContext | undefined): boolean => {
+      const currentStamp = tracked?.requesterWorkAttributionV1 ?? tracked?.spawnOptions?.requesterWorkAttributionV1;
+      return tracked !== undefined && tracked.requesterSessionRuntimeContext === expected
+        && tracked.reportMarkerCustody?.retiring !== true
+        && [...pidToTrackedSession.values()].some(candidate => candidate === tracked && candidate.happySessionId === sessionId)
+        && (!currentStamp || isDeepStrictEqual(currentStamp, stamp));
+    };
+    if (context) {
+      const contextStamp = context.bootstrap.attribution;
+      if (contextStamp.serverId !== stamp.serverId || contextStamp.accountId !== stamp.accountId
+        || contextStamp.machineId !== stamp.machineId || contextStamp.installationId !== stamp.installationId
+        || context.bootstrap.getBoundSessionId() !== sessionId) return null;
+      if (await context.isCurrent(signal)) {
+        if (tracked && !stillOwnsTrackedContext(context)) return null;
+        if (tracked) tracked.requesterWorkAttributionV1 = stamp;
+        return context;
+      }
+    }
+    if (signal?.aborted) return null;
+    const createRequesterRuntime = input.getCreateRuntime();
+    if (!createRequesterRuntime) return null;
+    const bootstrap = context ? await recoverBootstrap() : coldBootstrap;
+    if (!bootstrap) { await settlePreparationRefusal(); return null; }
+    const recovered = await createRequesterRuntime(bootstrap, signal);
+    if (!recovered) { bootstrap.savedSecretOperationContext.withdrawCatalog(); return null; }
+    if (tracked) {
+      const stillTracked = tracked.reportMarkerCustody?.retiring !== true && [...pidToTrackedSession.values()].some(candidate => candidate === tracked
+        && candidate.happySessionId === sessionId);
+      if (!stillTracked) { await recovered.dispose(); return null; }
+      const incumbent = tracked.requesterSessionRuntimeContext;
+      if (incumbent && incumbent !== context) {
+        await recovered.dispose();
+        const incumbentStamp = incumbent.bootstrap.attribution;
+        return incumbentStamp.serverId === stamp.serverId && incumbentStamp.accountId === stamp.accountId
+          && incumbentStamp.machineId === stamp.machineId && incumbentStamp.installationId === stamp.installationId
+          && incumbent.bootstrap.getBoundSessionId() === sessionId
+          && await incumbent.isCurrent(signal) && stillOwnsTrackedContext(incumbent) ? incumbent : null;
+      }
+      if (!await recovered.isCurrent(signal) || !stillOwnsTrackedContext(context)) {
+        await recovered.dispose(); return null;
+      }
+      tracked.requesterSessionRuntimeContext = recovered;
+      tracked.requesterWorkAttributionV1 = stamp;
+      if (context) await releaseUnretainedRequesterSessionRuntimeContext(context,
+        [...pidToTrackedSession.values()].map(candidate => candidate.requesterSessionRuntimeContext));
+    }
+    return recovered;
+  };
+}
+
+export type ReleaseRequesterSessionRuntimeContext = (context: RequesterSessionRuntimeContext) => Promise<void>;
+
+/** A tracked runner owns its exact requester; other acquisitions are temporary. */
+export async function releaseUnretainedRequesterSessionRuntimeContext(
+  context: RequesterSessionRuntimeContext,
+  retainedContexts: Iterable<RequesterSessionRuntimeContext | null | undefined>,
+): Promise<void> {
+  for (const retained of retainedContexts) if (retained === context) return;
+  await context.dispose();
+}
+
+/** Recovery can return a borrowed tracked runtime or a temporary operation owner. */
+export type RequesterSessionRuntimeContextPorts =
+  | Readonly<{
+    resolveRequesterSessionRuntimeContext: ResolveRequesterSessionRuntimeContext;
+    releaseRequesterSessionRuntimeContext: ReleaseRequesterSessionRuntimeContext;
+  }>
+  | Readonly<{
+    resolveRequesterSessionRuntimeContext?: undefined;
+    releaseRequesterSessionRuntimeContext?: undefined;
+  }>;
 
 /** Canonical Session Account assertion used by the daemon's captured operation context. */
 export async function assertRequesterSessionAccountContextCurrent(input: Readonly<{
   expected: RequesterSessionRuntimeContext | null;
+  signal?: AbortSignal;
   resolveCurrent(): Promise<RequesterSessionRuntimeContext | null>;
   readTrackedContext(): RequesterSessionRuntimeContext | null;
 }>): Promise<void> {
   if (input.expected) {
     const tracked = input.readTrackedContext();
-    if (tracked && tracked !== input.expected || !await input.expected.isCurrent()) {
+    if (tracked && tracked !== input.expected || !await input.expected.isCurrent(input.signal)) {
       throw new Error('requester_session_not_current');
     }
     return;
   }
   const current = await input.resolveCurrent();
   if (!current) return;
-  if (input.readTrackedContext() !== current) await current.dispose();
+  await releaseUnretainedRequesterSessionRuntimeContext(current, [input.readTrackedContext()]);
   throw new Error('requester_session_not_current');
 }
 
@@ -104,15 +228,25 @@ export const REQUESTER_SESSION_ID_ENV = 'HAPPIER_SESSION_REQUESTER_SESSION_ID';
 /** Created by the receiving host after admission; never accepted from decrypted caller input. */
 export type AdmittedRequesterSessionBootstrap = Readonly<{
   credentials: StoredCredentials;
+  /** Host-verified Machine custodian identity; caller origin never grants native credentials. */
+  allowNativeAccountCredentials: boolean;
   preparedSessionId?: string;
   attribution: RequesterWorkAttributionV1;
   serverHttpBaseUrl: string;
   accountSettingsContext: AccountSettingsContext;
   savedSecretOperationContext: SavedSecretOperationContextV1;
-  isCurrent(): Promise<boolean>;
+  ensureAccountSettingsCurrent(signal?: AbortSignal): Promise<boolean>;
+  refreshAccountSettings(minSettingsVersion?: number, signal?: AbortSignal): Promise<boolean>;
+  subscribeAccountSettings(listener: () => void): () => void;
+  subscribeSessionFollowRules(listener: () => void): () => void;
+  subscribeSessionFollowSources(listener: (sourceSessionId: string | null) => void): () => void;
+  /** One authority observation; accepted preparation owns any retry outside this reader. */
+  isCurrent(signal?: AbortSignal): Promise<boolean>;
+  /** Retires this bootstrap's observation when its ordinary runtime lifetime ends. */
+  dispose(): Promise<void>;
   getBoundSessionId(): string | null;
   /** Installed by the ordinary daemon runtime owner, never by transported caller input. */
-  bindRuntimeMachineAdmissionCurrentness(verify: () => Promise<boolean>): void;
+  bindRuntimeMachineAdmissionCurrentness(verify: (signal?: AbortSignal) => Promise<boolean>): void;
   projectExternalActionAuthorization(authorization: ExternalActionExecutionAuthorizationV1,
     observedServerIdentityId: string, signal?: AbortSignal): Promise<ExternalActionExecutionAuthorizationV1 | null>;
   bindSession(sessionId: string, sessionCreationTag: string): Promise<Readonly<{ path: string; cleanup(): Promise<void> }> | null>;
@@ -134,11 +268,11 @@ export async function admitRequesterSessionBootstrap(input: Readonly<{
   const attribution = RequesterWorkAttributionV1Schema.parse({ serverId: input.boundary.serverId,
     accountId: admission.actorAccountId, machineId: admission.machineId, installationId: admission.installationId });
   const preparedSessionId = 'sessionId' in input.bootstrap ? input.bootstrap.sessionId : undefined;
-  return await prepareRequesterSessionBootstrap({ credentials, attribution, boundary: input.boundary,
+  return await readRequesterHomeWithinActionLifetime(() => prepareRequesterSessionBootstrap({ credentials, attribution, boundary: input.boundary,
     machineAdmission: admission,
     verifyMachineAdmissionCurrent: verify, signal: input.context.signal,
     ...(input.existingSessionId ? { preparedSessionId: input.existingSessionId, boundSessionId: input.existingSessionId } : {}),
-    ...(preparedSessionId ? { preparedSessionId } : {}) });
+    ...(preparedSessionId ? { preparedSessionId } : {}) }), input.context.signal);
 }
 
 export async function prepareRequesterSessionBootstrap(input: Readonly<{
@@ -146,12 +280,16 @@ export async function prepareRequesterSessionBootstrap(input: Readonly<{
   credentials: StoredCredentials;
   attribution: RequesterWorkAttributionV1;
   boundary: Readonly<{ serverId: string; serverHttpBaseUrl: string; happyHomeDir: string }>;
-  verifyMachineAdmissionCurrent(): Promise<boolean>;
+  verifyMachineAdmissionCurrent(signal?: AbortSignal): Promise<boolean>;
   signal?: AbortSignal;
   preparedSessionId?: string;
   boundSessionId?: string;
 }>): Promise<Readonly<{ admitted: AdmittedRequesterSessionBootstrap; cleanupOnFailure(): Promise<void> }> | null> {
-  const { credentials, attribution, preparedSessionId } = input;
+  const { attribution, preparedSessionId } = input;
+  // Session custody borrows the installed/parent credential. Its private
+  // scope must not mutate that owner's identity, and an existing private
+  // scope must remain binding on the borrowed copy.
+  const credentials = Object.defineProperties({ ...input.credentials }, Object.getOwnPropertyDescriptors(input.credentials));
   const machineAdmission = input.machineAdmission ? Object.freeze({
     actorAccountId: input.machineAdmission.actorAccountId, custodianAccountId: input.machineAdmission.custodianAccountId,
   }) : undefined;
@@ -159,92 +297,196 @@ export async function prepareRequesterSessionBootstrap(input: Readonly<{
   let bound: Readonly<{ sessionId: string; sessionCreationTag?: string }> | null = input.boundSessionId
     ? { sessionId: input.boundSessionId } : null;
   let verifyRuntime = input.boundSessionId ? verify : null;
-  const readAccountCurrentness = async () => await runWithServerHttpBaseUrl(input.boundary.serverHttpBaseUrl, async () => {
-    if (input.signal?.aborted || !await verify()) return null;
-    const [profile, currentness] = await Promise.all([
-      fetchAccountProfile({ token: credentials.token, ...(input.signal ? { signal: input.signal } : {}) }),
-      fetchAccountEncryptionCurrentness({ token: credentials.token, serverBaseUrl: input.boundary.serverHttpBaseUrl,
-        ...(input.signal ? { signal: input.signal } : {}) }),
-    ]);
-    return profile.id === attribution.accountId
-      && (currentness.mode === 'plain' ? credentials.encryption === null : credentials.encryption !== null)
-      && !input.signal?.aborted && await verify() ? currentness : null;
-  });
-  const currentness = await readAccountCurrentness();
-  if (!currentness) return null;
-  bindRequesterSessionCredentialScope(credentials, { serverId: attribution.serverId,
-    serverHttpBaseUrl: normalizeServerHttpBaseUrl(input.boundary.serverHttpBaseUrl) });
-  let cleanup: () => Promise<void> = async () => undefined;
-  const isCurrent = async () => bound
-    ? verifyRuntime !== null && await verifyRequesterSessionCredentialBinding({ credentials, ...bound, attribution,
-      ...(bound.sessionCreationTag ? { expectedSessionCreationTag: bound.sessionCreationTag } : {}),
-      serverHttpBaseUrl: input.boundary.serverHttpBaseUrl,
-      verifyMachineAdmissionCurrent: verifyRuntime })
-    : await readAccountCurrentness() !== null;
-  if (!await isCurrent()) return null;
-  const accountSettingsContext = await runWithServerHttpBaseUrl(input.boundary.serverHttpBaseUrl,
-    () => bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force', publication: 'invocation',
-      honorAccountSettingsModeEnv: false, minSettingsVersion: currentness.settingsVersion,
-      shouldCommit: () => !input.signal?.aborted }));
-  if (accountSettingsContext.source !== 'network' || !await isCurrent()) return null;
-  const savedSecretOperationContext = createInvocationSavedSecretOperationContextV1({ credentials,
-    machineAdmission,
-    snapshot: accountSettingsContext, serverHttpBaseUrl: input.boundary.serverHttpBaseUrl, isCurrent });
-  const persistVerifiedCustody = async (binding: Parameters<typeof verifyRequesterSessionCredentialBinding>[0]) => {
-    if (!await verifyRequesterSessionCredentialBinding(binding)) return null;
-    await bindRequesterSessionMachineControl(binding);
-    if (!await verifyRequesterSessionCredentialBinding(binding)) return null;
-    return await createRequesterSessionCredentialCustody({ ...binding, happyHomeDir: input.boundary.happyHomeDir });
-  };
-  const bindSession: AdmittedRequesterSessionBootstrap['bindSession'] = async (sessionId, sessionCreationTag) => {
-    if (!verifyRuntime || preparedSessionId && preparedSessionId !== sessionId || bound && (bound.sessionId !== sessionId
-      || bound.sessionCreationTag !== undefined && bound.sessionCreationTag !== sessionCreationTag) || !await isCurrent()) return null;
-    const binding = { credentials, sessionId, attribution, serverHttpBaseUrl: input.boundary.serverHttpBaseUrl,
-      verifyMachineAdmissionCurrent: bound ? verifyRuntime : verify,
-      ...(!bound && input.signal ? { signal: input.signal } : {}), expectedSessionCreationTag: sessionCreationTag };
-    const custody = await persistVerifiedCustody(binding);
-    if (!custody) return null;
-    bound = { sessionId, sessionCreationTag };
-    cleanup = custody.cleanup;
-    if (!await isCurrent()) { await cleanup(); return null; }
-    return { path: custody.path, cleanup };
-  };
-  const bindExistingSession: AdmittedRequesterSessionBootstrap['bindExistingSession'] = async sessionId => {
-    if (!bound || bound.sessionId !== sessionId || !verifyRuntime || !await isCurrent()) return null;
-    const binding = { credentials, sessionId, attribution, serverHttpBaseUrl: input.boundary.serverHttpBaseUrl,
-      verifyMachineAdmissionCurrent: verifyRuntime };
-    const custody = await persistVerifiedCustody(binding);
-    if (!custody) return null;
-    cleanup = custody.cleanup;
-    if (!await isCurrent()) { await cleanup(); return null; }
-    return { path: custody.path, cleanup };
-  };
-  const projectionBootstrap = { credentials, attribution, serverHttpBaseUrl: input.boundary.serverHttpBaseUrl, isCurrent,
-    getBoundSessionId: () => bound?.sessionId ?? null };
-  const projectExternalActionAuthorization: AdmittedRequesterSessionBootstrap['projectExternalActionAuthorization'] =
-    async (authorization, observedServerIdentityId, signal) => await projectRequesterAccountActionAuthorization({
-      authorization, serverIdentityId: observedServerIdentityId, bootstrap: projectionBootstrap,
-      ...(signal ? { signal } : {}),
+  let observation: ReturnType<typeof acquireRequesterAccountEncryptionCurrentness> | undefined;
+  let admitted = false;
+  let live = true;
+  const lifetime = new AbortController();
+  // A bound Session outlives its launch RPC, but never its bootstrap.
+  const launchSignal = input.signal ? AbortSignal.any([lifetime.signal, input.signal]) : lifetime.signal;
+  const currentnessSignal = () => bound ? lifetime.signal : launchSignal;
+  const observationScope = { accountId: attribution.accountId, token: credentials.token,
+    serverBaseUrl: input.boundary.serverHttpBaseUrl };
+  try {
+    const readAccountCurrentness = async (signal = currentnessSignal()) => await runWithServerHttpBaseUrl(input.boundary.serverHttpBaseUrl, async () => {
+      if (!live || signal.aborted || !await verify(signal)) return null;
+      const profile = await fetchAccountProfile({ token: credentials.token, signal });
+      if (profile.id !== attribution.accountId || !live || signal.aborted) return null;
+      observation ??= acquireRequesterAccountEncryptionCurrentness(observationScope);
+      const currentness = await observation.read(signal);
+      return (currentness.mode === 'plain' ? credentials.encryption === null : credentials.encryption !== null)
+        && live && !signal.aborted && await verify(signal)
+        && observation.isCurrent(currentness) ? currentness : null;
     });
-  return { admitted: Object.freeze({ credentials, ...(preparedSessionId ? { preparedSessionId } : {}),
-    attribution, serverHttpBaseUrl: input.boundary.serverHttpBaseUrl, accountSettingsContext,
-    savedSecretOperationContext, isCurrent, getBoundSessionId: () => bound?.sessionId ?? null, bindSession, bindExistingSession,
-    bindRuntimeMachineAdmissionCurrentness: (current: () => Promise<boolean>) => { verifyRuntime = current; },
-    projectExternalActionAuthorization,
-  }),
-    cleanupOnFailure: async () => {
+    const currentness = await readAccountCurrentness(launchSignal);
+    if (!currentness || !observation) return null;
+    const accountObservation = observation;
+    bindRequesterSessionCredentialScope(credentials, { serverId: attribution.serverId,
+      serverHttpBaseUrl: normalizeServerHttpBaseUrl(input.boundary.serverHttpBaseUrl) });
+    let cleanup: () => Promise<void> = async () => undefined;
+    const observeCurrent = async () => {
+      // This is a fresh Home-authority decision, not a cached encryption-identity
+      // read. A mode/key transition may precede its socket invalidation.
+      const fresh = await fetchAccountEncryptionCurrentness({ token: credentials.token,
+        serverBaseUrl: input.boundary.serverHttpBaseUrl, signal: currentnessSignal() });
+      if (!sameRequesterAccountEncryptionCurrentness(fresh, currentness)) return false;
+      // Creation correspondence is proven around custody binding below. Once
+      // bound, use the same fresh Session authority checks as cold recovery;
+      // reopening immutable owner metadata at every credential fence adds no
+      // runtime authority and needlessly repeats its decryption.
+      const current = bound
+      ? verifyRuntime !== null && await verifyRequesterSessionCredentialBinding({ credentials, sessionId: bound.sessionId, attribution,
+        serverHttpBaseUrl: input.boundary.serverHttpBaseUrl,
+        verifyMachineAdmissionCurrent: verifyRuntime, signal: currentnessSignal() })
+      : await readAccountCurrentness().then(next => next !== null && sameRequesterAccountEncryptionCurrentness(next, currentness));
+      return current && await isObservationCurrent();
+    };
+    // Ordinary readers share only an outstanding Home verification. Native
+    // checkpoints also share its result until their next effect boundary.
+    let currentObservation: RequesterCurrentnessObservation | undefined;
+    let currentnessKey = {};
+    const isObservationCurrent = async () => {
+      if (!live || currentnessSignal().aborted) return false;
+      if (isRequesterAccountEncryptionCurrentnessObserved(observationScope, currentness)) return true;
+      // Missing live evidence is not revocation. The observation owner
+      // distinguishes unavailable transport from a known changed Account fact.
+      const observed = await accountObservation.read(currentnessSignal());
+      return live && !currentnessSignal().aborted && sameRequesterAccountEncryptionCurrentness(observed, currentness);
+    };
+    const readCurrentness = async () => {
+      if (!await isObservationCurrent()) return false;
+      const checkpoint = requesterCurrentnessCheckpoint.getStore();
+      const read = (observed: RequesterCurrentnessObservation) => observed.pending
+        .then(current => current && isObservationCurrent()).catch(error => {
+          if (checkpoint?.observations.get(currentnessKey) === observed) checkpoint.observations.delete(currentnessKey);
+          throw error;
+        });
+      const shared = checkpoint?.active ? checkpoint.observations.get(currentnessKey) : undefined;
+      if (shared) return timeWebLatencyPhase('requester.currentness_reuse',
+        () => read(shared), shared.trace);
+      const reused = currentObservation;
+      if (!currentObservation) {
+        const pending = observeCurrent().finally(() => {
+          if (currentObservation?.pending === pending) currentObservation = undefined;
+        });
+        currentObservation = { pending, trace: readWebLatencyTracePoint() };
+      }
+      if (checkpoint?.active) checkpoint.observations.set(currentnessKey, currentObservation);
+      const observed = currentObservation;
+      return reused ? timeWebLatencyPhase('requester.currentness_reuse', () => read(observed), reused.trace) : read(observed);
+    };
+    const isCurrent = async (signal?: AbortSignal) => {
+      signal?.throwIfAborted();
+      return await (signal ? waitForObservation(readCurrentness(), signal) : readCurrentness());
+    };
+    const readPreparationCurrentness = () => isCurrent(input.signal);
+    if (!await readPreparationCurrentness()) return null;
+    const accountSettingsContext = await runWithServerHttpBaseUrl(input.boundary.serverHttpBaseUrl,
+      () => bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force', publication: 'invocation',
+        signal: launchSignal,
+        // Requester admission already requires network authority. A known minimum
+        // of zero also preserves a failed read instead of quietly returning cache.
+        expectedAccountEncryptionMode: currentness.mode, honorAccountSettingsModeEnv: false, minSettingsVersion: currentness.settingsVersion ?? 0,
+        shouldCommit: () => !input.signal?.aborted }));
+    if (accountSettingsContext.source !== 'network' || !await readPreparationCurrentness()) return null;
+    const savedSecretOperationContext = createInvocationSavedSecretOperationContextV1({ credentials,
+      machineAdmission,
+      snapshot: accountSettingsContext, serverHttpBaseUrl: input.boundary.serverHttpBaseUrl, isCurrent });
+    const settingsPublication = createRequesterAccountSettingsPublication({ observation: accountObservation, currentness, operationContext: savedSecretOperationContext });
+    const dispose = async () => {
+      live = false;
+      lifetime.abort();
+      settingsPublication.dispose();
       savedSecretOperationContext.withdrawCatalog();
-      await cleanup();
-    } };
+      await savedSecretOperationContext.isCurrent();
+      await observation?.dispose();
+    };
+    const persistVerifiedCustody = async (binding: Parameters<typeof verifyRequesterSessionCredentialBinding>[0]) => {
+      if (!await verifyRequesterSessionCredentialBinding(binding)) return null;
+      await bindRequesterSessionMachineControl(binding);
+      if (!await verifyRequesterSessionCredentialBinding(binding)) return null;
+      return await createRequesterSessionCredentialCustody({ ...binding, happyHomeDir: input.boundary.happyHomeDir });
+    };
+    const bindSession: AdmittedRequesterSessionBootstrap['bindSession'] = async (sessionId, sessionCreationTag) => {
+      if (!verifyRuntime || preparedSessionId && preparedSessionId !== sessionId || bound && (bound.sessionId !== sessionId
+        || bound.sessionCreationTag !== undefined && bound.sessionCreationTag !== sessionCreationTag) || !await isCurrent()) return null;
+      const binding = { credentials, sessionId, attribution, serverHttpBaseUrl: input.boundary.serverHttpBaseUrl,
+        verifyMachineAdmissionCurrent: bound ? verifyRuntime : verify,
+        signal: currentnessSignal(), expectedSessionCreationTag: sessionCreationTag };
+      const custody = await persistVerifiedCustody(binding);
+      if (!custody) return null;
+      bound = { sessionId, sessionCreationTag };
+      currentObservation = undefined;
+      currentnessKey = {};
+      cleanup = custody.cleanup;
+      if (!await isCurrent()) { await cleanup(); return null; }
+      return { path: custody.path, cleanup };
+    };
+    const bindExistingSession: AdmittedRequesterSessionBootstrap['bindExistingSession'] = async sessionId => {
+      if (!bound || bound.sessionId !== sessionId || !verifyRuntime || !await isCurrent()) return null;
+      const binding = { credentials, sessionId, attribution, serverHttpBaseUrl: input.boundary.serverHttpBaseUrl,
+        verifyMachineAdmissionCurrent: verifyRuntime, signal: currentnessSignal() };
+      const custody = await persistVerifiedCustody(binding);
+      if (!custody) return null;
+      cleanup = custody.cleanup;
+      if (!await isCurrent()) { await cleanup(); return null; }
+      return { path: custody.path, cleanup };
+    };
+    const projectionBootstrap = { credentials, attribution, serverHttpBaseUrl: input.boundary.serverHttpBaseUrl, isCurrent,
+      getBoundSessionId: () => bound?.sessionId ?? null };
+    const projectExternalActionAuthorization: AdmittedRequesterSessionBootstrap['projectExternalActionAuthorization'] =
+      async (authorization, observedServerIdentityId, signal) => await projectRequesterAccountActionAuthorization({
+        authorization, serverIdentityId: observedServerIdentityId, bootstrap: projectionBootstrap,
+        ...(signal ? { signal } : {}),
+      });
+    admitted = true;
+    return { admitted: Object.freeze({ credentials, ...(preparedSessionId ? { preparedSessionId } : {}),
+      allowNativeAccountCredentials: machineAdmission?.actorAccountId === attribution.accountId
+        && isCustodianMachineAdmission(machineAdmission),
+      attribution, serverHttpBaseUrl: input.boundary.serverHttpBaseUrl, accountSettingsContext,
+      savedSecretOperationContext, isCurrent, dispose, getBoundSessionId: () => bound?.sessionId ?? null, bindSession, bindExistingSession,
+      ensureAccountSettingsCurrent: settingsPublication.ensureCurrent, subscribeAccountSettings: settingsPublication.subscribe,
+      subscribeSessionFollowRules: accountObservation.subscribeSessionFollowRules,
+      subscribeSessionFollowSources: accountObservation.subscribeSessionFollowSources,
+      refreshAccountSettings: settingsPublication.refresh,
+      bindRuntimeMachineAdmissionCurrentness: (current: (signal?: AbortSignal) => Promise<boolean>) => {
+        verifyRuntime = current;
+        currentObservation = undefined;
+        currentnessKey = {};
+      },
+      projectExternalActionAuthorization,
+    }),
+      cleanupOnFailure: async () => {
+        await dispose();
+        await cleanup();
+      } };
+  } catch (error) {
+    rethrowRequesterHomeReadFailure(error);
+    throw error;
+  } finally {
+    if (!admitted) { live = false; lifetime.abort(); await observation?.dispose(); }
+  }
 }
 
 /** Daemon credentials sign installation proofs only; requester content always uses the protected requester bearer. */
 export type RequesterSessionMachineAdmissionBoundary = Readonly<{
   machineId: string;
   daemonToken: string;
+  signal?: AbortSignal;
   isHomeCurrent(): boolean;
   readInstallation(): Readonly<{ installationId: string; privateKey: string | Uint8Array }> | null;
 }>;
+
+// Discovery belongs to one binding invocation, including opaque ingress
+// callbacks that reach this same Machine owner. It never retains authority:
+// both Machine checks still sign and ask Home, and every later binding discovers
+// its context anew. Exact identity matching prevents another callback borrowing it.
+type RequesterBindingDiscovery = {
+  active: boolean;
+  binding: Readonly<{ credentials: StoredCredentials; sessionId: string;
+    attribution: RequesterWorkAttributionV1; serverHttpBaseUrl: string }>;
+  context?: NonNullable<RpcHandlerContext['machineAdmission']>;
+};
+const requesterBindingDiscovery = new AsyncLocalStorage<RequesterBindingDiscovery>();
 
 /** Runtime authority follows custody binding, not a prepared Session id or the completed launch RPC. */
 export function bindRequesterSessionRuntimeMachineAdmissionCurrentness(input: Readonly<{
@@ -252,106 +494,159 @@ export function bindRequesterSessionRuntimeMachineAdmissionCurrentness(input: Re
   boundary: RequesterSessionMachineAdmissionBoundary;
 }>): void {
   const { bootstrap, boundary } = input;
-  bootstrap.bindRuntimeMachineAdmissionCurrentness(async () => {
+  bootstrap.bindRuntimeMachineAdmissionCurrentness(async signal => {
     const sessionId = bootstrap.getBoundSessionId();
     if (sessionId === null) return false;
     return await verifyRequesterSessionMachineAdmissionCurrent({
       credentials: bootstrap.credentials, attribution: bootstrap.attribution, sessionId,
-      serverHttpBaseUrl: bootstrap.serverHttpBaseUrl, boundary,
+      serverHttpBaseUrl: bootstrap.serverHttpBaseUrl, boundary, signal,
     });
   });
 }
 
 /** Fresh facts come from the existing authenticated access reader and C41 verifier, not a retained RPC envelope. */
-export async function verifyRequesterSessionMachineAdmissionCurrent(input: Readonly<{
+async function readRequesterSessionMachineAdmissionCurrent(input: Readonly<{
   credentials: StoredCredentials;
   sessionId: string;
   attribution: RequesterWorkAttributionV1;
   serverHttpBaseUrl: string;
   boundary: RequesterSessionMachineAdmissionBoundary;
-}>): Promise<boolean> {
-  try {
-    const installation = input.boundary.readInstallation();
-    if (!input.boundary.isHomeCurrent() || input.attribution.machineId !== input.boundary.machineId
-      || installation?.installationId !== input.attribution.installationId) return false;
-    const readAccess = createAccountServerActionDeps({ token: input.credentials.token,
-      serverId: input.attribution.serverId, serverHttpBaseUrl: input.serverHttpBaseUrl }).machineAccessAction;
-    if (!readAccess) return false;
-    const [profile, result] = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => Promise.all([
-      fetchAccountProfile({ token: input.credentials.token }),
-      readAccess({ actionId: 'machines.access.grants.list', input: { serverId: input.attribution.serverId,
-        machineId: input.attribution.machineId }, context: { surface: 'cli', serverId: input.attribution.serverId } }),
-    ]));
-    const access = MachineAccessGrantsListResponseV1Schema.safeParse(result);
-    if (profile.id !== input.attribution.accountId || !access.success
-      || access.data.machineId !== input.attribution.machineId || access.data.access.accessState !== 'ready'
-      || access.data.custodian.accountId !== access.data.access.custodian.accountId
-      || !input.boundary.isHomeCurrent()
-      || input.boundary.readInstallation()?.installationId !== installation.installationId) return false;
-    const current = await verifyMachineRpcAdmissionCurrent({ context: { actorAccountId: profile.id,
-      custodianAccountId: access.data.custodian.accountId, machineId: input.attribution.machineId,
-      installationId: installation.installationId, role: access.data.access.role,
-      encryptionMode: access.data.access.resourceMode }, purpose: { kind: 'requester_session_currentness', sessionId: input.sessionId },
-      privateKey: installation.privateKey, daemonToken: input.boundary.daemonToken, serverHttpBaseUrl: input.serverHttpBaseUrl });
-    return current && input.boundary.isHomeCurrent()
-      && input.boundary.readInstallation()?.installationId === installation.installationId;
-  } catch { return false; }
+  signal?: AbortSignal;
+}>): Promise<NonNullable<RpcHandlerContext['machineAdmission']> | null> {
+  return await timeWebLatencyPhase('requester.machine_verification', async () => {
+    try {
+      const signal = input.signal && input.boundary.signal
+        ? AbortSignal.any([input.signal, input.boundary.signal]) : input.signal ?? input.boundary.signal;
+      if (signal?.aborted) return null;
+      const installation = input.boundary.readInstallation();
+      if (!input.boundary.isHomeCurrent() || input.attribution.machineId !== input.boundary.machineId
+        || installation?.installationId !== input.attribution.installationId) return null;
+      const scope = requesterBindingDiscovery.getStore();
+      const discovery = scope?.active && scope.binding.credentials.token === input.credentials.token
+        && scope.binding.sessionId === input.sessionId && isDeepStrictEqual(scope.binding.attribution, input.attribution)
+        && normalizeServerHttpBaseUrl(scope.binding.serverHttpBaseUrl) === normalizeServerHttpBaseUrl(input.serverHttpBaseUrl)
+        ? scope : undefined;
+      let context = discovery?.context;
+      if (!context) {
+        const readAccess = createAccountServerActionDeps({ token: input.credentials.token,
+          serverId: input.attribution.serverId, serverHttpBaseUrl: input.serverHttpBaseUrl }).machineAccessAction;
+        if (!readAccess) return null;
+        const [profile, result] = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => Promise.all([
+          timeWebLatencyPhase('requester.machine_profile', () => fetchAccountProfile({ token: input.credentials.token, signal })),
+          timeWebLatencyPhase('requester.machine_access', () => readAccess({ actionId: 'machines.access.grants.list', input: { serverId: input.attribution.serverId,
+            machineId: input.attribution.machineId }, context: { surface: 'cli', serverId: input.attribution.serverId }, signal })),
+        ]));
+        rethrowRequesterHomeReadFailure(result);
+        const access = MachineAccessGrantsListResponseV1Schema.safeParse(result);
+        if (profile.id !== input.attribution.accountId || !access.success
+          || access.data.machineId !== input.attribution.machineId || access.data.access.accessState !== 'ready'
+          || access.data.custodian.accountId !== access.data.access.custodian.accountId
+          || !input.boundary.isHomeCurrent()
+          || input.boundary.readInstallation()?.installationId !== installation.installationId) return null;
+        context = { actorAccountId: profile.id,
+          custodianAccountId: access.data.custodian.accountId, machineId: input.attribution.machineId,
+          installationId: installation.installationId, role: access.data.access.role,
+          encryptionMode: access.data.access.resourceMode };
+      }
+      const current = await timeWebLatencyPhase('requester.machine_signed_verification', () => readMachineRpcAdmissionCurrentOrThrow({ context,
+        purpose: { kind: 'requester_session_currentness', sessionId: input.sessionId },
+        privateKey: installation.privateKey, daemonToken: input.boundary.daemonToken, serverHttpBaseUrl: input.serverHttpBaseUrl, signal }));
+      if (current === null || signal?.aborted || !input.boundary.isHomeCurrent()
+        || input.boundary.readInstallation()?.installationId !== installation.installationId) return null;
+      if (discovery) discovery.context = context;
+      return context;
+    } catch (error) { rethrowRequesterHomeReadFailure(error); return null; }
+  });
+}
+
+export async function verifyRequesterSessionMachineAdmissionCurrent(
+  input: Parameters<typeof readRequesterSessionMachineAdmissionCurrent>[0],
+): Promise<boolean> {
+  return await readRequesterSessionMachineAdmissionCurrent(input) !== null;
 }
 
 /** Reconstructs Account ports for this exact Session; protected custody is data, never an authority witness. */
 export async function resolveRequesterSessionBootstrap(input: RequesterSessionCredentialBinding & Readonly<{
   serverHttpBaseUrl: string;
   machineAdmissionBoundary: RequesterSessionMachineAdmissionBoundary;
+  signal?: AbortSignal;
+  onSessionReadRefused?: () => void;
 }>): Promise<AdmittedRequesterSessionBootstrap | null> {
   try {
     const stored = await readBoundCustody(requesterSessionCredentialPath(input), input);
     if (!stored) return null;
-    const verify = (credentials: StoredCredentials) => async () => await verifyRequesterSessionMachineAdmissionCurrent({
-      credentials, sessionId: input.sessionId, attribution: input.attribution, serverHttpBaseUrl: input.serverHttpBaseUrl,
-      boundary: input.machineAdmissionBoundary });
+    let machineAdmission: NonNullable<RpcHandlerContext['machineAdmission']> | undefined;
+    const verify = (credentials: StoredCredentials) => async (signal?: AbortSignal) => {
+      const current = await readRequesterSessionMachineAdmissionCurrent({ credentials, sessionId: input.sessionId,
+        attribution: input.attribution, serverHttpBaseUrl: input.serverHttpBaseUrl, boundary: input.machineAdmissionBoundary, signal });
+      machineAdmission = current ?? undefined;
+      return current !== null;
+    };
     const credentials = await resolveRequesterSessionCredentials({ ...input, verifyMachineAdmissionCurrent: verify(stored) });
     if (!credentials) return null;
-    const result = await prepareRequesterSessionBootstrap({ credentials, attribution: input.attribution,
+    const result = await prepareRequesterSessionBootstrap({ credentials, attribution: input.attribution, machineAdmission,
       boundary: { serverId: input.attribution.serverId, serverHttpBaseUrl: input.serverHttpBaseUrl, happyHomeDir: input.happyHomeDir },
-      preparedSessionId: input.sessionId, boundSessionId: input.sessionId, verifyMachineAdmissionCurrent: verify(credentials) });
+      preparedSessionId: input.sessionId, boundSessionId: input.sessionId, verifyMachineAdmissionCurrent: verify(credentials), signal: input.signal });
     return result?.admitted ?? null;
-  } catch { return null; }
+  } catch (error) { rethrowRequesterHomeReadFailure(error); return null; }
 }
 
-/** Cold recovery uses exact protected custody, or fresh authenticated ownership of an unstamped legacy Session. */
+/** Cold recovery uses exact protected custody, or fresh authenticated ownership of a legacy Session without custody. */
 export async function resolveRequesterSessionBootstrapFromCustody(input: Readonly<{
   happyHomeDir: string; serverId: string; sessionId: string; serverHttpBaseUrl: string;
   machineAdmissionBoundary: RequesterSessionMachineAdmissionBoundary;
   legacyOwnerCredentials?: StoredCredentials;
+  expectedAttribution?: RequesterWorkAttributionV1;
+  signal?: AbortSignal;
+  onSessionReadRefused?: () => void;
 }>): Promise<AdmittedRequesterSessionBootstrap | null> {
   const boundary = input.machineAdmissionBoundary;
   const installation = boundary.readInstallation();
-  if (!installation || !boundary.isHomeCurrent()) return null;
-  const existing = await listRequesterSessionCredentialBindings({ happyHomeDir: input.happyHomeDir,
-    serverId: input.serverId, machineId: boundary.machineId, installationId: installation.installationId });
-  if (existing.status !== 'ready' || !boundary.isHomeCurrent()
-    || boundary.readInstallation()?.installationId !== installation.installationId) return null;
-  const binding = existing.bindings.find(candidate => candidate.sessionId === input.sessionId);
-  if (binding) return await resolveRequesterSessionBootstrap({ ...input, attribution: binding.attribution });
+  const expected = input.expectedAttribution;
+  if (!installation || !boundary.isHomeCurrent()
+    || expected && (expected.serverId !== input.serverId || expected.machineId !== boundary.machineId
+      || expected.installationId !== installation.installationId)) return null;
+  if (expected) {
+    // Known custody remains an exact read. Unrelated unreadable references
+    // cannot withdraw this Session's authority or trigger a credential fallback.
+    try {
+      await readPrivateOwnerFile(requesterSessionCredentialPath({ ...input, attribution: expected }));
+      return await resolveRequesterSessionBootstrap({ ...input, attribution: expected });
+    } catch (error) {
+      rethrowRequesterHomeReadFailure(error);
+      if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'ENOENT') return null;
+    }
+  } else {
+    const existing = await listRequesterSessionCredentialBindings({ happyHomeDir: input.happyHomeDir,
+      serverId: input.serverId, machineId: boundary.machineId, installationId: installation.installationId });
+    if (existing.status !== 'ready' || !boundary.isHomeCurrent()
+      || boundary.readInstallation()?.installationId !== installation.installationId) return null;
+    const binding = existing.bindings.find(candidate => candidate.sessionId === input.sessionId);
+    if (binding) return await resolveRequesterSessionBootstrap({ ...input, attribution: binding.attribution });
+  }
   if (!input.legacyOwnerCredentials) return null;
   try {
     const credentials = { ...input.legacyOwnerCredentials };
     const profile = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl,
-      () => fetchAccountProfile({ token: credentials.token }));
+      () => fetchAccountProfile({ token: credentials.token, signal: input.signal }));
     const attribution = { serverId: input.serverId, accountId: profile.id,
       machineId: boundary.machineId, installationId: installation.installationId };
+    if (expected && !isDeepStrictEqual(expected, attribution)) return null;
     // An existing foreign/stale reference is not absence and cannot be replaced by
     // the daemon's credentials. Only a genuinely missing legacy reference qualifies.
     const path = requesterSessionCredentialPath({ ...input, attribution });
     try { await readPrivateOwnerFile(path); return null; }
     catch (error) { if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'ENOENT') return null; }
-    const verifyMachineAdmissionCurrent = () => verifyRequesterSessionMachineAdmissionCurrent({ credentials,
-      sessionId: input.sessionId, attribution, serverHttpBaseUrl: input.serverHttpBaseUrl, boundary });
-    const prepared = await prepareRequesterSessionBootstrap({ credentials, attribution,
+    const machineAdmission = await readRequesterSessionMachineAdmissionCurrent({ credentials,
+      sessionId: input.sessionId, attribution, serverHttpBaseUrl: input.serverHttpBaseUrl, boundary, signal: input.signal });
+    if (!machineAdmission) return null;
+    const verifyMachineAdmissionCurrent = (signal?: AbortSignal) => verifyRequesterSessionMachineAdmissionCurrent({ credentials,
+      sessionId: input.sessionId, attribution, serverHttpBaseUrl: input.serverHttpBaseUrl, boundary, signal });
+    const prepared = await prepareRequesterSessionBootstrap({ credentials, attribution, machineAdmission,
       boundary: { serverId: input.serverId, serverHttpBaseUrl: input.serverHttpBaseUrl, happyHomeDir: input.happyHomeDir },
-      boundSessionId: input.sessionId, verifyMachineAdmissionCurrent });
+      boundSessionId: input.sessionId, verifyMachineAdmissionCurrent, signal: input.signal });
     return prepared?.admitted ?? null;
-  } catch { return null; }
+  } catch (error) { rethrowRequesterHomeReadFailure(error); return null; }
 }
 
 export async function isAdmittedRequesterSessionBootstrapCurrent(context: Pick<RpcHandlerContext,
@@ -366,12 +661,12 @@ export async function isAdmittedRequesterSessionBootstrapCurrent(context: Pick<R
   catch { return false; }
 }
 
-const CustodySchema = z.object({
+const CustodySchema = z.strictObject({
   v: z.literal(1),
-  sessionId: z.string().min(1),
+  sessionId: z.string().check(z.minLength(1)),
   attribution: RequesterWorkAttributionV1Schema,
   credentials: SessionRequesterBootstrapCredentialsV1Schema,
-}).strict();
+});
 const CustodyStoredReadSchema = createStoredReadSchema(CustodySchema);
 
 export type RequesterSessionCredentialBinding = Readonly<{
@@ -435,31 +730,63 @@ export async function verifyRequesterSessionCredentialBinding(input: Readonly<{
   sessionId: string;
   attribution: RequesterWorkAttributionV1;
   serverHttpBaseUrl: string;
-  verifyMachineAdmissionCurrent(): Promise<boolean>;
+  verifyMachineAdmissionCurrent(signal?: AbortSignal): Promise<boolean>;
   signal?: AbortSignal;
   expectedSessionCreationTag?: string;
+  onSessionReadRefused?: () => void;
 }>): Promise<boolean> {
-  try {
-    if (input.signal?.aborted || !await input.verifyMachineAdmissionCurrent()) return false;
-    const [profile, currentness, session] = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => Promise.all([
-      fetchAccountProfile({ token: input.credentials.token, ...(input.signal ? { signal: input.signal } : {}) }),
-      fetchAccountEncryptionCurrentness({ token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl,
-        ...(input.signal ? { signal: input.signal } : {}) }),
-      fetchSessionById({ token: input.credentials.token, serverUrl: input.serverHttpBaseUrl, sessionId: input.sessionId,
-        ...(input.signal ? { signal: input.signal } : {}) }),
-    ]));
-    const owner = input.expectedSessionCreationTag !== undefined && session ? tryDecryptSessionOwnerMetadataView({ credentials: input.credentials,
-      accountEncryptionMode: currentness.mode, rawSession: session }) : null;
-    const correspondence = input.expectedSessionCreationTag === undefined ? null
-      : SessionCreationCorrespondenceV1Schema.safeParse(owner?.sessionCreationCorrespondenceV1);
-    return profile.id === input.attribution.accountId
-      && session?.id === input.sessionId && readSessionAccessProjectionRoleV1(session) === 'owner'
-      && (currentness.mode === 'plain' ? input.credentials.encryption === null : input.credentials.encryption !== null)
-      && (input.expectedSessionCreationTag === undefined
-        || correspondence?.success === true && correspondence.data.sessionCreationTag === input.expectedSessionCreationTag
-          && correspondence.data.recipe.execution.machineId === input.attribution.machineId)
-      && !input.signal?.aborted && await input.verifyMachineAdmissionCurrent();
-  } catch { return false; }
+  return await timeWebLatencyPhase('requester.credential_binding', async () => {
+    let sessionReadRefused = false;
+    const observe = async <T>(phase: 'machine_before' | 'profile' | 'encryption' | 'session' | 'machine_after', work: () => Promise<T>): Promise<T> => {
+      const startedAt = performance.now();
+      let status: 'completed' | 'failed' = 'failed';
+      let diagnostic: ReturnType<typeof readUnexpectedActionErrorDiagnosticV1> | undefined;
+      try { const result = await timeWebLatencyPhase(`requester.${phase}`, work); status = 'completed'; return result; }
+      catch (error) {
+        diagnostic = readUnexpectedActionErrorDiagnosticV1(error);
+        if (phase === 'session' && ['session_detail_invalid_response', 'session_detail_projection_unavailable',
+          'not_authenticated', 'client-upgrade-required'].includes(diagnostic.errorCode ?? '')) sessionReadRefused = true;
+        throw error;
+      }
+      finally { logger.debug('[PluginExec] Requester currentness phase', {
+        phase, status, sessionId: input.sessionId, durationMs: Math.round(performance.now() - startedAt),
+        ...diagnostic,
+      }); }
+    };
+    const discovery: RequesterBindingDiscovery = { active: true, binding: input };
+    return await requesterBindingDiscovery.run(discovery, async () => {
+      try {
+        if (input.signal?.aborted || !await observe('machine_before', () => input.verifyMachineAdmissionCurrent(input.signal))) return false;
+        const [profile, currentness, session] = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => Promise.all([
+          observe('profile', () => discovery.context ? Promise.resolve({ id: discovery.context.actorAccountId })
+            : fetchAccountProfile({ token: input.credentials.token, ...(input.signal ? { signal: input.signal } : {}) })),
+          observe('encryption', () => readRequesterAccountEncryptionCurrentness({ accountId: input.attribution.accountId,
+            token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl,
+            ...(input.signal ? { signal: input.signal } : {}) })),
+          observe('session', () => fetchSessionById({ token: input.credentials.token, serverUrl: input.serverHttpBaseUrl, sessionId: input.sessionId,
+            ...(input.signal ? { signal: input.signal } : {}) })),
+        ]));
+        const owner = input.expectedSessionCreationTag !== undefined && session ? tryDecryptSessionOwnerMetadataView({ credentials: input.credentials,
+          accountEncryptionMode: currentness.mode, rawSession: session }) : null;
+        const correspondence = input.expectedSessionCreationTag === undefined ? null
+          : SessionCreationCorrespondenceV1Schema.safeParse(owner?.sessionCreationCorrespondenceV1);
+        return profile.id === input.attribution.accountId
+          && session?.id === input.sessionId && readSessionAccessProjectionRoleV1(session) === 'owner'
+          && (currentness.mode === 'plain' ? input.credentials.encryption === null : input.credentials.encryption !== null)
+          && (input.expectedSessionCreationTag === undefined
+            || correspondence?.success === true && correspondence.data.sessionCreationTag === input.expectedSessionCreationTag
+              && correspondence.data.recipe.execution.machineId === input.attribution.machineId)
+          && !input.signal?.aborted && await observe('machine_after', () => input.verifyMachineAdmissionCurrent(input.signal))
+          && isRequesterAccountEncryptionCurrentnessObserved({ accountId: input.attribution.accountId,
+            token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl }, currentness);
+      } catch (error) {
+        rethrowRequesterHomeReadFailure(error);
+        if (sessionReadRefused && !input.signal?.aborted) input.onSessionReadRefused?.();
+        return false;
+      }
+      finally { discovery.active = false; discovery.context = undefined; }
+    });
+  });
 }
 
 export async function createRequesterSessionCredentialCustody(input: RequesterSessionCredentialBinding & Readonly<{
@@ -496,14 +823,15 @@ export async function retireRequesterSessionCredentialCustody(input: RequesterSe
 /** Rejoin/recovery consumes existing custody only after the current C41 owner permits it. */
 export async function resolveRequesterSessionCredentials(input: RequesterSessionCredentialBinding & Readonly<{
   serverHttpBaseUrl: string;
-  verifyMachineAdmissionCurrent(): Promise<boolean>;
+  verifyMachineAdmissionCurrent(signal?: AbortSignal): Promise<boolean>;
   signal?: AbortSignal;
+  onSessionReadRefused?: () => void;
 }>): Promise<StoredCredentials | null> {
   try {
-    if (input.signal?.aborted || !await input.verifyMachineAdmissionCurrent()) return null;
+    if (input.signal?.aborted || !await input.verifyMachineAdmissionCurrent(input.signal)) return null;
     const credentials = await readBoundCustody(requesterSessionCredentialPath(input), input);
     return credentials && await verifyRequesterSessionCredentialBinding({ ...input, credentials }) ? credentials : null;
-  } catch { return null; }
+  } catch (error) { rethrowRequesterHomeReadFailure(error); return null; }
 }
 
 /** Only a private path travels to the child; failure never selects a global credential. */
@@ -515,7 +843,7 @@ export async function readRequesterSessionCredentialsForChild(path: string): Pro
       || value.attribution.serverId !== configuration.activeServerId) return null;
     const credentials = decodeStoredCredentials(value.credentials);
     return credentials ? bindRequesterSessionCredentialScope(credentials, { serverId: value.attribution.serverId,
-      serverHttpBaseUrl: normalizeServerHttpBaseUrl(configuration.apiServerUrl),
+      serverHttpBaseUrl: resolveServerHttpBaseUrl(),
       requesterSession: { sessionId: value.sessionId, attribution: value.attribution } }) : null;
   } catch { return null; }
 }
@@ -529,3 +857,7 @@ export async function bindRequesterSessionMachineControl(input: Readonly<{
   await ensureSessionMachineAccessKeyBinding({ serverUrl: input.serverHttpBaseUrl,
     token: input.credentials.token, sessionId: input.sessionId, machineId: input.attribution.machineId });
 }
+
+export { rethrowRequesterHomeReadFailure } from '@/daemon/sessionEncryption/requesterCurrentness';
+export { runWithRequesterSessionCurrentnessCheckpoint } from '@/daemon/sessionEncryption/requesterCurrentness';
+export { runWithoutRequesterSessionCurrentnessCheckpoint } from '@/daemon/sessionEncryption/requesterCurrentness';

@@ -18,12 +18,81 @@ export const en = {
         "title": "Follow this session",
         "subtitle": "Get the updates that matter to you.",
         "ownerSubtitle": "You own this session, so its updates always reach you.",
-        "externalAttachedOnly": "Background sync is off, so updates may arrive only while this session is attached."
+        "externalAttachedOnly": "Background sync is off, so updates may arrive only while this session is attached.",
+            "sheetTitle": ({ name }: { name: string }) => `Follow ${name}`,
+            "sheetSubtitle": "How much you hear about it",
+            "suppressed": "Updates are off. You still own it.",
+            "turnOff": "Turn off updates",
+            "alsoFollow": ({ facts, count }: { facts: string; count: number }) => `${facts} ${count === 1 ? "also follows it" : "also follow it"}`,
+            "people": "People",
+            "quietHours": ({ range }: { range: string }) => `Quiet hours ${range} · nothing pushes; it still lands in Inbox`,
+            "quietHoursOn": "Quiet hours are on · nothing pushes; it still lands in Inbox",
+            "notFollowing": "You don’t follow it yet. Follow it to hear when it needs you."
     },
     "level": {
         "none": "No notifications",
         "important": "Important updates",
         "all_messages": "Every new message"
+    },
+    "policyEditor": {
+        "presetLabel": "How much you hear",
+        "presetDescription": {
+            "everything": "Interrupts you whenever something happens. Messages arrive quietly in Inbox.",
+            "important": "Interrupts you only when it needs you, fails or stalls. Everything else waits quietly in Inbox.",
+            "quiet": "Nothing interrupts you. Updates wait quietly in Inbox.",
+            "custom": "Choose what interrupts you, what arrives quietly and what is left out."
+        },
+        "customTitle": "Each event",
+        "group": {
+            "interrupt": "Interrupts you",
+            "quiet": "Arrives quietly",
+            "off": "Not included"
+        },
+        "channel": {
+            "interrupt": "Push",
+            "quiet": "Inbox"
+        },
+        "delivery": {
+            "off": "Off",
+            "quiet": "Inbox",
+            "interrupt": "Push"
+        },
+        "session": {
+            "presetLabel": "How much it hears",
+            "presetDescription": {
+                "everything": "Wakes it whenever something happens. Messages wait for its next turn.",
+                "important": "Wakes it only when something needs it, fails or stalls. Everything else waits for its next turn.",
+                "quiet": "Nothing wakes it. Updates wait for its next turn.",
+                "custom": "Choose what wakes it, what waits for its next turn and what is left out."
+            },
+            "group": { "interrupt": "Wakes it", "quiet": "Waits for its next turn" },
+            "channel": { "interrupt": "Wake", "quiet": "Next turn" },
+            "delivery": { "interrupt": "Wake", "quiet": "Next turn" }
+        },
+        "events": {
+            "needsYou": "Needs you",
+            "decision": "Needs a decision",
+            "approval": "Needs approval",
+            "blocked": "Blocked",
+            "finished": "Finished",
+            "failedOrStopped": "Failed or stopped",
+            "stalled": "Stalled",
+            "updatePosted": "Update posted",
+            "personWrote": "A person wrote in it",
+            "goalChanged": "Goal changed",
+            "message": "Every message"
+        },
+        "eventDescriptions": {
+            "needsYou": "A decision, an approval, or it’s blocked",
+            "failedOrStopped": "Also when a run ends without a word",
+            "personWrote": "A notice and a link, never their words"
+        }
+    },
+    "policy": {
+        "everything": "Everything",
+        "important": "Important",
+        "quiet": "Quiet",
+        "custom": "Custom"
     },
     "voice": {
         "title": "Include in Voice",
@@ -34,6 +103,7 @@ export const en = {
         "waitingEncrypted": "Unlock this session to include it in Voice.",
         "initialSnapshotPending": "On your next Voice turn, include a brief current snapshot."
     },
+    "once": { "title": "Notify me once", "subtitle": "On top of your level, then it ends.", "off": "Off", "turn": "When this turn ends", "attention": "When it next needs you" },
     "footer": "Following never changes who can access this session.",
     "settingsLink": "Notification settings…",
     "assignedExplanation": "Following because you were assigned",
@@ -44,7 +114,7 @@ export const en = {
     "offline": "You're offline. Reconnect to change following.",
     "archived": "Following is paused while this session is archived.",
     "sources": {
-        "title": "Session updates",
+        "title": "Following",
         "waitingRuntime": "Waiting for the destination Session to reconnect.",
         "unsupported": "Update or reconnect the CLI on the destination machine to receive updates.",
         "pausedArchived": "Updates are paused while the source or destination is archived.",
@@ -57,12 +127,20 @@ export const en = {
         "wakeOnHumanChange": "Wake when a person adds a message",
         "stop": "Stop updates",
         "stopForSource": ({ title }: { title: string }) => `Stop updates from “${title}”`,
+        "panelSubtitle": "How much it hears",
         "includeNextTurn": "Include updates with the destination's next turn.",
+        "empty": "Sessions it follows appear here",
         "sourceKeyPreparing": "Preparing encrypted access…",
         "sourceKeyWaiting": "Waiting for encrypted access.",
         "sourceKeyUnavailable": "This computer can't provide encrypted access.",
         "sourceSessionKeyUnavailable": "This session's encrypted access is not available here.",
-        "catchUpPending": "Catch-up pending"
+        "catchUpPending": "Catch-up pending",
+        "kindDiscussion": "Discussion",
+        "kindWorkflowRun": "Workflow run",
+        "executionRun": ({ title }: { title: string }) => `A run in “${title}”`,
+        "sourceUnavailable": "No longer available",
+        "followsThis": ({ title }: { title: string }) => `${title} follows this`,
+        "managerOnly": "It hears about this session as its manager. Change that in its coordinator setup."
     },
     "preferences": {
         "title": "Automatically follow",

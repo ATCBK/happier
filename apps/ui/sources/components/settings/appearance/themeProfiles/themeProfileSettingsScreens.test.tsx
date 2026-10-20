@@ -1,13 +1,19 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import 'fake-indexeddb/auto';
 
 import { flattenTestStyle, flushHookEffects, renderSettingsView, standardCleanup } from '@/dev/testkit';
 import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
+import { settingsParse } from '@/sync/domains/settings/settings';
 import { THEME_PROFILE_MAX_PROFILES } from '@/theme/profiles/themeProfileConstants';
 import type { ThemeProfilesLocalStateV1, ThemeProfileV1 } from '@/theme/profiles/themeProfileTypes';
 import { exportThemeProfileToJson } from '@/theme/profiles/themeProfileImportExport';
 import { getBuiltInThemeProfileDefinition } from '@/theme/profiles/builtInThemeProfiles';
+import { parseThemeProfilesLocalState } from '@/theme/profiles/themeProfilePersistence';
+import { storage } from '@/sync/domains/state/storageStore';
+import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
 const testGlobal = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean };
 testGlobal.IS_REACT_ACT_ENVIRONMENT = true;
@@ -25,6 +31,7 @@ const baseProfile = (id: string, overrides: ThemeProfileV1['overrides'] = { ligh
 const shared = vi.hoisted(() => ({
     routerPush: vi.fn(),
     routerBack: vi.fn(),
+    routerDismissTo: vi.fn(),
     clipboardSetStringAsync: vi.fn(),
     nativeSharedJson: '',
     sharingShareAsync: vi.fn(),
@@ -37,21 +44,7 @@ const shared = vi.hoisted(() => ({
     setSystemBackgroundColorAsync: vi.fn(),
     modalConfirm: vi.fn(),
     params: {} as Record<string, string | undefined>,
-    settingsState: {
-        themePreference: 'light',
-        themeProfiles: { activeProfileIds: { light: null, dark: null }, profiles: [] },
-        uiFontScale: 1,
-    } as Record<string, unknown>,
 }));
-
-type MutableSettingHook = (key: string) => [unknown, (next: unknown) => void];
-
-const createMutableSettingHook = (settingsState: Record<string, unknown>): MutableSettingHook => (key: string) => [
-    Object.prototype.hasOwnProperty.call(settingsState, key) ? settingsState[key] : (localSettingsDefaults as Record<string, unknown>)[key],
-    (next: unknown) => {
-        settingsState[key] = next;
-    },
-];
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -92,15 +85,15 @@ vi.mock('expo-router', async () => {
         router: {
             push: shared.routerPush,
             back: shared.routerBack,
+            dismissTo: shared.routerDismissTo,
         },
     }).module;
 });
 
-vi.mock('@/modal', () => ({
-    Modal: {
-        confirm: shared.modalConfirm,
-    },
-}));
+vi.mock('@/modal', async () => {
+    const mock = (await import('@/dev/testkit/mocks/modal')).createModalModuleMock();
+    return { ...mock.module, Modal: { ...mock.module.Modal, confirm: shared.modalConfirm } };
+});
 
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
@@ -114,21 +107,14 @@ vi.mock('react-native-unistyles', async () => {
     });
 });
 
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createStorageModuleMock, createLiveStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
-    const mutableSetting = createMutableSettingHook(shared.settingsState);
-    return createStorageModuleMock({
-        importOriginal,
-        overrides: {
-            storage: createLiveStorageStoreMock(() => ({
-                localSettings: { ...localSettingsDefaults, ...shared.settingsState },
-                applyLocalSettings: delta => { Object.assign(shared.settingsState, delta); },
-            })),
-            useLocalSettingMutable: mutableSetting as typeof import('@/sync/domains/state/storage')['useLocalSettingMutable'],
-            useLocalSetting: ((key: string) => mutableSetting(key)[0]) as typeof import('@/sync/domains/state/storage')['useLocalSetting'],
-        },
-    });
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOriginal => {
+    const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
+    const { createFrontDoorActionExecuteForVitest } = await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary');
+    return { ...original, createFrontDoorActionExecute: createFrontDoorActionExecuteForVitest(original) };
 });
+installDisconnectedServerSocketBoundary();
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -147,10 +133,11 @@ vi.mock('@/text', async () => {
 });
 
 const setThemeProfiles = (state: ThemeProfilesLocalStateV1) => {
-    shared.settingsState.themeProfiles = state;
+    // Match the persisted-settings read boundary, including legacy profile normalization.
+    storage.getState().applyLocalSettings({ themeProfiles: parseThemeProfilesLocalState(state).state });
 };
 
-const getThemeProfiles = (): ThemeProfilesLocalStateV1 => shared.settingsState.themeProfiles as ThemeProfilesLocalStateV1;
+const getThemeProfiles = (): ThemeProfilesLocalStateV1 => storage.getState().localSettings.themeProfiles;
 const emptyThemeProfiles = (): ThemeProfilesLocalStateV1 => ({ activeProfileIds: { light: null, dark: null }, profiles: [] });
 const maxProfiles = (): ThemeProfileV1[] => (
     Array.from({ length: THEME_PROFILE_MAX_PROFILES }, (_, index) => baseProfile(`theme_${index}`))
@@ -203,10 +190,17 @@ async function renderExportScreen() {
     return renderSettingsView(React.createElement(ThemeProfileExportScreen), { flushOptions: { cycles: 0 } });
 }
 
-afterEach(() => {
+let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>>;
+beforeEach(async () => {
+    account = await createSecretSettingsTestHarness();
+    storage.getState().applyLocalSettings({ ...localSettingsDefaults, themePreference: 'light', themeProfiles: emptyThemeProfiles() });
+});
+afterEach(async () => {
     standardCleanup();
+    await account.dispose();
     shared.routerPush.mockClear();
     shared.routerBack.mockClear();
+    shared.routerDismissTo.mockClear();
     shared.clipboardSetStringAsync.mockReset();
     fs.files.clear();
     shared.nativeSharedJson = '';
@@ -222,10 +216,8 @@ afterEach(() => {
     shared.modalConfirm.mockReset();
     shared.modalConfirm.mockResolvedValue(true);
     shared.params = {};
-    for (const key of Object.keys(shared.settingsState)) {
-        delete shared.settingsState[key];
-    }
-    Object.assign(shared.settingsState, {
+    storage.getState().applyLocalSettings({
+        ...localSettingsDefaults,
         themePreference: 'light',
         themeProfiles: emptyThemeProfiles(),
         uiFontScale: 1,
@@ -277,7 +269,7 @@ describe('Theme profile settings screen', () => {
 
         expect(getThemeProfiles().profiles).toEqual([]);
         expect(getThemeProfiles().activeProfileIds).toEqual({ light: null, dark: 'premiumDark' });
-        expect(shared.settingsState.themePreference).toBe('light');
+        expect(storage.getState().localSettings.themePreference).toBe('light');
         expect(shared.updateTheme).toHaveBeenCalled();
     });
 
@@ -361,8 +353,7 @@ describe('Theme profile editor', () => {
         Object.assign(dom.window.document, {
             startViewTransition: (update: () => Promise<void>) => ({
                 ready: Promise.resolve().then(async () => {
-                    shared.settingsState.themePreference = 'dark';
-                    shared.settingsState.uiFontScale = 1.2;
+                    storage.getState().applyLocalSettings({ themePreference: 'dark', uiFontScale: 1.2 });
                     setThemeProfiles({ activeProfileIds: { light: null, dark: null },
                         profiles: [edited, baseProfile('arrived-during-transition')] });
                     await update();
@@ -375,14 +366,14 @@ describe('Theme profile editor', () => {
         await screen.pressByTestIdAsync('settings-theme-profile-save');
 
         expect(getThemeProfiles().profiles.map(profile => profile.id)).toEqual(['ocean', 'arrived-during-transition']);
-        expect(shared.settingsState).toMatchObject({ themePreference: 'dark', uiFontScale: 1.2 });
+        expect(storage.getState().localSettings).toMatchObject({ themePreference: 'dark', uiFontScale: 1.2 });
         expect(shared.setTheme).toHaveBeenLastCalledWith('dark');
         // Web roots subscribe to the resolved theme; only native uses this imperative adapter.
         expect(shared.setRootViewBackgroundColor).not.toHaveBeenCalled();
         expect(shared.setStatusBarStyle).toHaveBeenLastCalledWith('light', true);
     });
     it('renders token groups and defaults the editing variant to the active app mode', async () => {
-        shared.settingsState.themePreference = 'dark';
+        storage.getState().applyLocalSettings({ themePreference: 'dark' });
         setThemeProfiles({ activeProfileIds: { light: null, dark: 'ocean' }, profiles: [baseProfile('ocean')] });
 
         const screen = await renderEditorScreen('ocean');
@@ -425,6 +416,18 @@ describe('Theme profile editor', () => {
         expect(saved.profiles[0]?.id).toMatch(/^theme_/);
     });
 
+    it('starts a new draft as the light or dark theme the app is using, and leaves the editor once it is saved and used', async () => {
+        storage.getState().applyLocalSettings({ themePreference: 'dark' });
+        const screen = await renderEditorScreen('new');
+        await screen.pressByTestIdAsync('settings-theme-profile-save');
+
+        const saved = getThemeProfiles();
+        // "Starts from: Dark" must not save as a light theme just because it has no colors yet.
+        expect(saved.profiles[0]).toMatchObject({ assetAppearance: 'dark' });
+        expect(saved.activeProfileIds).toEqual({ light: null, dark: saved.profiles[0]?.id });
+        expect(shared.routerDismissTo).toHaveBeenCalledWith('/settings/appearance/themes');
+    });
+
     it('saves the selected asset appearance and assigns that theme slot without changing appearance mode', async () => {
         const screen = await renderEditorScreen('new');
         await screen.pressByTestIdAsync('settings-theme-profile-asset-appearance:dark');
@@ -433,7 +436,7 @@ describe('Theme profile editor', () => {
         const saved = getThemeProfiles().profiles[0] as (ThemeProfileV1 & { assetAppearance?: string }) | undefined;
         expect(saved?.assetAppearance).toBe('dark');
         expect(getThemeProfiles().activeProfileIds).toEqual({ light: null, dark: saved?.id });
-        expect(shared.settingsState.themePreference).toBe('light');
+        expect(storage.getState().localSettings.themePreference).toBe('light');
     });
 
     it('blocks saving when the profile name is invalid', async () => {
@@ -488,6 +491,26 @@ describe('Theme profile editor', () => {
         });
 
         expect(getThemeProfiles()).toEqual({ activeProfileIds: { light: null, dark: null }, profiles: [] });
+    });
+
+    it('admits removal if the theme becomes selected while deletion confirmation is open', async () => {
+        account.replaceSettings(settingsParse({ actionsSettingsV1: { v: 1,
+            actions: { 'settings.set': { disabledSurfaces: ['ui'] } },
+        } }));
+        const profile = baseProfile('ocean');
+        setThemeProfiles({ activeProfileIds: { light: null, dark: null }, profiles: [profile] });
+        const screen = await renderEditorScreen('ocean');
+        const deleteAction = await findHeaderMenuAction(screen, 'delete');
+        shared.modalConfirm.mockImplementationOnce(async () => {
+            setThemeProfiles({ activeProfileIds: { light: 'ocean', dark: null }, profiles: [profile] });
+            return true;
+        });
+
+        await act(async () => { await deleteAction!.onSelect(); });
+
+        expect(getThemeProfiles().activeProfileIds.light).toBe('ocean');
+        expect(getThemeProfiles().profiles).toHaveLength(1);
+        expect(shared.routerBack).not.toHaveBeenCalled();
     });
 
     it('names the slot a theme is assigned to before deleting it, then applies the slot default through the theme owner', async () => {
@@ -617,7 +640,7 @@ describe('Theme profile editor', () => {
     });
 
     it('previews and activates a dark custom theme in its inferred mode even when the app is currently light', async () => {
-        shared.settingsState.themePreference = 'light';
+        storage.getState().applyLocalSettings({ themePreference: 'light' });
         setThemeProfiles({
             activeProfileIds: { light: null, dark: null },
             profiles: [baseProfile('noir', { light: {}, dark: { 'background.canvas': '#0B0B0D' } })],
@@ -633,12 +656,12 @@ describe('Theme profile editor', () => {
 
         await screen.pressByTestIdAsync('settings-theme-profile-save');
 
-        expect(shared.settingsState.themePreference).toBe('light');
+        expect(storage.getState().localSettings.themePreference).toBe('light');
         expect(getThemeProfiles().activeProfileIds).toEqual({ light: null, dark: 'noir' });
     });
 
     it('treats built-in presets as read-only and cloneable', async () => {
-        shared.settingsState.themePreference = 'dark';
+        storage.getState().applyLocalSettings({ themePreference: 'dark' });
         const screen = await renderEditorScreen('premiumDark');
 
         expect(screen.findByTestId('settings-theme-profile-save')).toBeNull();

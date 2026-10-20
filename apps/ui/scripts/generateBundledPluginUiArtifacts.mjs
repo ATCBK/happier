@@ -1,4 +1,4 @@
-import { lstat, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -114,6 +114,42 @@ function assertArtifactPath(artifactsRoot, relativePath, packageName) {
   return absolutePath;
 }
 
+async function materializeArtifactGraph(destination, files, reuseContent) {
+  const outputs = files.map(file => ({ ...file, path: assertArtifactPath(destination, file.relativePath, destination) }));
+  for (const file of outputs) {
+    if (reuseContent) {
+      const existing = await readFile(file.path).catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
+      if (existing?.equals(file.bytes)) continue;
+      let missingRoot;
+      for (let directory = dirname(file.path);; directory = dirname(directory)) {
+        const info = await lstat(directory).catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
+        if (info) break;
+        missingRoot = directory;
+      }
+      if (missingRoot) {
+        // Metro's fallback watcher reads a directory before attaching its watch.
+        // Publish the entire first missing subtree at once, so its crawl cannot
+        // observe an empty parent and then miss children created in that gap.
+        // Reuse the existing excluded scratch prefix, on the same filesystem.
+        const stage = await mkdtemp(join(dirname(missingRoot), '.happier-plugin-ui-stage-'));
+        try {
+          for (const output of outputs.filter(output => output.path.startsWith(`${missingRoot}${sep}`))) {
+            const stagedPath = join(stage, relative(missingRoot, output.path));
+            await mkdir(dirname(stagedPath), { recursive: true });
+            await writeFile(stagedPath, output.bytes);
+          }
+          await rename(stage, missingRoot);
+        } finally { await rm(stage, { recursive: true, force: true }); }
+        continue;
+      }
+    }
+    await mkdir(dirname(file.path), { recursive: true });
+    const temporary = `${file.path}.tmp.${process.pid}`;
+    await writeFile(temporary, file.bytes);
+    await rename(temporary, file.path);
+  }
+}
+
 export function listBundledPluginUiArtifactExports(packageJson) {
   return packageJson?.exports && typeof packageJson.exports === 'object'
     ? Object.entries(packageJson.exports).filter(([key, target]) => (
@@ -125,9 +161,10 @@ export function listBundledPluginUiArtifactExports(packageJson) {
     )).map(([key]) => key) : [];
 }
 
-export async function collectBundledPluginUiArtifactSources(repoRoot, initialPluginFailures = [], artifactRoots, pluginManifests = {}, artifactOutputDirs = {}) {
+export async function collectBundledPluginUiArtifactSources(repoRoot, initialPluginFailures = [], artifactRoots, pluginManifests = {}, artifactOutputDirs = {}, artifactStoreDir) {
   const { PluginPortableReleaseManifestV1Schema } = await import('@happier-dev/protocol/plugins/availability');
   const { projectPluginPortableUiDeclarationsV1 } = await import('@happier-dev/protocol/plugins/contributions/ui');
+  const { normalizePluginAccountCollectionContractsV1 } = await import('@happier-dev/protocol/plugins/data/collectionsV1');
   const {
     PluginUiArtifactsManifestV2Schema,
     computePluginUiArtifactFileSetSha256DigestV1,
@@ -144,6 +181,7 @@ export async function collectBundledPluginUiArtifactSources(repoRoot, initialPlu
     .map((entry) => entry.name)
     .sort((left, right) => left.localeCompare(right));
   const sources = [];
+  const publishedArtifactRoots = {};
   const pluginFailures = [...initialPluginFailures];
   const excludedPackageNames = new Set(initialPluginFailures.map((failure) => failure.packageName));
   const coordinateOwners = new Map();
@@ -200,12 +238,19 @@ export async function collectBundledPluginUiArtifactSources(repoRoot, initialPlu
       );
     }
 
-    const destination = artifactOutputDirs[pluginDirectory] && resolve(artifactOutputDirs[pluginDirectory]);
+    let destination = artifactOutputDirs[pluginDirectory] && resolve(artifactOutputDirs[pluginDirectory]);
     const declaration = PluginPortableReleaseManifestV1Schema.safeParse(pluginManifest);
     const uiDeclaration = declaration.success ? {
       pluginId, pluginVersion: packageVersion, packageName,
       displayName: typeof declaration.data.displayName === 'string' ? declaration.data.displayName : declaration.data.displayName.fallback,
+      declaredExecution: {
+        daemonActions: declaration.data.contributes.actions?.some(action => action.execution?.target !== 'client') === true,
+        contributionPoints: (declaration.data.contributes.pluginContributionPoints?.length ?? 0) > 0,
+      },
       entriesById: projectPluginPortableUiDeclarationsV1({ ...declaration.data, version: packageVersion }, parsedManifest.data.entries),
+      collectionContracts: normalizePluginAccountCollectionContractsV1({ pluginId,
+        contributions: declaration.data.contributes.accountCollections }).map(({ pluginId, collectionId, schemaVersion, contractDigest }) =>
+        ({ pluginId, collectionId, schemaVersion, contractDigest })),
     } : undefined;
     const pluginSources = [];
     const pluginFiles = [];
@@ -239,7 +284,7 @@ export async function collectBundledPluginUiArtifactSources(repoRoot, initialPlu
           `Bundled Plugin UI artifact graph digest mismatch for '${packageName}/${entry.artifactId}'`,
         );
       }
-      if (destination && destination !== artifactsRoot) pluginFiles.push(...verifiedFiles);
+      if (artifactStoreDir || (destination && destination !== artifactsRoot)) pluginFiles.push(...verifiedFiles);
 
       const coordinate = [pluginId, entry.artifactId, entry.tier, packageVersion].join('\u001f');
       const previousOwner = coordinateOwners.get(coordinate);
@@ -264,22 +309,25 @@ export async function collectBundledPluginUiArtifactSources(repoRoot, initialPlu
             : `${packageName}/happier-plugin-ui/${file.relativePath}` })),
       });
     }
+    if (!destination && artifactStoreDir) {
+      // Reuse the canonical graph digest: changes in compiler inputs that emit
+      // identical bytes must not duplicate those bytes in a serving Expo.
+      const files = [...new Map(pluginFiles.map(file => [file.relativePath, file])).values()];
+      const digest = computePluginUiArtifactFileSetSha256DigestV1(files);
+      destination = resolve(artifactStoreDir, pluginDirectory, digest.slice('sha256:'.length));
+    }
     // Finite native construction owns fresh output roots. Write the exact
     // bytes just verified, so a concurrent package publication cannot change
     // the retained graph between validation and materialization.
     if (destination && destination !== artifactsRoot) {
-      await mkdir(destination, { recursive: true });
-      for (const file of pluginFiles) {
-        const path = assertArtifactPath(destination, file.relativePath, candidatePackageName);
-        await mkdir(dirname(path), { recursive: true });
-        await writeFile(path, file.bytes);
-      }
-      await writeFile(join(destination, 'ui-artifacts.json'), JSON.stringify(parsedManifest.data));
+      await materializeArtifactGraph(destination, [...pluginFiles,
+        { relativePath: 'ui-artifacts.json', bytes: Buffer.from(JSON.stringify(parsedManifest.data)) }], Boolean(artifactStoreDir));
       for (const source of pluginSources) {
         source.files = source.files.map((file) => ({ ...file,
           specifier: assertArtifactPath(destination, file.relativePath, source.packageName) }));
       }
     }
+    publishedArtifactRoots[pluginDirectory] = destination ?? artifactsRoot;
     for (const source of pluginSources) {
       coordinateOwners.set([source.pluginId, source.artifactId, source.tier, source.packageVersion].join('\u001f'), source.packageName);
       sources.push(source);
@@ -304,7 +352,7 @@ export async function collectBundledPluginUiArtifactSources(repoRoot, initialPlu
     || left.tier.localeCompare(right.tier)
     || left.digest.localeCompare(right.digest)
   ));
-  return { sources, pluginFailures };
+  return { sources, pluginFailures, artifactRoots: publishedArtifactRoots };
 }
 
 function renderBundledPluginUiArtifactInventory(sources) {
@@ -443,6 +491,7 @@ export async function generateBundledPluginUiArtifacts({
   outputPath = resolveBundledPluginUiArtifactsOutputPath(repoRoot),
   artifactRoots,
   artifactOutputDirs = {},
+  artifactStoreDir,
   pluginManifests = {},
 } = {}) {
   if (mode !== 'write' && mode !== 'check') {
@@ -460,7 +509,7 @@ export async function generateBundledPluginUiArtifacts({
     [...inheritedCliFailures, ...pluginFailures].map((failure) => [failure.packageName, failure]),
   ).values()];
   const collected = await collectBundledPluginUiArtifactSources(repoRoot, initialFailures, artifactRoots, pluginManifests,
-    mode === 'write' ? artifactOutputDirs : {});
+    mode === 'write' ? artifactOutputDirs : {}, mode === 'write' ? artifactStoreDir : undefined);
   // A compiler failure can still have a validated retained byte graph. Only
   // unavailable graphs enter the existing failure set; every error is reported.
   const compilationFailureByPackage = new Map(compilationFailures.map((failure) => [failure.packageName, failure]));
@@ -506,7 +555,7 @@ export async function generateBundledPluginUiArtifacts({
       if (publicationMode === 'live') {
         writeBundledPluginPublicationFailures(repoRoot, collected.pluginFailures);
       }
-      return { outputPath, pluginFailures: collected.pluginFailures, diagnostics };
+      return { outputPath, pluginFailures: collected.pluginFailures, diagnostics, artifactRoots: collected.artifactRoots };
     }
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
@@ -519,7 +568,7 @@ export async function generateBundledPluginUiArtifacts({
   if (publicationMode === 'live') {
     writeBundledPluginPublicationFailures(repoRoot, collected.pluginFailures);
   }
-  return { outputPath, pluginFailures: collected.pluginFailures, diagnostics };
+  return { outputPath, pluginFailures: collected.pluginFailures, diagnostics, artifactRoots: collected.artifactRoots };
 }
 
 function readMode(argv) {

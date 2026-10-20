@@ -35,6 +35,10 @@ export const SplitCanvasLeafFrame = React.memo((props: Readonly<{
     const materialColor = useHappierMaterialColorResolver();
     const attachedHostRef = React.useRef<WebSplitCanvasHostElement | null>(null);
     const detachHostListenersRef = React.useRef<(() => void) | null>(null);
+    const focusActionRef = React.useRef(props.onFocus);
+    focusActionRef.current = props.onFocus;
+    // Focus changes do not replace the mounted host or its registered drop zones.
+    const promoteFocus = React.useCallback(() => focusActionRef.current(), []);
 
     const detachHostListeners = React.useCallback(() => {
         detachHostListenersRef.current?.();
@@ -62,10 +66,6 @@ export const SplitCanvasLeafFrame = React.memo((props: Readonly<{
         }
         const nextHostElement = hostElement as WebSplitCanvasHostElement;
 
-        const promoteFocus = () => {
-            props.onFocus();
-        };
-
         nextHostElement.addEventListener('pointerdown', promoteFocus);
         nextHostElement.addEventListener('focusin', promoteFocus);
         attachedHostRef.current = nextHostElement;
@@ -74,7 +74,7 @@ export const SplitCanvasLeafFrame = React.memo((props: Readonly<{
             nextHostElement.removeEventListener('pointerdown', promoteFocus);
             nextHostElement.removeEventListener('focusin', promoteFocus);
         };
-    }, [detachHostListeners, props.onFocus, props.onHostRefChange]);
+    }, [detachHostListeners, promoteFocus, props.onHostRefChange]);
 
     React.useEffect(() => detachHostListeners, [detachHostListeners]);
 

@@ -120,6 +120,8 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
     // "password" is the ordinary Italian word for it; "parola d'ordine" is not
     // what anyone types into a credential form.
     it: new Set([
+        // "In Happier" uses the product name and the same preposition in Italian.
+        'externalSessions.browseContentInHappier',
         // Widget/Board cognates and the product surface Home.
         'boards.widgets.kind',
         'widgetDefinition.placedOnHome',
@@ -237,6 +239,11 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
         'settingsPlugins.discover.platform.web',
         'settingsPlugins.surfaces.listingSource',
         'settingsPlugins.surfaces.navigationTitle',
+        // "Signature" and "Provenance" are the French words too (install-review evidence labels);
+        // "Auto" is the French label for an automatically picked Machine.
+        'settingsPlugins.installReviewSections.evidenceLabel.signature',
+        'settingsPlugins.installReviewSections.evidenceLabel.provenance',
+        'settingsPlugins.surfaces.runOnAuto',
         // Source control and Keyboard: developer vocabulary and French cognates.
         'settingsKeyboard.groupSessions',
         'settingsSourceControl.page.commits.title',
@@ -355,7 +362,6 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
         'files.sourceControlOperations.update.pullRequests.title',
         'files.sourceControlOperations.update.remotes.title',
         'inbox.permissions',
-        'inbox.work.groups.unknownLead',
         'localServices.band.suggestions',
         'localServices.launcher.title',
         'localServices.session.workspaceTitle',
@@ -425,10 +431,7 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
         'settings.accessEndpoints.recommendedUse.diagnostic',
         'settings.acpCatalogFieldDescription',
         'settings.machines',
-        'settings.mcpServersBindingMachine',
         'settings.mcpServersBindingTargetMachineTitle',
-        'settings.mcpServersBindingTargetWorkspaceTitle',
-        'settings.mcpServersBindingTitle',
         'settings.mcpServersDetectedDirectoryPlaceholder',
         'settings.mcpServersDetectedMachineTitle',
         'settings.mcpServersEditorBindings',
@@ -438,7 +441,6 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
         'settings.mcpServersFieldTransport',
         'settings.mcpServersScopeMachine',
         'settings.mcpServersScopeWorkspace',
-        'settings.mcpServersTestTitle',
         'settings.notifications',
         'settings.permissions',
         'settings.secrets',
@@ -571,6 +573,10 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
     // German noun is spelled. A key here is a decision, not a gap — translating one would make
     // the UI read worse, not better.
     de: new Set([
+        // "In Happier" uses the product name and the same preposition in German.
+        'externalSessions.browseContentInHappier',
+        // "Text in" is also the ordinary German wording for the scoped search chip.
+        'universalSearch.content.textInScope',
         // Agent is the ordinary localized noun for an executable coding Agent.
         'settingsPlugins.surfaces.kinds.agent',
         // Widget/Board cognates and the product surface Home.
@@ -792,9 +798,6 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
         'settings.featuresTitle',
         'settings.localRelayRuntime.statusTitle',
         'settings.localTailscale.statusTitle',
-        'settings.mcpServersBindingOverridesTitle',
-        'settings.mcpServersBindingTargetWorkspaceTitle',
-        'settings.mcpServersBindingTitle',
         'settings.mcpServersDetectedDirectoryPlaceholder',
         'settings.mcpServersEditorBindings',
         'settings.mcpServersEditorRemote',
@@ -803,7 +806,6 @@ const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<s
         'settings.mcpServersFieldName',
         'settings.mcpServersFieldTransport',
         'settings.mcpServersScopeWorkspace',
-        'settings.mcpServersTestTitle',
         'settings.mcpServersValueSourceLiteral',
         'settings.prompts',
         'settings.relayAccess.fields.hostnameLabel',
@@ -1738,6 +1740,29 @@ describe('i18n integrity', () => {
     // module, so nothing but this assertion can notice a leaf that exists only in `en`. Shape
     // parity, not key presence: a leaf that becomes a formatter in `en` breaks `t(...)` at runtime
     // in every locale that still carries a plain string.
+    it('keeps a distinct consequence description for every offered permission mode in every supported locale', () => {
+        const locales = [
+            { code: 'en', root: en }, { code: 'ru', root: ru }, { code: 'pl', root: pl }, { code: 'es', root: es },
+            { code: 'fr', root: fr }, { code: 'it', root: itLocale }, { code: 'pt', root: pt },
+            { code: 'ca', root: ca }, { code: 'de', root: de }, { code: 'zh-Hans', root: zhHans },
+            { code: 'zh-Hant', root: zhHant }, { code: 'ja', root: ja },
+        ];
+        const prefixes = ['permissionMode', 'codexPermissionMode', 'geminiPermissionMode'] as const;
+        const segments = ['default', 'readOnly', 'safeYolo', 'yolo'] as const;
+        const problems = locales.flatMap(({ code, root }) => prefixes.flatMap((prefix) => segments.flatMap((segment) => {
+            const group = root.agentInput[prefix] as Record<string, unknown>;
+            const label = group[segment];
+            const description = group[`${segment}Description`];
+            if (typeof description !== 'string' || description.length === 0) return [`${code}: ${prefix}.${segment}Description missing`];
+            if (description === label) return [`${code}: ${prefix}.${segment}Description repeats its label`];
+            if (code !== 'en' && description === (en.agentInput[prefix] as Record<string, unknown>)[`${segment}Description`]) {
+                return [`${code}: ${prefix}.${segment}Description is untranslated`];
+            }
+            return [];
+        })));
+        expect(problems).toEqual([]);
+    });
+
     it('keeps the Saved Secret namespace complete in every supported locale', () => {
         const locales = [
             { code: 'ru', root: ru }, { code: 'pl', root: pl }, { code: 'es', root: es },
@@ -2030,14 +2055,14 @@ describe('i18n integrity', () => {
             const value = readTranslationLeaf(root, key);
             const englishValue = readTranslationLeaf(en, key);
             if (typeof englishValue === 'function') {
-                const params = { matches: 37, files: 13, name: 'quartz-repo' };
+                const params = { matches: 37, files: 13, name: 'quartz-repo', scope: 'quartz-repo' };
                 const args = [params];
                 const sample = callSampledTranslation(value, args);
                 const englishSample = callSampledTranslation(englishValue, args);
                 // Every parameter the English copy shows must survive in the translation.
                 const shown = Object.values(params).map(String).filter((param) => englishSample?.includes(param));
                 return typeof value === 'function' && value !== englishValue
-                    && sample && sample !== englishSample
+                    && sample && (sample !== englishSample || IGNORED_UNTRANSLATED_KEYS_BY_LOCALE[code]?.has(key))
                     && shown.every((param) => sample.includes(param))
                     ? []
                     : [`${code}: ${key}`];

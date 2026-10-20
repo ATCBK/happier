@@ -75,9 +75,10 @@ async function responseJson(response: Response): Promise<unknown> {
 const requestInit = (body: unknown, signal?: AbortSignal): RequestInit => ({
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), ...(signal ? { signal } : {}),
 });
-async function readResponse(request: TrustRequest, path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
+async function readResponse(request: TrustRequest, path: string, body: unknown, signal?: AbortSignal, assertCurrent?: () => void): Promise<Response> {
     try { return await request(path, requestInit(body, signal)); }
     catch (error) {
+        assertCurrent?.();
         preserveScopeFailure(error);
         if (signal?.aborted) return failure('cancelled');
         // Native HTTP errors may retain request credentials; never export their message/config/cause.
@@ -93,7 +94,7 @@ export async function fetchProjectTrustInventory(params: Readonly<{
     const project = params.project === undefined ? undefined : QualifiedProjectTrustProjectV1Schema.parse(params.project);
     const material = materialFor(params.credentials, params.mode);
     params.assertCurrent?.();
-    const response = await readResponse(params.request, `${PROJECT_TRUST_ROUTE_V1}/list`, project ? { project } : {}, params.signal);
+    const response = await readResponse(params.request, `${PROJECT_TRUST_ROUTE_V1}/list`, project ? { project } : {}, params.signal, params.assertCurrent);
     params.assertCurrent?.();
     const raw = await responseJson(response); params.assertCurrent?.();
     const parsed = StoredListSchema.safeParse(raw);
@@ -126,7 +127,7 @@ export function createProjectTrustClientForAccount(account: Account) {
     async function read(projectInput: QualifiedProjectTrustProjectV1, signal?: AbortSignal): Promise<OpenedProjectTrustRead> {
         const project = QualifiedProjectTrustProjectV1Schema.parse(projectInput);
         const context = await modeContext();
-        const response = await readResponse((path, init) => account.request(path, init, { retry: 'none' }), `${PROJECT_TRUST_ROUTE_V1}/read`, { project }, signal);
+        const response = await readResponse((path, init) => account.request(path, init, { retry: 'none' }), `${PROJECT_TRUST_ROUTE_V1}/read`, { project }, signal, account.assertCurrent);
         account.assertCurrent();
         const raw = await responseJson(response); account.assertCurrent();
         const parsed = StoredReadSchema.safeParse(raw);

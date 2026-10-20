@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PUSH_NOTIFICATION_ACTION_IDS } from '@happier-dev/protocol';
 import { MMKV } from 'react-native-mmkv';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderScreen } from '@/dev/testkit';
 import { scopedStorageId } from '@/utils/system/storageScope';
 import { pendingServerScopedKey } from '@/sync/domains/pending/pendingServerScopedKeys';
 
@@ -58,7 +58,9 @@ vi.mock('@/utils/platform/loadExpoNotifications', () => ({
         getLastNotificationResponseAsync: async () => null,
         addNotificationResponseReceivedListener: (listener: (response: unknown) => void) => {
             notifications.listener = listener;
-            return { remove: () => { notifications.listener = null; } };
+            return { remove: () => {
+                if (notifications.listener === listener) notifications.listener = null;
+            } };
         },
     }),
 }));
@@ -139,13 +141,14 @@ async function setupHomes() {
     return { homeA, homeB, setActiveServerId };
 }
 
+let routingScreen: Awaited<ReturnType<typeof renderScreen>> | null = null;
 async function mountRouting() {
     const { useNotificationResponseRouting } = await import('./useNotificationResponseRouting');
     function Probe() {
         useNotificationResponseRouting({ enabled: true, refreshAuth: async () => {} });
         return null;
     }
-    await renderScreen(React.createElement(Probe));
+    routingScreen = await renderScreen(React.createElement(Probe));
 }
 
 function disableConfiguredHomeSeeds(): void {
@@ -171,8 +174,9 @@ describe('useNotificationResponseRouting exact-Home permission dispatch', () => 
         network.requests.length = 0;
     });
 
-    afterEach(() => {
-        standardCleanup();
+    afterEach(async () => {
+        await routingScreen?.unmount();
+        routingScreen = null;
         vi.unstubAllEnvs();
     });
 

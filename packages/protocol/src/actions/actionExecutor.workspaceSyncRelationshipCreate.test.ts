@@ -50,6 +50,17 @@ const result = {
 };
 
 describe('workspace.sync.relationship.create Action', () => {
+  it('preserves the controller RPC refusal instead of validating it as a committed relationship', async () => {
+    const executor = createActionExecutor({
+      sessionHandoffTargetReplacementApprovalPreflight: async () => ({ type: 'not_required' as const }),
+      workspaceSyncRelationshipCreate: async () => ({ error: 'Workspace root identity is unavailable', errorCode: 'workspace_root_identity_unavailable' }),
+      isActionApprovalRequired: () => false,
+    } satisfies ActionExecutorDeps);
+    expect(await executor.execute('workspace.sync.relationship.create', input, {
+      surface: 'ui', authority: 'present_user', serverId: 'home-1', actionRequestId: 'link-failure',
+    })).toMatchObject({ ok: false, errorCode: 'workspace_root_identity_unavailable' });
+  });
+
   it('keeps worker-copy purpose and the chosen folder in the existing destination approval', async () => {
     const exactInput = { ...input, mode: 'keep_synced' as const, destinationIntent: 'materialize_from_source_workspace' as const,
       targetPath: '/chosen-worker', purpose: 'worker_clean_copy' as const };
@@ -80,9 +91,10 @@ describe('workspace.sync.relationship.create Action', () => {
       isActionApprovalRequired: () => false,
     } satisfies ActionExecutorDeps);
 
-    const response = await executor.execute('workspace.sync.relationship.create', input, {
-      surface: 'ui', authority: 'present_user', serverId: 'home-1', actionRequestId: 'link-request-1',
-    });
+    const context = {
+      surface: 'ui', authority: 'present_user', serverId: 'home-profile', serverIdentityId: 'home-1', actionRequestId: 'link-request-1',
+    } as const;
+    const response = await executor.execute('workspace.sync.relationship.create', input, context);
 
     expect(response).toMatchObject({ ok: true, result });
     expect(preflight).toHaveBeenCalledWith(expect.objectContaining({
@@ -90,12 +102,17 @@ describe('workspace.sync.relationship.create Action', () => {
       targetPath: '/work/existing',
       destinationIntent: 'use_existing',
       activatesExactMirror: false,
+      serverId: 'home-1',
       operationId: 'link-request-1',
+      effectActionId: 'workspace.sync.relationship.create',
+      context,
     }));
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
       input,
       operationId: 'link-request-1',
-      serverId: 'home-1',
+      serverId: 'home-profile',
+      serverIdentityId: 'home-1',
+      context,
     }));
   });
 

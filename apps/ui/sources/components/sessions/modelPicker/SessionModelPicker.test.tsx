@@ -16,6 +16,7 @@ import { SessionModelApplyTimingContext } from './SessionModelSourceBrowseHandof
 import { SelectionList } from '@/components/ui/selectionList/SelectionList';
 import { t } from '@/text';
 import { router as expoRouter } from 'expo-router';
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 
 /**
  * Committing a freeform model id is a SUBMIT, not a keystroke: the overlay's custom
@@ -77,6 +78,69 @@ function experimentalProviderGroup(id: string) {
 }
 
 describe('SessionModelPicker', () => {
+    it('passes the exact Connected Account source to the existing experimental confirmation', () => {
+        const { selected, providerGroups } = experimentalProviderGroup('connected-source:catalog-a');
+        const connectedAccountTarget = { kind: 'group' as const,
+            service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, groupId: 'pool-a' };
+        expect(resolveSessionModelPickerSelection({
+            groups: [{ ...providerGroups[0]!, connectedAccountTarget, connectionRevision: 0 }], ref: selected,
+        })).toMatchObject({ kind: 'confirm-experimental', connectedAccountTarget,
+            connectionId: selected.providerConnectionId, expectedConnectionRevision: 0 });
+    });
+    it.each([false, true])('finds authoritative native models by exact id and label despite an unavailable Provider projection (favorite %s)', async (favorite) => {
+        const agentTargetKey = 'agent:acme.agent/reviewer';
+        const modelId = 'openai/gpt-6.1-sol';
+        const selected = { agentTargetKey, providerConnectionId: null, modelId };
+        const onSelect = vi.fn();
+        const screen = await renderScreen(<SessionModelPicker
+            agentTargetKey={agentTargetKey}
+            nativeModels={[
+                { value: 'default', label: 'Automatic' },
+                { value: modelId, label: 'GPT-6.1 Sol' },
+                { value: `${modelId}-fast`, label: 'GPT-6.1 Sol Fast' },
+                ...Array.from({ length: 8 }, (_, i) => ({ value: `other/${i}`, label: `Other model ${i}` })),
+            ]}
+            providerGroups={[]}
+            providerProjectionAuthoritative={false}
+            projectionError={createProviderErrorV1('provider_catalog_unavailable')}
+            favoriteEntries={favorite ? [{ ref: selected }] : undefined}
+            probe={{ phase: 'idle', failed: false }}
+            selected={null}
+            effectiveLabel="Automatic"
+            onSelect={onSelect}
+        />);
+        const optionId = `model-picker-overlay-option:${JSON.stringify([agentTargetKey, null, modelId])}`;
+        expect(screen.findByTestId(optionId)).toBeTruthy();
+        for (const query of [modelId, 'gpt-6.1-sol', 'GPT-6.1 Sol']) {
+            act(() => screen.changeTextByTestId('model-picker-overlay-search', query));
+            expect(screen.findByTestId(optionId)).toBeTruthy();
+            expect(screen.getTextContent()).not.toContain('Other model 0');
+        }
+        await screen.pressByTestIdAsync(optionId);
+        expect(onSelect).toHaveBeenCalledWith(selected);
+        expect(screen.findByTestId('provider-error:provider_catalog_unavailable')).toBeNull();
+    });
+    it('retains an unavailable Provider catalog diagnostic for a named connection, Provider selection or no discovered native catalog', async () => {
+        const agentTargetKey = 'agent:acme.agent/reviewer';
+        for (const scenario of ['connection', 'selection', 'no-native']) {
+            const error = createProviderErrorV1('provider_catalog_unavailable', scenario === 'connection'
+                ? { connectionId: 'pc_work' } : undefined);
+            const screen = await renderScreen(<SessionModelPicker
+                agentTargetKey={agentTargetKey}
+                nativeModels={scenario === 'no-native'
+                    ? [{ value: 'default', label: 'Automatic' }]
+                    : [{ value: 'native/model', label: 'Native model' }]}
+                providerGroups={[]}
+                providerProjectionAuthoritative={false}
+                projectionError={error}
+                selected={scenario === 'selection' ? { agentTargetKey,
+                    providerConnectionId: ProviderConnectionIdSchema.parse('pc_work'), modelId: 'work/model' } : null}
+                effectiveLabel="Automatic"
+                onSelect={vi.fn()}
+            />);
+            expect(screen.findByTestId('provider-error:provider_catalog_unavailable')).toBeTruthy();
+        }
+    });
     it('confirms unconfirmed experimental compatibility through the Account regardless of model-load availability', () => {
         const ref = { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: ProviderConnectionIdSchema.parse('pc_a'), modelId: 'manual-model' };
         const group = createProviderModelProjectionGroupFixture({ modelLoadAction: 'machine_required', rows: [{
@@ -247,7 +311,7 @@ describe('SessionModelPicker', () => {
     it('keeps an experimental confirmation waiting for approval reviewable in place without a second request', async () => {
         const { connectionId, selected, providerGroups } = experimentalProviderGroup('pc_experimental_approval');
         const confirm = vi.fn<SessionModelPickerExperimentalConfirmationController['confirm']>(async () => false);
-        const href = '/(app)/inbox/approval-artifact-1?server=srv_picker';
+        const href = buildApprovalHref('approval-artifact-1', 'srv_picker');
         const screen = await renderScreen(
             <SessionModelPicker
                 agentTargetKey="agent:happier.agent.codex/codex"
@@ -365,7 +429,7 @@ describe('SessionModelPicker', () => {
         };
     };
 
-    it('describes the native custom entry by its source or purpose, never the "Built-in" fallback heading', async () => {
+    it('keeps the selected native account heading even when it is the only source', async () => {
         const render = (nativeSourceLabel?: string) => renderScreen(
             <SessionModelPicker
                 agentTargetKey="agent:happier.agent.codex/codex"
@@ -386,9 +450,11 @@ describe('SessionModelPicker', () => {
                 .map((child) => String(child.props.children)).join(' ');
         };
         const bare = await render();
+        expect(bare.findByType(SelectionList).props.rootStep.sections[0].title).toBeUndefined();
         expect(customText(bare)).not.toContain(t('settingsProviders.models.builtIn'));
         expect(customText(bare)).toContain(t('agentInput.model.customDescription'));
         const sourced = await render('Codex · Work pool');
+        expect(sourced.findByType(SelectionList).props.rootStep.sections[0].title).toBe('Codex · Work pool');
         expect(customText(sourced)).toContain('Codex · Work pool');
     });
 
@@ -554,6 +620,28 @@ describe('SessionModelPicker', () => {
         expect(retryProjection).toHaveBeenCalledOnce();
     });
 
+    it('names the failing source on its failure line, never a bare "Provider is unreachable"', async () => {
+        const { connectionId, providerGroups } = experimentalProviderGroup('pc_gateway_work');
+        const screen = await renderScreen(
+            <SessionModelPicker
+                agentTargetKey="agent:happier.agent.codex/codex"
+                nativeModels={[]}
+                providerGroups={providerGroups}
+                providerProjectionAuthoritative
+                projectionFailures={[{
+                    connectionId,
+                    error: createProviderErrorV1('provider_endpoint_unavailable', { machineId: 'machine-a', connectionId }),
+                }]}
+                retryProjection={vi.fn(async () => {})}
+                selected={null}
+                effectiveLabel="Automatic"
+                onSelect={() => {}}
+            />,
+        );
+
+        expect(screen.getTextContent()).toContain('Gateway · Work');
+    });
+
     it('leaves retry to the header refresh when the picker already has one', async () => {
         const headerRefresh = vi.fn();
         const screen = await renderScreen(
@@ -660,9 +748,7 @@ describe('SessionModelPicker', () => {
             const screen = await renderScreen(renderPicker(false));
             const rootStepBefore = screen.findByType(SelectionList).props.rootStep;
 
-            await act(async () => {
-                screen.tree.update(renderPicker(true));
-            });
+            await screen.update(renderPicker(true));
 
             expect(screen.findByType(SelectionList).props.rootStep).toBe(rootStepBefore);
         });

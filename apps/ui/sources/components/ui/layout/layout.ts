@@ -3,7 +3,7 @@ import {
     resolveViewportMinEdgePx,
     VIEWPORT_CLASS_MIN_EDGE_BREAKPOINTS_PX,
 } from '@/utils/platform/viewportClass';
-import { useLocalSetting } from '@/sync/domains/state/storage';
+import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { PAGE_COLUMN_MAX_WIDTH_PX, resolveContentMaxWidthForMode, type PageColumn } from './contentWidthMode';
 import { useContainedPageScope, useListPresentation, usePageColumn } from '@/components/ui/lists/listPresentation';

@@ -7,7 +7,7 @@ import {
     updateEffectiveHomeViewState,
 } from '@/sync/domains/server/selection/homeViewSelectionState';
 import { normalizeServerSelectionGroupsForSettings } from '@/sync/domains/server/selection/serverSelectionSettingsAdapter';
-import { useSetting } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/store/settingsReadHooks';
 import { getStorage } from '@/sync/domains/state/storageStore';
 
 export type HomeViewSelectionSettings = Pick<

@@ -72,6 +72,18 @@ async function renderScopedProviderHook(target:
 }
 
 describe('useMemorySearchProvider', () => {
+    it('keeps Project search on the selected daemon even when Home search is ready', async () => {
+        setReadyHomeCapability({ enabled: true });
+        const { useMemorySearchProvider } = await import('./useMemorySearchProvider');
+        const scope = { type: 'project' as const, projectRef: { serverId: 'srv_home', projectKey: 'payments' } };
+        const hook = await renderHook(() => useMemorySearchProvider({ kind: 'ambient' }, { scope }));
+        expect(hook.getCurrent()).toMatchObject({ provider: 'daemon', homeServerId: null,
+            daemonTarget: daemonTargetState.target, queryAvailable: true });
+        daemonTargetState.target = null;
+        await hook.rerender();
+        expect(hook.getCurrent()).toMatchObject({ homeServerId: null, queryAvailable: false,
+            unavailableReason: 'daemon_no_target' });
+    });
     it('keeps ready Home Sessions and daemon native corpora available together for unified search', async () => {
         setReadyHomeCapability({ enabled: true });
         const { useMemorySearchProvider } = await import('./useMemorySearchProvider');

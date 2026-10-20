@@ -19,7 +19,7 @@ export const TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1 = 'happier.triage';
 export const TRIAGE_SOURCE_DETAIL_SURFACE_ROLE_V1 = 'detail';
 
 /**
- * Every V1 string is a single-line string: C0 control characters and `U+007F`
+ * Every V1 row-display string is a single-line string: C0 control characters and `U+007F`
  * are not representable in any of them.
  *
  * This is a byte contract as much as a display contract. A control character
@@ -28,9 +28,10 @@ export const TRIAGE_SOURCE_DETAIL_SURFACE_ROLE_V1 = 'detail';
  * content no list row can render. Sources normalize provider text — collapsing
  * newlines, tabs, and other control runs to spaces — before projecting it; the
  * target parses the completed result strictly and rejects a control-bearing
- * result atomically rather than repairing it (`CONTRACT.md` §2.1).
+ * result atomically rather than repairing it (`CONTRACT.md` §2.1). Task write
+ * documents have their own input schemas and preserve multiline body text.
  */
-export const TRIAGE_SINGLE_LINE_STRING_PATTERN_V1 = '^[^\\u0000-\\u001f\\u007f]+$';
+export { TRIAGE_SINGLE_LINE_STRING_PATTERN_V1 } from '@happier-dev/plugin-sdk/protocol';
 
 /**
  * The grammar of a source-owned composite identifier: two single-line
@@ -54,8 +55,7 @@ export const TRIAGE_SINGLE_LINE_STRING_PATTERN_V1 = '^[^\\u0000-\\u001f\\u007f]+
  * its own components cannot contain, as PostHog, GitLab, GitHub, Bitbucket,
  * and Azure DevOps all do.
  */
-export const TRIAGE_COMPOSITE_IDENTIFIER_PATTERN_V1 =
-    '^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$';
+export { TRIAGE_COMPOSITE_IDENTIFIER_PATTERN_V1 } from '@happier-dev/plugin-sdk/protocol';
 
 /**
  * One line of projected display text: a row title, subtitle, scope label, the
@@ -102,7 +102,7 @@ export const MAX_TRIAGE_LOCATION_UTF8_BYTES_V1 = 384;
  * immutable provider id and carries none of the source qualifier or encoded
  * repository id that widens `collisionScope`.
  */
-export const MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1 = 128;
+export { MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1 } from '@happier-dev/plugin-sdk/protocol';
 /**
  * A forge's canonical repository path (`ScmHostingProviderRef.nameWithOwner`).
  *
@@ -129,7 +129,7 @@ export const MAX_TRIAGE_REPOSITORY_PATH_UTF8_BYTES_V1 = 255;
  * `localInstanceKey` it can carry a sixfold-escaping byte, but at most one, so
  * its worst case stays comparable to a maximal display string.
  */
-export const MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1 = 192;
+export { MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1 } from '@happier-dev/plugin-sdk/protocol';
 /**
  * Source-private current route token carried on an entry locator.
  *

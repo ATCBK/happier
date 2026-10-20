@@ -177,6 +177,10 @@ export type HomeIdentityActionResultById = {
             updatedAt: number;
             teamId: null;
             allowedActions: ('home.identity.connections.settings.update' | 'home.identity.connections.enable' | 'home.identity.connections.disable' | 'home.identity.connections.remove' | 'home.identity.connections.test.start' | 'home.identity.workos.adminPortalLink.create' | 'home.identity.workos.reconcile' | 'home.identity.workos.connection.set')[];
+            teamsUsingIt?: {
+                teamId: string;
+                name: string;
+            }[] | undefined;
         }[];
         eligibleProviders: {
             v: 1;
@@ -297,6 +301,10 @@ export type HomeIdentityActionResultById = {
             updatedAt: number;
             teamId: null;
             allowedActions: ('home.identity.connections.settings.update' | 'home.identity.connections.enable' | 'home.identity.connections.disable' | 'home.identity.connections.remove' | 'home.identity.connections.test.start' | 'home.identity.workos.adminPortalLink.create' | 'home.identity.workos.reconcile' | 'home.identity.workos.connection.set')[];
+            teamsUsingIt?: {
+                teamId: string;
+                name: string;
+            }[] | undefined;
         };
     };
     readonly "home.identity.connections.settings.update": {
@@ -365,6 +373,10 @@ export type HomeIdentityActionResultById = {
             updatedAt: number;
             teamId: null;
             allowedActions: ('home.identity.connections.settings.update' | 'home.identity.connections.enable' | 'home.identity.connections.disable' | 'home.identity.connections.remove' | 'home.identity.connections.test.start' | 'home.identity.workos.adminPortalLink.create' | 'home.identity.workos.reconcile' | 'home.identity.workos.connection.set')[];
+            teamsUsingIt?: {
+                teamId: string;
+                name: string;
+            }[] | undefined;
         };
     };
     readonly "home.identity.connections.enable": {
@@ -433,6 +445,10 @@ export type HomeIdentityActionResultById = {
             updatedAt: number;
             teamId: null;
             allowedActions: ('home.identity.connections.settings.update' | 'home.identity.connections.enable' | 'home.identity.connections.disable' | 'home.identity.connections.remove' | 'home.identity.connections.test.start' | 'home.identity.workos.adminPortalLink.create' | 'home.identity.workos.reconcile' | 'home.identity.workos.connection.set')[];
+            teamsUsingIt?: {
+                teamId: string;
+                name: string;
+            }[] | undefined;
         };
     };
     readonly "home.identity.connections.disable": {
@@ -501,6 +517,10 @@ export type HomeIdentityActionResultById = {
             updatedAt: number;
             teamId: null;
             allowedActions: ('home.identity.connections.settings.update' | 'home.identity.connections.enable' | 'home.identity.connections.disable' | 'home.identity.connections.remove' | 'home.identity.connections.test.start' | 'home.identity.workos.adminPortalLink.create' | 'home.identity.workos.reconcile' | 'home.identity.workos.connection.set')[];
+            teamsUsingIt?: {
+                teamId: string;
+                name: string;
+            }[] | undefined;
         };
     };
     readonly "home.identity.connections.remove.preview": {
@@ -579,6 +599,10 @@ export type HomeIdentityActionResultById = {
             updatedAt: number;
             teamId: null;
             allowedActions: ('home.identity.connections.settings.update' | 'home.identity.connections.enable' | 'home.identity.connections.disable' | 'home.identity.connections.remove' | 'home.identity.connections.test.start' | 'home.identity.workos.adminPortalLink.create' | 'home.identity.workos.reconcile' | 'home.identity.workos.connection.set')[];
+            teamsUsingIt?: {
+                teamId: string;
+                name: string;
+            }[] | undefined;
         };
     };
     readonly "home.identity.connections.remove": {
@@ -654,6 +678,10 @@ export type HomeIdentityActionResultById = {
             updatedAt: number;
             teamId: null;
             allowedActions: ('home.identity.connections.settings.update' | 'home.identity.connections.enable' | 'home.identity.connections.disable' | 'home.identity.connections.remove' | 'home.identity.connections.test.start' | 'home.identity.workos.adminPortalLink.create' | 'home.identity.workos.reconcile' | 'home.identity.workos.connection.set')[];
+            teamsUsingIt?: {
+                teamId: string;
+                name: string;
+            }[] | undefined;
         };
         diagnostics?: {
             subjectPresent: boolean;
@@ -746,6 +774,10 @@ export type HomeIdentityActionResultById = {
             updatedAt: number;
             teamId: null;
             allowedActions: ('home.identity.connections.settings.update' | 'home.identity.connections.enable' | 'home.identity.connections.disable' | 'home.identity.connections.remove' | 'home.identity.connections.test.start' | 'home.identity.workos.adminPortalLink.create' | 'home.identity.workos.reconcile' | 'home.identity.workos.connection.set')[];
+            teamsUsingIt?: {
+                teamId: string;
+                name: string;
+            }[] | undefined;
         };
     };
     readonly "home.identity.workos.reconcile": {
@@ -815,6 +847,10 @@ export type HomeIdentityActionResultById = {
             updatedAt: number;
             teamId: null;
             allowedActions: ('home.identity.connections.settings.update' | 'home.identity.connections.enable' | 'home.identity.connections.disable' | 'home.identity.connections.remove' | 'home.identity.connections.test.start' | 'home.identity.workos.adminPortalLink.create' | 'home.identity.workos.reconcile' | 'home.identity.workos.connection.set')[];
+            teamsUsingIt?: {
+                teamId: string;
+                name: string;
+            }[] | undefined;
         };
     } | {
         outcome: 'connected';
@@ -883,6 +919,10 @@ export type HomeIdentityActionResultById = {
             updatedAt: number;
             teamId: null;
             allowedActions: ('home.identity.connections.settings.update' | 'home.identity.connections.enable' | 'home.identity.connections.disable' | 'home.identity.connections.remove' | 'home.identity.connections.test.start' | 'home.identity.workos.adminPortalLink.create' | 'home.identity.workos.reconcile' | 'home.identity.workos.connection.set')[];
+            teamsUsingIt?: {
+                teamId: string;
+                name: string;
+            }[] | undefined;
         };
     } | {
         outcome: 'needs_attention';
@@ -951,6 +991,10 @@ export type HomeIdentityActionResultById = {
             updatedAt: number;
             teamId: null;
             allowedActions: ('home.identity.connections.settings.update' | 'home.identity.connections.enable' | 'home.identity.connections.disable' | 'home.identity.connections.remove' | 'home.identity.connections.test.start' | 'home.identity.workos.adminPortalLink.create' | 'home.identity.workos.reconcile' | 'home.identity.workos.connection.set')[];
+            teamsUsingIt?: {
+                teamId: string;
+                name: string;
+            }[] | undefined;
         };
     } | {
         outcome: 'selection_required';
@@ -1019,6 +1063,10 @@ export type HomeIdentityActionResultById = {
             updatedAt: number;
             teamId: null;
             allowedActions: ('home.identity.connections.settings.update' | 'home.identity.connections.enable' | 'home.identity.connections.disable' | 'home.identity.connections.remove' | 'home.identity.connections.test.start' | 'home.identity.workos.adminPortalLink.create' | 'home.identity.workos.reconcile' | 'home.identity.workos.connection.set')[];
+            teamsUsingIt?: {
+                teamId: string;
+                name: string;
+            }[] | undefined;
         };
         candidates: {
             connectionId: string;
@@ -1093,6 +1141,10 @@ export type HomeIdentityActionResultById = {
             updatedAt: number;
             teamId: null;
             allowedActions: ('home.identity.connections.settings.update' | 'home.identity.connections.enable' | 'home.identity.connections.disable' | 'home.identity.connections.remove' | 'home.identity.connections.test.start' | 'home.identity.workos.adminPortalLink.create' | 'home.identity.workos.reconcile' | 'home.identity.workos.connection.set')[];
+            teamsUsingIt?: {
+                teamId: string;
+                name: string;
+            }[] | undefined;
         };
     };
 };

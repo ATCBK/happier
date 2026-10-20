@@ -13,6 +13,7 @@ import {
 import { HappierPressable, type HappierPressableStyleState } from '../presentation/interaction/Pressable.js';
 import { HappierScrollArea, HappierStack } from '../presentation/layout/Layout.js';
 import { HappierText } from '../presentation/text/Text.js';
+import { HappierBadge } from '../presentation/content/Foundation.js';
 import {
   HAPPIER_MENU_ROW_METRICS,
   HAPPIER_MENU_ROW_TEXT,
@@ -25,7 +26,7 @@ import type { HappierTextVariant, HappierTone } from '../presentation/semantics.
 import { HAPPIER_PRESS_FEEDBACK_V1, happierPressTransitionStyle } from '../presentation/interaction/pressFeedback.js';
 import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, happierFocusRingStyle } from '../presentation/interaction/focusVisible.js';
 import { settleHappierRaisedEdge } from '../presentation/layout/raisedEdge.js';
-import { HAPPIER_ICON_BUTTON_SIZE, resolveHappierIconButtonChrome } from '../presentation/interaction/iconButtonChrome.js';
+import { HAPPIER_ICON_BUTTON_SIZE, HAPPIER_ICON_BUTTON_WELL_SIZE, resolveHappierIconButtonChrome } from '../presentation/interaction/iconButtonChrome.js';
 import {
   HappierFieldBoxChevron,
   HappierFieldBoxTrigger,
@@ -38,6 +39,9 @@ import { useButtonFace } from './Button.js';
 import { Icon, PluginUiIconGlyph, type IconName } from './Icon.js';
 import { OverlayFieldTriggerContext } from './overlayFieldTrigger.js';
 import { Surface } from './Surface.js';
+import type { HappierFloatingRole } from '../presentation/layout/Surface.js';
+import { SURFACE_PADDING_BY_SIZE } from './surfacePadding.js';
+import { HAPPIER_PAGE_CHROME_CONTEXT_INTERNAL } from '../presentation/layout/pageChrome.js';
 import { usePluginTheme } from './PluginUiProvider.js';
 
 export type PopoverProps = Readonly<{
@@ -60,9 +64,11 @@ export type PopoverProps = Readonly<{
    * a compact control on the theme's control surface — the look of a toolbar
    * picker such as a view, sort or filter menu. `primary` draws it as the
    * view's one primary button, for a primary action that is a choice ("Add a
-   * source" opening the sources that can be added).
+   * source" opening the sources that can be added). `well` is the glyph alone in a round resting fill
+   * (needs `triggerIcon`): the phone toolbar's Filters and ⋯ beside the search, where the buttons are the
+   * object on their row.
    */
-  triggerAppearance?: 'text' | 'control' | 'primary';
+  triggerAppearance?: 'text' | 'control' | 'primary' | 'well';
   /**
    * Draws a caret after a plain `text` trigger, so a title that opens a menu reads as one ("Entry ⌄" in
    * a table's column header). Labelled appearances (`control`, `primary`) are buttons and never take it.
@@ -78,6 +84,12 @@ export type PopoverProps = Readonly<{
   triggerAccessibilityLabel: string;
   /** Accessible name for the non-menu dialog surface; defaults to the trigger label. */
   contentAccessibilityLabel?: string;
+  /**
+   * What the floating layer is: `menu` (the default) is a small popover that keeps the host's light
+   * coat; `panel` is a large anchored panel (a form, a picker with search, a detail view) that takes
+   * the host's heavy dialog coat so its words stay legible over the page. The host owns the paint.
+   */
+  floatingRole?: HappierFloatingRole;
   children?: ReactNode;
   placement?: 'auto' | 'top' | 'bottom' | 'left' | 'right';
   disabled?: boolean;
@@ -99,6 +111,10 @@ type PopoverPresentationProps = PopoverProps & Readonly<{
   initialFocusRef?: RefObject<unknown>;
   /** Private menu-content bridge for the incumbent Popover close lifecycle. */
   renderContent?: (controls: PluginUiPopoverContentControls) => ReactNode;
+  /** Private: on a phone, the host's bottom sheet titled `title`, with `footer` pinned under the rows. */
+  sheet?: Readonly<{ title: string; footer?: ReactNode }>;
+  /** Private: how many choices are in force, drawn as a count on a `well` trigger. */
+  triggerCount?: number;
 }>;
 
 /** A group heading starts on the rows' own text edge, with the menu's row rhythm above it. */
@@ -133,6 +149,7 @@ function PopoverPresentation({
   triggerIcon,
   triggerAccessibilityLabel,
   contentAccessibilityLabel: requestedContentAccessibilityLabel,
+  floatingRole,
   children,
   placement,
   disabled,
@@ -144,6 +161,8 @@ function PopoverPresentation({
   presentation = 'popover',
   initialFocusRef,
   renderContent,
+  sheet,
+  triggerCount,
 }: PopoverPresentationProps): ReactElement {
   // TypeScript callers cannot supply an element, and this keeps the same
   // one-owner contract for untyped/plugin-bundle callers before React Native
@@ -165,8 +184,9 @@ function PopoverPresentation({
     requestContextOpen(event, onOpenChange);
   }, [onOpenChange]);
   const contentAccessibilityLabel = requestedContentAccessibilityLabel ?? triggerAccessibilityLabel;
-  // Only the plain-text appearance turns a glyph into an icon button; a labelled one keeps its words.
-  const iconOnly = triggerIcon !== undefined && triggerAppearance === 'text';
+  // Only the plain-text and well appearances turn a glyph into an icon button; a labelled one keeps its words.
+  const iconOnly = triggerIcon !== undefined && (triggerAppearance === 'text' || triggerAppearance === 'well');
+  const well = iconOnly && triggerAppearance === 'well';
   // A labelled trigger is a Button's face, glyph and all: the view's primary, or the small secondary
   // of a toolbar's control row. Both hooks run on every render, whichever appearance draws.
   const primaryFace = useButtonFace('primary', 'normal', disabled === true);
@@ -175,7 +195,8 @@ function PopoverPresentation({
     : triggerAppearance === 'primary' ? primaryFace
       : triggerAppearance === 'control' ? controlFace : null;
   const iconChrome = (state: HappierPressableStyleState) => resolveHappierIconButtonChrome({
-    size: HAPPIER_ICON_BUTTON_SIZE, variant: 'plain', selected: state.selected,
+    size: well ? HAPPIER_ICON_BUTTON_WELL_SIZE : HAPPIER_ICON_BUTTON_SIZE, variant: well ? 'well' : 'plain',
+    selected: state.selected,
     hovered: state.hovered, pressed: state.pressed, focused: state.focused, disabled: state.disabled,
     colors: { background: theme.colors.control, border: theme.colors.border,
       hover: theme.colors.control, pressed: theme.colors.control,
@@ -187,13 +208,23 @@ function PopoverPresentation({
   const content = useCallback((controls: PluginUiPopoverContentControls) => {
     const renderedChildren = renderContent ? renderContent(controls) : children;
     if (renderedChildren === undefined || renderedChildren === null) return null;
+    // The host's phone sheet is the surface: it titles, scrolls and pins the footer itself.
+    if (controls.presentation === 'sheet') {
+      return (
+        <OverlayFieldTriggerContext.Provider value={null}>
+          <HAPPIER_PAGE_CHROME_CONTEXT_INTERNAL.Provider value={null}>
+            <View style={sheetRowsInsetStyle}>{renderedChildren}</View>
+          </HAPPIER_PAGE_CHROME_CONTEXT_INTERNAL.Provider>
+        </OverlayFieldTriggerContext.Provider>
+      );
+    }
     const contentBody = (
       <OverlayFieldTriggerContext.Provider value={null}>
-        <HappierScrollArea style={{ maxHeight: controls.maxHeight }}>
-          <Surface padding="small" materialRole="floating">
-            <HappierStack gap={4}>{renderedChildren}</HappierStack>
-          </Surface>
-        </HappierScrollArea>
+        <FloatingScrollSurface maxHeight={controls.maxHeight} floatingRole={floatingRole}>
+          {renderedChildren}
+          {/* Anchored (a wide viewport, or a host without a sheet): the sheet's footer ends the same surface. */}
+          {sheet?.footer == null ? null : <View style={anchoredSheetFooterStyle}>{sheet.footer}</View>}
+        </FloatingScrollSurface>
       </OverlayFieldTriggerContext.Provider>
     );
     return isMenuPresentation
@@ -207,7 +238,7 @@ function PopoverPresentation({
           {contentBody}
         </View>
       );
-  }, [children, contentAccessibilityLabel, isMenuPresentation, renderContent]);
+  }, [children, contentAccessibilityLabel, floatingRole, isMenuPresentation, renderContent, sheet]);
 
   return (
     <View ref={anchorRef} collapsable={false}>
@@ -269,6 +300,20 @@ function PopoverPresentation({
         } : iconOnly ? (state) => (
           <View style={iconChrome(state).surface}>
             <Icon name={triggerIcon} size="medium" tone="neutral" />
+            {well && triggerCount !== undefined && triggerCount > 0 ? (
+              <HappierBadge
+                shape="capsule"
+                color={theme.colors.onAccent}
+                backgroundColor={theme.colors.accent}
+                horizontalPadding={TRIGGER_COUNT_PADDING_X}
+                verticalPadding={0}
+                style={triggerCountStyle}
+              >
+                <HappierText accessible={false} variant="micro" tabularNumbers style={{ color: theme.colors.onAccent }}>
+                  {String(triggerCount)}
+                </HappierText>
+              </HappierBadge>
+            ) : null}
           </View>
         ) : buttonFace ? (state) => buttonFace.renderContent(state, {
           // The glyph in the button's own ink, at a Button's leading-icon size.
@@ -300,6 +345,7 @@ function PopoverPresentation({
             presentation,
             width: fieldTrigger ? 'anchor' : 'content',
             autoFocusOnOpen: shouldAutoFocusOnOpen,
+            ...(sheet === undefined ? {} : { sheet }),
             onRequestClose: () => onOpenChange(false),
             content,
           })
@@ -400,7 +446,7 @@ type MenuContentProps =
       groups: readonly MenuGroup[];
     }>;
 
-export type MenuProps = Omit<PopoverProps, 'children'> & MenuContentProps & Readonly<{
+export type MenuProps = Omit<PopoverProps, 'children' | 'floatingRole'> & MenuContentProps & Readonly<{
   /** One controlled selected id per named radio group; radio rows never own checks locally. */
   radioGroups?: readonly MenuRadioGroup[];
   /** Draws each named group's heading above its rows (a Filters menu of labelled checkbox groups). */
@@ -421,6 +467,11 @@ type MenuRowsProps = Readonly<{
   initialFocusRef: MutableRefObject<View | null>;
   /** Chooser sections have visible headings as well as their semantic group names. */
   showGroupLabels?: boolean;
+  /**
+   * A touch sheet draws no resting highlight on the current choice (its check already says it); keyboard focus
+   * still draws its ring.
+   */
+  restingHighlight?: boolean;
 }>;
 
 function MenuRows({
@@ -433,6 +484,7 @@ function MenuRows({
   controls,
   initialFocusRef,
   showGroupLabels = false,
+  restingHighlight = true,
 }: MenuRowsProps): ReactElement {
   const theme = usePluginTheme();
   const nativeMinimumTouchTarget = useHappierNativeMinimumInteractiveTargetSize();
@@ -519,7 +571,7 @@ function MenuRows({
             : undefined}
         accessibilityLabel={item.subtitle ? `${item.label} · ${item.subtitle}` : item.label}
         checked={checked}
-        highlighted={index === selectedIndex}
+        highlighted={restingHighlight && index === selectedIndex}
         disabled={item.disabled}
         tabIndex={!item.disabled && index === selectedIndex ? 0 : -1}
         onKeyDown={(key) => onItemKey(key, index)}
@@ -596,6 +648,13 @@ function MenuRows({
   );
 }
 
+type MenuSheetProps = Readonly<{
+  /** The phone sheet's title and its pinned footer; choices then apply in place and never close it. */
+  sheet?: Readonly<{ title: string; footer?: ReactNode }>;
+  /** How many choices are in force, drawn on a `well` trigger. */
+  triggerCount?: number;
+}>;
+
 function MenuPresentation({
   items: ungroupedItems = [],
   groups = [],
@@ -604,8 +663,10 @@ function MenuPresentation({
   onSelect,
   onOpenChange,
   kind,
+  sheet,
+  triggerCount,
   ...popover
-}: MenuProps & Readonly<{ kind: MenuPresentationKind }>): ReactElement {
+}: MenuProps & MenuSheetProps & Readonly<{ kind: MenuPresentationKind }>): ReactElement {
   const initialFocusRef = useRef<View | null>(null);
   const placement = kind === 'dropdown' && popover.placement === undefined
     ? 'bottom'
@@ -621,6 +682,8 @@ function MenuPresentation({
       triggerMode={triggerMode}
       presentation={kind}
       initialFocusRef={initialFocusRef}
+      {...(sheet === undefined ? {} : { sheet })}
+      {...(triggerCount === undefined ? {} : { triggerCount })}
       renderContent={(controls) => (
         <MenuRows
           ungroupedItems={ungroupedItems}
@@ -629,12 +692,67 @@ function MenuPresentation({
           onSelect={onSelect}
           open={popover.open}
           triggerAccessibilityLabel={popover.triggerAccessibilityLabel}
-          controls={controls}
+          // A sheet of choices applies each one where it is touched: only Escape (or its own footer) closes it.
+          controls={sheet === undefined ? controls : {
+            ...controls,
+            requestClose: (reason) => {
+              if (reason === 'escape') controls.requestClose(reason);
+            },
+          }}
           initialFocusRef={initialFocusRef}
           showGroupLabels={showGroupLabels}
+          restingHighlight={controls.presentation !== 'sheet'}
         />
       )}
     />
+  );
+}
+
+const FLOATING_SURFACE_INSET = SURFACE_PADDING_BY_SIZE.small;
+/** In the host's phone sheet, menu rows put their words on the sheet title's edge, the highlight inset from the sheet's. */
+const sheetRowsInsetStyle = {
+  paddingHorizontal: SURFACE_PADDING_BY_SIZE.medium.horizontal - HAPPIER_MENU_ROW_METRICS.paddingHorizontalPx,
+} as const;
+/** An anchored sheet's footer sits on the menu rows' own edge, a row's rhythm below them. */
+const anchoredSheetFooterStyle = {
+  flexDirection: 'row',
+  justifyContent: 'flex-end',
+  alignItems: 'center',
+  gap: 8,
+  paddingHorizontal: HAPPIER_MENU_ROW_METRICS.paddingHorizontalPx,
+  paddingTop: HAPPIER_MENU_ROW_METRICS.paddingVerticalPx,
+} as const;
+/** A count rides the round trigger's upper corner, clear of the glyph. */
+const TRIGGER_COUNT_PADDING_X = 5;
+const triggerCountStyle = {
+  position: 'absolute',
+  top: -3,
+  right: -3,
+  minWidth: 16,
+  height: 16,
+  justifyContent: 'center',
+} as const;
+const FLOATING_SURFACE_SCROLL_INSET = Object.freeze({
+  paddingHorizontal: FLOATING_SURFACE_INSET.horizontal,
+  paddingVertical: FLOATING_SURFACE_INSET.vertical,
+});
+
+/**
+ * A floating layer's one surface: the rimmed Surface keeps its whole edge at the height cap and the
+ * content scrolls inside it, so a long menu never ends in a flat cut. Floating content stands outside
+ * the page column, so the page's sheet edge does not inset it either.
+ */
+function FloatingScrollSurface(props: Readonly<{ maxHeight: number; floatingRole?: HappierFloatingRole; children: ReactNode }>): ReactElement {
+  // The Surface's 1px border on each side sits outside the scroller.
+  const scrollMaxHeight = Math.max(0, props.maxHeight - 2);
+  return (
+    <HAPPIER_PAGE_CHROME_CONTEXT_INTERNAL.Provider value={null}>
+      <Surface padding="none" materialRole="floating" floatingRole={props.floatingRole}>
+        <HappierScrollArea style={{ maxHeight: scrollMaxHeight }} contentContainerStyle={FLOATING_SURFACE_SCROLL_INSET}>
+          <HappierStack gap={4}>{props.children}</HappierStack>
+        </HappierScrollArea>
+      </Surface>
+    </HAPPIER_PAGE_CHROME_CONTEXT_INTERNAL.Provider>
   );
 }
 
@@ -682,16 +800,32 @@ export function HostedAnchoredMenu(props: HostedAnchoredMenuProps): ReactElement
     onClick={event => { if (event.target === event.currentTarget) props.onOpenChange(false); }}
     style={{ position: 'fixed', margin: 0, padding: 0, border: 0, background: 'transparent', color: 'inherit', maxWidth: `calc(100vw - ${margin * 2}px)` }}>
     <OverlayFieldTriggerContext.Provider value={null}>
-      <HappierScrollArea style={{ maxHeight }}><Surface padding="small" materialRole="floating"><HappierStack gap={4}>
+      <FloatingScrollSurface maxHeight={maxHeight}>
         <MenuRows ungroupedItems={props.items} groups={props.groups} radioGroups={[]} onSelect={props.onSelect}
           open showGroupLabels triggerAccessibilityLabel={props.accessibilityLabel} controls={controls} initialFocusRef={initialFocusRef} />
-      </HappierStack></Surface></HappierScrollArea>
+      </FloatingScrollSurface>
     </OverlayFieldTriggerContext.Provider>
   </dialog>;
 }
 
 /** A bounded semantic menu over the shared Popover lifecycle. */
 export function Menu(props: MenuProps): ReactElement {
+  return <MenuPresentation {...props} kind="menu" />;
+}
+
+export type SheetMenuProps = MenuProps & Readonly<{
+  /** The phone sheet's title and the controls pinned under its rows (a quiet Clear, one primary that closes). */
+  sheet: Readonly<{ title: string; footer?: ReactNode }>;
+  /** How many choices are in force, drawn as a count on a `well` trigger. */
+  triggerCount?: number;
+}>;
+
+/**
+ * A menu of several choices (checkbox and radio groups) that a phone presents as the host's bottom sheet —
+ * titled, the rows applying as they are touched, the footer pinned under them — and a wider viewport anchors
+ * like any menu, the footer ending its surface. `CollectionToolbar`'s folded Filters is one.
+ */
+export function SheetMenu(props: SheetMenuProps): ReactElement {
   return <MenuPresentation {...props} kind="menu" />;
 }
 

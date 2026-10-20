@@ -12,7 +12,7 @@ import type {
   MachineVitalsSampleV1,
 } from '@happier-dev/protocol/machines/vitals/machineVitalsSampleV1';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { usageSignatureAccent, withUsageAccentAlpha } from '@/components/settings/usage/usageAccent';
 import {
   ExpandableItem,
@@ -80,14 +80,13 @@ export const CpuTile = React.memo(function CpuTile(
                 id: String(point.t),
                 x: point.t,
                 y: point.cpu,
-                label: formatVitalsPointTime(point.t),
               })),
             },
             {
               id: 'cpu-maximum', label: t('machineVitals.history.maximum'),
-              color: withUsageAccentAlpha(accent, 0.4), overlay: true, lineStyle: 'dotted',
+              color: withUsageAccentAlpha(accent, 0.55), overlay: true,
               points: props.timeline.points.map((point) => ({ id: String(point.t), x: point.t,
-                y: point.cpuMax, label: formatVitalsPointTime(point.t) })),
+                y: point.cpuMax })),
             },
           ]
         : [],
@@ -138,7 +137,7 @@ export const CpuTile = React.memo(function CpuTile(
           label={t('machineVitals.cpu.chartLabel')}
           timeline={props.timeline}
           series={series}
-          variant="line"
+          variant="area"
           domain={vitalsPercentScale.domain}
           scaleTicks={vitalsPercentScale.ticks}
           axis={props.axis}
@@ -184,7 +183,7 @@ function PerCoreBody(
   props: Readonly<{ cpu: ReportedCpu; host: MachineVitalsHostFactsV1 | null }>,
 ) {
   const { theme } = useUnistyles();
-  const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const pluginTheme = usePluginUiTheme(theme);
   const { cpu, host } = props;
   const cores = React.useMemo(
     (): readonly CoreLoadBar[] =>

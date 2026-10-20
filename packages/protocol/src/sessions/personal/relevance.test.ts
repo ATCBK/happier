@@ -1,4 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { NO_SESSION_PERSONAL_RELEVANCE_FACTS_V1, resolveSessionPersonalRelevanceV1 as resolveRelevance } from './relevance.js';
+
+it('keeps a private one-shot in My work without claiming ongoing Follow', () => {
+  expect(resolveRelevance({ ...NO_SESSION_PERSONAL_RELEVANCE_FACTS_V1, followOnce: true }))
+    .toEqual({ relevant: true, reasons: ['follow_once'] });
+});
 
 import {
   NO_SESSION_PERSONAL_RELEVANCE_FACTS_V1,

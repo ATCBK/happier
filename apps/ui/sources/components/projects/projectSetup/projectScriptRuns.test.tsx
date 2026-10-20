@@ -84,7 +84,7 @@ describe('Scripts canonical operation subscriptions', () => {
         const serverIdentityId = policy === 'direct' ? 'srv_script_worker_refusal' : 'srv_script_worker_refusal_ask_first';
         const actionSettings = { actionsSettingsV1: { v: 1, actions: {
             'projects.script.run': { approvalRequiredSurfaces: policy === 'ask-first' ? ['ui'] : [] },
-        } } };
+        }, ...(policy === 'direct' ? { approvalWaivedSurfaces: { 'projects.script.run': ['ui'] } } : {}) } };
         const refusalCode = reason === 'worker_copy_missing' ? reason : 'choice_required';
         const targetMachineId = reason === 'worker_copy_missing' ? 'worker-machine' : 'source-machine';
         const connection = await restoreServerAccountForTest({
@@ -105,7 +105,8 @@ describe('Scripts canonical operation subscriptions', () => {
                         unavailable: 'primary', allowAdHoc: false, scriptOverrides: {}, services: {} } } });
                 if (path === '/v1/actions/projects.script.run/execution-authorization') {
                     const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(typeof init?.body === 'string' ? JSON.parse(init.body) : null);
-                    const input = PROJECT_ACTION_INPUT_SCHEMAS_V1['projects.script.run'].parse(request.envelope.input);
+                    const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.envelope);
+                    const input = PROJECT_ACTION_INPUT_SCHEMAS_V1['projects.script.run'].parse(envelope.input);
                     const machine = createPlainMachineRowFixture({ id: input.choice?.kind === 'workers' ? targetMachineId : 'source-machine', accountId: 'account' });
                     expect(request.machineId).toBe(machine.id);
                     return Response.json(ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'own-script-home-root', binding: {

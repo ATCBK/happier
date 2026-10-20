@@ -1,7 +1,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import tweetnacl from "tweetnacl";
-import { encodeBase64, signMachineInstallationProof } from "@happier-dev/protocol";
+import { encodeBase64, encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER, signMachineInstallationProof } from "@happier-dev/protocol";
 
+import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { createSessionMachineAccessKeyInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
 import { eventRouter } from "@/app/events/eventRouter";
 import { db } from "@/storage/db";
@@ -38,7 +39,7 @@ describe("Machine transaction-composable mutations (SQLite integration)", () => 
         ]);
     });
 
-    async function createAccount(publicKey: string) {
+    async function createAccount(publicKey: string | null) {
         return db.account.create({
             data: { publicKey, encryptionMode: "plain" },
             select: { id: true },
@@ -46,7 +47,7 @@ describe("Machine transaction-composable mutations (SQLite integration)", () => 
     }
 
     it("validates installation proof and creates the ordinary Machine through the canonical owner", async () => {
-        const account = await createAccount("pk-machine-create");
+        const account = await createAccount(null);
         const installationKeyPair = tweetnacl.sign.keyPair();
         const payload = {
             version: 1 as const,
@@ -73,9 +74,9 @@ describe("Machine transaction-composable mutations (SQLite integration)", () => 
         const created = await inTx(async (tx) => createMachineWithInstallationIdentityInTx(tx, {
             accountId: account.id,
             machineId: payload.machineId,
-            metadata: "plain-metadata",
+            metadata: encodePlainMachineStoredContent({ host: "ordinary" }),
             daemonState: null,
-            dataEncryptionKey: null,
+            dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
             installationIdentity: validated.identity,
             contentPublicKeyFingerprint: null,
             replacementReason: "machine_rotation",
@@ -85,7 +86,7 @@ describe("Machine transaction-composable mutations (SQLite integration)", () => 
             id: payload.machineId,
             kind: "persistent",
             accountId: account.id,
-            metadata: "plain-metadata",
+            metadata: encodePlainMachineStoredContent({ host: "ordinary" }),
             active: false,
             installationId: payload.installationId,
         });
@@ -96,6 +97,45 @@ describe("Machine transaction-composable mutations (SQLite integration)", () => 
         })).resolves.toBe(1);
     });
 
+    it.each([
+        { mode: "plain", mismatch: "metadata", metadata: "ciphertext", daemonState: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER },
+        { mode: "plain", mismatch: "daemonState", metadata: encodePlainMachineStoredContent({}), daemonState: "ciphertext", dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER },
+        { mode: "plain", mismatch: "dataEncryptionKey", metadata: encodePlainMachineStoredContent({}), daemonState: null, dataEncryptionKey: null },
+        { mode: "e2ee", mismatch: "metadata", metadata: encodePlainMachineStoredContent({}), daemonState: null, dataEncryptionKey: null },
+        { mode: "e2ee", mismatch: "daemonState", metadata: "ciphertext", daemonState: encodePlainMachineStoredContent({}), dataEncryptionKey: null },
+        { mode: "e2ee", mismatch: "dataEncryptionKey", metadata: "ciphertext", daemonState: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER },
+    ] as const)("rejects $mode Machine creation with mismatched $mismatch before any durable mutation", async ({ mode, metadata, daemonState, dataEncryptionKey }) => {
+        const account = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: mode } });
+        await expect(inTx(async (tx) => createMachineWithInstallationIdentityInTx(tx, {
+            accountId: account.id,
+            machineId: "mismatch",
+            metadata,
+            daemonState,
+            dataEncryptionKey,
+            installationIdentity: null,
+            contentPublicKeyFingerprint: null,
+            replacementReason: "machine_rotation",
+        }))).rejects.toMatchObject({ code: "machine_storage_mode_mismatch" });
+        await expect(db.machine.count({ where: { accountId: account.id } })).resolves.toBe(0);
+        await expect(db.accountChange.count({ where: { accountId: account.id } })).resolves.toBe(0);
+    });
+
+    it("preserves E2EE creation with an absent historical Account-key envelope", async () => {
+        const account = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: "e2ee" } });
+        const created = await inTx(async (tx) => createMachineWithInstallationIdentityInTx(tx, {
+            accountId: account.id,
+            machineId: "historical-e2ee",
+            metadata: "encrypted-metadata",
+            daemonState: "encrypted-state",
+            dataEncryptionKey: null,
+            installationIdentity: null,
+            contentPublicKeyFingerprint: null,
+            replacementReason: "machine_rotation",
+        }));
+        expect(created.machine).toMatchObject({ id: "historical-e2ee", metadata: "encrypted-metadata", daemonState: "encrypted-state", dataEncryptionKey: null });
+        await expect(db.accountChange.count({ where: { accountId: account.id } })).resolves.toBe(1);
+    });
+
     it.each(["persistent", "ephemeral_session_runner"] as const)("revokes a %s Machine without leaking temporary inventory", async (kind) => {
         const account = await createAccount("pk-machine-revoke");
         const machine = await db.machine.create({
@@ -104,12 +144,12 @@ describe("Machine transaction-composable mutations (SQLite integration)", () => 
         const session = await db.session.create({
             data: { accountId: account.id, tag: "machine-revoke-session", encryptionMode: "plain", metadata: "{}" },
         });
-        const accessKey = await createSessionMachineAccessKeyInTx(db, {
+        const accessKey = await inTx(tx => createSessionMachineAccessKeyInTx(tx, {
             accountId: account.id,
             machineId: machine.id,
             sessionId: session.id,
             data: "access-key",
-        });
+        }));
         expect(accessKey.ok).toBe(true);
 
         const disconnectedRooms: string[] = [];

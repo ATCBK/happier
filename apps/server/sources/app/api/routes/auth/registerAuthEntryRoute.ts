@@ -1,5 +1,5 @@
 import { AuthEntryProjectionV1Schema, AuthEntryRequestV1Schema } from '@happier-dev/protocol/auth/entry';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { Fastify } from '@/app/api/types';
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';
@@ -36,9 +36,9 @@ export function registerAuthEntryRoute(app: Fastify, params: Readonly<{
                 body: AuthEntryRequestV1Schema,
                 response: {
                     200: AuthEntryProjectionV1Schema,
-                    403: z.object({
+                    403: z.strictObject({
                         error: z.literal(SESSION_RUNTIME_PUBLIC_AUTH_FORBIDDEN_ERROR),
-                    }).strict(),
+                    }),
                 },
             },
         },

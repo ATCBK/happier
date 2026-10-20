@@ -27,6 +27,43 @@ afterEach(async () => {
 });
 
 describe('reactive Machine presence', () => {
+    it('keeps the captured presence snapshot until a source or the shared deadline clock advances', async () => {
+        vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+        const now = Date.now();
+        vi.setSystemTime(now);
+        const previous = storage.getState();
+        const machine = createMachineFixture({ id: 'machine', activeAt: now });
+        storage.getState().applyMachines([machine], true, { sourceServerId: serverId });
+        try {
+            const hook = await renderHook(() => ({
+                membership: useMachinePresenceMembership(serverId),
+                summary: useMachinePresenceSummary(serverId, 'machine'),
+            }));
+            const captured = hook.getCurrent();
+            expect(captured.membership.onlineMachineIds).toEqual(['machine']);
+            expect(captured.summary.reachability).toBe('reachable');
+
+            // A delayed renderer can cross a lease deadline between React's two
+            // snapshot reads before the subscribed clock callback gets to run.
+            vi.setSystemTime(now + 60_001);
+            await hook.rerender();
+            expect(hook.getCurrent().membership).toBe(captured.membership);
+            expect(hook.getCurrent().summary).toBe(captured.summary);
+
+            await act(async () => {
+                vi.advanceTimersByTime(60_001);
+            });
+            expect(hook.getCurrent().membership.onlineMachineIds).toEqual([]);
+            expect(hook.getCurrent().summary.reachability).toBe('unreachable');
+
+            await act(async () => {
+                storage.getState().applyMachines([{ ...machine, activeAt: Date.now() }], false, { sourceServerId: serverId });
+            });
+            expect(hook.getCurrent().membership.onlineMachineIds).toEqual(['machine']);
+            expect(hook.getCurrent().summary.reachability).toBe('reachable');
+            await hook.unmount();
+        } finally { storage.setState(previous); }
+    });
     it('keeps locked machines in presence inventory without admitting them to the selectable fleet', async () => {
         const previous = storage.getState();
         const machine = createMachineFixture({ id: 'locked-machine', active: true, activeAt: Date.now(),

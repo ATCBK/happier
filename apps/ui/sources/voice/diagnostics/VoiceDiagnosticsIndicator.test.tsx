@@ -73,12 +73,20 @@ let modalScreen: RenderScreenResult;
 function readAlertDialogs() {
   return modalScreen.findAllByType(WebAlertModal).filter(node => node.props.config.type === 'alert');
 }
+async function respondToVisibleConfirmation() {
+  // The host retains hidden dialogs during exit. Only a visible confirmation
+  // can accept another user gesture.
+  if (modalScreen.findAllByType(WebAlertModal).some(node => node.props.visible !== false && node.props.config.type === 'confirm')) {
+    await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+  }
+}
 let home: Awaited<ReturnType<typeof serveAccountHomes>>;
 let disconnect: (() => Promise<void>) | undefined;
 function VoiceDiagnosticsIndicator(props: React.ComponentProps<typeof Indicator>) {
   React.useLayoutEffect(() => {
     const machines = ['m1', 'm2'].map(id => createMachineFixture({ id, active: runtimeState.isOnline,
-      activeAt: runtimeState.isOnline ? Date.now() : 0, daemonStateVersion: runtimeState.daemonStateVersion }));
+      activeAt: runtimeState.isOnline ? Date.now() : 0, daemonStateVersion: runtimeState.daemonStateVersion,
+      daemonState: { status: 'running', startedAt: runtimeState.daemonStateVersion } }));
     storage.setState({ machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
       machineListByServerId: { [home.homes.diagnostics!.id]: machines } });
     storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: voiceSettingsParse({ diagnostics,
@@ -178,7 +186,7 @@ describe('VoiceDiagnosticsIndicator', () => {
     await act(async () => {
       tree = renderer.create(React.createElement(VoiceDiagnosticsIndicator, { sessionId: 'session-1' })); registerStandardCleanupTarget(tree);
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     expect(tree.root.findByProps({ accessibilityLabel: tLoose('settingsVoice.diagnostics.sessionOptOut') })).toBeTruthy();
     expect(JSON.stringify(tree.toJSON())).toContain(tLoose('settingsVoice.diagnostics.activeIndicator'));
 
@@ -186,7 +194,7 @@ describe('VoiceDiagnosticsIndicator', () => {
       tree.root.findByType('Pressable' as any).props.onPress();
       await Promise.resolve();
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     expect(tree.toJSON()).toBeNull();
     expect(rpcRequests).toContainEqual(expect.objectContaining({ method: `m1:${RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_REVOKE_CAPTURE}`,
       params: expect.objectContaining({ authorizationId: expect.any(String) }) }));
@@ -197,7 +205,7 @@ describe('VoiceDiagnosticsIndicator', () => {
     await act(async () => {
       tree = renderer.create(React.createElement(VoiceDiagnosticsIndicator, { sessionId: 'session-1' })); registerStandardCleanupTarget(tree);
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
 
     const action = tree.root.findByType('Pressable' as any);
     const style = typeof action.props.style === 'function'
@@ -218,7 +226,7 @@ describe('VoiceDiagnosticsIndicator', () => {
     await act(async () => {
       tree = renderer.create(React.createElement(VoiceDiagnosticsIndicator)); registerStandardCleanupTarget(tree);
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
 
     const root = tree.root.findByType('View' as any);
     const rootStyle = flattenStyle(root.props.style);
@@ -261,7 +269,7 @@ describe('VoiceDiagnosticsIndicator', () => {
         ),
       ); registerStandardCleanupTarget(tree);
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
 
     expect(tree.root.findAllByType('Text' as any).filter(
       (node) => node.children.join('') === tLoose('settingsVoice.diagnostics.shutdownFailedIndicator'),
@@ -281,7 +289,7 @@ describe('VoiceDiagnosticsIndicator', () => {
     await act(async () => {
       tree = renderer.create(React.createElement(VoiceDiagnosticsIndicator)); registerStandardCleanupTarget(tree);
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
 
     await act(async () => {
       tree.root.findByType('Pressable' as any).props.onPress();
@@ -289,7 +297,7 @@ describe('VoiceDiagnosticsIndicator', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toContainEqual(
       expect.objectContaining({
         target: { kind: 'machine_policy', machineId: 'm-inline-retry' },
@@ -313,7 +321,7 @@ describe('VoiceDiagnosticsIndicator', () => {
     await act(async () => {
       tree = renderer.create(React.createElement(VoiceDiagnosticsIndicator, { sessionId: 'session-1' })); registerStandardCleanupTarget(tree);
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     expect(tree.toJSON()).toBeNull();
   });
 
@@ -323,7 +331,7 @@ describe('VoiceDiagnosticsIndicator', () => {
     await act(async () => {
       tree = renderer.create(React.createElement(VoiceDiagnosticsIndicator, { sessionId: 'session-1' })); registerStandardCleanupTarget(tree);
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     expect(tree.toJSON()).toBeNull();
   });
 
@@ -333,13 +341,13 @@ describe('VoiceDiagnosticsIndicator', () => {
     await act(async () => {
       tree = renderer.create(React.createElement(VoiceDiagnosticsIndicator, { sessionId: 'session-1' })); registerStandardCleanupTarget(tree);
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     await act(async () => {
       tree.root.findByType('Pressable' as any).props.onPress();
       await Promise.resolve();
       await Promise.resolve();
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
 
     expect(tree.toJSON()).not.toBeNull();
     expect(readAlertDialogs().map(node => node.props.config)).toContainEqual(expect.objectContaining({
@@ -354,7 +362,7 @@ describe('VoiceDiagnosticsIndicator', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     expect(revokeCaptureAuthorization).toHaveBeenCalledTimes(2);
     expect(tree.toJSON()).toBeNull();
   });
@@ -393,14 +401,14 @@ describe('VoiceDiagnosticsIndicator', () => {
         sessionId: 'session-1',
       })); registerStandardCleanupTarget(tree);
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
 
     await act(async () => {
       tree.root.findByType('Pressable' as any).props.onPress();
       await Promise.resolve();
       await Promise.resolve();
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({ status: 'failed' }),
     ]));
@@ -416,7 +424,7 @@ describe('VoiceDiagnosticsIndicator', () => {
         sessionId: 'session-1',
       }));
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([]));
 
     runtimeState.daemonStateVersion = 3;
@@ -426,7 +434,7 @@ describe('VoiceDiagnosticsIndicator', () => {
         sessionId: 'session-1',
       }));
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm1',
       phase: 'active',
@@ -434,7 +442,7 @@ describe('VoiceDiagnosticsIndicator', () => {
     expect(resolveCaptureContext()).toBeUndefined();
     expect(tree.toJSON()).toBeNull();
     await act(async () => { tree.unmount(); });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
   });
 
   it('does not revoke on cancel and suppresses duplicate actions while a revoke is pending', async () => {
@@ -443,13 +451,13 @@ describe('VoiceDiagnosticsIndicator', () => {
     await act(async () => {
       tree = renderer.create(React.createElement(VoiceDiagnosticsIndicator, { sessionId: 'session-1' })); registerStandardCleanupTarget(tree);
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     modalState.confirmed = false;
     await act(async () => {
       tree.root.findByType('Pressable' as any).props.onPress();
       await Promise.resolve();
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     expect(revokeCaptureAuthorization).not.toHaveBeenCalled();
 
     modalState.confirmed = true;
@@ -461,14 +469,14 @@ describe('VoiceDiagnosticsIndicator', () => {
       press();
       await Promise.resolve();
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     expect(revokeCaptureAuthorization).toHaveBeenCalledOnce();
     await act(async () => {
       release();
       await revokeState.pending;
       await Promise.resolve();
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     expect(tree.toJSON()).toBeNull();
   });
 
@@ -480,24 +488,24 @@ describe('VoiceDiagnosticsIndicator', () => {
     await act(async () => {
       tree = renderer.create(React.createElement(VoiceDiagnosticsIndicator, { sessionId: 'session-1' })); registerStandardCleanupTarget(tree);
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     await act(async () => {
       tree.root.findByType('Pressable' as any).props.onPress();
       await Promise.resolve();
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     await act(async () => {
       publishVoiceDiagnosticsRuntimeStatus({ phase: 'status_unknown', machineId: 'm2' });
       tree.update(React.createElement(VoiceDiagnosticsIndicator, { sessionId: 'session-1' }));
       await Promise.resolve();
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     await act(async () => {
       release();
       await revokeState.pending;
       await Promise.resolve();
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
 
     expect(tree.toJSON()).toBeNull();
     expect(readAlertDialogs()).toEqual([]);
@@ -516,7 +524,7 @@ describe('VoiceDiagnosticsIndicator', () => {
         sessionId: 'session-1',
       })); registerStandardCleanupTarget(tree);
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     await vi.waitFor(() => expect(configure).toHaveBeenCalledWith('m1', expect.objectContaining({ enabled: true })));
 
     configureState.failedCalls.add('m1:disabled');
@@ -529,7 +537,7 @@ describe('VoiceDiagnosticsIndicator', () => {
         sessionId: 'session-1',
       }));
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     await vi.waitFor(() => expect(configure).toHaveBeenCalledWith('m2', expect.objectContaining({ enabled: true })));
 
     expect(tree.toJSON()).not.toBeNull();
@@ -544,25 +552,25 @@ describe('VoiceDiagnosticsIndicator', () => {
         includeSecondSurface: true,
       }));
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     await act(async () => {
       tree.update(React.createElement(RuntimeSyncIndicatorHarness, {
         voice: m2Voice,
         sessionId: 'session-1',
       }));
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     const failedObligation = readVoiceDiagnosticsRuntimeStatus().revocationObligations.find(
       (candidate) => candidate.status === 'failed',
     )!;
     await act(async () => {
       updateVoiceDiagnosticsRevocationObligation(failedObligation, 'pending');
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     await act(async () => {
       updateVoiceDiagnosticsRevocationObligation(failedObligation, 'failed');
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     const retryActionStyle = tree.root.findByType('Pressable' as any).props.style;
     expect(retryActionStyle.minWidth).toBeGreaterThanOrEqual(resolveMinimumInteractiveTargetSize('web'));
     expect(retryActionStyle.minHeight).toBeGreaterThanOrEqual(resolveMinimumInteractiveTargetSize('web'));
@@ -576,7 +584,7 @@ describe('VoiceDiagnosticsIndicator', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
     expect(configure.mock.calls.filter(
       ([machineId, settings]) => machineId === 'm1' && settings.enabled === false,
     )).toHaveLength(oldMachineDisableCallsBeforeRetry + 1);
@@ -603,7 +611,7 @@ describe('VoiceDiagnosticsIndicator', () => {
         sessionId: 'session-android',
       })); registerStandardCleanupTarget(tree);
     });
-    if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync(modalState.confirmed ? 'web-modal-confirm' : 'web-modal-cancel');
+    await respondToVisibleConfirmation();
 
     const action = tree.root.findByType('Pressable' as any);
     const style = typeof action.props.style === 'function'

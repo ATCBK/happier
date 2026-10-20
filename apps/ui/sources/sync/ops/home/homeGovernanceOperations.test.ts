@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createDeferred, homeAccountRowFixture, homeAdministrationEventFixture, homeGovernancePolicyProjectionFixture, homeSettingsProjectionFixture, standardCleanup } from '@/dev/testkit';
 import { createManagedResourceDependencyFixture } from '@/dev/testkit/fixtures/managedResourceDependencyFixtures';
 import { homeGovernanceProjectionFixture } from '@/dev/testkit/fixtures/homeGovernanceFixtures';
@@ -26,19 +26,23 @@ installHomeGovernanceBoundaries(harness);
 const { resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
 // Cold source transformation is collection work, outside the contract's mutation deadline.
 const homeOperations = await import('./homeGovernanceOperations');
+const { getHomeGovernanceSnapshot } = await import('@/sync/store/home/governance/homeGovernanceSnapshots');
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
+const governanceScopes: Array<{ serverId: string; accountId: string }> = [];
 
 async function operations() {
     return homeOperations;
 }
 
 async function addHome(): Promise<string> {
-    return await harness.addHome({
+    const serverId = await harness.addHome({
         name: 'Home A',
         serverUrl: 'https://home-a.example',
         accountId: 'account-admin',
     });
+    governanceScopes.push({ serverId, accountId: 'account-admin' });
+    return serverId;
 }
 
 beforeEach(async () => {
@@ -54,7 +58,17 @@ beforeEach(async () => {
     await harness.reset();
 });
 
-afterEach(() => {
+afterEach(async () => {
+    // A successful mutation settles before its background revalidation. Drain
+    // that real read before reset clears its single-flight registration and the
+    // next case reuses this Home. Refused mutations still issue no revalidation.
+    for (const scope of governanceScopes.splice(0)) {
+        await waitForHomeGovernance(() => {
+            const status = getHomeGovernanceSnapshot(scope)?.status;
+            expect(status).not.toBe('loading');
+            expect(status).not.toBe('refreshing');
+        });
+    }
     standardCleanup();
 });
 

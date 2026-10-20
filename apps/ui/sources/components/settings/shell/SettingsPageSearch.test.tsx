@@ -1,18 +1,12 @@
 import * as React from 'react';
-import { storage as storageStore } from '@/sync/domains/state/storage';
-import { settingsParse } from '@/sync/domains/settings/settings';
-import { localSettingsParse } from '@/sync/domains/settings/localSettings';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { standardCleanup } from '@/dev/testkit';
-
-const initialSettingsCatalogStorage = storageStore.getState();
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { renderScreen } from '@/dev/testkit';
-import { Item } from '@/components/ui/lists/Item';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -85,9 +79,17 @@ vi.mock('@/components/ui/text/Text', () => ({
     TextInput: 'TextInput',
 }));
 
+// Storage and row components can reach Sync; install the transport before loading consumers.
+installDisconnectedServerSocketBoundary();
+const { storage: storageStore } = await import('@/sync/domains/state/storage');
+const { settingsParse } = await import('@/sync/domains/settings/settings');
+const { localSettingsParse } = await import('@/sync/domains/settings/localSettings');
+const { Item } = await import('@/components/ui/lists/Item');
+const initialSettingsCatalogStorage = storageStore.getState();
+
 beforeEach(async () => {
-    await loadSyncSingletonForTests();
     installDisconnectedServerSocketBoundary();
+    await loadSyncSingletonForTests();
     storageStore.setState({
         settings: settingsParse({ useProfiles: false }),
         localSettings: localSettingsParse({ devModeEnabled: false, uiFontScale: 1 }),

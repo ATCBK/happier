@@ -5,6 +5,23 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 import type { AutomationDefinitionRun } from '@/sync/domains/automations/automationTypes';
 
 import type { StoreGet, StoreSet } from './_shared';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { areServerAccountScopesEqual, serverAccountScopedResourceKey, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+
+/** Run ids are opaque within a Home/Account, including when another Home is active. */
+export function workflowRunStoreKey(id: string, scope: ServerAccountScope | null = getActiveServerAccountScope()): string {
+    return scope ? serverAccountScopedResourceKey(scope, id) : id;
+}
+
+/** Session relation membership is query evidence, independent of the retained Run bodies. */
+export function sessionWorkflowRunWindowId(scope: ServerAccountScope, sessionId: string, relation: 'origin' | 'destination'): `session:${string}` {
+    return `session:${serverAccountScopedResourceKey(scope, sessionId, relation)}`;
+}
+
+/** Discussion membership uses the same retained query windows as Session relations. */
+export function discussionWorkflowRunWindowId(scope: ServerAccountScope, discussionId: string): `discussion:${string}` {
+    return `discussion:${serverAccountScopedResourceKey(scope, discussionId, 'origin')}`;
+}
 
 /**
  * One Run, including an Automation failure before Session creation, as this Account can read it.
@@ -38,6 +55,9 @@ export type WorkflowRunRow = Readonly<{
     automation: AutomationDefinitionRun | null;
     /** Opened exact content; list/control projections never erase this observation. */
     detail?: WorkflowRunGetResultV1;
+    /** Authored support, opened by the list owner; lifecycle and permission stay separate. */
+    supportsAnotherRound?: boolean;
+    callerAccess?: WorkflowRunGetResultV1['callerAccess'];
 }>;
 
 export type WorkflowRunsById = Record<string, WorkflowRunRow>;
@@ -49,7 +69,7 @@ export type WorkflowRunsById = Record<string, WorkflowRunRow>;
  */
 export type WorkflowRunsDomain = {
     workflowRunsById: WorkflowRunsById;
-    workflowRunListWindows: Partial<Record<WorkflowRunListWindowId, WorkflowRunListWindow>>;
+    workflowRunListWindows: Partial<Record<WorkflowRunListWindowId | `session:${string}` | `discussion:${string}`, WorkflowRunListWindow>>;
     /** Per Run: the one invocation fact map plus the windows and evidence that reference it. */
     workflowRunInvocationsByRunId: Record<string, WorkflowRunInvocations>;
     /**
@@ -57,15 +77,20 @@ export type WorkflowRunsDomain = {
      * a list page or an invalidation uses; it joins no window, because a Run is
      * discoverable by identity whether or not a list containing it is loaded.
      */
-    upsertWorkflowRuns: (runs: readonly WorkflowRunRow[]) => void;
-    removeWorkflowRun: (runId: string) => void;
+    upsertWorkflowRuns: (runs: readonly WorkflowRunRow[], scope?: ServerAccountScope | null) => void;
+    removeWorkflowRun: (runId: string, scope?: ServerAccountScope | null) => void;
     applyWorkflowRunListPage: (input: Readonly<{
-        windowId: WorkflowRunListWindowId;
+        scope?: ServerAccountScope | null;
+        windowId: WorkflowRunListWindowId | `session:${string}` | `discussion:${string}`;
         runs: readonly WorkflowRunSummaryV1[];
         automationRuns?: readonly AutomationDefinitionRun[];
         metadataByRunId?: Readonly<Record<string, WorkflowRunPrivateMetadataV1 | null>>;
+        supportsAnotherRoundByRunId?: Readonly<Record<string, boolean>>;
+        callerAccessByRunId?: Readonly<Record<string, WorkflowRunGetResultV1['callerAccess']>>;
         nextCursor: string | null;
         mode: WorkflowLoadedSpanMode;
+        attentionRunIds?: readonly string[];
+        lastSuccessfulReadAt?: number;
     }>) => void;
     /**
      * Merge a page into the Run's fact map and restate one window's membership.
@@ -74,6 +99,7 @@ export type WorkflowRunsDomain = {
      * loaded span (`refreshLoadedAttentionSpan`) so its cursor is authoritative.
      */
     applyWorkflowRunInvocationPage: (input: Readonly<{
+        scope?: ServerAccountScope | null;
         runId: string;
         window?: WorkflowRunInvocationWindowId;
         invocations: readonly WorkflowRunInvocationIndexV1[];
@@ -89,14 +115,16 @@ export type WorkflowRunsDomain = {
      * the actionable window while history keeps it.
      */
     upsertWorkflowRunInvocation: (input: Readonly<{
+        scope?: ServerAccountScope | null;
         runId: string;
         invocation: WorkflowRunInvocationFact;
         parentRevision: number;
     }>) => void;
     /** Record the exact first-failure evidence (`null`: the Run has none). */
     setWorkflowRunFirstFailedInvocation: (input: Readonly<{
+        scope?: ServerAccountScope | null;
         runId: string;
-        invocation: WorkflowRunInvocationIndexV1 | null;
+        invocation: WorkflowRunInvocationFact | null;
     }>) => void;
 };
 
@@ -115,11 +143,15 @@ export type WorkflowRunsDomain = {
  */
 export type WorkflowLoadedSpanMode = 'replace' | 'append' | 'refresh';
 
-export type WorkflowRunListWindowId = 'all' | 'active' | 'attention' | 'automationAttention' | `automation:${string}` | `destination:${string}`;
+export type WorkflowRunListWindowId = 'all' | 'active' | 'attention' | 'automationAttention' | `automation:${string}` | `destination:${string}` | `under:${string}`;
 export type WorkflowRunListWindow = Readonly<{
     runIds: readonly string[];
     nextCursor: string | null;
     loaded: boolean;
+    /** Explicitly scoped windows can outlive the consumer that queried them. */
+    scope?: ServerAccountScope;
+    attentionRunIds?: readonly string[];
+    lastSuccessfulReadAt?: number;
 }>;
 
 export type WorkflowRunInvocationWindowId = 'history' | 'attention';
@@ -222,13 +254,57 @@ function mergeInvocationAttention(
     let invocationIds = previous.invocationIds;
     for (const invocation of incoming) {
         const current = factsById[invocation.id];
-        // Only an accepted (not older) fact may change actionable membership.
-        if (!current || isWorkflowInvocationFactOlder(invocation, current)) continue;
-        const needsYou = WORKFLOW_ATTENTION_INVOCATION_LIFECYCLES_V1.some((lifecycle) => lifecycle === invocation.lifecycle);
+        // Membership follows the accepted fact, including when a delayed page
+        // still names a hold the newer observation has already resolved.
+        if (!current) continue;
+        const needsYou = WORKFLOW_ATTENTION_INVOCATION_LIFECYCLES_V1.some((lifecycle) => lifecycle === current.lifecycle);
         if (needsYou) invocationIds = appendUniqueInvocationIds(invocationIds, [invocation.id]);
         else if (invocationIds.includes(invocation.id)) invocationIds = invocationIds.filter((id) => id !== invocation.id);
     }
     return invocationIds === previous.invocationIds ? previous : { ...previous, invocationIds };
+}
+
+/** Root progress carries exact child facts too; keep them in the same row owner as pages and exact reads. */
+function reconcileInvocationObservations(
+    previous: WorkflowRunInvocations,
+    summary: WorkflowRunSummaryV1 | null | undefined,
+): WorkflowRunInvocations {
+    const observations: WorkflowRunInvocationFact[] = [];
+    for (const destination of summary?.stepProgress?.destinations ?? []) {
+        const observation = destination.observation;
+        if (!observation) continue;
+        const known = previous.factsById[observation.recordId];
+        // A summary is not a complete index row. It can advance a known exact
+        // attempt, but cannot invent ancestry, timestamps or another attempt.
+        if (!known || known.sequence !== observation.sequence || known.attempt !== observation.attempt
+            || compareDecimalStrings(observation.contentRevision, known.contentRevision) <= 0) continue;
+        observations.push({ ...known, contentRevision: observation.contentRevision, lifecycle: observation.lifecycle });
+    }
+    if (observations.length === 0) return previous;
+    const factsById = mergeInvocationFacts(previous.factsById, observations);
+    // A row loaded only through attention remains visible after it settles.
+    const historyIds = appendUniqueInvocationIds(previous.history.invocationIds, observations.map((row) => row.id));
+    const history = historyIds === previous.history.invocationIds ? previous.history : { ...previous.history,
+        invocationIds: factsFor(factsById, historyIds).sort(compareInvocationOrder).map((row) => row.id) };
+    return { ...previous, factsById, history, attention: mergeInvocationAttention(previous.attention, factsById, observations) };
+}
+
+function reconcileRunInvocationObservations(
+    previous: WorkflowRunsDomain['workflowRunInvocationsByRunId'],
+    rows: readonly WorkflowRunRow[],
+    scope: ServerAccountScope | null | undefined,
+): WorkflowRunsDomain['workflowRunInvocationsByRunId'] {
+    let next: WorkflowRunsDomain['workflowRunInvocationsByRunId'] | null = null;
+    for (const row of rows) {
+        const key = workflowRunStoreKey(row.id, scope);
+        const known = (next ?? previous)[key];
+        if (!known) continue;
+        const current = reconcileInvocationObservations(known, row.summary);
+        if (current === known) continue;
+        next ??= { ...previous };
+        next[key] = current;
+    }
+    return next ?? previous;
 }
 
 function factsFor(factsById: WorkflowRunInvocations['factsById'], ids: readonly string[]): WorkflowRunInvocationIndexV1[] {
@@ -443,6 +519,7 @@ function refreshWorkflowRunListWindow(params: Readonly<{
     previous: WorkflowRunListWindow | undefined;
     pageRunIds: readonly string[];
     nextCursor: string | null;
+    scope?: ServerAccountScope | null;
 }>): WorkflowRunListWindow {
     const { runsById, previous, pageRunIds, nextCursor } = params;
     // A page that exhausted the filter is the complete list, and a traversal no
@@ -452,11 +529,11 @@ function refreshWorkflowRunListWindow(params: Readonly<{
         return { runIds: [...pageRunIds], nextCursor, loaded: true };
     }
     const boundaryId = pageRunIds[pageRunIds.length - 1];
-    const boundary = boundaryId === undefined ? undefined : runsById[boundaryId];
+    const boundary = boundaryId === undefined ? undefined : runsById[workflowRunStoreKey(boundaryId, params.scope ?? null)];
     if (boundary === undefined) return { runIds: [...pageRunIds], nextCursor, loaded: true };
     const pageIds = new Set(pageRunIds);
     const retained = previous.runIds.filter((runId) => (
-        !pageIds.has(runId) && isBeyondWorkflowRunListSpan(runsById[runId], boundary)
+        !pageIds.has(runId) && isBeyondWorkflowRunListSpan(runsById[workflowRunStoreKey(runId, params.scope ?? null)], boundary)
     ));
     return { runIds: [...pageRunIds, ...retained], nextCursor: previous.nextCursor, loaded: true };
 }
@@ -481,6 +558,8 @@ function toEpochMilliseconds(value: string): number {
 export function workflowRunRowFromSummary(
     summary: WorkflowRunSummaryV1,
     metadata: WorkflowRunPrivateMetadataV1 | null = null,
+    supportsAnotherRound?: boolean,
+    callerAccess?: WorkflowRunGetResultV1['callerAccess'],
 ): WorkflowRunRow {
     return {
         id: summary.id,
@@ -489,6 +568,8 @@ export function workflowRunRowFromSummary(
         summary,
         metadata,
         automation: null,
+        ...(supportsAnotherRound === undefined ? {} : { supportsAnotherRound }),
+        ...(callerAccess === undefined ? {} : { callerAccess }),
     };
 }
 
@@ -607,7 +688,11 @@ function mergeRow(stored: WorkflowRunRow, incoming: WorkflowRunRow): WorkflowRun
     const detail = incoming.detail && (!stored.detail || incoming.detail.run.revision >= stored.detail.run.revision)
         ? (stored.detail && sameStrictJsonValue(stored.detail, incoming.detail) ? stored.detail : incoming.detail)
         : stored.detail;
-    if (summary === stored.summary && automation === stored.automation && metadata === stored.metadata && detail === stored.detail) return stored;
+    const supportsAnotherRound = incoming.supportsAnotherRound ?? stored.supportsAnotherRound;
+    const callerAccess = incoming.callerAccess === undefined ? stored.callerAccess
+        : incoming.callerAccess.canEdit === stored.callerAccess?.canEdit ? stored.callerAccess : incoming.callerAccess;
+    if (summary === stored.summary && automation === stored.automation && metadata === stored.metadata && detail === stored.detail
+        && supportsAnotherRound === stored.supportsAnotherRound && callerAccess === stored.callerAccess) return stored;
     const revision = Math.max(summary?.revision ?? 0, automation?.revision ?? 0);
     // `updatedAt` follows whichever projection carries the newest revision, so
     // list ordering never regresses when only the other transport refreshes.
@@ -616,7 +701,9 @@ function mergeRow(stored: WorkflowRunRow, incoming: WorkflowRunRow): WorkflowRun
         : automation && automation.revision === revision
             ? automation.updatedAt
             : stored.updatedAt;
-    return { id: stored.id, revision, updatedAt, summary, metadata, automation, ...(detail ? { detail } : {}) };
+    return { id: stored.id, revision, updatedAt, summary, metadata, automation, ...(detail ? { detail } : {}),
+        ...(supportsAnotherRound === undefined ? {} : { supportsAnotherRound }),
+        ...(callerAccess === undefined ? {} : { callerAccess }) };
 }
 
 /**
@@ -627,14 +714,16 @@ function mergeRow(stored: WorkflowRunRow, incoming: WorkflowRunRow): WorkflowRun
 export function mergeWorkflowRunBodies(
     previous: WorkflowRunsById,
     incoming: readonly WorkflowRunRow[],
+    scope: ServerAccountScope | null = getActiveServerAccountScope(),
 ): WorkflowRunsById {
     let next: WorkflowRunsById | null = null;
     for (const row of incoming) {
-        const stored = (next ?? previous)[row.id];
+        const key = workflowRunStoreKey(row.id, scope);
+        const stored = (next ?? previous)[key];
         const current = stored ? mergeRow(stored, row) : row;
         if (current === stored) continue;
         next = next ?? { ...previous };
-        next[row.id] = current;
+        next[key] = current;
     }
     return next ?? previous;
 }
@@ -651,18 +740,20 @@ export function releaseWorkflowRunBodies(params: Readonly<{
     runsById: WorkflowRunsById;
     releasedRunIds: Iterable<string>;
     retainedRunIds: ReadonlySet<string>;
+    scope?: ServerAccountScope | null;
 }>): WorkflowRunsById {
     const { runsById, releasedRunIds, retainedRunIds } = params;
     let next: WorkflowRunsById | null = null;
     for (const runId of releasedRunIds) {
         if (retainedRunIds.has(runId)) continue;
-        const row = (next ?? runsById)[runId];
+        const key = workflowRunStoreKey(runId, params.scope);
+        const row = (next ?? runsById)[key];
         if (!row?.automation) continue;
         next = next ?? { ...runsById };
         if (row.summary) {
-            next[runId] = { ...row, automation: null };
+            next[key] = { ...row, automation: null };
         } else {
-            delete next[runId];
+            delete next[key];
         }
     }
     return next ?? runsById;
@@ -676,10 +767,11 @@ export function releaseWorkflowRunBodies(params: Readonly<{
 export function resolveWorkflowRunRows(
     runsById: WorkflowRunsById,
     runIds: readonly string[],
+    scope: ServerAccountScope | null = getActiveServerAccountScope(),
 ): WorkflowRunRow[] {
     const rows: WorkflowRunRow[] = [];
     for (const runId of runIds) {
-        const row = runsById[runId];
+        const row = runsById[workflowRunStoreKey(runId, scope)];
         if (row) rows.push(row);
     }
     return rows;
@@ -694,10 +786,11 @@ export function resolveWorkflowRunRows(
 export function resolveAutomationRunProjections(
     runsById: WorkflowRunsById,
     runIds: readonly string[],
+    scope: ServerAccountScope | null = getActiveServerAccountScope(),
 ): AutomationDefinitionRun[] {
     const rows: AutomationDefinitionRun[] = [];
     for (const runId of runIds) {
-        const row = runsById[runId];
+        const row = runsById[workflowRunStoreKey(runId, scope)];
         if (row?.automation) rows.push(row.automation);
     }
     return rows;
@@ -713,55 +806,72 @@ export function createWorkflowRunsDomain<S extends WorkflowRunsDomain>({
         workflowRunsById: {},
         workflowRunListWindows: {},
         workflowRunInvocationsByRunId: {},
-        upsertWorkflowRuns: (runs) =>
+        upsertWorkflowRuns: (runs, scope = getActiveServerAccountScope()) =>
             set((state) => {
-                const workflowRunsById = mergeWorkflowRunBodies(state.workflowRunsById, runs);
-                if (workflowRunsById === state.workflowRunsById) return state;
-                return { ...state, workflowRunsById };
+                const workflowRunsById = mergeWorkflowRunBodies(state.workflowRunsById, runs, scope);
+                const workflowRunInvocationsByRunId = reconcileRunInvocationObservations(state.workflowRunInvocationsByRunId,
+                    runs.flatMap((row) => workflowRunsById[workflowRunStoreKey(row.id, scope)] ?? []), scope);
+                if (workflowRunsById === state.workflowRunsById && workflowRunInvocationsByRunId === state.workflowRunInvocationsByRunId) return state;
+                return { ...state, workflowRunsById, workflowRunInvocationsByRunId };
             }),
-        removeWorkflowRun: (runId) => set((state) => {
-            if (!(runId in state.workflowRunsById)) return state;
+        removeWorkflowRun: (runId, scope = getActiveServerAccountScope()) => set((state) => {
+            const key = workflowRunStoreKey(runId, scope);
+            if (!(key in state.workflowRunsById)) return state;
             const workflowRunsById = { ...state.workflowRunsById };
-            delete workflowRunsById[runId];
+            delete workflowRunsById[key];
             const workflowRunListWindows = Object.fromEntries(
                 Object.entries(state.workflowRunListWindows).map(([id, window]) => [
                     id,
-                    window?.runIds.includes(runId)
-                        ? { ...window, runIds: window.runIds.filter((candidate) => candidate !== runId) } : window,
+                    window?.runIds.includes(runId) && (window.scope
+                        ? areServerAccountScopesEqual(scope, window.scope)
+                        : !scope || areServerAccountScopesEqual(scope, getActiveServerAccountScope()))
+                        ? { ...window, runIds: window.runIds.filter((candidate) => candidate !== runId),
+                            ...(window.attentionRunIds ? { attentionRunIds: window.attentionRunIds.filter(candidate => candidate !== runId) } : {}) } : window,
                 ]),
             ) as WorkflowRunsDomain['workflowRunListWindows'];
             const workflowRunInvocationsByRunId = { ...state.workflowRunInvocationsByRunId };
-            delete workflowRunInvocationsByRunId[runId];
+            delete workflowRunInvocationsByRunId[key];
             return { ...state, workflowRunsById, workflowRunListWindows, workflowRunInvocationsByRunId };
         }),
-        applyWorkflowRunListPage: ({ windowId, runs, automationRuns = [], metadataByRunId, nextCursor, mode }) =>
+        applyWorkflowRunListPage: ({ scope = getActiveServerAccountScope(), windowId, runs, automationRuns = [], metadataByRunId, supportsAnotherRoundByRunId, callerAccessByRunId, nextCursor, mode, attentionRunIds, lastSuccessfulReadAt }) =>
             set((state) => {
                 const previous = state.workflowRunListWindows[windowId];
                 // Bodies merge first so the refreshed span can be measured
                 // against the rows the page just restated.
                 const workflowRunsById = mergeWorkflowRunBodies(
                     state.workflowRunsById,
-                    [...runs.map((run) => workflowRunRowFromSummary(run, metadataByRunId?.[run.id] ?? null)),
+                    [...runs.map((run) => workflowRunRowFromSummary(run, metadataByRunId?.[run.id] ?? null,
+                        supportsAnotherRoundByRunId?.[run.id], callerAccessByRunId?.[run.id])),
                         ...automationRuns.map(workflowRunRowFromAutomationRun)],
+                    scope,
                 );
-                const pageRunIds = [...runs.map((run) => run.id), ...automationRuns.map((run) => run.id)];
-                const window: WorkflowRunListWindow = mode === 'append' && previous
+                const pageRunIds = appendUniqueIds([], [...runs.map((run) => run.id), ...automationRuns.map((run) => run.id)]);
+                const membership: WorkflowRunListWindow = mode === 'append' && previous
                     ? { runIds: appendUniqueIds(previous.runIds, pageRunIds), nextCursor, loaded: true }
                     : mode === 'refresh'
-                        ? refreshWorkflowRunListWindow({ runsById: workflowRunsById, previous, pageRunIds, nextCursor })
+                        ? refreshWorkflowRunListWindow({ runsById: workflowRunsById, previous, pageRunIds, nextCursor, scope })
                         : { runIds: pageRunIds, nextCursor, loaded: true };
+                const window: WorkflowRunListWindow = { ...membership,
+                    ...((windowId.startsWith('session:') || windowId.startsWith('discussion:')) && scope ? { scope } : {}),
+                    ...(attentionRunIds === undefined ? {} : { attentionRunIds }),
+                    ...(lastSuccessfulReadAt === undefined ? {} : { lastSuccessfulReadAt }),
+                };
                 const unchangedWindow = previous !== undefined && sameStrictJsonValue(previous, window);
-                if (unchangedWindow && workflowRunsById === state.workflowRunsById) return state;
+                const workflowRunInvocationsByRunId = reconcileRunInvocationObservations(state.workflowRunInvocationsByRunId,
+                    pageRunIds.flatMap((id) => workflowRunsById[workflowRunStoreKey(id, scope)] ?? []), scope);
+                if (unchangedWindow && workflowRunsById === state.workflowRunsById && workflowRunInvocationsByRunId === state.workflowRunInvocationsByRunId) return state;
                 return {
                     ...state,
                     workflowRunsById,
+                    workflowRunInvocationsByRunId,
                     workflowRunListWindows: unchangedWindow ? state.workflowRunListWindows
                         : { ...state.workflowRunListWindows, [windowId]: window },
                 };
             }),
-        applyWorkflowRunInvocationPage: ({ runId, window: windowId = 'history', invocations, invocationDetails = [], nextCursor, parentRevision, mode }) =>
+        applyWorkflowRunInvocationPage: ({ runId, scope, window: windowId = 'history', invocations, invocationDetails = [], nextCursor, parentRevision, mode }) =>
             set((state) => {
-                const previous = state.workflowRunInvocationsByRunId[runId] ?? EMPTY_RUN_INVOCATIONS;
+                const key = workflowRunStoreKey(runId, scope);
+                const previous = state.workflowRunInvocationsByRunId[key] ?? EMPTY_RUN_INVOCATIONS;
                 const openedFacts = invocationDetails.map(opened => ({ ...opened.index, opened }));
                 const factsById = mergeInvocationFacts(previous.factsById, [...invocations, ...openedFacts]);
                 const previousWindow = previous[windowId];
@@ -797,20 +907,21 @@ export function createWorkflowRunsDomain<S extends WorkflowRunsDomain>({
                 const nextWindow = sameStrictJsonValue(previousWindow, candidateWindow) ? previousWindow : candidateWindow;
                 const history = windowId === 'history' ? nextWindow : previous.history;
                 const attention = mergeInvocationAttention(
-                    windowId === 'attention' ? nextWindow : previous.attention, factsById, openedFacts,
+                    windowId === 'attention' ? nextWindow : previous.attention, factsById, [...invocations, ...openedFacts],
                 );
                 if (factsById === previous.factsById && history === previous.history && attention === previous.attention) return state;
                 return {
                     ...state,
                     workflowRunInvocationsByRunId: {
                         ...state.workflowRunInvocationsByRunId,
-                        [runId]: { ...previous, factsById, history, attention },
+                        [key]: reconcileInvocationObservations({ ...previous, factsById, history, attention }, state.workflowRunsById[key]?.summary),
                     },
                 };
             }),
-        upsertWorkflowRunInvocation: ({ runId, invocation, parentRevision }) =>
+        upsertWorkflowRunInvocation: ({ runId, scope, invocation, parentRevision }) =>
             set((state) => {
-                const previous = state.workflowRunInvocationsByRunId[runId] ?? EMPTY_RUN_INVOCATIONS;
+                const key = workflowRunStoreKey(runId, scope);
+                const previous = state.workflowRunInvocationsByRunId[key] ?? EMPTY_RUN_INVOCATIONS;
                 const factsById = mergeInvocationFacts(previous.factsById, [invocation]);
                 const candidateHistory: WorkflowRunInvocationWindow = {
                     ...previous.history,
@@ -825,13 +936,14 @@ export function createWorkflowRunsDomain<S extends WorkflowRunsDomain>({
                     ...state,
                     workflowRunInvocationsByRunId: {
                         ...state.workflowRunInvocationsByRunId,
-                        [runId]: { ...previous, factsById, history, attention },
+                        [key]: reconcileInvocationObservations({ ...previous, factsById, history, attention }, state.workflowRunsById[key]?.summary),
                     },
                 };
             }),
-        setWorkflowRunFirstFailedInvocation: ({ runId, invocation }) =>
+        setWorkflowRunFirstFailedInvocation: ({ runId, scope, invocation }) =>
             set((state) => {
-                const previous = state.workflowRunInvocationsByRunId[runId] ?? EMPTY_RUN_INVOCATIONS;
+                const key = workflowRunStoreKey(runId, scope);
+                const previous = state.workflowRunInvocationsByRunId[key] ?? EMPTY_RUN_INVOCATIONS;
                 const factsById = invocation === null ? previous.factsById : mergeInvocationFacts(previous.factsById, [invocation]);
                 const firstFailedId = invocation?.id ?? null;
                 if (factsById === previous.factsById && firstFailedId === previous.firstFailedId) return state;
@@ -839,7 +951,7 @@ export function createWorkflowRunsDomain<S extends WorkflowRunsDomain>({
                     ...state,
                     workflowRunInvocationsByRunId: {
                         ...state.workflowRunInvocationsByRunId,
-                        [runId]: { ...previous, factsById, firstFailedId },
+                        [key]: reconcileInvocationObservations({ ...previous, factsById, firstFailedId }, state.workflowRunsById[key]?.summary),
                     },
                 };
             }),

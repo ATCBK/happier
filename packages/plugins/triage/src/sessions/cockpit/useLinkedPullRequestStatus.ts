@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { usePluginHostApi, usePluginUiEphemeralSharedScope, type PluginUiEphemeralSharedScope } from '@happier-dev/plugin-ui';
+import { usePluginHostApi, usePluginHostReadiness, usePluginUiEphemeralSharedScope, type PluginUiEphemeralSharedScope } from '@happier-dev/plugin-ui';
 import { TriagePullRequestStatusResultV1Schema, type TriagePullRequestStatusV1 } from '@happier-dev/triage-protocol/v1';
 import { TRIAGE_READ_PULL_REQUEST_STATUS_ACTION_LOCAL_ID_V1 } from '../../actions/entryDetailProtocol.js';
 import { TriageReobserveEntryInputV1Schema } from '../../actions/reobserveEntryProtocol.js';
@@ -20,6 +20,7 @@ export type LinkedPullRequestStatusRead = Readonly<{
 /** Row-local detail demand. The retained list window and its refresh coordinator are untouched. */
 export function useLinkedPullRequestStatus(entry: TriageSessionLinkedEntrySummaryV1 | null, expanded: boolean, refreshRevision: number): LinkedPullRequestStatusRead {
     const host = usePluginHostApi();
+    const readiness = usePluginHostReadiness();
     const owner = usePluginUiEphemeralSharedScope();
     const identity = entry?.kind === 'pullRequest' && entry.sourceInstanceId !== null && entry.detailSource !== null
         ? JSON.stringify([entry.entryRef, entry.sourceInstanceId]) : null;
@@ -29,13 +30,14 @@ export function useLinkedPullRequestStatus(entry: TriageSessionLinkedEntrySummar
     const input = React.useMemo(() => inputJson === null ? null : TriageReobserveEntryInputV1Schema.parse(JSON.parse(inputJson)), [inputJson]);
     const observationAtMs = entry?.detailSource?.observation.observedAtMs ?? null;
     const [read, setRead] = React.useState<StatusRead | null>(null);
-    const settled = React.useRef<Readonly<{ owner: PluginUiEphemeralSharedScope | null; inputJson: string; observationAtMs: number | null; refreshRevision: number }> | null>(null);
+    const settled = React.useRef<Readonly<{ owner: PluginUiEphemeralSharedScope | null; inputJson: string; observationAtMs: number | null; refreshRevision: number; readinessRevision: number }> | null>(null);
 
     React.useEffect(() => {
-        if (!expanded || input === null || inputJson === null || identity === null) return;
+        if (!expanded || readiness.pending || input === null || inputJson === null || identity === null) return;
         const previous = settled.current;
         if (previous?.owner === owner && previous.inputJson === inputJson
-            && previous.observationAtMs === observationAtMs && previous.refreshRevision === refreshRevision) return;
+            && previous.observationAtMs === observationAtMs && previous.refreshRevision === refreshRevision
+            && previous.readinessRevision === readiness.revision) return;
         const controller = new AbortController();
         const retain = (previousRead: StatusRead | null) => previousRead?.owner === owner && previousRead.identity === identity ? previousRead.status : null;
         setRead((previousRead) => ({ owner, identity, status: retain(previousRead), phase: 'reading' }));
@@ -45,19 +47,20 @@ export function useLinkedPullRequestStatus(entry: TriageSessionLinkedEntrySummar
                     TRIAGE_READ_PULL_REQUEST_STATUS_ACTION_LOCAL_ID_V1, input, { signal: controller.signal },
                 ));
                 if (controller.signal.aborted) return;
-                settled.current = { owner, inputJson, observationAtMs, refreshRevision };
+                settled.current = { owner, inputJson, observationAtMs, refreshRevision, readinessRevision: readiness.revision };
                 setRead((previousRead) => ({ owner, identity,
                     status: result.kind === 'status' ? result : retain(previousRead),
                     phase: result.kind === 'status' ? 'ready' : 'unavailable' }));
             } catch {
                 if (controller.signal.aborted) return;
-                settled.current = { owner, inputJson, observationAtMs, refreshRevision };
+                settled.current = { owner, inputJson, observationAtMs, refreshRevision, readinessRevision: readiness.revision };
                 setRead((previousRead) => ({ owner, identity, status: retain(previousRead), phase: 'unavailable' }));
             }
         })();
         return () => { controller.abort(); };
-    }, [expanded, host, identity, input, inputJson, observationAtMs, owner, refreshRevision]);
+    }, [expanded, host, identity, input, inputJson, observationAtMs, owner, refreshRevision, readiness.pending, readiness.revision]);
 
     // A changed Account/plugin scope or selected connection never renders the previous owner's facts.
-    return read?.owner === owner && read.identity === identity ? read : IDLE;
+    const current = read?.owner === owner && read.identity === identity ? read : IDLE;
+    return readiness.pending && expanded && identity !== null ? { status: current.status, phase: 'reading' } : current;
 }

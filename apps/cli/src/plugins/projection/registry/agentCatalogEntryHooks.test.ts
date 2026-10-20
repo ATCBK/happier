@@ -11,6 +11,7 @@ import type {
   AgentCliSessionCommandBuildInputV1,
   AgentConnectedAccountRuntimeAuthAdapterV1,
   AgentPreflightSessionControlsContributionV1,
+  AgentSessionRuntimeAuthApplyResult,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
@@ -385,10 +386,10 @@ describe('Agent registration catalog projections', () => {
         const adapter = await entry!.getConnectedServiceRuntimeAuthAdapter!();
         const nativeHome = await createConnectedServiceRuntimeAuthNativeHome({ agentId: 'codex', root });
         expect(nativeHome).not.toBeNull();
-        let finishNativeApply!: (value: { ok: true }) => void;
+        let finishNativeApply!: (value: AgentSessionRuntimeAuthApplyResult) => void;
         let enteredNativeApply!: () => void;
         const nativeApplyEntered = new Promise<void>(resolve => { enteredNativeApply = resolve; });
-        const nativeApply = new Promise<{ ok: true }>(resolve => { finishNativeApply = resolve; });
+        const nativeApply = new Promise<AgentSessionRuntimeAuthApplyResult>(resolve => { finishNativeApply = resolve; });
         // The process RPC is the only substituted boundary; codec, host adapter and native files are real.
         const pending = adapter!.hotApply({
           target: { agentId: 'codex' }, credential: candidate, nativeHome: nativeHome!,
@@ -408,7 +409,7 @@ describe('Agent registration catalog projections', () => {
           : supersedingAuth;
         const superseded = scenario !== 'group_current' && scenario !== 'profile';
         if (superseded) await writeFile(authPath, replacementAuth);
-        finishNativeApply({ ok: true });
+        finishNativeApply({ ok: true, appliedVia: 'native_rpc' });
         const result = await pending;
         if (superseded) {
           expect(result).toMatchObject({ applied: false, reason: 'provider_account_auth_store_mismatch' });

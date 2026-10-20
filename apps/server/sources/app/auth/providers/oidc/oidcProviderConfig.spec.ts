@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { StoredHomeSettings } from "@/app/home/settings/startupHomeEnv";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -275,7 +276,120 @@ describe("oidcProviderConfig", () => {
         }
     });
 
-    it("loads provider instances from AUTH_PROVIDERS_CONFIG_PATH (preferred over JSON)", async () => {
+    describe("clientSecretEnv", () => {
+        const baseProvider = {
+            id: "acme",
+            type: "oidc",
+            displayName: "Acme OIDC",
+            issuer: "https://issuer.example.test",
+            clientId: "cid",
+            redirectUrl: "https://server.example.test/v1/oauth/acme/callback",
+        };
+
+        it("reads the client secret from the named environment variable", async () => {
+            const { resolveAuthProviderInstancesFromEnv } = await import("./oidcProviderConfig");
+
+            const env: NodeJS.ProcessEnv = {
+                AUTH_PROVIDERS_CONFIG_JSON: JSON.stringify([{ ...baseProvider, clientSecretEnv: " ACME_OIDC_SECRET " }]),
+                ACME_OIDC_SECRET: " secret-from-env ",
+            };
+
+            const res = resolveAuthProviderInstancesFromEnv(env);
+            expect(res.errors).toEqual([]);
+            expect(res.instances.map((i) => i.clientSecret)).toEqual([" secret-from-env "]);
+        });
+
+        it("prefers a literal clientSecret over clientSecretEnv", async () => {
+            const { resolveAuthProviderInstancesFromEnv } = await import("./oidcProviderConfig");
+
+            const env: NodeJS.ProcessEnv = {
+                AUTH_PROVIDERS_CONFIG_JSON: JSON.stringify([
+                    { ...baseProvider, clientSecret: "literal-secret", clientSecretEnv: "ACME_OIDC_SECRET" },
+                ]),
+                ACME_OIDC_SECRET: "secret-from-env",
+            };
+
+            const res = resolveAuthProviderInstancesFromEnv(env);
+            expect(res.errors).toEqual([]);
+            expect(res.instances.map((i) => i.clientSecret)).toEqual(["literal-secret"]);
+        });
+
+        it.each(["json", "path"])("refuses deployment-secret references in Home-authored %s configuration after restart", async (source) => {
+            const { resolveAuthProviderInstancesFromEnv } = await import("./oidcProviderConfig");
+            const { loadStartupHomeEnv, applyStartupHomeEnvToProcess } = await import("@/app/home/settings/startupHomeEnv");
+            const dir = await mkdtemp(join(tmpdir(), "happier-home-oidc-secret-"));
+            const config = JSON.stringify([{ ...baseProvider, clientSecretEnv: "DEPLOYMENT_SECRET" }]);
+            const configPath = join(dir, "providers.json");
+            try {
+                await writeFile(configPath, config, "utf8");
+                const stored: StoredHomeSettings = source === "json"
+                    ? { values: {}, secrets: { AUTH_PROVIDERS_CONFIG_JSON: config } }
+                    : { values: { AUTH_PROVIDERS_CONFIG_PATH: configPath }, secrets: {} };
+                const startup = await loadStartupHomeEnv({
+                    env: { DEPLOYMENT_SECRET: "bootstrap-private-value" },
+                    readStored: async () => stored,
+                    log: () => {},
+                });
+                const processEnv = { ...startup.deploymentEnv };
+                applyStartupHomeEnvToProcess(startup, processEnv);
+
+                for (const env of [startup.env, { ...processEnv }]) {
+                    const result = resolveAuthProviderInstancesFromEnv(env);
+                    expect(result.instances).toEqual([]);
+                    expect(result.errors).toEqual([expect.stringMatching(/clientSecretEnv.*deployment/i)]);
+                    expect(result.errors.join("\n")).not.toContain("bootstrap-private-value");
+                }
+
+                if (source === "json") {
+                    const literal = JSON.stringify([{ ...baseProvider, clientSecret: "home-owned-secret" }]);
+                    const literalStartup = await loadStartupHomeEnv({
+                        env: {},
+                        readStored: async () => ({ values: {}, secrets: { AUTH_PROVIDERS_CONFIG_JSON: literal } }),
+                        log: () => {},
+                    });
+                    expect(resolveAuthProviderInstancesFromEnv(literalStartup.env).instances[0]?.clientSecret).toBe("home-owned-secret");
+                }
+            } finally {
+                await loadStartupHomeEnv({ env: {}, readStored: async () => ({ values: {}, secrets: {} }), log: () => {} });
+                await rm(dir, { recursive: true, force: true });
+            }
+        });
+
+        it.each(["", null])("rejects an invalid literal %j without falling back to the environment", async (clientSecret) => {
+            const { resolveAuthProviderInstancesFromEnv } = await import("./oidcProviderConfig");
+
+            const res = resolveAuthProviderInstancesFromEnv({
+                AUTH_PROVIDERS_CONFIG_JSON: JSON.stringify([
+                    { ...baseProvider, clientSecret, clientSecretEnv: "ACME_OIDC_SECRET" },
+                ]),
+                ACME_OIDC_SECRET: "secret-from-env",
+            });
+
+            expect(res.instances).toEqual([]);
+            expect(res.errors).toEqual([expect.stringContaining("clientSecret for acme")]);
+            expect(res.errors.join("\n")).not.toContain("secret-from-env");
+        });
+
+        it.each([
+            ["unset", undefined],
+            ["empty", ""],
+            ["whitespace-only", "  "],
+        ])("rejects the provider config when the named variable is %s", async (_label, value) => {
+            const { resolveAuthProviderInstancesFromEnv } = await import("./oidcProviderConfig");
+
+            const env: NodeJS.ProcessEnv = {
+                AUTH_PROVIDERS_CONFIG_JSON: JSON.stringify([{ ...baseProvider, clientSecretEnv: "ACME_OIDC_SECRET" }]),
+            };
+            if (value !== undefined) env.ACME_OIDC_SECRET = value;
+
+            const res = resolveAuthProviderInstancesFromEnv(env);
+            expect(res.instances).toEqual([]);
+            expect(res.errors.join("\n")).toMatch(/clientSecretEnv for acme/);
+            expect(res.errors.join("\n")).toMatch(/ACME_OIDC_SECRET/);
+        });
+    });
+
+    it("resolves environment secrets from AUTH_PROVIDERS_CONFIG_PATH (preferred over JSON)", async () => {
         const { resolveAuthProviderInstancesFromEnv } = await import("./oidcProviderConfig");
 
         const dir = await mkdtemp(join(tmpdir(), "happier-oidc-config-"));
@@ -290,7 +404,7 @@ describe("oidcProviderConfig", () => {
                         displayName: "Acme OIDC",
                         issuer: "https://issuer.example.test",
                         clientId: "cid",
-                        clientSecret: "secret",
+                        clientSecretEnv: "ACME_OIDC_SECRET",
                         redirectUrl: "https://server.example.test/v1/oauth/acme/callback",
                     },
                 ]),
@@ -300,11 +414,13 @@ describe("oidcProviderConfig", () => {
             const env: NodeJS.ProcessEnv = {
                 AUTH_PROVIDERS_CONFIG_PATH: path,
                 AUTH_PROVIDERS_CONFIG_JSON: "[]",
+                ACME_OIDC_SECRET: "secret-from-file-config",
             };
 
             const res = resolveAuthProviderInstancesFromEnv(env);
             expect(res.errors).toEqual([]);
             expect(res.instances.map((i) => i.id)).toEqual(["acme"]);
+            expect(res.instances.map((i) => i.clientSecret)).toEqual(["secret-from-file-config"]);
         } finally {
             await rm(dir, { recursive: true, force: true });
         }

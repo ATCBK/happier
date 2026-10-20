@@ -40,6 +40,9 @@ vi.mock('@/text', () => ({
             : key,
 }));
 
+// Compile the real component during collection, after installing its boundaries.
+await import('./JumpToBottomButton');
+
 describe('JumpToBottomButton compact layout', () => {
     beforeEach(() => {
         runtimeState.breakpoint = 'lg';

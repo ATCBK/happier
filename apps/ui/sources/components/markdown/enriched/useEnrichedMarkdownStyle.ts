@@ -1,8 +1,8 @@
 import * as React from 'react';
-import type { StyleProp, TextStyle } from 'react-native';
+import { Platform, type StyleProp, type TextStyle } from 'react-native';
 import type { EnrichedMarkdownTextProps, MarkdownStyle } from 'react-native-enriched-markdown';
 import { useUnistyles } from 'react-native-unistyles';
-import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { happierPageTextMetrics, resolveHappierTypeScale } from '@happier-dev/plugin-ui/presentation';
 
 import { Typography } from '@/constants/Typography';
 import { useLocalSetting } from '@/sync/domains/state/storage';
@@ -56,7 +56,13 @@ function readFontStyle(style: TextStyle): 'normal' | 'italic' | undefined {
     return style.fontStyle === 'normal' || style.fontStyle === 'italic' ? style.fontStyle : undefined;
 }
 
-function flattenTextStyle(style: unknown): TextStyle {
+type UnistylesContext = ReturnType<typeof useUnistyles>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null;
+}
+
+function flattenTextStyle(style: unknown, context?: UnistylesContext): TextStyle {
     if (!style) {
         return {};
     }
@@ -64,7 +70,7 @@ function flattenTextStyle(style: unknown): TextStyle {
     if (Array.isArray(style)) {
         return style.reduce<TextStyle>((flattened, entry) => ({
             ...flattened,
-            ...flattenTextStyle(entry),
+            ...flattenTextStyle(entry, context),
         }), {});
     }
 
@@ -72,7 +78,31 @@ function flattenTextStyle(style: unknown): TextStyle {
         return {};
     }
 
-    return style;
+    // Unistyles 3.2 web entries retain stylesheet/key/arguments behind their
+    // CSS classes. Native entries expose the same values through uni__getStyles.
+    // Resolve before spreading arrays or scaling, which would lose hidden metrics.
+    let resolved: TextStyle = {};
+    for (const key of Object.getOwnPropertyNames(style)) {
+        if (!key.startsWith('unistyles_')) continue;
+        const secret: unknown = Reflect.get(style, key);
+        if (!isRecord(secret)) continue;
+        if (typeof secret.uni__getStyles === 'function') {
+            resolved = { ...resolved, ...flattenTextStyle(Reflect.apply(secret.uni__getStyles, secret, []), context) };
+        } else if (context && typeof secret.__uni__key === 'string') {
+            const stylesheet: unknown = typeof secret.__uni__stylesheet === 'function'
+                ? Reflect.apply(secret.__uni__stylesheet, undefined, [context.theme, context.rt])
+                : secret.__uni__stylesheet;
+            const entry: unknown = isRecord(stylesheet) ? stylesheet[secret.__uni__key] : undefined;
+            const values: unknown = typeof entry === 'function'
+                ? Reflect.apply(entry, undefined, Array.isArray(secret.__uni__args) ? secret.__uni__args : [])
+                : entry;
+            resolved = { ...resolved, ...flattenTextStyle(values, context) };
+        }
+    }
+    // Plain overrides retain React Native's last-entry-wins order. Non-enumerable
+    // values on web entries are the creation-time projection; use the current one above.
+    const plain = Object.fromEntries(Object.entries(style).filter(([key]) => !key.startsWith('unistyles_')));
+    return { ...resolved, ...plain };
 }
 
 function blockFontFace(style: TextStyle): { fontFamily?: string; fontWeight?: string } {
@@ -95,23 +125,37 @@ export function buildEnrichedMarkdownStyle(params: Readonly<{
     const uiFontScale = typeof params.uiFontScale === 'number' && Number.isFinite(params.uiFontScale)
         ? params.uiFontScale
         : 1;
-    const scaledTextStyle = scaleTextStyle(params.textStyle, uiFontScale);
-    const flattenedTextStyle = flattenTextStyle(scaledTextStyle);
+    const flattenedTextStyle = scaleTextStyle(flattenTextStyle(params.textStyle), uiFontScale);
 
     const widget = params.profile === 'widget';
+    // A document or widget is Markdown placed inside interface chrome (a plugin's detail step, a board
+    // widget). Its body reads at the interface's reading size and its headings step down from the type
+    // roles, so no heading outranks the title of the step or card that holds it. Transcript Markdown keeps
+    // its own larger domain scale.
+    const embedded = widget || params.profile === 'document';
     const widgetText = happierPageTextMetrics('sectionDescription');
-    const baseFontSize = readNumber(flattenedTextStyle.fontSize, roundTo2((widget ? widgetText.fontSize : 16) * uiFontScale));
-    const baseLineHeight = readNumber(flattenedTextStyle.lineHeight, roundTo2((widget ? widgetText.lineHeight : 24) * uiFontScale));
+    const readingText = resolveHappierTypeScale('reading', Platform.OS);
+    const embeddedBase = widget ? widgetText : params.profile === 'document' ? readingText : null;
+    const baseFontSize = readNumber(flattenedTextStyle.fontSize, roundTo2((embeddedBase?.fontSize ?? 16) * uiFontScale));
+    const baseLineHeight = readNumber(flattenedTextStyle.lineHeight, roundTo2((embeddedBase?.lineHeight ?? 24) * uiFontScale));
     const inlineCodeFontSize = roundTo2(baseFontSize * 0.88);
     const baseColor = readString(flattenedTextStyle.color, params.colors.text.primary);
-    const h1FontSize = scaledMetric(baseFontSize, 1.5);
-    const h2FontSize = scaledMetric(baseFontSize, 1.25);
-    const h3FontSize = scaledMetric(baseFontSize, 1.125);
-    const h6FontSize = scaledMetric(baseFontSize, 0.875);
-    const h1LineHeight = Math.max(baseLineHeight, scaledMetric(h1FontSize, 1.3));
-    const h2LineHeight = Math.max(baseLineHeight, scaledMetric(h2FontSize, 1.35));
-    const h3LineHeight = Math.max(baseLineHeight, scaledMetric(h3FontSize, 1.4));
-    const h6LineHeight = Math.max(scaledMetric(baseLineHeight, 0.875), scaledMetric(h6FontSize, 1.4));
+    const roleMetric = (role: 'heading' | 'label' | 'reading') => {
+        const step = resolveHappierTypeScale(role, Platform.OS);
+        return { fontSize: roundTo2(step.fontSize * uiFontScale), lineHeight: roundTo2(step.lineHeight * uiFontScale) };
+    };
+    const h1FontSize = embedded ? Math.max(baseFontSize, roleMetric('heading').fontSize) : scaledMetric(baseFontSize, 1.5);
+    const h2FontSize = embedded ? Math.max(baseFontSize, roleMetric('label').fontSize) : scaledMetric(baseFontSize, 1.25);
+    const h3FontSize = embedded ? Math.max(baseFontSize, roleMetric('reading').fontSize) : scaledMetric(baseFontSize, 1.125);
+    const h6FontSize = embedded ? baseFontSize : scaledMetric(baseFontSize, 0.875);
+    const h1LineHeight = embedded ? Math.max(roleMetric('heading').lineHeight, h1FontSize) : Math.max(baseLineHeight, scaledMetric(h1FontSize, 1.3));
+    const h2LineHeight = embedded ? Math.max(roleMetric('label').lineHeight, h2FontSize) : Math.max(baseLineHeight, scaledMetric(h2FontSize, 1.35));
+    const h3LineHeight = embedded ? Math.max(baseLineHeight, roleMetric('reading').lineHeight) : Math.max(baseLineHeight, scaledMetric(h3FontSize, 1.4));
+    const h6LineHeight = embedded ? baseLineHeight : Math.max(scaledMetric(baseLineHeight, 0.875), scaledMetric(h6FontSize, 1.4));
+    // Embedded headings sit closer to their text: the ramp is one or two points, so space does the rest.
+    const headingSpace = embedded
+        ? { h1: [16, 6], h2: [16, 4], h3: [12, 4], h4: [10, 4], h5: [8, 4], h6: [8, 4] } as const
+        : { h1: [18, 10], h2: [16, 8], h3: [14, 8], h4: [10, 6], h5: [8, 6], h6: [8, 6] } as const;
     const defaultTypography = Typography.default();
     const semiBoldTypography = Typography.default('semiBold');
     const italicTypography = Typography.default('italic');
@@ -137,43 +181,43 @@ export function buildEnrichedMarkdownStyle(params: Readonly<{
             ...headingBase,
             fontSize: h1FontSize,
             lineHeight: h1LineHeight,
-            marginTop: 18,
-            marginBottom: 10,
+            marginTop: headingSpace.h1[0],
+            marginBottom: headingSpace.h1[1],
         },
         h2: {
             ...headingBase,
             fontSize: h2FontSize,
             lineHeight: h2LineHeight,
-            marginTop: 16,
-            marginBottom: 8,
+            marginTop: headingSpace.h2[0],
+            marginBottom: headingSpace.h2[1],
         },
         h3: {
             ...headingBase,
             fontSize: h3FontSize,
             lineHeight: h3LineHeight,
-            marginTop: 14,
-            marginBottom: 8,
+            marginTop: headingSpace.h3[0],
+            marginBottom: headingSpace.h3[1],
         },
         h4: {
             ...headingBase,
             fontSize: baseFontSize,
             lineHeight: baseLineHeight,
-            marginTop: 10,
-            marginBottom: 6,
+            marginTop: headingSpace.h4[0],
+            marginBottom: headingSpace.h4[1],
         },
         h5: {
             ...headingBase,
             fontSize: baseFontSize,
             lineHeight: baseLineHeight,
-            marginTop: 8,
-            marginBottom: 6,
+            marginTop: headingSpace.h5[0],
+            marginBottom: headingSpace.h5[1],
         },
         h6: {
             ...headingBase,
             fontSize: h6FontSize,
             lineHeight: h6LineHeight,
-            marginTop: 8,
-            marginBottom: 6,
+            marginTop: headingSpace.h6[0],
+            marginBottom: headingSpace.h6[1],
         },
         strong: {
             fontFamily: readFontFamily(semiBoldTypography),
@@ -228,6 +272,8 @@ export function buildEnrichedMarkdownStyle(params: Readonly<{
             markerMinWidth: roundTo2(18 * uiFontScale),
             gapWidth: 8,
             marginLeft: roundTo2(28 * uiFontScale),
+            // An embedded list closes on the paragraph rhythm, so the next heading's space is the only gap.
+            ...(embedded ? { marginBottom: 8 } : {}),
         },
         thematicBreak: {
             color: params.colors.border.default,
@@ -295,13 +341,16 @@ export function useEnrichedMarkdownStyle(params: Readonly<{
     profile: MarkdownRenderingProfile;
     textStyle?: StyleProp<TextStyle>;
 }>): EnrichedMarkdownStyleBundle {
-    const { theme } = useUnistyles();
+    const { theme, rt } = useUnistyles();
     const uiFontScale = useLocalSetting('uiFontScale') ?? 1;
+    // Unistyles returns fresh proxies each render. Read through them to subscribe
+    // to stylesheet dependencies, then memoize the bundle by the metrics it consumes.
+    const { fontSize, lineHeight, color } = flattenTextStyle(params.textStyle, { theme, rt });
 
     return React.useMemo(() => buildEnrichedMarkdownStyle({
         colors: theme.colors,
         profile: params.profile,
-        textStyle: params.textStyle,
+        textStyle: { fontSize, lineHeight, color },
         uiFontScale,
-    }), [params.profile, params.textStyle, theme.colors, uiFontScale]);
+    }), [params.profile, fontSize, lineHeight, color, theme.colors, uiFontScale]);
 }

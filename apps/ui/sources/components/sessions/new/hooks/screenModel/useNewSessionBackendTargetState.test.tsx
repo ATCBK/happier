@@ -1,17 +1,37 @@
 import * as React from 'react';
+import 'fake-indexeddb/auto';
 import renderer, { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
-import { getPermissionModeOptionsForAgentType } from '@/sync/domains/permissions/permissionModeOptions';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installNewSessionScreenModelCommonModuleMocks } from '../newSessionScreenModelTestHelpers';
 
-import { useNewSessionBackendTargetState } from './useNewSessionBackendTargetState';
-import { createResolvedAgentCatalogEntryFixture } from '@/dev/testkit/fixtures/agentCatalogFixtures';
-import { renderScreen } from '@/dev/testkit';
+installNewSessionScreenModelCommonModuleMocks();
+const network = await installSessionOpsNetworkBoundary();
+await loadSyncSingletonForTests();
+const { createResolvedAgentCatalogEntryFixture } = await import('@/dev/testkit/fixtures/agentCatalogFixtures');
+const { getPermissionModeOptionsForAgentType } = await import('@/sync/domains/permissions/permissionModeOptions');
+const { storage } = await import('@/sync/domains/state/storage');
+const { settingsDefaults, settingsParse } = await import('@/sync/domains/settings/settings');
+const { useNewSessionBackendTargetState } = await import('./useNewSessionBackendTargetState');
+let initialSettings = settingsDefaults;
 
+function seedPreferences(preferences: Readonly<{ lastUsedAgent?: unknown; lastUsedBackendTarget?: unknown }>) {
+    initialSettings = settingsParse({ ...storage.getState().settings, ...preferences });
+    storage.setState({ settings: initialSettings });
+}
 
-const applySettingsMock = vi.fn();
+beforeEach(() => {
+    network.resetRequests();
+    storage.setState(storage.getInitialState(), true);
+    seedPreferences({ lastUsedAgent: 'codex', lastUsedBackendTarget: null });
+});
+afterEach(() => standardCleanup());
+afterAll(() => network.dispose());
 
 function resolvedEntryFixture(
     entry: Omit<ResolvedBackendCatalogEntry, 'agentCatalogEntry' | 'cliAuthBackgroundCheckSafe'>,
@@ -22,10 +42,6 @@ function resolvedEntryFixture(
         ...entry,
     };
 }
-
-vi.mock('@/sync/store/settingsWriters', () => ({
-    useApplySettings: () => applySettingsMock,
-}));
 
 const entries: ReadonlyArray<ResolvedBackendCatalogEntry> = [
     resolvedEntryFixture({
@@ -70,6 +86,62 @@ const configuredPreferredEntries: ReadonlyArray<ResolvedBackendCatalogEntry> = [
 ];
 
 describe('useNewSessionBackendTargetState', () => {
+    it('retains an explicit route while a remembered configured Agent and the catalog hydrate', async () => {
+        seedPreferences({ lastUsedBackendTarget: entries[0]!.backendTarget });
+        const routeBackendTarget = { kind: 'agent' as const,
+            identity: { pluginId: 'happier.agent.claude', localId: 'claude' } };
+        let observed: ReturnType<typeof useNewSessionBackendTargetState> | null = null;
+        function Probe() {
+            observed = useNewSessionBackendTargetState({
+                entries, configuredCatalogReady: true, routeBackendTarget,
+                projectionPhase: 'loading',
+            });
+            return null;
+        }
+        const screen = await renderScreen(React.createElement(Probe));
+        const readObserved = () => observed;
+        expect(readObserved()?.backendTarget).toEqual(routeBackendTarget);
+        await screen.unmount();
+    });
+    it.each(['route', 'picker'] as const)('retains an explicit %s choice when late catalog hydration exposes a configured default', async (source) => {
+        const claudeTarget = { kind: 'agent' as const,
+            identity: { pluginId: 'happier.agent.claude', localId: 'claude' } };
+        const claudeEntry = resolvedEntryFixture({
+            ...configuredPreferredEntries[0]!,
+            backendTarget: claudeTarget,
+            backendTargetKey: resolveBackendTargetKeyV2(claudeTarget),
+            backendId: 'claude', agentId: 'claude', catalogAgentId: 'claude',
+            builtInAgentId: 'claude', iconAgentId: 'claude', title: 'Claude', subtitle: 'claude',
+        });
+        let currentEntries = [claudeEntry];
+        let persistedBackendTarget: unknown = null;
+        let observed: ReturnType<typeof useNewSessionBackendTargetState> | null = null;
+        function Probe() {
+            observed = useNewSessionBackendTargetState({
+                entries: currentEntries, configuredCatalogReady: true,
+                persistedBackendTarget,
+                routeBackendTarget: source === 'route' ? claudeTarget : null,
+                projectionPhase: 'ready',
+            });
+            return null;
+        }
+        const screen = await renderScreen(React.createElement(Probe));
+        const readObserved = () => {
+            if (!observed) throw new Error('Selection owner did not render');
+            return observed;
+        };
+        if (source === 'picker') {
+            await act(async () => readObserved().setBackendTarget(claudeTarget));
+        }
+        persistedBackendTarget = configuredPreferredEntries[1]!.backendTarget;
+        currentEntries = [configuredPreferredEntries[1]!];
+        await screen.update(React.createElement(Probe));
+        expect(readObserved().backendTarget).toEqual(claudeTarget);
+        currentEntries = [claudeEntry, configuredPreferredEntries[1]!];
+        await screen.update(React.createElement(Probe));
+        expect(readObserved().backendTarget).toEqual(claudeTarget);
+        await act(async () => screen.tree.unmount());
+    });
     it('retains definition-qualified intent through loading and deletion without a bundled fallback', async () => {
         const target = { kind: 'agent' as const,
             identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' }, definitionId: 'review-a' };
@@ -78,7 +150,7 @@ describe('useNewSessionBackendTargetState', () => {
         let observed: ReturnType<typeof useNewSessionBackendTargetState> | null = null;
         function Probe() {
             observed = useNewSessionBackendTargetState({ entries: currentEntries, configuredCatalogReady,
-                persistedBackendTarget: target, lastUsedAgent: 'codex', projectionPhase: 'ready' });
+                persistedBackendTarget: target, projectionPhase: 'ready' });
             return null;
         }
         const screen = await renderScreen(React.createElement(Probe));
@@ -87,21 +159,18 @@ describe('useNewSessionBackendTargetState', () => {
         expect(readObserved()?.selectedRuntimeCarrierAgentId).toBeNull();
         configuredCatalogReady = true;
         currentEntries = [...currentEntries];
-        await act(async () => screen.tree.update(React.createElement(Probe)));
+        await screen.update(React.createElement(Probe));
         expect(readObserved()?.backendTarget).toEqual(target);
         expect(readObserved()?.selectedRuntimeCarrierAgentId).toBeNull();
-        expect(applySettingsMock).not.toHaveBeenCalled();
+        expect(storage.getState().settings).toBe(initialSettings);
         await act(async () => screen.tree.unmount());
-    });
-    beforeEach(() => {
-        applySettingsMock.mockReset();
     });
     it('retains the same selected target when equivalent catalog inputs are recreated', async () => {
         let currentEntries: readonly ResolvedBackendCatalogEntry[] = [];
         let observed: ReturnType<typeof useNewSessionBackendTargetState> | null = null;
         function Probe() {
             observed = useNewSessionBackendTargetState({
-                entries: currentEntries, lastUsedAgent: 'codex', lastUsedBackendTarget: null,
+                entries: currentEntries,
                 projectionPhase: 'ready',
             });
             return null;
@@ -112,44 +181,44 @@ describe('useNewSessionBackendTargetState', () => {
             return observed.backendTarget;
         };
         const selectedTarget = readSelectedTarget();
-        applySettingsMock.mockClear();
         currentEntries = [];
-        await act(async () => screen.tree.update(React.createElement(Probe)));
+        await screen.update(React.createElement(Probe));
         // The selection is unchanged; catalog identity churn must not replace
         // it or turn automatic reconciliation into an explicit user selection.
-        expect(applySettingsMock).not.toHaveBeenCalled();
+        expect(storage.getState().settings).toBe(initialSettings);
         expect(readSelectedTarget()).toBe(selectedTarget);
         await act(async () => screen.tree.unmount());
     });
 
     it('preserves the selected target and remembered settings while the Account catalog is unavailable', async () => {
         const lastUsedBackendTarget = { kind: 'backend' as const, backendId: 'codex' };
+        seedPreferences({ lastUsedBackendTarget });
         const unavailableEntries: readonly ResolvedBackendCatalogEntry[] = [];
         let observed: ReturnType<typeof useNewSessionBackendTargetState> | null = null;
         function Probe() {
             observed = useNewSessionBackendTargetState({
                 entries: unavailableEntries, configuredCatalogReady: false,
-                lastUsedAgent: 'codex', lastUsedBackendTarget,
                 projectionPhase: 'ready',
             });
             return null;
         }
         const screen = await renderScreen(React.createElement(Probe));
         const readObserved = () => observed;
-        expect(readObserved()?.backendTarget).toEqual(lastUsedBackendTarget);
-        expect(applySettingsMock).not.toHaveBeenCalled();
+        expect(resolveBackendTargetKeyV2(readObserved()!.backendTarget)).toBe(resolveBackendTargetKeyV2(lastUsedBackendTarget));
+        expect(storage.getState().settings).toBe(initialSettings);
         await act(async () => screen.tree.unmount());
     });
 
     it('restores the last used configured ACP backend target instead of the provider sentinel', async () => {
+        seedPreferences({ lastUsedAgent: 'customAcp', lastUsedBackendTarget: {
+            kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot', sourceKind: 'configured',
+        } });
         let observed: ReturnType<typeof useNewSessionBackendTargetState> | null = null;
 
         function Probe() {
             observed = useNewSessionBackendTargetState({
                 entries,
-                lastUsedAgent: 'customAcp',
-                lastUsedBackendTarget: { kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot', sourceKind: 'configured' },
-            } as any);
+            });
             return null;
         }
 
@@ -167,25 +236,23 @@ describe('useNewSessionBackendTargetState', () => {
         function Probe() {
             observed = useNewSessionBackendTargetState({
                 entries,
-                lastUsedAgent: 'codex',
-                lastUsedBackendTarget: null,
-            } as any);
+            });
             return null;
         }
 
         let tree: renderer.ReactTestRenderer | null = null;
         tree = (await renderScreen(React.createElement(Probe))).tree;
 
-        applySettingsMock.mockClear();
-
-        act(() => {
+        await act(async () => {
             observed?.setBackendTarget({ kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot', sourceKind: 'configured' });
         });
 
-        expect(applySettingsMock).toHaveBeenCalledWith({
-            lastUsedBackendTarget: { kind: 'agent',
-                identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' }, definitionId: 'review-bot' },
+        expect(storage.getState().settings.lastUsedBackendTarget).toEqual({
+            kind: 'agent',
+            identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' },
+            definitionId: 'review-bot',
         });
+        expect(storage.getState().settings.lastUsedAgent).toBe('codex');
 
         act(() => {
             tree?.unmount();
@@ -213,9 +280,7 @@ describe('useNewSessionBackendTargetState', () => {
             observed = useNewSessionBackendTargetState({
                 entries: fallbackEntries,
                 tempAgentType: 'claude',
-                lastUsedAgent: 'codex',
-                lastUsedBackendTarget: null,
-            } as any);
+            });
             return null;
         }
 
@@ -231,9 +296,7 @@ describe('useNewSessionBackendTargetState', () => {
         function Probe() {
             observed = useNewSessionBackendTargetState({
                 entries: configuredPreferredEntries,
-                lastUsedAgent: 'codex',
-                lastUsedBackendTarget: null,
-            } as any);
+            });
             return null;
         }
 
@@ -245,6 +308,7 @@ describe('useNewSessionBackendTargetState', () => {
     });
 
     it('keeps an unbacked plugin Agent separate from bundled static policy', async () => {
+        seedPreferences({ lastUsedBackendTarget: { kind: 'backend', backendId: 'acme.review.backend' } });
         const pluginEntries: ReadonlyArray<ResolvedBackendCatalogEntry> = [
             resolvedEntryFixture({
                 backendTarget: { kind: 'backend', backendId: 'codex' },
@@ -277,9 +341,7 @@ describe('useNewSessionBackendTargetState', () => {
         function Probe() {
             observed = useNewSessionBackendTargetState({
                 entries: pluginEntries,
-                lastUsedAgent: 'codex',
-                lastUsedBackendTarget: { kind: 'backend', backendId: 'acme.review.backend' },
-            } as any);
+            });
             return null;
         }
 
@@ -319,10 +381,8 @@ describe('useNewSessionBackendTargetState', () => {
             observed = useNewSessionBackendTargetState({
                 entries: pluginEntries,
                 tempBackendTarget: { kind: 'backend', backendId: 'acme.review.backend' },
-                lastUsedAgent: 'codex',
-                lastUsedBackendTarget: null,
                 projectionPhase: 'loading',
-            } as any);
+            });
             return null;
         }
 
@@ -355,10 +415,8 @@ describe('useNewSessionBackendTargetState', () => {
             observed = useNewSessionBackendTargetState({
                 entries: pluginEntries,
                 tempBackendTarget: { kind: 'backend', backendId: 'acme.review.backend' },
-                lastUsedAgent: 'codex',
-                lastUsedBackendTarget: null,
                 projectionPhase: 'ready',
-            } as any);
+            });
             return null;
         }
 
@@ -369,6 +427,7 @@ describe('useNewSessionBackendTargetState', () => {
     });
 
     it('persists plugin backend selection without writing lastUsedAgent (V1 compatibility only)', async () => {
+        seedPreferences({ lastUsedAgent: 'claude' });
         const pluginEntries: ReadonlyArray<ResolvedBackendCatalogEntry> = [
             resolvedEntryFixture({
                 backendTarget: { kind: 'backend', backendId: 'codex' },
@@ -401,27 +460,19 @@ describe('useNewSessionBackendTargetState', () => {
         function Probe() {
             observed = useNewSessionBackendTargetState({
                 entries: pluginEntries,
-                lastUsedAgent: 'claude',
-                lastUsedBackendTarget: null,
-            } as any);
+            });
             return null;
         }
 
         let tree: renderer.ReactTestRenderer | null = null;
         tree = (await renderScreen(React.createElement(Probe))).tree;
 
-        applySettingsMock.mockClear();
-
-        act(() => {
+        await act(async () => {
             observed?.setBackendTarget({ kind: 'backend', backendId: 'acme.review.backend' });
         });
 
-        expect(applySettingsMock).toHaveBeenCalledWith({
-            lastUsedBackendTarget: { kind: 'backend', backendId: 'acme.review.backend' },
-        });
-        expect(applySettingsMock).not.toHaveBeenCalledWith(expect.objectContaining({
-            lastUsedAgent: expect.any(String),
-        }));
+        expect(storage.getState().settings.lastUsedBackendTarget).toEqual({ kind: 'backend', backendId: 'acme.review.backend' });
+        expect(storage.getState().settings.lastUsedAgent).toBe('claude');
 
         act(() => {
             tree?.unmount();
@@ -429,6 +480,7 @@ describe('useNewSessionBackendTargetState', () => {
     });
 
     it('persists Oh My Pi selection as structured identity and clears the flat compatibility field', async () => {
+        seedPreferences({ lastUsedAgent: 'claude' });
         const ohMyPiEntries: ReadonlyArray<ResolvedBackendCatalogEntry> = [resolvedEntryFixture({
             backendTarget: { kind: 'backend', backendId: 'ohMyPi' },
             backendTargetKey: 'agent:happier.agent.ohmypi/ohmypi',
@@ -446,30 +498,23 @@ describe('useNewSessionBackendTargetState', () => {
         function Probe() {
             observed = useNewSessionBackendTargetState({
                 entries: ohMyPiEntries,
-                lastUsedAgent: 'claude',
-                lastUsedBackendTarget: null,
-            } as any);
+            });
             return null;
         }
 
         const { tree } = await renderScreen(React.createElement(Probe));
-        applySettingsMock.mockClear();
-
-        act(() => {
+        await act(async () => {
             observed?.setBackendTarget({ kind: 'backend', backendId: 'ohMyPi' });
         });
 
-        expect(applySettingsMock).toHaveBeenCalledWith({
-            lastUsedAgent: null,
-            lastUsedBackendTarget: {
-                kind: 'agent',
-                identity: {
-                    pluginId: 'happier.agent.ohmypi',
-                    localId: 'ohmypi',
-                },
+        expect(storage.getState().settings.lastUsedAgent).toBeNull();
+        expect(storage.getState().settings.lastUsedBackendTarget).toEqual({
+            kind: 'agent',
+            identity: {
+                pluginId: 'happier.agent.ohmypi',
+                localId: 'ohmypi',
             },
         });
-        expect(JSON.stringify(applySettingsMock.mock.calls)).not.toContain('\"ohMyPi\"');
 
         act(() => {
             tree.unmount();

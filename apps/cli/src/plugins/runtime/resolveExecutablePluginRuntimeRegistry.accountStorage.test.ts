@@ -5,6 +5,9 @@ import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { accountSettingsParse, DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol';
+import { definePlugin } from '@happier-dev/plugin-sdk';
+import { defineContributionProtocol } from '@happier-dev/plugin-sdk/contributions';
+import { defineProtocolObject, defineProtocolString } from '@happier-dev/plugin-sdk/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
@@ -20,6 +23,8 @@ import { resolveLocalPathPluginSource } from '@/plugins/discovery/sources/localP
 import { bindPluginRuntimeSourceAuthority } from './sourceAuthority';
 import { registerDaemonContributionRegistryProjectionHandler, invalidateDaemonContributionRegistryProjectionCache } from '@/rpc/handlers/daemonContributionRegistryProjection';
 import type { StoredCredentials } from '@/persistence';
+import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { readAccountNoticeArtifactV1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 
 import {
     type AccountPluginDataStorageHostDependencies,
@@ -164,7 +169,20 @@ async function seedAccountCollectionsActionFixture(params: Readonly<{
     includePage?: boolean;
     pluginId?: string;
     includeAvailability?: boolean;
+    includeNestedAction?: boolean;
+    providerPluginId?: string;
+    contributeToPluginId?: string;
 }>): Promise<void> {
+    const nestedTarget = params.includeNestedAction ? definePlugin({
+        id: params.pluginId ?? PLUGIN_ID, version: '1.0.0',
+        contributionPoints: { providers: defineContributionProtocol({
+            id: 'fixture-provider', version: 1,
+            operations: { poll: { required: true, input: { kind: 'contributorDefined' },
+                resultSchema: defineProtocolObject({ marker: defineProtocolString() }, { policy: 'closed' }),
+                action: { surfaces: ['plugin'], dangerLevel: 'safe' },
+            } },
+        }).point() },
+    }) : undefined;
     await mkdir(join(params.pluginRoot, '.happier-plugin'), { recursive: true });
     await writeFile(join(params.pluginRoot, '.happier-plugin', 'plugin.json'), JSON.stringify({
         schemaVersion: 2,
@@ -186,6 +204,16 @@ async function seedAccountCollectionsActionFixture(params: Readonly<{
                 optional: [],
             },
         contributes: {
+            ...(params.includeNestedAction ? { backgroundServices: [{ id: 'poll-source' }] } : {}),
+            ...(nestedTarget ? {
+                pluginContributionPoints: nestedTarget.manifest.contributes?.pluginContributionPoints,
+                targetedPluginContributions: params.providerPluginId ? [] : [
+                    { id: 'self-provider', target: { pluginId: params.pluginId ?? PLUGIN_ID, pointId: 'providers' },
+                        protocol: { id: 'fixture-provider', version: 1 }, operations: { poll: 'read-channel-state' } },
+                    ...(params.contributeToPluginId ? [{ id: 'outer-provider', target: { pluginId: params.contributeToPluginId, pointId: 'providers' },
+                        protocol: { id: 'fixture-provider', version: 1 }, operations: { poll: 'read-channel-state' } }] : []),
+                ],
+            } : {}),
             ...(params.includePage ? { ui: {
                 renderers: [{ id: 'page-renderer', kind: 'declarative', root: { kind: 'text', text: 'Account page' } }],
                 views: [{ id: 'page', container: 'appPage', target: { kind: 'app' }, renderer: 'page-renderer', title: 'Account page' }],
@@ -194,14 +222,19 @@ async function seedAccountCollectionsActionFixture(params: Readonly<{
                 id: 'read-channel-state',
                 title: 'Read channel state',
                 scopes: ['global'],
-                surfaces: ['cli'],
+                surfaces: params.includeNestedAction ? ['cli', 'plugin'] : ['cli'],
                 execution: { target: 'daemon' },
                 placementBindings: ['primary'],
                 dangerLevel: 'safe',
+                ...(params.includeNestedAction ? { inputSchema: { type: 'object' }, resultSchema: { type: 'object', properties: { marker: { type: 'string' } }, required: ['marker'], additionalProperties: false } } : {}),
                 ...(params.declareAccountStorage === false
                     ? {}
                     : { hostAccess: [ACCOUNT_STORAGE_HOST_ACCESS_ID] }),
-            }],
+            }, ...(params.includeNestedAction ? [{
+                id: 'poll-provider', title: 'Poll provider', scopes: ['global'],
+                surfaces: ['cli'], execution: { target: 'daemon' },
+                placementBindings: ['primary'], dangerLevel: 'safe',
+            }] : [])],
             accountCollections: [{
                 id: COLLECTION_ID,
                 schemaVersion: 1,
@@ -220,8 +253,42 @@ async function seedAccountCollectionsActionFixture(params: Readonly<{
         },
     }), 'utf8');
     await writeFile(join(params.pluginRoot, 'daemon.mjs'), `${params.includePage ? `export const collectionMigrations = { '${COLLECTION_ID}': [] };` : ''}
+    let backgroundOutcome = null;
+    let wakeBackground;
+    async function poll(context, routingOverride) {
+        const observation = context.services.targetedContributions.observeForSelf(
+            ${JSON.stringify(nestedTarget?.contributionPoints.providers ?? null)}, { onInvalidated() {} },
+        );
+        try {
+            const current = await observation.readCurrent({ signal: context.signal });
+            return await context.services.actions.executeAdmittedTargetedOperationWithExecutionOrigin(
+                current.contributions[0].operations.poll, ${params.providerPluginId ? '{ nest: true }' : '{}'},
+                { expectedExecutionRouting: routingOverride ?? { serverIdentityId: 'srv_page',
+                    pluginId: '${params.providerPluginId ?? params.pluginId ?? PLUGIN_ID}', machineId: 'machine-page',
+                } },
+            );
+        } finally { observation.dispose(); }
+    }
     export function activate(api) {
+        ${params.includeNestedAction ? `api.actions.register('poll-provider', async (input, context) => {
+            if (input.background) return backgroundOutcome;
+            if (input.wake) { backgroundOutcome = null; wakeBackground?.(); return {}; }
+            return await poll(context, input.routingOverride);
+        });
+        api.backgroundServices.register('poll-source', async context => {
+            while (!context.signal.aborted) {
+                await new Promise(resolve => {
+                    wakeBackground = resolve;
+                    context.signal.addEventListener('abort', resolve, { once: true });
+                });
+                context.signal.removeEventListener('abort', wakeBackground);
+                if (context.signal.aborted) break;
+                try { backgroundOutcome = await poll(context); }
+                catch (error) { backgroundOutcome = { code: error.code, message: error.message }; }
+            }
+        });` : ''}
         api.actions.register('read-channel-state', async (_input, context) => {
+            ${params.includeNestedAction ? 'if (_input.nest) return (await poll(context)).result;' : ''}
             const accountStorage = context.services.storage.account;
             if (!accountStorage) return { marker: null, accountStorage: 'absent' };
             const row = await accountStorage.collection({
@@ -456,6 +523,7 @@ async function seedAccountNotificationChannelFixture(params: Readonly<{
                 clientRequestId: input.clientRequestId,
                 categoryId: '${NOTIFICATION_CATEGORY_ID}',
                 title: 'Account state',
+                ...(input.itemId ? { itemId: input.itemId, type: 'update', channelIds: [] } : {}),
             })
         ));
         api.notifications.registerChannel('${NOTIFICATION_CHANNEL_ID}', async (request, context) => {
@@ -517,12 +585,14 @@ describe('executable plugin Account Collections binding', () => {
                 return [target.pluginId, candidate.graph] as const;
             }));
             const dependencies = createFixtureAccountStorageDependencies({ token: 'publication-refusal-token', encryption: null });
+            const http = dependencies.http;
+            if (!http) throw new Error('Expected the Account Data HTTP fixture');
             runtime = await resolveExecutablePluginRuntimeRegistry({
                 happyHomeDir, contributes: createResolvedContributionRegistry(loaded),
                 preparedDevelopmentActivationGraphsByPluginId: new Map(graphs),
                 accountStorageDependencies: {
                     ...dependencies,
-                    http: { ...dependencies.http, async post(_url, body) {
+                    http: { ...http, async post(_url, body) {
                         const request = JSON.parse(body) as { manifest: { id: string } };
                         attempted.push(request.manifest.id);
                         return { status: 409, data: { error: 'plugin_collection_contract_conflict' } };
@@ -553,12 +623,18 @@ describe('executable plugin Account Collections binding', () => {
         }
     }, 60_000);
 
-    it('keeps release-less Account declaration identity out of app-page origin selection', async () => {
+    it('keeps release-less Account declaration identity out of app-page origin selection and uses source custody for background provider calls', async () => {
         const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-release-less-page-home-'));
         const pluginRoot = await mkdtemp(join(tmpdir(), 'happier-release-less-page-plugin-'));
+        const providerRoot = await mkdtemp(join(tmpdir(), 'happier-release-less-provider-plugin-'));
+        const providerPluginId = 'acme.email-transport';
+        let originMachineId = 'machine-page';
         let runtime: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>> | null = null;
+        const controller = createPluginReloadController();
         try {
-            await seedAccountCollectionsActionFixture({ happyHomeDir, pluginRoot, includePage: true });
+            await seedAccountCollectionsActionFixture({ happyHomeDir, pluginRoot, includePage: true, includeNestedAction: true, providerPluginId });
+            await seedAccountCollectionsActionFixture({ happyHomeDir, pluginRoot: providerRoot, pluginId: providerPluginId, includePage: true, includeNestedAction: true, contributeToPluginId: PLUGIN_ID });
+            accountDataBoundary.readStoredCredentials.mockResolvedValue({ token: 'fixture-account-token', encryption: null });
             const loaded = await resolvePluginContributes({ happyHomeDir, existingAgentIds: new Set() });
             const target = loaded.activationTargets?.find((entry) => entry.pluginId === PLUGIN_ID);
             if (!target?.devDaemonEntryPath) throw new Error('Expected the fixture development entry');
@@ -570,15 +646,29 @@ describe('executable plugin Account Collections binding', () => {
             });
             if (sourceAuthority.kind !== 'development') throw new Error('Expected development custody');
             const development = await evaluateManifestPluginDevelopmentCandidate({ source, sourceAuthority });
+            const providerTarget = loaded.activationTargets?.find(entry => entry.pluginId === providerPluginId);
+            if (!providerTarget?.devDaemonEntryPath) throw new Error('Expected the provider development entry');
+            const providerSource = await resolveLocalPathPluginSource({ locator: dirname(providerTarget.devDaemonEntryPath) });
+            if (!providerSource.ok) throw new Error('Expected provider development source');
+            const providerAuthority = bindPluginRuntimeSourceAuthority({
+                custody: { kind: 'development', registeredRootId: providerSource.pluginRootPath },
+                resolvedRoot: providerSource.pluginRootPath, observedRevision: 1,
+            });
+            if (providerAuthority.kind !== 'development') throw new Error('Expected provider development custody');
+            const providerDevelopment = await evaluateManifestPluginDevelopmentCandidate({ source: providerSource, sourceAuthority: providerAuthority });
             // A daemon-selected development declaration has no install materialization.
             // Keep the real manifest, activation graph and Account storage below this input.
             const contributes = createResolvedContributionRegistry({ ...loaded, materializationIdsByPluginId: {} });
             runtime = await resolveExecutablePluginRuntimeRegistry({
                 happyHomeDir, contributes,
-                preparedDevelopmentActivationGraphsByPluginId: new Map([[PLUGIN_ID, development.graph]]),
+                preparedDevelopmentActivationGraphsByPluginId: new Map([[PLUGIN_ID, development.graph], [providerPluginId, providerDevelopment.graph]]),
                 resolveCurrentMachineId: () => 'machine-page',
+                targetedContributions: controller.getTargetedContributionsOwner(),
+                resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'srv_page', machineId: originMachineId }),
                 accountStorageDependencies: createFixtureAccountStorageDependencies({ token: 'fixture-account-token', encryption: null }),
             });
+            const lease = await controller.acquireRuntimeRegistry({ resolveRuntimeRegistry: async () => runtime! });
+            await lease.release();
             const handlers = new Map<string, RpcHandler>();
             const registrar: RpcHandlerRegistrar = { registerHandler: (method, handler) => { handlers.set(method, handler); } };
             invalidateDaemonContributionRegistryProjectionCache();
@@ -602,13 +692,43 @@ describe('executable plugin Account Collections binding', () => {
             });
             await expect(runtime.targetActionInvocations?.invoke({ pluginId: PLUGIN_ID, localId: 'read-channel-state', input: {}, surface: 'cli' }))
                 .resolves.toEqual({ status: 'executed', value: { marker: HOST_MARKER } });
+            await runtime.activateContributionsOnDemand([{ pluginId: PLUGIN_ID, family: 'actions', localId: 'poll-provider' }]);
+            expect(runtime.pluginDiagnosticsByPluginId[PLUGIN_ID] ?? []).toEqual([]);
+            await expect(runtime.targetActionInvocations?.invoke({ pluginId: PLUGIN_ID, localId: 'poll-provider', input: {}, surface: 'cli' }))
+                .resolves.toEqual({ status: 'executed', value: {
+                    result: { marker: HOST_MARKER },
+                    executionOrigin: { serverIdentityId: 'srv_page', sourceRef: { pluginId: providerPluginId, machineId: 'machine-page', sourceCustody: runtime.readPluginSourceCustody?.(providerPluginId) } },
+                } });
+            for (const override of [
+                { serverIdentityId: 'srv_other', machineId: 'machine-page', pluginId: providerPluginId },
+                { serverIdentityId: 'srv_page', machineId: 'other-machine', pluginId: providerPluginId },
+                { serverIdentityId: 'srv_page', machineId: 'machine-page', pluginId: 'acme.other' },
+            ]) {
+                await expect(runtime.targetActionInvocations?.invoke({
+                    pluginId: PLUGIN_ID, localId: 'poll-provider', input: { routingOverride: override }, surface: 'cli',
+                })).resolves.toMatchObject({ status: 'failed', code: 'plugin_action_execution_origin_mismatch' });
+            }
+            runtime.startAdoptedBackgroundServices?.();
+            await runtime.targetActionInvocations?.invoke({ pluginId: PLUGIN_ID, localId: 'poll-provider', input: { wake: true }, surface: 'cli' });
+            await vi.waitFor(async () => {
+                const background = await runtime?.targetActionInvocations?.invoke({ pluginId: PLUGIN_ID, localId: 'poll-provider', input: { background: true }, surface: 'cli' });
+                expect(background).toEqual({ status: 'executed', value: {
+                    result: { marker: HOST_MARKER },
+                    executionOrigin: { serverIdentityId: 'srv_page', sourceRef: { pluginId: providerPluginId, machineId: 'machine-page', sourceCustody: runtime?.readPluginSourceCustody?.(providerPluginId) } },
+                } });
+            });
+            originMachineId = 'different-machine';
+            await expect(runtime.targetActionInvocations?.invoke({ pluginId: PLUGIN_ID, localId: 'poll-provider', input: {}, surface: 'cli' }))
+                .resolves.toMatchObject({ status: 'failed', code: 'plugin_action_caller_unavailable' });
             runtime.retireConsumers();
             expect(runtime.resolveCurrentPluginMaterializationRef?.(PLUGIN_ID)).toBeNull();
         } finally {
             invalidateDaemonContributionRegistryProjectionCache();
+            await controller.shutdown();
             await runtime?.dispose();
             await rm(happyHomeDir, { recursive: true, force: true });
             await rm(pluginRoot, { recursive: true, force: true });
+            await rm(providerRoot, { recursive: true, force: true });
         }
     }, 60_000);
 
@@ -881,6 +1001,46 @@ describe('executable plugin Account Collections binding', () => {
                 await rm(happyHomeDir, { recursive: true, force: true });
                 await rm(pluginRoot, { recursive: true, force: true });
             }
+        }
+    }, 60_000);
+
+    it('writes an installed external plugin notice through the production Account Artifact binding', async () => {
+        const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-account-notice-home-'));
+        const pluginRoot = await mkdtemp(join(tmpdir(), 'happier-account-notice-plugin-'));
+        const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'notice-owner' })).toString('base64url')}.signature`, encryption: null };
+        accountDataBoundary.readStoredCredentials.mockResolvedValue(credentials);
+        const written: Array<{ header: unknown; body: unknown }> = [];
+        accountDataBoundary.get.mockImplementation(async (url: string) => {
+            if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+                mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+            if (new URL(url).pathname === '/v1/artifacts') return { status: 200, data: [] };
+            if (url.includes('/v1/artifacts/')) return { status: 404, data: {} };
+            throw new Error(`Unexpected notice GET: ${url}`);
+        });
+        accountDataBoundary.post.mockImplementation(async (url: string, input: { id: string; header: string; body: string }) => {
+            if (!url.endsWith('/v1/artifacts')) throw new Error(`Unexpected notice POST: ${url}`);
+            written.push({ header: decodePlainArtifactStoredContent(input.header), body: decodePlainArtifactStoredContent(input.body) });
+            return { status: 200, data: { id: input.id, headerVersion: 1, bodyVersion: 1 } };
+        });
+        setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), settingsVersion: 1,
+            loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
+        let runtime: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>> | null = null;
+        try {
+            await seedAccountNotificationChannelFixture({ happyHomeDir, pluginRoot, hostAccess: 'optional' });
+            runtime = await resolveExecutablePluginRuntimeRegistry({ happyHomeDir });
+            await runtime.activateContributionsOnDemand([{ pluginId: PLUGIN_ID, family: 'actions', localId: NOTIFICATION_ACTION_ID }]);
+            await expect(runtime.targetActionInvocations?.invoke({ pluginId: PLUGIN_ID, localId: NOTIFICATION_ACTION_ID,
+                input: { clientRequestId: 'notice-request', itemId: 'work-1' }, surface: 'cli' }))
+                .resolves.toMatchObject({ status: 'executed', value: { replayed: false, deliveries: [] } });
+            expect(written).toHaveLength(1);
+            const value = written[0]!;
+            expect(readAccountNoticeArtifactV1({ header: value.header,
+                body: value.body && typeof value.body === 'object' && 'body' in value.body ? value.body.body : null }))
+                .toMatchObject({ source: { kind: 'plugin', pluginId: PLUGIN_ID, itemId: 'work-1' }, type: 'update', status: 'open' });
+        } finally {
+            await runtime?.dispose();
+            await rm(happyHomeDir, { recursive: true, force: true });
+            await rm(pluginRoot, { recursive: true, force: true });
         }
     }, 60_000);
 

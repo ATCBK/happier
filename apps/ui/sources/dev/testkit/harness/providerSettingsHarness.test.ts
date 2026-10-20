@@ -1,10 +1,16 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createMachineFixture } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from './homeGovernanceHarness';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1,
     ProviderConnectionsCatalogV1Schema, ProviderConnectionsRowMutationV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { ProviderConnectionV1Schema } from '@happier-dev/protocol/providers/connections/v1';
+import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
+import { installDisconnectedServerSocketBoundary } from './serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from './syncSingletonLoader';
 
 import {
     createProviderConnectionViewFixture,
@@ -16,6 +22,9 @@ import {
     installProviderSettingsRpcBoundary,
 } from './providerSettingsHarness';
 
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+
 let account: ReturnType<typeof createProviderSettingsAccountHarness> | null = null;
 afterEach(async () => {
     await account?.reset();
@@ -26,6 +35,7 @@ describe('providerSettingsHarness', () => {
     it('uses route replies for paginated reads while exact query replies keep precedence', async () => {
         const serverUrl = 'https://paged-fixture.test';
         const home = createHomeGovernanceHarness();
+        installHomeGovernanceBoundaries(home);
         const serverId = await home.addHome({ name: 'Paged fixture', serverUrl });
         home.answer(serverId, 'GET /v2/sessions', { body: { sessions: [], hasNext: false } });
         home.answer(serverId, '/v2/sessions?limit=2', { body: { sessions: [], hasNext: true, nextCursor: 'next' } });
@@ -43,7 +53,8 @@ describe('providerSettingsHarness', () => {
     });
 
     it('keeps cold barrel imports safe and routes requests to the current installed boundaries', async () => {
-        const first = createProviderSettingsHarness();
+        const machine = createMachineFixture();
+        const first = createProviderSettingsHarness({ machines: [machine] });
         installProviderSettingsRpcBoundary(first);
         account = createProviderSettingsAccountHarness();
         const { serverId } = await account.restore({ machines: first.state.machines });
@@ -52,7 +63,7 @@ describe('providerSettingsHarness', () => {
         const { machineRpcWithServerScope } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc');
         const { createServerFetchAtEndpoint } = await import('@/sync/http/client');
         const request = {
-            machineId: createMachineFixture().id,
+            machineId: machine.id,
             serverId,
             method: RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE,
             payload: {},
@@ -83,8 +94,8 @@ describe('providerSettingsHarness', () => {
         const sessionsPath = '/v2/sessions/active?limit=500';
         const sessions = await fetchAtHome(sessionsPath);
         expect(sessions.status).toBe(200);
-        expect(await sessions.json()).toMatchObject({
-            sessions: [], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+        expect(V2SessionListResponseSchema.parse(await sessions.json())).toMatchObject({
+            sessions: [], nextCursor: null, hasNext: false,
         });
         const { runtimeFetch } = await import('@/utils/system/runtimeFetch');
         expect((await runtimeFetch(new Request(new URL(sessionsPath, home.serverUrl), { method: 'POST' }))).status).toBe(404);
@@ -114,6 +125,26 @@ describe('providerSettingsHarness', () => {
         expect(await (await request('POST', { ...mutation, content: { t: 'plain', v: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } })).json())
             .toMatchObject({ status: 'conflict', revision: 2 });
         expect(await (await request('GET')).json()).toMatchObject({ status: 'present', revision: 2, content: { t: 'plain', v: catalog } });
+    });
+
+    it('persists Account settings through the real HTTP CAS contract and rejects a stale write', async () => {
+        account = createProviderSettingsAccountHarness();
+        await account.restore({ settings: { newSessionDraftEntryMode: 'resumePrevious' } });
+        const home = account.home.findByServerUrl('https://provider-settings-account.test');
+        if (!home?.token) throw new Error('Provider fixture has no authenticated Home');
+        const request = (method: 'GET' | 'POST', body?: unknown) => account!.home.request(
+            new URL('/v2/account/settings', home.serverUrl), {
+                method, headers: { Authorization: `Bearer ${home.token}`, 'Content-Type': 'application/json' },
+                ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+            });
+        const content = { t: 'plain', v: { newSessionDraftEntryMode: 'alwaysFresh' } };
+
+        expect(await (await request('POST', { expectedVersion: 1, content })).json()).toEqual({ success: true, version: 2 });
+        expect(await (await request('POST', { expectedVersion: 1, content: { t: 'plain', v: {} } })).json()).toEqual({
+            success: false, error: 'version-mismatch', currentVersion: 2, currentContent: content,
+        });
+        expect(await (await request('GET')).json()).toEqual({ version: 2, content });
+        expect((await account.home.request(new URL('/v2/account/settings', home.serverUrl))).status).toBe(401);
     });
 
     it('keeps scoped Machine admission real above the Provider Socket response', async () => {

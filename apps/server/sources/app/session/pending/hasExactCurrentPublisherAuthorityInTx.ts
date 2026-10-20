@@ -15,9 +15,10 @@ export async function readExactCurrentPublisherAuthorityInTx(
     actorUserId: string,
     sessionId: string,
     expectedRuntimeActivityRevision?: number,
+    options?: Readonly<{ lockMachineAuthority?: boolean }>,
 ): Promise<CurrentSessionPublisherAuthority | null> {
     if (authority.accountId !== actorUserId || authority.sessionId !== sessionId) return null;
-    if (!await hasCurrentSessionScopedMachineAccessInTx({ tx, ...authority })) return null;
+    if (!await hasCurrentSessionScopedMachineAccessInTx({ tx, ...authority, lockAuthority: options?.lockMachineAuthority })) return null;
     const session = await tx.session.findUnique({
         where: { id: sessionId },
         select: { active: true, archivedAt: true, lastActiveAt: true, runtimeActivityRevision: true,
@@ -44,9 +45,10 @@ export async function hasExactCurrentPublisherAuthorityInTx(
     actorUserId: string,
     sessionId: string,
     expectedRuntimeActivityRevision?: number,
+    options?: Readonly<{ lockMachineAuthority?: boolean }>,
 ): Promise<boolean> {
     return (await readExactCurrentPublisherAuthorityInTx(tx, authority, actorUserId,
-        sessionId, expectedRuntimeActivityRevision)) !== null;
+        sessionId, expectedRuntimeActivityRevision, options)) !== null;
 }
 
 /**

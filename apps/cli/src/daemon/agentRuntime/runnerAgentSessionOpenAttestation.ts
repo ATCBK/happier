@@ -124,6 +124,7 @@ export async function recordTrackedRunnerAgentSessionOpenAttestation(
   input.tracked
     .agentRuntimeDaemonServiceSessionOpenAttestation =
       attestation;
+  delete input.tracked.projectSetupOperation;
   return attestation;
 }
 

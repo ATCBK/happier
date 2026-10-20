@@ -440,8 +440,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     position: 'relative',
     flexShrink: 1,
     minHeight: 0,
-    width: 190,
-    maxWidth: "30%",
+    // Wide enough for an engine name beside the row's reserved favorite and check slots.
+    width: 232,
+    maxWidth: "34%",
     backgroundColor: theme.colors.background.canvas,
     borderRightWidth: 1,
     borderRightColor: theme.colors.border.default,

@@ -472,12 +472,6 @@ export function actionCliCommandPattern(command: CompiledActionCliCommand): read
   return [...command.path.slice(0, -1), ...command.positionalsBeforeLastSegment, command.path.at(-1)!];
 }
 
-export function actionCliCommandInputArgv(command: CompiledActionCliCommand, argv: readonly string[]): readonly string[] {
-  const before = command.path.length - 1;
-  const count = command.positionalsBeforeLastSegment.length;
-  return [...argv.slice(before, before + count), ...argv.slice(command.path.length + count)];
-}
-
 export function actionCliCommandUsagePath(command: CompiledActionCliCommand): string {
   return actionCliCommandPattern(command).map(segment => typeof segment === 'string' ? segment : `<${segment.path}>`).join(' ');
 }

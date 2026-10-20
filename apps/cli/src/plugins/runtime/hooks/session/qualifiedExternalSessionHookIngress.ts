@@ -24,8 +24,9 @@ import type {
 import {
     preservesExternalSessionSourceIdentity,
 } from '@/session/external/sourceIdentity';
-import type {
-    BoundedAgentExternalSessionsContribution,
+import {
+    parseAgentExternalSessionsResolveSourceResult,
+    type BoundedAgentExternalSessionsContribution,
 } from '@/session/external/agentExternalSessionsInvocation';
 
 const TOTAL_FORWARDING_DEADLINE_MS =
@@ -324,23 +325,7 @@ async function acquireBeforeAbort(
 function parseResolvedSource(
     value: unknown,
 ): AgentExternalSessionSource | null {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-    const record = value as Record<string, unknown>;
-    if (Object.keys(record).length !== 1) return null;
-    const source = AgentRuntimeJsonValueV1Schema.safeParse(record.source);
-    if (
-        !source.success
-        || !source.data
-        || typeof source.data !== 'object'
-        || Array.isArray(source.data)
-        || typeof Reflect.get(source.data, 'kind') !== 'string'
-    ) {
-        return null;
-    }
-    return Object.freeze({
-        ...(source.data as Record<string, unknown>),
-        kind: Reflect.get(source.data, 'kind') as string,
-    }) as AgentExternalSessionSource;
+    return parseAgentExternalSessionsResolveSourceResult(value)?.source ?? null;
 }
 
 function parseResolvedIdentity(value: unknown): Readonly<{

@@ -34,10 +34,12 @@ function resolveSourceKindLabel(sourceKind: string | null | undefined): string {
         case 'bundled':
             return t('settingsPlugins.sourceKind.bundled');
         case 'path':
+        case 'localPath':
             return t('settingsPlugins.sourceKind.path');
         case 'marketplace':
             return t('settingsPlugins.sourceKind.marketplace');
         case 'package':
+        case 'npm':
             return t('settingsPlugins.sourceKind.package');
         case 'archive':
             return t('settingsPlugins.sourceKind.archive');

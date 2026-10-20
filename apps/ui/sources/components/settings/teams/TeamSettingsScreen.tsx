@@ -19,7 +19,6 @@ import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { Icon } from '@/components/ui/icons/Icon';
-import { Modal } from '@/modal';
 import {
     archiveTeam,
     removeTeamLogo,
@@ -35,7 +34,6 @@ import { useUnsavedDraftNavigationGuard } from '@/utils/navigation/useUnsavedDra
 import { useTeamManagerNames } from '@/hooks/teams/useTeamManagerNames';
 
 import { askTeamManagersText } from './collection/teamsCreateGuidanceText';
-import { teamArchiveConfirmationLines } from './teamLifecyclePresentation';
 import { TeamSection } from './TeamSection';
 import { TeamLogoPicker } from './TeamLogoPicker';
 import type { TeamSectionContext } from './teamSectionContext';
@@ -327,15 +325,6 @@ const TeamLogoSection = React.memo(function TeamLogoSection(props: Readonly<{
     const remove = React.useCallback(async () => {
         if (removeInFlightRef.current) return;
         removeInFlightRef.current = true;
-        const confirmed = await Modal.confirm(
-            t('teams.logo.removeConfirmTitle'),
-            t('teams.logo.removeConfirmBody'),
-            { confirmText: t('teams.logo.remove'), destructive: true },
-        );
-        if (!confirmed) {
-            removeInFlightRef.current = false;
-            return;
-        }
         setRemoving(true);
         setError(null);
         try {
@@ -538,24 +527,6 @@ const TeamLifecycleSection = React.memo(function TeamLifecycleSection(props: Rea
     const archive = React.useCallback(async () => {
         if (lifecycleInFlightRef.current) return;
         lifecycleInFlightRef.current = true;
-        // The consequence in separate paragraphs (lab `tsSettings-X`): what is kept, the one thing
-        // that does not come back, and the way back.
-        const lines = teamArchiveConfirmationLines(context.team);
-        const confirmed = await Modal.confirm(
-            t('teams.archive.confirmTitle', { name }),
-            lines.join('\n'),
-            // Destructive styling appears only at the final confirmation.
-            {
-                // The title names the Team; the button stays one short word in the alert's narrow width.
-                confirmText: t('teams.archive.confirmShort'),
-                destructive: true,
-                messageParagraphs: lines.map((text, index) => ({ text, irreversible: lines.length === 3 && index === 1 })),
-            },
-        );
-        if (!confirmed) {
-            lifecycleInFlightRef.current = false;
-            return;
-        }
         setBusy(true);
         setError(null);
         let outcome: Awaited<ReturnType<typeof archiveTeam>>;
@@ -575,20 +546,11 @@ const TeamLifecycleSection = React.memo(function TeamLifecycleSection(props: Rea
         lifecycleInFlightRef.current = false;
         if (outcome.kind === 'failed') { setError(teamMutationFailureLabel(outcome.failure)); return; }
         router.back();
-    }, [context, name, router]);
+    }, [context, router]);
 
     const restore = React.useCallback(async () => {
         if (lifecycleInFlightRef.current) return;
         lifecycleInFlightRef.current = true;
-        const confirmed = await Modal.confirm(
-            t('teams.archive.restoreTitle', { name }),
-            t('teams.archive.restoreBody'),
-            { confirmText: t('common.restore') },
-        );
-        if (!confirmed) {
-            lifecycleInFlightRef.current = false;
-            return;
-        }
         setBusy(true);
         setError(null);
         let outcome: Awaited<ReturnType<typeof restoreTeam>>;
@@ -607,7 +569,7 @@ const TeamLifecycleSection = React.memo(function TeamLifecycleSection(props: Rea
         setBusy(false);
         lifecycleInFlightRef.current = false;
         if (outcome.kind === 'failed') setError(teamMutationFailureLabel(outcome.failure));
-    }, [context, name]);
+    }, [context]);
 
     // Restore stays reachable from the archived Team; archive does not.
     const showArchive = context.team.capabilities.archiveTeam && !context.archived;

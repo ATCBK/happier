@@ -3,12 +3,13 @@ import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionEx
 import type { TerminalPresentUserPolicy } from '@happier-dev/protocol/actions/invocationAuthority';
 
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import type { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { HappyError } from '@/utils/errors/errors';
 import { serverFetch } from '@/sync/http/client';
 import { requestAccountPasswordEnrollmentEmail } from '@/sync/api/auth/accountSecurity';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 
-type AccountSecurityExecute = ReturnType<typeof createFrontDoorActionExecute>;
+type AccountSecurityExecute = ReturnType<typeof createDefaultActionExecutor>['execute'];
 export type AccountSecurityActionId =
     | 'account.security.get'
     | 'account.password.enroll'

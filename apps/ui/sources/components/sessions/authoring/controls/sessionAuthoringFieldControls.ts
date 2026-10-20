@@ -38,9 +38,12 @@ import type { SessionAuthoringControls } from './useSessionAuthoringControls';
  * navigates, persists, or remembers a selection.
  */
 
-// Execution tool policy round-trips in selections but has no standalone
-// Session-authoring control. A serialized field is not a control descriptor.
-export type SessionAuthoringFieldId = Exclude<WorkflowSessionAuthoringSelectionFieldId, 'allowedTools' | 'unlistedTools'>;
+export type SessionAuthoringFieldId = WorkflowSessionAuthoringSelectionFieldId;
+/**
+ * The fields a Workflow step lists. The tool policy (`allowedTools`,
+ * `unlistedTools`) has its controls here too, but only an unattended recipe
+ * host asks for them by name; Workflow lists do not offer it yet.
+ */
 export const SESSION_AUTHORING_CONTROL_FIELD_IDS = Object.freeze(
     WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS.filter((field): field is SessionAuthoringFieldId =>
         field !== 'allowedTools' && field !== 'unlistedTools'),
@@ -69,6 +72,8 @@ export type SessionAuthoringFieldUnavailableReason =
     | 'not_supported_on_target'
     /** The Account's feature decision for this control is off. */
     | 'feature_disabled'
+    /** The facts this control reads have not arrived yet; it says so instead of claiming there is nothing. */
+    | 'loading'
     /** Another owner supplies this field's control and the host did not pass it. */
     | 'owned_by_host';
 
@@ -132,6 +137,14 @@ export type SessionAuthoringFieldControlModel =
         kind: 'text';
         title: string;
         value: string;
+        placeholder: string;
+    }>
+    /** Tool names typed as one list (`Read, mcp__server__tool`); the control keeps the typed text. */
+    | Readonly<{
+        field: 'allowedTools';
+        kind: 'toolList';
+        title: string;
+        value: readonly string[];
         placeholder: string;
     }>
     /** The MCP selection, edited through the incumbent New Session MCP owner for the resolved Agent. */
@@ -215,6 +228,10 @@ export type SessionAuthoringControlFacts = Readonly<{
      */
     contextualDefaultAgentTarget?: AgentExecutionTargetV1 | null;
     profiles?: ReadonlyArray<Readonly<{ id: string; label: string; subtitle?: string }>>;
+    /** The reader's Profiles setting; `false` means profiles are turned off, not merely absent. */
+    profilesEnabled?: boolean;
+    /** The Account's profile read has not answered yet: an empty list is not an answer. */
+    profilesLoading?: boolean;
     /** The exact Machine these facts describe, by its display name: the repair line names it. */
     machineName?: string | null;
     /** The exact run target runs Windows, so its launch controls apply. */
@@ -243,6 +260,8 @@ export function resolveSessionAuthoringFieldTitle(
     selectedAgentTarget?: SessionAuthoringAgentTargetOption | null,
 ): string | null {
     switch (field) {
+        case 'allowedTools': return t('settingsSession.toolPolicy.allowedTitle');
+        case 'unlistedTools': return t('settingsSession.toolPolicy.unlistedTitle');
         case 'agentTarget': return t('agentInput.agent.sectionTitle');
         case 'modelSelection': return t('agentInput.model.sectionTitle');
         case 'permissionMode': return t('settingsSession.permissions.title');
@@ -522,7 +541,8 @@ export function resolveSessionAuthoringFieldControl(params: Readonly<{
 
         case 'profileId': {
             const profiles = facts.profiles ?? [];
-            if (profiles.length === 0) return unavailable(field, 'owned_by_host');
+            if (facts.profilesEnabled === false) return unavailable(field, 'feature_disabled');
+            if (profiles.length === 0) return unavailable(field, facts.profilesLoading === true ? 'loading' : 'owned_by_host');
             return {
                 field,
                 kind: 'options',
@@ -606,6 +626,27 @@ export function resolveSessionAuthoringFieldControl(params: Readonly<{
                 selectedOptionId: values.windowsRemoteSessionConsole ?? 'hidden',
             };
         }
+
+        case 'allowedTools':
+            return {
+                field,
+                kind: 'toolList',
+                title: fieldTitle,
+                value: values.allowedTools ?? [],
+                placeholder: t('settingsSession.toolPolicy.allowedPlaceholder'),
+            };
+
+        case 'unlistedTools':
+            return {
+                field,
+                kind: 'options',
+                title: fieldTitle,
+                options: [
+                    { id: 'ask', label: t('settingsSession.toolPolicy.unlistedAsk'), subtitle: t('settingsSession.toolPolicy.unlistedAskSubtitle') },
+                    { id: 'deny', label: t('settingsSession.toolPolicy.unlistedDeny'), subtitle: t('settingsSession.toolPolicy.unlistedDenySubtitle') },
+                ],
+                selectedOptionId: values.unlistedTools ?? 'ask',
+            };
 
         case 'windowsTerminalWindowName': {
             if (facts.targetIsWindows !== true) return unavailable(field, 'not_supported_on_target');
@@ -716,6 +757,19 @@ export function resolveSessionAuthoringFieldControl(params: Readonly<{
     }
 }
 
+/**
+ * A typed tool list (`Read, mcp__server__tool`, commas or line breaks) as the
+ * allowed-tools value; an empty list is no list.
+ */
+export function parseSessionAuthoringToolList(text: string): string[] | undefined {
+    const tools = [...new Set(text.split(/[\s,]+/).map((tool) => tool.trim()).filter((tool) => tool.length > 0))];
+    return tools.length === 0 ? undefined : tools;
+}
+
+export function formatSessionAuthoringToolList(tools: readonly string[] | undefined): string {
+    return (tools ?? []).join(', ');
+}
+
 export type SessionAuthoringFieldSelection = Readonly<{
     field: SessionAuthoringFieldId;
     optionId: string;
@@ -773,6 +827,10 @@ export function resolveSessionAuthoringFieldValue(params: Readonly<{
             return optionId as WindowsRemoteSessionLaunchMode;
         case 'windowsRemoteSessionConsole':
             return optionId === 'visible' ? 'visible' : 'hidden';
+        case 'unlistedTools':
+            return optionId === 'deny' ? 'deny' : 'ask';
+        case 'allowedTools':
+            return parseSessionAuthoringToolList(optionId);
         case 'windowsTerminalWindowName':
             return optionId.trim().length === 0 ? null : optionId;
         case 'terminal': {

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
-import { hasRawComposerAttachmentSelectionV1 } from '@happier-dev/protocol/runtime/input/structuredInputV1';
+import { hasRawComposerAttachmentSelectionV1, hasRawSessionAttachmentSelectionV1 } from '@happier-dev/protocol/runtime/input/structuredInputV1';
 import { sanitizeSessionUserMessageSendMeta, SessionUserMessageSendRequestSchema } from '@happier-dev/protocol/sessions/userMessageRpc';
 import { SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY, SessionUsageLimitRecoveryV1Schema } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 import { isModelRefGrantedV1, isPermissionModeGrantedV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
@@ -155,7 +155,8 @@ export function registerSessionUserMessageSendHandler(
       cwd: opts.workingDirectory,
       metadata: incomingMeta,
     });
-    const selectedComposerAttachment = hasRawComposerAttachmentSelectionV1(incomingMeta);
+    const selectedComposerAttachment = hasRawComposerAttachmentSelectionV1(incomingMeta)
+      || hasRawSessionAttachmentSelectionV1(incomingMeta);
     const structuredInputAdmissionPolicy = allowedLocalImagePaths.size > 0
       ? { allowedLocalImagePaths }
       : undefined;

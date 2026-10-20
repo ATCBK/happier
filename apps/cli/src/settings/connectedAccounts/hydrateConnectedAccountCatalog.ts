@@ -1,3 +1,5 @@
+import { $ZodError } from 'zod/v4/core';
+import { isRetryableAccountEncryptionCurrentnessError } from '@/api/client/accountEncryptionCurrentness';
 import type { ConnectedAccountCatalogKeyV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import type { ConnectedAccountCatalogSnapshotV1, ConnectedAccountCatalogUnavailableReasonV1 } from '@happier-dev/protocol/connect/connectedAccountCatalogV1';
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
@@ -11,16 +13,34 @@ import { createCliConnectedAccountCatalogStore } from './connectedAccountCatalog
 const pending = new Map<string, Promise<ConnectedAccountCatalogSnapshotV1>>();
 const reloadAfterPending = new Set<string>();
 
-/** Coalesce first demand and content-free row hints within the incumbent Account lifetime. */
-export function refreshActiveConnectedAccountCatalog(input: Readonly<{
+type ConnectedAccountCatalogRefreshInput = Readonly<{
   credentials: StoredCredentials; key: ConnectedAccountCatalogKeyV1; signal?: AbortSignal;
   operationContext?: SavedSecretOperationContextV1;
   authorizeRequest?: Parameters<typeof createCliConnectedAccountCatalogStore>[0]['authorizeRequest'];
-}>, reobserve = false): Promise<ConnectedAccountCatalogSnapshotV1> {
+  readMode?: 'admitted';
+}>;
+
+type ConnectedAccountCatalogReadyObserver = (
+  catalog: Extract<ConnectedAccountCatalogSnapshotV1, { status: 'ready' }>,
+) => void;
+
+/** Coalesce first demand and content-free row hints within the incumbent Account lifetime. */
+export function refreshActiveConnectedAccountCatalog(
+  input: ConnectedAccountCatalogRefreshInput,
+  reobserve = false,
+): Promise<ConnectedAccountCatalogSnapshotV1> {
+  return refreshConnectedAccountCatalog(input, reobserve);
+}
+
+function refreshConnectedAccountCatalog(
+  input: ConnectedAccountCatalogRefreshInput,
+  reobserve: boolean,
+  onReady?: ConnectedAccountCatalogReadyObserver,
+): Promise<ConnectedAccountCatalogSnapshotV1> {
   const context = input.operationContext;
   const scopeKey = context?.readSnapshot()?.scopeKey ?? resolveAccountSettingsScopeKey(input.credentials);
   const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
-  const workKey = `${scopeKey}:${lifetimeToken}:${input.key}`;
+  const workKey = `${scopeKey}:${lifetimeToken}:${input.key}:${input.readMode ?? 'transfer'}`;
   const store = createCliConnectedAccountCatalogStore(input);
   const publish = async (catalog: ConnectedAccountCatalogSnapshotV1) => {
     store.assertCurrent();
@@ -46,24 +66,33 @@ export function refreshActiveConnectedAccountCatalog(input: Readonly<{
       if (!context) reloadAfterPending.delete(workKey);
       let catalog: ConnectedAccountCatalogSnapshotV1;
       try {
-        catalog = await store.readCatalog(input.key, async ready => {
-          if (context || !reloadAfterPending.has(workKey)) await publish(ready);
+        // Read-only Action roots consume admitted rows without source transfer
+        // or history cleanup, retaining this owner's currentness/publication.
+        catalog = input.readMode === 'admitted' ? await store.readAdmittedCatalog(input.key) : await store.readCatalog(input.key, async ready => {
+          if (context || !reloadAfterPending.has(workKey)) {
+            if (await publish(ready)) onReady?.(ready);
+          }
         });
       } catch (error) {
         const code = error instanceof Error && 'code' in error ? error.code : undefined;
         const reason: ConnectedAccountCatalogUnavailableReasonV1 = input.signal?.aborted ? 'cancelled'
           : code === 'scope-retired' || code === 'unauthorized' || code === 'forbidden' || code === 'unsupported'
-            || code === 'account-mode-mismatch' ? code
+            || code === 'account-mode-mismatch' || code === 'database_transaction_conflict_exhausted' ? code
+          : isRetryableAccountEncryptionCurrentnessError(error) ? 'unreachable'
           : code === 'account_storage_currentness_unavailable' || code === 'account_encryption_currentness_unavailable'
             ? 'encryption-material-unavailable'
-          : error instanceof Error && error.name === 'ZodError' ? 'invalid-stored-content' : 'unreachable';
+          : error instanceof $ZodError ? 'invalid-stored-content' : 'unreachable';
         catalog = { status: 'unavailable', reason };
       }
       if (!context && reloadAfterPending.has(workKey)) continue;
       try {
         if (!await publish(catalog)) return { status: 'unavailable', reason: 'scope-retired' };
       } catch { return { status: 'unavailable', reason: 'scope-retired' }; }
-      return catalog;
+      // Publication preserves identity for an unchanged row; consumers qualify
+      // their observation against that canonical snapshot, not the parsed copy.
+      const snapshot = context ? context.readSnapshot() : getActiveAccountSettingsSnapshot();
+      return snapshot ? readConnectedAccountCatalogFromSnapshot(snapshot, input.key)
+        : { status: 'unavailable', reason: 'scope-retired' };
     }
   })().finally(() => {
     if (pending.get(workKey) === work) { pending.delete(workKey); reloadAfterPending.delete(workKey); }
@@ -72,20 +101,42 @@ export function refreshActiveConnectedAccountCatalog(input: Readonly<{
   return work;
 }
 
+/**
+ * Session admission needs the freshly reobserved authoritative row, not the
+ * row owner's legacy-source/history maintenance. The same catalog load keeps
+ * running that cleanup under its captured Account lifetime after publishing
+ * the admitted row; no second reader or defaulting decision is introduced.
+ */
+export function refreshConnectedAccountCatalogForAdmission(
+  input: ConnectedAccountCatalogRefreshInput & Readonly<{ operationContext: SavedSecretOperationContextV1 }>,
+): Promise<ConnectedAccountCatalogSnapshotV1> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (catalog: ConnectedAccountCatalogSnapshotV1) => {
+      if (settled) return;
+      settled = true;
+      resolve(catalog);
+    };
+    const cleanup = refreshConnectedAccountCatalog(input, true, settle);
+    void cleanup.then(settle, () => settle({ status: 'unavailable', reason: 'unreachable' }));
+  });
+}
+
 export async function readActiveConnectedAccountCatalog(input: Parameters<typeof refreshActiveConnectedAccountCatalog>[0]) {
   const lifetime = getActiveAccountSettingsSnapshotLifetimeToken();
   const snapshot = input.operationContext ? input.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
   const expectedScope = input.operationContext?.readSnapshot()?.scopeKey ?? resolveAccountSettingsScopeKey(input.credentials);
   if (!snapshot || snapshot.scopeKey !== expectedScope
-    || input.operationContext && !await input.operationContext.isCurrent()
+    || input.operationContext && !await input.operationContext.isCurrent(input.signal)
     || !input.operationContext && lifetime !== getActiveAccountSettingsSnapshotLifetimeToken()) {
     return { status: 'unavailable' as const, reason: 'scope-retired' as const };
   }
   const current = input.operationContext ? input.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
   if (current?.scopeKey !== expectedScope) return { status: 'unavailable' as const, reason: 'scope-retired' as const };
-  const catalog = readConnectedAccountCatalogFromSnapshot(current, input.key);
-  return catalog.status === 'loading' || catalog.status === 'unavailable'
-    ? refreshActiveConnectedAccountCatalog(input) : catalog;
+  // Explicit Actions can follow another client's write before its Account
+  // change hint reaches this daemon (or a captured invocation snapshot).
+  // Reuse the refresh owner, including its pending-read reobservation.
+  return refreshActiveConnectedAccountCatalog(input, true);
 }
 
 /** Existing Account observer only refreshes domains already demanded by a live consumer. */

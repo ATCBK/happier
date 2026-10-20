@@ -10,7 +10,7 @@ import {
 } from './workflowV1.js';
 import type { WorkflowCondition, WorkflowAuthoredProducerRef, WorkflowValueReference } from './workflowReferenceV1.js';
 import type { WorkflowActionLeafV1 } from './workflowLeafV1.js';
-import { buildWorkflowResultFieldsContract, projectWorkflowResultFields } from './workflowResultFieldsV1.js';
+import { buildWorkflowResultFieldsContract, findInvalidWorkflowResultFieldName, isWorkflowResultFieldNameValid, projectWorkflowResultFields } from './workflowResultFieldsV1.js';
 import type {
   WorkflowBlock,
   WorkflowDefinitionV1,
@@ -208,7 +208,7 @@ function mapBlockList(
 }
 
 /** Replaces one block wherever it lives, preserving untouched subtree identity. */
-export function updateWorkflowBlock<TDraft extends WorkflowDefinitionDraftV1>(
+export function updateWorkflowBlock<TDraft extends Pick<WorkflowDefinitionV1, 'blocks'>>(
   draft: TDraft,
   blockId: string,
   update: (block: WorkflowBlock) => WorkflowBlock,
@@ -369,8 +369,16 @@ export function rewriteWorkflowBlockReferences(block: WorkflowBlock, rewrite: Wo
       input: block.input.map(reference),
       ...(block.execution === undefined ? {} : { execution: {
         ...block.execution,
+        ...(block.execution.engine && 'kind' in block.execution.engine && block.execution.engine.kind === 'input'
+          ? { engine: { ...block.execution.engine, name: rewrite.inputName(block.execution.engine.name) } } : {}),
+        ...(block.execution.participant?.kind === 'input'
+          ? { participant: { ...block.execution.participant,
+            name: rewrite.inputName(block.execution.participant.name) } } : {}),
         ...(block.execution.conversation?.kind === 'from_step' ? { conversation: {
           ...block.execution.conversation, producer: producer(block.execution.conversation.producer),
+        } } : {}),
+        ...(block.execution.conversation?.kind === 'input' ? { conversation: {
+          ...block.execution.conversation, name: rewrite.inputName(block.execution.conversation.name),
         } } : {}),
         ...(block.execution.workspace?.kind === 'from_step' ? { workspace: {
           ...block.execution.workspace, producer: producer(block.execution.workspace.producer),
@@ -457,9 +465,66 @@ export function copyWorkflowBlocks(
 /** A place that reads a named result field: a block, or the workflow's final output. */
 export type WorkflowResultFieldConsumer = Readonly<{ blockId: string }> | Readonly<{ finalOutput: true }>;
 
-function readsResultField(producerBlockId: string, field: string) {
-  return (ref: WorkflowValueReference): boolean => (ref.kind === 'result' || ref.kind === 'loop_trailing_count')
-    && ref.producer.blockId === producerBlockId && ref.path[0] === field;
+/** Resolve an authored result path through container outputs to its leaf field. */
+export function createWorkflowResultFieldLocator(
+  blocks: readonly WorkflowBlock[],
+): (reference: WorkflowValueReference) => Readonly<{ producerBlockId: string; field: string; pathIndex: number }> | null {
+  const producers = new Map<string, WorkflowBlock | WorkflowParallelBranch>();
+  for (const block of walkWorkflowBlocks(blocks)) {
+    producers.set(block.id, block);
+    if (block.kind === 'parallel') for (const branch of block.branches) producers.set(branch.id, branch);
+  }
+  const child = (blocks: readonly WorkflowBlock[], id: string | number | undefined) => {
+    for (const block of blocks) {
+      if (block.id === id) return block;
+      if (block.kind === 'parallel') {
+        const branch = block.branches.find((branch) => branch.id === id);
+        if (branch !== undefined) return branch;
+      }
+    }
+    return undefined;
+  };
+  return (ref) => {
+    if (ref.kind !== 'result' && ref.kind !== 'loop_trailing_count') return null;
+    let producer = producers.get(ref.producer.blockId);
+    let pathIndex = 0;
+    while (producer !== undefined && pathIndex < ref.path.length) {
+      if (!('kind' in producer)) {
+        producer = child(producer.blocks, ref.path[pathIndex++]);
+        continue;
+      }
+      switch (producer.kind) {
+        case 'loop': {
+          const iteration = ref.path[pathIndex++];
+          if (typeof iteration !== 'number' && iteration !== 'last') return null;
+          if (producer.repetition.kind === 'items' && ref.path[pathIndex++] !== 'results') return null;
+          producer = child(producer.body, ref.path[pathIndex++]);
+          break;
+        }
+        case 'parallel': {
+          const index = ref.path[pathIndex++];
+          if ((typeof index !== 'number' && index !== 'last') || ref.path[pathIndex++] !== 'results') return null;
+          producer = index === 'last' ? producer.branches.at(-1) : producer.branches[index];
+          break;
+        }
+        case 'if':
+          producer = child([...producer.then, ...producer.otherwise], ref.path[pathIndex++]);
+          break;
+        default: {
+          const field = ref.path[pathIndex];
+          return typeof field === 'string' ? { producerBlockId: producer.id, field, pathIndex } : null;
+        }
+      }
+    }
+    return null;
+  };
+}
+
+function readsResultField(locate: ReturnType<typeof createWorkflowResultFieldLocator>, producerBlockId: string, field: string) {
+  return (ref: WorkflowValueReference): number | null => {
+    const location = locate(ref);
+    return location?.producerBlockId === producerBlockId && location.field === field ? location.pathIndex : null;
+  };
 }
 
 /** Every block (in document order) and the final output that read `field` of `producerBlockId`'s result. */
@@ -468,14 +533,14 @@ export function listWorkflowResultFieldConsumers(
   producerBlockId: string,
   field: string,
 ): readonly WorkflowResultFieldConsumer[] {
-  const reads = readsResultField(producerBlockId, field);
+  const reads = readsResultField(createWorkflowResultFieldLocator(draft.blocks), producerBlockId, field);
   const consumers: WorkflowResultFieldConsumer[] = [];
   for (const block of walkWorkflowBlocks(draft.blocks)) {
     let found = false;
-    rewriteWorkflowBlockReferences(block, { ...READ_ONLY_REWRITE, reference: (ref) => { if (reads(ref)) found = true; return ref; } });
+    rewriteWorkflowBlockReferences(block, { ...READ_ONLY_REWRITE, reference: (ref) => { if (reads(ref) !== null) found = true; return ref; } });
     if (found) consumers.push({ blockId: block.id });
   }
-  if (draft.finalOutput !== undefined && reads(draft.finalOutput)) consumers.push({ finalOutput: true });
+  if (draft.finalOutput !== undefined && reads(draft.finalOutput) !== null) consumers.push({ finalOutput: true });
   return consumers;
 }
 
@@ -494,17 +559,19 @@ export function renameWorkflowResultField<TDraft extends WorkflowDefinitionDraft
   const producerBlock = findWorkflowBlock(draft, producerBlockId);
   if (producerBlock === null || (producerBlock.kind !== 'step' && producerBlock.kind !== 'wait')) return draft;
   const projection = projectWorkflowResultFields(producerBlock.result);
-  if (projection.kind !== 'fields' || name.length === 0 || name === from
+  if (projection.kind !== 'fields' || !isWorkflowResultFieldNameValid(name) || name === from
     || !projection.fields.some((field) => field.name === from)
     || projection.fields.some((field) => field.name === name)) return draft;
   const result = buildWorkflowResultFieldsContract(
     projection.fields.map((field) => field.name === from ? { ...field, name } : field),
     { closed: projection.closed },
   );
-  const reads = readsResultField(producerBlockId, from);
-  const rename = (ref: WorkflowValueReference): WorkflowValueReference => (
-    reads(ref) && (ref.kind === 'result' || ref.kind === 'loop_trailing_count') ? { ...ref, path: [name, ...ref.path.slice(1)] } : ref
-  );
+  const reads = readsResultField(createWorkflowResultFieldLocator(draft.blocks), producerBlockId, from);
+  const rename = (ref: WorkflowValueReference): WorkflowValueReference => {
+    const index = reads(ref);
+    return index !== null && (ref.kind === 'result' || ref.kind === 'loop_trailing_count')
+      ? { ...ref, path: ref.path.map((segment, position) => position === index ? name : segment) } : ref;
+  };
   const consumers = listWorkflowResultFieldConsumers(draft, producerBlockId, from);
   let next = updateWorkflowBlock(draft, producerBlockId, (block) => (
     block.kind === 'step' || block.kind === 'wait' ? { ...block, result } : block
@@ -946,7 +1013,7 @@ export function setWorkflowLeafPauseForReview<TDraft extends WorkflowDefinitionD
  * An Agent step's own "Runs in" class, or removal so it follows the workflow
  * default again (U5 precedence: an explicit step choice first).
  */
-export function setWorkflowStepExecutionTarget<TDraft extends WorkflowDefinitionDraftV1>(
+export function setWorkflowStepExecutionTarget<TDraft extends Pick<WorkflowDefinitionV1, 'blocks'>>(
   draft: TDraft,
   blockId: string,
   target: WorkflowLeafExecutionTargetV1['kind'] | undefined,
@@ -1087,7 +1154,7 @@ export const WorkflowDefinitionEditOpV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ kind: z.literal('set_inputs'), inputs: z.array(WorkflowInputDefinitionSchema) }),
   z.strictObject({ kind: z.literal('set_final_output'), finalOutput: zMini.nullable(WorkflowAuthoredResultReferenceSchema) }),
   z.strictObject({ kind: z.literal('rename'), name: z.string().check(z.trim(), z.minLength(1)) }),
-  z.strictObject({ kind: z.literal('rename_result_field'), blockId: WorkflowBlockIdSchema, from: z.string().check(z.minLength(1)), to: z.string().check(z.trim(), z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('rename_result_field'), blockId: WorkflowBlockIdSchema, from: z.string().check(z.minLength(1)), to: z.string().check(z.trim(), z.minLength(1), z.refine(isWorkflowResultFieldNameValid)) }),
 ]));
 export type WorkflowDefinitionEditOpV1 = z.infer<typeof WorkflowDefinitionEditOpV1Schema>;
 
@@ -1133,6 +1200,8 @@ export function applyWorkflowDefinitionEditsV1<TDraft extends WorkflowDefinition
       }
       case 'replace_block':
         if (target?.kind === 'step' && findWorkflowBlockListRef(next, op.blockId) === null && op.block.kind !== 'step') return fail('invalid_target');
+        if (walkWorkflowBlocks([op.block]).some((block) => (block.kind === 'step' || block.kind === 'wait')
+          && findInvalidWorkflowResultFieldName(block.result) !== null)) return fail('invalid_target');
         next = updateWorkflowBlock(next, op.blockId, () => op.block);
         for (const replaced of walkWorkflowBlocks([op.block])) changed.add(replaced.id);
         break;

@@ -14,6 +14,9 @@ import { MessagePinButton } from './MessagePinButton';
 import { PluginMessageActionsView } from './PluginMessageActions';
 import { useCommittedMessageActions, type CommittedMessageActionInput } from './useCommittedMessageActions';
 import { SaveMessageAsPrompt } from './SaveMessageAsPrompt';
+import { DiscussionSourceMarkers } from '@/components/discussions/SessionDiscussionSourceLinks';
+import { SaveMemoryDecisionSheet, seedMemoryDecisionFromMessage } from '@/components/memory/SaveMemoryDecisionSheet';
+import type { SessionMessageRefV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageRefV1';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
@@ -22,7 +25,7 @@ import { useWorkflowMakeRepeatable } from '@/components/workflows/authoring/useW
 import { useEventCallback } from '@/hooks/ui/useEventCallback';
 import type { RowActionHoverHost } from './rowActionRevealHost';
 
-type Props = Omit<CommittedMessageActionInput, 'openSavePrompt'> & Readonly<{
+type Props = Omit<CommittedMessageActionInput, 'openSavePrompt' | 'openSaveDecision'> & Readonly<{
     showActions: boolean;
     showPinAction: boolean;
     timestampText: string | null;
@@ -63,10 +66,13 @@ export function CommittedMessageActions(props: Props) {
     const [menuOpen, setMenuOpen] = React.useState(false);
     const [saveOpen, setSaveOpen] = React.useState(false);
     const [savedArtifactId, setSavedArtifactId] = React.useState<string | null>(null);
-    const { actions, pinAvailability, pluginActions, makeRepeatableSource, setMakeRepeatableCapability } = useCommittedMessageActions({
-        ...props, openSavePrompt: () => setSaveOpen(true),
+    const decisionAnchorRef = React.useRef<View>(null);
+    const [decisionSeedSource, setDecisionSeedSource] = React.useState<SessionMessageRefV1 | null>(null);
+    const [decisionSaved, setDecisionSaved] = React.useState(false);
+    const { actions, pinAvailability, pluginActions, makeRepeatableSource, setMakeRepeatableCapability, committedMessage } = useCommittedMessageActions({
+        ...props, openSavePrompt: () => setSaveOpen(true), openSaveDecision: setDecisionSeedSource,
     });
-    React.useEffect(() => { setSaveOpen(false); setMenuOpen(false); setSavedArtifactId(null); }, [props.message.id]);
+    React.useEffect(() => { setSaveOpen(false); setMenuOpen(false); setSavedArtifactId(null); setDecisionSeedSource(null); setDecisionSaved(false); }, [props.message.id]);
     const availableActions = actions.filter((action) => action.available);
     const saveAvailable = availableActions.some((action) => action.id === 'savePrompt');
     React.useEffect(() => { if (!saveAvailable) setSaveOpen(false); }, [saveAvailable]);
@@ -120,8 +126,13 @@ export function CommittedMessageActions(props: Props) {
                     {t('committedMessageActions.savedToLibrary')}{' · '}<Text style={styles.savedLink}>{t('common.open')}</Text>
                 </Text>
             </HappierPressable>;
-            return <View key={action.id} ref={action.id === 'savePrompt' ? saveAnchorRef : undefined} collapsable={false}
-                style={props.invertTimestampAndActions ? styles.inverted : styles.button}><IconButton testID={`transcript-message-${action.id === 'savePrompt' ? 'save-prompt' : action.id === 'makeRepeatable' ? 'repeatable' : action.id}:${props.message.id}`}
+            if (action.id === 'saveDecision' && decisionSaved) return <View key={action.id} testID={`transcript-message-saved-decision:${props.message.id}`}
+                style={styles.saved} accessibilityLiveRegion="polite">
+                <Icon name="check" size={ICON_SIZE.xs} color={theme.colors.state.success.foreground} />
+                <Text style={styles.savedText} numberOfLines={1}>{t('memoryContext.memory.savedAsDecision')}</Text>
+            </View>;
+            return <View key={action.id} ref={action.id === 'savePrompt' ? saveAnchorRef : action.id === 'saveDecision' ? decisionAnchorRef : undefined} collapsable={false}
+                style={props.invertTimestampAndActions ? styles.inverted : styles.button}><IconButton testID={`transcript-message-${action.id === 'savePrompt' ? 'save-prompt' : action.id === 'saveDecision' ? 'save-decision' : action.id === 'makeRepeatable' ? 'repeatable' : action.id}:${props.message.id}`}
                 size={28}
                 icon={<Icon name={action.icon} size={ICON_SIZE.xs} color={action.id === 'copy' && action.icon === 'check'
                     ? theme.colors.state.success.foreground : theme.colors.text.secondary} />}
@@ -133,8 +144,10 @@ export function CommittedMessageActions(props: Props) {
             /></View>;
         })}
     </MessageActionRow>;
+    // A Discussion started on this answer (lab T3-D) stays under the answer, ahead of its hover actions.
+    const markers = <DiscussionSourceMarkers source={committedMessage} navigate={source.navigate} />;
     const contents = <>
-        {props.children(row)}
+        {props.children(<>{markers}{row}</>)}
         {hasNativeMenu ? <ContextMenu
             open={menuOpen} onOpenChange={setMenuOpen} anchorRef={anchorRef}
             items={items} onSelect={perform} placement="auto" variant="slim" showCategoryTitles={false}
@@ -143,6 +156,10 @@ export function CommittedMessageActions(props: Props) {
             messageId={props.message.id} text={props.selectableText!.text} serverId={props.serverId ?? source.serverId}
             anchorRef={saveAnchorRef} onClose={() => setSaveOpen(false)}
             onSaved={(artifactId) => { setSavedArtifactId(artifactId); setSaveOpen(false); }} /> : null}
+        {decisionSeedSource && props.selectableText ? <SaveMemoryDecisionSheet
+            seed={seedMemoryDecisionFromMessage(decisionSeedSource, props.selectableText.text)}
+            anchorRef={decisionAnchorRef} onClose={() => setDecisionSeedSource(null)}
+            onSaved={() => { setDecisionSeedSource(null); setDecisionSaved(true); }} /> : null}
     </>;
     return <>
         {makeRepeatableSource ? <MakeRepeatableSubscription

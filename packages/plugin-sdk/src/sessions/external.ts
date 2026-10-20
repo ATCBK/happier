@@ -1,6 +1,6 @@
 /** @moduleRealm daemon */
+export { readSessionInputPromptUserTextV1, createExternalSessionContentMatchSnippet, runWithSessionInputPromptUserTextReader } from './promptDisplay.js';
 export {
-    createExternalSessionContentMatchSnippet,
     findExternalSessionContentMatchRange,
 } from '@happier-dev/protocol/sessions/external/contentSearchMatch';
 import {

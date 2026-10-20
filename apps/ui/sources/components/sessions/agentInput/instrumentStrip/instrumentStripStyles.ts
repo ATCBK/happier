@@ -79,6 +79,11 @@ export const instrumentStripStyles = StyleSheet.create((theme) => ({
         flexShrink: 0,
         marginLeft: theme.space.s10,
     },
+    /** An instrument's entrance wrapper shrinks with the cluster, so a long badge label wraps or ellipsizes inside the row. */
+    instrumentEntrance: {
+        flexShrink: 1,
+        minWidth: 0,
+    },
     instrumentSlot: {
         flexDirection: 'row',
         alignItems: 'center',

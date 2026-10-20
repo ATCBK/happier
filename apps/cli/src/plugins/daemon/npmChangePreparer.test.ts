@@ -284,6 +284,7 @@ function exactMarketplaceIndexSourceSnapshot(params: Readonly<{
   return {
     source,
     freshness: { state: 'fresh', fetchedAtMs: 1 },
+    picks: [],
     diagnostics: [],
     entries: [{
       pluginId: 'acme.npm-candidate',

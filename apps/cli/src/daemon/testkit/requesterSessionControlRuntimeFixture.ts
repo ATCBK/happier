@@ -33,7 +33,8 @@ export async function createRequesterSessionControlRuntimeFixture(input: Readonl
     'resolveSessionSpawnDirectTargetTransport' | 'resolveCurrentMachineExecutionOriginContext'>
     & Partial<Pick<Parameters<typeof startDaemonSessionControlRuntime>[0],
       'deviceLocalSecretStorage' | 'onHappySessionWebhook' | 'createRequesterSessionRuntimeContext'
-      | 'liveStreamCaptureRegistry' | 'onComputerRoutesReady'>>;
+      | 'liveStreamCaptureRegistry' | 'onComputerRoutesReady' | 'workflowAcceptedAuthorizationCurrentness'
+      | 'runtimeActionExecute' | 'pluginRuntimeController'>>;
 }>) {
   const previousConfiguration = {
     happyHomeDir: configuration.happyHomeDir,
@@ -99,6 +100,8 @@ export async function createRequesterSessionControlRuntimeFixture(input: Readonl
         const requester = input.getRequester();
         return requester?.bootstrap.getBoundSessionId() === sessionId ? requester : null;
       },
+      // getRequester lends the caller's context; its enclosing fixture owns teardown.
+      releaseRequesterSessionRuntimeContext: async () => {},
       resolveQualifiedConnectedAccountV4Support: input.resolveQualifiedConnectedAccountV4Support,
       // Physical launch and whole-daemon shutdown are OS/lifetime boundaries.
       beforeShutdown: async () => {},

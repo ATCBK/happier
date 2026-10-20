@@ -13,9 +13,7 @@ vi.mock('@/components/settings/shell/SettingsCollectionLayout', () => ({
     SettingsCollectionLayout: (props: Record<string, unknown>) => React.createElement('SettingsCollectionLayout', props),
 }));
 
-installSessionSettingsEntryModuleMocks({
-    featureEnabled: () => useFeatureEnabledMock(),
-});
+installSessionSettingsEntryModuleMocks();
 
 describe('MCP settings route (feature gate)', () => {
     beforeEach(() => {

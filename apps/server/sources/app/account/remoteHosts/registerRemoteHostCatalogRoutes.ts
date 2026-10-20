@@ -1,5 +1,5 @@
 import { z } from 'zod/mini';
-import { REMOTE_HOST_ROWS_ROUTE_V1, RemoteHostCatalogRowMutationV1Schema,
+import { REMOTE_HOST_ROWS_ROUTE_V1, REMOTE_HOST_ACCOUNT_KV_KEY_V1, RemoteHostCatalogRowMutationV1Schema,
   RemoteHostCatalogRowReadResponseV1Schema, RemoteHostCatalogRowMutationResponseV1Schema,
   assertRemoteHostCatalogContentForModeV1, readRemoteHostCatalogRecordV1,
   type RemoteHostCatalogRowMutationV1, type RemoteHostCatalogRowMutationResponseV1,
@@ -13,17 +13,20 @@ import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCata
 import { requirePresentUser } from '@/app/api/utils/requirePresentUser';
 import { AccountRouteAuthenticationForbiddenResponseSchema } from '@/app/api/utils/enableAuthentication';
 import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorContext';
-import { inTx, type Tx } from '@/storage/inTx';
+import { inTx, transactionResult, type TransactionResult, type Tx } from '@/storage/inTx';
+import { afterAccountChangePublication } from '@/app/changes/markAccountChanged';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
+import { AccountSettingsPublicationConflict } from '@/app/accountSettings/writeAccountSettingsInTx';
+import { readUserKvMutationConflict } from '@/app/kv/kvMutate';
 import { decodeSavedSecretResourceEnvelopes } from '@/app/api/routes/account/registerSavedSecretResourceRoutes';
-import { promoteSavedSecretResourceInTx, SavedSecretResourceTransactionAbort,
+import { acquireSavedSecretCreationAccountsInTx, promoteSavedSecretResourceInTx, SavedSecretResourceTransactionAbort,
   type SavedSecretResourceServiceError } from '@/app/account/savedSecrets/savedSecretResourceService';
 import type { TeamOperationAuthenticationContext } from '@/app/teams/actorContext';
 import { readRemoteHostCatalogRowInTx, mutateRemoteHostCatalogRowInTx } from './remoteHostRows';
 
 async function resourcePacketFailureInTx(tx: Tx, accountId: string, mutation: RemoteHostCatalogRowMutationV1,
   error: SavedSecretResourceServiceError): Promise<RemoteHostCatalogRowMutationResponseV1> {
-  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId);
+  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId, "content");
   if (fence.status === 'account_not_found') return { status: 'account-not-found' };
   if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent', reason: fence.reason };
   if (error === 'settings_conflict') return { status: 'settings-conflict', revision: fence.account.settingsVersion };
@@ -41,8 +44,9 @@ async function promoteRemoteHostPacketInTx(tx: Tx, input: Readonly<{
   accountId: string; authentication?: TeamOperationAuthenticationContext;
   mutation: RemoteHostCatalogRowMutationV1; resources: readonly SharedSavedSecretCreateInputV1[];
   referenceCensus?: SavedSecretCatalogReferenceCensusV1;
-}>): Promise<RemoteHostCatalogRowMutationResponseV1> {
-  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+}>): Promise<RemoteHostCatalogRowMutationResponseV1 | TransactionResult<RemoteHostCatalogRowMutationResponseV1>> {
+  await acquireSavedSecretCreationAccountsInTx(tx, { accountId: input.accountId, resources: input.resources });
+  const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
   if (fence.status === 'account_not_found') return { status: 'account-not-found' };
   if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent', reason: fence.reason };
   const accountMode = fence.account.currentness.encryptionMode;
@@ -83,8 +87,16 @@ async function promoteRemoteHostPacketInTx(tx: Tx, input: Readonly<{
     additionalSavedSecretResources: resources.filter((resource): resource is NonNullable<typeof resource> => resource !== null) });
   if (!result.ok) return resourcePacketFailureInTx(tx, input.accountId, input.mutation, result.error);
   if (result.value.remoteHostRevision === undefined) throw new Error('Remote host promotion omitted its committed revision');
-  const account = await tx.account.findUniqueOrThrow({ where: { id: input.accountId }, select: { seq: true } });
-  return { status: 'updated', revision: result.value.remoteHostRevision, cursor: account.seq };
+  const revision = result.value.remoteHostRevision;
+  let cursor: number | undefined;
+  afterAccountChangePublication(tx, async publishedTx => {
+    const account = await publishedTx.account.findUniqueOrThrow({ where: { id: input.accountId }, select: { seq: true } });
+    cursor = account.seq;
+  });
+  return transactionResult(() => {
+    if (cursor === undefined) throw new Error('Remote host promotion cursor is unavailable before terminal publication');
+    return { status: 'updated' as const, revision, cursor };
+  });
 }
 
 /** Catalog packets use authenticated identity, not public KV or caller-supplied Accounts. */
@@ -104,11 +116,21 @@ export function registerRemoteHostCatalogRoutes(app: Fastify): void {
   }, async (request, reply) => {
     const authentication = readTeamOperationAuthenticationFromRequest(request);
     try {
-      return reply.send(await inTx(tx => request.body.savedSecretResources?.length
-        ? promoteRemoteHostPacketInTx(tx, { accountId: request.userId, authentication,
+      return reply.send(await inTx(async tx => request.body.savedSecretResources?.length
+        ? await promoteRemoteHostPacketInTx(tx, { accountId: request.userId, authentication,
           mutation: request.body.mutation, resources: request.body.savedSecretResources, referenceCensus: request.body.referenceCensus })
-        : mutateRemoteHostCatalogRowInTx(tx, { accountId: request.userId, authentication, ...request.body.mutation }), { /* Shared Secret revisions and Team-derived access precede catalog writes. */ isolationLevel: "Serializable" }));
+        : await mutateRemoteHostCatalogRowInTx(tx, { accountId: request.userId, authentication, ...request.body.mutation }), {
+          // Reference-free catalogs are admitted behind their existing Account
+          // fence; promotion and shared resource captures retain SSI.
+          ...((request.body.savedSecretResources?.length ?? 0) > 0 || request.body.mutation.referencedSavedSecretRevisions.length > 0
+            ? { isolationLevel: "Serializable" as const } : {}),
+        }));
     } catch (error) {
+      const conflict = await readUserKvMutationConflict(error);
+      if (conflict) return reply.send(conflict.key === REMOTE_HOST_ACCOUNT_KV_KEY_V1
+        ? { status: 'conflict', revision: conflict.version } : { status: 'references-conflict' });
+      if (error instanceof AccountSettingsPublicationConflict) return reply.send(error.result.status === 'version_mismatch'
+        ? { status: 'settings-conflict', revision: error.result.currentVersion } : { status: 'invalid-stored-content' });
       // The canonical batch abort must leave the transaction before mapping its result.
       if (!(error instanceof SavedSecretResourceTransactionAbort)) throw error;
       return reply.send(await inTx(tx => resourcePacketFailureInTx(tx, request.userId, request.body.mutation, error.error)));

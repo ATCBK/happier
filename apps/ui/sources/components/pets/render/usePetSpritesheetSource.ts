@@ -36,15 +36,18 @@ function readContentType(headers: Headers): PetAssetMediaTypeV1 | null {
     return isAllowedPetAssetMediaType(mediaType) ? mediaType : null;
 }
 
-async function readAccountPetSpritesheetSource(accountPetId: string): Promise<ImageProps['source'] | null> {
+async function readAccountPetSpritesheetSource(accountPetId: string, signal: AbortSignal): Promise<ImageProps['source'] | null> {
     const credentials = await TokenStorage.getCredentials();
-    if (!credentials) return null;
-    const admission = await resolveAccountPetReadAdmission(credentials);
-    if (admission.status === 'unavailable') return null;
+    if (!credentials || signal.aborted) return null;
+    const admission = await resolveAccountPetReadAdmission(credentials, {
+        request: (path, init, options) => serverFetch(path, { ...init, signal }, options),
+    });
+    if (admission.status === 'unavailable' || signal.aborted) return null;
 
     const response = await serverFetch(
         `/v1/account/pets/${accountPetId}/spritesheet`,
         {
+            signal,
             headers: {
                 Authorization: `Bearer ${credentials.token}`,
             },
@@ -60,7 +63,7 @@ async function readAccountPetSpritesheetSource(accountPetId: string): Promise<Im
     return toDataUri(mediaType, encodeBase64(bytes, 'base64'));
 }
 
-async function readDaemonPetPreviewSource(source: Extract<SelectedPetPackageSource, { kind: 'detectedCodexHome' | 'happierManagedLocal' }>): Promise<ImageProps['source'] | null> {
+async function readDaemonPetPreviewSource(source: Extract<SelectedPetPackageSource, { kind: 'detectedCodexHome' | 'happierManagedLocal' }>, signal: AbortSignal): Promise<ImageProps['source'] | null> {
     const target = source.daemonTarget;
     if (!target?.machineId || !target.serverId) return null;
 
@@ -76,7 +79,9 @@ async function readDaemonPetPreviewSource(source: Extract<SelectedPetPackageSour
         serverId: target.serverId,
         method: PET_DAEMON_RPC_METHODS.READ_PREVIEW_ASSET,
         payload,
+        signal,
     });
+    if (signal.aborted) return null;
     const parsed = DaemonPetReadPreviewAssetResponseV1Schema.parse(raw);
     if ('ok' in parsed) return null;
     if (!isAllowedPetAssetMediaType(parsed.mediaType)) return null;
@@ -106,7 +111,7 @@ export function usePetSpritesheetSourceResult(
     }));
 
     React.useEffect(() => {
-        let cancelled = false;
+        const controller = new AbortController();
         setResult({
             source: source && !fallbackWhileLoading ? null : fallbackSource,
             status: source ? 'loading' : 'ready',
@@ -117,12 +122,12 @@ export function usePetSpritesheetSourceResult(
             try {
                 if (source.kind === 'builtIn') {
                     const builtIn = resolveBuiltInPetPackage(source.petId).spritesheetSource;
-                    if (!cancelled) setResult({ source: builtIn, status: 'ready' });
+                    if (!controller.signal.aborted) setResult({ source: builtIn, status: 'ready' });
                     return;
                 }
                 if (source.kind === 'accountPet') {
-                    const accountSource = await readAccountPetSpritesheetSource(source.accountPetId);
-                    if (!cancelled) {
+                    const accountSource = await readAccountPetSpritesheetSource(source.accountPetId, controller.signal);
+                    if (!controller.signal.aborted) {
                         setResult({
                             source: accountSource ?? (fallbackOnError ? fallbackSource : null),
                             status: accountSource ? 'ready' : 'error',
@@ -131,15 +136,15 @@ export function usePetSpritesheetSourceResult(
                     return;
                 }
 
-                const localSource = await readDaemonPetPreviewSource(source);
-                if (!cancelled) {
+                const localSource = await readDaemonPetPreviewSource(source, controller.signal);
+                if (!controller.signal.aborted) {
                     setResult({
                         source: localSource ?? (fallbackOnError ? fallbackSource : null),
                         status: localSource ? 'ready' : 'error',
                     });
                 }
             } catch {
-                if (!cancelled) {
+                if (!controller.signal.aborted) {
                     setResult({
                         source: fallbackOnError ? fallbackSource : null,
                         status: 'error',
@@ -150,7 +155,7 @@ export function usePetSpritesheetSourceResult(
 
         void apply();
         return () => {
-            cancelled = true;
+            controller.abort();
         };
     }, [fallbackOnError, fallbackSource, fallbackWhileLoading, source]);
 

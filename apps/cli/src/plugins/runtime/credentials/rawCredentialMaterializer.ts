@@ -25,11 +25,8 @@ import {
   createSavedSecretMaterializerFromSnapshotV1,
   type SavedSecretResolutionFailureStatusV1,
 } from '@/settings/secrets/savedSecretCatalog';
-import {
-  refreshSavedSecretCatalogForOperation,
-  savedSecretOperationAdmissionStatus,
-  SavedSecretOperationAdmissionError,
-} from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { refreshSavedSecretCatalogForOperation, savedSecretOperationAdmissionStatus } from "@/settings/secrets/hydrateSavedSecretCatalog";
+import { SavedSecretOperationAdmissionError } from "@/settings/secrets/savedSecretCatalogRead";
 import { evaluatePluginPermissionGrant } from '@/plugins/runtime/lifecycle/permissions/evaluatePluginPermissionGrant';
 import type { PluginPermissionGrantListReader } from '@/plugins/runtime/lifecycle/permissions/pluginPermissionGrantListReader';
 

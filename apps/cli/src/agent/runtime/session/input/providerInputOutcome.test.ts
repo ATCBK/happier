@@ -1,8 +1,97 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createSessionProviderInputOutcomeNormalizer } from './providerInputOutcome';
+import { createSessionProviderInputOutcomeBinding, createSessionProviderInputOutcomeNormalizer } from './providerInputOutcome';
 
 describe('createSessionProviderInputOutcomeNormalizer', () => {
+  it('settles exactly represented retained inputs before their accepting primary without delaying replay acceptance', async () => {
+    let release!: () => void;
+    const quietWrite = new Promise<void>(resolve => { release = resolve; });
+    const writes: Array<{ localId: string; providerTurnId?: string; userMessageSeq: number | null }> = [];
+    const effects: string[] = [];
+    const joins = new Map<string, Promise<void> | undefined>();
+    const binding = createSessionProviderInputOutcomeBinding({
+      getTarget: () => ({ sessionId: 'session-1',
+        hasPendingProviderInput: localId => ['natural-input', 'represented-quiet', 'unrepresented-quiet'].includes(localId),
+        observeProviderInputSettlement: outcome => {
+          if (outcome.kind !== 'accepted') throw new Error('Expected actual acceptance');
+          writes.push(outcome);
+          return outcome.localId === 'represented-quiet' ? quietWrite : Promise.resolve();
+        },
+      }),
+    });
+    for (const localId of ['represented-quiet', 'natural-input']) binding.registerProviderAcceptedEffect(localId,
+      pendingSettlement => { effects.push(localId); joins.set(localId, pendingSettlement); },
+      localId === 'natural-input' ? [{ localId: 'represented-quiet', userMessageSeq: 40 }] : undefined);
+    const observe = binding.observeProviderInputOutcome;
+    const accepted = { type: 'input-accepted' as const, localId: 'natural-input', userMessageSeq: 41,
+      delivery: { kind: 'newTurn' as const, turnId: 'actual-native-turn' }, acceptedAtMs: 1234 };
+    observe(accepted);
+    observe(accepted);
+    const beforeQuietDurability = [...writes];
+    const effectsBeforeQuietDurability = [...effects];
+    release();
+    await joins.get('natural-input');
+    expect(beforeQuietDurability).toMatchObject([{ localId: 'represented-quiet', userMessageSeq: 40,
+      providerTurnId: 'actual-native-turn', providerDeliveryKind: 'newTurn', acceptedAtMs: 1234 }]);
+    expect(effectsBeforeQuietDurability).toEqual(['represented-quiet', 'natural-input']);
+    expect(writes).toMatchObject([
+      { localId: 'represented-quiet', userMessageSeq: 40, providerTurnId: 'actual-native-turn' },
+      { localId: 'natural-input', userMessageSeq: 41, providerTurnId: 'actual-native-turn' },
+    ]);
+    expect(effects).not.toContain('unrepresented-quiet');
+  });
+
+  it('fans acceptance out immediately with its Pending settlement promise, without accepting twice', async () => {
+    let release!: () => void;
+    const settlement = new Promise<void>(resolve => { release = resolve; });
+    const effects: string[] = [];
+    const pendingSettlements: Array<Promise<void> | undefined> = [];
+    const observe = createSessionProviderInputOutcomeNormalizer({
+      getTarget: () => ({ sessionId: 'session-1', hasPendingProviderInput: () => true,
+        observeProviderInputSettlement: () => settlement }),
+      observeAcceptedEffect: (localId, pendingSettlement) => {
+        effects.push(localId);
+        pendingSettlements.push(pendingSettlement);
+      },
+    });
+    const accepted = { type: 'input-accepted' as const, localId: 'accepted-local', userMessageSeq: 41,
+      delivery: { kind: 'newTurn' as const, turnId: 'turn-accepted' } };
+    observe(accepted);
+    observe(accepted);
+    const beforeSettlement = [...effects];
+    release();
+    await settlement;
+    expect(beforeSettlement).toEqual(['accepted-local']);
+    expect(pendingSettlements[0]).toBeInstanceOf(Promise);
+    expect(effects).toEqual(['accepted-local']);
+  });
+
+  it('keeps represented input custody uncertain until the same native delivery actually accepts', async () => {
+    const settled: Array<{ localId: string; kind: string }> = [];
+    const effects: string[] = [];
+    const observe = createSessionProviderInputOutcomeNormalizer({
+      getTarget: () => ({ sessionId: 'session-1', hasPendingProviderInput: () => true,
+        observeProviderInputSettlement: outcome => { settled.push(outcome); } }),
+      readRepresentedPendingInputs: localId => localId === 'primary'
+        ? [{ localId: 'quiet-original', userMessageSeq: 40 }] : [],
+      observeAcceptedEffect: localId => { effects.push(localId); },
+    });
+    observe({ type: 'input-custody-unknown', localInputId: 'primary', userMessageSeq: 41,
+      issue: { code: 'transport_lost', severity: 'error' } });
+    expect(settled).toEqual([
+      expect.objectContaining({ localId: 'quiet-original', kind: 'effect_may_have_occurred' }),
+      expect.objectContaining({ localId: 'primary', kind: 'effect_may_have_occurred' }),
+    ]);
+    expect(effects).toEqual([]);
+    observe({ type: 'input-accepted', localInputId: 'primary', userMessageSeq: 41,
+      delivery: { kind: 'newTurn', turnId: 'actual-native-turn' } });
+    await vi.waitFor(() => expect(settled.slice(2)).toEqual([
+      expect.objectContaining({ localId: 'quiet-original', kind: 'accepted' }),
+      expect.objectContaining({ localId: 'primary', kind: 'accepted' }),
+    ]));
+    expect(effects).toEqual(['quiet-original', 'primary']);
+  });
+
   it('does not settle Pending or a correlated Follow effect from legacy provider_accepted evidence', () => {
     const observeSettlement = vi.fn();
     const observeAcceptedEffect = vi.fn();
@@ -510,6 +599,7 @@ describe('createSessionProviderInputOutcomeNormalizer', () => {
       expect.objectContaining({
         kind: 'rejected_before_effect',
         localId: 'retryable-native-rejection',
+        reason: 'provider_unavailable_before_acceptance',
         retryable: true,
       }),
       expect.objectContaining({
@@ -623,7 +713,7 @@ describe('createSessionProviderInputOutcomeNormalizer', () => {
       getTarget: () => ({
         sessionId,
         hasPendingProviderInput: () => true,
-        observeProviderInputSettlement: (outcome) => observed.push({ sessionId, kind: outcome.kind }),
+        observeProviderInputSettlement: (outcome) => { observed.push({ sessionId, kind: outcome.kind }); },
       }),
     });
 

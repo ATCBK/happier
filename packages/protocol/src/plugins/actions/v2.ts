@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '../../strings/maxCodeUnits.js';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { InputOptionValueSchema } from '../../inputs/inputFields.js';
@@ -12,7 +13,9 @@ import {
 import type { ActionDefinitionSlashV1 } from '../../actions/actionDefinitionV1.js';
 import { ActionSafetySchema } from '../../actions/safetyVocabulary.js';
 import { ActionContextualDefaultsSchema } from '../../actions/contextualDefaults.js';
+import { InputPredicateSchema } from '../../inputs/inputPredicates.js';
 import { ActionOperationDeclarationV1Schema } from '../../actions/operations/v1.js';
+import { ActionSessionTargetDeclarationV1Schema } from '../../actions/sessionTargetV1.js';
 import {
   createActionInputHintsSchemasWithStaticOptionsOnly,
   createActionInputHintsSchemasWithoutOptionsSource,
@@ -39,6 +42,7 @@ import {
 } from '../contributions/clientExecution.js';
 import { asProtocolZod } from "./internalProtocolZodAdapter.js";
 import { expandDeclaredInputAlternatives, resolveDeclaredInputLeaves } from './inputSchemaTraversal.js';
+export { resolveDeclaredInputLeaves } from './inputSchemaTraversal.js';
 export { PluginJsonSchemaV2Schema, type PluginJsonSchemaV2 as PluginJsonSchema } from '../contributions/publicTypes.js';
 export type { PluginJsonValueV2 as PluginJsonValue } from '../contributions/publicTypes.js';
 export {
@@ -192,10 +196,10 @@ export const PLUGIN_ACTION_CONFIRMATION_PRESENTATION_LIMITS_V2 = Object.freeze({
 
 function createPluginActionConfirmationPresentationTextSchema(maxUtf16Units: number) {
   return z.union([
-    z.string().check(z.trim(), z.minLength(1), z.maxLength(maxUtf16Units)),
+    z.string().check(z.trim(), z.minLength(1), maxCodeUnits(maxUtf16Units)),
     z.strictObject({
-      key: z.string().check(z.trim(), z.minLength(1), z.maxLength(maxUtf16Units)),
-      fallback: z.string().check(z.trim(), z.minLength(1), z.maxLength(maxUtf16Units)),
+      key: z.string().check(z.trim(), z.minLength(1), maxCodeUnits(maxUtf16Units)),
+      fallback: z.string().check(z.trim(), z.minLength(1), maxCodeUnits(maxUtf16Units)),
     }),
   ]);
 }
@@ -213,6 +217,13 @@ export const PluginActionConfirmationV2Schema = lazyZodSchema(() => z.strictObje
   confirmLabel: z.optional(PluginActionConfirmationTitleV2Schema),
 }));
 export type PluginActionConfirmationV2 = z.infer<typeof PluginActionConfirmationV2Schema>;
+
+/** Flat predicates apply everywhere; the scoped form preserves automation defaults. */
+export const PluginActionConfirmationWhenV2Schema = lazyZodSchema(() => z.union([
+  InputPredicateSchema,
+  z.strictObject({ presentUserUi: z.union([z.boolean(), InputPredicateSchema]) }),
+]));
+export type PluginActionConfirmationWhenV2 = z.infer<typeof PluginActionConfirmationWhenV2Schema>;
 
 // Only the purpose-derived field capability may offer Connected Account choices.
 // Other typed choices still carry strict JSON through the neutral value owner.
@@ -488,6 +499,7 @@ export const PluginActionContributionV2Schema = lazyZodSchema(() => z.strictObje
   surfaces: z.array(PluginActionSurfaceV2Schema).check(z.minLength(1)),
   execution: PluginActionDeclaredExecutionV2Schema,
   operation: z.optional(ActionOperationDeclarationV1Schema),
+  sessionTarget: z.optional(ActionSessionTargetDeclarationV1Schema),
   placementBindings: z.optional(PluginActionPlacementBindingsV2Schema),
   slash: z.optional(PluginActionSlashV2Schema),
   inputSchema: z.optional(PluginJsonSchemaV2Schema),
@@ -508,6 +520,7 @@ export const PluginActionContributionV2Schema = lazyZodSchema(() => z.strictObje
   priority: z.optional(z.number().check(z.int())),
   dangerLevel: PluginActionDangerLevelV2Schema,
   confirmation: z.optional(PluginActionConfirmationV2Schema),
+  confirmationWhen: z.optional(PluginActionConfirmationWhenV2Schema),
   metadata: z.optional(z.record(z.string(), PluginJsonValueV2Schema)),
 }).check(z.superRefine((value, ctx) => {
   if (value.operation && value.execution.target !== 'daemon') {
@@ -542,6 +555,13 @@ export const PluginActionContributionV2Schema = lazyZodSchema(() => z.strictObje
   }
 
   const inputSchema = value.inputSchema;
+  if (value.sessionTarget && (!declaresTraversableObjectInput(inputSchema)
+    || !resolveDeclaredInputLeaves(inputSchema!, value.sessionTarget.field)?.length)) {
+    ctx.addIssue({
+      code: 'custom', path: ['sessionTarget', 'field'],
+      message: 'Session target must identify a declared object input operand.',
+    });
+  }
   if (value.contextualDefaults) {
     if (!declaresTraversableObjectInput(inputSchema)) {
       ctx.addIssue({

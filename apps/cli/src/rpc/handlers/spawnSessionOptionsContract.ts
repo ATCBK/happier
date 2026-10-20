@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { AgentSessionToolPolicyShapeV1 } from '@happier-dev/protocol/runtime/permissionIntentV1';
 import { SpawnSessionTerminalSchema } from '@happier-dev/protocol/spawnSession';
 import { AcpConfigOptionOverridesV1Schema } from '@happier-dev/protocol/sessions/metadata/overrides';
@@ -10,18 +10,18 @@ import { SessionCreationCorrespondenceV1Schema } from '@happier-dev/protocol/ses
 import { SessionCreationTagV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
 import { SessionInitialAccessDraftV1Schema } from '@happier-dev/protocol/sessions/access/sessionInitialAccessDraftV1';
 import { SessionInitialTriggerAdmissionV1Schema } from '@happier-dev/protocol/sessions/creation/sessionInitialTriggerAdmissionV1';
-import { SessionOriginKindV1Schema, SessionWorkDepthV1Schema, refineSessionCreateOriginFieldsV1 } from '@happier-dev/protocol/sessions/creation/sessionCreateOriginV1';
+import { SessionCreateOriginFieldsV1Schema, refineSessionCreateOriginFieldsV1 } from '@happier-dev/protocol/sessions/creation/sessionCreateOriginV1';
 import { SessionAttachMetadataIdentityPolicySchema } from '@happier-dev/protocol/sessions/attach/metadataIdentityPolicy';
 import { readCapabilitySelectionCarrierV1, SessionCapabilitySelectionAuthoringV1Schema } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { SessionInputRequestSchema, SessionMessageProvenanceSchema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { SessionUserMessageSendRequestSchema } from '@happier-dev/protocol/sessions/userMessageRpc';
 import { SessionModelSelectionV1Schema } from '@happier-dev/protocol/providers/model-selection';
-import { SessionReportsToV1Schema } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
+import { SessionManagerV1Schema } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { SessionIdentityAdditionsV1Schema } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
 import { SessionPromptStackV1Schema } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 import { SessionRolesV1Schema } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
 import { SessionInitialGoalRequestV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
-import { SessionIdSchema, ExecutionRunIdSchema } from '@happier-dev/protocol/sessions/idsV1';
+import { SessionIdSchema } from '@happier-dev/protocol/sessions/idsV1';
 import { MachinePoolSelectionOriginV1Schema } from '@happier-dev/protocol/machines/pools/v1';
 import { NonBlankOpaqueIdentifierSchema } from '@happier-dev/protocol/strings/opaqueIdentifier';
 import { SecretReferenceOverlayV1Schema } from '@happier-dev/protocol/profiles/secretReferenceOverlayV1';
@@ -185,161 +185,169 @@ function canonicalizeSpawnDaemonSessionRequestIngress(value: unknown): unknown {
     : { ...rest, ...(capabilitySelection ? { capabilitySelection } : {}) };
 }
 
-const SpawnDaemonSessionRequestCompatSchema = z.preprocess(canonicalizeSpawnDaemonSessionRequestIngress, z.object({
-  type: z.enum(['spawn-in-directory', 'resume-session']).optional(),
+const SpawnDaemonSessionRequestCompatSchema = (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(canonicalizeSpawnDaemonSessionRequestIngress), z.strictObject({
+  type: z.optional(z.enum(['spawn-in-directory', 'resume-session'])),
   directory: z.string(),
-  directoryKind: z.enum(['path', 'managed']).optional(),
-  freshSessionCreation: z.boolean().optional(),
-  managedDirectorySeed: z.object({
-    sourceSessionId: z.string().trim().min(1),
-    sourceSessionCreationTag: z.string().trim().min(1).optional(),
-    sourcePath: z.string().trim().min(1),
-  }).strict().optional(),
-  originKind: SessionOriginKindV1Schema.optional(),
-  originSessionId: asHostProtocolZod(SessionIdSchema).optional(),
-  originRunId: ExecutionRunIdSchema.optional(),
-  workDepth: SessionWorkDepthV1Schema.optional(),
-  approvedNewDirectoryCreation: z.boolean().optional(),
-  machineId: z.string().trim().min(1).optional(),
-  spawnNonce: z.string().trim().min(1).optional(),
-  sessionCreationTag: SessionCreationTagV1Schema.optional(),
-  sessionCreationCorrespondence: SessionCreationCorrespondenceV1Schema.optional(),
-  placementOrigin: MachinePoolSelectionOriginV1Schema.optional(),
-  initialTitle: z.string().trim().min(1).optional(),
-  identity: asHostProtocolZod(SessionIdentityAdditionsV1Schema).optional(),
-  memoryEnabled: z.boolean().optional(),
-  promptStack: asHostProtocolZod(SessionPromptStackV1Schema).optional(),
-  initialAccess: SessionInitialAccessDraftV1Schema.optional(),
-  initialTriggers: z.array(asHostProtocolZod(SessionInitialTriggerAdmissionV1Schema)).optional(),
-  reportsTo: SessionReportsToV1Schema.optional(),
-  initialSessionRolesV1: asHostProtocolZod(SessionRolesV1Schema).optional(),
-  primaryTeamId: z.string().min(1).nullable().optional(),
-  teamCredentialBindings: SessionTeamCredentialBindingIntentsV1Schema.optional(),
-  pendingFirstInput: z.object({
+  directoryKind: z.optional(z.enum(['path', 'managed'])),
+  freshSessionCreation: z.optional(z.boolean()),
+  managedDirectorySeed: z.optional(z.strictObject({
+    sourceSessionId: z.string().check(z.trim(), z.minLength(1)),
+    sourceSessionCreationTag: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    sourcePath: z.string().check(z.trim(), z.minLength(1)),
+  })),
+  ...SessionCreateOriginFieldsV1Schema.shape,
+  approvedNewDirectoryCreation: z.optional(z.boolean()),
+  machineId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  spawnNonce: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  sessionCreationTag: z.optional(SessionCreationTagV1Schema),
+  sessionCreationCorrespondence: z.optional(SessionCreationCorrespondenceV1Schema),
+  placementOrigin: z.optional(MachinePoolSelectionOriginV1Schema),
+  initialTitle: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  identity: z.optional(asHostProtocolZod(SessionIdentityAdditionsV1Schema)),
+  memoryEnabled: z.optional(z.boolean()),
+  promptStack: z.optional(asHostProtocolZod(SessionPromptStackV1Schema)),
+  initialAccess: z.optional(SessionInitialAccessDraftV1Schema),
+  initialTriggers: z.optional(z.array(asHostProtocolZod(SessionInitialTriggerAdmissionV1Schema))),
+  manager: z.optional(SessionManagerV1Schema),
+  initialSessionRolesV1: z.optional(asHostProtocolZod(SessionRolesV1Schema)),
+  primaryTeamId: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+  teamCredentialBindings: z.optional(SessionTeamCredentialBindingIntentsV1Schema),
+  pendingFirstInput: z.optional(z.strictObject({
     text: z.string(),
-    localId: z.string().refine((value) => value.trim().length > 0),
-    meta: z.record(z.string(), z.unknown()).optional(),
-    inputAdmission: z.object({
+    localId: z.string().check(z.refine((value) => value.trim().length > 0)),
+    meta: z.optional(z.record(z.string(), z.unknown())),
+    inputAdmission: z.optional(z.strictObject({
       provenance: SessionMessageProvenanceSchema,
       request: SessionInputRequestSchema,
-    }).strict().optional(),
-  }).strict().superRefine((value, ctx) => {
+    })),
+  }).check(z.superRefine((value, ctx) => {
     const parsed = SessionUserMessageSendRequestSchema.safeParse({
       text: value.text,
       meta: value.meta ?? {},
     });
     if (parsed.success) return;
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['text'],
       message: 'Pending first input requires text or a valid Composer attachment.',
     });
-  }).optional(),
-  accountSettingsVersionHint: z.number().int().min(0).optional(),
-  sessionId: z.string().trim().min(1).optional(),
-  existingSessionId: z.string().trim().min(1).optional(),
-  initialTranscriptAfterSeq: z.number().int().min(0).optional(),
-  initialGoal: SessionInitialGoalRequestV1Schema.optional(),
-  executionAuthorization: SpawnSessionExecutionAuthorizationSchema.optional(),
-  attachMetadataIdentityPolicy: SessionAttachMetadataIdentityPolicySchema.optional(),
+  }))),
+  accountSettingsVersionHint: z.optional(z.number().check(z.int(), z.minimum(0))),
+  sessionId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  existingSessionId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  initialTranscriptAfterSeq: z.optional(z.number().check(z.int(), z.minimum(0))),
+  initialGoal: z.optional(SessionInitialGoalRequestV1Schema),
+  executionAuthorization: z.optional(SpawnSessionExecutionAuthorizationSchema),
+  attachMetadataIdentityPolicy: z.optional(SessionAttachMetadataIdentityPolicySchema),
   /** Agent-issued and opaque: admitted for presence, carried byte for byte. */
-  resume: NonBlankOpaqueIdentifierSchema.optional(),
-  handoffStateTransfer: z.enum(['transfer', 'existing']).optional(),
-  nativeForkSource: NativeForkSourceSchema.optional(),
+  resume: z.optional(NonBlankOpaqueIdentifierSchema),
+  handoffStateTransfer: z.optional(z.enum(['transfer', 'existing'])),
+  nativeForkSource: z.optional(NativeForkSourceSchema),
   agentSessionStartupInstructionsV1:
-    AgentSessionStartupInstructionsV1Schema.optional(),
-  runtimeDescriptorV1: RuntimeDescriptorV1Schema.optional(),
-  permissionMode: SpawnSessionPermissionModeSchema.optional(),
+    z.optional(AgentSessionStartupInstructionsV1Schema),
+  runtimeDescriptorV1: z.optional(RuntimeDescriptorV1Schema),
+  permissionMode: z.optional(SpawnSessionPermissionModeSchema),
   ...AgentSessionToolPolicyShapeV1,
-  permissionModeUpdatedAt: z.number().int().optional(),
-  agentModeId: z.string().trim().min(1).optional(),
-  agentModeUpdatedAt: z.number().int().optional(),
-  modelId: z.string().optional(),
-  modelUpdatedAt: z.number().int().optional(),
-  modelSelection: SessionModelSelectionV1Schema.optional(),
-  providerBindingSecurityChangeConfirmationV1: SessionProviderBindingSecurityChangeConfirmationV1Schema.optional(),
-  sessionConfigOptionOverrides: AcpConfigOptionOverridesV1Schema.optional(),
-  backendTarget: z.any().optional(),
-  agentTarget: AgentExecutionTargetV1Schema.optional(),
-  agent: z.string().trim().min(1).optional(),
-  terminal: SpawnSessionTerminalSchema.optional(),
-  windowsRemoteSessionLaunchMode: z.enum(['hidden', 'windows_terminal', 'console']).optional(),
-  windowsRemoteSessionConsole: z.enum(['hidden', 'visible']).optional(),
-  windowsTerminalWindowName: z.string().optional(),
-  profileId: z.string().optional(),
-  secretReferenceOverlay: SecretReferenceOverlayV1Schema.optional(),
-  environmentVariables: z.record(z.string(), z.string()).optional(),
+  workspaceWrites: z.optional(z.enum(['allow', 'deny'])),
+  permissionModeUpdatedAt: z.optional(z.number().check(z.int())),
+  agentModeId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  agentModeUpdatedAt: z.optional(z.number().check(z.int())),
+  modelId: z.optional(z.string()),
+  modelUpdatedAt: z.optional(z.number().check(z.int())),
+  modelSelection: z.optional(SessionModelSelectionV1Schema),
+  providerBindingSecurityChangeConfirmationV1: z.optional(SessionProviderBindingSecurityChangeConfirmationV1Schema),
+  sessionConfigOptionOverrides: z.optional(AcpConfigOptionOverridesV1Schema),
+  backendTarget: z.optional(z.any()),
+  agentTarget: z.optional(AgentExecutionTargetV1Schema),
+  agent: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  terminal: z.optional(SpawnSessionTerminalSchema),
+  windowsRemoteSessionLaunchMode: z.optional(z.enum(['hidden', 'windows_terminal', 'console'])),
+  windowsRemoteSessionConsole: z.optional(z.enum(['hidden', 'visible'])),
+  windowsTerminalWindowName: z.optional(z.string()),
+  profileId: z.optional(z.string()),
+  secretReferenceOverlay: z.optional(SecretReferenceOverlayV1Schema),
+  environmentVariables: z.optional(z.record(z.string(), z.string())),
   connectedServices: ConnectedServicesBindingsIngressSchema,
-  connectedServicesUpdatedAt: z.number().int().optional(),
-  connectedServiceMaterializationIdentityV1: ConnectedServiceMaterializationIdentityV1Schema.optional(),
-  capabilitySelection: SessionCapabilitySelectionAuthoringV1Schema.optional(),
-  transcriptStorage: z.enum(['persisted', 'direct']).optional(),
-}).strict());
+  connectedServicesUpdatedAt: z.optional(z.number().check(z.int())),
+  connectedServiceMaterializationIdentityV1: z.optional(ConnectedServiceMaterializationIdentityV1Schema),
+  capabilitySelection: z.optional(SessionCapabilitySelectionAuthoringV1Schema),
+  transcriptStorage: z.optional(z.enum(['persisted', 'direct'])),
+}));
 
-export const SpawnDaemonSessionRequestSchema = SpawnDaemonSessionRequestCompatSchema.transform((request, ctx) => {
+export const SpawnDaemonSessionRequestSchema = z.pipe(SpawnDaemonSessionRequestCompatSchema, z.transform((request, ctx) => {
   refineSessionCreateOriginFieldsV1(request, ctx);
+  const freshCreation = !request.existingSessionId && request.type !== 'resume-session';
+  const discussionRecipe = request.sessionCreationCorrespondence?.recipe.discussionParticipant;
+  if (freshCreation && discussionRecipe && (request.originKind !== 'discussion'
+    || request.discussionParticipant?.discussionId !== discussionRecipe.discussionId
+    || request.discussionParticipant?.participantSlotId !== discussionRecipe.participantSlotId)) {
+    ctx.issues.push({ code: "custom", path: ['discussionParticipant'],
+      message: 'Discussion creation correspondence requires its matching explicit birth origin', input: ctx.value });
+    return z.NEVER;
+  }
+  if (freshCreation && (request.discussionParticipant || discussionRecipe)
+    && (request.pendingFirstInput !== undefined || (request.initialTriggers?.length ?? 0) > 0)) {
+    ctx.issues.push({ code: "custom", path: request.pendingFirstInput !== undefined ? ['pendingFirstInput'] : ['initialTriggers'],
+      message: 'Discussion participant creation cannot submit initial work', input: ctx.value });
+    return z.NEVER;
+  }
   if ((request.identity !== undefined || request.memoryEnabled !== undefined || request.promptStack !== undefined)
     && (request.existingSessionId || request.type === 'resume-session')) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['identity'], message: 'Initial identity, memory choice and context require fresh Session creation' });
+    ctx.issues.push({ code: "custom", path: ['identity'], message: 'Initial identity, memory choice and context require fresh Session creation', input: ctx.value });
     return z.NEVER;
   }
   if (request.initialGoal && !request.existingSessionId && request.type !== 'resume-session') {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+    ctx.issues.push({
+      code: "custom",
       path: ['initialGoal'],
-      message: 'Initial goals require Session resume',
-    });
+      message: 'Initial goals require Session resume', input: ctx.value });
     return z.NEVER;
   }
-  if (request.reportsTo !== undefined && (request.existingSessionId || request.type === 'resume-session')) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['reportsTo'], message: 'The lead relation requires fresh Session creation' });
+  if (request.manager !== undefined && (request.existingSessionId || request.type === 'resume-session')) {
+    ctx.issues.push({ code: "custom", path: ['manager'], message: 'The lead relation requires fresh Session creation', input: ctx.value });
     return z.NEVER;
   }
   if (request.initialSessionRolesV1 !== undefined && (request.existingSessionId || request.type === 'resume-session')) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['initialSessionRolesV1'], message: 'Initial roles require fresh Session creation' });
+    ctx.issues.push({ code: "custom", path: ['initialSessionRolesV1'], message: 'Initial roles require fresh Session creation', input: ctx.value });
     return z.NEVER;
   }
   if ((request.initialAccess !== undefined || request.primaryTeamId !== undefined)
     && (request.existingSessionId || request.type === 'resume-session')) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['initialAccess'], message: 'Initial access and Team context require fresh Session creation' });
+    ctx.issues.push({ code: "custom", path: ['initialAccess'], message: 'Initial access and Team context require fresh Session creation', input: ctx.value });
     return z.NEVER;
   }
   if (request.placementOrigin && request.existingSessionId) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+    ctx.issues.push({
+      code: "custom",
       message: 'Session placement origin is valid only for fresh creation',
-      path: ['placementOrigin'],
-    });
+      path: ['placementOrigin'], input: ctx.value });
     return z.NEVER;
   }
   if (request.resume && request.nativeForkSource) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+    ctx.issues.push({
+      code: "custom",
       message: 'resume and nativeForkSource are mutually exclusive',
-      path: ['nativeForkSource'],
-    });
+      path: ['nativeForkSource'], input: ctx.value });
     return z.NEVER;
   }
   if (
     request.nativeForkSource
     && request.agentSessionStartupInstructionsV1
   ) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+    ctx.issues.push({
+      code: "custom",
       message: 'Startup instructions are not supported for fork requests',
-      path: ['agentSessionStartupInstructionsV1'],
-    });
+      path: ['agentSessionStartupInstructionsV1'], input: ctx.value });
     return z.NEVER;
   }
   if (
     request.sessionCreationCorrespondence
     && request.sessionCreationCorrespondence.sessionCreationTag !== request.sessionCreationTag
   ) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+    ctx.issues.push({
+      code: "custom",
       message: 'Session creation correspondence must match sessionCreationTag',
-      path: ['sessionCreationCorrespondence'],
-    });
+      path: ['sessionCreationCorrespondence'], input: ctx.value });
     return z.NEVER;
   }
   const {
@@ -358,11 +366,10 @@ export const SpawnDaemonSessionRequestSchema = SpawnDaemonSessionRequestCompatSc
     }).backendTarget;
   const hasBackendTargetInput = rest.backendTarget !== undefined || Boolean(typeof agent === 'string' && agent.trim().length > 0);
   if (hasBackendTargetInput && !canonicalBackendTarget) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+    ctx.issues.push({
+      code: "custom",
       message: 'Unknown backend target',
-      path: ['backendTarget'],
-    });
+      path: ['backendTarget'], input: ctx.value });
     return z.NEVER;
   }
   const targetKey = rest.agentTarget
@@ -371,20 +378,18 @@ export const SpawnDaemonSessionRequestSchema = SpawnDaemonSessionRequestCompatSc
       ? buildBackendTargetKeyV2(canonicalBackendTarget)
       : null;
   if (rest.modelSelection && (!targetKey || rest.modelSelection.ref.agentTargetKey !== targetKey)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+    ctx.issues.push({
+      code: "custom",
       message: 'Model selection agent target must match the selected target',
-      path: ['modelSelection', 'ref', 'agentTargetKey'],
-    });
+      path: ['modelSelection', 'ref', 'agentTargetKey'], input: ctx.value });
     return z.NEVER;
   }
   const normalizedLegacyModelId = typeof legacyModelId === 'string' ? legacyModelId.trim() : '';
   if (normalizedLegacyModelId && !targetKey) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+    ctx.issues.push({
+      code: "custom",
       message: 'An Agent or backend target is required when modelId is provided',
-      path: ['agentTarget'],
-    });
+      path: ['agentTarget'], input: ctx.value });
     return z.NEVER;
   }
   const modelSelection = rest.modelSelection ?? (normalizedLegacyModelId && targetKey
@@ -410,7 +415,7 @@ export const SpawnDaemonSessionRequestSchema = SpawnDaemonSessionRequestCompatSc
     ...(modelSelection ? { modelSelection } : {}),
     ...(runtimeDescriptorV1 ? { runtimeDescriptorV1 } : {}),
   };
-}) as z.ZodType<SpawnDaemonSessionRequest>;
+})) as z.ZodMiniType<SpawnDaemonSessionRequest>;
 
 const SPAWN_SESSION_OPTION_KEYS = [
   'machineId',
@@ -421,6 +426,8 @@ const SPAWN_SESSION_OPTION_KEYS = [
   'originKind',
   'originSessionId',
   'originRunId',
+  'discussionParticipant',
+  'discussionParticipantLaunch',
   'workDepth',
   'spawnNonce',
   'sessionCreationTag',
@@ -432,7 +439,7 @@ const SPAWN_SESSION_OPTION_KEYS = [
   'promptStack',
   'initialAccess',
   'initialTriggers',
-  'reportsTo',
+  'manager',
   'initialSessionRolesV1',
   'primaryTeamId',
   'teamCredentialBindings',
@@ -452,6 +459,7 @@ const SPAWN_SESSION_OPTION_KEYS = [
   'permissionMode',
   'allowedTools',
   'unlistedTools',
+  'workspaceWrites',
   'permissionModeUpdatedAt',
   'agentModeId',
   'agentModeUpdatedAt',

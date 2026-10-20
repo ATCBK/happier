@@ -2,6 +2,7 @@ import { Fragment, type ReactNode } from 'react';
 import { View } from 'react-native';
 
 import { HappierPressable } from '../interaction/Pressable.js';
+import { HAPPIER_TYPE_SCALE } from '../text/typeScale.js';
 import {
   HAPPIER_STATE_LINE_METRICS,
   HAPPIER_STATE_SIZE_METRICS,
@@ -59,6 +60,8 @@ export type HappierSurfaceStateBindings = Readonly<{
     input: Readonly<{
       role: HappierSurfaceStateTextRole;
       metrics?: HappierSurfaceStateQuietMetrics;
+      /** `start` for copy that stands on a left edge (an inline state); a centred state centres its quiet copy. */
+      align?: 'start' | 'center';
       testID?: string;
       onPress?: () => void;
       children: ReactNode;
@@ -87,6 +90,7 @@ export type HappierSurfaceStateBindings = Readonly<{
     input: Readonly<{
       layout: 'centered' | 'inline';
       size?: HappierStateSize;
+      /** `null` for an inline state, which draws its glyph in a column of its own beside the whole state. */
       glyph: ReactNode;
       titleTestID?: string;
       reasonTestID?: string;
@@ -232,6 +236,7 @@ export function HappierSurfaceState(props: HappierSurfaceStateProps) {
       testID={props.testID}
       markerTestID={props.testID ? `${props.testID}-diagnostic-${props.diagnosticCode}` : undefined}
       label={bindings.detailsLabel}
+      align={props.layout === 'inline' ? 'start' : 'center'}
       details={props.diagnosticCode}
       renderToggle={bindings.renderDetailsToggle}
       renderDetails={bindings.renderDetailsCode}
@@ -382,6 +387,7 @@ export function HappierSurfaceState(props: HappierSurfaceStateProps) {
         {bindings.renderText({
           role: 'quiet',
           metrics: quiet.metrics,
+          align: props.layout === 'inline' ? 'start' : 'center',
           testID: props.testID ? `${props.testID}-note` : undefined,
           children: (
             <>
@@ -431,40 +437,48 @@ export function HappierSurfaceState(props: HappierSurfaceStateProps) {
   const reasonTestID = props.testID ? `${props.testID}-reason` : undefined;
 
   if (props.layout === 'inline') {
+    // The glyph owns a leading column and everything the state says or offers — copy, present, body,
+    // actions, the note — stands on the one edge to its right, so the actions line up under the
+    // sentence they answer instead of under the glyph. The tile draws the copy only.
     return (
       <View
         testID={props.testID}
         {...(disclosure ? {} : liveRegionProps)}
-        style={{ alignSelf: 'stretch', gap: 4 }}
+        style={{ alignSelf: 'stretch', flexDirection: 'row', alignItems: 'flex-start', columnGap: STACK_GAP_PX }}
       >
-        {announceSentence(bindings.renderTile({
-          layout: 'inline',
-          size,
-          glyph: iconSlot,
-          titleTestID,
-          reasonTestID,
-        }), false)}
-        {live ? <View style={{ alignItems: 'flex-start' }}>{live}</View> : null}
-        {props.body}
-        {buttons ? (
-          <View
-            style={[
-              {
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 8,
-              },
-              fullWidth
-                ? { flexDirection: 'column', alignItems: 'stretch' }
-                : null,
-            ]}
-          >
-            {caption}
-            {buttons}
-          </View>
+        {iconSlot ? (
+          <View style={{ height: HAPPIER_TYPE_SCALE.label.lineHeight, justifyContent: 'center' }}>{iconSlot}</View>
         ) : null}
-        {supplemental}
+        <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+          {announceSentence(bindings.renderTile({
+            layout: 'inline',
+            size,
+            glyph: null,
+            titleTestID,
+            reasonTestID,
+          }), false)}
+          {live ? <View style={{ alignItems: 'flex-start' }}>{live}</View> : null}
+          {props.body}
+          {buttons ? (
+            <View
+              style={[
+                {
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                },
+                fullWidth
+                  ? { flexDirection: 'column', alignItems: 'stretch' }
+                  : null,
+              ]}
+            >
+              {caption}
+              {buttons}
+            </View>
+          ) : null}
+          {supplemental}
+        </View>
       </View>
     );
   }

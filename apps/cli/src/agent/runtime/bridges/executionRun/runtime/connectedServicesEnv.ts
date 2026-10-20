@@ -26,8 +26,8 @@ import type { CreateCliExecutionRunBackendParams } from '@/agent/runtime/registr
 /**
  * Generic (provider-agnostic) connected-services env resolution for execution-run backends.
  *
- * Execution runs spawn their backend from inside the RUNNER process, so connected-service auth
- * cannot be materialized by the daemon spawn path. Instead this helper — the ONE attach point for
+ * Execution runs spawn their backend inside the Session runner or, when detached, the daemon,
+ * so connected-service auth does not pass through Session spawn. This helper — the ONE attach point for
  * run CS env — asks the daemon over the scoped run-materialize control bridge and returns the
  * materialized env (e.g. CODEX_HOME) to merge into the run's isolation bundle BEFORE the
  * per-backend launch. Provider env keys come entirely from the daemon-side provider-owned
@@ -52,17 +52,20 @@ import type { CreateCliExecutionRunBackendParams } from '@/agent/runtime/registr
 export class ExecutionRunConnectedServicesError extends Error {
     readonly code = 'execution_run_connected_services_failed';
     readonly errorCode: string;
+    readonly executionRunErrorCode: string;
 
     constructor(message: string, errorCode?: string) {
         super(message);
         this.name = 'ExecutionRunConnectedServicesError';
         this.errorCode = errorCode ?? 'connected_service_run_materialization_failed';
+        this.executionRunErrorCode = this.errorCode;
     }
 }
 
 type ResolveSessionSpawnDefaults = (params: Readonly<{
     agentId: string;
     credentials: StoredCredentials;
+    signal?: AbortSignal;
 }>) => Promise<Readonly<{ connectedServices: ConnectedServiceBindingsV2 }> | null>;
 
 type MaterializationDeps = Readonly<{
@@ -151,6 +154,7 @@ export async function resolveExecutionRunConnectedServicesSelection(params: Read
     backendSourceKind: 'built_in' | 'configured' | (string & {});
     connectedServices?: ConnectedServiceBindingsV2 | null;
     connectedServicesDefaultServiceIds?: readonly string[];
+    signal?: AbortSignal;
     deps?: Pick<MaterializationDeps, 'readCredentials' | 'resolveSessionSpawnDefaults'>;
 }>): Promise<ResolvedExecutionRunConnectedServicesSelection | null> {
     const backendId = params.backendId.trim();
@@ -200,7 +204,7 @@ export async function resolveExecutionRunConnectedServicesSelection(params: Read
         }
         const credentials = await deps.readCredentials();
         const resolvedDefaults = credentials
-            ? await deps.resolveSessionSpawnDefaults({ agentId: backendId, credentials })
+            ? await deps.resolveSessionSpawnDefaults({ agentId: backendId, credentials, signal: params.signal })
             : null;
         const merged: Record<string, ConnectedServiceBindingSelectionV2> = {
             ...explicitBindingsByServiceId,
@@ -241,6 +245,7 @@ export async function resolveExecutionRunConnectedServicesSelection(params: Read
     const resolved = await deps.resolveSessionSpawnDefaults({
         agentId: backendId,
         credentials,
+        signal: params.signal,
     });
     return resolved && hasConnectedExecutionRunBinding(resolved.connectedServices)
         ? {
@@ -252,6 +257,7 @@ export async function resolveExecutionRunConnectedServicesSelection(params: Read
 }
 
 export async function resolveExecutionRunConnectedServicesEnv(params: Readonly<{
+    signal?: AbortSignal;
     runId: string;
     backendId: string;
     backendSourceKind: 'built_in' | 'configured' | (string & {});
@@ -270,6 +276,7 @@ export async function resolveExecutionRunConnectedServicesEnv(params: Readonly<{
     deps?: MaterializationDeps;
     recovery?: Readonly<{ activationId: string; nativeResumeId: string }>;
 }>): Promise<ResolvedExecutionRunConnectedServicesEnv | null> {
+    params.signal?.throwIfAborted();
     const backendId = params.backendId.trim();
     const supportsCatalogConnectedServices =
         resolveExecutionRunDeclaredConnectedServiceIds({
@@ -285,6 +292,7 @@ export async function resolveExecutionRunConnectedServicesEnv(params: Readonly<{
         : await resolveExecutionRunConnectedServicesSelection({
             backendId,
             backendSourceKind: params.backendSourceKind,
+            signal: params.signal,
             ...(params.connectedServices !== undefined
                 ? { connectedServices: params.connectedServices }
                 : {}),
@@ -309,6 +317,7 @@ export async function resolveExecutionRunConnectedServicesEnv(params: Readonly<{
         return null;
     }
 
+    params.signal?.throwIfAborted();
     const response = await deps.requestMaterialization({
         runId: params.runId,
         runnerPid: deps.runnerPid,
@@ -317,9 +326,10 @@ export async function resolveExecutionRunConnectedServicesEnv(params: Readonly<{
         cwd: params.cwd,
         ...(params.modelId ? { modelId: params.modelId } : {}),
         ...(params.recovery ? { recovery: params.recovery } : {}),
-    });
+    }, { signal: params.signal });
 
     if (!response || response.ok !== true || !('result' in response) || !response.result) {
+        params.signal?.throwIfAborted();
         const errorMessage =
             (response && 'errorMessage' in response && typeof response.errorMessage === 'string' && response.errorMessage)
             || (response && 'error' in response && typeof response.error === 'string' && response.error)
@@ -337,16 +347,6 @@ export async function resolveExecutionRunConnectedServicesEnv(params: Readonly<{
         throw new ExecutionRunConnectedServicesError(errorMessage, errorCode);
     }
 
-    // QA2-F03: the one decision line for the materialized path. Env key NAMES only — values and
-    // tokens never appear in logs.
-    logger.info('[EXECUTION RUN] connected services: materialized', {
-        runId: params.runId,
-        agentId: backendId,
-        source: selection.source,
-        envKeys: Object.keys(response.result.env),
-        selectedMembers: readConnectedServiceChildMemberLogContextFromEnv(response.result.env),
-    });
-
     let cleanupPromise: Promise<void> | null = null;
     const cleanup = async (): Promise<void> => {
         if (cleanupPromise) return await cleanupPromise;
@@ -356,8 +356,11 @@ export async function resolveExecutionRunConnectedServicesEnv(params: Readonly<{
                 runnerPid: deps.runnerPid,
                 activationId: response.result.activationId,
             });
-            if (result.ok !== true || result.released !== true) {
-                throw new Error(result.error ?? 'Execution-run connected-services cleanup did not complete');
+            if (result.ok !== true) {
+                throw new ExecutionRunConnectedServicesError(
+                    result.error ?? 'Execution-run connected-services cleanup did not complete',
+                    result.errorCode ?? 'connected_service_run_cleanup_unavailable',
+                );
             }
         })();
         cleanupPromise = attempt;
@@ -368,6 +371,19 @@ export async function resolveExecutionRunConnectedServicesEnv(params: Readonly<{
             throw error;
         }
     };
+
+    if (params.signal?.aborted) {
+        await cleanup();
+        params.signal.throwIfAborted();
+    }
+    // Env key names and selected identity only; credentials stay private.
+    logger.info('[EXECUTION RUN] connected services: materialized', {
+        runId: params.runId,
+        agentId: backendId,
+        source: selection.source,
+        envKeys: Object.keys(response.result.env),
+        selectedMembers: readConnectedServiceChildMemberLogContextFromEnv(response.result.env),
+    });
 
     return {
         env: { ...response.result.env },

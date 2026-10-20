@@ -94,11 +94,6 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdFo
     resolvePreferredServerIdForSessionId: () => null,
 }));
 
-vi.mock('@/sync/store/settingsWriters', () => ({
-    useApplyLocalSettings: () => vi.fn(),
-    useApplySettings: () => vi.fn(),
-}));
-
 vi.mock('@/utils/platform/desktopHost', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/utils/platform/desktopHost')>(),
     isDesktopHost: () => false,
@@ -277,13 +272,13 @@ describe('CommandPaletteProvider lazy command building', () => {
         const element = () => <CommandPaletteProvider><React.Fragment /></CommandPaletteProvider>;
         const screen = await renderScreen(element());
 
-        testState.keyboardHandlers?.['commandPalette.open']?.();
+        await act(async () => {
+            testState.keyboardHandlers?.['commandPalette.open']?.();
+        });
         vi.mocked(Modal.update).mockClear();
 
         testState.enabledFeatures.add('sessions.direct');
-        await act(async () => {
-            screen.tree.update(element());
-        });
+        await screen.update(element());
 
         expect(Modal.update).toHaveBeenCalledWith('modal-id', {
             commands: expect.arrayContaining([

@@ -5,7 +5,6 @@ import { renderScreen, standardCleanup } from '@/dev/testkit';
 import {
     installSessionSettingsEntryModuleMocks,
     resetSessionSettingsEntryState,
-    sessionSettingsEntryState,
 } from './sessionSettingsEntryTestHelpers';
 
 
@@ -16,19 +15,20 @@ vi.mock('@/components/settings/connectedServices/ConnectedServicesProviderStateS
         React.createElement('ConnectedServicesProviderStateSharingSettingsView'),
 }));
 
-installSessionSettingsEntryModuleMocks({
-    featureEnabled: (featureId: string) => sessionSettingsEntryState.options.featureEnabled?.(featureId) ?? false,
-});
+installSessionSettingsEntryModuleMocks();
 
 describe('Connected services provider-state-sharing route', () => {
-    afterEach(() => {
-        standardCleanup();
+    afterEach(async () => {
+        await standardCleanup();
+        vi.restoreAllMocks();
         resetSessionSettingsEntryState();
     });
 
     it('renders without consulting the retired connectedServices master feature', async () => {
-        const useFeatureEnabledMock = vi.fn(() => false);
-        sessionSettingsEntryState.options.featureEnabled = useFeatureEnabledMock;
+        // Observe the real reader without replacing its policy. This retired
+        // master id must not become a dependency of this unconditionally hosted route.
+        const featureReader = await import('@/hooks/server/useFeatureEnabled');
+        const useFeatureEnabledMock = vi.spyOn(featureReader, 'useFeatureEnabled');
 
         const mod = await import('@/app/(app)/settings/connected-services/provider-state-sharing');
         const ProviderStateSharingRoute = mod.default;

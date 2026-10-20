@@ -90,6 +90,50 @@ func TestDiskMeasureLargeUnsharedTreeCost(t *testing.T) {
 	t.Logf("50,000 ordinary files, 101 distinct directories; allocated=%d exclusive=%d\n%s", measured.TotalAllocatedBytes, measured.TotalExclusiveBytes, diagnostic.String())
 }
 
+func TestDiskMeasureCatalogRootScale(t *testing.T) {
+	root := storageRenameTestRoot(t)
+	paths := []string{root}
+	for directory := 0; directory < 100; directory++ {
+		path := filepath.Join(root, strconv.Itoa(directory))
+		if err := os.Mkdir(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+		for file := 0; file < 100; file++ {
+			leaf := filepath.Join(path, strconv.Itoa(file))
+			if err := os.WriteFile(leaf, []byte("fixture"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			// QA's real catalog has 649 retained log roots alongside data trees.
+			if len(paths) <= 650 {
+				paths = append(paths, leaf)
+			}
+		}
+	}
+	measure := func(paths []string) (diskMeasureResult, time.Duration) {
+		started := time.Now()
+		result, err := diskMeasure(context.Background(), diskMeasureRequest{Paths: paths})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result, time.Since(started)
+	}
+	base, single := measure([]string{root})
+	result, catalog := measure(paths)
+	if result.TotalAllocatedBytes != base.TotalAllocatedBytes || result.TotalExclusiveBytes != base.TotalExclusiveBytes || len(result.PerPath) != len(paths) {
+		t.Fatalf("catalog root attribution changed physical union: base=%#v result=%#v", base, result)
+	}
+	// Adding catalog attribution must not multiply a whole-tree traversal by the
+	// number of roots. Relative budget plus a scheduling floor avoids a disk-speed gate.
+	budget := 8 * single
+	if budget < time.Second {
+		budget = time.Second
+	}
+	t.Logf("same 10,000-file tree: one root=%s, 651 catalog roots=%s", single, catalog)
+	if catalog > budget {
+		t.Fatalf("catalog membership multiplied tree work: %s > %s", catalog, budget)
+	}
+}
+
 type diskBlockingDirectory struct{ diskDirectory }
 
 func (dir diskBlockingDirectory) entries(context.Context) ([]diskEntry, string, error) {

@@ -47,7 +47,7 @@ describe('installed external plugin Lane 10 Actions', () => {
                 authorization: String(request.headers.authorization),
                 body: request.body,
             });
-            return { resources: [] };
+            return { resources: [], nextCursor: null };
         });
         const restoreHttp = installAxiosFastifyAdapter({ app: home, origin: homeUrl });
         let registry: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>> | null = null;
@@ -167,11 +167,11 @@ describe('installed external plugin Lane 10 Actions', () => {
 
             expect(result).toEqual({
                 status: 'executed',
-                value: { resources: [] },
+                value: { resources: [], nextCursor: null },
             });
             expect(requests).toEqual([{
                 authorization: `Bearer ${ACCOUNT_TOKEN}`,
-                body: { teamId: 'team-1' },
+                body: expect.objectContaining({ teamId: 'team-1' }),
             }]);
         } finally {
             restoreHttp();

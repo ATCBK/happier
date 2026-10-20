@@ -20,7 +20,9 @@ export const WidgetConnectedAccountSelectionReadSchema = createProtocolStoredRea
 export type ConfiguredWidgetTargetResolution =
   | Readonly<{ status: 'ready'; target: InstalledWidgetTarget | Readonly<{ kind: 'workspace'; workspace: WorkspaceAddressV1; checkout: WorkspaceRefV1 }>; runtime: PluginUiProjectionCurrentness; input: Readonly<Record<string, JsonValue>> }>
   | Readonly<{ status: 'loading'; reasonCode: string }>
-  | Readonly<{ status: 'selection_required' | 'invalid' | 'unavailable' | 'denied'; reasonCode: string; fields?: readonly WidgetInputIssueV1[]; repair?: WidgetInputRepairOutcome }>;
+  | Readonly<{ status: 'selection_required' | 'invalid' | 'unavailable' | 'denied'; reasonCode: string; fields?: readonly WidgetInputIssueV1[]; repair?: WidgetInputRepairOutcome;
+    /** Present when the refusal is a failed choices read: asking again is the repair, not editing the input. */
+    retry?: () => void }>;
 /** Credential-free facts for one next action; Connect never needs a shared inputs writer. */
 export type WidgetInputRepairOutcome = Readonly<{
   kind: 'connect' | 'session_denied' | 'session_unavailable' | 'type_unavailable' | 'input';
@@ -40,6 +42,7 @@ export type ConfiguredWidgetTargetInput = Readonly<{
   targetKind: 'app' | 'session';
   descriptor: WidgetInputDescriptorV1;
   providedContext?: Readonly<Record<string, readonly JsonValue[]>>;
+  workspaceRefs?: readonly WorkspaceRefV1[];
   appRuntime: PluginUiProjectionCurrentness;
   repairContext?: WidgetRepairContext;
   readSession(ref: Readonly<{ serverId: string; sessionId: string }>):
@@ -99,7 +102,10 @@ function resolveConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetInput):
     if (selected === undefined) return { status: 'selection_required',
       reasonCode: 'widget_workspace_selection_invalid', fields: [{ path, status: selected === undefined ? 'selection_required' : 'invalid', reasonCode: 'widget_workspace_selection_invalid' }] };
     // The path is read from the admitted strict-JSON input; the shared path reader returns unknown.
-    const admitted = validateWidgetWorkspaceInputV1({ value: selected as JsonValue, serverId: input.scope.serverId, contextValues: input.providedContext?.[path] ?? [] }, workspaceRefResolutionContextV1);
+    if (input.appRuntime.accountLifetime && !input.appRuntime.accountLifetime.isCurrent())
+      return { status: 'denied', reasonCode: 'widget_target_scope_mismatch' };
+    const admitted = validateWidgetWorkspaceInputV1({ value: selected as JsonValue, serverId: input.scope.serverId,
+      workspaceRefs: input.workspaceRefs ?? [] }, workspaceRefResolutionContextV1);
     if (admitted.status !== 'valid') return { ...admitted, fields: [{ path, ...admitted }] };
     // Equality may accept target-platform spelling differences; only the admitted
     // checkout supplies the actual path bytes passed to filesystem/SCM readers.

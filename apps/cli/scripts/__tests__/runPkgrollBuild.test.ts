@@ -17,10 +17,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { createTempDirSync } from '../../src/testkit/fs/tempDir';
 import { collectPkgrollInputPaths, resolvePkgrollCliPath, runPkgrollBuild } from '../runPkgrollBuild.mjs';
 import { resolveTypeScriptCliInvocation } from '../../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
+import { bundleWorkspacePackage } from '../../../../packages/cli-common/src/workspaces/index';
 
 const cliPackageRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-async function runRealPkgrollSource(source: string, format: 'esm' | 'cjs' = 'esm') {
+async function runRealPkgrollSource(source: string, format: 'esm' | 'cjs' = 'esm',
+  prepareRuntimeDependencies?: (packageRoot: string) => void) {
   const fixtureParent = join(cliPackageRoot, '.project', 'tmp');
   mkdirSync(fixtureParent, { recursive: true });
   // Keep the actual CLI package-local and hoisted dependency resolution ancestry.
@@ -45,6 +47,7 @@ async function runRealPkgrollSource(source: string, format: 'esm' | 'cjs' = 'esm
     // The real CLI has several entries in each format. Exercise any shared
     // Pkgroll chunks rather than accepting a single-entry-only repair.
     writeFileSync(join(packageRoot, 'src', 'secondary.ts'), source, 'utf8');
+    prepareRuntimeDependencies?.(packageRoot);
     await runPkgrollBuild({ packageJsonPath, outputDir, pkgrollCliPath: resolvePkgrollCliPath() });
     return spawnSync(process.execPath, [join(packageRoot, outputDir, outputFile)], {
       cwd: packageRoot,
@@ -208,6 +211,10 @@ describe('runPkgrollBuild', () => {
     const fixture = writeIsolatedPkgrollRepo('happier-cli-checked-publication-');
     const buildScript = fileURLToPath(new URL('../build.mjs', import.meta.url));
     try {
+      // The real build owner admits nested compiler work through this repo's
+      // executor; retain that genuine boundary in the synthetic repository.
+      symlinkSync(fileURLToPath(new URL('../../../stack', import.meta.url)),
+        join(fixture.repoRoot, 'apps', 'stack'), process.platform === 'win32' ? 'junction' : 'dir');
       writeFileSync(fixture.packageJsonPath, JSON.stringify({
         name: '@happier-dev/pkgroll-fixture', version: '0.0.0', type: 'module',
         main: './dist/index.cjs', module: './dist/index.mjs', types: './dist/index.d.cts',
@@ -282,6 +289,7 @@ describe('runPkgrollBuild', () => {
       await expect(runPkgrollBuild({
         packageJsonPath: fixture.packageJsonPath, outputDir: fixture.outputDir,
         pkgrollCliPath: fixture.pkgrollCliPath, spawn,
+        env: { ...process.env, HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
       })).rejects.toThrow(/native-checked declaration source directory/);
       expect(spawn).not.toHaveBeenCalled();
     } finally {
@@ -296,10 +304,32 @@ describe('runPkgrollBuild', () => {
     const result = await runRealPkgrollSource(`
 import { connect } from '@happier-dev/sdk';
 console.log(typeof connect);
-`);
+`, 'esm', (packageRoot) => {
+      // Production's shared-dependency owner materializes workspace packages
+      // before Pkgroll. A hoisted workspace symlink is not that prepared input:
+      // Pkgroll would classify the SDK's #http as the host's private import.
+      bundleWorkspacePackage({
+        packageName: '@happier-dev/sdk',
+        srcDir: join(cliPackageRoot, '..', '..', 'packages', 'sdk'),
+        destDir: join(packageRoot, 'node_modules', '@happier-dev', 'sdk'),
+      });
+    });
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe('function');
+  });
+
+  it('preserves executable source aliases without resolving runtime imports through declaration-only paths', async () => {
+    const result = await runRealPkgrollSource(`
+import { z } from 'zod/mini';
+import en from 'zod/v4/locales/en.js';
+import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
+const parsed = z.string().safeParse(1, { error: en().localeError });
+console.log(parsed.error?.issues[0]?.code, expandHomeDirPath('/unchanged'));
+`);
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe('invalid_type /unchanged');
   });
 
   it.each(['esm', 'cjs'] as const)('preserves the password sodium public CommonJS export through the real %s prebundle', async (format) => {
@@ -763,6 +793,7 @@ await runPkgrollBuild({
       pkgrollCliPath,
       spawn,
       declarationSourceDir,
+      env: { ...process.env, HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
     });
 
     expect(spawn).toHaveBeenCalledTimes(2);

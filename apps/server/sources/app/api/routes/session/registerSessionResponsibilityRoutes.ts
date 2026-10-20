@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { SESSION_RESPONSIBILITY_ASSIGNEE_UNAVAILABLE_V1, SESSION_RESPONSIBILITY_CANDIDATES_INVALID_CURSOR_V1, SessionResponsibilityCandidatesRequestSchema, SessionResponsibilityCandidatesResponseSchema, SetSessionResponsibilityRequestSchema, SetSessionResponsibilityResponseSchema } from '@happier-dev/protocol/sessions/access/sessionResponsibilityV1';
 import {
@@ -9,6 +9,7 @@ import { type Fastify } from "../../types";
 import { createServerFeatureGatedRouteApp } from "@/app/features/catalog/serverFeatureGate";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 import { NotFoundSchema as FeatureUnavailableSchema } from "../../schemas/notFoundSchema";
+import { AccountRouteAuthenticationForbiddenResponseSchema } from "@/app/api/utils/enableAuthentication";
 
 const ForbiddenSchema = z.object({ error: z.literal("session_access_forbidden") });
 const AuthenticationRequiredSchema = z.object({ error: z.literal("session_access_authentication_required") });
@@ -35,11 +36,13 @@ export function registerSessionResponsibilityRoutes(app: Fastify) {
     const collaborationApp = createServerFeatureGatedRouteApp(app, "sharing.session");
     collaborationApp.post("/v2/sessions/responsibility/set", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.responsibility.set',
+            restrictedCredentialBinding: { scope: 'session', session: 'body.sessionId', allowSessionRuntime: false } },
         schema: {
             body: SetSessionResponsibilityRequestSchema,
             response: {
                 200: SetSessionResponsibilityResponseSchema,
-                403: z.union([ForbiddenSchema, AuthenticationRequiredSchema]),
+                403: z.union([ForbiddenSchema, AuthenticationRequiredSchema, AccountRouteAuthenticationForbiddenResponseSchema]),
                 404: NotFoundSchema,
                 409: AssigneeUnavailableSchema,
                 503: AuthenticationUnavailableSchema,
@@ -75,12 +78,14 @@ export function registerSessionResponsibilityRoutes(app: Fastify) {
 
     collaborationApp.post("/v2/sessions/responsibility/candidates", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.responsibility.candidates.list',
+            restrictedCredentialBinding: { scope: 'session', session: 'body.sessionId', allowSessionRuntime: false } },
         schema: {
             body: SessionResponsibilityCandidatesRequestSchema,
             response: {
                 200: SessionResponsibilityCandidatesResponseSchema,
                 400: InvalidCursorSchema,
-                403: z.union([ForbiddenSchema, AuthenticationRequiredSchema]),
+                403: z.union([ForbiddenSchema, AuthenticationRequiredSchema, AccountRouteAuthenticationForbiddenResponseSchema]),
                 404: NotFoundSchema,
                 503: AuthenticationUnavailableSchema,
             },

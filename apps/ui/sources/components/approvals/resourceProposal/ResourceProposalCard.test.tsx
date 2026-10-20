@@ -29,6 +29,7 @@ import { MachineStorageCategoryListResultV1Schema, PileApplyResultV1Schema } fro
 import { MachineStorageDeleteNowInputV1Schema } from '@happier-dev/protocol/storage/storageV1';
 import { resolveApprovalRequestExecutionInput } from '@happier-dev/protocol/approvals/approvalRequestTransition';
 import { MachineGuardActivityListV1Schema } from '@happier-dev/protocol/machines/guard/activityV1';
+import { normalizeActionsSettingsV1, setActionApprovalOverride } from '@happier-dev/protocol/actions/actionSettings';
 import tweetnacl from 'tweetnacl';
 import { createMachineGuardViewFixture } from '@/sync/domains/machines/guard/guardViewFixtures';
 
@@ -96,6 +97,7 @@ vi.mock('@/modal', async () => {
 });
 
 await loadSyncSingletonForTests();
+const { Modal } = await import('@/modal');
 const { ApprovalPromptCard } =
   await import('@/components/tools/shell/approvals/ApprovalPromptCard');
 const { storage } = await import('@/sync/domains/state/storage');
@@ -281,6 +283,7 @@ async function render(request: ApprovalRequestV2, seedFirst = true) {
 
 describe('resource proposal card', () => {
   beforeEach(async () => {
+    vi.mocked(Modal.confirm).mockReset().mockResolvedValue(true);
     webLocks = installWebLockManagerMock();
     await home.reset();
     homeId = await home.addHome({
@@ -408,12 +411,17 @@ describe('resource proposal card', () => {
   });
 
   it('checks an agent Delete-now Artifact and executes only the selected subset through the canonical decision and storage front doors', async () => {
+    // This network fixture stands in for an already-approved daemon replay. Its UI adapter must
+    // admit the effect through policy, rather than impersonating a separate caller confirmation.
+    home.answer(homeId, '/v2/account/settings', { body: { content: { t: 'plain', v: { actionsSettingsV1: {
+      v: 1, actions: {}, approvalWaivedSurfaces: { 'machines.storage.deleteNow': ['ui'] },
+    } } }, version: 1 } });
     const items = proposalArgs.items.slice(0, 2).map(({ ref, expect }) => ({ ref, expect }));
     const base = proposal();
-    const request = signed(ApprovalRequestV2Schema.parse({ ...base, actionId: 'machines.storage.deleteNow',
+    const request = signed({ ...base, actionId: 'machines.storage.deleteNow',
       requestedSurface: 'agent', actionArgs: MachineStorageDeleteNowInputV1Schema.parse({ machineId: MACHINE, items }),
       executionOriginV1: { ...base.executionOriginV1, actionId: 'machines.storage.deleteNow', surface: 'api',
-        caller: { kind: 'session', sessionId: 'session-1' } } }));
+        caller: { kind: 'session', sessionId: 'session-1', starterDepth: 0, turnDepth: 0 } } });
     const remaining = new Set(items.map(item => item.ref.itemId));
     let executed: PileApplyResultV1 | null = null;
     // The exact daemon is a network boundary. It consumes the recorded choice with the same
@@ -426,7 +434,7 @@ describe('resource proposal card', () => {
       const input = MachineStorageDeleteNowInputV1Schema.parse(replay.input);
       const { deleteMachineStorageNowViaAction } = await import('@/sync/domains/machines/storage/machineRpc');
       const result = await deleteMachineStorageNowViaAction({ ...input, serverId: homeId,
-        expectedAccountId: 'account-1', confirmedByPerson: true });
+        expectedAccountId: 'account-1' });
       if (!result.ok) throw new Error(result.reason);
       executed = result.value;
       return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'approval.request.decide',
@@ -583,6 +591,11 @@ describe('resource proposal card', () => {
     );
     expect(screen.getTextContent()).not.toContain('machineStorage.pile.freed');
     expect(screen.findByTestId('resource-proposal-item-old-wt')).toBeTruthy();
+    vi.mocked(Modal.confirm).mockClear().mockResolvedValueOnce(false);
+    await screen.pressByTestIdAsync('machine-storage-pile-empty');
+    expect(Modal.confirm).toHaveBeenCalled();
+    expect(calls(RPC_METHODS.DAEMON_STORAGE_TRASH_EMPTY)).toHaveLength(0);
+    expect(screen.getTextContent()).not.toContain('machineStorage.pile.freed');
     await screen.pressByTestIdAsync('machine-storage-pile-empty');
     await vi.waitFor(() =>
       expect(screen.getTextContent()).toContain('machineStorage.pile.freed'),
@@ -590,6 +603,44 @@ describe('resource proposal card', () => {
     expect(
       calls(RPC_METHODS.DAEMON_STORAGE_TRASH_EMPTY)[0]!.payload,
     ).toMatchObject({ machineId: MACHINE, entryIds: ids.slice(0, 5).map(itemId => `entry-${itemId}`) });
+  });
+
+  it('retries an unavailable receipt when reopening supplies a fresh approval snapshot, but retains settled outcomes', async () => {
+    const entryId = 'entry-reopened';
+    const result = PileApplyResultV1Schema.parse({ batchId: 'batch-reopened', mode: 'trash', inTrashBytes: GB, freedBytes: 0,
+      outcomes: [{ itemId: ids[0], status: 'moved' }], trashEntryIds: [entryId] });
+    const request = proposal({ status: 'executed', updatedAtMs: 3,
+      decision: { kind: 'approve', decidedAtMs: 2, authority: 'present_user' },
+      execution: { executedAtMs: 3, ok: true, result } });
+    const boundary = daemonRpc.getMockImplementation()!;
+    let activityAvailable = false;
+    daemonRpc.mockImplementation(async call => {
+      if (call.method === RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST) return MachineStorageCategoryListResultV1Schema.parse({
+        revision: 1, sizedAt: 1, categoryId: 'trash', items: [], trashEntries: [],
+      });
+      if (call.method === RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST) {
+        if (!activityAvailable) throw new Error('Activity unavailable');
+        return MachineGuardActivityListV1Schema.parse({ entries: [{ v: 1, id: `${entryId}-trash_moved`, kind: 'trash_moved',
+          at: 1, undoneAt: 4, rule: 'approved_proposal', outcome: 'done', attribution: { kind: 'unknown' } }],
+          counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: 5 });
+      }
+      return boundary(call);
+    });
+    const screen = await render(request);
+    await vi.waitFor(() => expect(screen.findByTestId('resource-proposal-receipt-unavailable')).toBeTruthy());
+    activityAvailable = true;
+    const reopen = () => act(async () => screen.update(<ApprovalPromptCard
+        artifact={{ id: 'approval-1', header: { title: null, serverId: homeId } }}
+        approval={ApprovalRequestV2Schema.parse(JSON.parse(JSON.stringify(request)))} sessionId="session-1" canApprove
+      />));
+    // The exact-Home artifact reader fetches a new snapshot on focus without remounting the retained page.
+    await reopen();
+    await vi.waitFor(() => expect(calls(RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST)).toHaveLength(2));
+    await vi.waitFor(() => expect(screen.findByTestId('resource-proposal-restored')).toBeTruthy());
+    expect(calls(RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST)).toHaveLength(2);
+    await reopen();
+    expect(screen.findByTestId('resource-proposal-restored')).toBeTruthy();
+    expect(calls(RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST)).toHaveLength(2);
   });
 
   it.each(['emptied', 'restored', 'mixed', 'mixed_closed', 'expired', 'older', 'page_failure', 'activity_failure'] as const)(
@@ -741,6 +792,84 @@ describe('resource proposal card', () => {
     await act(async () => { await undoButtons[undoButtons.length - 1]!.props.onPress(); });
     await vi.waitFor(() => expect(calls(RPC_METHODS.DAEMON_STORAGE_TRASH_RESTORE)).toHaveLength(1));
     expect(calls(RPC_METHODS.DAEMON_STORAGE_TRASH_RESTORE)[0]!.payload).toMatchObject({ entryIds: ['entry-ui-old-wt'] });
+  });
+
+  it.each(['delete', 'trash'] as const)('retries only the selected skipped operand with current facts after a partial %s receipt is freed and remounted', async mode => {
+    const actionId = mode === 'delete' ? 'machines.storage.deleteNow' : 'machines.storage.trash.move';
+    home.answer(homeId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
+      actionsSettingsV1: setActionApprovalOverride({ settings: normalizeActionsSettingsV1(null), actionId,
+        surface: 'ui', approvalRequired: true }),
+    } }, version: 1 } });
+    const method = mode === 'delete' ? RPC_METHODS.DAEMON_STORAGE_DELETE_NOW : RPC_METHODS.DAEMON_STORAGE_TRASH_MOVE;
+    const args = mode === 'delete'
+      ? MachineStorageDeleteNowInputV1Schema.parse({ machineId: MACHINE,
+        items: proposalArgs.items.map(({ ref, expect }) => ({ ref, expect })) }) : proposalArgs;
+    const result = PileApplyResultV1Schema.parse({ batchId: 'batch-1', mode,
+      inTrashBytes: mode === 'trash' ? 4 * GB : 0, freedBytes: mode === 'delete' ? 4 * GB : 0,
+      ...(mode === 'trash' ? { trashEntryIds: ids.slice(0, 4).map(id => `entry-${id}`) } : {}),
+      outcomes: [...ids.slice(0, 4).map(itemId => ({ itemId, status: mode === 'delete' ? 'deleted' : 'moved' })),
+        ...ids.slice(4).map(itemId => ({ itemId, status: 'skipped', reason: { code: 'changed_since_review' } }))] });
+    const base = proposal();
+    const request = ApprovalRequestV2Schema.parse({ ...base, actionId, actionArgs: args,
+      executionOriginV1: { ...base.executionOriginV1, actionId }, status: 'executed', updatedAtMs: 3,
+      decision: { kind: 'approve', decidedAtMs: 2, authority: 'present_user', narrowedInput: StrictJsonValueSchema.parse(args) },
+      execution: { executedAtMs: 3, ok: true, result } });
+    let emptied = false;
+    const incumbent = daemonRpc.getMockImplementation()!;
+    daemonRpc.mockImplementation(async call => {
+      if (call.method === RPC_METHODS.DAEMON_STORAGE_TRASH_EMPTY) {
+        emptied = true;
+        return { outcomes: ids.slice(0, 4).map(id => ({ entryId: `entry-${id}`, status: 'deleted' })), freedBytes: 4 * GB };
+      }
+      if (emptied && call.method === RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST) {
+        return MachineStorageCategoryListResultV1Schema.parse({ revision: 2, sizedAt: 4, categoryId: 'trash', items: [], trashEntries: [] });
+      }
+      if (emptied && call.method === RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST) {
+        return MachineGuardActivityListV1Schema.parse({ entries: ids.slice(0, 4).map(id => ({ v: 1,
+          id: `entry-${id}-trash_emptied`, kind: 'trash_emptied', at: 4, rule: 'approved_proposal',
+          outcome: 'done', attribution: { kind: 'unknown' }, freedBytes: GB })),
+          counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: 4 });
+      }
+      if (call.method === RPC_METHODS.DAEMON_STORAGE_DELETE_NOW) {
+        const input = MachineStorageDeleteNowInputV1Schema.parse(call.payload);
+        return PileApplyResultV1Schema.parse({ batchId: 'retry-delete', mode: 'delete', inTrashBytes: 0,
+          freedBytes: input.items.length * GB, outcomes: input.items.map(item => ({ itemId: item.ref.itemId, status: 'deleted' })) });
+      }
+      return incumbent(call);
+    });
+    const first = await render(request);
+    if (mode === 'trash') {
+      await vi.waitFor(() => expect(first.findByTestId('machine-storage-pile-empty')).toBeTruthy());
+      await first.pressByTestIdAsync('machine-storage-pile-empty');
+    }
+    await vi.waitFor(() => expect(first.getTextContent()).toContain('machineStorage.pile.freed(amount=4 GB)'));
+    expect(first.findByTestId('resource-proposal-retry-old-wt')).not.toBeNull();
+    await first.unmount();
+    const screen = await render(request, false);
+    await vi.waitFor(() => expect(screen.getTextContent()).toContain('machineStorage.pile.freed(amount=4 GB)'));
+    checkExpect = itemId => `current-${itemId}`;
+    await screen.pressByTestIdAsync('resource-proposal-retry-old-wt');
+    // Explicit Ask first creates a fresh approval Artifact through the Action owner.
+    await vi.waitFor(() => expect(home.artifacts(homeId).list().filter(row => row.id !== 'approval-1')).toHaveLength(1));
+    const retryApprovalId = home.artifacts(homeId).list().find(row => row.id !== 'approval-1')!.id;
+    expect(ApprovalRequestSchema.parse(JSON.parse(home.artifacts(homeId).readPlainBody(retryApprovalId)!))).toMatchObject({
+      status: 'open', actionId, actionArgs: { items: [{ ref: { itemId: 'old-wt' }, expect: 'current-old-wt' }] },
+    });
+    expect(calls(method)).toHaveLength(0);
+    // A subsequent UI invocation obeys the newly selected Allowed preference as well.
+    home.answer(homeId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
+      actionsSettingsV1: setActionApprovalOverride({ settings: normalizeActionsSettingsV1(null), actionId,
+        surface: 'ui', approvalRequired: false }),
+    } }, version: 2 } });
+    await screen.pressByTestIdAsync('resource-proposal-retry-old-wt');
+    await vi.waitFor(() => expect(calls(method)).toHaveLength(1));
+    expect(calls(RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK).at(-1)?.payload).toMatchObject({ refs: [{ itemId: 'old-wt', path: ref('old-wt').path }] });
+    const input = calls(method)[0]!.payload as { items: Array<{ ref: { itemId: string }; expect: string }> };
+    expect(input.items.map(item => ({ itemId: item.ref.itemId, expect: item.expect }))).toEqual([{ itemId: 'old-wt', expect: 'current-old-wt' }]);
+    await vi.waitFor(() => expect(screen.findByTestId('resource-proposal-retry-old-wt')).toBeNull());
+    expect(screen.findByTestId('resource-proposal-retry-playwright')).not.toBeNull();
+    expect(calls(RPC_METHODS.APPROVAL_REQUEST_REPLAY_APPROVED)).toHaveLength(0);
+    await screen.unmount();
   });
 
   it('retains the successful retry batch after Undo and a cold reopened failed-first proposal', async () => {

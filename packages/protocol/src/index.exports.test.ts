@@ -4,8 +4,8 @@ import * as publishedProtocol from '@happier-dev/protocol';
 import * as protocol from './index.js';
 import * as sessionProtocol from './sessions/index.js';
 import {
-    SessionDiscussionIdSchema as canonicalSessionDiscussionIdSchema,
-} from './sessions/discussions/content.js';
+    DiscussionIdSchema as canonicalDiscussionIdSchema,
+} from './discussions/content.js';
 import {
     ComposerReferenceCandidateIdV1Schema as canonicalComposerReferenceCandidateIdV1Schema,
 } from './plugins/contributions/composerReferenceProviders.js';
@@ -142,8 +142,8 @@ describe('protocol package root exports', () => {
         expect(protocol.TerminalHostUnavailableSpawnErrorDetailSchema.parse(detail)).toEqual(detail);
     });
     it('exports Session discussion contracts through both public Session barrels', () => {
-        expect(protocol.SessionDiscussionIdSchema).toBe(canonicalSessionDiscussionIdSchema);
-        expect(sessionProtocol.SessionDiscussionIdSchema).toBe(canonicalSessionDiscussionIdSchema);
+        expect(protocol.DiscussionIdSchema).toBe(canonicalDiscussionIdSchema);
+        expect(sessionProtocol.DiscussionIdSchema).toBe(canonicalDiscussionIdSchema);
     });
 
     it('exports the canonical Runner publication-eligibility contract through the package root', () => {

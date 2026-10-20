@@ -5,7 +5,6 @@ import { act } from 'react-test-renderer';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { installSessionDetailsPanelCommonModuleMocks } from './sessionDetailsPanelTestHelpers';
-import { installSessionPaneRuntimeTestHarness } from './sessionPaneRuntimeTestHarness';
 
 let paneElement: HTMLDivElement;
 let bubbled: ReturnType<typeof vi.fn>;
@@ -23,6 +22,8 @@ installSessionDetailsPanelCommonModuleMocks({
         });
     },
 });
+// Install the real DOM ref adapter before the runtime graph resolves React Native.
+const { installSessionPaneRuntimeTestHarness } = await import('./sessionPaneRuntimeTestHarness');
 const runtime = installSessionPaneRuntimeTestHarness();
 beforeEach(() => {
     bubbled = vi.fn();

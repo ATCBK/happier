@@ -33,10 +33,24 @@ export const SessionPermissionRespondRpcParamsV1Schema = lazyZodSchema(() => z.d
 ]));
 export type SessionPermissionRespondRpcParamsV1 = z.infer<typeof SessionPermissionRespondRpcParamsV1Schema>;
 
+/** Passing a question changes its handler without answering or granting permission. */
+export const SessionUserActionPassUpRpcParamsV1Schema = lazyZodSchema(() => z.strictObject({
+  id: z.string().check(z.trim(), z.minLength(1)),
+  disposition: z.literal('pass_up'),
+  reason: z.optional(z.string().check(z.trim(), z.minLength(1))),
+}));
+export type SessionUserActionPassUpRpcParamsV1 = z.infer<typeof SessionUserActionPassUpRpcParamsV1Schema>;
+export const SessionUserActionAnswerRpcParamsV1Schema = lazyZodSchema(() => z.union([
+  SessionPermissionRespondRpcParamsV1Schema,
+  SessionUserActionPassUpRpcParamsV1Schema,
+]));
+export type SessionUserActionAnswerRpcParamsV1 = z.infer<typeof SessionUserActionAnswerRpcParamsV1Schema>;
+
 /** One Action-to-RPC compatibility seam, consumed by both first-party hosts. */
 export function buildSessionPermissionRespondRpcParamsV1(input: Readonly<
-  Omit<SessionPermissionRespondRpcParamsV1, 'approved' | 'decision'> & {
+  Omit<SessionPermissionRespondRpcParamsV1, 'approved' | 'decision' | 'execPolicyAmendment'> & {
     decision: SessionPermissionRespondActionDecisionV1;
+    execPolicyAmendment?: unknown;
   }
 >): SessionPermissionRespondRpcParamsV1 {
   const { decision, ...fields } = input;

@@ -11,6 +11,7 @@ import { mapUnknownErrorToControlError } from '@/cli/control/controlErrorMapping
 import { printJsonEnvelope, wantsJson } from '@/cli/output/jsonEnvelope';
 import { readCredentials, readStoredCredentialsForServerId, type StoredCredentials } from '@/persistence';
 import { configuration } from '@/configuration';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { tryHandleApprovalRequestCreated } from '@/cli/commands/session/shared/tryHandleApprovalRequestCreated';
 import { fail } from '@happier-dev/cli-common/output';
@@ -152,7 +153,7 @@ export async function handleAutomationCommand(
 
   const parsed = parseRunArgs(args);
   const serverId = configuration.activeServerId;
-  const serverApiUrl = configuration.apiServerUrl;
+  const serverApiUrl = resolveServerHttpBaseUrl();
   const credentials = await deps.readCredentialsFn(serverId);
   if (!credentials) {
     const error = new Error('Not authenticated. Run "happier auth login" first.');

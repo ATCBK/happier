@@ -1,77 +1,58 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-const appStateEmitter = vi.hoisted(async () => {
-    const { createReactNativeAppStateEmitter } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeAppStateEmitter('active');
-});
-const getSnapshotPlain = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<import('@happier-dev/protocol').ConnectedServiceQuotaSnapshotV1 | null>>(async () => null));
-const requestRefresh = vi.hoisted(() => vi.fn(async () => true));
-
-vi.mock('react-native', async () => {
-    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock({
-        Platform: { get OS() { return 'web'; } },
-        AppState: (await appStateEmitter).appState,
-    });
-});
-vi.mock('@/utils/platform/desktopHost', () => ({ isDesktopHost: () => false }));
-vi.mock('@/sync/api/account/apiConnectedServicesQuotasV2', () => ({
-    getConnectedServiceQuotaSnapshotSealed: vi.fn(async () => null),
-    requestConnectedServiceQuotaSnapshotRefresh: vi.fn(async () => true),
-}));
-vi.mock('@/sync/api/account/apiConnectedServicesQuotasV3', () => ({
-    getConnectedServiceQuotaSnapshotPlain: getSnapshotPlain,
-    requestConnectedServiceQuotaSnapshotRefreshV3: requestRefresh,
-}));
-
+import { renderHook, standardCleanup } from '@/dev/testkit';
+import { createLegacyQuotaAuthWrapper, createLegacyQuotaTestHarness, plainQuotaResponse,
+    resetConnectedServiceQuotaSnapshotsTestState } from './useConnectedServiceQuotaSnapshots.testkit';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { fetchAccountEncryptionMode } from '@/sync/api/account/apiAccountEncryptionMode';
 import {
-    __resetConnectedServiceQuotaSnapshotStore,
-    buildQuotaSnapshotScopeKey,
-    getQuotaSnapshotEntry,
-    refreshQuotaSnapshot,
-    retainQuotaSnapshotPolling,
-    retainQuotaSnapshotOnce,
-    subscribeQuotaSnapshotEntry,
+    __resetConnectedServiceQuotaSnapshotStore, buildQuotaSnapshotScopeKey, getQuotaSnapshotEntry,
+    refreshQuotaSnapshot, retainQuotaSnapshotPolling, retainQuotaSnapshotOnce, subscribeQuotaSnapshotEntry,
+    type QuotaSnapshotRefreshContext,
 } from './connectedServiceQuotaSnapshotStore';
 
-const ctx = {
-    credentials: { token: 't', secret: 's' },
-    credentialScope: 'scope',
-    serverBasis: {
-        serverId: 'server-a',
-        generation: 3,
-    },
-    serviceId: 'openai-codex',
-    profileId: 'work',
-    resolveAccountMode: async () => 'plain' as const,
-    assertOperationAllowed: async () => {},
-} as const;
+let boundary: Awaited<ReturnType<typeof createLegacyQuotaTestHarness>>;
+const Wrapper = createLegacyQuotaAuthWrapper(() => boundary);
+let getSnapshotPlain: typeof boundary.plainRead;
+let requestRefresh: typeof boundary.refreshRead;
+let ctx: QuotaSnapshotRefreshContext;
 
 describe('connectedServiceQuotaSnapshotStore polling lifecycle', () => {
-    const globalWithDocument = globalThis as unknown as { document?: { visibilityState?: string } };
+    const globalWithDocument = globalThis as unknown as { document?: Document | EventTarget & { visibilityState: string } };
     const originalDocument = globalWithDocument.document;
+    let documentBoundary: EventTarget & { visibilityState: string };
 
     beforeEach(async () => {
+        await resetConnectedServiceQuotaSnapshotsTestState();
+        boundary = await createLegacyQuotaTestHarness();
+        const { useConnectedServiceLegacyOperationAdmission } = await import('./useConnectedServiceLegacyOperationAdmission');
+        const admission = await renderHook(() => useConnectedServiceLegacyOperationAdmission(), { wrapper: Wrapper });
+        const active = getActiveServerSnapshot();
+        ctx = { credentials: boundary.account.credentials, credentialScope: boundary.context().credentialScope,
+            serverBasis: { serverId: active.serverId, generation: active.generation },
+            serviceId: 'openai-codex', profileId: 'work',
+            resolveAccountMode: async () => (await fetchAccountEncryptionMode(boundary.account.credentials)).mode,
+            assertOperationAllowed: operation => admission.getCurrent()('openai-codex', operation) };
+        documentBoundary = Object.assign(new EventTarget(), { visibilityState: 'visible' });
+        globalWithDocument.document = documentBoundary;
+        getSnapshotPlain = boundary.plainRead;
+        requestRefresh = boundary.refreshRead;
+        getSnapshotPlain.mockImplementation(async () => plainQuotaResponse(null));
         vi.useFakeTimers();
-        globalWithDocument.document = { visibilityState: 'visible' };
-        (await appStateEmitter).emit('active');
-        __resetConnectedServiceQuotaSnapshotStore();
-        getSnapshotPlain.mockReset();
-        getSnapshotPlain.mockResolvedValue(null);
-        requestRefresh.mockReset();
-        requestRefresh.mockResolvedValue(true);
     });
 
-    afterEach(() => {
+    afterEach(async () => {
         __resetConnectedServiceQuotaSnapshotStore();
+        standardCleanup();
         vi.useRealTimers();
         globalWithDocument.document = originalDocument;
+        await boundary.dispose();
+        vi.restoreAllMocks();
     });
 
     it('polls only an explicit pending refresh for a cached observer and cancels on departure', async () => {
         const snapshot = { v: 1 as const, serviceId: ctx.serviceId, profileId: ctx.profileId,
             fetchedAt: 1, staleAfterMs: 30 * 60_000, planLabel: null, accountLabel: null, meters: [] };
-        getSnapshotPlain.mockResolvedValue(snapshot);
+        getSnapshotPlain.mockImplementation(async () => plainQuotaResponse(snapshot));
         const key = buildQuotaSnapshotScopeKey(ctx.credentialScope, ctx.serviceId, ctx.profileId);
         const release = retainQuotaSnapshotOnce(key, ctx);
         const unsubscribe = subscribeQuotaSnapshotEntry(key, () => {});
@@ -96,7 +77,7 @@ describe('connectedServiceQuotaSnapshotStore polling lifecycle', () => {
             v: 1 as const, serviceId: ctx.serviceId, profileId: ctx.profileId,
             fetchedAt: 1, staleAfterMs: 30 * 60_000, planLabel: null, accountLabel: null, meters: [],
         };
-        getSnapshotPlain.mockResolvedValue(snapshot);
+        getSnapshotPlain.mockImplementation(async () => plainQuotaResponse(snapshot));
         const key = buildQuotaSnapshotScopeKey(ctx.credentialScope, ctx.serviceId, ctx.profileId);
         const release = retainQuotaSnapshotPolling(key, ctx);
         await vi.advanceTimersByTimeAsync(0);
@@ -105,8 +86,8 @@ describe('connectedServiceQuotaSnapshotStore polling lifecycle', () => {
         expect(getQuotaSnapshotEntry(key)).toMatchObject({ refreshing: true, snapshot, error: null });
         await vi.advanceTimersByTimeAsync(49_000);
         expect(getQuotaSnapshotEntry(key).refreshing).toBe(true);
-        if (outcome === 'snapshot') getSnapshotPlain.mockResolvedValue({ ...snapshot, fetchedAt: 2 });
-        else getSnapshotPlain.mockRejectedValue(new Error('Quota read failed'));
+        if (outcome === 'snapshot') getSnapshotPlain.mockImplementation(async () => plainQuotaResponse({ ...snapshot, fetchedAt: 2 }));
+        else getSnapshotPlain.mockImplementation(async () => Response.json({ error: 'Quota read failed' }, { status: 400 }));
         await vi.advanceTimersByTimeAsync(30_000);
         expect(getQuotaSnapshotEntry(key).refreshing).toBe(false);
         expect(getQuotaSnapshotEntry(key).snapshot?.fetchedAt).toBe(outcome === 'snapshot' ? 2 : 1);
@@ -120,11 +101,11 @@ describe('connectedServiceQuotaSnapshotStore polling lifecycle', () => {
             v: 1 as const, serviceId: ctx.serviceId, profileId: ctx.profileId,
             fetchedAt: 1, staleAfterMs: 30 * 60_000, planLabel: null, accountLabel: null, meters: [],
         };
-        getSnapshotPlain.mockResolvedValue(snapshot);
+        getSnapshotPlain.mockImplementation(async () => plainQuotaResponse(snapshot));
         const key = buildQuotaSnapshotScopeKey(ctx.credentialScope, ctx.serviceId, ctx.profileId);
         const release = retainQuotaSnapshotPolling(key, ctx);
         await vi.advanceTimersByTimeAsync(0);
-        getSnapshotPlain.mockResolvedValue(null);
+        getSnapshotPlain.mockImplementation(async () => plainQuotaResponse(null));
         void refreshQuotaSnapshot(key, ctx);
         await vi.advanceTimersByTimeAsync(0);
         expect(getQuotaSnapshotEntry(key).snapshot).toEqual(snapshot);
@@ -138,9 +119,9 @@ describe('connectedServiceQuotaSnapshotStore polling lifecycle', () => {
             v: 1 as const, serviceId: ctx.serviceId, profileId: ctx.profileId,
             fetchedAt: 1, staleAfterMs: 30 * 60_000, planLabel: null, accountLabel: null, meters: [],
         };
-        getSnapshotPlain.mockResolvedValue(snapshot);
-        let finishRequest!: (accepted: boolean) => void;
-        requestRefresh.mockReturnValueOnce(new Promise<boolean>((resolve) => { finishRequest = resolve; }));
+        getSnapshotPlain.mockImplementation(async () => plainQuotaResponse(snapshot));
+        let finishRequest!: (response: Response) => void;
+        requestRefresh.mockReturnValueOnce(new Promise<Response>((resolve) => { finishRequest = resolve; }));
         const key = buildQuotaSnapshotScopeKey(ctx.credentialScope, ctx.serviceId, ctx.profileId);
         const retain = () => {
             const release = policy === 'poll' ? retainQuotaSnapshotPolling(key, ctx) : retainQuotaSnapshotOnce(key, ctx);
@@ -157,20 +138,19 @@ describe('connectedServiceQuotaSnapshotStore polling lifecycle', () => {
         const joinedRetry = refreshQuotaSnapshot(key, ctx);
         expect(getQuotaSnapshotEntry(key)).toMatchObject({ refreshing: true, snapshot, error: null });
         expect(requestRefresh).toHaveBeenCalledTimes(1);
-        finishRequest(true);
+        finishRequest(Response.json({ success: true }));
         await Promise.all([first, retry, joinedRetry]);
         expect(requestRefresh).toHaveBeenCalledTimes(2);
-        expect(getSnapshotPlain).toHaveBeenCalledTimes(2);
-        expect(getQuotaSnapshotEntry(key).refreshing).toBe(true);
-        getSnapshotPlain.mockResolvedValue({ ...snapshot, fetchedAt: 2 });
+        expect(getQuotaSnapshotEntry(key)).toMatchObject({ refreshing: true, snapshot, error: null });
+        getSnapshotPlain.mockImplementation(async () => plainQuotaResponse({ ...snapshot, fetchedAt: 2 }));
         await vi.advanceTimersByTimeAsync(30_000);
         expect(getQuotaSnapshotEntry(key)).toMatchObject({ refreshing: false, snapshot: { fetchedAt: 2 }, error: null });
         releaseAgain();
     });
 
     it.each(['join', 'cancel'] as const)('does not restart an unresolved refresh on %s', async (intent) => {
-        let finishRequest!: (accepted: boolean) => void;
-        requestRefresh.mockReturnValueOnce(new Promise<boolean>((resolve) => { finishRequest = resolve; }));
+        let finishRequest!: (response: Response) => void;
+        requestRefresh.mockReturnValueOnce(new Promise<Response>((resolve) => { finishRequest = resolve; }));
         const key = buildQuotaSnapshotScopeKey(ctx.credentialScope, ctx.serviceId, ctx.profileId);
         const release = retainQuotaSnapshotPolling(key, ctx);
         await vi.advanceTimersByTimeAsync(0);
@@ -178,7 +158,7 @@ describe('connectedServiceQuotaSnapshotStore polling lifecycle', () => {
         await vi.advanceTimersByTimeAsync(0);
         const joined = intent === 'join' ? refreshQuotaSnapshot(key, ctx) : undefined;
         if (intent === 'cancel') release();
-        finishRequest(true);
+        finishRequest(Response.json({ success: true }));
         await Promise.all([first, joined]);
         expect(requestRefresh).toHaveBeenCalledTimes(1);
         expect(getSnapshotPlain).toHaveBeenCalledTimes(intent === 'join' ? 2 : 1);
@@ -204,7 +184,7 @@ describe('connectedServiceQuotaSnapshotStore polling lifecycle', () => {
         const key = buildQuotaSnapshotScopeKey(ctx.credentialScope, ctx.serviceId, ctx.profileId);
         const release = retainQuotaSnapshotPolling(key, ctx);
         await vi.advanceTimersByTimeAsync(0);
-        requestRefresh.mockRejectedValueOnce(new Error('Refresh refused'));
+        requestRefresh.mockImplementationOnce(async () => Response.json({ error: 'Refresh refused' }, { status: 400 }));
         void refreshQuotaSnapshot(key, ctx);
         await vi.advanceTimersByTimeAsync(11_000);
         expect(getQuotaSnapshotEntry(key)).toMatchObject({ refreshing: false, error: 'Refresh refused' });
@@ -213,7 +193,7 @@ describe('connectedServiceQuotaSnapshotStore polling lifecycle', () => {
 
 
     it('stops fetching quota snapshots while the app is backgrounded and refetches on return', async () => {
-        const key = buildQuotaSnapshotScopeKey('scope', 'openai-codex', 'work');
+        const key = buildQuotaSnapshotScopeKey(ctx.credentialScope, ctx.serviceId, ctx.profileId);
 
         const release = retainQuotaSnapshotPolling(key, ctx);
         await vi.advanceTimersByTimeAsync(0);
@@ -222,11 +202,13 @@ describe('connectedServiceQuotaSnapshotStore polling lifecycle', () => {
         await vi.advanceTimersByTimeAsync(30_000);
         expect(getSnapshotPlain).toHaveBeenCalledTimes(2);
 
-        (await appStateEmitter).emit('background');
+        documentBoundary.visibilityState = 'hidden';
+        documentBoundary.dispatchEvent(new Event('visibilitychange'));
         await vi.advanceTimersByTimeAsync(30_000 * 4);
         expect(getSnapshotPlain).toHaveBeenCalledTimes(2);
 
-        (await appStateEmitter).emit('active');
+        documentBoundary.visibilityState = 'visible';
+        documentBoundary.dispatchEvent(new Event('visibilitychange'));
         await vi.advanceTimersByTimeAsync(0);
         expect(getSnapshotPlain).toHaveBeenCalledTimes(3);
 

@@ -40,6 +40,8 @@ import { OperationUpdateRequiredV1Schema } from '../../compat/operationUpdateReq
 import { ExecutionRunOutputObservationSchema } from '../../reviews/reviewNarration.js';
 import { ProviderAgentTargetKeySchema } from '../../providers/ids.js';
 import { ProviderBoundModelRefSchema } from '../../providers/selection/v1.js';
+import { ReviewFindingsV2Schema } from '../../messages/structured/reviewFindingsV2.js';
+import { SessionRuntimeIssueV1Schema } from '../../sessions/control/runtimeIssueV1.js';
 
 /** A refusal offers choices, never credential material or permission to use a route. */
 export const ExecutionRunChildChoiceV1Schema = lazyZodSchema(() => z.strictObject({
@@ -140,6 +142,7 @@ export type ExecutionRunListRequest = ExecutionRunListRequestBase;
 export const ExecutionRunErrorSchema = lazyZodSchema(() => z.looseObject({
   code: z.string().check(z.minLength(1)),
   message: z.optional(z.string()),
+  runtimeIssueV1: z.optional(SessionRuntimeIssueV1Schema),
 }));
 export type ExecutionRunError = z.infer<typeof ExecutionRunErrorSchema>;
 
@@ -246,8 +249,22 @@ export const ExecutionRunGetResponseSchema = lazyZodSchema(() => z.looseObject({
   run: ExecutionRunPublicStateSchema,
   latestToolResult: z.optional(z.unknown()),
   structuredMeta: z.optional(z.looseObject({ kind: z.string(), payload: z.unknown() })),
+  reviewFindings: z.optional(ReviewFindingsV2Schema),
 }));
 export type ExecutionRunGetResponse = z.infer<typeof ExecutionRunGetResponseSchema>;
+
+/** Retained source identity only; unlike get, this read never returns Run content. */
+export const ExecutionRunFollowFrontierRequestSchema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.minLength(1)),
+  runId: z.string().check(z.minLength(1)),
+}));
+export const ExecutionRunFollowFrontierResponseSchema = lazyZodSchema(() => z.strictObject({
+  runId: z.string().check(z.minLength(1)),
+  sessionId: z.string().check(z.minLength(1)),
+  status: ExecutionRunStatusSchema,
+  terminalEventId: z.nullable(z.string().check(z.minLength(1))),
+}));
+export type ExecutionRunFollowFrontierResponse = z.infer<typeof ExecutionRunFollowFrontierResponseSchema>;
 
 /**
  * One public observation disposition for `execution.run.wait` and optional

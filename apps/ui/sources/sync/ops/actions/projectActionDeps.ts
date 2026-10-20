@@ -8,7 +8,7 @@ import { createProjectTrustClientForAccount } from '@/sync/api/account/apiProjec
 import { canUsePrivateProjectAccountAction } from '@/sync/api/projects/projectAccountRowsClient';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
-import type { LazyActionAccountContext } from './actionAccountContext';
+import { withActionAccountRequestSignal, type LazyActionAccountContext } from './actionAccountContext';
 import { executeOriginalAccountMachineAction } from '@/sync/api/externalActionAccountTransport';
 
 /** Delivery only: the incumbent executor already owns invocation authority, settings and approvals. */
@@ -57,12 +57,12 @@ export function createUiProjectAction(account?: LazyActionAccountContext): NonNu
                 // A hosted origin cannot become this UI's ambient Account.
                 // Only its existing typed Session carrier can authorize RPC.
                 if (!context.rpcSessionAuthorization) return { ok: false, errorCode: 'admission_unavailable', error: 'admission_unavailable' };
-                const raw = await machineRpcWithServerScope({ serverId: account.serverId, accountId: account.accountId,
+                const raw = await withActionAccountRequestSignal(account, context.signal, signal => machineRpcWithServerScope({ serverId: account.serverId, accountId: account.accountId,
                     authorization: context.rpcSessionAuthorization,
                     machineId, method: PROJECT_FINITE_ACTION_RPC_METHODS_V1[actionId], payload: canonicalInput,
                     requestId: context.actionRequestId ?? undefined, operationTimeoutMs: null,
-                    ...(context.signal ? { signal: context.signal } : {}),
-                });
+                    signal,
+                }));
                 // An actual finite receipt remains the invoker's disposition;
                 // Account retirement suppresses projection, not this ACK.
                 account.assertResultCurrent(getActionSpec(actionId).sideEffectClass);

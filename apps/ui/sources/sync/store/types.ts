@@ -6,7 +6,7 @@ import type { FeedItem } from '../domains/social/feedTypes';
 import type { RelationshipUpdatedEvent, UserProfile } from '../domains/social/friendTypes';
 import type { LocalSettings } from '../domains/settings/localSettings';
 import type { ReviewCommentDraft } from '../domains/input/reviewComments/reviewCommentTypes';
-import type { PendingMessage, Session, Machine, ScmStatus, ScmWorkingSnapshot, DiscardedPendingMessage } from '../domains/state/storageTypes';
+import type { Session, Machine, ScmStatus, ScmWorkingSnapshot } from '../domains/state/storageTypes';
 import type { ScmCommitSelectionPatch } from '../domains/state/storageTypes';
 import type { PermissionMode } from '../domains/permissions/permissionTypes';
 import type { WorkflowRunsDomain } from './domains/workflowRuns';
@@ -30,7 +30,7 @@ import type { ApplyMachinesOptions, MachinePresence } from './domains/machines';
 import type { MachinePoolsDomain } from './domains/machinePools';
 import type { ProjectAccountRowsDomain } from './domains/projectAccountRows';
 import type { MessagesDomain, SessionMessages } from './domains/messages';
-import type { SessionPending } from './domains/pending';
+import type { PendingDomain } from './domains/pending';
 import type {
     EndpointConnectivitySnapshot,
     EndpointConnectivityStatus,
@@ -145,11 +145,11 @@ export interface SessionsDomainSlice {
     clearWorkspaceRepositoryTreeExpandedPaths: (scope: WorkspaceScopeBase) => void;
     upsertSessionReviewCommentDraft: (sessionId: string, draft: ReviewCommentDraft) => void;
     setSessionReviewCommentDraftIncluded: (sessionId: string, commentId: string, included: boolean) => void;
-    deleteSessionReviewCommentDraft: (sessionId: string, commentId: string) => void;
+    deleteSessionReviewCommentDraft: (sessionId: string, commentId: string, expectedDraft?: ReviewCommentDraft) => void;
     clearSessionReviewCommentDrafts: (sessionId: string) => void;
     upsertWorkspaceReviewCommentDraft: (workspaceCacheKey: string, draft: ReviewCommentDraft) => void;
     setWorkspaceReviewCommentDraftIncluded: (workspaceCacheKey: string, commentId: string, included: boolean) => void;
-    deleteWorkspaceReviewCommentDraft: (workspaceCacheKey: string, commentId: string) => void;
+    deleteWorkspaceReviewCommentDraft: (workspaceCacheKey: string, commentId: string, expectedDraft?: ReviewCommentDraft) => void;
     clearWorkspaceReviewCommentDrafts: (workspaceCacheKey: string) => void;
     createSessionActionDraft: (
         scope: ServerAccountScope,
@@ -199,6 +199,7 @@ export interface MachinesDomainSlice {
     machineListStatusByServerId: Record<string, 'idle' | 'loading' | 'signedOut' | 'error'>;
     applyMachines: (machines: Machine[], replace?: boolean, options?: ApplyMachinesOptions) => void;
     replaceMachineDisplays: import('./domains/machines').MachinesDomain['replaceMachineDisplays'];
+    markMachineListSettled: import('./domains/machines').MachinesDomain['markMachineListSettled'];
     markMachineListUnavailable: (serverId: string) => void;
 }
 
@@ -214,19 +215,7 @@ export interface MessagesDomainSlice {
     isMutableToolCall: (sessionId: string, callId: string) => boolean;
 }
 
-export interface PendingDomainSlice {
-    sessionPending: Record<string, SessionPending>;
-    applyPendingLoaded: (sessionId: string) => void;
-    applyPendingSnapshot: (sessionId: string, snapshot: Readonly<{
-        messages: PendingMessage[];
-        discarded: DiscardedPendingMessage[];
-    }>) => void;
-    applyPendingMessages: (sessionId: string, messages: PendingMessage[]) => void;
-    applyDiscardedPendingMessages: (sessionId: string, messages: DiscardedPendingMessage[]) => void;
-    pruneServerPendingMessages: (sessionId: string) => void;
-    upsertPendingMessage: (sessionId: string, message: PendingMessage) => void;
-    removePendingMessage: (sessionId: string, pendingId: string) => void;
-}
+export type PendingDomainSlice = PendingDomain;
 
 export type TranscriptLoadingDomainSlice = TranscriptLoadingDomain;
 
@@ -270,7 +259,7 @@ export interface ArtifactsDomainSlice {
     artifacts: Record<string, DecryptedArtifact>;
     artifactsLoaded: boolean;
     artifactsStorageRevision: number;
-    applyArtifacts: (artifacts: DecryptedArtifact[]) => void;
+    applyArtifacts: (artifacts: DecryptedArtifact[], inventoryReadStartedWith?: Readonly<Record<string, DecryptedArtifact>>) => void;
     addArtifact: (artifact: DecryptedArtifact) => void;
     updateArtifact: (artifact: DecryptedArtifact) => void;
     deleteArtifact: (artifactId: string) => void;

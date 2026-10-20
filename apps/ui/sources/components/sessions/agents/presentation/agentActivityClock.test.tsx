@@ -23,7 +23,7 @@ describe('shared Work clock', () => {
         const screen = await renderScreen(<Row />);
         expect(interval).toHaveBeenCalledTimes(1);
         const before = paints.mock.calls.length;
-        await act(async () => vi.advanceTimersByTime(60_000));
+        await act(async () => { vi.advanceTimersByTime(60_000); });
         expect(screen.getTextContent()).toContain('1m');
         expect(paints.mock.calls.length).toBe(before);
         await act(async () => screen.tree.unmount());

@@ -54,7 +54,7 @@ export function useProviderConnectionMachineViews(input: Readonly<{
         loading: false,
     });
     const generation = React.useRef(0);
-    const latestReadByTarget = React.useRef(new Map<string, object>());
+    const latestReadByTarget = React.useRef(new Map<string, AbortController>());
     const activeRef = React.useRef(input.active !== false);
     activeRef.current = input.active !== false;
     const targetsRef = React.useRef(input.targets);
@@ -122,8 +122,14 @@ export function useProviderConnectionMachineViews(input: Readonly<{
             : targetsRef.current;
         if (targets.length === 0) return;
         if (!ready) return;
-        const requestToken = {};
-        for (const row of targets) latestReadByTarget.current.set(providerSettingsMachineRowKey(row.target), requestToken);
+        const requestControllers = new Map<string, AbortController>();
+        for (const row of targets) {
+            const key = providerSettingsMachineRowKey(row.target);
+            latestReadByTarget.current.get(key)?.abort();
+            const controller = new AbortController();
+            requestControllers.set(key, controller);
+            latestReadByTarget.current.set(key, controller);
+        }
         setState((current) => {
             const previousByTargetKey = current.scopeKey === scopeKey
                 && current.accountLifetime === accountLifetime
@@ -160,7 +166,7 @@ export function useProviderConnectionMachineViews(input: Readonly<{
             try {
                 const result = await describeProviderConnections({
                     machineId, serverId: row.serverId, connectionId: input.connectionId,
-                });
+                }, { signal: requestControllers.get(key)!.signal });
                 if (!binding.isCurrent()) return [key, { status: 'error',
                     error: createProviderErrorV1('provider_authorization_changed', { connectionId: input.connectionId, machineId }),
                 } satisfies ProviderConnectionMachineViewState] as const;
@@ -178,7 +184,9 @@ export function useProviderConnectionMachineViews(input: Readonly<{
             if (current.scopeKey !== scopeKey || current.accountLifetime !== accountLifetime) return current;
             const byTargetKey = { ...current.byTargetKey };
             for (const [key, entry] of entries) {
-                if (latestReadByTarget.current.get(key) === requestToken) byTargetKey[key] = entry;
+                if (latestReadByTarget.current.get(key) === requestControllers.get(key)) {
+                    byTargetKey[key] = entry;
+                }
             }
             return { ...current, byTargetKey, loading: Object.values(byTargetKey).some(entry => entry.status === 'loading') };
         });
@@ -195,6 +203,7 @@ export function useProviderConnectionMachineViews(input: Readonly<{
         void read();
         return () => {
             generation.current += 1;
+            for (const controller of latestReadByTarget.current.values()) controller.abort();
             latestReadByTarget.current.clear();
             unregister?.();
         };

@@ -112,8 +112,10 @@ describe('Remote host Account catalog (SQLite integration)', () => {
             } })).json()).toEqual({ status: 'settings-conflict', revision: 4 });
             expect(await db.savedSecretResource.count()).toBe(0);
             expect(await db.userKVStore.count()).toBe(0);
-            expect((await app.inject({ method: 'POST', url: route, headers, payload: { mutation, savedSecretResources } })).json())
-                .toMatchObject({ status: 'updated', revision: 0 });
+            const response = (await app.inject({ method: 'POST', url: route, headers, payload: { mutation, savedSecretResources } })).json();
+            const published = await db.account.findUniqueOrThrow({ where: { id: owner.id }, select: { seq: true } });
+            expect(published.seq).toBeGreaterThan(0);
+            expect(response).toEqual({ status: 'updated', revision: 0, cursor: published.seq });
             expect(await db.savedSecretResource.count()).toBe(2);
             expect((await app.inject({ method: 'GET', url: route, headers })).json())
                 .toEqual({ status: 'present', revision: 0, content: mutation.content });

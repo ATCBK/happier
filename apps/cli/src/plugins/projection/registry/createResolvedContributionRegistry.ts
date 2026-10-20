@@ -245,7 +245,9 @@ export function createResolvedContributionRegistry(inputs: ResolvedContributionI
     const atmospherePictures = Object.freeze([...(inputs.atmospherePictures ?? [])].sort((left, right) =>
         buildQualifiedPluginContributionKey(left.identity).localeCompare(buildQualifiedPluginContributionKey(right.identity))));
     const registrySources = freezeQualifiedContributions(inputs.registrySources ?? []);
+    const skills = freezeQualifiedContributions(inputs.skills ?? []);
     const dragSources = freezeQualifiedContributions(inputs.dragSources ?? []);
+    const workItems = freezeQualifiedContributions(inputs.workItems ?? []);
     const machineProvisioners = freezeQualifiedContributions(inputs.machineProvisioners ?? []);
     const machineProvisionersByContributionKey = new Map(machineProvisioners.map((entry) => [
         resolveQualifiedContributionRegistryKey(entry), entry,
@@ -531,9 +533,11 @@ export function createResolvedContributionRegistry(inputs: ResolvedContributionI
         inputTypes,
         atmospherePictures,
         registrySources,
+        skills,
         machineProvisioners,
         machineProvisionersByContributionKey: Object.freeze(machineProvisionersByContributionKey),
         dragSources,
+        workItems,
         dropTargets,
         voiceProviders,
         accountCollections,
@@ -1054,8 +1058,10 @@ export function createMergedContributionRegistry(
         inputTypes: Object.freeze([...(builtIn.inputTypes ?? []), ...(plugin.inputTypes ?? [])]),
         atmospherePictures: Object.freeze([...(builtIn.atmospherePictures ?? []), ...(plugin.atmospherePictures ?? [])]),
         registrySources: Object.freeze([...(builtIn.registrySources ?? []), ...(plugin.registrySources ?? [])]),
+        skills: Object.freeze([...(builtIn.skills ?? []), ...(plugin.skills ?? [])]),
         machineProvisioners: Object.freeze([...(builtIn.machineProvisioners ?? []), ...(plugin.machineProvisioners ?? [])]),
         dragSources: Object.freeze([...(builtIn.dragSources ?? []), ...(plugin.dragSources ?? [])]),
+        workItems: Object.freeze([...(builtIn.workItems ?? []), ...(plugin.workItems ?? [])]),
         dropTargets: Object.freeze([...(builtIn.dropTargets ?? []), ...(plugin.dropTargets ?? [])]),
         voiceProviders: Object.freeze([...(builtIn.voiceProviders ?? []), ...(plugin.voiceProviders ?? [])]),
         accountCollections: Object.freeze([...(builtIn.accountCollections ?? []), ...(plugin.accountCollections ?? [])]),

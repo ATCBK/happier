@@ -96,7 +96,7 @@ describe('sessionExecutionRuns', () => {
     it('starts an omitted attached choice through safe ensure/start and preserves the complete start identity', async () => {
         sessionRpcMock.mockResolvedValue({ ok: true, created: true, runId: 'run-1', callId: 'call-1', sidechainId: 'side-1' });
         const request = {
-            intent: 'delegate', backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, instructions: 'Inspect',
+            intent: 'delegate', backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } }, instructions: 'Inspect',
             permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response',
         } as const;
         const result = await sessionExecutionRuns.sessionExecutionRunStart('session-1', request);
@@ -123,7 +123,7 @@ describe('sessionExecutionRuns', () => {
         sessionAccountRpcMock.mockResolvedValue(refusal);
         const result = kind === 'start'
             ? await sessionExecutionRuns.sessionExecutionRunStart('session-1', {
-                intent: 'delegate', backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+                intent: 'delegate', backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
                 permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
             }, { scope })
             : kind === 'ensure'
@@ -388,12 +388,16 @@ describe('sessionExecutionRuns', () => {
         expect(Array.isArray((response as any).runs)).toBe(true);
     });
 
-    it('fails closed instead of routing a same-id Session operation to another Home', async () => {
-        sessionRpcMock.mockResolvedValue({ runs: [] });
+    it('fails closed instead of starting a Run with another Home Session row as mutation eligibility', async () => {
+        sessionRpcMock.mockResolvedValue({ ok: true });
 
-        await expect(sessionExecutionRuns.sessionExecutionRunList(
+        await expect(sessionExecutionRuns.sessionExecutionRunStart(
             'session-1',
-            {},
+            {
+                intent: 'delegate', backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+                instructions: 'Inspect', permissionMode: 'read_only', retentionPolicy: 'ephemeral',
+                runClass: 'bounded', ioMode: 'request_response',
+            },
             { serverId: 'server-b' },
         )).resolves.toEqual({
             ok: false,

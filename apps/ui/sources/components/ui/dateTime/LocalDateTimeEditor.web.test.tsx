@@ -6,8 +6,8 @@ import { renderScreen } from '@/dev/testkit';
 import { LocalDateTimeEditor } from './LocalDateTimeEditor';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
-vi.mock('@/components/ui/text/Text', async () => (await import('@/dev/testkit/mocks/uiText')).createUiTextModuleMock());
 // Use Metro's web platform selection, retaining the actual picker and editor.
 vi.mock('./DateTimePickerPopover', () => vi.importActual('./DateTimePickerPopover.web'));
 

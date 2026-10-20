@@ -5,6 +5,7 @@ import {
   RestartAllSessionRunnersResultV1Schema,
   RestartSessionRunnerResultV1Schema,
   RestartSessionRunnerRequestV1Schema,
+  SessionRunnerRuntimeStateV1Schema,
 } from '@happier-dev/protocol';
 import {
   CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH_ENV,
@@ -25,6 +26,9 @@ import {
 import { applyTrackedSessionTurnLifecycle } from '../sessions/applyTrackedSessionTurnLifecycle';
 import { requestPlannedRunnerRestart } from './requestPlannedRunnerRestart';
 import { requestConnectedServiceSessionRestartSignal } from '../connectedServices/sessionAuthSwitch/requestConnectedServiceSessionRestartSignal';
+import { restartStaleRunnersAfterDaemonStart } from './restartStaleRunnersAfterDaemonStart';
+import { prepareSessionRunnerRestartAdmission } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
+import { resolveSessionRunnerRuntimeState } from '../sessionRunnerRuntime/resolveRuntimeState';
 
 function currentIdentity(version: string): SessionRunnerEntrypointIdentity {
   return {
@@ -77,6 +81,73 @@ function providerRecoveryRequest() {
 }
 
 describe('restartSessionRunnerOnCurrentRuntime', () => {
+  it('returns an actionable typed refusal when the receiving runner cannot prepare restart admission', async () => {
+    const tracked = trackedSession();
+    const restart = () => restartSessionRunnerOnCurrentRuntime({
+      request: { sessionId: 'sess-1', mode: 'if_stale', reason: 'ui_stale_runner_banner' },
+      tracked,
+      currentIdentity: currentIdentity('0.2.11'),
+      requestRestart: input => requestPlannedRunnerRestart({ ...input, deferral: { kind: 'none' },
+        restartRequestedPids: new Set(), pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+        isProcessSafeToSignal: async () => true,
+        prepareSignal: signal => prepareSessionRunnerRestartAdmission({ expectedPid: tracked.pid, signal,
+          callRpc: async () => ({ status: 'unsupported' }) }),
+        requestSignal: async request => {
+          if (!await request.shouldSignal()) return { status: 'skipped_stale_owner' };
+          throw new Error('Unsupported admission must not signal the runner');
+        },
+      }),
+    });
+    const result = await restart();
+    expect(result).toEqual({ ok: false, sessionId: 'sess-1',
+      status: 'restart_admission_unsupported', reasonCode: 'restart_admission_unsupported' });
+    expect(RestartSessionRunnerResultV1Schema.parse(result)).toEqual(result);
+    expect(await restart()).toEqual(result);
+    expect(SessionRunnerRuntimeStateV1Schema.parse(resolveSessionRunnerRuntimeState({ sessionId: 'sess-1', tracked,
+      currentIdentity: currentIdentity('0.2.11') })).plannedRestart)
+      .toMatchObject({ eligible: false, disabledReason: 'restart_admission_unsupported' });
+  });
+
+  it.each(['single', 'bulk', 'startup'] as const)('refuses %s refresh without capture authority and permits an explicit retry', async mode => {
+    const tracked = trackedSession();
+    const reservations = new Set<number>();
+    const signals: number[] = [];
+    let available = false;
+    const input = {
+      trackedSessions: [tracked], currentIdentity: currentIdentity('0.2.11'),
+      requestRestart: async input =>
+        requestPlannedRunnerRestart({ ...input, deferral: { kind: 'none' },
+          restartRequestedPids: reservations, pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+          isProcessSafeToSignal: async () => true,
+          captureRunnerRemainder: async () => available ? { scope: 'subtree', roots: [], ownership: [] } : undefined,
+          requestSignal: async request => {
+            if (!await request.shouldSignal()) return { status: 'skipped_stale_owner' };
+            signals.push(tracked.pid);
+            return { status: 'requested' };
+          },
+        }),
+    } satisfies Omit<Parameters<typeof restartAllSessionRunnersOnCurrentRuntime>[0], 'mode' | 'reason'>;
+    const run = async () => {
+      if (mode === 'single') return await restartSessionRunnerOnCurrentRuntime({ ...input, tracked,
+        request: { sessionId: 'sess-1', mode: 'if_stale', reason: 'daemon_restart_session_runners_command' } });
+      const result = mode === 'bulk'
+        ? await restartAllSessionRunnersOnCurrentRuntime({ ...input, mode: 'if_stale', reason: 'daemon_restart_session_runners_command' })
+        : await restartStaleRunnersAfterDaemonStart({ readSettings: async () => ({ restartSessionRunnersOnUpdate: true }),
+          isShuttingDown: () => false, restart: () => input, logDebug: () => {}, logWarn: () => {} });
+      const bulk = 'status' in result ? result.status === 'completed' ? result.result : null : result;
+      expect(bulk).not.toBeNull();
+      return bulk!.results[0]!;
+    };
+    const refusal = await run();
+    expect(refusal).toEqual({ ok: false, status: 'partial_failure', sessionId: 'sess-1',
+      diagnostics: { runnerRemainderCapture: 'unavailable', retryable: true } });
+    expect(RestartSessionRunnerResultV1Schema.safeParse(refusal).success).toBe(true);
+    expect(signals).toEqual([]);
+    expect(reservations.size).toBe(0);
+    available = true;
+    expect(await run()).toMatchObject({ ok: true, status: 'restarted' });
+    expect(signals).toEqual([tracked.pid]);
+  });
   it('keeps final shutdown cancellation within the existing public restart response schema', async () => {
     const tracked = trackedSession();
     const restartRequestedPids = new Set<number>();
@@ -455,13 +526,14 @@ describe('restartSessionRunnerOnCurrentRuntime', () => {
       tracked: trackedSession(),
       currentIdentity: currentIdentity('0.2.11'),
       requestRestart,
-      resolveActivityDisabledReason: () => 'turn_in_progress',
+      resolveActivityDisabledReason: () => ({ reasonCode: 'turn_in_progress', diagnostics: { busySource: 'pending_foreground_begin' } }),
     });
 
     expect(result).toEqual(expect.objectContaining({
       ok: false,
       status: 'busy',
       reasonCode: 'turn_in_progress',
+      diagnostics: { busySource: 'pending_foreground_begin' },
     }));
     expect(requestRestart).not.toHaveBeenCalled();
   });
@@ -488,6 +560,10 @@ describe('restartSessionRunnerOnCurrentRuntime', () => {
       ok: false,
       status: 'busy',
       reasonCode: 'turn_in_progress',
+      diagnostics: {
+        busySource: 'activeTurnId' in activity ? 'foreground_turn' : 'interrupted_foreground_turn',
+        turnId: 'activeTurnId' in activity ? activity.activeTurnId : activity.reattachedInterruptedTurnId,
+      },
     }));
     expect(requestRestart).not.toHaveBeenCalled();
   });

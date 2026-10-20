@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { JsonValue, PluginCancellationOptions } from '@happier-dev/plugin-sdk';
-import { usePluginHostApi } from '@happier-dev/plugin-ui';
+import { usePluginHostApi, usePluginHostReadiness, useSurfaceContext } from '@happier-dev/plugin-ui';
 import type {
   TriageDetailSurfaceInputV1,
   TriageLinkedSessionProjectionV1,
@@ -18,15 +18,16 @@ import type { TriageSurfaceSelectionV1 } from '../state/surface.js';
 import { sameTriageEntryRefV1 } from '../state/surface.js';
 import { useTriageDurableAccount } from '../durable/accountDurableState.js';
 import { buildTriageDetailSurfaceInputV1 } from './input.js';
+import { resolveTriageSourceSessionRelationsV1 } from './sourceSurface.js';
 
 /**
  * The selected entry's mounted detail input.
  *
  * Two of the three members the strict boundary requires are Account Collection
  * state. When the mounted Account data client is reachable this hook reads
- * those members through the canonical Collection-backed domain owner; when it
- * is not, the plugin's own Action remains the daemon transport. Neither path
- * reaches a provider. The third member, the applied observation, is already in
+ * those members through the canonical Collection-backed domain owner. Sources
+ * with their own Session relations and mounts without an Account data client
+ * use the plugin's own Action transport. The applied observation is already in
  * the reader's device-local projection and is passed in.
  *
  * Descriptor and operation/surface facts deliberately do not travel through
@@ -54,7 +55,7 @@ export type TriageEntryDetailStateV1 =
   }>
   /** The selected connection is retired, removed, or no longer this source's. */
   | Readonly<{ kind: 'unavailable' }>
-  /** The Account could not be read at all; retrying is the reader's move. */
+  /** Detail preparation failed; Retry or host re-admission can read it again. */
   | Readonly<{ kind: 'unreachable' }>
   /**
    * The durable facts read cleanly and still could not compose an admissible
@@ -64,14 +65,18 @@ export type TriageEntryDetailStateV1 =
    */
   | Readonly<{ kind: 'refused'; reason: 'entryMismatch' | 'instanceMismatch' | 'invalidContractValue' }>;
 
-/** The mounted form adds the reader's one recovery action to Account failure. */
+/** The mounted form adds the reader's one recovery action to read failure. */
 export type TriageMountedEntryDetailStateV1 =
-  | Exclude<TriageEntryDetailStateV1, Readonly<{ kind: 'unreachable' }>>
+  | Exclude<TriageEntryDetailStateV1, Readonly<{ kind: 'unreachable' | 'ready' }>>
+  | (Extract<TriageEntryDetailStateV1, Readonly<{ kind: 'ready' }>> & Readonly<{
+    /** An explicit relationship change starts a fresh authoritative linked-Session walk. */
+    refreshLinkedSessions(): void;
+  }>)
   | Readonly<{ kind: 'unreachable'; retry(): void }>;
 
-const READING: TriageEntryDetailStateV1 = Object.freeze({ kind: 'reading' });
-const UNAVAILABLE: TriageEntryDetailStateV1 = Object.freeze({ kind: 'unavailable' });
-const UNREACHABLE: TriageEntryDetailStateV1 = Object.freeze({ kind: 'unreachable' });
+const READING = Object.freeze({ kind: 'reading' } satisfies TriageEntryDetailStateV1);
+const UNAVAILABLE = Object.freeze({ kind: 'unavailable' } satisfies TriageEntryDetailStateV1);
+const UNREACHABLE = Object.freeze({ kind: 'unreachable' } satisfies TriageEntryDetailStateV1);
 
 /** Settle any cursor this mounted walk already spent, including A→B→A. */
 /**
@@ -232,11 +237,24 @@ export function useTriageEntryDetail(
 ): TriageMountedEntryDetailStateV1 | null {
   const hostApi = usePluginHostApi();
   const durable = useTriageDurableAccount();
+  const { targetedContributions } = useSurfaceContext();
+  const sourceReadSelection = useRef<Readonly<{ identity: string | null; sourceOwned: boolean }>>({ identity: null, sourceOwned: false });
+  const identity = source === null ? null : `${source.selection.entryRef.source.pluginId}/${source.selection.entryRef.source.localId}/${source.selection.sourceInstanceId}`;
+  const admittedSourceRead = source !== null && resolveTriageSourceSessionRelationsV1(targetedContributions, source.selection.entryRef.source, 'readSessionLinks');
+  // Losing admission cannot reinterpret the same mounted source relationship
+  // as an external Collection relation. A different selection starts fresh.
+  sourceReadSelection.current = { identity, sourceOwned: admittedSourceRead
+    || (sourceReadSelection.current.identity === identity && sourceReadSelection.current.sourceOwned) };
+  const sourceOwned = sourceReadSelection.current.sourceOwned;
+  // Source-owned relations use the Action transport even with mounted Account
+  // Collections. They must wait for and recover with that same Machine owner.
+  const machineBound = durable.collections === null || sourceOwned;
+  const readiness = usePluginHostReadiness(machineBound);
   const transport = useMemo<TriageEntryDetailTransportV1>(
-    () => durable.collections === null
-      ? createActionTriageEntryDetailTransport(hostApi)
-      : createDirectTriageEntryDetailTransport(durable.collections),
-    [durable.collections, hostApi],
+    () => durable.collections !== null && !machineBound
+      ? createDirectTriageEntryDetailTransport(durable.collections)
+      : createActionTriageEntryDetailTransport(hostApi),
+    [durable.collections, hostApi, machineBound],
   );
   const [state, setState] = useState<TriageEntryDetailStateV1 | null>(null);
   const stateRef = useRef<TriageEntryDetailStateV1 | null>(null);
@@ -247,6 +265,7 @@ export function useTriageEntryDetail(
   /** Cursors already spent by this selection's mount-local linked-session walk. */
   const spentLinkedSessionCursors = useRef(new Set<string>());
   const [retryGeneration, setRetryGeneration] = useState(0);
+  const lastSettledRetryGeneration = useRef(0);
 
   const entryRef = source?.selection.entryRef;
   const sourceInstanceId = source?.selection.sourceInstanceId;
@@ -375,6 +394,7 @@ export function useTriageEntryDetail(
         ? retained
         : READING
     );
+    if (readiness.pending) return () => controller.abort();
     void (async () => {
       const next = await readTriageEntryDetailStateThrough(
         transport,
@@ -382,19 +402,29 @@ export function useTriageEntryDetail(
         { signal: controller.signal },
       );
       if (controller.signal.aborted || current !== generation.current) return;
-      publish(keepLoadedLinkedSessionPagesV1(stateRef.current, next));
+      // Ordinary source refresh retains already-loaded pages. An explicit relationship reread
+      // must replace them: appending old rows would resurrect the link the user just removed.
+      if (next.kind === 'unreachable' && stateRef.current?.kind === 'ready') {
+        publish(Object.freeze({ ...stateRef.current, linkedSessionsPageState: 'failed' }));
+        return;
+      }
+      publish(lastSettledRetryGeneration.current === retryGeneration
+        ? keepLoadedLinkedSessionPagesV1(stateRef.current, next)
+        : next);
+      if (next.kind === 'ready') lastSettledRetryGeneration.current = retryGeneration;
     })();
     return () => {
       controller.abort();
       linkedSessionsController.current?.abort();
     };
-  }, [entryRef, observation, publish, retryGeneration, sourceInstanceId, transport]);
+  }, [entryRef, observation, publish, retryGeneration, sourceInstanceId, transport, readiness.pending, readiness.revision]);
 
   return useMemo(() => (
-    state?.kind === 'ready'
-      ? Object.freeze({ ...state, loadMoreLinkedSessions })
+    readiness.pending && state?.kind !== 'ready' ? READING
+      : state?.kind === 'ready'
+      ? Object.freeze({ ...state, loadMoreLinkedSessions, refreshLinkedSessions: retry })
       : state?.kind === 'unreachable'
         ? Object.freeze({ ...state, retry })
         : state
-  ), [loadMoreLinkedSessions, retry, state]);
+  ), [loadMoreLinkedSessions, retry, state, readiness.pending]);
 }

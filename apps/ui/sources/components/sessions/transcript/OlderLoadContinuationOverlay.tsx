@@ -34,6 +34,7 @@ export const OlderLoadContinuationOverlay = React.memo(function OlderLoadContinu
                 <WarningActionBanner
                     tone="neutral"
                     testID="transcript.olderLoad.continue"
+                    floating
                     title={t('session.transcript.olderLoadContinueTitle')}
                     body={t('session.transcript.olderLoadContinueBody')}
                     actionLabel={t('session.transcript.olderLoadContinueAction')}

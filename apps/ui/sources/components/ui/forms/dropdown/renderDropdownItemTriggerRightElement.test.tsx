@@ -45,4 +45,25 @@ describe('renderDropdownItemTriggerRightElement', () => {
         expect(valueText).toHaveLength(1);
         expect(flattenTestStyle(valueText[0]!.props.style).color).toBe('#aaa');
     });
+
+    it('draws the chip density as a compact borderless pill that sizes to its choice', async () => {
+        const { renderDropdownItemTriggerRightElement } = await import('./renderDropdownItemTriggerRightElement');
+        const field = { borderColor: 'transparent', backgroundColor: '#eee', valueColor: '#111', placeholderColor: '#aaa' };
+        const triggerStyle = async (fieldDensity?: 'chip') => {
+            const node = renderDropdownItemTriggerRightElement({
+                detail: 'Sonnet 5', open: false, detailColor: '#666', chevronColor: '#999', field,
+                ...(fieldDensity ? { fieldDensity } : {}),
+            });
+            const screen = await renderScreen(<>{node}</>);
+            const box = findAllHostTestInstances(screen.tree, (child) => child.type === 'View'
+                && flattenTestStyle(child.props.style).backgroundColor === '#eee');
+            return flattenTestStyle(box[0]!.props.style);
+        };
+        const chip = await triggerStyle('chip');
+        const bordered = await triggerStyle();
+        expect(chip.borderWidth).toBe(0);
+        expect(chip.minWidth).toBe(0);
+        expect(chip.minHeight).toBeLessThan(bordered.minHeight as number);
+        expect(bordered.minWidth).toBeGreaterThan(0);
+    });
 });

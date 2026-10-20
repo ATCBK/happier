@@ -96,7 +96,7 @@ export function buildVoiceBrief(input: Readonly<{ inbox: VoiceBriefSource; setti
             const name = resolveWorkflowRunDisplayName(item.row.metadata);
             if (name.kind !== 'name' || !name.value.trim()) continue;
             const title = name.value;
-            items.push({ key: item.key, category: 'needs_you', title, destination: { kind: 'workflow', runId: item.runId }, route: createWorkflowRunRoute(item.runId) });
+            items.push({ key: item.key, category: 'needs_you', title, destination: { kind: 'workflow', runId: item.runId }, route: createWorkflowRunRoute(item.runId, inbox.workflowAttention.serverId) });
             if (privacy.shareSessionSummary && title) speechByKey.set(item.key, { title: safeTitle(title) });
         }
     }

@@ -1,5 +1,6 @@
 import { REVIEW_COMMENT_DIRECT_WRITE_SCOPE_V1, type ReviewCommentActorRefV1, type ReviewCommentStateV1, type ReviewCommentV1 } from '@happier-dev/protocol/reviews/comments/v1';
 import { type ReviewCommentCurrentIntentV1 } from '@happier-dev/protocol/reviews/comments/actions';
+import { isWorkflowSessionScopeTargetV1, type ReviewCommentPrincipalHeaderV1 } from '@happier-dev/protocol/reviews/comments/actions';
 import { type ReviewCommentStoredSourceV1, reviewCommentActorsEqualV1 } from '@happier-dev/protocol/reviews/comments/mutation';
 
 import type { AccountEncryptionCurrentness } from "@/app/encryption/accountContentKeyAdmission";
@@ -14,6 +15,7 @@ export type ReviewCommentPrincipal = Readonly<{
     accountVersion?: number;
     accountEncryptionCurrentness?: AccountEncryptionCurrentness;
     workflowOriginSessionId?: string;
+    workflowScope?: ReviewCommentPrincipalHeaderV1["workflowScope"];
     /** Current readable subtree proved by the server's Session relation owner. */
     ledSubtreeSessionIds?: readonly string[];
 }>;
@@ -28,16 +30,22 @@ export function assertReviewCommentOrdinarySourceAdmission(source: ReviewComment
     }
 }
 
-export function reviewCommentPrincipalSessionId(principal: Pick<ReviewCommentPrincipal, "actor" | "workflowOriginSessionId">): string | undefined {
+export function reviewCommentPrincipalSessionId(principal: Pick<ReviewCommentPrincipal, "actor" | "workflowOriginSessionId" | "workflowScope">): string | undefined {
     if (principal.actor.kind === "agent") return principal.actor.sessionId;
     if (principal.actor.kind === "workflow") {
+        if (principal.workflowScope?.sessions.length === 1) return principal.workflowScope.sessions[0]!.sessionId;
         if (principal.workflowOriginSessionId) return principal.workflowOriginSessionId;
         throw new ReviewCommentOperationError("review_comment_permission_denied", "Workflow review scope requires its server-owned origin Session");
     }
     return undefined;
 }
 
-export function assertReviewCommentSessionScope(principal: Pick<ReviewCommentPrincipal, "actor" | "workflowOriginSessionId" | "ledSubtreeSessionIds">, sessionId: string | undefined): void {
+export function assertReviewCommentSessionScope(principal: Pick<ReviewCommentPrincipal, "actor" | "workflowOriginSessionId" | "workflowScope" | "ledSubtreeSessionIds">, sessionId: string | undefined): void {
+    if (principal.actor.kind === "workflow") {
+        if (isWorkflowSessionScopeTargetV1({ originSessionId: principal.workflowOriginSessionId,
+            scope: principal.workflowScope, sessionId })) return;
+        throw new ReviewCommentOperationError("review_comment_permission_denied", "Review comment is outside the admitted Workflow invocation scope");
+    }
     const ownSessionId = reviewCommentPrincipalSessionId(principal);
     if (ownSessionId && ownSessionId !== sessionId
         && !(principal.actor.kind === "agent" && sessionId && principal.ledSubtreeSessionIds?.includes(sessionId))) {
@@ -81,6 +89,7 @@ export function assertReviewCommentTransitionActorAllowed(params: Readonly<{
     fromState: ReviewCommentStateV1;
     toState: ReviewCommentStateV1;
     workflowOriginSessionId?: string;
+    workflowScope?: ReviewCommentPrincipalHeaderV1["workflowScope"];
     ledSubtreeSessionIds?: readonly string[];
 }>): void {
     if (params.actor.kind === "user") return;

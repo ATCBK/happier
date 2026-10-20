@@ -138,7 +138,7 @@ beforeEach(async () => {
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     const { encodeBase64 } = await import('@/encryption/base64');
     const { createEncryptionFromAuthCredentials } = await import('@/auth/encryption/createEncryptionFromAuthCredentials');
-    const credentials = { token: createAccountTokenForTests('account-a'), secret: encodeBase64(new Uint8Array(32).fill(7), 'base64url') };
+    const credentials = { token: createAccountTokenForTests('account-a', { currentAccount: true }), secret: encodeBase64(new Uint8Array(32).fill(7), 'base64url') };
     const credentialSpy = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue(credentials);
     disposeCredentials = () => credentialSpy.mockRestore();
     const encryption = await createEncryptionFromAuthCredentials(credentials);
@@ -212,6 +212,11 @@ function writtenContext(input: ReturnType<typeof AutomationDefinitionReconcileRe
     if (input.executionRecipe?.workflow.t !== 'plain') throw new Error('Expected a canonical plain recipe');
     return input.executionRecipe.workflow.v;
 }
+async function confirmAction(screen: Awaited<ReturnType<typeof renderAccountScreen>>) {
+    await waitForHomeGovernance(() => expect(screen.findByTestId('web-modal-confirm')).not.toBeNull());
+    await screen.pressByTestIdAsync('web-modal-confirm');
+    await waitForHomeGovernance(() => expect(screen.findAllByType(WebAlertModal).length).toBe(0));
+}
 
 describe('Account trigger editing', () => {
     it('settles acknowledged trigger creation while the unrelated Automation listing refresh is pending', async () => {
@@ -237,6 +242,7 @@ describe('Account trigger editing', () => {
                     target: set.target!, trigger: buildTriggerDefinition(value), inputs: {},
                 }).then(() => { settled = true; });
             });
+            await confirmAction(screen);
             await waitForHomeGovernance(() => expect(listingRequested).toBe(true));
             expect(rows).toHaveLength(1);
             expect(storage.getState().workflowTriggerSetsById[rows[0]!.id]).toMatchObject({ revision: 1 });
@@ -296,6 +302,7 @@ describe('Account trigger editing', () => {
         expect(screen.findByTestId('workflows-column-trigger-popover-run-now')).toBeNull();
         await act(async () => screen.changeTextByTestId('workflows-column-trigger-popover-prompt', 'Reviewed prompt'));
         await screen.pressByTestIdAsync('workflows-column-trigger-popover-submit');
+        await confirmAction(screen);
         expect(writes()).toMatchObject([{ expectedTemplateVersion: 1, enabled: true,
             triggers: [{ kind: 'existing', triggerId: 't1', expectedRevision: 1, enabled: triggerEnabled }] }]);
         expect(writtenContext(writes()[0]!)).toMatchObject({ inlineDefinition: { blocks: [{ document: { text: 'Reviewed prompt' } }] } });
@@ -316,7 +323,8 @@ describe('Account trigger editing', () => {
             buttons: [{ style: 'cancel' }, { style: 'destructive' }],
         });
         await screen.pressByTestIdAsync('web-modal-button-1');
-        expect(screen.findAllByType(WebAlertModal)).toEqual([]);
+        await confirmAction(screen);
+        expect(screen.findAllByType(WebAlertModal).length).toBe(0);
         await waitForHomeGovernance(() => expect(storage.getState().workflowTriggerSetsById.digest?.triggers).toEqual([]));
         expect(mutations).toMatchObject([{ automationId: 'digest', input: { removedTriggers: [{ triggerId: 't1', expectedRevision: 1 }], triggers: [] } }]);
         expect(rows[0]?.templateCiphertext).toBe(AUTOMATION_TEMPLATE_V02_EXISTING_ENCRYPTED);
@@ -328,6 +336,8 @@ describe('Account trigger editing', () => {
         storage.getState().upsertWorkflowTriggerSet({ queryKey: 'account_inline', set });
         const read = createDeferred<void>();
         listReply = async () => { await read.promise; throw new Error('Down'); };
+        // This failure is settled; a Home still being connected keeps a failed read as loading.
+        storage.setState({ endpointStatus: 'offline' });
         const screen = await renderAccountScreen(<AccountTriggersSection />);
         // Refreshing retained rows says nothing: no reserved line, no status above the rows.
         expect(screen.findByTestId('account-triggers-read-slot')).toBeNull();
@@ -352,6 +362,7 @@ describe('Account trigger editing', () => {
         const set = { ...fixture(false, [trigger('t1'), trigger('t2', 19)]), enabled: false }; serve(set);
         const screen = await renderAccountScreen(<AccountTriggersSection />);
         await act(async () => screen.findByTestId('workflows-column:trigger:digest:t2-switch')?.props.onValueChange(true));
+        await confirmAction(screen);
         expect(writes()).toMatchObject([{ expectedTemplateVersion: 1, enabled: true, triggers: [
             { kind: 'existing', triggerId: 't1', expectedRevision: 1, enabled: false },
             { kind: 'existing', triggerId: 't2', expectedRevision: 1, enabled: true },
@@ -371,7 +382,8 @@ describe('Account trigger editing', () => {
             type: 'alert', buttons: [{ style: 'cancel' }, { style: 'destructive' }],
         });
         await screen.pressByTestIdAsync('web-modal-button-1');
-        expect(screen.findAllByType(WebAlertModal)).toEqual([]);
+        await confirmAction(screen);
+        expect(screen.findAllByType(WebAlertModal).length).toBe(0);
         await waitForHomeGovernance(() => expect(storage.getState().workflowTriggerSetsById.digest?.triggers.map(value => value.id)).toEqual(['t1']));
         expect(mutations).toMatchObject([{ automationId: 'digest', input: { removedTriggers: [{ triggerId: 't2', expectedRevision: 1 }],
             triggers: [{ kind: 'existing', triggerId: 't1', expectedRevision: 1 }] } }]);
@@ -389,14 +401,15 @@ describe('Account trigger editing', () => {
             message: 'workflows.triggers.legacy.conversionBoundary', confirmText: 'workflows.triggers.popover.turnOff',
         });
         await screen.pressByTestIdAsync('web-modal-cancel');
-        expect(screen.findAllByType(WebAlertModal)).toEqual([]);
+        await waitForHomeGovernance(() => expect(screen.findAllByType(WebAlertModal).length).toBe(0));
         expect(writes()).toHaveLength(0);
         expect(rows[0]!.triggers[0]!.enabled).toBe(true);
         expect(toggle?.props.disabled).toBe(false);
         await act(async () => toggle?.props.onValueChange(false));
         expect(writes()).toHaveLength(0);
         await screen.pressByTestIdAsync('web-modal-confirm');
-        expect(screen.findAllByType(WebAlertModal)).toEqual([]);
+        await confirmAction(screen);
+        expect(screen.findAllByType(WebAlertModal).length).toBe(0);
         await waitForHomeGovernance(() => expect(writes()).toHaveLength(1));
         expect(writes()).toMatchObject([{ expectedTemplateVersion: 1, triggers: [{ kind: 'existing', triggerId: 't1', expectedRevision: 1, enabled: false }] }]);
         expect(rows[0]!.triggers[0]!.enabled).toBe(false);
@@ -407,6 +420,7 @@ describe('Account trigger editing', () => {
         const toggle = screen.findByTestId('workflows-column:trigger:digest:t2-switch');
         expect(toggle).not.toBeNull();
         await act(async () => toggle?.props.onValueChange(false));
+        await confirmAction(screen);
         expect(writes()).toMatchObject([{ expectedTemplateVersion: 1, triggers: [
             { kind: 'existing', triggerId: 't1', expectedRevision: 1 },
             { kind: 'existing', triggerId: 't2', expectedRevision: 1, enabled: false },
@@ -417,6 +431,7 @@ describe('Account trigger editing', () => {
         await act(async () => runsOn?.props.onChange({ machineId: 'm2', directory: '/elsewhere' }));
         await act(async () => screen.changeTextByTestId('workflows-column-trigger-popover-prompt', 'Changed prompt'));
         await screen.pressByTestIdAsync('workflows-column-trigger-popover-submit');
+        await confirmAction(screen);
         expect(writes().at(-1)).toMatchObject({ expectedTemplateVersion: 2, assignments: [{ machineId: 'm2' }], triggers: [
             { kind: 'existing', triggerId: 't1', expectedRevision: 1 },
             { kind: 'existing', triggerId: 't2', expectedRevision: 2,
@@ -442,6 +457,7 @@ describe('Account trigger editing', () => {
             && node.props.value === '19:00').length).toBeGreaterThan(0);
         await act(async () => screen.changeTextByTestId('workflows-column-trigger-popover-prompt', 'Changed prompt'));
         await screen.pressByTestIdAsync('workflows-column-trigger-popover-submit');
+        await confirmAction(screen);
         expect(writes()).toEqual([]);
         expect(rows[0]).toMatchObject({ templateVersion: 1, templateCiphertext: AUTOMATION_TEMPLATE_V02_EXISTING_PLAIN,
             triggers: [{ id: 't1', revision: 1 }, { id: 't2', revision: 1 }] });
@@ -457,6 +473,7 @@ describe('Account trigger editing', () => {
         expect(screen.findByTestId('workflows-column-trigger-popover-run-now')).not.toBeNull();
         await act(async () => screen.changeTextByTestId('workflows-column-trigger-popover-prompt', 'Manual edit'));
         await screen.pressByTestIdAsync('workflows-column-trigger-popover-submit');
+        await confirmAction(screen);
         expect(writes()).toHaveLength(1);
         expect(writes()[0]!.triggers).toEqual([]);
         expect(writes()[0]!.removedTriggers).toEqual([]);
@@ -470,6 +487,7 @@ describe('Account trigger editing', () => {
         expect(screen.getTextContent()).toContain('workflows.triggers.popover.deleteTriggerSet');
         const listsBefore = listRequests().length;
         await screen.pressByTestIdAsync('workflows-column-trigger-popover-delete');
+        await confirmAction(screen);
         expect(rows).toEqual([]);
         expect(storage.getState().workflowTriggerSetsById.digest).toBeUndefined();
         expect(listRequests().length).toBeGreaterThan(listsBefore);
@@ -508,7 +526,10 @@ describe('Account trigger editing', () => {
                 kind: 'workflow-definition.v1', definition: seed.definition,
             })) }),
         }) });
-        await act(async () => { await retargetTriggerToWorkflow(seed.retarget, '11111111-1111-4111-8111-111111111111'); });
+        let retarget!: Promise<void>;
+        await act(async () => { retarget = retargetTriggerToWorkflow(seed.retarget, '11111111-1111-4111-8111-111111111111'); });
+        await confirmAction(screen);
+        await act(async () => { await retarget; });
         expect(writes()[0]).toMatchObject({ expectedTemplateVersion: 1,
             workflowDefinitionId: '11111111-1111-4111-8111-111111111111', triggers: [], removedTriggers: [] });
     });

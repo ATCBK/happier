@@ -40,7 +40,7 @@ import { useDeviceType } from '@/utils/platform/responsive';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { useServerScopedMachine } from '@/sync/store/hooks';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { t } from '@/text';
 
 import { ProjectCommandOutputHost, useProjectCommandOutputOpener } from '@/components/inbox/actionOperations/projectCommandOutputHost';
@@ -65,6 +65,7 @@ import {
 } from './projectScriptRuns';
 import { ProjectScriptRow } from './ProjectScriptRow';
 import { ProjectSetupReview } from './ProjectSetupReview';
+import { useProjectSetupMachine } from './useProjectSetupMachine';
 import { ProjectSetupAuthoredLine } from './ProjectSetupReturn';
 import { WorkspaceAdHocCommandsItem } from '@/components/projects/workers/WorkspaceAdHocCommandsItem';
 import { ProjectAgentGuidanceDisclosure } from '@/components/projects/workers/ProjectAgentGuidanceDisclosure';
@@ -118,7 +119,14 @@ export function ProjectScriptsBody({
   const accountId = binding?.isCurrent() ? binding.accountId : null;
   const key = projectDefinitionInspectionKey(workspace);
   const { read, retry } = useProjectDefinitionInspection(workspace, binding);
-  const controller = useProjectScriptsController(workspace, retry, binding);
+  const runChoiceKeys = React.useMemo(() => {
+    if (!read || !('value' in read)) return undefined;
+    const document = read.value.definition.document;
+    return document?.status === 'valid' ? Object.entries(document.manifest.scripts ?? {})
+      .filter(([, declaration]) => declaration.execution === 'portable')
+      .map(([name]) => projectScriptRowKey(workspace, name)) : [];
+  }, [read, workspace]);
+  const controller = useProjectScriptsController(workspace, retry, binding, { runChoiceKeys });
   const [editor, setEditor] = React.useState<EditorState>(null);
   // Workers settings open in place, like the editor: Scripts › Workers and Run on › Worker settings….
   const [workersKey, setWorkersKey] = React.useState<string | null>(null);
@@ -369,7 +377,7 @@ function DeclaredScripts(
     props.workspace.machineId,
   );
   const machineName =
-    (machine ? getMachineDisplayName(machine) : null) ??
+    (machine ? getMachineSentenceName(machine) : null) ??
     props.workspace.machineId;
   const scripts = Object.entries(props.manifest.scripts ?? {});
   const hasPortable = scripts.some(([, declaration]) => declaration.execution === 'portable');
@@ -438,10 +446,6 @@ function DeclaredScripts(
         <SetupRow
           workspace={props.workspace}
           manifest={props.manifest}
-          machineName={machineName}
-          sharedRunAs={
-            machine?.isShared ? (machine.metadata?.username ?? null) : null
-          }
           controller={props.controller}
           operation={setupRun}
           readiness={setupReadiness}
@@ -566,7 +570,7 @@ function DeclaredScriptRow(
   const operation = useProjectScriptRun(props.workspace, { kind: 'named', name: props.name }, props.controller.accountId);
   const source = describeProjectCommandSource(props.declaration.source, props.invocation);
   const resolvedChoice = resolveProjectExecutionChoiceV1({
-    execution: props.declaration.execution,
+    execution: props.declaration.execution ?? 'primary',
     scriptName: props.name,
     sourceMachineId: props.workspace.machineId,
     preference: props.preference ? { status: 'ready', value: props.preference } : { status: 'unavailable' },
@@ -590,6 +594,8 @@ function DeclaredScriptRow(
       compact={props.compact}
       showDivider={props.showDivider}
       defaultChoice={resolvedChoice.status === 'resolved' ? resolvedChoice.choice : null}
+      runChoice={props.controller.runChoices[rowKey]}
+      onRunChoiceChange={(choice) => props.controller.chooseRunDestination(rowKey, choice)}
       memoryDemand={props.memoryDemand}
       initialManagedConfiguration={props.initialManagedConfiguration}
       choiceRequired={props.controller.choiceRequired?.key === rowKey}
@@ -616,8 +622,6 @@ function SetupRow(
     testID: string;
     workspace: WorkspaceAddressV1;
     manifest: ProjectManifestV1;
-    machineName: string;
-    sharedRunAs: string | null;
     controller: ScriptsController;
     operation: ReturnType<typeof useProjectSetupRun>;
     readiness: ProjectDefinitionInspection['setupReadiness'];
@@ -628,11 +632,16 @@ function SetupRow(
   const { theme } = useUnistyles();
   const steps = props.manifest.workspace?.setup?.length ?? 0;
   const consent = props.controller.consent;
+  const reviewTarget = consent?.operation?.snapshot.domainRef ?? props.operation?.snapshot.domainRef;
+  const reviewMachine = useProjectSetupMachine(
+    reviewTarget?.kind === 'projectCommand' ? reviewTarget.serverId : props.workspace.serverId,
+    reviewTarget?.kind === 'projectCommand' ? reviewTarget.machineId : props.workspace.machineId,
+  );
   const stop = props.controller.setupStop;
   const output = useProjectCommandOutputOpener();
   const presentation = presentProjectRun(
     props.operation,
-    props.machineName,
+    reviewMachine.machineName,
     t('projects.scripts.setup.steps', { count: steps }),
   );
   const reviewing =
@@ -654,7 +663,7 @@ function SetupRow(
   const attachment = props.operation?.snapshot.domainRef?.kind === 'projectCommand' ? props.operation.snapshot.domainRef : null;
   const openOutput = () => {
     if (props.operation)
-      void output.open(props.operation, { title: `${t('projects.scripts.setup.title')} · ${props.machineName}` });
+      void output.open(props.operation, { title: `${t('projects.scripts.setup.title')} · ${reviewMachine.machineName}` });
   };
   // The review opens from the row or from a preparation that needs consent; it never runs anything.
   const [open, setOpen] = React.useState(false);
@@ -764,8 +773,8 @@ function SetupRow(
           <ProjectSetupReview
             testID={`${props.testID}.review`}
             manifest={props.manifest}
-            machineName={props.machineName}
-            sharedRunAs={props.sharedRunAs}
+            machineName={reviewMachine.machineName}
+            sharedRunAs={reviewMachine.sharedRunAs}
             pending={pending}
             reviewedEffect={consent?.reviewedEffect ?? props.operation?.snapshot.setupReview?.reviewedEffect}
             initialScope={consent?.consentScope ?? props.operation?.snapshot.setupReview?.consentScope}
@@ -1066,10 +1075,14 @@ function FirstRun(
         </View>
       ) : null}
       {detected.length === 0 ? (
-        <SurfaceStateCard
-          kind="empty"
-          title={t('projects.widgets.scriptsEmpty')}
-        />
+        // On the page the hero above already says nothing was found and offers the next step.
+        props.page ? null : (
+          <SurfaceStateCard
+            testID={`${props.testID}.empty`}
+            kind="empty"
+            title={t('projects.widgets.scriptsEmpty')}
+          />
+        )
       ) : (
         <DetectedGroups
           {...props}

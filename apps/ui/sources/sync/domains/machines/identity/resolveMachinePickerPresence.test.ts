@@ -10,7 +10,9 @@ describe('resolveMachinePickerPresence', () => {
         const nowMs = 1_900_000_000_000;
         const machine = { id: 'picker-machine', active: true, activeAt: nowMs };
         recordMachineRequestFailed({ ...scope, machineId: machine.id, observedAtMs: nowMs });
-        expect(resolveMachinePickerPresence(machine, nowMs, scope)).toEqual({ status: 'offline', selectable: false });
+        expect(resolveMachinePickerPresence(machine, nowMs, scope)).toEqual({ status: 'offline', selectable: false, reason: 'home_unreachable' });
+        expect(resolveMachinePickerPresence({ ...machine, active: false, activeAt: 0 }, nowMs, { ...scope, accountId: 'other-account' }))
+            .toEqual({ status: 'offline', selectable: false, reason: 'offline' });
         expect(resolveMachinePickerPresence(machine, nowMs, { ...scope, accountId: 'other-account' }))
             .toEqual({ status: 'online', selectable: true });
     });

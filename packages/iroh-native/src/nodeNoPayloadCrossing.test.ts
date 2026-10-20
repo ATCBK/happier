@@ -71,11 +71,11 @@ describe('no-payload crossing of the Node/Bun lifecycle binding', () => {
   const loaded = loadIrohNodeNative();
   const itWhenNative = loaded.available ? it : it.skip;
 
-  itWhenNative('raw addon exports only the lifecycle allowlist', () => {
+  itWhenNative('raw addon exports only lifecycle and allocator maintenance operations', () => {
     if (!loaded.available || loaded.addonPath === null) {
       throw new Error('native addon unexpectedly unavailable');
     }
     const addon = loadIrohNodeNativeAddon(loaded.addonPath);
-    expect(Object.keys(addon).sort()).toEqual([...IROH_NODE_NATIVE_EXPORTS].sort());
+    expect(Object.keys(addon).sort()).toEqual([...IROH_NODE_NATIVE_EXPORTS, 'trimProcessAllocator'].sort());
   });
 });

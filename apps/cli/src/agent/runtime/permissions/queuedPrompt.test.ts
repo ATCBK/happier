@@ -1,11 +1,54 @@
 import { describe, expect, it } from 'vitest';
+import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 
 import {
+  appendNextTurnContextToQueuedPrompt,
   combinePermissionModeQueuedPrompts,
+  isNextTurnContextQueuedPrompt,
   normalizePermissionModeQueuedPromptLocalIds,
+  type PermissionModeQueuedPrompt,
+  type PermissionModeQueuedPromptMode,
 } from './queuedPrompt';
 
 describe('combinePermissionModeQueuedPrompts', () => {
+  it('retains a quiet returned answer without replacing the natural input native witness', async () => {
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(mode => mode.permissionMode, {
+      batcher: combinePermissionModeQueuedPrompts, isContextOnly: isNextTurnContextQueuedPrompt,
+      withContext: appendNextTurnContextToQueuedPrompt,
+    });
+    const reply = { requestSessionId: 'requester', requestLocalId: 'question', outcome: 'answer' as const,
+      delivery: 'next_turn' as const };
+    queue.push({ text: 'The retained answer', localId: 'quiet-answer', userMessageSeq: 8, returnedAnswer: reply },
+      { permissionMode: 'read-only' });
+    expect(queue.size()).toBe(0);
+    const authority = { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'read-only' as const };
+    queue.push({ text: 'Continue', localId: 'natural-input', userMessageSeq: 9, causalPermissionAuthority: authority },
+      { permissionMode: 'default' });
+    const batch = await queue.waitForMessagesAndGetAsString();
+    expect(batch?.message).toMatchObject({ localId: 'natural-input', localIds: ['natural-input'], userMessageSeq: 9,
+      userMessageSeqs: [9], causalPermissionAuthority: authority,
+      returnedAnswerContext: [{ reply, text: 'The retained answer', localId: 'quiet-answer', userMessageSeq: 8 }] });
+  });
+
+  it('does not merge distinct protected Discussion questions into one turn cutoff', () => {
+    const discussionAddressing = { discussionId: 'discussion', messageId: 'first', throughSeq: 2, participantSessionId: 'receiver' };
+    const prompt = { text: 'First question', localId: 'first-input', discussionAddressing };
+    expect(combinePermissionModeQueuedPrompts([prompt])).toMatchObject({ discussionAddressing });
+    expect(() => combinePermissionModeQueuedPrompts([prompt, { text: 'Second question', localId: 'second-input',
+      discussionAddressing: { ...discussionAddressing, messageId: 'second', throughSeq: 3 } }])).toThrow();
+  });
+  it('retains the exact request cause and refuses to coalesce different requesters', () => {
+    const bob = { requestRef: 'bob-input', requester: { serverId: 'home', accountId: 'bob' },
+      persona: { serverId: 'home', sessionId: 'bot' }, origin: null };
+    const prompt = { text: 'work', localId: 'bob-input', actionRequestAttributionV1: bob };
+    expect(combinePermissionModeQueuedPrompts([prompt])).toMatchObject({ actionRequestAttributionV1: bob });
+    expect(() => combinePermissionModeQueuedPrompts([prompt, {
+      text: 'other work', localId: 'carol-input', actionRequestAttributionV1: {
+        ...bob, requestRef: 'carol-input', requester: { serverId: 'home', accountId: 'carol' },
+      },
+    }])).toThrow();
+  });
+
   it('joins prompt texts and keeps the first localId', () => {
     const combined = combinePermissionModeQueuedPrompts([
       { text: 'one', localId: 'a' },

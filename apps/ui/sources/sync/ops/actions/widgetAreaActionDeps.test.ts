@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1, readWidgetSurfaceArtifactV1, projectOverviewDefaultPlacementsV1, flattenWidgetLayoutWidgetsV1, WidgetAreaLayoutV1Schema, WIDGET_SURFACE_ARTIFACT_KIND_V1, type WidgetAreaLayoutV1 } from '@happier-dev/protocol/widgets';
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
@@ -73,6 +73,8 @@ it('uses a stable Project key without a Source through the actual Account Artifa
         artifactId: buildWidgetSurfaceArtifactIdV1(surface), kind: WIDGET_SURFACE_ARTIFACT_KIND_V1,
         defaultLayout: { v: 1 as const, surface, items: [] }, parseLayout: value => WidgetAreaLayoutV1Schema.parse(value),
     });
+    // The checkout is admitted against the Account's Project rows, never against page context alone.
+    boundary.setWorkspaceRefs([checkout]);
     const account = await captureLazyActionAccountContext(connection.home.id);
     try {
         const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
@@ -95,6 +97,9 @@ it('uses a stable Project key without a Source through the actual Account Artifa
         const saved = flattenWidgetLayoutWidgetsV1(boundary.layout().items);
         expect(saved.filter(entry => entry.instance.id !== instance.id).map(entry => ({ id: entry.instance.id, area: entry.area })))
             .toEqual(defaults.map(entry => ({ id: entry.instance.id, area: entry.area })));
+        // The retained preset is not the person's frame choice: each widget keeps following its area's default.
+        expect(saved.filter(entry => entry.instance.id !== instance.id).map(entry => entry.frameStyle ?? null))
+            .toEqual(defaults.map(() => null));
         expect(saved.find(entry => entry.instance.id === instance.id)).toMatchObject({ instance, area: 'main' });
         expect(await executor.execute('widgets.item.rename', { ref: { surface, instanceId: instance.id }, displayName: 'My project' }, context))
             .toMatchObject({ ok: true });

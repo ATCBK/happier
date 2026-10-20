@@ -103,6 +103,12 @@ function intersects(member: BoardCanvasFootprint, point: BoardCanvasPoint, other
         && point.y < other.y + other.height + gapPx && other.y < point.y + member.height + gapPx;
 }
 
+/** Whether two rectangles actually share area: a hand-placed card closer than the gutter is the user's choice, not a collision. */
+function overlaps(member: BoardCanvasFootprint, point: BoardCanvasPoint, other: BoardCanvasFootprint & BoardCanvasPoint): boolean {
+    return point.x < other.x + other.width && other.x < point.x + member.width
+        && point.y < other.y + other.height && other.y < point.y + member.height;
+}
+
 /** One placement owner for saved XY and measured auto cards. Auto positions are visit-local only. */
 export function resolveBoardCanvasPositions(input: Readonly<{
     members: readonly BoardCanvasFootprint[];
@@ -122,9 +128,19 @@ export function resolveBoardCanvasPositions(input: Readonly<{
         occupied.push({ ...member, ...point });
     };
     // Reserve every hand-placed rectangle before considering any auto card, regardless of Board order.
+    // Stored positions can collide (a card that was not visible when its neighbour was set down); the
+    // first in Board order keeps its place and the others settle at the nearest free slot, for display
+    // only: the stored position is the user's data and is not rewritten here.
+    const displaced: BoardCanvasFootprint[] = [];
     for (const member of input.members) {
         const saved = input.positionsByItemRef[member.key];
-        if (saved) place(member, saved);
+        if (!saved) continue;
+        if (occupied.some(other => overlaps(member, saved, other))) displaced.push(member);
+        else place(member, saved);
+    }
+    for (const member of displaced) {
+        place(member, resolveBoardCardDrop({ origin: input.positionsByItemRef[member.key]!, translation: { x: 0, y: 0 },
+            snap: input.snap, footprint: member, occupied }));
     }
     // Auto flow is a projection of the current members, not saved layout. Recompute in Board
     // order so filtering closes vacated slots; identical inputs still reuse each point and map.

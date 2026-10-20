@@ -108,7 +108,7 @@ describe("Session responsibility owner (SQLite integration)", () => {
 
     afterEach(() => vi.unstubAllEnvs());
 
-    it("starts default Follow only on a changed assignment and preserves explicit suppression", async () => {
+    it("changes assignment without enrolling a Follow or resetting private read custody", async () => {
         const fixture = await createFixture();
         const input = {
             actorAccountId: fixture.owner.id,
@@ -116,23 +116,32 @@ describe("Session responsibility owner (SQLite integration)", () => {
             responsibleAccountId: fixture.collaborator.id,
         };
         const assigned = await setSessionResponsibility(input);
-        expect(assigned).toMatchObject({ ok: true, changed: true, autoFollowed: true });
+        expect(assigned).toMatchObject({ ok: true, changed: true, autoFollowed: false });
         const where = { accountId_sessionId: { accountId: fixture.collaborator.id, sessionId: fixture.session.id } };
         const created = await db.$queryRaw<Array<{ notificationLevel: string }>>`
             SELECT notificationLevel FROM AccountSessionFollow
             WHERE accountId = ${fixture.collaborator.id} AND sessionId = ${fixture.session.id}
         `;
-        expect(created).toEqual([{ notificationLevel: "important" }]);
-        expect(await db.accountSessionReadState.findUnique({ where })).toMatchObject({
-            lastViewedSessionSeq: fixture.session.seq, unreadSince: null,
-        });
-        await db.accountSessionFollow.update({ where, data: { following: false, notificationLevel: "none" } });
+        expect(created).toEqual([]);
+        expect(await db.accountSessionReadState.findUnique({ where })).toBeNull();
+        await db.accountSessionFollow.create({ data: {
+            accountId: fixture.collaborator.id, sessionId: fixture.session.id,
+            following: false, notificationLevel: "none",
+        } });
+        const unreadSince = new Date(1234);
+        await db.accountSessionReadState.create({ data: {
+            accountId: fixture.collaborator.id, sessionId: fixture.session.id,
+            lastViewedSessionSeq: 1, unreadSince,
+        } });
         const cleared = await setSessionResponsibility({ ...input, responsibleAccountId: null });
         expect(cleared).toMatchObject({ ok: true, changed: true, autoFollowed: false });
         const reassigned = await setSessionResponsibility(input);
         expect(reassigned).toMatchObject({ ok: true, changed: true, autoFollowed: false });
         expect(await db.accountSessionFollow.findUnique({ where })).toMatchObject({
             following: false, notificationLevel: "none",
+        });
+        expect(await db.accountSessionReadState.findUnique({ where })).toMatchObject({
+            lastViewedSessionSeq: 1, unreadSince,
         });
     });
 
@@ -313,7 +322,7 @@ describe("Session responsibility owner (SQLite integration)", () => {
             expect(await countAccountChanges(fixture.collaborator.id)).toBe(collaboratorChanges);
         });
 
-        it("publishes responsibility to readers and Follow configuration only to the assignee", async () => {
+        it("publishes responsibility to readers without changing private Follow configuration", async () => {
             const fixture = await createFixture();
             await setSessionResponsibility({
                 actorAccountId: fixture.owner.id,
@@ -330,7 +339,7 @@ describe("Session responsibility owner (SQLite integration)", () => {
             } })).toBe(0);
             expect(await db.accountChange.count({ where: {
                 accountId: fixture.collaborator.id, kind: "account", entityId: "session-follows",
-            } })).toBe(1);
+            } })).toBe(0);
         });
 
         it("clears responsibility on an explicit null without exposing an already-consumed transition", async () => {
@@ -662,7 +671,7 @@ describe("Session responsibility owner (SQLite integration)", () => {
                     },
                 });
                 expect(assigned.statusCode).toBe(200);
-                expect(assigned.json()).toMatchObject({ changed: true, responsibleAccountId: fixture.collaborator.id, autoFollowed: true });
+                expect(assigned.json()).toMatchObject({ changed: true, responsibleAccountId: fixture.collaborator.id, autoFollowed: false });
                 expect(assigned.json().responsibleAccount).toMatchObject({ kind: 'account', accountId: fixture.collaborator.id });
                 const repeated = await app.inject({
                     method: "POST",

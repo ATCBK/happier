@@ -43,7 +43,10 @@ import { formatStorageDay } from './storageCategoryText';
 import { StorageProtectedFoldersPage } from './StorageProtectedFoldersPage';
 import {
   describeStorageVerdict,
+  STORAGE_CATEGORY_ICONS,
+  storageCategoryTitle,
   storageReasonLabel,
+  storageEvidenceLabel,
 } from './storageReasonPresentation';
 import { describeStorageApplyResult } from './storageReviewModel';
 import { StorageSuggestionsPage } from './StorageSuggestionsPage';
@@ -65,6 +68,8 @@ import {
 type StorageParams = Extract<MachinePageTabParams, { id: 'storage' }>;
 /** The suggestions the Happier view lists in place before "All suggestions" (lab `rs` H). */
 const TOP_SUGGESTIONS = 3;
+/** The only kinds a recipient of a shared machine reaches: their own sessions' folders and their own Trash (D7). */
+const RECIPIENT_CATEGORIES = ['sessionFolders', 'trash'] as const satisfies readonly HappierStorageCategoryIdV1[];
 
 export const MachineStorageTab = React.memo(function MachineStorageTab(
   props: MachinePageTabBodyProps,
@@ -276,9 +281,10 @@ function StorageMainView(
           title={t(
             view.kind === 'not_reported'
               ? 'machineStorage.states.notReported'
-              : 'machineStorage.states.offlineEmpty',
+              : 'machineStorage.states.offlineTitle',
             { machine: props.machineName },
           )}
+          {...(view.kind === 'offline_empty' ? { reason: t('machineStorage.states.offlineReason') } : {})}
         />
       </ItemGroup>
     );
@@ -401,23 +407,15 @@ function StorageHappierView(
       ) : null}
       <StorageVolumes summary={props.summary} compact={props.compact} />
       {/* What just happened reads under the disk it changed (lab `rs` RD): the disk stays the view's first block. */}
-      {custodian ? (
-        <StorageResultSection
-          serverId={props.serverId}
-          machineId={props.machineId}
-        />
-      ) : null}
+      <StorageResultSection
+        serverId={props.serverId}
+        machineId={props.machineId}
+      />
       {props.recipient ? (
-        <ItemGroup>
-          <SurfaceStateCard
-            testID="machine-storage-recipient"
-            kind="unavailable"
-            size="line"
-            title={t('machineStorage.breakdown.recipient', {
-              machine: props.machineName,
-            })}
-          />
-        </ItemGroup>
+        <RecipientStorageEntries
+          machineName={props.machineName}
+          onOpenCategory={props.onOpenCategory}
+        />
       ) : (
         <>
           <StorageBreakdown
@@ -549,7 +547,7 @@ function StorageTopSuggestions(
           key={item.itemId}
           testID={`machine-storage-top-suggestion-${item.itemId}`}
           title={item.title}
-          evidence={item.evidence.join(' · ')}
+          evidence={item.evidence.map(storageEvidenceLabel).join(' · ')}
           bytes={item.size.allocatedBytes}
           atLeast={item.size.atLeast}
           largest={largest}
@@ -646,7 +644,7 @@ function StorageLowDisk(
               key={item.itemId}
               testID={`machine-storage-lowdisk-${item.itemId}`}
               title={item.title}
-              evidence={item.evidence.join(' · ')}
+              evidence={item.evidence.map(storageEvidenceLabel).join(' · ')}
               bytes={item.size.allocatedBytes}
               atLeast={item.size.atLeast}
               largest={largest}
@@ -660,6 +658,47 @@ function StorageLowDisk(
         </ItemGroup>
       )}
     </>
+  );
+}
+
+/**
+ * What a person who uses a shared machine without managing it can tidy: their own session folders and
+ * what they moved to the Trash (D7). The breakdown of everything else stays with those who manage it.
+ */
+function RecipientStorageEntries(
+  props: Readonly<{
+    machineName: string;
+    onOpenCategory: (categoryId: HappierStorageCategoryIdV1) => void;
+  }>,
+) {
+  const { theme } = useUnistyles();
+  const { onOpenCategory } = props;
+  return (
+    <ItemGroup
+      testID="machine-storage-recipient"
+      title={t('machineStorage.breakdown.recipientTitle')}
+      description={t('machineStorage.breakdown.recipient', {
+        machine: props.machineName,
+      })}
+    >
+      {RECIPIENT_CATEGORIES.map((categoryId, index) => (
+        <Item
+          key={categoryId}
+          testID={`machine-storage-category-${categoryId}`}
+          icon={
+            <Icon
+              name={STORAGE_CATEGORY_ICONS[categoryId]}
+              size={18}
+              color={theme.colors.text.secondary}
+            />
+          }
+          title={storageCategoryTitle(categoryId)}
+          showChevron
+          showDivider={index < RECIPIENT_CATEGORIES.length - 1}
+          onPress={() => onOpenCategory(categoryId)}
+        />
+      ))}
+    </ItemGroup>
   );
 }
 
@@ -861,7 +900,7 @@ function StorageSentence(
 /** The first sizing (never sized): the sentence, a disk and the breakdown rows at their final size. */
 function StorageLoading() {
   const { theme } = useUnistyles();
-  const color = theme.colors.border.default;
+  const color = theme.colors.surface.skeleton;
   return (
     <View
       testID="machine-storage-loading"

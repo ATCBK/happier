@@ -15,6 +15,7 @@ import {
   type ProcessesItem,
   type ProcessesSort,
 } from '@/components/machines/processes/processesPresentation';
+import type { MachineProcessesState } from '@/sync/domains/machines/processes/machineProcessesStore';
 import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -44,6 +45,10 @@ export const MachineUsingTheMost = React.memo(function MachineUsingTheMost(
     machineId: string;
     machineName: string;
     processes: MachineProcessesAnswerV1 | null;
+    /** The Processes store's own status: a null answer is still being read only while it says `loading`. */
+    processesStatus: MachineProcessesState['status'];
+    /** An offline machine has no census to read; say that once, in the Processes tab's own words. */
+    offline: boolean;
     sample: MachineVitalsSampleV1;
     logicalCores: number | null;
     onOpenProcesses: () => void;
@@ -125,13 +130,16 @@ export const MachineUsingTheMost = React.memo(function MachineUsingTheMost(
     });
   }, [language, answer, onOpenProcesses, props.machineName, sample]);
 
-  // The section keeps its place: while the census is read, when it cannot be, or when nothing Happier started runs,
-  // it says so in one quiet line instead of disappearing (and moving the page when the answer lands).
-  const quiet = items.length > 0 ? null : props.processes === null
-    ? { id: 'reading', kind: 'loading' as const, title: t('machineVitals.usingTheMost.reading') }
-    : answer === null
-      ? { id: 'unavailable', kind: 'unavailable' as const, title: t('machineVitals.usingTheMost.unavailable') }
-      : { id: 'empty', kind: 'empty' as const, title: t('machineVitals.usingTheMost.empty', { machine: props.machineName }) };
+  // The section keeps its place: while the census is first read, when it cannot be read, or when a finished read
+  // found nothing Happier started, it says so in one quiet line instead of disappearing (and moving the page when
+  // the answer lands). A null answer is "reading" only while the store is still reading; after a failure it is not.
+  const quiet = items.length > 0 ? null : answer !== null
+    ? { id: 'empty', kind: 'empty' as const, title: t('machineVitals.usingTheMost.empty', { machine: props.machineName }) }
+    : props.offline
+      ? { id: 'offline', kind: 'unavailable' as const, title: t('machineProcesses.states.offlineTitle', { machine: props.machineName }), reason: t('machineProcesses.states.offlineReason') }
+    : props.processes === null && props.processesStatus === 'loading'
+      ? { id: 'reading', kind: 'loading' as const, title: t('machineVitals.usingTheMost.reading') }
+      : { id: 'unavailable', kind: 'unavailable' as const, title: t('machineVitals.usingTheMost.unavailable') };
   return (
     <ItemGroup
       title={t('machineVitals.usingTheMost.title')}
@@ -150,7 +158,8 @@ export const MachineUsingTheMost = React.memo(function MachineUsingTheMost(
       }
     >
       {quiet ? (
-        <SurfaceStateCard testID={`machine-using-the-most-${quiet.id}`} size="line" kind={quiet.kind} title={quiet.title} />
+        <SurfaceStateCard testID={`machine-using-the-most-${quiet.id}`} size="line" kind={quiet.kind} title={quiet.title}
+          {...('reason' in quiet ? { reason: quiet.reason } : {})} />
       ) : (
       <CoreCollectionScope>
         <Collection<ProcessesItem>

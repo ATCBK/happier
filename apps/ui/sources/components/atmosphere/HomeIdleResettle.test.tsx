@@ -4,30 +4,27 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { ATMOSPHERE_PICTURES } from '@happier-dev/brand/atmosphere';
 import { DEFAULT_HOME_ATMOSPHERE } from '@happier-dev/protocol/account/settings/accountSettings';
 import { renderScreen } from '@/dev/testkit';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>>;
 afterEach(() => {
+  browser?.restore();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
 it('admits an overdue resettle only when the desktop window becomes visible', async () => {
+  browser = await installBrowserRuntimeForTests({ url: 'http://localhost/' });
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date', 'performance'] });
-  let visibility = 'hidden';
-  const listeners = new Set<() => void>();
+  let visibility: DocumentVisibilityState = 'hidden';
   // The desktop bridge and document are host boundaries; visibility policy stays real.
   vi.stubGlobal('__TAURI_INTERNALS__', { invoke: () => undefined });
-  vi.stubGlobal('document', {
-    get visibilityState() { return visibility; },
-    hasFocus: () => false,
-    addEventListener: (event: string, listener: () => void) => {
-      if (event === 'visibilitychange') listeners.add(listener);
-    },
-    removeEventListener: (_event: string, listener: () => void) => listeners.delete(listener),
-  });
+  vi.spyOn(browser.document, 'visibilityState', 'get').mockImplementation(() => visibility);
+  vi.spyOn(browser.document, 'hasFocus').mockReturnValue(false);
   const { storage } = await import('@/sync/domains/state/storageStore');
   const { pictureStore } = await import('./pictureStore');
   const { HomeIdleResettle } = await import('./HomeIdleResettle');
@@ -45,7 +42,7 @@ it('admits an overdue resettle only when the desktop window becomes visible', as
     expect(ensure).not.toHaveBeenCalled();
     await act(async () => {
       visibility = 'visible';
-      listeners.forEach(listener => listener());
+      browser.document.dispatchEvent(new browser.window.Event('visibilitychange'));
     });
     await act(async () => { vi.advanceTimersByTime(0); });
     expect(ensure).toHaveBeenCalledTimes(1);

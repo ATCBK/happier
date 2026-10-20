@@ -13,6 +13,7 @@ import { formatHappierDataBytesParts } from '@happier-dev/plugin-ui/presentation
 
 import type { MachineResourceTone } from '@/components/machines/summary/machineSummaryStripModel';
 import type { MachineVitalsRange } from '@/sync/domains/machines/resources/machineRpc';
+import type { MachineResourceState } from '@/sync/domains/machines/resources/machineResourceStore';
 
 /**
  * The Overview's pure rules (plan 20 VU-6): which of the six states a machine is in, the history each
@@ -64,7 +65,7 @@ export function selectMachineVitalsOverviewView(
     online: boolean;
     published: MachinePublishedResourceSummaryV1 | null;
     state: Readonly<{
-      status: 'loading' | 'ready' | 'error' | 'not_reported';
+      status: MachineResourceState['status'];
       snapshot: MachineVitalsSnapshotV1 | null;
       stale: boolean;
       errorCode?: string | null;
@@ -101,7 +102,7 @@ export function selectMachineVitalsOverviewView(
     return {
       kind: 'ready',
       sample,
-      freshness: state.stale || state.status === 'error' ? 'stale' : 'live',
+      freshness: state.stale || state.status === 'slow' || state.status === 'error' ? 'stale' : 'live',
     };
   if (state.status === 'error')
     return { kind: 'unavailable', since: null, reason: 'request_failed', ...(state.errorCode ? { errorCode: state.errorCode } : {}) };

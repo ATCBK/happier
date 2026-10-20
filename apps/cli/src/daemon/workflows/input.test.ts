@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AutomationRunCauseSchema, deriveAutomationOccurrenceKeyV1, WorkflowValueReferenceSchema } from '@happier-dev/protocol';
+import { AutomationRunCauseSchema } from '@happier-dev/protocol/automations/run-cause';
+import { deriveAutomationOccurrenceKeyV1 } from '@happier-dev/protocol/automations/automationOccurrenceV1';
+import { WorkflowValueReferenceSchema } from '@happier-dev/protocol/workflows/workflowReferenceV1';
 import type { WorkflowCondition } from '@happier-dev/protocol/workflows';
 
 import {
@@ -31,6 +33,44 @@ const contextGoal = { id: 'goal', kind: 'goal' as const, origin: 'happier' as co
   title: 'Finish', updatedAt: 1, tokenBudget: 100 };
 
 describe('workflow input materialization', () => {
+  it('leaves required Session context defaults for canonical materialization and resolves qualified input paths', async () => {
+    const definition = { inputs: [{ name: 'reviewSession', valueType: 'json' as const, required: true,
+      inputType: { hostType: 'session' as const }, defaultFrom: 'origin_session' as const }] };
+    expect(bindAutomationWorkflowInputs({ definition, evidence: {} })).toEqual({});
+    expect(() => bindAutomationWorkflowInputs({ definition: { inputs: [{ name: 'target', valueType: 'json', required: true }] }, evidence: {} }))
+      .toThrowError('missing_required_input');
+    const address = { serverId: 'home', sessionId: 'review-session' };
+    await expect(resolveWorkflowValueReference({ kind: 'input', name: 'reviewSession', path: ['sessionId'] },
+      { ...runtime, inputs: { reviewSession: address } })).resolves.toBe('review-session');
+  });
+  it('resolves each Discussion context scope once per materialized input and preserves its frontier', async () => {
+    const scopes: string[] = [];
+    let currentFrontier = 7;
+    const contextualRuntime = { ...runtime, resolveDiscussionContext: async (scope: string) => {
+      scopes.push(scope);
+      return { frontier: scope === 'addressing_message' ? 4 : currentFrontier++, text: scope === 'addressing_message' ? 'question' : 'question and replies' };
+    } };
+    const addressing = WorkflowValueReferenceSchema.parse({ kind: 'discussion_context', scope: 'addressing_message' });
+    const soFar = WorkflowValueReferenceSchema.parse({ kind: 'discussion_context', scope: 'so_far' });
+    const input = await materializeWorkflowStepInput({ document: { text: 'Answer', references: [], attachments: [] },
+      references: [addressing, soFar, soFar], runtime: contextualRuntime });
+    expect(input.values).toEqual([{ frontier: 4, text: 'question' },
+      { frontier: 7, text: 'question and replies' }, { frontier: 7, text: 'question and replies' }]);
+    expect(scopes).toEqual(['addressing_message', 'so_far']);
+    // The existing persisted-input replay arm carries exact values, not another history read.
+    await expect(materializeWorkflowStepInput({ document: { text: 'Answer', references: [], attachments: [] },
+      references: input.values.map(value => ({ kind: 'literal', value })), runtime })).resolves.toMatchObject({ values: input.values });
+  });
+
+  it('refuses Discussion context without its authorized owner and propagates unavailable history in conditions', async () => {
+    const reference = WorkflowValueReferenceSchema.parse({ kind: 'discussion_context', scope: 'addressing_message' });
+    await expect(resolveWorkflowValueReference(reference, runtime)).rejects.toMatchObject({ code: 'invalid_reference_scope' });
+    const deniedRuntime = { ...runtime, resolveDiscussionContext: async () => {
+      throw new WorkflowInputResolutionError('workflow_discussion_context_unavailable');
+    } };
+    await expect(evaluateWorkflowCondition({ kind: 'exists', value: reference }, deniedRuntime))
+      .rejects.toMatchObject({ code: 'workflow_discussion_context_unavailable' });
+  });
   it('evaluates deeply nested conditions without a runtime nesting limit and preserves short-circuit order', async () => {
     let condition: WorkflowCondition = { kind: 'compare', operator: 'eq',
       left: { kind: 'literal', value: 'same' }, right: { kind: 'literal', value: 'same' } };

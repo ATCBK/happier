@@ -6,12 +6,12 @@ import { useUnistyles } from 'react-native-unistyles';
 import { glassSurfaceBackgroundColor } from '@/components/ui/glass/glassSurfacePaint';
 import { createTwoFilesPatch } from 'diff';
 
-import { getSingularPatch, parseDiffFromFile, Virtualizer as PierreVirtualizer } from '@pierre/diffs';
+import { parseDiffFromFile, parsePatchFiles, Virtualizer as PierreVirtualizer } from '@pierre/diffs';
 import type { DiffLineAnnotation, FileDiffMetadata, FileDiffOptions, OnDiffLineClickProps } from '@pierre/diffs';
 import { FileDiff, Virtualizer, VirtualizerContext, WorkerPoolContext, useVirtualizer } from '@pierre/diffs/react';
 import { usePierreScrollRootVirtualizer } from './PierreScrollRootVirtualizerProvider.web';
 
-import { useSetting } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/store/settingsReadHooks';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { t } from '@/text';
 import { looksLikeUnifiedDiff } from '@/scm/diff/looksLikeUnifiedDiff';
@@ -543,7 +543,11 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
                 const name = props.filePath ?? 'diff';
                 return parseDiffFromFile({ name, contents: props.oldText }, { name, contents: props.newText }, { context: props.contextLines ?? 3 });
             }
-            return getSingularPatch(sanitizedPatch);
+            // `getSingularPatch` console.errors the parsed array before throwing for a patch that is not exactly one
+            // file diff (a hunk-only ```diff fence parses to none), which Expo shows as a red "[]" toast.
+            // Counting here keeps that expected case silent and falls through to the plain-text fallback.
+            const parsed = parsePatchFiles(sanitizedPatch);
+            return parsed.length === 1 && parsed[0]!.files.length === 1 ? parsed[0]!.files[0]! : null;
         } catch {
             return null;
         }

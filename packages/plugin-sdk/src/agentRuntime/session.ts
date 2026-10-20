@@ -292,6 +292,8 @@ export type AgentSessionRuntimeEvent =
       turnId: string;
       agentTurnId?: string;
       kind: 'mcp-tool-usage';
+      /** Native final-result queue count; null/absent means unobserved. */
+      queuedTurnCount?: number | null;
       window: Readonly<{ startMs: number; endMs: number }>;
       coverage: 'complete' | 'partial';
       servers: Array<Readonly<{

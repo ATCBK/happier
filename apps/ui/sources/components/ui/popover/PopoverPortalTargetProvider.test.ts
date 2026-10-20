@@ -136,8 +136,7 @@ describe('PopoverPortalTargetProvider (native)', () => {
             },
         } as any;
 
-        let tree: ReturnType<typeof renderer.create> | undefined;
-        tree = (await renderScreen(React.createElement(
+        const screen = await renderScreen(React.createElement(
                     PopoverPortalTargetProvider,
                     null,
                     React.createElement(
@@ -152,13 +151,14 @@ describe('PopoverPortalTargetProvider (native)', () => {
                             children: () => React.createElement(PopoverChild),
                         } as any),
                     ),
-                ))).tree;
+                ));
+        const tree = screen.tree;
 
         expect(tree ? findAllByType(tree, 'PopoverChild').length : 0).toBe(1);
 
         try {
             await act(async () => {
-                tree?.update(
+                await screen.update(
                     React.createElement(
                         PopoverPortalTargetProvider,
                         null,

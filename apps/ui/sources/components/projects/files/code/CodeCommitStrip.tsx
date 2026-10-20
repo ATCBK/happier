@@ -77,14 +77,14 @@ export const CodeCommitStrip = React.memo(function CodeCommitStrip(
           width={22}
           height={22}
           radius={11}
-          color={theme.colors.surface.pressedOverlay}
+          color={theme.colors.surface.skeleton}
           reducedMotion={reducedMotion}
         />
         <HappierSkeletonBlock
           width={phone ? '55%' : '38%'}
           height={10}
           radius={5}
-          color={theme.colors.surface.pressedOverlay}
+          color={theme.colors.surface.skeleton}
           reducedMotion={reducedMotion}
         />
       </View>

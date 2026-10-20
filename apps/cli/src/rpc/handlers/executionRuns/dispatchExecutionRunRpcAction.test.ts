@@ -17,6 +17,9 @@ import { createBrowserAutomationReverseDispatcher } from '@/daemon/browser/autom
 import type { CliServerFeaturesSnapshot } from '@/features/featureDecisionService';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { createScopedRuntimeActionSettingsProvider } from '@/settings/scopedRuntimeActionSettingsProvider';
+import { markExecutionRunStartPreparationFailure } from '@/agent/runtime/bridges/executionRun/errors';
+import { sendBackendLongLivedRun } from '@/agent/runtime/bridges/executionRun/send/backendLongLivedPrompt';
+import { ExecutionRunTransportErrorCodeSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 
 import {
   createExecutionRunRpcActionDeps,
@@ -119,6 +122,7 @@ const BROWSER_CONTROL_RUNTIME_ACTIONS_ENABLED = readyServerFeatures({
     viewTargets: { enabled: true },
     internal: { enabled: true },
     sidecar: { enabled: true },
+    automation: { enabled: true },
   },
 });
 
@@ -392,6 +396,30 @@ describe('createExecutionRunRpcActionExecutor', () => {
     }));
   });
 
+  it('returns a protocol-valid refusal when a private detached send lost its original authority', async () => {
+    const run: ExecutionRunState = { runId: 'run-lost-authority', callId: 'call', sidechainId: 'sidechain',
+      sessionId: null, depth: 0, intent: 'delegate', backendId: 'codex', backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+      instructions: '', permissionMode: 'yolo', retentionPolicy: 'resumable', runClass: 'long_lived',
+      ioMode: 'streaming', status: 'running', startedAtMs: 1 };
+    const deps = createExecutionRunRpcActionDeps({
+      manager: { ...createUnusedExecutionRunBridge(), get: id => id === run.runId ? run : null,
+        send: (id, params) => sendBackendLongLivedRun({ runId: id, params,
+          runs: new Map([[run.runId, run]]), controllers: new Map(), budgetRegistry: null,
+          createRuntime: () => { throw new Error('Refused input must not open a provider'); },
+          maxTurns: null, getNowMs: () => 1, finishRun: async () => {}, sendAcp: async () => {},
+          parentProvider: 'codex', streamedTranscriptSession: null, writeActivityMarker: async () => {},
+        }),
+      }, context: { sessionId: null, cwd: '/workspace' },
+      policy: resolveExecutionRunPolicy({ defaults: { maxConcurrentRuns: null, boundedTimeoutMs: null,
+        reviewBoundedTimeoutMs: null, maxTurns: null } }), isExecutionRunsEnabled: () => true,
+    });
+    const result = await deps.detachedExecutionRunSend?.(null, { runId: run.runId, message: 'Refuse lost authority' },
+      { effectiveCallerPermissionMode: 'read-only' });
+    if (!result || typeof result !== 'object' || !('errorCode' in result)) throw new Error('Missing input refusal');
+    expect(ExecutionRunTransportErrorCodeSchema.safeParse(result.errorCode).success).toBe(true);
+    expect(result).toMatchObject({ ok: false, errorCode: 'execution_run_not_allowed', error: 'causal_permission_authority_invalid' });
+  });
+
   it('forwards the exact detached send interaction and Workflow observation owners to the retained turn', async () => {
     const structuredInput = {
       v: 1 as const,
@@ -455,7 +483,10 @@ describe('createExecutionRunRpcActionExecutor', () => {
       message: 'Continue',
       localInputId: 'workflow-input-b',
       structuredInput,
-    }, { permissionRequestStore, workflowObservationSink })).resolves.toEqual({ ok: true });
+    }, { permissionRequestStore, workflowObservationSink,
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'yolo' },
+      effectiveCallerPermissionMode: 'read-only',
+    })).resolves.toEqual({ ok: true });
 
     expect(send).toHaveBeenCalledWith(run.runId, expect.objectContaining({
       message: 'Continue',
@@ -463,6 +494,8 @@ describe('createExecutionRunRpcActionExecutor', () => {
       structuredInput,
       permissionRequestStore,
       workflowObservationSink,
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'yolo' },
+      effectiveCallerPermissionMode: 'read-only',
     }));
   });
 
@@ -575,7 +608,7 @@ describe('createExecutionRunRpcActionExecutor', () => {
     expect(start).not.toHaveBeenCalled();
   });
 
-  it('keeps Discussion launch provenance in the fixed Session scope without treating it as authority', async () => {
+  it('keeps Home-qualified Discussion provenance without treating it as Session authority', async () => {
     const start = vi.fn(async () => ({
       runId: 'run_started_1',
       callId: 'call_started_1',
@@ -583,8 +616,8 @@ describe('createExecutionRunRpcActionExecutor', () => {
     }));
     const executor = createAgentExecutionRunStartExecutor(start);
     const launchOrigin = {
-      kind: 'session_discussion',
-      sessionId: 'sess_1',
+      kind: 'discussion',
+      serverId: 'server-1',
       discussionId: 'discussion_1',
       messageIds: ['message_1'],
       draftCorrelationId: 'draft_1',
@@ -620,7 +653,7 @@ describe('createExecutionRunRpcActionExecutor', () => {
     }));
   });
 
-  it('admits attached deferred input and carries the Workflow request identity only to the Run manager', async () => {
+  it.each(['execution.run.start', 'execution.run.ensure_or_start'] as const)('carries the trusted Workflow identity through %s instead of caller input', async actionId => {
     const start = vi.fn(async () => ({
       runId: 'run_workflow_1',
       callId: 'call_workflow_1',
@@ -636,24 +669,27 @@ describe('createExecutionRunRpcActionExecutor', () => {
       },
     };
 
-    const result = await executor.execute('execution.run.start', {
+    const input = {
       ...AGENT_EXECUTION_RUN_START_REQUEST,
+      actionRequestId: 'caller-selected-host-key',
       intent: 'agent',
       backendTarget: CURRENT_AGENT_TARGET,
       instructions: undefined,
-      initialInput: { kind: 'deferred_session_pending' },
+      initialInput: { kind: 'deferred_session_pending' as const },
       permissionMode: 'safe-yolo',
       retentionPolicy: 'resumable',
       runClass: 'long_lived',
       ioMode: 'streaming',
-    }, {
+    };
+    const result = await executor.execute(actionId,
+      actionId === 'execution.run.start' ? input : { sessionId: 'sess_1', start: input }, {
       ...APPROVED_INTERNAL_RUNTIME_ACTION_CONTEXT,
       actionCaller,
       agentStartContext: { ...CURRENT_SESSION_AGENT_START_CONTEXT,
         caller: { kind: 'originless', runId: actionCaller.runId, runDepth: 0, runOriginSessionId: 'sess_1' } },
       actionRequestId: 'workflow-input-v2:stable:execution-run-start',
     });
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: true,
       result: {
         runId: 'run_workflow_1',
@@ -967,7 +1003,8 @@ describe('createExecutionRunRpcActionExecutor', () => {
         // This raw nested value is not scope authority; the outer operation is.
         sessionId: null,
       },
-    })).resolves.toEqual({ ok: true, runId: 'run_scoped_1', created: true });
+    })).resolves.toEqual({ ok: true, runId: 'run_scoped_1', created: true,
+      callId: 'call_scoped_1', sidechainId: 'sidechain_scoped_1' });
 
     expect(start).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sess_1' }));
   });
@@ -1041,6 +1078,23 @@ describe('createExecutionRunRpcActionExecutor', () => {
       ok: false,
       errorCode: 'provider_binding_changed',
       error: 'Saved Secret selection changed',
+      details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } },
+    });
+
+    // A preparation failure with no typed code of its own keeps its own reason beside
+    // the host's fallback code, so the caller can say why no Run was created.
+    const preparationStart = vi.fn(async () => {
+      throw markExecutionRunStartPreparationFailure(
+        new Error('Account settings could not be read'), 'execution_run_profile_preparation_failed');
+    });
+    await expect(createAgentExecutionRunStartExecutor(preparationStart).execute(
+      'execution.run.start',
+      AGENT_EXECUTION_RUN_START_REQUEST,
+      { surface: 'rpc' },
+    )).resolves.toEqual({
+      ok: false,
+      errorCode: 'execution_run_profile_preparation_failed',
+      error: 'Account settings could not be read',
       details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } },
     });
   });
@@ -1394,6 +1448,8 @@ describe('createExecutionRunRpcActionExecutor', () => {
         start,
         get: (runId) => runId === publicRun.runId ? runState : null,
         getPublic,
+        // Terminal projection is published only after this fixture's custody has settled.
+        waitForTerminal: async () => {},
       },
       context: { sessionId: null, cwd: '/workspace' },
       policy: resolveExecutionRunPolicy({
@@ -2055,7 +2111,8 @@ describe('createExecutionRunRpcActionExecutor', () => {
       context: {
         sessionId: 'sess_1',
         cwd: '/workspace',
-        browserAutomation: { dispatch: automationDispatch },
+        browserAutomation: { dispatch: automationDispatch,
+          prepareConfidentialFill: async () => { throw new Error('Confidential browser input is not available in this fixture'); } },
         getServerFeaturesSnapshot: () => BROWSER_AUTOMATION_RUNTIME_ACTIONS_ENABLED,
       },
       policy: resolveExecutionRunPolicy({
@@ -2179,6 +2236,7 @@ describe('createExecutionRunRpcActionExecutor', () => {
       waitForInputTurn,
       get: (runId) => runId === run.runId ? runState : null,
       getPublic: (runId) => runId === run.runId ? run : null,
+      waitForTerminal: async () => {},
       getLatestToolResult: () => false,
       getStructuredMeta: () => ({
         kind: 'execution_result',

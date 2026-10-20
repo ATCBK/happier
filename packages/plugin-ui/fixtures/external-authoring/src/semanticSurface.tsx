@@ -29,7 +29,10 @@ import {
   WidgetFrame,
 } from '@happier-dev/plugin-ui';
 import { useHappierUiAccessibility, useHappierUiLocalization } from '@happier-dev/plugin-ui/environment';
-import { CountedDisclosureItem, ItemAddRow, FloatingFrame as AuthorFloatingFrame } from '@happier-dev/plugin-ui/components';
+import {
+  CountedDisclosureItem, ItemAddRow, FloatingFrame as AuthorFloatingFrame, TechnicalDetailsDisclosure, HAPPIER_BALANCED_TEXT_WRAP,
+  type TechnicalDetailsLine,
+} from '@happier-dev/plugin-ui/components';
 import {
   HappierFloatingFrame as FloatingFrame, HappierStack, HappierText, resolveFloatingFrameRect, resolveHappierTreeFocusKey,
   useHappierCollection, type FrameRect, type HappierTreeNode,
@@ -40,6 +43,11 @@ const externalReviews = Object.freeze([
   Object.freeze({ id: 'terminal', title: 'Terminal review' }),
   Object.freeze({ id: 'release', title: 'Release review' }),
 ]);
+const externalReviewReferences: readonly TechnicalDetailsLine[] = externalReviews.map((review) => ({
+  key: review.id,
+  label: review.title,
+  value: review.id,
+}));
 
 const externalTreeNodes = [{
   key: 'review-root', parentKey: null, depth: 0, kind: 'branch', expanded: false,
@@ -138,6 +146,8 @@ function ExternalAuthoringSemanticSurface() {
   const composerView = useComposerView(composerHandle);
   const hostApi = usePluginHostApi();
   const [savedLocale, setSavedLocale] = useState<string | undefined>();
+  const [reviewInput, setReviewInput] = useState<Record<string, unknown>>({ enabled: false, note: '' });
+  const [reviewFormReceipt, setReviewFormReceipt] = useState<string | null>(null);
   const [authoringStatus, setAuthoringStatus] = useState<string | undefined>();
   const [composerAttachmentStatus, setComposerAttachmentStatus] = useState<string | undefined>();
   const [composerDecorationStatus, setComposerDecorationStatus] = useState<string | undefined>();
@@ -269,6 +279,8 @@ function ExternalAuthoringSemanticSurface() {
       <CountedDisclosureItem title="Older reviews" count={externalReviews.length - 1} testID="external-older-reviews">
         {externalReviews.slice(1).map((review) => <Item key={review.id} title={review.title} />)}
       </CountedDisclosureItem>
+      <TechnicalDetailsDisclosure title="Technical details" lines={externalReviewReferences} testID="external-review-technical" />
+      <HappierText style={[{ textAlign: 'center' }, HAPPIER_BALANCED_TEXT_WRAP]}>Opening the review on the reviewer's Machine</HappierText>
       <WidgetFrame
         frameStyle="card"
         placement="board"
@@ -303,12 +315,19 @@ function ExternalAuthoringSemanticSurface() {
       <Form
         hints={{
           title: 'External review form',
-          fields: [],
+          submitLabel: 'Submit external review form',
+          fields: [
+            { path: 'name', title: 'Review name', widget: 'text', defaultValue: 'Release review' },
+            { path: 'enabled', title: 'Review enabled', widget: 'boolean', defaultValue: true },
+            { path: 'note', title: 'Review note', widget: 'text', defaultValue: 'Suggested note' },
+            { path: 'count', title: 'Review count', widget: 'integer', defaultValue: 0 },
+          ],
         }}
-        value={{}}
-        onChange={() => undefined}
-        onSubmit={() => undefined}
+        value={reviewInput}
+        onChange={setReviewInput}
+        onSubmit={(input) => setReviewFormReceipt(JSON.stringify(input))}
       />
+      {reviewFormReceipt === null ? null : <Status tone="info" label={`External review form submitted: ${reviewFormReceipt}`} />}
       <ItemGroup title="External review scope">
         <ItemAddRow title="Add review scope" onPress={() => setReviewScope('all')} testID="external-add-review-scope" />
         <Item

@@ -2,6 +2,7 @@ import type { PendingMessage } from '@/sync/domains/state/storageTypes';
 import type { TranslationKeyNoParams } from '@/text';
 import { isPendingDeliveryProviderEffectPossibleV1, type PendingDeliveryStatusV1 } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
 import type { SessionInputAdmissionRejectionCodeV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmissionRejectionV1';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 
 export type PendingMessageVisualStateKind =
     | 'saving'
@@ -76,6 +77,7 @@ export function resolvePendingMessageHeightBearingChrome(
 }
 
 const blockedReasonLabelKeys = {
+    autonomous_check_in: 'settingsCoordination.checkInPaused',
     terminal_composer_draft: 'session.pendingMessages.deliveryBlockedReasons.terminalComposerDraft',
     capture_style_unavailable: 'session.pendingMessages.deliveryBlockedReasons.captureStyleUnavailable',
     provider_unavailable_before_acceptance: 'session.pendingMessages.deliveryBlockedReasons.providerUnavailableBeforeAcceptance',
@@ -84,6 +86,7 @@ const blockedReasonLabelKeys = {
     delivery_outcome_uncertain: 'session.pendingMessages.deliveryBlockedReasons.deliveryOutcomeUncertain',
     terminal_host_unreachable: 'session.pendingMessages.deliveryBlockedReasons.terminalHostUnreachable',
     runtime_disposed_before_delivery: 'session.pendingMessages.deliveryBlockedReasons.runtimeDisposedBeforeDelivery',
+    host_retired_before_dispatch: 'session.pendingMessages.deliveryBlockedReasons.runtimeDisposedBeforeDelivery',
     session_input_target_unavailable: 'session.pendingMessages.deliveryBlockedReasons.targetUnavailable',
     runtime_config_blocked: 'session.pendingMessages.deliveryBlockedReasons.runtimeConfigBlocked',
     invalid_prompt_text: 'session.pendingMessages.deliveryBlockedReasons.invalidPromptText',
@@ -97,10 +100,13 @@ const blockedReasonLabelKeys = {
     unknown: 'session.pendingMessages.deliveryBlockedReasons.unknown',
 } satisfies Record<NonNullable<PendingMessage['pendingDeliveryBlockedReason']>, TranslationKeyNoParams>;
 
-/** Run-launch outcomes raised by the interactive draft before any Session input is admitted. */
+/** Run-launch failures and unconfirmed submission outcomes surfaced by the draft or Start Action. */
 export type ExecutionRunLaunchFailureCode =
     | 'execution_run_target_changed'
-    | 'execution_run_secret_reference_overlay_update_required';
+    | 'execution_run_secret_reference_overlay_update_required'
+    | 'model_structured_output_unsupported'
+    | 'RUNNER_AGENT_SESSION_RUNTIME_SOURCE_MISSING'
+    | typeof RPC_ERROR_CODES.OUTCOME_UNKNOWN;
 
 export type SessionInputFailureCode = SessionInputAdmissionRejectionCodeV1 | ExecutionRunLaunchFailureCode;
 
@@ -110,6 +116,7 @@ export type SessionInputFailureCode = SessionInputAdmissionRejectionCodeV1 | Exe
  * boundary resolves copy here; a raw snake_case code is never user-facing text.
  */
 const sessionInputFailureLabelKeys = {
+    session_input_muted: 'settingsCoordination.inputMuted',
     session_input_invalid: 'session.pendingMessages.admissionRejected.invalid',
     model_not_granted: 'session.pendingMessages.admissionRejected.modelNotGranted',
     permission_mode_not_granted: 'session.pendingMessages.admissionRejected.permissionModeNotGranted',
@@ -126,6 +133,9 @@ const sessionInputFailureLabelKeys = {
     session_input_encryption_mode_mismatch: 'session.pendingMessages.admissionRejected.encryptionModeMismatch',
     execution_run_target_changed: 'sessionDrafts.executionRunStart.targetChanged',
     execution_run_secret_reference_overlay_update_required: 'sessionDrafts.executionRunStart.secretReferenceOverlayUpdateRequired',
+    model_structured_output_unsupported: 'walkthrough.generationFailure.modelUnavailable',
+    RUNNER_AGENT_SESSION_RUNTIME_SOURCE_MISSING: 'session.staleRunner.banner.body',
+    [RPC_ERROR_CODES.OUTCOME_UNKNOWN]: 'sessionDrafts.executionRunStart.submittedUnknown',
 } satisfies Record<SessionInputFailureCode, TranslationKeyNoParams>;
 
 function isSessionInputFailureCode(value: unknown): value is SessionInputFailureCode {

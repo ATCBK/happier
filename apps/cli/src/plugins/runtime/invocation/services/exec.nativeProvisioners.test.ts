@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { setTimeout as delay } from 'node:timers/promises';
 import { LUME_PLUGIN } from '@happier-dev/plugins-machine-lume/manifest';
 import { CUA_PLUGIN } from '@happier-dev/plugins-machine-cua/manifest';
 import { DOCKER_SANDBOXES_PLUGIN } from '@happier-dev/plugins-machine-docker-sandboxes/manifest';
@@ -6,18 +7,28 @@ import { LIMA_PLUGIN } from '@happier-dev/plugins-machine-lima/manifest';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { createDaemonizingProcessFixture } from '@/testkit/process/daemonizingProcess';
 import { waitForProcessExit } from '@/testkit/process/spawn';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 
 import { createProductionPluginInvocationServiceOwners } from './production';
 
 describe('native provisioner production process composition', () => {
-    it.each(['run', 'spawn'] as const)('preserves native descendants through the public %s projection after invocation retirement', async method => {
+    it.for(['run', 'spawn'] as const)('preserves native descendants through the public %s projection after invocation retirement', async (method, { task }) => {
         await withTempDir('happier-native-exec-composed-', async directory => {
             const fixture = createDaemonizingProcessFixture(directory);
-            const manifest = LIMA_PLUGIN.manifest;
+            const manifest = normalizePluginManifestV2(LIMA_PLUGIN.manifest);
             const controller = new AbortController();
+            let failNextDiscovery = method === 'run';
             const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write() {} },
                 // Only executable discovery crosses a substituted OS boundary.
-                exec: { resolveExecutable: async () => ({ command: process.execPath }), resolvePath: async () => directory },
+                exec: { resolveExecutable: async () => {
+                    if (failNextDiscovery) {
+                        failNextDiscovery = false;
+                        throw new Error('Executable discovery unavailable');
+                    }
+                    // Exercise a valid OS discovery phase beyond waitFor's 1s default.
+                    if (method === 'run') await delay(1_100);
+                    return { command: process.execPath };
+                }, resolvePath: async () => directory },
             });
             try {
                 const seed = { plugin: { id: manifest.id, version: manifest.version },
@@ -34,9 +45,15 @@ describe('native provisioner production process composition', () => {
                 const executable = access.scope.executables[0]!;
                 const request = { executable, args: fixture.args };
                 const options = { descendantDisposition: 'preserve-on-success' as const, signal: controller.signal };
+                if (method === 'run') {
+                    const rejectedLaunch = services.exec.run(request, options);
+                    const launchError: unknown = await rejectedLaunch.catch((error: unknown) => error);
+                    expect(launchError).toMatchObject({ code: 'plugin_exec_resolve_failed' });
+                    await expect(fixture.ready({ launch: rejectedLaunch, timeoutMs: task.timeout })).rejects.toBe(launchError);
+                }
                 const handle = method === 'spawn' ? await services.exec.spawn(request, options) : null;
                 const pending = handle ? handle.wait() : services.exec.run(request, options);
-                const pid = await fixture.ready();
+                const pid = await fixture.ready({ launch: pending, timeoutMs: task.timeout });
                 await fixture.release();
                 expect((await pending).termination).toEqual({ observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } });
                 await handle?.dispose();
@@ -51,7 +68,7 @@ describe('native provisioner production process composition', () => {
         });
     });
 
-    it.each([LUME_PLUGIN.manifest, CUA_PLUGIN.manifest, DOCKER_SANDBOXES_PLUGIN.manifest])(
+    it.each([LUME_PLUGIN.manifest, CUA_PLUGIN.manifest, DOCKER_SANDBOXES_PLUGIN.manifest].map(manifest => normalizePluginManifestV2(manifest)))(
         'preserves the selected native environment without disclosing unrelated ambient values for $id',
         async (manifest) => {
             vi.stubEnv('UNRELATED_SECRET', 'ambient-secret');

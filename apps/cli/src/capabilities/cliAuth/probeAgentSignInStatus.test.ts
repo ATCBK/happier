@@ -53,17 +53,25 @@ describe('on-demand native sign-in status', () => {
   it('does not infer signed-in or signed-out when no native probe can answer', async () => {
     expect(await probeAgentSignInStatus('missing-fixture-agent')).toMatchObject({ status: 'unknown' });
   });
-  it('prefers a declared connected service and refuses unsupported native or undeclared service login', async () => {
+  it('prefers an admitted Agent\'s declared connected service and refuses unsupported native or undeclared service login', async () => {
     const handlers = new Map<string, RpcHandler>();
     registerMachineAgentSignInRpcHandlers({ rpcHandlerManager: {
       registerHandler: (method, handler) => { handlers.set(method, handler); },
     } });
     const prepare = handlers.get('daemon.agents.signIn.prepare');
     expect(prepare).toBeTypeOf('function');
-    expect(await prepare!({ agentId: 'gemini' })).toMatchObject({ method: 'connected', command: {
-      operation: 'beginConnect', service: { pluginId: 'happier.agent.gemini', localId: 'gemini-account' }, modeId: 'api-key',
-    } });
-    expect(await prepare!({ agentId: 'gemini', method: 'native' })).toMatchObject({ ok: false, errorCode: 'agent_login_unsupported' });
-    expect(await prepare!({ agentId: 'gemini', method: 'connected', serviceId: 'not-declared' })).toMatchObject({ ok: false, errorCode: 'connected_service_unsupported' });
+    const runtime = await createAdmittedPluginRuntimeFixture({
+      controller: pluginReloadController,
+      runtimeOptions: { pluginIds: ['happier.agent.gemini'] },
+    });
+    try {
+      expect(await prepare!({ agentId: 'gemini' })).toMatchObject({ method: 'connected', command: {
+        operation: 'beginConnect', service: { pluginId: 'happier.agent.gemini', localId: 'gemini-account' }, modeId: 'api-key',
+      } });
+      expect(await prepare!({ agentId: 'gemini', method: 'native' })).toMatchObject({ ok: false, errorCode: 'agent_login_unsupported' });
+      expect(await prepare!({ agentId: 'gemini', method: 'connected', serviceId: 'not-declared' })).toMatchObject({ ok: false, errorCode: 'connected_service_unsupported' });
+    } finally {
+      await runtime.dispose();
+    }
   });
 });

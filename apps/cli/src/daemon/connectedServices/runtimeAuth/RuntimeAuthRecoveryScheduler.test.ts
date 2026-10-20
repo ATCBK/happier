@@ -579,6 +579,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
         reportId: 'runtime-auth-report:claimed-mode', sessionId: 'session-claimed-mode',
         switchesThisTurn: 0, classification: usageLimitClassification(), resumePromptMode: 'standard',
       });
+      if (begun.status !== 'scheduled') throw new Error('Expected a scheduled recovery attempt');
       const key = store.readAll!()[0]?.[0];
       if (!key) throw new Error('expected durable attempt');
       // The durable boundary contains a claim held by another recovery owner, including
@@ -654,6 +655,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
         sessionId: 'session-admitted-mode', switchesThisTurn: 0,
         classification: usageLimitClassification(), resumePromptMode: 'standard',
       });
+      if (begun.status !== 'scheduled') throw new Error('Expected a scheduled recovery attempt');
       blockNextClaim = true;
       wakes.push(scheduler.wake({ sessionId: 'session-admitted-mode', attemptId: begun.attemptId, reason: 'manual' }));
       await claimStarted;

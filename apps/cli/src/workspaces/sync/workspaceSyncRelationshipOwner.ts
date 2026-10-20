@@ -89,7 +89,8 @@ export type WorkspaceSyncRelationshipOwnerOptions = Readonly<{
   commitRelationshipTarget(relationship: WorkspaceSyncRelationshipV1): Promise<void>;
   terminateRelationshipRuntime(relationship: WorkspaceSyncRelationshipV1): Promise<void>;
   waitForProjectReconciliation(settingsVersion: number, signal?: AbortSignal): Promise<void>;
-  readRelationshipDependencies?(relationship: WorkspaceSyncRelationshipV1, snapshot: ProjectAccountSnapshotV1): Promise<readonly ProjectWorkerDependency[]>;
+  readRelationshipDependencies?(relationship: WorkspaceSyncRelationshipV1, snapshot: ProjectAccountSnapshotV1,
+    removal?: NonNullable<WorkspaceSyncRelationshipRetirement['removeTargetCopy']>): Promise<readonly ProjectWorkerDependency[]>;
   inspectCommittedRelationshipTarget?(relationship: WorkspaceSyncRelationshipV1, removal: NonNullable<WorkspaceSyncRelationshipRetirement['removeTargetCopy']>, signal?: AbortSignal, approval?: WorkspaceSyncCommittedCopyTargetV1): Promise<void>;
   removeCommittedRelationshipTarget?(relationship: WorkspaceSyncRelationshipV1, removal: NonNullable<WorkspaceSyncRelationshipRetirement['removeTargetCopy']>, signal?: AbortSignal, approval?: WorkspaceSyncCommittedCopyTargetV1): Promise<void>;
   createId?: () => string;
@@ -179,6 +180,14 @@ function mutationFailure(result: ProjectAccountSnapshotMutationResult): Error & 
   if (result.status === 'cancelled') return ownerError('cancelled', 'Workspace relationship mutation was cancelled');
   if (result.status === 'outcomeUnknown') return ownerError('indeterminate', 'Workspace relationship settings outcome is unknown');
   return ownerError('workspace_sync_settings_unavailable', `Workspace relationship settings mutation failed: ${result.status}`);
+}
+
+/** Codes by which runtime reconciliation says an endpoint is not ready yet, not that the request failed. */
+const RECONCILING_REFUSAL_CODES: ReadonlySet<string> = new Set(['peer_unavailable', 'relationship_not_ready', 'agent_unavailable']);
+
+function isReconcilingRefusal(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error
+    && typeof error.code === 'string' && RECONCILING_REFUSAL_CODES.has(error.code);
 }
 
 function isIndeterminate(error: unknown): boolean {
@@ -312,7 +321,16 @@ export function createWorkspaceSyncRelationshipOwner(
       throw mutationFailure(result);
     }
 
-    await options.waitForProjectReconciliation(settingsVersion, signal);
+    try {
+      await options.waitForProjectReconciliation(settingsVersion, signal);
+    } catch (error) {
+      // The request is committed. While the sync agent restarts, runtime
+      // reconciliation refuses with a "not ready yet" code and converges by
+      // itself (the runtime keeps reconciliation required until it succeeds);
+      // the row follows the status projection. Reporting that refusal would tell
+      // the person a request that took effect had failed.
+      if (!isReconcilingRefusal(error)) throw error;
+    }
   };
 
   return Object.freeze({
@@ -332,7 +350,7 @@ export function createWorkspaceSyncRelationshipOwner(
         controllerMachineId: options.localMachineId,
         alphaWorkspaceRefId: endpoints.source.id,
         betaWorkspaceRefId: endpoints.target.id,
-        ...(input.purpose === 'worker_clean_copy' ? { provenance: {
+        ...(input.purpose === 'worker_clean_copy' ? { committedAtMs: null, provenance: {
           kind: 'worker_clean_copy', sourceWorkspaceRefId: endpoints.source.id, targetWorkspaceRefId: endpoints.target.id,
         } } : {}),
         mode: input.mode,
@@ -397,6 +415,19 @@ export function createWorkspaceSyncRelationshipOwner(
         }
       };
 
+      const restoreStagedIntent = async (): Promise<void> => {
+        if (!durableIntentStaged || !runtimeOwnedByTransaction || publishedRelationship.relationshipId !== relationship.relationshipId) return;
+        const rollbackVersion = await mutateDesiredRelationships(relationship.relationshipId, (relationships) => {
+          const current = relationships.find((value) => value.relationshipId === relationship.relationshipId);
+          if (!current) return relationships;
+          if (existing) {
+            return relationships.map((value) => value.relationshipId === relationship.relationshipId ? existing : value);
+          }
+          return relationships.filter((value) => value.relationshipId !== relationship.relationshipId);
+        });
+        await options.waitForProjectReconciliation(rollbackVersion);
+      };
+
       await stageDurableIntent();
       let status: WorkspaceSyncStatusV1;
       try {
@@ -419,7 +450,12 @@ export function createWorkspaceSyncRelationshipOwner(
         );
         status = await options.flushRelationship(relationship.relationshipId, input.signal);
       } catch (error) {
-        if (runtimeOwnedByTransaction && !isIndeterminate(error)) await options.terminateRelationshipRuntime(relationship);
+        if (runtimeOwnedByTransaction && !isIndeterminate(error)) {
+          await options.terminateRelationshipRuntime(relationship);
+          // A refused preparation (for example a destination that needs bootstrap) must not leave
+          // the staged paused link behind; the caller's refusal stays the reported failure.
+          await restoreStagedIntent().catch(() => undefined);
+        }
         throw error;
       }
       return Object.freeze({
@@ -439,11 +475,14 @@ export function createWorkspaceSyncRelationshipOwner(
               const result = await mutateProjectSnapshot((settings) => {
                 const relationships = parseRelationships(settings);
                 const winner = resolveEndpointPair(relationships, relationship);
-                if (winner?.enabled) return settings;
+                if (winner?.enabled && (!getWorkspaceSyncWorkerCopyV1(winner) || winner.committedAtMs !== null)) return settings;
                 if (!winner) {
                   throw ownerError('relationship_not_ready', 'Workspace relationship staging intent is unavailable');
                 }
-                const committed = { ...winner, enabled: true, updatedAtMs: nowMs() };
+                const timestamp = nowMs();
+                const committed = { ...winner, enabled: true, updatedAtMs: timestamp,
+                  ...(getWorkspaceSyncWorkerCopyV1(winner) ? { committedAtMs: winner.committedAtMs ?? timestamp } : {}),
+                };
                 return admitProjectSnapshotTransition(settings, {
                   ...settings,
                   relationships: relationships.map((value) => (
@@ -483,17 +522,7 @@ export function createWorkspaceSyncRelationshipOwner(
         },
         async abort(): Promise<void> {
           if (closed) return;
-          if (durableIntentStaged && runtimeOwnedByTransaction && publishedRelationship.relationshipId === relationship.relationshipId) {
-            const rollbackVersion = await mutateDesiredRelationships(relationship.relationshipId, (relationships) => {
-              const current = relationships.find((value) => value.relationshipId === relationship.relationshipId);
-              if (!current) return relationships;
-              if (existing) {
-                return relationships.map((value) => value.relationshipId === relationship.relationshipId ? existing : value);
-              }
-              return relationships.filter((value) => value.relationshipId !== relationship.relationshipId);
-            });
-            await options.waitForProjectReconciliation(rollbackVersion);
-          }
+          await restoreStagedIntent();
           if (runtimeOwnedByTransaction) await options.terminateRelationshipRuntime(runtimeRelationship);
           closed = true;
         },
@@ -533,7 +562,7 @@ export function createWorkspaceSyncRelationshipOwner(
         if (retirement && !options.readRelationshipDependencies) {
           throw ownerError('workspace_sync_dependencies_unavailable', 'Workspace relationship dependencies are unavailable');
         }
-        const dependencies = await options.readRelationshipDependencies?.(terminated, settings) ?? [];
+        const dependencies = await options.readRelationshipDependencies?.(terminated, settings, retirement?.removeTargetCopy) ?? [];
         if (dependencies.length > 0) {
           throw Object.assign(ownerError('workspace_sync_relationship_in_use', 'Workspace relationship has dependent work'), { dependencies });
         }
@@ -566,6 +595,10 @@ export function createWorkspaceSyncRelationshipOwner(
           await options.removeCommittedRelationshipTarget!(terminated, retirement.removeTargetCopy, signal, retirement.approval);
         }
       } catch (error) {
+        // A plain stop is committed once the graph mutation settles: while the sync agent restarts, runtime
+        // reconciliation refuses with a "not ready yet" code and converges by itself. Removing a worker-copy
+        // target needs that reconciliation to have finished, so that path keeps reporting the refusal.
+        if (!retirement?.removeTargetCopy && isReconcilingRefusal(error)) return;
         const failure = typeof error === 'object' && error !== null
           ? error
           : new Error('Workspace relationship retirement settlement failed', { cause: error });

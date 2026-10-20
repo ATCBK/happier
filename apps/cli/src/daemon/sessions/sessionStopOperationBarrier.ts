@@ -1,7 +1,8 @@
 import type { StopSessionResult } from './stopSessionContract';
 
 export type SessionStopOperationBarrier = Readonly<{
-  run: (sessionId: string, operation: () => Promise<StopSessionResult>) => Promise<StopSessionResult>;
+  run: (sessionId: string, operation: () => Promise<StopSessionResult>, physicalEffect?: Promise<void>) => Promise<StopSessionResult>;
+  registerPhysicalStopEffect: (sessionId: string, completion: Promise<void>) => void;
   wait: (sessionId: string) => Promise<void>;
   has: (sessionId: string) => boolean;
 }>;
@@ -11,29 +12,69 @@ function normalizeSessionId(sessionId: string): string {
 }
 
 export function createSessionStopOperationBarrier(): SessionStopOperationBarrier {
-  const inFlightBySessionId = new Map<string, Promise<StopSessionResult>>();
+  type InFlight = {
+    completion: Promise<void>;
+    physicalEffects: Set<Promise<void>>;
+    stop?: Promise<StopSessionResult>;
+  };
+  const inFlightBySessionId = new Map<string, InFlight>();
+  const refreshCompletion = (sessionId: string, entry: InFlight) => {
+    const pending: Promise<unknown>[] = [...entry.physicalEffects, ...(entry.stop ? [entry.stop] : [])];
+    const completion = Promise.allSettled(pending).then(results => {
+      const failed = results.find(result => result.status === 'rejected');
+      if (failed?.status === 'rejected') throw failed.reason;
+    });
+    entry.completion = completion;
+    const retire = () => {
+      if (inFlightBySessionId.get(sessionId) === entry && entry.completion === completion) {
+        inFlightBySessionId.delete(sessionId);
+      }
+    };
+    void completion.then(retire, retire);
+  };
+  const run: SessionStopOperationBarrier['run'] = async (sessionId, operation, physicalEffect) => {
+    const normalizedSessionId = normalizeSessionId(sessionId);
+    if (!normalizedSessionId) return { status: 'incomplete', reason: 'invalid_session_id' };
+    for (;;) {
+      const existing = inFlightBySessionId.get(normalizedSessionId);
+      if (existing?.stop) return await existing.stop;
+      if (existing && (!physicalEffect || !existing.physicalEffects.has(physicalEffect))) {
+        await existing.completion;
+        continue;
+      }
+      const entry = existing ?? { completion: Promise.resolve(), physicalEffects: new Set<Promise<void>>() };
+      // Publish custody before invoking a producer. Only the exact registered
+      // native effect may rejoin its own Stop; other Stops wait for its result.
+      const stopping = Promise.resolve().then(operation);
+      entry.stop = stopping;
+      inFlightBySessionId.set(normalizedSessionId, entry);
+      refreshCompletion(normalizedSessionId, entry);
+      return await stopping;
+    }
+  };
 
   return {
-    run: async (sessionId, operation) => {
+    run,
+    registerPhysicalStopEffect: (sessionId, completion) => {
       const normalizedSessionId = normalizeSessionId(sessionId);
-      if (!normalizedSessionId) return { status: 'incomplete', reason: 'invalid_session_id' };
-      const existing = inFlightBySessionId.get(normalizedSessionId);
-      if (existing) return await existing;
-
-      const inFlight = operation();
-      inFlightBySessionId.set(normalizedSessionId, inFlight);
-      try {
-        return await inFlight;
-      } finally {
-        if (inFlightBySessionId.get(normalizedSessionId) === inFlight) {
-          inFlightBySessionId.delete(normalizedSessionId);
-        }
-      }
+      if (!normalizedSessionId) return;
+      const entry = inFlightBySessionId.get(normalizedSessionId)
+        ?? { completion: Promise.resolve(), physicalEffects: new Set<Promise<void>>() };
+      if (entry.physicalEffects.has(completion)) return;
+      entry.physicalEffects.add(completion);
+      inFlightBySessionId.set(normalizedSessionId, entry);
+      refreshCompletion(normalizedSessionId, entry);
     },
     wait: async (sessionId) => {
       const normalizedSessionId = normalizeSessionId(sessionId);
       if (!normalizedSessionId) return;
-      await inFlightBySessionId.get(normalizedSessionId);
+      for (;;) {
+        const entry = inFlightBySessionId.get(normalizedSessionId);
+        if (!entry) return;
+        const completion = entry.completion;
+        await completion;
+        if (entry.completion === completion) return;
+      }
     },
     has: (sessionId) => inFlightBySessionId.has(normalizeSessionId(sessionId)),
   };

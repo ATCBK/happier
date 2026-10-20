@@ -36,12 +36,22 @@ describe('CLIProxyAPI plugin manifest', () => {
 
   it('uses only the strict data-only root and survives bundled or installed ingestion', () => {
     expect(Object.keys(PLUGIN_MANIFEST).sort()).toEqual([
-      'contributes', 'description', 'displayName', 'engines', 'entrypoints', 'hostAccess', 'id', 'runtime', 'schemaVersion', 'version',
+      'brand', 'contributes', 'description', 'displayName', 'engines', 'entrypoints', 'hostAccess', 'id', 'runtime', 'schemaVersion', 'version',
     ]);
     expect(ingestPluginManifestV2(PLUGIN_MANIFEST)).toEqual(
       ingestPluginManifestV2(JSON.stringify(PLUGIN_MANIFEST)),
     );
     expect(ingestPluginManifestV2(PLUGIN_MANIFEST).ok).toBe(true);
+    expect(PLUGIN_MANIFEST.contributes.providers[0].managedRuntime?.connectedAccounts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
+        staticModels: expect.arrayContaining([expect.objectContaining({ id: 'gpt-5.5' })]),
+      }),
+      expect.objectContaining({
+        service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' },
+        staticModels: expect.arrayContaining([expect.objectContaining({ id: 'claude-sonnet-4-6' })]),
+      }),
+    ]));
   });
 
   it('declares the public managed Provider facet and requires its conditional runtime registration', () => {

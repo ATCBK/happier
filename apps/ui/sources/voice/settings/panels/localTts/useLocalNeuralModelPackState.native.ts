@@ -2,13 +2,16 @@ import * as React from 'react';
 
 import { Modal } from '@/modal';
 import { t } from '@/text';
-import { formatDownloadProgressDetail } from '@/voice/downloads/downloadProgress';
+import type { ModelPackRowStatus } from '@/voice/settings/panels/modelPack/modelPackTransferRows';
+import { isModelPackCancellation } from '@/voice/modelPacks/installer/network';
 import { getModelPackInstallSummary } from '@/voice/modelPacks/installer.native';
 import { invokeVoiceDeviceModelPackOperation } from '@/voice/settings/voiceDeviceModelPackOperation.native';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
+import { createVoiceModelCancellationCommand } from '@/voice/settings/voiceModelCancellation';
+import { useCurrentUiContextMountedCommand } from '@/components/appShell/currentUiContext/CurrentUiContextCommands';
 
-type ModelStatus = 'idle' | 'downloading' | 'ready' | 'error';
+type ModelStatus = ModelPackRowStatus;
 
 /** Native STT and TTS share settings state; consent and installer admission live in the operation owner. */
 export function useLocalNeuralModelPackState(params: {
@@ -28,6 +31,8 @@ export function useLocalNeuralModelPackState(params: {
   const [modelStatus, setModelStatus] = React.useState<ModelStatus>('idle');
   const [downloadProgress, setDownloadProgress] = React.useState<unknown | null>(null);
   const prepareAbortRef = React.useRef<AbortController | null>(null);
+  const [cancellationCommand, setCancellationCommand] = React.useState<ReturnType<typeof createVoiceModelCancellationCommand>>(null);
+  useCurrentUiContextMountedCommand(cancellationCommand, t('common.cancel'));
   const [installed, setInstalled] = React.useState(false);
   const [installSummary, setInstallSummary] = React.useState<Awaited<ReturnType<typeof getModelPackInstallSummary>> | null>(null);
   const [updateCheckedRemote, setUpdateCheckedRemote] = React.useState<{ build: string | null; updateAvailable: boolean } | null>(null);
@@ -46,8 +51,10 @@ export function useLocalNeuralModelPackState(params: {
       setInstalled(summary.installed);
       setModelStatus((cur) => cur === 'downloading' ? cur : summary.installed ? 'ready' : 'idle');
       setUpdateCheckedRemote(null);
-    } catch {
+      return summary;
+    } catch (error) {
       if (!isCurrent() || !accountLifetime.isCurrent()) return;
+      console.warn('[modelPacks] Failed to refresh native model pack state', error);
       setInstallSummary(null);
       setInstalled(false);
       setModelStatus((cur) => cur === 'downloading' ? cur : 'idle');
@@ -66,6 +73,7 @@ export function useLocalNeuralModelPackState(params: {
   React.useEffect(() => {
     prepareAbortRef.current?.abort();
     prepareAbortRef.current = null;
+    setCancellationCommand(null);
     setModelStatus('idle');
     setDownloadProgress(null);
     setInstalled(false);
@@ -83,11 +91,16 @@ export function useLocalNeuralModelPackState(params: {
       controller.abort();
       if (prepareAbortRef.current === controller) prepareAbortRef.current = null;
       if (isCurrent()) {
+        setCancellationCommand(null);
         setModelStatus(installed ? 'ready' : 'idle');
         setDownloadProgress(null);
       }
     });
     const current = () => isCurrent() && accountLifetime.isCurrent() && !controller.signal.aborted;
+    const command = createVoiceModelCancellationCommand({ packId: params.packId, execution: 'device', machineId: null,
+      account: 'scope' in accountLifetime ? accountLifetime : null, isCurrent: () => current() && prepareAbortRef.current === controller,
+      cancel: () => controller.abort() });
+    setCancellationCommand(command);
     let checkedUpdateAvailable: boolean | null = null;
     try {
       const result = await invokeVoiceDeviceModelPackOperation({
@@ -133,11 +146,14 @@ export function useLocalNeuralModelPackState(params: {
       }
     } catch (error) {
       if (!isCurrent() || !accountLifetime.isCurrent()) return;
-      if (controller.signal.aborted) {
-        setModelStatus(installed ? 'ready' : 'idle');
+      if (isModelPackCancellation(error, controller.signal)) {
+        setModelStatus('idle');
+        await refreshInstallState();
         return;
       }
-      setModelStatus('error');
+      const summary = await refreshInstallState();
+      if (!isCurrent() || !accountLifetime.isCurrent()) return;
+      setModelStatus(operation === 'update' && summary?.installed ? 'ready' : 'error');
       const message = error instanceof Error ? error.message : String(error);
       if (operation === 'update') {
         await Modal.alert(
@@ -155,7 +171,10 @@ export function useLocalNeuralModelPackState(params: {
       accountRetirement.dispose();
       if (prepareAbortRef.current === controller) {
         prepareAbortRef.current = null;
-        if (isCurrent()) setDownloadProgress(null);
+        if (isCurrent()) {
+          setCancellationCommand(current => current === command ? null : current);
+          setDownloadProgress(null);
+        }
       }
     }
   }, [installed, isCurrent, params.manifestUrl, params.packId, refreshInstallState, role]);
@@ -168,13 +187,7 @@ export function useLocalNeuralModelPackState(params: {
   const checkForUpdates = React.useCallback(() => {
     fireAndForget(runOperation('update'), { tag: 'useLocalNeuralModelPackState.checkForUpdates' });
   }, [runOperation]);
-  const downloadDetail = React.useMemo(() => {
-    if (modelStatus !== 'downloading') return null;
-    return downloadProgress
-      ? formatDownloadProgressDetail(downloadProgress, { prefix: t('settingsVoice.local.kokoro.modelStatus.downloadingPrefix') })
-      : t('settingsVoice.local.kokoro.modelStatus.downloading');
-  }, [downloadProgress, modelStatus]);
 
-  return { modelStatus, downloadProgress, downloadDetail, installed, installSummary, updateCheckedRemote,
+  return { modelStatus, downloadProgress, installed, installSummary, updateCheckedRemote,
     refreshInstallState, prepareModel, cancelPrepare, clearAssets, checkForUpdates } as const;
 }

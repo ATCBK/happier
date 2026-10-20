@@ -5,12 +5,119 @@ import { computeWorkspaceSyncPolicyDigest } from '@happier-dev/protocol';
 import { verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
 
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { MACHINE_ACCESS_LOSS_SERVER_ORIGIN, SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS, type WorkspaceSyncSourceRoutingV1 } from '@happier-dev/protocol/socketRpc';
 
 import { authorizeMachineRpcRequest, verifyMachineRpcAdmissionCurrent, verifyManagedActivityTargetCurrent, type MachineRpcAdmissionBoundary } from './machineRpcAuthorization';
+import { logger } from '@/ui/logger';
 
 describe('authorizeMachineRpcRequest', () => {
+  it('uses declared Machine scope only after exact current custodian admission, without weakening Session writes', async () => {
+    const machineAdmission = { actorAccountId: 'alice', custodianAccountId: 'alice', machineId: 'machine',
+      installationId: 'installation', role: 'manage' as const, encryptionMode: 'plain' as const };
+    let current = true;
+    // The Home verification callback is the network boundary; local target,
+    // installation, actor and method-scope checks remain real.
+    const boundary: MachineRpcAdmissionBoundary = { machineId: 'machine', resolveInstallationId: () => 'installation',
+      resolveCustodianAccountId: async () => 'alice', verifyMachineAdmission: async () => current };
+    for (const method of [SESSION_RPC_METHODS.EXECUTION_RUN_STOP, SESSION_RPC_METHODS.EXECUTION_RUN_SEND,
+      SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE, SESSION_RPC_METHODS.EXECUTION_RUN_CANCEL_TURN_V1]) {
+      const request = { method: `machine:${method}`, params: { runId: 'run' }, machineAdmission };
+      expect(await authorizeMachineRpcRequest(request, boundary), method).toEqual({ ok: true });
+      for (const refused of [
+        { ...request, machineAdmission: undefined },
+        { ...request, method: `other-machine:${method}` },
+        { ...request, machineAdmission: { ...machineAdmission, installationId: 'replaced-installation' } },
+        { ...request, machineAdmission: { ...machineAdmission, actorAccountId: 'bob', role: 'use' as const } },
+        { ...request, authorization: { kind: 'session.write' as const, sessionId: 'session' } },
+      ]) expect(await authorizeMachineRpcRequest(refused, boundary)).toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.FORBIDDEN });
+      current = false;
+      expect(await authorizeMachineRpcRequest(request, boundary)).toMatchObject({ ok: false, admissionPredicate: 'machine_currentness' });
+      current = true;
+    }
+    expect(await authorizeMachineRpcRequest({ method: `machine:${SESSION_RPC_METHODS.SESSION_GOAL_SET}`,
+      params: { sessionId: 'session' }, machineAdmission }, boundary))
+      .toMatchObject({ ok: false, admissionPredicate: 'session_authorization' });
+    expect(await authorizeMachineRpcRequest({ method: `session:${SESSION_RPC_METHODS.EXECUTION_RUN_STOP}`,
+      params: { sessionId: 'session', runId: 'run' }, authorization: { kind: 'session.write', sessionId: 'session' } }, boundary)).toEqual({ ok: true });
+  });
+  it('binds strict personal copy previews to either the controller or the physical target without widening other Machine requests', async () => {
+    const policy = { v: 1 as const, selection: 'all_files' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };
+    const params = { kind: 'preview', workspace: { serverId: 'home', refId: 'source' }, machineId: 'controller',
+      targetMachineId: 'target', targetWorkspaceRefId: 'copy', expectedRelationship: {
+        v: 1, relationshipId: 'copy-link', controllerMachineId: 'controller', alphaWorkspaceRefId: 'source',
+        betaWorkspaceRefId: 'copy', mode: 'keep_synced', enabled: true, createdAtMs: 1, updatedAtMs: 2,
+        contentPolicy: { ...policy, policyDigest: computeWorkspaceSyncPolicyDigest(policy) },
+      } };
+    let current = true;
+    for (const machineId of ['controller', 'target']) {
+      const machineAdmission = { actorAccountId: 'owner', custodianAccountId: 'owner', machineId,
+        installationId: 'installation', role: 'manage' as const, encryptionMode: 'plain' as const };
+      const boundary: MachineRpcAdmissionBoundary = { machineId, resolveInstallationId: () => 'installation',
+        resolveCustodianAccountId: async () => 'owner', verifyMachineAdmission: async () => current };
+      const request = { method: `${machineId}:${RPC_METHODS.DAEMON_WORKSPACE_SYNC_COMMITTED_COPY_INSPECT}`, params, machineAdmission };
+      expect(await authorizeMachineRpcRequest(request, boundary)).toEqual({ ok: true });
+      for (const refused of [
+        { ...request, machineAdmission: { ...machineAdmission, installationId: 'replaced-installation' } },
+        { ...request, machineAdmission: { ...machineAdmission, custodianAccountId: 'foreign-owner' } },
+        { ...request, method: `foreign-machine:${RPC_METHODS.DAEMON_WORKSPACE_SYNC_COMMITTED_COPY_INSPECT}` },
+      ]) expect(await authorizeMachineRpcRequest(refused, boundary)).toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.FORBIDDEN });
+      if (machineId === 'target') {
+        for (const refused of [
+          { ...request, params: { ...params, targetMachineId: 'foreign-target' } },
+          { ...request, params: { ...params, expectedRelationship: undefined } },
+          { ...request, params: { ...params, rootPath: '/caller-selected-root' } },
+          { ...request, params: { ...params, kind: 'remove' } },
+          { ...request, method: `${machineId}:${RPC_METHODS.DAEMON_WORKSPACE_SYNC_COMMITTED_COPY_REMOVE}` },
+          { ...request, method: `${machineId}:${RPC_METHODS.CAPABILITIES_DESCRIBE}` },
+        ]) expect(await authorizeMachineRpcRequest(refused, boundary)).toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.FORBIDDEN });
+      }
+      current = false;
+      expect(await authorizeMachineRpcRequest(request, boundary)).toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.FORBIDDEN });
+      current = true;
+    }
+  });
+  it('distinguishes Home response, schema, transport and cancellation failures without logging credentials or payloads', async () => {
+    const context = { actorAccountId: 'never-log-actor', custodianAccountId: 'never-log-owner', machineId: 'never-log-machine',
+      installationId: 'never-log-installation', role: 'manage' as const, encryptionMode: 'plain' as const };
+    const key = tweetnacl.sign.keyPair();
+    const record = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    const network = vi.spyOn(axios, 'post');
+    const input = { context, method: `${context.machineId}:${RPC_METHODS.CAPABILITIES_DESCRIBE}`,
+      privateKey: key.secretKey, daemonToken: 'never-log-token', serverHttpBaseUrl: 'https://never-log-home.invalid' };
+    try {
+      network.mockResolvedValueOnce({ status: 429, data: { error: 'never-log-body' } });
+      expect(await verifyMachineRpcAdmissionCurrent(input)).toBe(false);
+      expect(record).toHaveBeenLastCalledWith('[RPC] Machine admission verification failed', {
+        method: RPC_METHODS.CAPABILITIES_DESCRIBE, stage: 'response_status', status: 429,
+      });
+      network.mockResolvedValueOnce({ status: 200, data: { v: 1, ok: true, unexpected: 'never-log-value' } });
+      expect(await verifyMachineRpcAdmissionCurrent(input)).toBe(false);
+      expect(record).toHaveBeenLastCalledWith('[RPC] Machine admission verification failed', {
+        method: RPC_METHODS.CAPABILITIES_DESCRIBE, stage: 'response_schema', status: 200,
+      });
+      network.mockRejectedValueOnce(new Error('never-log-transport-secret'));
+      expect(await verifyMachineRpcAdmissionCurrent(input)).toBe(false);
+      expect(record).toHaveBeenLastCalledWith('[RPC] Machine admission verification failed', {
+        method: RPC_METHODS.CAPABILITIES_DESCRIBE, stage: 'transport',
+      });
+      network.mockRejectedValueOnce(new axios.AxiosError('never-log-network-message', 'ECONNRESET'));
+      expect(await verifyMachineRpcAdmissionCurrent({ ...input, method: 'never-log-machine:never-log-method' })).toBe(false);
+      expect(record).toHaveBeenLastCalledWith('[RPC] Machine admission verification failed', {
+        method: '<unregistered>', stage: 'transport', transportCode: 'ECONNRESET',
+      });
+      const controller = new AbortController();
+      network.mockImplementationOnce(async () => {
+        controller.abort();
+        throw new axios.CanceledError('never-log-cancel-message');
+      });
+      expect(await verifyMachineRpcAdmissionCurrent({ ...input, signal: controller.signal })).toBe(false);
+      expect(record).toHaveBeenLastCalledWith('[RPC] Machine admission verification failed', {
+        method: RPC_METHODS.CAPABILITIES_DESCRIBE, stage: 'request_cancelled',
+      });
+      expect(JSON.stringify(record.mock.calls)).not.toContain('never-log');
+    } finally { network.mockRestore(); record.mockRestore(); }
+  });
   it('admits prepared Machine phases after current Home admission while retaining Session attachment admission', async () => {
     const machineAdmission = { actorAccountId: 'owner', custodianAccountId: 'owner', machineId: 'machine',
       installationId: 'installation', role: 'manage' as const, encryptionMode: 'plain' as const };

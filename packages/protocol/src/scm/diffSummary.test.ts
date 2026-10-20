@@ -111,7 +111,7 @@ describe('comparison evidence and analysis contracts', () => {
     expect(schema?.safeParse({ summaryMarkdown: 'done', command: 'git commit' }).success).toBe(false);
   });
 
-  it('resolves distinct occurrence aliases and rejects unknown, duplicate or missing coverage', () => {
+  it('keeps omitted walkthrough changes reachable while rejecting invalid references and incomplete canonical outputs', () => {
     const comparison: diffSummary.ScmComparison = {
       id: 'pair-1', source: { kind: 'workingTree' }, repository: { rootPath: '/repo' },
       endpoints: { before: 'a', after: 'b' }, inventory: {
@@ -131,17 +131,26 @@ describe('comparison evidence and analysis contracts', () => {
     expect(diffSummary.normalizeScmDiffSummaryModelOutput(value, options).walkthrough).toMatchObject({
       stops: [{ changeRefs: ['pair-1:a:0'] }], otherChangeRefs: ['pair-1:a:1'],
     });
+    const omitted = { walkthrough: { ...value.walkthrough, otherChangeRefs: [] } };
+    expect(diffSummary.normalizeScmDiffSummaryModelOutput(omitted, options).walkthrough).toMatchObject({
+      stops: [{ changeRefs: ['pair-1:a:0'] }], otherChangeRefs: ['pair-1:a:1'],
+    });
+    expect(diffSummary.normalizeScmDiffSummaryModelOutput(omitted, { ...options, requireCompleteCoverage: false })
+      .walkthrough?.otherChangeRefs).toEqual([]);
     const stored = { walkthrough: { ...value.walkthrough, stops: [{ ...stop, changeRefs: ['pair-1:a:0'] }],
       otherChangeRefs: ['pair-1:a:1'] } };
     expect(() => diffSummary.normalizeScmDiffSummaryModelOutput(stored, options)).toThrow();
+    expect(() => diffSummary.normalizeScmDiffSummaryModelOutput({ walkthrough: { ...stored.walkthrough, otherChangeRefs: [] } },
+      { ...options, referenceMode: 'canonical' })).toThrow();
     expect(diffSummary.ScmDiffSummaryGenerateOutputSchema.safeParse({ success: true, sourceKey: comparison.id,
       metadata: { source: comparison.source, sourceKey: comparison.id }, comparison, requestedOutputs: ['walkthrough'],
       outputs: { walkthrough: { state: 'complete', value: stored.walkthrough } },
       analysis: { suppliedChangeRefs: ['pair-1:a:0', 'pair-1:a:1'], analysedChangeRefs: ['pair-1:a:0', 'pair-1:a:1'], remainingChangeRefs: [] },
     }).success).toBe(true);
-    for (const refs of [['c1'], ['c3'], []]) {
+    for (const refs of [['c1'], ['c3']]) {
       expect(() => diffSummary.normalizeScmDiffSummaryModelOutput({ walkthrough: { ...value.walkthrough, otherChangeRefs: refs } }, options)).toThrow();
     }
+    expect(() => diffSummary.normalizeScmDiffSummaryModelOutput({ commitPlan: { groups: [], leftOutChangeRefs: ['c1'] } }, options)).toThrow();
     expect(() => diffSummary.normalizeScmDiffSummaryModelOutput({
       commitPlan: { groups: [], leftOutChangeRefs: ['c1', 'c2'] },
     }, { ...options, comparison: { ...comparison, source: { kind: 'commit', commit: 'abc' } } })).toThrow();

@@ -55,6 +55,10 @@ vi.mock('@/sync/domains/state/agentStateCapabilities', () => ({
     getPermissionsInUiWhileLocal: () => ({}),
 }));
 
+// Compile the real transcript graph during collection, after installing its boundaries.
+resetChatListHarness({ platformOs: 'ios' });
+await import('./ChatList');
+
 describe('ChatList native screen-reveal viewport revalidation (S-E route-pop blank)', () => {
     beforeEach(() => {
         resetChatListHarness({ platformOs: 'ios' });
@@ -88,18 +92,16 @@ describe('ChatList native screen-reveal viewport revalidation (S-E route-pop bla
             getState: () => { scroll: number };
             getNativeScrollRef?: () => unknown;
         };
-        const scrollNode = { id: 'scroll-node' };
-        const measureLayout = vi.fn((
-            relativeTo: unknown,
-            onSuccess: (x: number, y: number) => void,
-        ) => {
-            expect(relativeTo).toBe(scrollNode);
-            // Native view displays offset 200 while Legend state believes 0.
-            onSuccess(0, -200);
-        });
+        type Measure = (onSuccess: (x: number, y: number, width: number, height: number, pageX: number, pageY: number) => void) => void;
+        // Native measure includes the content transform; the host is at pageY 100
+        // and its inner content at -100, while Legend still believes offset 0.
+        const measureContent = vi.fn<Measure>((onSuccess) => onSuccess(0, 0, 600, 1200, 0, -100));
+        const measureHost = vi.fn<Measure>((onSuccess) => onSuccess(0, 0, 600, 600, 0, 100));
+        const innerView = { measure: measureContent };
+        const scrollNode = { measure: measureHost };
         legendRefHandle.getNativeScrollRef = () => ({
-            getInnerViewNode: () => ({ measureLayout }),
-            getScrollableNode: () => scrollNode,
+            getInnerViewRef: () => innerView,
+            getNativeScrollRef: () => scrollNode,
         });
         legendRefHandle.scrollToOffset.mockClear();
 
@@ -107,12 +109,14 @@ describe('ChatList native screen-reveal viewport revalidation (S-E route-pop bla
         await act(async () => {
             setChatListHarnessSessionScreenFocused(false);
         });
-        expect(measureLayout).not.toHaveBeenCalled();
+        expect(measureContent).not.toHaveBeenCalled();
+        expect(measureHost).not.toHaveBeenCalled();
         await act(async () => {
             setChatListHarnessSessionScreenFocused(true);
         });
 
-        expect(measureLayout).toHaveBeenCalledTimes(1);
+        expect(measureContent).toHaveBeenCalledTimes(1);
+        expect(measureHost).toHaveBeenCalledTimes(1);
         expect(legendRefHandle.scrollToOffset).toHaveBeenCalledWith({
             animated: false,
             offset: 200,
@@ -131,10 +135,10 @@ describe('ChatList native screen-reveal viewport revalidation (S-E route-pop bla
         const legendRefHandle = chatListHarnessState.legendListRefHandle as {
             getNativeScrollRef?: () => unknown;
         };
-        const measureLayout = vi.fn();
+        const measure = vi.fn();
         legendRefHandle.getNativeScrollRef = () => ({
-            getInnerViewNode: () => ({ measureLayout }),
-            getScrollableNode: () => ({ id: 'scroll-node' }),
+            getInnerViewRef: () => ({ measure }),
+            getNativeScrollRef: () => ({ measure }),
         });
 
         // Re-assert focus without a preceding blur: no reveal transition, no revalidation.
@@ -142,7 +146,7 @@ describe('ChatList native screen-reveal viewport revalidation (S-E route-pop bla
             setChatListHarnessSessionScreenFocused(true);
         });
 
-        expect(measureLayout).not.toHaveBeenCalled();
+        expect(measure).not.toHaveBeenCalled();
 
         await screen.unmount();
     });

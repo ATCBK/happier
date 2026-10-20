@@ -33,12 +33,13 @@ import {
 import { TurnChangeSetSchema } from '../../sessions/changes/schemas.js';
 import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
 import { PluginJsonSchemaV2Schema } from '../../plugins/contributions/publicTypes.js';
-import { SessionDiscussionSelectionSourceV1Schema } from '../../sessions/discussions/content.js';
+import { DiscussionSelectionSourceV1Schema } from '../../discussions/content.js';
 import {
   ExecutionRunClassSchema,
   ExecutionRunIntentSchema,
   ExecutionRunIoModeSchema,
   ExecutionRunRetentionPolicySchema,
+  type ExecutionRunIntent,
 } from './runPrimitives.js';
 import { ExecutionRunResultContractV1Schema } from './resultContractV1.js';
 import { TeamCredentialProviderModelSelectionV1Schema } from '../../teams/credentials/resourceV1.js';
@@ -102,6 +103,16 @@ export const ExecutionRunKindSchema = lazyZodSchema(() => z.enum([
   'scm_diff_summary.v1',
 ]));
 export type ExecutionRunKind = z.infer<typeof ExecutionRunKindSchema>;
+
+/** The typed Run kind an intent requires; intents absent here are untyped. */
+export const EXECUTION_RUN_KIND_BY_INTENT = {
+  scm_commit_message: 'scm_commit_message.v1',
+  scm_diff_summary: 'scm_diff_summary.v1',
+} as const satisfies Partial<Record<ExecutionRunIntent, ExecutionRunKind>>;
+
+export function executionRunKindForIntent(intent: ExecutionRunIntent): ExecutionRunKind | undefined {
+  return (EXECUTION_RUN_KIND_BY_INTENT as Partial<Record<ExecutionRunIntent, ExecutionRunKind>>)[intent];
+}
 
 const PROVIDER_SESSION_RESUME_HANDLE_KIND = 'provider_session.v1';
 const LEGACY_VENDOR_SESSION_RESUME_HANDLE_KIND = 'vendor_session.v1';
@@ -190,7 +201,7 @@ export function normalizeLegacyExecutionRunBackendTargetInput(value: unknown): u
 
 const ExecutionRunResumeHandleProviderSessionV1SchemaCore = lazyZodSchema(() => z.looseObject({
   kind: z.literal(PROVIDER_SESSION_RESUME_HANDLE_KIND),
-  backendTarget: z.pipe(z.transform(normalizeBackendTargetRefV2InputToV2), BackendTargetRefV2Schema),
+  backendTarget: (<I extends zMini.core.$ZodType, O extends zMini.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as zMini.ZodMiniPipe<I, O>)(z.transform(normalizeBackendTargetRefV2InputToV2), BackendTargetRefV2Schema),
   providerSessionId: NonBlankOpaqueIdentifierSchema,
 }).check(z.superRefine((value, ctx) => {
   if (hasLegacyCustomAcpConcreteBackendId(value.backendTarget)) {
@@ -201,12 +212,12 @@ const ExecutionRunResumeHandleProviderSessionV1SchemaCore = lazyZodSchema(() => 
     });
   }
 })));
-export const ExecutionRunResumeHandleProviderSessionV1Schema = lazyZodSchema(() => z.pipe(z.transform(normalizeLegacyExecutionRunBackendTargetInput), ExecutionRunResumeHandleProviderSessionV1SchemaCore));
+export const ExecutionRunResumeHandleProviderSessionV1Schema = lazyZodSchema(() => (<I extends zMini.core.$ZodType, O extends zMini.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as zMini.ZodMiniPipe<I, O>)(z.transform(normalizeLegacyExecutionRunBackendTargetInput), ExecutionRunResumeHandleProviderSessionV1SchemaCore));
 export type ExecutionRunResumeHandleProviderSessionV1 = z.infer<typeof ExecutionRunResumeHandleProviderSessionV1Schema>;
 
 const ExecutionRunResumeHandleVoiceAgentSessionsV1SchemaCore = lazyZodSchema(() => z.looseObject({
   kind: z.literal('voice_agent_sessions.v1'),
-  backendTarget: z.pipe(z.transform(normalizeBackendTargetRefV2InputToV2), BackendTargetRefV2Schema),
+  backendTarget: (<I extends zMini.core.$ZodType, O extends zMini.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as zMini.ZodMiniPipe<I, O>)(z.transform(normalizeBackendTargetRefV2InputToV2), BackendTargetRefV2Schema),
   chatProviderSessionId: z.string().check(z.minLength(1)),
   commitProviderSessionId: z.string().check(z.minLength(1)),
 }).check(z.superRefine((value, ctx) => {
@@ -218,14 +229,14 @@ const ExecutionRunResumeHandleVoiceAgentSessionsV1SchemaCore = lazyZodSchema(() 
     });
   }
 })));
-export const ExecutionRunResumeHandleVoiceAgentSessionsV1Schema = lazyZodSchema(() => z.pipe(z.transform(normalizeLegacyExecutionRunBackendTargetInput), ExecutionRunResumeHandleVoiceAgentSessionsV1SchemaCore));
+export const ExecutionRunResumeHandleVoiceAgentSessionsV1Schema = lazyZodSchema(() => (<I extends zMini.core.$ZodType, O extends zMini.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as zMini.ZodMiniPipe<I, O>)(z.transform(normalizeLegacyExecutionRunBackendTargetInput), ExecutionRunResumeHandleVoiceAgentSessionsV1SchemaCore));
 export type ExecutionRunResumeHandleVoiceAgentSessionsV1 = z.infer<typeof ExecutionRunResumeHandleVoiceAgentSessionsV1Schema>;
 
 const ExecutionRunResumeHandleSchemaCore = lazyZodSchema(() => z.discriminatedUnion('kind', [
   ExecutionRunResumeHandleProviderSessionV1SchemaCore,
   ExecutionRunResumeHandleVoiceAgentSessionsV1SchemaCore,
 ]));
-export const ExecutionRunResumeHandleSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeLegacyExecutionRunBackendTargetInput), ExecutionRunResumeHandleSchemaCore));
+export const ExecutionRunResumeHandleSchema = lazyZodSchema(() => (<I extends zMini.core.$ZodType, O extends zMini.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as zMini.ZodMiniPipe<I, O>)(z.transform(normalizeLegacyExecutionRunBackendTargetInput), ExecutionRunResumeHandleSchemaCore));
 export type ExecutionRunResumeHandle = z.infer<typeof ExecutionRunResumeHandleSchema>;
 
 export const ExecutionRunDisplaySchema = lazyZodSchema(() => z.looseObject({
@@ -244,7 +255,7 @@ export const ExecutionRunDisplaySchema = lazyZodSchema(() => z.looseObject({
 }));
 export type ExecutionRunDisplay = z.infer<typeof ExecutionRunDisplaySchema>;
 
-export const ExecutionRunDraftCorrelationIdSchema = lazyZodSchema(() => SessionDiscussionSelectionSourceV1Schema.shape.draftCorrelationId._zod.def.innerType);
+export const ExecutionRunDraftCorrelationIdSchema = lazyZodSchema(() => DiscussionSelectionSourceV1Schema.shape.draftCorrelationId._zod.def.innerType);
 export type ExecutionRunDraftCorrelationId = z.infer<typeof ExecutionRunDraftCorrelationIdSchema>;
 
 export const ExecutionRunLaunchOriginSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
@@ -253,7 +264,7 @@ export const ExecutionRunLaunchOriginSchema = lazyZodSchema(() => z.discriminate
     sessionId: z.string().check(z.trim(), z.minLength(1)),
     draftCorrelationId: zMini.optional(ExecutionRunDraftCorrelationIdSchema),
   }),
-  SessionDiscussionSelectionSourceV1Schema,
+  DiscussionSelectionSourceV1Schema,
   z.strictObject({
     kind: z.literal('external'),
     source: z.optional(z.enum(['cli', 'mcp', 'action'])),
@@ -384,7 +395,7 @@ export const ExecutionRunStartRequestBaseSchema = lazyZodSchema(() => z.looseObj
   /** Launch Profile selection; profileId remains the plugin execution Profile. */
   launchProfileId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   intent: ExecutionRunIntentSchema,
-  backendTarget: z.pipe(z.transform(normalizeExecutionRunStartBackendTargetInput), PersistedBackendTargetRefV2Schema),
+  backendTarget: (<I extends zMini.core.$ZodType, O extends zMini.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as zMini.ZodMiniPipe<I, O>)(z.transform(normalizeExecutionRunStartBackendTargetInput), PersistedBackendTargetRefV2Schema),
   instructions: z.optional(z.string()),
   initialInput: z.optional(ExecutionRunInitialInputV1Schema),
   display: z.optional(ExecutionRunDisplaySchema),
@@ -778,46 +789,47 @@ export function refineExecutionRunStartRequest(
       path: ['backendTarget'],
     });
   }
-  if (value.kind === 'scm_commit_message.v1' || value.intent === 'scm_commit_message') {
-    if (value.kind !== 'scm_commit_message.v1') {
+  if (value.kind === EXECUTION_RUN_KIND_BY_INTENT.scm_commit_message || value.intent === 'scm_commit_message') {
+    const kind = EXECUTION_RUN_KIND_BY_INTENT.scm_commit_message;
+    if (value.kind !== kind) {
       ctx.addIssue({
         code: "custom",
-        message: 'kind must be scm_commit_message.v1 for scm_commit_message runs',
+        message: `kind must be ${kind} for scm_commit_message runs`,
         path: ['kind'],
       });
     }
     if (value.intent !== 'scm_commit_message') {
       ctx.addIssue({
         code: "custom",
-        message: 'intent must be scm_commit_message for scm_commit_message.v1 runs',
+        message: `intent must be scm_commit_message for ${kind} runs`,
         path: ['intent'],
       });
     }
     if (value.permissionMode !== 'no_tools' && value.permissionMode !== 'read_only') {
       ctx.addIssue({
         code: "custom",
-        message: 'scm_commit_message.v1 does not allow write-capable permission modes',
+        message: `${kind} does not allow write-capable permission modes`,
         path: ['permissionMode'],
       });
     }
     if (value.retentionPolicy !== 'ephemeral') {
       ctx.addIssue({
         code: "custom",
-        message: 'scm_commit_message.v1 must use ephemeral retention',
+        message: `${kind} must use ephemeral retention`,
         path: ['retentionPolicy'],
       });
     }
     if (value.runClass !== 'bounded') {
       ctx.addIssue({
         code: "custom",
-        message: 'scm_commit_message.v1 must use bounded runClass',
+        message: `${kind} must use bounded runClass`,
         path: ['runClass'],
       });
     }
     if (value.ioMode !== 'request_response') {
       ctx.addIssue({
         code: "custom",
-        message: 'scm_commit_message.v1 must use request_response ioMode',
+        message: `${kind} must use request_response ioMode`,
         path: ['ioMode'],
       });
     }
@@ -825,51 +837,52 @@ export function refineExecutionRunStartRequest(
     if (!parsedInput.success) {
       ctx.addIssue({
         code: "custom",
-        message: 'Invalid scm_commit_message.v1 intentInput',
+        message: `Invalid ${kind} intentInput`,
         path: ['intentInput'],
       });
     }
   }
-  if (value.kind === 'scm_diff_summary.v1' || value.intent === 'scm_diff_summary') {
-    if (value.kind !== 'scm_diff_summary.v1') {
+  if (value.kind === EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary || value.intent === 'scm_diff_summary') {
+    const kind = EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary;
+    if (value.kind !== kind) {
       ctx.addIssue({
         code: "custom",
-        message: 'kind must be scm_diff_summary.v1 for scm_diff_summary runs',
+        message: `kind must be ${kind} for scm_diff_summary runs`,
         path: ['kind'],
       });
     }
     if (value.intent !== 'scm_diff_summary') {
       ctx.addIssue({
         code: "custom",
-        message: 'intent must be scm_diff_summary for scm_diff_summary.v1 runs',
+        message: `intent must be scm_diff_summary for ${kind} runs`,
         path: ['intent'],
       });
     }
     if (value.permissionMode !== 'no_tools' && value.permissionMode !== 'read_only') {
       ctx.addIssue({
         code: "custom",
-        message: 'scm_diff_summary.v1 does not allow write-capable permission modes',
+        message: `${kind} does not allow write-capable permission modes`,
         path: ['permissionMode'],
       });
     }
     if (value.retentionPolicy !== 'resumable') {
       ctx.addIssue({
         code: "custom",
-        message: 'scm_diff_summary.v1 must use resumable retention',
+        message: `${kind} must use resumable retention`,
         path: ['retentionPolicy'],
       });
     }
     if (value.runClass !== 'long_lived') {
       ctx.addIssue({
         code: "custom",
-        message: 'scm_diff_summary.v1 must use long_lived runClass',
+        message: `${kind} must use long_lived runClass`,
         path: ['runClass'],
       });
     }
     if (value.ioMode !== 'request_response' && value.ioMode !== 'streaming') {
       ctx.addIssue({
         code: "custom",
-        message: 'scm_diff_summary.v1 must use request_response or streaming ioMode',
+        message: `${kind} must use request_response or streaming ioMode`,
         path: ['ioMode'],
       });
     }
@@ -877,7 +890,7 @@ export function refineExecutionRunStartRequest(
     if (!parsedInput.success) {
       ctx.addIssue({
         code: "custom",
-        message: 'Invalid scm_diff_summary.v1 intentInput',
+        message: `Invalid ${kind} intentInput`,
         path: ['intentInput'],
       });
     }

@@ -1,3 +1,4 @@
+import { EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
 import { ExecutionRunStartResponseSchema, readExecutionRunStartRunCreation } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { randomUUID } from 'node:crypto';
 import { ScmDiffSummaryGenerateOutputSchema, buildScmDiffSummaryCacheKey, SCM_DIFF_SUMMARY_CACHE_SCHEMA_VERSION } from '@happier-dev/protocol/scm/diffSummary';
@@ -131,7 +132,7 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
         const startInput = {
             sessionId: sessionId ?? null,
             ...(!sessionId ? { machineId: params.machineId, cwd: params.request.cwd } : {}),
-            kind: 'scm_diff_summary.v1',
+            kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary,
             intent: 'scm_diff_summary',
             localInputId: inputId,
             backendTarget: sessionId && !params.request.modelSelector?.modelId && !params.request.modelSelector?.profileId
@@ -179,7 +180,10 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
                 && !params.request.modelSelector?.modelId && !params.request.modelSelector?.profileId) {
                 return failed('Diff-summary model is unavailable', 'MODEL_UNAVAILABLE');
             }
-            return failed(noRunCreated ? startResult.error : 'Diff-summary execution run start outcome is unknown',
+            // The typed refusal and its reason travel together; the code alone is not a reason.
+            const refusal = startResult.error.includes(startResult.errorCode) ? startResult.error
+                : `${startResult.errorCode}: ${startResult.error}`;
+            return failed(noRunCreated ? refusal : 'Diff-summary execution run start outcome is unknown',
                 noRunCreated && startResult.errorCode === 'DIFF_UNAVAILABLE' ? 'DIFF_UNAVAILABLE' : undefined);
         }
         const started = ExecutionRunStartResponseSchema.safeParse(startResult.result);

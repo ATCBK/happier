@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 import { ProviderRuntimeBindingBasisV1Schema } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
 import { createPluginContributionIdentity } from '@happier-dev/protocol/plugins/contribution-identity';
-import { resolveProviderManagedRuntimeDeclarationV1 } from '@happier-dev/protocol/providers/contributions';
+import { createProviderManagedRuntimeDeclarationEqualityKeyV1, resolveProviderManagedRuntimeDeclarationV1 } from '@happier-dev/protocol/providers/contributions';
 import type { PluginContributionIdentityV1, ProviderRuntimeBindingBasisV1 } from '@happier-dev/protocol';
 
 import type { PluginStorePaths } from '../../store/paths';
@@ -80,7 +80,11 @@ export async function attestRetainedManagedProvider(input: Readonly<{
     if (
         !declaration.endpointTemplateIds.includes(runtimeBindingBasis.endpoint.endpointTemplateId)
         || endpoint?.protocol !== runtimeBindingBasis.endpoint.protocol
-        || !isDeepStrictEqual(declaration, runtimeBindingBasis.deployment.managedRuntime)
+        || createProviderManagedRuntimeDeclarationEqualityKeyV1({ implementationIdentity: identity, managedRuntime: declaration })
+            !== createProviderManagedRuntimeDeclarationEqualityKeyV1({
+                implementationIdentity: runtimeBindingBasis.deployment.implementationIdentity,
+                managedRuntime: runtimeBindingBasis.deployment.managedRuntime,
+            })
     ) return null;
     try {
         await retainedSource.assertStillAvailable();

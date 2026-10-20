@@ -12,6 +12,7 @@ export async function resolveVoiceSessionModelSelection(params: Readonly<{
     sessionAddress: SessionAddress;
     agentId: string;
     agentTargetKey: string;
+    signal?: AbortSignal;
 }>): Promise<SessionModelSelectionV1 | null> {
     const metadata = readVoiceSessionOwnerMetadataFromState(storage.getState(), params.sessionAddress);
     const machineId = normalizeNonEmptyString(readMachineTargetForSession(params.sessionAddress.sessionId)?.machineId)
@@ -19,6 +20,7 @@ export async function resolveVoiceSessionModelSelection(params: Readonly<{
     if (!machineId) return null;
     const snapshot = await getSessionRunnerRuntimeStatusSnapshot({
         sessionId: params.sessionAddress.sessionId, machineId, serverId: params.sessionAddress.serverId,
+        signal: params.signal,
     });
     if (!snapshot || snapshot.state.machineId !== machineId) return null;
     const selection = readActiveSessionModelSelectionFromMetadata(

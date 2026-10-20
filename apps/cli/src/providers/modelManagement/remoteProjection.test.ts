@@ -4,12 +4,13 @@ import type { DaemonProviderModelProjectionRequestV1 } from '@happier-dev/protoc
 import type { StoredCredentials } from '@/persistence';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { logger } from '@/ui/logger';
 
 const transport = vi.hoisted(() => ({ call: vi.fn() }));
 // The authenticated Machine RPC transport is the genuine network boundary.
 vi.mock('@/session/transport/rpc/machineRpc', () => ({ callExactMachineRpc: transport.call }));
 
-import { createAccountScopedProviderModelProjectionReader } from './remoteProjection';
+import { createAccountScopedProviderCatalogReader, createAccountScopedProviderModelProjectionReader } from './remoteProjection';
 
 const request = {
   machineId: 'hub-exact', agentTargetKey: 'agent:happier.agent.codex/codex', mode: 'management',
@@ -25,6 +26,41 @@ const snapshot: ActiveAccountSettingsSnapshot = {
 };
 
 describe('Account-scoped remote Provider projection transport', () => {
+  it('validates explicit hub catalog responses without falling back to another connection or Machine', async () => {
+    transport.call.mockReset().mockResolvedValue({ status: 'success', connectionId: 'other-connection',
+      connectionRevision: 1, manualModelPolicy: 'catalog-only', modelLoadAction: 'descriptor_absent', models: [] });
+    const read = createAccountScopedProviderCatalogReader({ serverUrl: 'https://home.example.test',
+      readCredentials: async () => credentials, readAccountSettingsSnapshot: async () => snapshot, isCurrent: () => true });
+    const target = { machineId: 'hub-exact', connectionId: 'requested-connection' };
+    await expect(read.models(target, new AbortController().signal)).resolves.toMatchObject({
+      status: 'error', error: { code: 'provider_rpc_response_invalid' },
+    });
+    transport.call.mockResolvedValueOnce({ status: 'success', models: [] });
+    await expect(read.probe(target, new AbortController().signal)).resolves.toMatchObject({
+      status: 'error', error: { code: 'provider_rpc_response_invalid' },
+    });
+    expect(transport.call.mock.calls.map(([input]) => input.method)).toEqual([
+      'daemon.providers.models', 'daemon.providers.probe',
+    ]);
+    expect(transport.call.mock.calls.every(([input]) => input.machineId === target.machineId)).toBe(true);
+  });
+
+  it('identifies transport cancellation without recording private transport failure content', async () => {
+    const logs = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    const controller = new AbortController();
+    const failure = new Error('private-transport-content');
+    transport.call.mockReset().mockImplementation(async () => { controller.abort(failure); throw failure; });
+    try {
+      const read = createAccountScopedProviderModelProjectionReader({ serverUrl: 'https://home.example.test',
+        readCredentials: async () => credentials, readAccountSettingsSnapshot: async () => snapshot, isCurrent: () => true });
+      await expect(read(request, controller.signal)).rejects.toBe(failure);
+      expect(logs.mock.calls).toContainEqual(['[PROVIDER] Remote model projection phase', expect.objectContaining({
+        phase: 'machine_rpc', status: 'failed', reason: 'cancelled', machineId: request.machineId,
+      })]);
+      expect(JSON.stringify(logs.mock.calls)).not.toContain('private-transport-content');
+    } finally { logs.mockRestore(); }
+  });
+
   it('uses only the captured Home and exact persistent hub with the owning Account', async () => {
     transport.call.mockReset().mockResolvedValue(response);
     const read = createAccountScopedProviderModelProjectionReader({

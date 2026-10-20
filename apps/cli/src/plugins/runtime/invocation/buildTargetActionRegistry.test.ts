@@ -42,6 +42,7 @@ import {
 } from '../hostAccess/resolve';
 import {
     addConnectedAccountsAvailablePluginInvocationServiceBinding,
+    createLoggerAndEventsAvailablePluginInvocationServiceBinding,
     createLoggerAvailablePluginInvocationServiceBinding,
     createPluginInvocationServicesFactory,
     createUnavailablePluginServicesFactory,
@@ -50,11 +51,12 @@ import {
     createStablePluginConnectedAccountsHost,
     type StablePluginConnectedAccountsOwner,
 } from './services/connectedAccounts';
-import type { ConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
+import { createConnectedAccountPurposeBindingOwner, type ConnectedAccountPurposeBindingOwner, type ConnectedAccountPurposeBindingOwnerDependencies } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
+import { QualifiedConnectedAccountProfileV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { createPluginActionCallerMaterializationFixture } from './services/actionCaller.testkit';
 import type { TargetActionAuthorizationFacts } from '../policy/evaluate';
 import { resolvePluginFinalPolicyAuthorizationFacts } from '../policy/facts';
-import type { ResolvedExecutablePluginRuntimeRegistry } from '../resolveExecutablePluginRuntimeRegistry';
+import { resolveExecutablePluginRuntimeRegistry, type ResolvedExecutablePluginRuntimeRegistry } from '../resolveExecutablePluginRuntimeRegistry';
 import { createPluginReloadController } from '../reload/controller';
 import { tryAcquireAuthoritativePluginRuntimeRegistryLease } from '../reload/runtimeLease';
 import { unexpectedCaptureSourceResolution } from '@/plugins/testkit/unexpectedCaptureSourceResolution';
@@ -172,8 +174,11 @@ function connectedAccountActionManifest(params: Readonly<{
     optional?: boolean;
     multipleSelectRequests?: boolean;
     omitPurposeBinding?: boolean;
+    useDefaultBinding?: boolean;
 }> = {}) {
-    const actionAccountAccess = connectedAccountActionHostAccess();
+    const accountAccess = connectedAccountActionHostAccess();
+    const actionAccountAccess = { ...accountAccess, scope: { ...accountAccess.scope,
+        ...(params.useDefaultBinding ? { materializationKinds: ['httpHeaders' as const] } : {}) } };
     const actionAccountRequests = [
         actionAccountAccess,
         ...(params.multipleSelectRequests
@@ -216,7 +221,7 @@ function connectedAccountActionManifest(params: Readonly<{
                 placementBindings: ['commandPalette'],
                 dangerLevel: 'safe',
                 hostAccess: actionAccountRequests.map((request) => request.id),
-                ...(params.omitPurposeBinding
+                ...(params.omitPurposeBinding || params.useDefaultBinding
                     ? {}
                     : {
                         connectedAccountPurposeBindings: [{
@@ -248,14 +253,14 @@ function connectedAccountActionManifest(params: Readonly<{
                     required: ['credentialRef'],
                     additionalProperties: false,
                 },
-                inputHints: {
+                ...(params.useDefaultBinding ? {} : { inputHints: {
                     fields: [{
                         path: 'credentialRef',
                         title: 'Connected Account',
                         widget: 'select',
                         connectedAccountOptions: true,
                     }],
-                },
+                } }),
             }],
         },
     }));
@@ -415,6 +420,17 @@ function connectedAccountActionServices(
 }
 
 function currentActionFormConnectedAccounts() {
+    const unavailable = async (): Promise<never> => {
+        throw new Error('Action form fixture does not read or materialize Account state');
+    };
+    const purposeBindingOwner = createConnectedAccountPurposeBindingOwner({
+        store: { read: unavailable, update: unavailable, subscribe: () => ({ dispose() {} }) },
+        selectTarget: unavailable,
+        resolveTarget: unavailable,
+        materializeAccount: unavailable,
+        projectTargetAccounts: unavailable,
+        assertTargetAccountMaterializable: unavailable,
+    });
     return Object.freeze({
         resolveBindingIntent: vi.fn(async () => Object.freeze({
             purpose: {
@@ -429,13 +445,7 @@ function currentActionFormConnectedAccounts() {
                 },
             },
         })),
-        activatePurposeBindings: vi.fn(() => Object.freeze({
-            subjectId: 'operation:action-form-test',
-            isCurrent: () => true,
-            resolvePurposeBinding: () => null,
-            listPurposeBindings: () => Object.freeze([]),
-            dispose() {},
-        })),
+        activatePurposeBindings: vi.fn(purposeBindingOwner.activatePurposeBindings),
     });
 }
 
@@ -537,10 +547,11 @@ function fact(overrides: Partial<PluginTargetActivationFact> = {}): PluginTarget
 
 describe('buildTargetActionInvocationRegistry', () => {
     it.each(['actions/read-v1', 'actions/administer-v1'])('discovers the actual Triage %s declaration cold while retaining Account storage policy', async (localId) => {
-        const declaration = TRIAGE_MANIFEST.contributes.actions.find(action => action.id === localId);
+        const triageManifest = normalizePluginManifestV2(TRIAGE_MANIFEST);
+        const declaration = triageManifest.contributes.actions.find(action => action.id === localId);
         if (!declaration) throw new Error(`Missing Triage declaration ${localId}`);
         const pluginManifest = normalizePluginManifestV2(createPluginManifestV2Fixture({ id: 'acme.alpha',
-            hostAccess: TRIAGE_MANIFEST.hostAccess, contributes: { actions: [declaration] } }));
+            hostAccess: triageManifest.hostAccess, contributes: { actions: [declaration] } }));
         const contributes = registry({ pluginManifest });
         let accountAvailable = true;
         const resolveHostPolicy = createTargetActionHostPolicyResolver({
@@ -597,6 +608,7 @@ describe('buildTargetActionInvocationRegistry', () => {
         });
         expect(target.has('acme.alpha', 'run')).toBe(false);
         const runtime: ResolvedExecutablePluginRuntimeRegistry = {
+            ...await resolveExecutablePluginRuntimeRegistry({ contributes, pluginIds: [] }),
             claimReleaseLessDeclarations: async () => undefined,
             contributes, targetActionInvocations: target,
             hookHandlersByHookId: new Map(), agentRuntimesByAgentId: new Map(), scmHostingProvidersById: new Map(),
@@ -633,11 +645,15 @@ describe('buildTargetActionInvocationRegistry', () => {
                     })]) },
                 });
                 if (!search.ok) throw new Error('Expected contributed discovery');
-                expect(getActionSpec('action.spec.search').outputSchema.safeParse(search.result).success).toBe(true);
+                const searchSchema = getActionSpec('action.spec.search').outputSchema;
+                if (!searchSchema) throw new Error('Expected Action search output schema');
+                expect(searchSchema.safeParse(search.result).success).toBe(true);
                 const get = await executor.execute('action.spec.get', { id }, { surface });
                 expect(get).toMatchObject({ ok: true, result: { actionSpec: { id } } });
                 if (!get.ok) throw new Error('Expected contributed schema');
-                expect(getActionSpec('action.spec.get').outputSchema.safeParse(get.result).success).toBe(true);
+                const getSchema = getActionSpec('action.spec.get').outputSchema;
+                if (!getSchema) throw new Error('Expected Action get output schema');
+                expect(getSchema.safeParse(get.result).success).toBe(true);
             }
             expect(target.evaluateCatalogPolicy('acme.alpha', 'run')).toMatchObject({
                 outcome: 'visible', requiresCurrentIntent: false,
@@ -821,29 +837,29 @@ describe('buildTargetActionInvocationRegistry', () => {
             service: { pluginId: 'acme.alpha', localId: 'account' },
             accountId: 'durable-selected-account-b',
         } as const;
-        const materialize = vi.fn<StablePluginConnectedAccountsOwner['materialize']>(async (input) => {
-            expect(input.exactPurposeBindingSubjectId).toBe('operation:history-gap-reset');
-            expect(input.expectedAccount).toEqual(sourceAccount);
-            expect(input.expectedAccount).not.toEqual(durableSelectedAccount);
-            return { kind: 'httpHeaders', headers: { authorization: 'Bearer source-a' } };
+        const recordOperationCredentialUse = vi.fn();
+        const materializeAccount = vi.fn(async ({ account }: Parameters<ConnectedAccountPurposeBindingOwnerDependencies['materializeAccount']>[0]) => {
+            expect(account).toEqual(sourceAccount);
+            expect(account).not.toEqual(durableSelectedAccount);
+            return { kind: 'httpHeaders' as const, headers: { authorization: 'Bearer source-a' } };
         });
-        const connectedAccountsOwner: StablePluginConnectedAccountsOwner = Object.freeze({
-            getBinding: async () => null,
-            requestSelection: async () => {
-                throw new Error('History-gap recovery must not request a durable selection');
+        const purposeBindingOwner = createConnectedAccountPurposeBindingOwner({
+            credentialOwnerAccountId: 'materialization-owner',
+            store: {
+                read: async () => ({ v: 1, bindings: [] }),
+                update: async () => { throw new Error('History-gap recovery must not persist a selection'); },
+                subscribe: () => ({ dispose() {} }),
             },
-            materialize,
-            listAccounts: async () => {
-                throw new Error('History-gap recovery must not enumerate Accounts');
-            },
-            materializeListedAccount: async () => {
-                throw new Error('History-gap recovery must not materialize a listed Account');
-            },
-            watch: () => Object.freeze({ dispose() {} }),
+            selectTarget: async () => { throw new Error('History-gap recovery must not request a selection'); },
+            resolveTarget: async target => target.kind === 'account'
+                ? { displayName: 'Source Account', account: target.account } : null,
+            materializeAccount,
+            projectTargetAccounts: async () => { throw new Error('History-gap recovery must not list Accounts'); },
+            assertTargetAccountMaterializable: async () => { throw new Error('History-gap recovery must not materialize a listed Account'); },
         });
         const actionFormConnectedAccounts = {
             resolveBindingIntent: vi.fn<ConnectedAccountPurposeBindingOwner['resolveBindingIntent']>(
-                async (input) => ({ purpose: input.purpose, target: input.target }),
+                purposeBindingOwner.resolveBindingIntent,
             ),
             activatePurposeBindings: vi.fn<ConnectedAccountPurposeBindingOwner['activatePurposeBindings']>(
                 (input) => {
@@ -858,20 +874,15 @@ describe('buildTargetActionInvocationRegistry', () => {
                         },
                         target: { kind: 'account', account: sourceAccount },
                     }]);
-                    return Object.freeze({
-                        subjectId: 'operation:history-gap-reset',
-                        isCurrent: () => true,
-                        resolvePurposeBinding: () => null,
-                        listPurposeBindings: () => Object.freeze([]),
-                        dispose() {},
-                    });
+                    const lease = purposeBindingOwner.activatePurposeBindings(input);
+                    return lease;
                 },
             ),
         };
         const services = {
             createServices: createPluginInvocationServicesFactory({
                 loggerSink: { write() {} },
-                connectedAccounts: createStablePluginConnectedAccountsHost(connectedAccountsOwner),
+                connectedAccounts: createStablePluginConnectedAccountsHost(purposeBindingOwner),
             }),
             resolveHostBinding: createTargetActionHostBindingResolver({
                 createServiceBinding: (generation, id) => (
@@ -927,14 +938,74 @@ describe('buildTargetActionInvocationRegistry', () => {
                 sourceSelectorId: '9d5af559-2c82-4c22-b6a0-ecabce38a631',
             },
             surface: 'plugin',
+            approvalContext: { recordOperationCredentialUse },
         })).resolves.toEqual({ status: 'executed', value: { kind: 'baselined' } });
         expect(resolveAutomationEventHistoryGapSource).toHaveBeenCalledOnce();
         expect(actionFormConnectedAccounts.resolveBindingIntent).toHaveBeenCalledWith(expect.objectContaining({
             target: { kind: 'account', account: sourceAccount },
         }));
         expect(actionFormConnectedAccounts.activatePurposeBindings).toHaveBeenCalledOnce();
-        expect(materialize).toHaveBeenCalledOnce();
+        expect(materializeAccount).toHaveBeenCalledOnce();
+        expect(recordOperationCredentialUse.mock.calls).toEqual([[{
+            v: 1, kind: 'connected_account', label: 'Source Account',
+            owner: { kind: 'account', accountId: 'materialization-owner' }, service: sourceAccount.service,
+            why: { kind: 'purpose_binding', purpose: { consumer: { pluginId: 'acme.alpha', localId: 'reset-history' }, purpose: 'source-account' }, target: 'account' },
+            currentness: { kind: 'current_at_materialization' },
+        }]]);
         expect(handler).toHaveBeenCalledOnce();
+    });
+
+    it.each([false, true])('records credential use for the actual Session binding without an Action-form operation lease (occurrence retires: %s)', async retireDuringMaterialization => {
+        const pluginManifest = connectedAccountActionManifest({ useDefaultBinding: true });
+        const service = { pluginId: 'acme.alpha', localId: 'account' };
+        const purpose = { consumer: { pluginId: 'acme.alpha', localId: 'run' }, purpose: 'action-account' };
+        const account = { service, accountId: 'actual-session-account' };
+        const profile = QualifiedConnectedAccountProfileV4Schema.parse({
+            ref: account, status: 'connected', authenticationModeId: 'manual', configurationReady: true,
+            configurationRevision: null, revisionSemantics: 'revisioned', credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
+            displayName: 'Actual Session actor',
+        });
+        const recordOperationCredentialUse = vi.fn();
+        let current = true;
+        const unavailable = async (): Promise<never> => { throw new Error('No selection or inventory is needed'); };
+        const owner = createConnectedAccountPurposeBindingOwner({
+            credentialOwnerAccountId: 'credential-owner',
+            store: { read: async () => ({ v: 1, bindings: [] }), update: unavailable, subscribe: () => ({ dispose() {} }) },
+            selectTarget: unavailable,
+            resolveTarget: async target => target.kind === 'account' ? { account: target.account, displayName: profile.displayName!, observation: { profiles: [profile] } } : null,
+            materializeAccount: async () => {
+                if (retireDuringMaterialization) current = false;
+                return { kind: 'httpHeaders', headers: { authorization: 'Bearer private-token' } };
+            },
+            projectTargetAccounts: unavailable, assertTargetAccountMaterializable: async () => undefined,
+        });
+        const lease = owner.activateSessionPurposeBindings({ sessionId: 'session-1', purposes: [purpose], bindings: [{ purpose, target: { kind: 'account', account } }] });
+        const handler: ActionHandler = async (_input, context) => {
+            await context.services.connectedAccounts.materialize('action-account', { kind: 'httpHeaders', origin: 'https://api.example.test', headerNames: ['authorization'] });
+            await context.services.connectedAccounts.materializeListedAccount({ purpose: 'action-account', account,
+                materialization: { kind: 'httpHeaders', origin: 'https://api.example.test', headerNames: ['authorization'] } });
+            return { ok: true };
+        };
+        const target = buildRegistry({ contributes: registry({ pluginManifest }), targetActivationFacts: [fact()],
+            readCurrentPluginOccurrenceId: () => current ? ('7' as PluginRuntimeOccurrenceId) : null,
+            targetRegistrations: [{ pluginId: 'acme.alpha', occurrenceId: '7', registration: { family: 'actions', localId: 'run', value: handler } }],
+            createServices: createPluginInvocationServicesFactory({ loggerSink: { write() {} }, connectedAccounts: createStablePluginConnectedAccountsHost(owner) }),
+            resolveHostBinding: createTargetActionHostBindingResolver({ createServiceBinding: (generation, id) => addConnectedAccountsAvailablePluginInvocationServiceBinding(createLoggerAvailablePluginInvocationServiceBinding(generation, id)) }),
+        });
+        const result = await target.invoke({ pluginId: 'acme.alpha', localId: 'run', surface: 'ui', sessionId: 'session-1',
+            input: { credentialRef: { service, accountId: 'ignored-authored-account' } }, approvalContext: { recordOperationCredentialUse },
+        });
+        if (retireDuringMaterialization) {
+            expect(result).toMatchObject({ status: 'failed' });
+            expect(recordOperationCredentialUse).not.toHaveBeenCalled();
+        } else {
+            expect(result).toEqual({ status: 'executed', value: { ok: true } });
+            expect(recordOperationCredentialUse.mock.calls).toEqual(['account', 'listed_account'].map(selectedTarget => [{
+                v: 1, kind: 'connected_account', label: 'Actual Session actor', owner: { kind: 'account', accountId: 'credential-owner' }, service,
+                why: { kind: 'purpose_binding', purpose, target: selectedTarget }, currentness: { kind: 'current_at_materialization' },
+            }]));
+        }
+        lease.dispose();
     });
 
     it('does not dispatch a Connected Accounts Action after its occurrence retires', async () => {
@@ -1566,14 +1637,19 @@ describe('buildTargetActionInvocationRegistry', () => {
                 stored = TargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
                 return { artifactId: 'approval-external-declared-secret' };
             },
-            read: async () => stored ? { ...stored, status: 'approved', decision: { kind: 'approve', decidedAtMs: Date.now() } } : null,
+            read: async () => stored?.status === 'open'
+                ? { ...stored, status: 'approved', decision: { kind: 'approve', decidedAtMs: Date.now() } } : stored ?? null,
+            update: async ({ request }) => {
+                stored = TargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
+                return { ok: true };
+            },
         });
         try {
             await expect(target.invoke({ pluginId: 'acme.alpha', localId: 'run',
                 input: { releaseTag: 'private-release-effect', value: 'unrelated-readable' }, surface: 'cli', requestCurrentIntent,
             })).resolves.toMatchObject({ status: 'executed' });
             expect(applied).toEqual({ releaseTag: 'private-release-effect', value: 'unrelated-readable' });
-            expect(stored).toMatchObject({ approvalInputCustody: 'live_only', secretInputLabels: { releaseTag: 'Release' } });
+            expect(stored).toMatchObject({ status: 'executed', approvalInputCustody: 'live_only', secretInputLabels: { releaseTag: 'Release' } });
             expect(JSON.stringify(stored)).not.toContain('private-release-effect');
             expect(records).toHaveLength(1);
             expect(JSON.stringify(records)).not.toContain('private-release-effect');

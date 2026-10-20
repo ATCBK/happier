@@ -7,8 +7,7 @@ import {
     standardCleanup,
 } from '@/dev/testkit';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { storage } from '@/sync/domains/state/storageStore';
-import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -30,14 +29,16 @@ vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock().module;
 });
+const account = createProviderSettingsAccountHarness();
+await loadSyncSingletonForTests();
+const { storage } = await import('@/sync/domains/state/storage');
 
 beforeEach(async () => {
-    await loadSyncSingletonForTests();
-    storage.setState({ settings: { ...settingsDefaults, transcriptStreamingCoalesceEnabled: true, transcriptStreamingCoalesceWindowMs: 16 },
-        settingsScope: { serverId: 'server-a', accountId: 'account-a' }, settingsVersion: 1 });
+    await account.restore({ settings: { transcriptStreamingCoalesceEnabled: true, transcriptStreamingCoalesceWindowMs: 16 } });
 });
-afterEach(() => {
+afterEach(async () => {
     standardCleanup();
+    await account.reset();
 });
 
 describe('Transcript advanced settings (performance)', () => {
@@ -55,7 +56,7 @@ describe('Transcript advanced settings (performance)', () => {
             screen.pressRowByTitle('settingsSession.transcript.advanced.coalesceEnabledTitle');
         });
 
-        expect(storage.getState().settings.transcriptStreamingCoalesceEnabled).toBe(false);
+        await vi.waitFor(() => expect(storage.getState().settings.transcriptStreamingCoalesceEnabled).toBe(false));
     });
 
     it('omits the obsolete renderer menu without reading a writable renderer setting', async () => {
@@ -79,7 +80,7 @@ describe('Transcript advanced settings (performance)', () => {
             findField()?.props.onBlur();
         });
 
-        expect(storage.getState().settings.transcriptStreamingCoalesceWindowMs).toBe(900);
+        await vi.waitFor(() => expect(storage.getState().settings.transcriptStreamingCoalesceWindowMs).toBe(900));
         expect(findField()?.props.value).toBe('900');
     });
 });

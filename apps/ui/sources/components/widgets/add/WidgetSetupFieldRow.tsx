@@ -1,12 +1,15 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HappierInputField, happierPageTextMetrics, resolveHappierActionFieldPresentation, resolveHappierChoiceControl } from '@happier-dev/plugin-ui/presentation';
+import { HappierInputField, HappierPressable, happierPageTextMetrics, resolveHappierActionFieldPresentation } from '@happier-dev/plugin-ui/presentation';
 import { sameStrictJsonValue, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { readInputOptionValue } from '@happier-dev/protocol/inputs';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { renderDropdownItemTriggerRightElement } from '@/components/ui/forms/dropdown/renderDropdownItemTriggerRightElement';
+import { resolveFieldBoxColors } from '@/components/ui/forms/fieldBox';
+import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -21,6 +24,12 @@ import {
 } from './widgetSetupModel';
 
 const FOLLOW_ID = 'follow';
+const OWN_ID = 'own';
+
+/** Whether the input reads the surface's value (one control) rather than its own (control + editor). */
+function followsSurface(row: WidgetSetupRow): boolean {
+    return row.kind === 'follows' || (row.kind === 'invalid' && row.follows === true);
+}
 export type WidgetSetupFieldChange =
     | Readonly<{ kind: 'follow'; slot: string }>
     | Readonly<{ kind: 'pin'; value: JsonValue }>
@@ -74,26 +83,67 @@ function NeededTag(): React.ReactElement {
     return <Text style={styles.needed}>{t('widgetAdd.needed')}</Text>;
 }
 
-/** Only the follow/pin affordance is widget-specific; typed choices and pickers stay public. */
+/**
+ * Only the follow/pin affordance is widget-specific; typed choices and pickers stay public. The one
+ * control says how the input is bound (lab IN "Follow or pin"): following, it is the whole row and
+ * names the value it follows; "Own value" hands the value to the typed editor beneath it, starting
+ * from what the surface had, so the value is never shown twice.
+ */
 function WidgetBindingControl(props: React.ComponentProps<typeof WidgetSetupFieldRow>): React.ReactElement | null {
     const { theme } = useUnistyles();
     const follow = props.entry.follow;
     const [open, setOpen] = React.useState(false);
     if (!follow) return null;
+    const following = followsSurface(props.row);
     const trigger = describeTrigger(props.row, theme.colors.text.secondary, theme.colors.state.danger.foreground);
     return <DropdownMenu
         testID={props.testID}
         open={open}
         onOpenChange={setOpen}
-        items={[{ id: FOLLOW_ID, title: follow.label, checked: props.row.kind === 'follows',
+        items={[{ id: FOLLOW_ID, title: follow.label, checked: following, testID: `${props.testID}.binding.follow`,
             ...(follow.values[0] ? { subtitle: follow.values[0].label } : {}),
-            icon: <Icon name="link" size={16} color={theme.colors.text.secondary} /> }]}
-        onSelect={() => props.onChange({ kind: 'follow', slot: follow.slot })}
-        selectedId={props.row.kind === 'follows' ? FOLLOW_ID : null}
-        itemTrigger={{ title: '', showSelectedSubtitle: false,
-            detailFormatter: () => trigger.detail, field: trigger.field,
-            itemProps: { testID: `${props.testID}.trigger`, showDivider: false, disabled: props.disabled,
-                accessibilityLabel: [props.entry.field.prompt ?? props.entry.field.title, trigger.spoken].filter(Boolean).join(', ') } }}
+            icon: <Icon name="link" size={16} color={theme.colors.text.secondary} /> },
+        { id: OWN_ID, title: t('widgetAdd.ownValue'), subtitle: t('widgetAdd.ownValueHint'), checked: !following,
+            testID: `${props.testID}.binding.own`,
+            icon: <Icon name="pencil-simple" size={16} color={theme.colors.text.secondary} /> }]}
+        onSelect={(id) => {
+            if (id === FOLLOW_ID) props.onChange({ kind: 'follow', slot: follow.slot });
+            else if (following) {
+                const current = follow.values[0]?.value;
+                props.onChange(current === undefined ? { kind: 'clear' } : { kind: 'pin', value: current });
+            }
+        }}
+        selectedId={following ? FOLLOW_ID : OWN_ID}
+        placement="bottom"
+        matchTriggerWidth={false}
+        // The binding is a control inside the input's row, never a second row: its field box stands on
+        // the row's control edge, the same edge as the typed editor beneath it (FA18 P2).
+        trigger={({ toggle }) => (
+            <HappierPressable
+                testID={`${props.testID}.trigger`}
+                onPress={toggle}
+                disabled={props.disabled}
+                accessibilityRole="button"
+                accessibilityLabel={[props.entry.field.prompt ?? props.entry.field.title, trigger.spoken].filter(Boolean).join(', ')}
+                expanded={open}
+                hasPopup="menu"
+                style={styles.bindingTrigger}
+            >
+                {renderDropdownItemTriggerRightElement({
+                    detail: trigger.detail,
+                    open,
+                    detailColor: theme.colors.text.primary,
+                    chevronColor: theme.colors.text.secondary,
+                    field: resolveFieldBoxColors(theme, trigger.field.invalid ? 'invalid' : 'idle'),
+                    fieldSpan: 'column',
+                    ...(trigger.field.leading ? { leading: trigger.field.leading } : {}),
+                    secondary: trigger.field.secondary ?? null,
+                    quietValue: trigger.field.quietValue === true,
+                    secondaryColor: theme.colors.text.tertiary,
+                    quietValueColor: theme.colors.text.secondary,
+                })}
+            </HappierPressable>
+        )}
     />;
 }
 
@@ -113,22 +163,8 @@ function describeTrigger(row: WidgetSetupRow, secondary: string, danger: string)
                 field: { leading: <Icon name="link" size={15} color={secondary} />, secondary: value, quietValue: true },
             };
         }
-        case 'pinned': {
-            const value = row.value;
-            const label = value?.label ?? row.label;
-            return {
-                detail: label || null,
-                spoken: label,
-                field: {
-                    // A pinned value shows its own mark when it has one (a session, a repository); a plain
-                    // value (All agents, a number) stands alone, as the link glyph marks only a follow.
-                    ...(value?.icon ? { leading: <Icon name={value.icon} size={15} color={secondary} /> } : {}),
-                    secondary: value?.description ?? null,
-                },
-            };
-        }
         case 'invalid':
-            return {
+            if (row.follows) return {
                 detail: row.label ?? t('widgetAdd.invalidValue'),
                 spoken: `${row.label ?? ''} ${t('widgetAdd.invalidValue')}`.trim(),
                 field: {
@@ -137,8 +173,21 @@ function describeTrigger(row: WidgetSetupRow, secondary: string, danger: string)
                     invalid: true,
                 },
             };
+            // The editor beneath holds the value that stopped resolving; the binding only says whose it is.
+            return {
+                detail: t('widgetAdd.ownValue'),
+                spoken: `${t('widgetAdd.ownValue')} ${t('widgetAdd.invalidValue')}`,
+                field: { leading: <Icon name="warning" size={15} color={danger} />, invalid: true },
+            };
+        case 'pinned':
         case 'needed':
         case 'choices':
+            // The value itself is the editor's beneath; the binding says only that it is this widget's own.
+            return {
+                detail: t('widgetAdd.ownValue'),
+                spoken: t('widgetAdd.ownValue'),
+                field: { leading: <Icon name="pencil-simple" size={15} color={secondary} /> },
+            };
         case 'viewer':
             return { detail: null, spoken: t('widgetAdd.needed'), field: {} };
     }
@@ -170,7 +219,7 @@ function ViewerFieldRow(props: React.ComponentProps<typeof WidgetSetupFieldRow>)
  */
 function InputFieldRow(props: React.ComponentProps<typeof WidgetSetupFieldRow>): React.ReactElement {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const { entry, row } = props;
     // A list input that declares no placeholder would draw as a blank block: say what to type in it.
     const field = React.useMemo(() => (entry.field.widget === 'text_list' && entry.field.placeholder === undefined
@@ -203,10 +252,24 @@ function InputFieldRow(props: React.ComponentProps<typeof WidgetSetupFieldRow>):
     // The shared field decides how a fixed choice is drawn (two to four short ones are a segmented
     // control, anything else one compact choice field); the row only places them: beside the title when
     // there is room, and multi-line text beneath it.
-    const choiceControl = resolveHappierChoiceControl(presentation, options);
     // A value the choices cannot name (a period) is read from the row's own label.
     const valueLabel = row.kind === 'pinned' ? row.label : row.kind === 'follows' ? row.valueLabel ?? undefined : row.kind === 'invalid' ? row.label ?? undefined : undefined;
     const stacked = props.phone || (presentation.kind === 'text' && presentation.multiline);
+    if (entry.follow && followsSurface(row)) {
+        // Following the surface: the binding control is the row's one control and names the value.
+        return (
+            <Item
+                testID={props.testID}
+                title={field.prompt ?? field.title}
+                subtitle={subtitle}
+                subtitleLines={0}
+                titleAccessory={titleAccessory}
+                showChevron={false}
+                accessoryLayout={props.phone ? 'stacked' : 'inline'}
+                rightElement={<WidgetBindingControl {...props} />}
+            />
+        );
+    }
     return (
         <Item
             testID={props.testID}
@@ -217,7 +280,9 @@ function InputFieldRow(props: React.ComponentProps<typeof WidgetSetupFieldRow>):
             subtitleLines={0}
             titleAccessory={titleAccessory}
             showChevron={false}
-            accessoryLayout={stacked ? 'stacked' : choiceControl !== null ? 'adaptive' : 'inline'}
+            // Only a switch stays beside its label; every wider control (a choice, a field) moves beneath
+            // it when the row is narrow (a pane column), never squeezing the label into a stack of lines.
+            accessoryLayout={stacked ? 'stacked' : presentation.kind === 'toggle' ? 'inline' : 'adaptive'}
             rightElement={(
                 <View ref={controlHost} collapsable={false}>
                 <HappierInputField<JsonValue>
@@ -251,5 +316,6 @@ function InputFieldRow(props: React.ComponentProps<typeof WidgetSetupFieldRow>):
 }
 
 const styles = StyleSheet.create((theme) => ({
+    bindingTrigger: { minHeight: resolveMinimumInteractiveTargetSize(Platform.OS), justifyContent: 'center' },
     needed: { ...Typography.default('semiBold'), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary },
 }));

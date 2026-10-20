@@ -2,7 +2,7 @@ import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/
 import { StoredJsonContentEnvelopeSchema } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
 import type { StoredJsonContentEnvelope } from '@happier-dev/protocol';
 import axios from 'axios';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { resolveConnectedServicesServerApiTimeoutMs } from './connectedServicesServerApiTimeout';
 import { resolveServerHttpBaseUrl } from './serverHttpBaseUrl';
@@ -83,26 +83,26 @@ export class ConnectedAccountAttemptTransactionApiError extends Error {
   }
 }
 
-const TransactionRecordSchema = z.object({
-  revision: z.number().int().min(1),
+const TransactionRecordSchema = z.strictObject({
+  revision: z.number().check(z.int(), z.minimum(1)),
   content: StoredJsonContentEnvelopeSchema,
-  expiresAtMs: z.number().int().positive(),
-}).strict();
+  expiresAtMs: z.number().check(z.int(), z.positive()),
+});
 
-const PendingTransactionSchema = z.object({
-  attemptId: z.string().min(1).max(160),
+const PendingTransactionSchema = z.strictObject({
+  attemptId: z.string().check(z.minLength(1), z.maxLength(160)),
   kind: z.enum(['oauth', 'device']),
-  modeId: z.string().min(1).max(256),
+  modeId: z.string().check(z.minLength(1), z.maxLength(256)),
   intent: z.enum(['connect', 'reconnect']),
   phase: z.enum(['awaitingOAuth', 'awaitingDeviceAuthorization', 'outcomeUnknown']),
-  createdAtMs: z.number().int().nonnegative(),
-  expiresAtMs: z.number().int().positive(),
-}).strict();
-const PendingTransactionsSchema = z.object({
+  createdAtMs: z.number().check(z.int(), z.nonnegative()),
+  expiresAtMs: z.number().check(z.int(), z.positive()),
+});
+const PendingTransactionsSchema = z.strictObject({
   attempts: z.array(PendingTransactionSchema),
-}).strict();
+});
 
-const TransactionErrorSchema = z.object({
+const TransactionErrorSchema = z.strictObject({
   error: z.enum([
     'connected_account_attempt_transaction_not_found',
     'connected_account_attempt_transaction_conflict',
@@ -110,7 +110,7 @@ const TransactionErrorSchema = z.object({
     'connected_account_attempt_transaction_storage_mode_mismatch',
     'connected_account_attempt_transaction_unreadable',
   ]),
-}).strict();
+});
 
 function requestHeaders(token: string): Readonly<Record<string, string>> {
   return {

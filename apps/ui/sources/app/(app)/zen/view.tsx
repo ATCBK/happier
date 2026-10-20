@@ -1,5 +1,1 @@
-import { ZenView } from '@/components/zen/screens/ZenView';
-
-export default function ZenViewScreen() {
-    return <ZenView />;
-}
+export { ZenTasksRedirect as default } from '@/components/zen/navigation/ZenTasksRedirect';

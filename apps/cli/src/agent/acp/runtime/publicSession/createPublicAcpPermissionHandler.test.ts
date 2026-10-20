@@ -1,16 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { ServerBoundPermissionRpcHandlerManager } from '@/agent/permissions/testkit/serverBoundPermissionRpcHandlerManager';
+
 import type {
   HostCurrentSessionInteractionsService as PluginCurrentSessionInteractionsService,
   HostSessionApprovalRequest as PluginSessionApprovalRequest,
   HostSessionApprovalResult as PluginSessionApprovalResult,
-  HostSessionConfirmationRequest as PluginSessionConfirmationRequest,
-  HostSessionConfirmationResult as PluginSessionConfirmationResult,
   HostSessionInteractionRequest as PluginSessionInteractionRequest,
   HostSessionInteractionResult as PluginSessionInteractionResult,
-  HostSessionQuestionsRequest as PluginSessionQuestionsRequest,
-  HostSessionQuestionsResult as PluginSessionQuestionsResult,
 } from '@/agent/runtime/state/currentSessionUiTypes';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 
 import { createPublicAcpPermissionHandler } from './createPublicAcpPermissionHandler';
@@ -24,8 +23,6 @@ class TestInteractions implements PluginCurrentSessionInteractionsService {
   constructor(private readonly requestApproval: ApprovalRequester) {}
 
   request(request: PluginSessionApprovalRequest, options?: { signal?: AbortSignal }): Promise<PluginSessionApprovalResult>;
-  request(request: PluginSessionQuestionsRequest, options?: { signal?: AbortSignal }): Promise<PluginSessionQuestionsResult>;
-  request(request: PluginSessionConfirmationRequest, options?: { signal?: AbortSignal }): Promise<PluginSessionConfirmationResult>;
   async request(
     request: PluginSessionInteractionRequest,
     options?: { signal?: AbortSignal },
@@ -41,9 +38,7 @@ function interactions(request: ApprovalRequester): PluginCurrentSessionInteracti
 
 class FakePermissionSession {
   sessionId = 'public-acp-permission-test';
-  rpcHandlerManager = {
-    registerHandler() {},
-  };
+  rpcHandlerManager = new ServerBoundPermissionRpcHandlerManager(this.sessionId);
   agentState: {
     requests: Record<string, unknown>;
     completedRequests: Record<string, unknown>;
@@ -71,10 +66,9 @@ describe('createPublicAcpPermissionHandler', () => {
         import('@/agent/permissions/providerEnforced/handler'),
         import('@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions'),
       ]);
-      const hostPermissionHandler = new ProviderEnforcedPermissionHandler(
-        new FakePermissionSession() as unknown as ApiSessionClient,
-        { logPrefix: '[PublicAcpPermissionTest]' },
-      );
+      const session = createMutableApiSessionClientFixture({ sessionId: 'public-acp-permission-test' });
+      const lifetime = new AbortController();
+      const hostPermissionHandler = new ProviderEnforcedPermissionHandler(session, { logPrefix: '[PublicAcpPermissionTest]' });
       hostPermissionHandler.setPermissionMode(permissionMode);
       const currentSession = createNativeAgentCurrentSessionUiServices({
         permissionHandler: hostPermissionHandler,
@@ -85,21 +79,27 @@ describe('createPublicAcpPermissionHandler', () => {
         occurrenceId: 'occurrence-1',
         interactionDeadlineMs: 1_000,
         isCurrent: () => true,
-        signal: new AbortController().signal,
+        signal: lifetime.signal,
       });
       const handler = createPublicAcpPermissionHandler({
         interactions: currentSession.interactions,
-        signal: new AbortController().signal,
+        signal: lifetime.signal,
         resolveRequestId: (toolCallId) => `turn-1:${toolCallId}`,
       });
 
-      for (const toolName of ['writeTextFile', 'write_file', 'rename', 'delete', 'mkdir']) {
-        await expect(handler.handleToolCall(
-          `host-fs-write:${toolName}`,
-          toolName,
-          { path: '/workspace/forbidden.txt', bytes: 9 },
-          { origin: 'host_acp_fs_write' },
-        )).resolves.toEqual({ decision: 'denied' });
+      try {
+        for (const toolName of ['writeTextFile', 'write_file', 'rename', 'delete', 'mkdir']) {
+          await expect(handler.handleToolCall(
+            `host-fs-write:${toolName}`,
+            toolName,
+            { path: '/workspace/forbidden.txt', bytes: 9 },
+            { origin: 'host_acp_fs_write' },
+          )).resolves.toEqual({ decision: 'denied' });
+        }
+      } finally {
+        lifetime.abort();
+        await hostPermissionHandler.reset();
+        await session.close();
       }
     },
   );
@@ -253,5 +253,183 @@ describe('createPublicAcpPermissionHandler', () => {
     expect(observedSignal?.aborted).toBe(true);
     expect(interactionSettled).toBe(true);
     await expect(pending).resolves.toEqual(expect.objectContaining({ decision: 'abort' }));
+  });
+
+  async function elicitationFixture(
+    permissionMode: 'default' | 'yolo' | 'plan' = 'default',
+    custody?: Pick<Parameters<typeof createPublicAcpPermissionHandler>[0],
+      'resolveRequestId' | 'resolveTurnId' | 'resolveCausalPermissionAuthority'>,
+  ) {
+    const [{ ProviderEnforcedPermissionHandler }, { createNativeAgentCurrentSessionUiServices }] = await Promise.all([
+      import('@/agent/permissions/providerEnforced/handler'),
+      import('@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions'),
+    ]);
+    const session = new FakePermissionSession();
+    // The fake replaces the server-backed session transport; permission policy stays real.
+    const permissionHandler = new ProviderEnforcedPermissionHandler(session as unknown as ApiSessionClient, {
+      logPrefix: '[PublicAcpElicitationTest]',
+      getWorkspaceWrites: () => 'allow',
+    });
+    permissionHandler.setPermissionMode(permissionMode);
+    const signal = new AbortController().signal;
+    const currentSession = createNativeAgentCurrentSessionUiServices({
+      permissionHandler,
+      pluginId: 'happier.agent.test',
+      contributionId: 'test',
+      runtimeId: 'test',
+      sessionId: session.sessionId,
+      occurrenceId: 'occurrence-1',
+      isCurrent: () => true,
+      signal,
+    });
+    const handler = createPublicAcpPermissionHandler({
+      interactions: currentSession.interactions,
+      signal,
+      resolveRequestId: toolCallId => `turn-1:${toolCallId}`,
+      resolveTurnId: () => 'turn-1',
+      resolveCausalPermissionAuthority: () => ({
+        kind: 'admittedSessionInputV1',
+        admittedPermissionCeiling: permissionMode,
+      }),
+      ...custody,
+    });
+    async function publishedRequest() {
+      await vi.waitFor(() => expect(Object.keys(session.agentState.requests)).toHaveLength(1));
+      const [id, input] = Object.entries(session.agentState.requests)[0]!;
+      return { id, input };
+    }
+    async function answer(id: string, approved: boolean, answers?: Readonly<Record<string, readonly string[]>>) {
+      const respond = session.rpcHandlerManager.handlers.get('session.user_action.answer');
+      expect(respond).toBeDefined();
+      await expect(respond!({
+        id,
+        turnId: 'turn-1',
+        approved,
+        decision: approved ? 'approved' : 'denied',
+        ...(answers ? { answers } : {}),
+      })).resolves.toBeUndefined();
+    }
+    return { session, permissionHandler, handler, publishedRequest, answer };
+  }
+
+  it('preserves an opaque elicitation tool call identity through turn custody and the real permission interaction', async () => {
+    const toolCallId = ' \tcall/工具+=\n ';
+    const turnCustody = new Map([[toolCallId, {
+      requestId: `acp:${JSON.stringify(['turn-1', toolCallId])}`,
+      turnId: 'turn-1',
+      causalPermissionAuthority: {
+        kind: 'admittedSessionInputV1' as const,
+        admittedPermissionCeiling: 'default' as const,
+      },
+    }]]);
+    const fixture = await elicitationFixture('default', {
+      resolveRequestId: id => turnCustody.get(id)?.requestId ?? null,
+      resolveTurnId: id => turnCustody.get(id)?.turnId ?? null,
+      resolveCausalPermissionAuthority: id => turnCustody.get(id)?.causalPermissionAuthority ?? null,
+    });
+    try {
+      const pending = fixture.handler.handleElicitation!({
+        mode: 'form', sessionId: 'session-1', toolCallId, message: 'Which implementation?',
+        requestedSchema: {
+          type: 'object', properties: { value: { type: 'string' } }, required: ['value'],
+        },
+      });
+      const request = await fixture.publishedRequest();
+      expect(request.input).toMatchObject({ tool: 'AskUserQuestion', kind: 'user_action', turnId: 'turn-1' });
+      await fixture.answer(request.id, true, { value: ['keep the identity'] });
+      await expect(pending).resolves.toEqual({ action: 'accept', content: { value: 'keep the identity' } });
+      expect(Object.keys(fixture.session.agentState.requests)).toEqual([]);
+    } finally {
+      await fixture.permissionHandler.reset();
+    }
+  });
+
+  it('keeps plan questions pending for an explicit refine answer through the real permission owner', async () => {
+    const fixture = await elicitationFixture('plan');
+    try {
+      const message = '# Plan summary\n' + '- Inspect the ACP adapter.\n'.repeat(25);
+      const pending = fixture.handler.handleElicitation!({
+        mode: 'form', sessionId: 'session-1', message,
+        requestedSchema: {
+          type: 'object', properties: {
+            value: { type: 'string', oneOf: [
+              { const: 'approve', title: 'Approve plan', description: 'Execute the plan' },
+              { const: 'refine', title: 'Refine plan', description: 'Keep planning' },
+            ] },
+          }, required: ['value'],
+        },
+      });
+      const request = await fixture.publishedRequest();
+      expect(request.input).toMatchObject({ tool: 'AskUserQuestion', kind: 'user_action', turnId: 'turn-1' });
+      await fixture.answer(request.id, true, { value: ['refine'] });
+      await expect(pending).resolves.toEqual({ action: 'accept', content: { value: 'refine' } });
+      expect(Object.keys(fixture.session.agentState.requests)).toEqual([]);
+    } finally {
+      await fixture.permissionHandler.reset();
+    }
+  });
+
+  it.each(['default', 'yolo'] as const)('requires explicit confirmation acceptance or decline in %s mode', async (mode) => {
+    const fixture = await elicitationFixture(mode);
+    try {
+      for (const approved of [false, true]) {
+        const pending = fixture.handler.handleElicitation!({
+          mode: 'form', sessionId: 'session-1', message: 'Continue?',
+          requestedSchema: { type: 'object', properties: {} },
+        });
+        const request = await fixture.publishedRequest();
+        expect(request.input).toMatchObject({ tool: 'AskUserQuestion', kind: 'user_action' });
+        await fixture.answer(request.id, true, { confirmation: [approved ? 'confirm' : 'decline'] });
+        await expect(pending).resolves.toEqual(approved
+          ? { action: 'accept', content: {} }
+          : { action: 'decline' });
+      }
+    } finally {
+      await fixture.permissionHandler.reset();
+    }
+  });
+
+  it('keeps the actual question visible with long context and accepts ACP nullable schema fields', async () => {
+    const fixture = await elicitationFixture();
+    try {
+      const pending = fixture.handler.handleElicitation!({
+        mode: 'form', sessionId: 'session-1', message: 'Plan details. '.repeat(400),
+        requestedSchema: { type: 'object', properties: {
+          value: { type: 'string', title: 'Which implementation?', enum: ['simple', 'other'] },
+        }, required: null },
+      });
+      const request = await fixture.publishedRequest();
+      expect(request.input).toMatchObject({ arguments: { questions: [{ question: expect.stringContaining('Which implementation?') }] } });
+      await fixture.answer(request.id, true, { value: ['simple'] });
+      await expect(pending).resolves.toEqual({ action: 'accept', content: { value: 'simple' } });
+    } finally {
+      await fixture.permissionHandler.reset();
+    }
+  });
+
+  it('retains a cancelled elicitation until explicit Stop and still accepts the next request', async () => {
+    const fixture = await elicitationFixture();
+    try {
+      const controller = new AbortController();
+      const input = {
+        mode: 'form' as const, sessionId: 'session-1', message: 'Your answer?',
+        requestedSchema: { type: 'object' as const, properties: { value: { type: 'string' as const } }, required: ['value'] },
+      };
+      const pending = fixture.handler.handleElicitation!(input, { signal: controller.signal });
+      const request = await fixture.publishedRequest();
+      controller.abort();
+      await expect(pending).resolves.toEqual({ action: 'cancel' });
+      expect(fixture.session.agentState.requests[request.id]).toMatchObject({ tool: 'AskUserQuestion', kind: 'user_action' });
+      await fixture.permissionHandler.abortPendingRequestsAndFlush('Explicit person Stop');
+      expect(fixture.session.agentState.requests[request.id]).toBeUndefined();
+      expect(fixture.session.agentState.completedRequests[request.id])
+        .toMatchObject({ status: 'canceled', reason: 'Explicit person Stop' });
+      const next = fixture.handler.handleElicitation!(input);
+      const nextRequest = await fixture.publishedRequest();
+      await fixture.answer(nextRequest.id, true, { value: ['still active'] });
+      await expect(next).resolves.toEqual({ action: 'accept', content: { value: 'still active' } });
+    } finally {
+      await fixture.permissionHandler.reset();
+    }
   });
 });

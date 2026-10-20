@@ -100,6 +100,10 @@ beforeEach(() => {
 });
 
 async function renderRouteScreen(preparePane?: () => void) {
+    // The Account bootstrap may already have read features before a case
+    // changes its HTTP boundary. Publish that case's answer before mounting.
+    const { getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+    await getServerFeaturesSnapshot({ serverId: runtime.serverId, force: true });
     const { default: SessionTerminalRouteScreen } = await import('@/app/(app)/session/[id]/terminal');
     ({ useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope'));
     const body = () => <runtime.Wrapper>
@@ -115,6 +119,85 @@ async function renderRouteScreen(preparePane?: () => void) {
 }
 
 describe('/session/[id]/terminal', () => {
+    it('composes an alias child entry with a hydrated split workspace, the real pane driver and responsive terminal selection before admission', async () => {
+        const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+        const { resolveCompactAppDestinations, hrefForDestinationRef } = await import('@/components/appShell/destinations/compactAppDestinationCatalog');
+        const { createWorkspaceState, reduceWorkspaceState } = await import('@/components/appShell/workspace/workspaceState');
+        const { writeScopedWorkspaceLayout, readScopedWorkspaceLayout, workspaceLayoutScopeKey } = await import('@/components/appShell/workspace/workspacePersistence');
+        const { createWorkspaceNavigationAdapter } = await import('@/components/appShell/workspace/workspaceNavigationAdapter');
+        const { useRegisterSessionPaneDriver } = await import('@/components/sessions/panes/useRegisterSessionPaneDriver');
+        const { useSessionPaneUrlSync } = await import('@/components/sessions/panes/url/useSessionPaneUrlSync');
+        const { parseSessionPaneUrlState } = await import('@/components/sessions/panes/url/sessionPaneUrlState');
+        const { useAppPaneContext } = await import('@/components/appShell/panes/AppPaneProvider');
+        const { useAppPaneScope: useScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
+        const { EMPTY_PLUGIN_UI_PROJECTION } = await import('@/sync/domains/plugins/ui/projection');
+        const { readSessionTerminalWorkspace } = await import('@/components/sessions/terminal/sessionTerminalWorkspace');
+        const { initializeSessionTerminalWorkspaceForScope } = await import('@/components/sessions/terminal/sessionTerminalWorkspaceRuntime');
+        const { SessionBottomPanel } = await import('@/components/sessions/panes/bottom/SessionBottomPanel');
+        const { TerminalScreenRoute } = await import('@/app/(app)/session/[id]/terminal');
+        const { resolveHref } = await import('expo-router/build/link/href');
+        const paneId = '7bdea2d1-e575-4c2d-88a6-c22-terminal';
+        const scope = runtime.accountScope!;
+        let state = createWorkspaceState({ id: paneId, target: { kind: 'session', params: {
+            id: 'session-1', serverId: runtime.serverIdentityId, bottom: 'terminal',
+        } }, pinned: false, preview: false });
+        state = reduceWorkspaceState(state, { type: 'openSplitTab', groupId: 'group:1', newGroupId: 'other-group',
+            axis: 'row', placement: 'after', availableSizePx: 1440, minimumFirstSizePx: 320, minimumSecondSizePx: 320,
+            tab: { id: 'other-pane', target: { kind: 'projects', params: {} }, pinned: false, preview: false } });
+        const key = workspaceLayoutScopeKey({ ...scope, windowId: 'c22-original-profile' });
+        state = readScopedWorkspaceLayout(JSON.parse(JSON.stringify(writeScopedWorkspaceLayout({}, key, state))), key)!;
+        const catalog = resolveCompactAppDestinations({ builtins: { externalSessions: false, inbox: true, workflows: false, friends: false }, pages: [] });
+        const adapter = createWorkspaceNavigationAdapter({ getState: () => state, getCatalog: () => catalog, getScope: () => scope,
+            dispatch: action => { state = reduceWorkspaceState(state, action); }, transport: { commit: () => {} },
+            createId: () => 'unexpected-new-pane', onChange: () => {} });
+        const childHref = `/session/session-1/terminal?serverId=${runtime.serverId}&bottom=terminal`;
+        adapter.initialize(childHref);
+        const active = () => state.tabs[state.groups[state.focusedGroupId].activeTabId];
+        expect(active().id).toBe(paneId);
+        const navigation = { back: vi.fn(), push: vi.fn(), replace: (href: Parameters<typeof resolveHref>[0]) => {
+            adapter.openHref(resolveHref(href), { replace: true, tabId: paneId, groupId: 'group:1' });
+        } };
+        let context!: ReturnType<typeof useAppPaneContext>;
+        let selectedScope = '';
+        function RegisteredSession() {
+            selectedScope = useRegisterSessionPaneDriver('session-1', runtime.serverIdentityId, undefined, {
+                serverId: runtime.serverIdentityId, machineId: null, pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION,
+                pluginBrowserProjection: null, phase: 'current', interactionEnabled: true, platform: 'web', accountLifetime: null,
+            });
+            context = useAppPaneContext();
+            const pane = useScope(selectedScope);
+            useSessionPaneUrlSync({ enabled: true, browserMirrorsEnabled: false, scopeKey: selectedScope,
+                pane, scopeState: pane.scopeState, urlState: parseSessionPaneUrlState(active().target.params), setParams: undefined });
+            return null;
+        }
+        const body = (child: boolean) => <runtime.Wrapper><DestinationInstanceHost tabId={active().id}
+            ref={active().target} pathname={hrefForDestinationRef(catalog, active().target)!.split('?')[0]}
+            focused visible navigation={navigation}><RegisteredSession />{child ? <TerminalScreenRoute /> : null}</DestinationInstanceHost></runtime.Wrapper>;
+        phone = false;
+        const screen = await renderScreen(body(false));
+        await act(async () => { initializeSessionTerminalWorkspaceForScope(selectedScope, readSessionTerminalWorkspace(undefined)); });
+        const originalMember = context.state.scopes[selectedScope].bottom.tabState.terminal;
+        await screen.update(body(true));
+        await screen.update(body(false));
+        expect(navigation.back).not.toHaveBeenCalled();
+        expect(active()).toMatchObject({ id: paneId, target: { kind: 'session', params: { bottom: 'terminal' } } });
+        expect(active().target.params.workspacePathname).toBeUndefined();
+        expect(Object.keys(state.groups)).toHaveLength(2);
+        expect(context.state.scopes[selectedScope].bottom).toMatchObject({ isOpen: true, selectedDestination: { kind: 'builtin', id: 'terminal' } });
+        const driver = context.getDriver(selectedScope)!;
+        expect(driver.surfaceScope).toMatchObject({ targetKind: 'session', sessionId: 'session-1', serverId: runtime.serverIdentityId });
+        expect(driver.bottomPaneBuiltinAdapter!.render({ scopeId: selectedScope, destinationId: 'terminal' })).toMatchObject({ type: SessionBottomPanel });
+        for (const widthIsPhone of [true, false, true, false]) {
+            phone = widthIsPhone;
+            adapter.acceptUrl(childHref);
+            await screen.update(body(true));
+            await screen.update(body(false));
+            expect(active().id).toBe(paneId);
+            expect(Boolean(context.getDriver(selectedScope)?.bottomPaneBuiltinAdapter)).toBe(!phone);
+            expect(context.state.scopes[selectedScope].bottom.tabState.terminal).toBe(originalMember);
+        }
+    });
+
     it('opens the Home-qualified phone terminal and applies fullscreen safe areas once', async () => {
         const { SessionRightPanel } = await import('@/components/sessions/panes/SessionRightPanel');
         const { screen } = await renderRouteScreen();
@@ -198,11 +281,14 @@ describe('/session/[id]/terminal', () => {
         expect(routerBackSpy).toHaveBeenCalled();
     });
 
-    it('does not open the phone terminal route on a larger bottom-dock device', async () => {
+    it('returns a desktop Terminal child entry to the addressed Session bottom terminal instead of its previous Git scene', async () => {
         phone = false;
-        await renderRouteScreen();
-        expect(runtime.pane.scopeState?.right?.isOpen ?? false).toBe(false);
-        expect(routerBackSpy).toHaveBeenCalled();
+        await renderRouteScreen(() => runtime.pane.openRight({ tabId: 'scm' }));
+        expect(runtime.pane.scopeState?.right).toMatchObject({ isOpen: true, activeTabId: 'scm' });
+        expect(routerBackSpy).not.toHaveBeenCalled();
+        expect(routerReplaceSpy).toHaveBeenCalledWith({ pathname: '/session/[id]', params: {
+            id: 'session-1', serverId: runtime.serverId, bottom: 'terminal',
+        } });
     });
 
     it('keeps details in the cockpit instead of pushing another fullscreen route', async () => {

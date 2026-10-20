@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { buildMachineAgentInventoryKey } from '@happier-dev/protocol/capabilities';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
 import { useMachineAgents } from '@/agents/machineAgents/useMachineAgents';
@@ -10,7 +11,7 @@ import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot'
 import { subscribeSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { useMachineListByServerId } from '@/sync/domains/state/storage';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 
@@ -63,7 +64,7 @@ export function useFirstAgentSetupItem(input: Readonly<{ phone: boolean }>): Set
     // and the machine page own the probes that fill them.
     const inventory = useMachineAgents({ serverId, machineId, load: false });
     const { hidden, dismiss } = useHomeSetupDismissals();
-    const machineName = getMachineDisplayName(machine) ?? '';
+    const machineName = getMachineSentenceName(machine);
     const needed = machineId !== null
         && shouldOfferFirstAgentSetup(inventory)
         && !hidden.has(FIRST_AGENT_SETUP_STEP_ID);
@@ -82,11 +83,12 @@ export function useFirstAgentSetupItem(input: Readonly<{ phone: boolean }>): Set
                     renderMark={(agent) => <MachineAgentMark agentId={agent.agentId} machineId={machineId} serverId={serverId} size={22} />}
                     renderForm={(agent) => (
                         <AgentSetupForm
-                            testID={`hub-setup.firstAgent.form.${agent.agentId}`}
+                            testID={`hub-setup.firstAgent.form.${buildMachineAgentInventoryKey(agent)}`}
                             serverId={serverId}
                             machineId={machineId}
                             machineName={machineName}
                             agentId={agent.agentId}
+                            definitionId={agent.definitionId}
                             layout="compact"
                         />
                     )}

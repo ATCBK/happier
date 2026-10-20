@@ -6,7 +6,7 @@ import {
     type TeamGroupV1,
 } from '@happier-dev/protocol/teams';
 
-import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
+import type { HomeDomainFailure } from '@/sync/ops/teams/teamActionClient';
 import type { ScopedSnapshotError } from '@/sync/domains/scope/scopedSnapshotFacts';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { serverAccountScopedTeamResourceKey, type TeamAddress } from '@/sync/domains/teams/teamAddress';

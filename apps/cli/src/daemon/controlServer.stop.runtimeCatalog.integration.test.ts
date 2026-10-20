@@ -33,6 +33,29 @@ describe('daemon control server: /stop', () => {
     vi.restoreAllMocks();
   });
 
+  it('marks only an explicit session Stop, not daemon shutdown cleanup', async () => {
+    const intents: Array<string | undefined> = [];
+    const app = createDaemonControlApp({
+      getChildren: () => [{ startedBy: 'daemon', pid: 111, happySessionId: 'sess-1' }],
+      machineId: 'machine_local',
+      stopSession: async (_sessionId, intent) => { intents.push(intent); return { status: 'stopped' as const }; },
+      spawnSession: async () => ({ type: 'success' as const, sessionId: 'happy-test-123' }),
+      requestShutdown: () => {},
+      onHappySessionWebhook: () => {},
+      controlToken: 'test-token',
+    });
+    try {
+      await app.ready();
+      const explicit = await app.inject({ method: 'POST', url: '/stop-session',
+        headers: { 'x-happier-daemon-token': 'test-token' }, payload: { sessionId: 'sess-1' } });
+      expect(explicit.statusCode).toBe(200);
+      const shutdown = await app.inject({ method: 'POST', url: '/stop',
+        headers: { 'x-happier-daemon-token': 'test-token' }, payload: { stopSessions: true } });
+      expect(shutdown.statusCode).toBe(200);
+      expect(intents).toEqual(['explicit_stop', undefined]);
+    } finally { await app.close(); }
+  });
+
   it('defers shutdown until beforeShutdown resolves (when provided)', async () => {
     const calls: string[] = [];
     const barrier = createDeferred<void>();
@@ -288,6 +311,7 @@ describe('daemon control server: /stop', () => {
     const tracked = { startedBy: 'daemon' as const, pid: child.pid, happySessionId: 'unconfirmed-exit', childProcess: child };
     const runners = new Map([[child.pid, tracked]]);
     const requestShutdown = vi.fn();
+    const requestSelfRestart = vi.fn(async () => {});
     const app = createDaemonControlApp({
       getChildren: () => [...runners.values()],
       machineId: 'machine_local',
@@ -298,6 +322,7 @@ describe('daemon control server: /stop', () => {
       }),
       spawnSession: async () => ({ type: 'success', sessionId: 'unused' }),
       requestShutdown,
+      requestSelfRestart,
       onHappySessionWebhook: () => {},
       controlToken: 'test-token',
     });
@@ -311,6 +336,14 @@ describe('daemon control server: /stop', () => {
       expect(response.json()).toEqual({ status: 'session_cleanup_incomplete' });
       await new Promise((resolve) => setTimeout(resolve, 75));
       expect(requestShutdown).not.toHaveBeenCalled();
+
+      const restartResponse = await app.inject({
+        method: 'POST', url: '/restart',
+        headers: { 'x-happier-daemon-token': 'test-token' },
+      });
+      expect(restartResponse.statusCode).toBe(202);
+      expect(restartResponse.json()).toEqual({ status: 'restarting' });
+      expect(requestSelfRestart).toHaveBeenCalledOnce();
     } finally {
       await app.close();
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');

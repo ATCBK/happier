@@ -31,6 +31,29 @@ describe('Machine current access (real SQLite)', () => {
     }
     const grant = (actorAccountId: string, machineId: string, accountId: string, level: 'view' | 'admin' = 'view') => inTx(tx => access.setMachineAccessGrantInTx(tx, { actorAccountId, machineId, principal: { kind: 'account', accountId }, level }));
 
+    it('keeps owned and foreign admission decisions in one mixed batch, including refusals', async () => {
+        const owned = await fixture();
+        const shared = await fixture();
+        const hidden = await fixture();
+        await grant(shared.owner.id, shared.machine.id, owned.owner.id);
+        const revoked = await db.machine.create({ data: { ...owned.machine, id: crypto.randomUUID(), revokedAt: new Date() } });
+        const missingId = crypto.randomUUID();
+        const read = () => inTx(tx => access.resolveMachineAdmissionsInTx(tx, { actorAccountId: owned.owner.id,
+            machineIds: [owned.machine.id, shared.machine.id, hidden.machine.id, revoked.id, missingId] }));
+        const admitted = await read();
+        expect(admitted.get(owned.machine.id)).toMatchObject({ kind: 'admitted', role: 'manage', custodianAccountId: owned.owner.id });
+        expect(admitted.get(shared.machine.id)).toMatchObject({ kind: 'admitted', role: 'use', custodianAccountId: shared.owner.id });
+        expect(admitted.get(hidden.machine.id)).toEqual({ kind: 'denied', code: 'access_denied' });
+        expect(admitted.get(revoked.id)).toEqual({ kind: 'denied', code: 'machine_unavailable' });
+        expect(admitted.get(missingId)).toEqual({ kind: 'denied', code: 'access_denied' });
+        await inTx(tx => access.removeMachineAccessGrantInTx(tx, { actorAccountId: shared.owner.id,
+            machineId: shared.machine.id, principal: { kind: 'account', accountId: owned.owner.id } }));
+        await db.account.update({ where: { id: owned.owner.id }, data: { status: 'suspended' } });
+        const refused = await read();
+        expect(refused.get(owned.machine.id)).toEqual({ kind: 'denied', code: 'access_denied' });
+        expect(refused.get(shared.machine.id)).toEqual({ kind: 'denied', code: 'access_denied' });
+    });
+
     it('admits the requester-owned spawn Action for Can use while refusing raw private spawn RPCs', async () => {
         const f = await fixture();
         const requester = await account();

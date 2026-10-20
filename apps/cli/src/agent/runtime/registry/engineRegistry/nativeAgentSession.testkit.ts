@@ -3,6 +3,65 @@ import type { ResolvedAgentContribution, ResolvedAgentRuntimeContribution } from
 import { createNativeAgentRuntimeSessionPlan, type NativeAgentSessionHostServiceOwners } from './nativeAgentSession';
 import type { HostSessionRuntimeFactoryParams } from '@/agent/runtime/session/loop/runHostSessionRuntime';
 import { createCurrentSessionPresentationHost } from '@/session/presentation/currentSessionPresentationService';
+import axios from 'axios';
+import { onTestFinished, vi } from 'vitest';
+import { createInstalledProjectAgentLaunchFixture } from '@/daemon/testkit/installedProjectAgentLaunchFixture';
+import { createRunnerAgentProjectLaunchInvocation } from '@/daemon/agentRuntime/runnerAgentProjectLaunch';
+import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+
+/** Real captured requester and Project preparation, with only Home/OS boundaries supplied by the installed fixture. */
+export async function createNativeAgentLaunchPreparationFixture() {
+    const previousGet = axios.get;
+    const previousPost = axios.post;
+    const previousGetImplementation = vi.isMockFunction(previousGet) ? previousGet.getMockImplementation() : undefined;
+    const previousPostImplementation = vi.isMockFunction(previousPost) ? previousPost.getMockImplementation() : undefined;
+    const previousFetch = globalThis.fetch;
+    const fixture = await createInstalledProjectAgentLaunchFixture();
+    const homeGet = vi.mocked(axios.get).getMockImplementation();
+    const homePost = vi.mocked(axios.post).getMockImplementation();
+    if (!homeGet || !homePost) throw new Error('Installed Home transport fixture is unavailable');
+    const homeFetch = globalThis.fetch;
+    // Preserve unrelated transport boundaries (notably real local hook HTTP).
+    globalThis.fetch = (input, init) => new URL(String(input)).hostname === 'session-home.test'
+        ? homeFetch(input, init) : previousFetch(input, init);
+    onTestFinished(() => {
+        axios.get = previousGet;
+        axios.post = previousPost;
+        if (previousGetImplementation && vi.isMockFunction(previousGet)) previousGet.mockImplementation(previousGetImplementation);
+        if (previousPostImplementation && vi.isMockFunction(previousPost)) previousPost.mockImplementation(previousPostImplementation);
+        globalThis.fetch = previousFetch;
+    });
+    const projectLaunchContext = {
+        requester: { bootstrap: fixture.f.bootstrap, isCurrent: fixture.f.bootstrap.isCurrent },
+        isCurrent: fixture.f.isHomeCurrent,
+        resolveRuntime: (ingress: Parameters<typeof fixture.machine.resolveProjectFiniteRuntime>[0]) => fixture.machine.resolveProjectFiniteRuntime(ingress),
+    };
+    return {
+        homeGet, homePost, projectLaunchContext,
+        prepare(cwd: string, signal: AbortSignal) {
+            const invocation = createRunnerAgentProjectLaunchInvocation({ ...projectLaunchContext, cwd, signal });
+            onTestFinished(() => invocation.disposeProjectAgentLaunch());
+            return invocation.prepareAgentNativeLaunch;
+        },
+    };
+}
+
+/** Bind the same caller-owned preparation used by runner composition to real invocation services. */
+export function bindNativeAgentLaunchPreparationFixture(
+    registry: ResolvedExecutablePluginRuntimeRegistry,
+    preparation: Awaited<ReturnType<typeof createNativeAgentLaunchPreparationFixture>>,
+): ResolvedExecutablePluginRuntimeRegistry {
+    const createServices = registry.createAgentInvocationServices;
+    if (!createServices) throw new Error('Admitted Agent invocation services are unavailable');
+    return Object.freeze({
+        ...registry,
+        createAgentInvocationServices: input => createServices({
+            ...input,
+            prepareAgentNativeLaunch: preparation.prepare(input.cwd, input.signal),
+        }),
+    });
+}
 
 export type NativeAgentRuntimeSessionFixtureParams = Omit<HostSessionRuntimeFactoryParams, 'currentSessionPresentation'>;
 
@@ -40,7 +99,11 @@ export function createNativeSessionClientTestPort(sessionId: string, overrides: 
         path: '/tmp/test', host: 'test', homeDir: '/tmp', happyHomeDir: '/tmp/.happier',
         happyLibDir: '/tmp/.happier/lib', happyToolsDir: '/tmp/.happier/tools',
     };
-    const handlers = new Map<string, (input: unknown) => unknown>();
+    const rpc = new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' });
+    const rpcHandlerManager = Object.assign(rpc, {
+        registerHandler: rpc.registerHandler.bind(rpc),
+        invokeLocal: rpc.invokeLocal.bind(rpc),
+    });
     const metadataListeners = new Set<() => void>();
     const updateMetadata = async (updater: (state: Record<string, unknown>) => Record<string, unknown>) => {
         metadata = updater(metadata);
@@ -48,10 +111,7 @@ export function createNativeSessionClientTestPort(sessionId: string, overrides: 
     };
     return {
         sessionId,
-        rpcHandlerManager: {
-            registerHandler: (method: string, handler: (input: unknown) => unknown) => handlers.set(method, handler),
-            invokeLocal: async (method: string, input: unknown) => await handlers.get(method)?.(input),
-        },
+        rpcHandlerManager,
         updateAgentState: async (updater: (state: Record<string, unknown>) => Record<string, unknown>) => { agentState = updater(agentState); },
         updateMetadata, updateMetadataAsCurrentPublisher: updateMetadata,
         getMetadataSnapshot: () => metadata, getAgentStateSnapshot: () => agentState,

@@ -31,7 +31,7 @@ import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import { accountSettingsScopeKeySuffix } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createExistingSessionDirectoryPreflightResult, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -323,6 +323,9 @@ installDisconnectedServerSocketBoundary((socket) => {
 
 // Fake the external daemon ACK, preserving real scoped RPC/Account routing.
 async function dispatchMachineRpc(method: string, payload: unknown) {
+    if (method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT) {
+      return createExistingSessionDirectoryPreflightResult(payload);
+    }
     if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
       return { error: 'Method not found', errorCode: 'RPC_METHOD_NOT_FOUND' };
     }
@@ -529,7 +532,8 @@ describe('VoiceExecutionTransport (persistence)', () => {
 
     await expect(controller.sendTurn('s1', 'hello')).rejects.toMatchObject({
       message: expect.stringContaining('Experimental Features > Voice Agent'),
-      code: 'VOICE_AGENT_RUNTIME_UNAVAILABLE',
+      code: 'VOICE_TEXT_TURN_REJECTED_BEFORE_EFFECT',
+      pendingDeliveryBlockedReason: 'provider_unavailable_before_acceptance',
       featureDecision: expect.objectContaining({
         featureId: 'voice.agent',
         blockedBy: 'local_policy',
@@ -1306,7 +1310,8 @@ describe('VoiceExecutionTransport (persistence)', () => {
 
     await expect(controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello')).rejects.toMatchObject({
       message: 'Target session is inactive. Resume it before starting local voice.',
-      code: 'VOICE_AGENT_TARGET_SESSION_INACTIVE',
+      code: 'VOICE_TEXT_TURN_REJECTED_BEFORE_EFFECT',
+      pendingDeliveryBlockedReason: 'provider_unavailable_before_acceptance',
     });
 
     expect(daemonStart).not.toHaveBeenCalled();
@@ -1337,7 +1342,8 @@ describe('VoiceExecutionTransport (persistence)', () => {
 
     await expect(controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello')).rejects.toMatchObject({
       message: 'Target session is offline. Reconnect it before starting local voice.',
-      code: 'VOICE_AGENT_TARGET_SESSION_OFFLINE',
+      code: 'VOICE_TEXT_TURN_REJECTED_BEFORE_EFFECT',
+      pendingDeliveryBlockedReason: 'provider_unavailable_before_acceptance',
     });
 
     expect(daemonStart).not.toHaveBeenCalled();
@@ -1382,7 +1388,8 @@ describe('VoiceExecutionTransport (persistence)', () => {
 
     await expect(controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello')).rejects.toMatchObject({
       message: 'Target machine daemon is offline. Start or reconnect the daemon before starting local voice.',
-      code: 'VOICE_AGENT_TARGET_MACHINE_OFFLINE',
+      code: 'VOICE_TEXT_TURN_REJECTED_BEFORE_EFFECT',
+      pendingDeliveryBlockedReason: 'provider_unavailable_before_acceptance',
     });
 
     expect(daemonStart).not.toHaveBeenCalled();
@@ -1413,7 +1420,8 @@ describe('VoiceExecutionTransport (persistence)', () => {
 
     await expect(controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello')).rejects.toMatchObject({
       message: 'Target session provider does not support local voice control.',
-      code: 'VOICE_AGENT_TARGET_SESSION_UNSUPPORTED',
+      code: 'VOICE_TEXT_TURN_REJECTED_BEFORE_EFFECT',
+      pendingDeliveryBlockedReason: 'provider_unavailable_before_acceptance',
     });
 
     expect(daemonStart).not.toHaveBeenCalled();

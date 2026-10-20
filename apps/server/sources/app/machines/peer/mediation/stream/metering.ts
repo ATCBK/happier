@@ -12,6 +12,8 @@ export function applyMachineLiveStreamRelayBackpressure(input: Readonly<{
     capIntervalExceeded: boolean;
 }>): Readonly<{
     frames: readonly MachineLiveStreamFrameV1[];
+    framesDropped: number;
+    bytesDropped: number;
     receipt: MachineLiveStreamReceiptV1 | null;
     requiresKeyframeResync: boolean;
 }> {
@@ -23,6 +25,8 @@ export function applyMachineLiveStreamRelayBackpressure(input: Readonly<{
 
     return {
         frames: dropped.frames,
+        framesDropped: dropped.framesDropped,
+        bytesDropped: dropped.bytesDropped,
         requiresKeyframeResync: dropped.requiresKeyframeResync,
         receipt: input.capIntervalExceeded && dropped.framesDropped > 0
             ? {

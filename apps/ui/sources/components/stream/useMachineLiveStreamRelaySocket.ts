@@ -71,5 +71,8 @@ export function useMachineLiveStreamRelaySocket(input: Readonly<{
         };
     }, [accountLifetime, enabled, machineId, serverId, tag]);
 
+    const subscribe = React.useCallback((listener: () => void) => socket ? socket.onSocketIdChange(listener) : () => {}, [socket]);
+    const readSocketId = React.useCallback(() => socket?.socketId ?? '', [socket]);
+    React.useSyncExternalStore(subscribe, readSocketId, readSocketId);
     return socket;
 }

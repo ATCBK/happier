@@ -16,7 +16,7 @@ export type WorkflowsActionInputById = {
         };
         inputs?: Record<string, unknown> | undefined;
         target?: {
-            machineId: unknown;
+            machineId: string;
         } | undefined;
     };
     readonly "workflow.run.start": {
@@ -31,10 +31,11 @@ export type WorkflowsActionInputById = {
                 roles?: unknown;
                 finalOutput?: unknown;
             };
-            sourceArtifactId?: unknown;
-            visibleTeamId?: unknown;
+            sourceArtifactId?: string | undefined;
+            visibleTeamId?: string | undefined;
             replay?: {
-                runId: unknown;
+                runId: string;
+                intent?: 'another_round' | undefined;
                 agentOverride?: {
                     sourceKey: string;
                     blockId: string;
@@ -68,12 +69,12 @@ export type WorkflowsActionInputById = {
             } | undefined;
         } | {
             kind: 'saved';
-            definitionId: unknown;
+            definitionId: string;
             revision: {
                 headerVersion: number;
                 bodyVersion: number;
             };
-            visibleTeamId?: unknown;
+            visibleTeamId?: string | undefined;
         } | {
             kind: 'catalog';
             workflow: string;
@@ -105,62 +106,75 @@ export type WorkflowsActionInputById = {
             profileId?: string | undefined;
             workspaceWrites?: 'allow' | 'deny' | undefined;
             secondOpinion?: 'off' | 'encouraged' | undefined;
+            canDelegateToOtherRoles?: boolean | undefined;
         }[] | undefined;
+        origin?: {
+            kind: 'discussion';
+            discussion: {
+                serverId: string;
+                discussionId: string;
+            };
+            addressingMessageId: string;
+        } | undefined;
         onComplete?: {
             kind: 'originating_session';
+        } | {
+            kind: 'originating_discussion';
         } | undefined;
     };
     readonly "workflow.run.list": {
         cursor?: string | undefined;
         limit?: number | undefined;
-        runId?: unknown;
-        runIds?: unknown[] | undefined;
+        runId?: string | undefined;
+        runIds?: string[] | undefined;
         invocationProvenance?: {
-            runId: unknown;
-            invocationRecordIds: unknown[];
+            runId: string;
+            invocationRecordIds: string[];
         }[] | undefined;
-        sourceArtifactId?: unknown;
+        sourceArtifactId?: string | undefined;
         origin?: 'automation' | 'direct' | undefined;
         states?: ('queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review')[] | undefined;
         attention?: 'required' | undefined;
-        originSessionId?: unknown;
-        targetSessionId?: unknown;
-        automationId?: unknown;
-        machineId?: unknown;
+        originSessionId?: string | undefined;
+        originDiscussionId?: string | undefined;
+        targetSessionId?: string | undefined;
+        underSessionId?: string | undefined;
+        automationId?: string | undefined;
+        machineId?: string | undefined;
     };
     readonly "workflow.run.summaries": {
-        sourceArtifactIds: unknown[];
+        sourceArtifactIds: string[];
         recent: number;
     };
     readonly "workflow.run.get": {
-        runId: unknown;
+        runId: string;
     };
     readonly "workflow.run.wait": {
-        runId: unknown;
+        runId: string;
         conditions?: ('paused' | 'attention' | 'terminal')[] | undefined;
         timeoutSeconds?: number | undefined;
     };
     readonly "workflow.run.pause": {
-        runId: unknown;
+        runId: string;
         expectedRevision: number;
     };
     readonly "workflow.run.resume": {
         mode: 'boundary';
-        runId: unknown;
+        runId: string;
         expectedRevision: number;
     } | {
         mode: 'recover';
-        runId: unknown;
+        runId: string;
         expectedRevision: number;
         invocations: ({
             kind: 'reattach';
             invocation: {
-                recordId: unknown;
+                recordId: string;
             };
         } | {
             kind: 'continue';
             invocation: {
-                recordId: unknown;
+                recordId: string;
             };
             conversation: 'same_conversation' | 'fresh_agent';
             input: {
@@ -181,13 +195,13 @@ export type WorkflowsActionInputById = {
                             pluginId: string;
                             localId: string;
                         };
-                        key: unknown;
+                        key: string;
                         value: unknown;
                         presentation: {
-                            label: unknown;
-                            typeLabel: unknown;
-                            description?: unknown;
-                            icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                            label: string;
+                            typeLabel: string;
+                            description?: string | undefined;
+                            icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                     }[] | undefined;
@@ -199,7 +213,7 @@ export type WorkflowsActionInputById = {
         } | {
             kind: 'restore_workspace';
             invocation: {
-                recordId: unknown;
+                recordId: string;
             };
             conversation: 'same_conversation' | 'fresh_agent';
             input: {
@@ -224,13 +238,13 @@ export type WorkflowsActionInputById = {
                                 pluginId: string;
                                 localId: string;
                             };
-                            key: unknown;
+                            key: string;
                             value: unknown;
                             presentation: {
-                                label: unknown;
-                                typeLabel: unknown;
-                                description?: unknown;
-                                icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                                label: string;
+                                typeLabel: string;
+                                description?: string | undefined;
+                                icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
                                 tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                             };
                         }[] | undefined;
@@ -243,28 +257,28 @@ export type WorkflowsActionInputById = {
         })[];
     };
     readonly "workflow.run.cancel": {
-        runId: unknown;
+        runId: string;
         expectedRevision: number;
     };
     readonly "workflow.run.invocations.list": {
-        runId: unknown;
+        runId: string;
         cursor?: string | undefined;
         limit?: number | undefined;
-        parentRecordId?: unknown;
+        parentRecordId?: string | undefined;
         lifecycles?: ('running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded')[] | undefined;
         includeContent?: boolean | undefined;
     };
     readonly "workflow.run.invocations.get": {
-        runId: unknown;
-        invocationId: unknown;
+        runId: string;
+        invocationId: string;
     };
     readonly "workflow.run.invocations.retry": {
-        runId: unknown;
+        runId: string;
         expectedRevision: number;
         invocation: {
-            recordId: unknown;
+            recordId: string;
         };
-        causalInvocationIds: unknown[];
+        causalInvocationIds: string[];
         conversation: 'same_conversation' | 'fresh_agent';
         input: {
             kind: 'original';
@@ -288,13 +302,13 @@ export type WorkflowsActionInputById = {
                             pluginId: string;
                             localId: string;
                         };
-                        key: unknown;
+                        key: string;
                         value: unknown;
                         presentation: {
-                            label: unknown;
-                            typeLabel: unknown;
-                            description?: unknown;
-                            icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                            label: string;
+                            typeLabel: string;
+                            description?: string | undefined;
+                            icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
                             tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                         };
                     }[] | undefined;
@@ -306,36 +320,36 @@ export type WorkflowsActionInputById = {
         acknowledgeUncertainPriorEffects?: true | undefined;
     };
     readonly "workflow.run.delete": {
-        runId: unknown;
+        runId: string;
         expectedRevision: number;
     };
     readonly "workflow.run.invocations.publish_draft": {
         value: unknown;
-        runId: unknown;
+        runId: string;
         invocation: {
-            recordId: unknown;
+            recordId: string;
         };
         expectedContentRevision: string;
     };
     readonly "workflow.run.invocations.complete_review": {
         mode: 'use_result';
-        runId: unknown;
+        runId: string;
         invocation: {
-            recordId: unknown;
+            recordId: string;
         };
         expectedContentRevision: string;
         value?: unknown;
         followUp?: {
             kind: 'run_started';
-            runId: unknown;
+            runId: string;
         } | {
             kind: 'editing';
         } | undefined;
     } | {
         mode: 'generate';
-        runId: unknown;
+        runId: string;
         invocation: {
-            recordId: unknown;
+            recordId: string;
         };
         expectedContentRevision: string;
         acknowledgeUncertainPriorEffects?: true | undefined;
@@ -345,7 +359,7 @@ export type WorkflowsActionInputById = {
         limit?: number | undefined;
     };
     readonly "workflow.definition.get": {
-        definitionId: unknown;
+        definitionId: string;
     };
     readonly "workflow.definition.create": {
         definitionId: string;
@@ -363,7 +377,7 @@ export type WorkflowsActionInputById = {
         };
     };
     readonly "workflow.definition.update": {
-        definitionId: unknown;
+        definitionId: string;
         expectedRevision: {
             headerVersion: number;
             bodyVersion: number;
@@ -382,7 +396,7 @@ export type WorkflowsActionInputById = {
         };
     };
     readonly "workflow.definition.edit": {
-        definitionId: unknown;
+        definitionId: string;
         expectedRevision: {
             headerVersion: number;
             bodyVersion: number;
@@ -540,6 +554,9 @@ export type WorkflowsActionInputById = {
                 kind: 'fresh';
             } | {
                 kind: 'origin_session';
+            } | {
+                kind: 'input';
+                name: string;
             } | {
                 kind: 'from_step';
                 producer: {
@@ -757,6 +774,9 @@ export type WorkflowsActionInputById = {
             } | {
                 kind: 'origin_session';
             } | {
+                kind: 'input';
+                name: string;
+            } | {
                 kind: 'from_step';
                 producer: {
                     blockId: string;
@@ -867,8 +887,10 @@ export type WorkflowsActionInputById = {
                 name: string;
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
+                multiple?: boolean | undefined;
                 enum?: string[] | undefined;
                 default?: unknown;
+                defaultFrom?: 'origin_session' | undefined;
                 description?: string | undefined;
                 optionsSourceId?: string | undefined;
                 inputType?: {
@@ -878,7 +900,7 @@ export type WorkflowsActionInputById = {
                     hostType: 'usageQuery';
                     field?: 'session' | 'period' | undefined;
                 } | {
-                    hostType: 'session' | 'workspace' | 'machine';
+                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                 } | undefined;
             }[];
         } | {
@@ -911,13 +933,13 @@ export type WorkflowsActionInputById = {
         })[];
     };
     readonly "workflow.definition.delete": {
-        definitionId: unknown;
+        definitionId: string;
     };
     readonly "workflow.definition.import": {
         json: string;
     };
     readonly "workflow.definition.export": {
-        definitionId: unknown;
+        definitionId: string;
     };
     readonly "workflow.trigger.list": {
         workflow: string;
@@ -1100,12 +1122,12 @@ export type WorkflowsActionInputById = {
             enabled: boolean;
         };
         project: {
-            machineId: unknown;
+            machineId: string;
             directory: string;
-            workspaceRefId?: unknown;
+            workspaceRefId?: string | undefined;
         };
         inputs?: Record<string, unknown> | undefined;
-        visibleTeamId?: unknown;
+        visibleTeamId?: string | null | undefined;
         executionTarget?: {
             kind: 'session';
         } | {
@@ -1127,6 +1149,7 @@ export type WorkflowsActionInputById = {
             profileId?: string | undefined;
             workspaceWrites?: 'allow' | 'deny' | undefined;
             secondOpinion?: 'off' | 'encouraged' | undefined;
+            canDelegateToOtherRoles?: boolean | undefined;
         }[] | undefined;
         workflow?: string | undefined;
         target?: {
@@ -1140,8 +1163,10 @@ export type WorkflowsActionInputById = {
                     name: string;
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
+                    multiple?: boolean | undefined;
                     enum?: string[] | undefined;
                     default?: JsonValue | undefined;
+                    defaultFrom?: 'origin_session' | undefined;
                     description?: string | undefined;
                     optionsSourceId?: string | undefined;
                     inputType?: {
@@ -1151,7 +1176,7 @@ export type WorkflowsActionInputById = {
                         hostType: 'usageQuery';
                         field?: 'session' | 'period' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                 }[];
                 defaults: {
@@ -1283,6 +1308,9 @@ export type WorkflowsActionInputById = {
                     } | {
                         kind: 'origin_session';
                     } | {
+                        kind: 'input';
+                        name: string;
+                    } | {
                         kind: 'from_step';
                         producer: {
                             blockId: string;
@@ -1368,6 +1396,23 @@ export type WorkflowsActionInputById = {
                             updatedAt: number;
                         } | null | undefined;
                         effort?: string | undefined;
+                    } | {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
+                    } | undefined;
+                    participant?: {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
                     } | undefined;
                     executionTarget?: {
                         kind: 'session';
@@ -1391,6 +1436,7 @@ export type WorkflowsActionInputById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 } | {
                     roleId: string;
                     name: string;
@@ -1409,6 +1455,7 @@ export type WorkflowsActionInputById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 })[] | undefined;
                 blocks: readonly PluginActionWorkflowBlockV1<true>[];
                 finalOutput?: {
@@ -1446,8 +1493,10 @@ export type WorkflowsActionInputById = {
                         name: string;
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
+                        multiple?: boolean | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
+                        defaultFrom?: 'origin_session' | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -1457,7 +1506,7 @@ export type WorkflowsActionInputById = {
                             hostType: 'usageQuery';
                             field?: 'session' | 'period' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                     }[];
                     defaults: {
@@ -1589,6 +1638,9 @@ export type WorkflowsActionInputById = {
                         } | {
                             kind: 'origin_session';
                         } | {
+                            kind: 'input';
+                            name: string;
+                        } | {
                             kind: 'from_step';
                             producer: {
                                 blockId: string;
@@ -1674,6 +1726,23 @@ export type WorkflowsActionInputById = {
                                 updatedAt: number;
                             } | null | undefined;
                             effort?: string | undefined;
+                        } | {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
+                        } | undefined;
+                        participant?: {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -1697,6 +1766,7 @@ export type WorkflowsActionInputById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     } | {
                         roleId: string;
                         name: string;
@@ -1715,6 +1785,7 @@ export type WorkflowsActionInputById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     })[] | undefined;
                     blocks: readonly PluginActionWorkflowBlockV1<true>[];
                     finalOutput?: {
@@ -1902,7 +1973,7 @@ export type WorkflowsActionInputById = {
                 };
             } | undefined;
             inputs?: Record<string, unknown> | undefined;
-            visibleTeamId?: unknown;
+            visibleTeamId?: string | null | undefined;
             executionTarget?: {
                 kind: 'session';
             } | {
@@ -1924,11 +1995,12 @@ export type WorkflowsActionInputById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             }[] | undefined;
             project?: {
-                machineId: unknown;
+                machineId: string;
                 directory: string;
-                workspaceRefId?: unknown;
+                workspaceRefId?: string | undefined;
             } | undefined;
         };
         triggerId?: string | undefined;
@@ -2136,8 +2208,10 @@ export type WorkflowsActionInputById = {
                     name: string;
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
+                    multiple?: boolean | undefined;
                     enum?: string[] | undefined;
                     default?: JsonValue | undefined;
+                    defaultFrom?: 'origin_session' | undefined;
                     description?: string | undefined;
                     optionsSourceId?: string | undefined;
                     inputType?: {
@@ -2147,7 +2221,7 @@ export type WorkflowsActionInputById = {
                         hostType: 'usageQuery';
                         field?: 'session' | 'period' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                 }[];
                 defaults: {
@@ -2279,6 +2353,9 @@ export type WorkflowsActionInputById = {
                     } | {
                         kind: 'origin_session';
                     } | {
+                        kind: 'input';
+                        name: string;
+                    } | {
                         kind: 'from_step';
                         producer: {
                             blockId: string;
@@ -2364,6 +2441,23 @@ export type WorkflowsActionInputById = {
                             updatedAt: number;
                         } | null | undefined;
                         effort?: string | undefined;
+                    } | {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
+                    } | undefined;
+                    participant?: {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
                     } | undefined;
                     executionTarget?: {
                         kind: 'session';
@@ -2387,6 +2481,7 @@ export type WorkflowsActionInputById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 } | {
                     roleId: string;
                     name: string;
@@ -2405,6 +2500,7 @@ export type WorkflowsActionInputById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 })[] | undefined;
                 blocks: readonly PluginActionWorkflowBlockV1<true>[];
                 finalOutput?: {
@@ -2427,7 +2523,7 @@ export type WorkflowsActionInputById = {
             }>;
         };
         inputs?: Record<string, unknown> | undefined;
-        visibleTeamId?: unknown;
+        visibleTeamId?: string | null | undefined;
         executionTarget?: {
             kind: 'session';
         } | {
@@ -2449,14 +2545,15 @@ export type WorkflowsActionInputById = {
             profileId?: string | undefined;
             workspaceWrites?: 'allow' | 'deny' | undefined;
             secondOpinion?: 'off' | 'encouraged' | undefined;
+            canDelegateToOtherRoles?: boolean | undefined;
         }[] | undefined;
         onComplete?: {
             kind: 'originating_session';
         } | undefined;
         project?: {
-            machineId: unknown;
+            machineId: string;
             directory: string;
-            workspaceRefId?: unknown;
+            workspaceRefId?: string | undefined;
         } | undefined;
     };
     readonly "session.trigger.update": {
@@ -2475,8 +2572,10 @@ export type WorkflowsActionInputById = {
                         name: string;
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
+                        multiple?: boolean | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
+                        defaultFrom?: 'origin_session' | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -2486,7 +2585,7 @@ export type WorkflowsActionInputById = {
                             hostType: 'usageQuery';
                             field?: 'session' | 'period' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                     }[];
                     defaults: {
@@ -2618,6 +2717,9 @@ export type WorkflowsActionInputById = {
                         } | {
                             kind: 'origin_session';
                         } | {
+                            kind: 'input';
+                            name: string;
+                        } | {
                             kind: 'from_step';
                             producer: {
                                 blockId: string;
@@ -2703,6 +2805,23 @@ export type WorkflowsActionInputById = {
                                 updatedAt: number;
                             } | null | undefined;
                             effort?: string | undefined;
+                        } | {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
+                        } | undefined;
+                        participant?: {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -2726,6 +2845,7 @@ export type WorkflowsActionInputById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     } | {
                         roleId: string;
                         name: string;
@@ -2744,6 +2864,7 @@ export type WorkflowsActionInputById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     })[] | undefined;
                     blocks: readonly PluginActionWorkflowBlockV1<true>[];
                     finalOutput?: {
@@ -2766,9 +2887,9 @@ export type WorkflowsActionInputById = {
                 }>;
             } | undefined;
             project?: {
-                machineId: unknown;
+                machineId: string;
                 directory: string;
-                workspaceRefId?: unknown;
+                workspaceRefId?: string | undefined;
             } | undefined;
             enabled?: boolean | undefined;
             trigger?: {
@@ -2942,7 +3063,7 @@ export type WorkflowsActionInputById = {
                 } | undefined;
             } | undefined;
             inputs?: Record<string, unknown> | undefined;
-            visibleTeamId?: unknown;
+            visibleTeamId?: string | null | undefined;
             executionTarget?: {
                 kind: 'session';
             } | {
@@ -2964,6 +3085,7 @@ export type WorkflowsActionInputById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             }[] | undefined;
             onComplete?: {
                 kind: 'originating_session';
@@ -2992,8 +3114,10 @@ export type WorkflowsActionResultById = {
                 name: string;
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
+                multiple?: boolean | undefined;
                 enum?: string[] | undefined;
                 default?: JsonValue | undefined;
+                defaultFrom?: 'origin_session' | undefined;
                 description?: string | undefined;
                 optionsSourceId?: string | undefined;
                 inputType?: {
@@ -3003,7 +3127,7 @@ export type WorkflowsActionResultById = {
                     hostType: 'usageQuery';
                     field?: 'session' | 'period' | undefined;
                 } | {
-                    hostType: 'session' | 'workspace' | 'machine';
+                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                 } | undefined;
             }[];
             defaults: {
@@ -3135,6 +3259,9 @@ export type WorkflowsActionResultById = {
                 } | {
                     kind: 'origin_session';
                 } | {
+                    kind: 'input';
+                    name: string;
+                } | {
                     kind: 'from_step';
                     producer: {
                         blockId: string;
@@ -3220,6 +3347,23 @@ export type WorkflowsActionResultById = {
                         updatedAt: number;
                     } | null | undefined;
                     effort?: string | undefined;
+                } | {
+                    kind: 'input';
+                    name: string;
+                    path?: (string | number)[] | undefined;
+                } | {
+                    kind: 'item';
+                    field: 'value';
+                    path?: (string | number)[] | undefined;
+                } | undefined;
+                participant?: {
+                    kind: 'input';
+                    name: string;
+                    path?: (string | number)[] | undefined;
+                } | {
+                    kind: 'item';
+                    field: 'value';
+                    path?: (string | number)[] | undefined;
                 } | undefined;
                 executionTarget?: {
                     kind: 'session';
@@ -3243,6 +3387,7 @@ export type WorkflowsActionResultById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             } | {
                 roleId: string;
                 name: string;
@@ -3261,6 +3406,7 @@ export type WorkflowsActionResultById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             })[] | undefined;
             blocks: readonly PluginActionWorkflowBlockV1[];
             finalOutput?: {
@@ -3284,18 +3430,156 @@ export type WorkflowsActionResultById = {
     };
     readonly "workflow.run.start": {
         run: {
-            [x: string]: any;
+            sourceArtifactId: string | null;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
-                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
+                cause?: {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'schedule';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        scheduledFor: number;
+                    };
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'pluginEvent';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        eventRef: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        sourceSelectorId: string;
+                    };
+                } | {
+                    evidence: {
+                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionStarted';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
+                    } | {
+                        event: 'userActionRequired';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        requestId: string;
+                        requestKind: 'permission' | 'user_action';
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    };
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'sessionLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'runLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        source: {
+                            kind: 'execution_run';
+                            machineId: string;
+                            runId: string;
+                            sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
+                        } | {
+                            kind: 'workflow_run';
+                            runId: string;
+                        };
+                        condition: 'terminal' | 'needs_attention';
+                        sourceRevision: number;
+                        originRunId?: string | undefined;
+                    };
+                } | {
+                    kind: 'manual';
+                    invokedAt: number;
+                } | {
+                    kind: 'conversation';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    triggerId?: (string) | undefined;
+                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -3315,10 +3599,25 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
+            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: any[] | undefined;
+                destinations?: {
+                    sourceKey: string;
+                    blockId: string;
+                    sessionIds: string[];
+                    ordinal?: number | undefined;
+                    name?: string | undefined;
+                    observation?: {
+                        recordId: string;
+                        sequence: string;
+                        attempt: string;
+                        contentRevision: string;
+                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
+                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
+                    } | undefined;
+                }[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -3335,25 +3634,169 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
+            where?: {
+                machineId: string;
+                directory: string;
+                workspaceRefId?: string | undefined;
+            } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         admission: 'created' | 'existing';
     };
     readonly "workflow.run.list": {
         runs: {
-            [x: string]: any;
+            sourceArtifactId: string | null;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
-                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
+                cause?: {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'schedule';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        scheduledFor: number;
+                    };
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'pluginEvent';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        eventRef: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        sourceSelectorId: string;
+                    };
+                } | {
+                    evidence: {
+                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionStarted';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
+                    } | {
+                        event: 'userActionRequired';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        requestId: string;
+                        requestKind: 'permission' | 'user_action';
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    };
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'sessionLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'runLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        source: {
+                            kind: 'execution_run';
+                            machineId: string;
+                            runId: string;
+                            sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
+                        } | {
+                            kind: 'workflow_run';
+                            runId: string;
+                        };
+                        condition: 'terminal' | 'needs_attention';
+                        sourceRevision: number;
+                        originRunId?: string | undefined;
+                    };
+                } | {
+                    kind: 'manual';
+                    invokedAt: number;
+                } | {
+                    kind: 'conversation';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    triggerId?: (string) | undefined;
+                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -3373,10 +3816,25 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
+            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: any[] | undefined;
+                destinations?: {
+                    sourceKey: string;
+                    blockId: string;
+                    sessionIds: string[];
+                    ordinal?: number | undefined;
+                    name?: string | undefined;
+                    observation?: {
+                        recordId: string;
+                        sequence: string;
+                        attempt: string;
+                        contentRevision: string;
+                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
+                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
+                    } | undefined;
+                }[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -3393,7 +3851,13 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
+            where?: {
+                machineId: string;
+                directory: string;
+                workspaceRefId?: string | undefined;
+            } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         }[];
         metadataByRunId: Record<string, {
@@ -3404,14 +3868,18 @@ export type WorkflowsActionResultById = {
             };
         } | {
             kind: 'unavailable';
-            reason: 'missing_reference' | 'invalid_reference_scope' | 'invalid_input' | 'target_unavailable' | 'run_not_found' | 'not_authenticated' | 'subtree_denied' | 'role_target_unavailable' | 'role_runs_as_mismatch' | 'policy_denied_field' | 'permission_exceeds_ceiling' | 'work_depth_exceeded' | 'definition_exceeds_authority' | 'run_access_denied' | 'currentness_conflict' | 'workflow_input_too_large' | 'workflow_outcome_unresolved' | 'workflow_interaction_capacity_exceeded' | 'workflow_conversation_unavailable' | 'continuation_unavailable' | 'workflow_workspace_restore_unavailable' | 'workflow_workspace_restore_failed' | 'workflow_wait_self_dependency' | 'ineligible_state' | 'custody_pending' | 'content_unavailable' | 'source_unavailable' | 'legacy_conversion_unsupported' | 'history_not_readable' | 'encryption_setup_required' | 'waiting_for_keys' | 'storage_unavailable' | 'native_goal_owner' | 'session_already_started';
+            reason: 'missing_reference' | 'invalid_reference_scope' | 'invalid_input' | 'target_unavailable' | 'run_not_found' | 'not_authenticated' | 'subtree_denied' | 'role_target_unavailable' | 'role_runs_as_mismatch' | 'policy_denied_field' | 'permission_exceeds_ceiling' | 'work_depth_exceeded' | 'definition_exceeds_authority' | 'run_access_denied' | 'currentness_conflict' | 'workflow_input_too_large' | 'workflow_outcome_unresolved' | 'workflow_http_error' | 'workflow_interaction_capacity_exceeded' | 'workflow_conversation_unavailable' | 'continuation_unavailable' | 'workflow_workspace_restore_unavailable' | 'workflow_workspace_restore_failed' | 'workflow_wait_self_dependency' | 'ineligible_state' | 'custody_pending' | 'content_unavailable' | 'source_unavailable' | 'legacy_conversion_unsupported' | 'history_not_readable' | 'encryption_setup_required' | 'waiting_for_keys' | 'storage_unavailable' | 'native_goal_owner' | 'session_already_started';
         }>;
+        supportsAnotherRoundByRunId?: Record<string, boolean> | undefined;
+        callerAccessByRunId?: Record<string, {
+            canEdit: boolean;
+        }> | undefined;
         invocationProvenance?: {
             index: {
-                [x: string]: any;
                 id: string;
                 runId: string;
                 sequence: string;
+                parentRecordId: string | null;
                 memberOrdinal: string;
                 attempt: string;
                 contentRevision: string;
@@ -3444,18 +3912,156 @@ export type WorkflowsActionResultById = {
     };
     readonly "workflow.run.get": {
         run: {
-            [x: string]: any;
+            sourceArtifactId: string | null;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
-                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
+                cause?: {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'schedule';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        scheduledFor: number;
+                    };
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'pluginEvent';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        eventRef: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        sourceSelectorId: string;
+                    };
+                } | {
+                    evidence: {
+                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionStarted';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
+                    } | {
+                        event: 'userActionRequired';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        requestId: string;
+                        requestKind: 'permission' | 'user_action';
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    };
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'sessionLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'runLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        source: {
+                            kind: 'execution_run';
+                            machineId: string;
+                            runId: string;
+                            sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
+                        } | {
+                            kind: 'workflow_run';
+                            runId: string;
+                        };
+                        condition: 'terminal' | 'needs_attention';
+                        sourceRevision: number;
+                        originRunId?: string | undefined;
+                    };
+                } | {
+                    kind: 'manual';
+                    invokedAt: number;
+                } | {
+                    kind: 'conversation';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    triggerId?: (string) | undefined;
+                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -3475,10 +4081,25 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
+            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: any[] | undefined;
+                destinations?: {
+                    sourceKey: string;
+                    blockId: string;
+                    sessionIds: string[];
+                    ordinal?: number | undefined;
+                    name?: string | undefined;
+                    observation?: {
+                        recordId: string;
+                        sequence: string;
+                        attempt: string;
+                        contentRevision: string;
+                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
+                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
+                    } | undefined;
+                }[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -3495,7 +4116,13 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
+            where?: {
+                machineId: string;
+                directory: string;
+                workspaceRefId?: string | undefined;
+            } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         callerAccess: {
@@ -3507,8 +4134,10 @@ export type WorkflowsActionResultById = {
                 name: string;
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
+                multiple?: boolean | undefined;
                 enum?: string[] | undefined;
                 default?: JsonValue | undefined;
+                defaultFrom?: 'origin_session' | undefined;
                 description?: string | undefined;
                 optionsSourceId?: string | undefined;
                 inputType?: {
@@ -3518,7 +4147,7 @@ export type WorkflowsActionResultById = {
                     hostType: 'usageQuery';
                     field?: 'session' | 'period' | undefined;
                 } | {
-                    hostType: 'session' | 'workspace' | 'machine';
+                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                 } | undefined;
             }[];
             defaults: {
@@ -3650,6 +4279,9 @@ export type WorkflowsActionResultById = {
                 } | {
                     kind: 'origin_session';
                 } | {
+                    kind: 'input';
+                    name: string;
+                } | {
                     kind: 'from_step';
                     producer: {
                         blockId: string;
@@ -3735,6 +4367,23 @@ export type WorkflowsActionResultById = {
                         updatedAt: number;
                     } | null | undefined;
                     effort?: string | undefined;
+                } | {
+                    kind: 'input';
+                    name: string;
+                    path?: (string | number)[] | undefined;
+                } | {
+                    kind: 'item';
+                    field: 'value';
+                    path?: (string | number)[] | undefined;
+                } | undefined;
+                participant?: {
+                    kind: 'input';
+                    name: string;
+                    path?: (string | number)[] | undefined;
+                } | {
+                    kind: 'item';
+                    field: 'value';
+                    path?: (string | number)[] | undefined;
                 } | undefined;
                 executionTarget?: {
                     kind: 'session';
@@ -3758,6 +4407,7 @@ export type WorkflowsActionResultById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             } | {
                 roleId: string;
                 name: string;
@@ -3776,6 +4426,7 @@ export type WorkflowsActionResultById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             })[] | undefined;
             blocks: readonly PluginActionWorkflowBlockV1[];
             finalOutput?: {
@@ -3823,7 +4474,6 @@ export type WorkflowsActionResultById = {
                 kind: 'detached_run';
             };
             materializedLeaves: {
-                [x: string]: any;
                 sourceKey: string;
                 blockId: string;
                 kind: 'workflow' | 'action' | 'step' | 'wait';
@@ -3956,6 +4606,9 @@ export type WorkflowsActionResultById = {
                     } | {
                         kind: 'origin_session';
                     } | {
+                        kind: 'input';
+                        name: string;
+                    } | {
                         kind: 'from_step';
                         producer: {
                             blockId: string;
@@ -4017,11 +4670,247 @@ export type WorkflowsActionResultById = {
                         baseRef?: string | null | undefined;
                     } | undefined;
                 };
+                authoredWorkspace: {
+                    kind: 'inherit';
+                } | {
+                    kind: 'project_checkout';
+                } | {
+                    kind: 'from_step';
+                    producer: {
+                        blockId: string;
+                        scope: {
+                            kind: 'current';
+                        } | {
+                            kind: 'previous_iteration';
+                            loopBlockId: string;
+                        } | {
+                            kind: 'outer';
+                            levels: number;
+                        };
+                    };
+                } | {
+                    kind: 'new_worktree';
+                    source: {
+                        kind: 'original';
+                    } | {
+                        kind: 'workflow';
+                    } | {
+                        kind: 'step';
+                        producer: {
+                            blockId: string;
+                            scope: {
+                                kind: 'current';
+                            } | {
+                                kind: 'previous_iteration';
+                                loopBlockId: string;
+                            } | {
+                                kind: 'outer';
+                                levels: number;
+                            };
+                        };
+                    };
+                    displayName?: string | undefined;
+                    baseRef?: string | null | undefined;
+                };
                 executionTarget: {
                     kind: 'session';
                 } | {
                     kind: 'detached_run';
                 };
+                participant?: {
+                    kind: 'session';
+                    session: {
+                        serverId: string;
+                        sessionId: string;
+                    };
+                    machineId: string;
+                } | {
+                    kind: 'model';
+                    launch: {
+                        executionTarget: {
+                            serverId: string;
+                            machineId: string;
+                        };
+                        directory: {
+                            kind: 'path';
+                            path: string;
+                        } | {
+                            kind: 'managed';
+                        };
+                        agentTarget: {
+                            kind: 'agent';
+                            identity: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            definitionId?: string | undefined;
+                        };
+                        placementOrigin?: {
+                            kind: 'machine_pool';
+                            poolId: string;
+                        } | undefined;
+                        organizationPlacement?: {
+                            folderId: string | null;
+                            tagIds: string[];
+                        } | undefined;
+                        roleId?: string | undefined;
+                        modelSelection?: {
+                            v: 1;
+                            ref: {
+                                agentTargetKey: string;
+                                providerConnectionId: null;
+                                modelId: string;
+                            } | {
+                                agentTargetKey: string;
+                                providerConnectionId: string;
+                                modelId: string;
+                            };
+                            updatedAt: number;
+                        } | undefined;
+                        profileId?: string | undefined;
+                        secretReferenceOverlay?: {
+                            v: 1;
+                            bindings: Record<string, {
+                                ref: string;
+                                revision?: number | undefined;
+                            }>;
+                        } | undefined;
+                        permissionMode?: 'default' | 'plan' | 'read-only' | 'safe-yolo' | 'yolo' | undefined;
+                        agentModeId?: string | undefined;
+                        configuration?: {
+                            mode: {
+                                value: string | null;
+                                updatedAtMs: number;
+                            };
+                            model: {
+                                value: string | null;
+                                updatedAtMs: number;
+                            };
+                            permissionIntent: {
+                                value: 'default' | 'plan' | 'read-only' | 'safe-yolo' | 'yolo' | null;
+                                updatedAtMs: number;
+                            };
+                            options: Record<string, {
+                                value: string | number | boolean | null;
+                                updatedAtMs: number;
+                            }>;
+                            workspaceWrites?: 'allow' | 'deny' | undefined;
+                            providerSessionResume?: {
+                                kind: 'provider_session.v1';
+                                providerSessionId: string;
+                            } | undefined;
+                            allowedTools?: string[] | undefined;
+                            unlistedTools?: 'deny' | 'ask' | undefined;
+                        } | undefined;
+                        connectedServices?: {
+                            v: 2;
+                            bindingsByServiceId: Record<string, {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
+                            } | {
+                                source: 'team_resource';
+                                resourceId: string;
+                                deliveryMode: 'direct';
+                                disclosedMember: {
+                                    service: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    accountId: string;
+                                };
+                            } | {
+                                source: 'team_resource';
+                                resourceId: string;
+                                deliveryMode: 'brokered';
+                                disclosedMember?: undefined;
+                            }>;
+                        } | undefined;
+                        capabilitySelection?: {
+                            mcp?: {
+                                forceIncludeServerIds: string[];
+                                forceExcludeServerIds: string[];
+                                v: 1;
+                                managedServersEnabled: boolean;
+                            } | undefined;
+                            skills?: {
+                                forceIncludeSkillIds: string[];
+                                forceExcludeSkillIds: string[];
+                                excludeNativeSkillNames: string[];
+                                v: 1;
+                            } | undefined;
+                        } | undefined;
+                        transcriptStorage?: 'direct' | 'persisted' | undefined;
+                        terminal?: {
+                            mode?: 'integrated' | 'plain' | 'tmux' | 'zellij' | 'herdr' | 'windows_terminal' | 'windows_console' | undefined;
+                            tmux?: {
+                                sessionName?: string | undefined;
+                                isolated?: boolean | undefined;
+                                tmpDir?: string | null | undefined;
+                            } | undefined;
+                            herdr?: {
+                                sessionName?: string | undefined;
+                            } | undefined;
+                            windows?: {
+                                launchMode?: 'windows_terminal' | 'hidden' | 'console' | undefined;
+                                console?: 'hidden' | 'visible' | undefined;
+                                windowName?: string | undefined;
+                            } | undefined;
+                        } | undefined;
+                        checkoutCreationDraft?: {
+                            kind: 'git_worktree';
+                            displayName: string;
+                            baseRef: string | null;
+                            branchMode?: 'new' | 'existing' | undefined;
+                        } | null | undefined;
+                        title?: string | undefined;
+                        memoryEnabled?: boolean | undefined;
+                        primaryTeamId?: string | null | undefined;
+                        teamCredentialBindings?: ({
+                            v: 1;
+                            slot: {
+                                kind: 'provider_model';
+                            } | {
+                                kind: 'connected_service_purpose';
+                                purpose: {
+                                    consumer: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    purpose: string;
+                                };
+                            };
+                            resourceId: string;
+                            expectedResourceRevision: number;
+                            deliveryMode: 'direct' | 'brokered';
+                            teamId?: string | undefined;
+                        } | {
+                            v: 1;
+                            slot: {
+                                kind: 'provider_model';
+                            } | {
+                                kind: 'connected_service_purpose';
+                                purpose: {
+                                    consumer: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    purpose: string;
+                                };
+                            };
+                            resourceId: null;
+                        })[] | undefined;
+                        allowedTools?: string[] | undefined;
+                        unlistedTools?: 'deny' | 'ask' | undefined;
+                    };
+                } | undefined;
                 role?: {
                     name: string;
                     instructions: string;
@@ -4041,8 +4930,911 @@ export type WorkflowsActionResultById = {
                         effort?: string | undefined;
                     } | undefined;
                     profileId?: string | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                     changedAt?: 'workflow' | 'session' | 'settings' | 'run' | undefined;
                     profileUnavailable?: boolean | undefined;
+                } | undefined;
+                sessionAuthorityBindings?: {
+                    inputName: string;
+                    targets: {
+                        address: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        machineId: string;
+                    }[];
+                }[] | undefined;
+                sessionBindings?: {
+                    inputName: string;
+                    targets: {
+                        address: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        machineId: string;
+                    }[];
+                    defaultFrom?: 'origin_session' | undefined;
+                } | undefined;
+                engineBindings?: {
+                    reference: {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
+                    };
+                    selections: {
+                        value: {
+                            role: string;
+                        } | {
+                            agentTarget: {
+                                kind: 'agent';
+                                identity: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                definitionId?: string | undefined;
+                            };
+                            modelSelection?: {
+                                v: 1;
+                                ref: {
+                                    agentTargetKey: string;
+                                    providerConnectionId: null;
+                                    modelId: string;
+                                } | {
+                                    agentTargetKey: string;
+                                    providerConnectionId: string;
+                                    modelId: string;
+                                };
+                                updatedAt: number;
+                            } | null | undefined;
+                            effort?: string | undefined;
+                        };
+                        selection: {
+                            allowedTools?: string[] | undefined;
+                            unlistedTools?: 'deny' | 'ask' | undefined;
+                            agentTarget?: {
+                                kind: 'agent';
+                                identity: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                definitionId?: string | undefined;
+                            } | null | undefined;
+                            modelSelection?: {
+                                v: 1;
+                                ref: {
+                                    agentTargetKey: string;
+                                    providerConnectionId: null;
+                                    modelId: string;
+                                } | {
+                                    agentTargetKey: string;
+                                    providerConnectionId: string;
+                                    modelId: string;
+                                };
+                                updatedAt: number;
+                            } | null | undefined;
+                            profileId?: string | null | undefined;
+                            permissionMode?: string | null | undefined;
+                            acpSessionModeId?: string | null | undefined;
+                            sessionConfigOptionOverrides?: {
+                                [x: string]: unknown;
+                                v: 1;
+                                updatedAt: number;
+                                overrides: Record<string, {
+                                    [x: string]: unknown;
+                                    updatedAt: number;
+                                    value: string | number | boolean | null;
+                                }>;
+                            } | null | undefined;
+                            capabilitySelection?: {
+                                mcp?: {
+                                    forceIncludeServerIds: string[];
+                                    forceExcludeServerIds: string[];
+                                    v: 1;
+                                    managedServersEnabled: boolean;
+                                } | undefined;
+                                skills?: {
+                                    forceIncludeSkillIds: string[];
+                                    forceExcludeSkillIds: string[];
+                                    excludeNativeSkillNames: string[];
+                                    v: 1;
+                                } | undefined;
+                            } | null | undefined;
+                            connectedServices?: {
+                                v: 2;
+                                bindingsByServiceId: Record<string, {
+                                    source: 'native';
+                                } | {
+                                    source: 'connected';
+                                    selection: 'group';
+                                    groupId: string;
+                                    profileId?: string | undefined;
+                                } | {
+                                    source: 'connected';
+                                    selection: 'profile';
+                                    profileId: string;
+                                } | {
+                                    source: 'team_resource';
+                                    resourceId: string;
+                                    deliveryMode: 'direct';
+                                    disclosedMember: {
+                                        service: {
+                                            pluginId: string;
+                                            localId: string;
+                                        };
+                                        accountId: string;
+                                    };
+                                } | {
+                                    source: 'team_resource';
+                                    resourceId: string;
+                                    deliveryMode: 'brokered';
+                                    disclosedMember?: undefined;
+                                }>;
+                            } | null | undefined;
+                            transcriptStorage?: 'direct' | 'persisted' | null | undefined;
+                            terminal?: {
+                                mode?: 'integrated' | 'plain' | 'tmux' | 'zellij' | 'herdr' | 'windows_terminal' | 'windows_console' | undefined;
+                                tmux?: {
+                                    sessionName?: string | undefined;
+                                    isolated?: boolean | undefined;
+                                    tmpDir?: string | null | undefined;
+                                } | undefined;
+                                herdr?: {
+                                    sessionName?: string | undefined;
+                                } | undefined;
+                                windows?: {
+                                    launchMode?: 'windows_terminal' | 'hidden' | 'console' | undefined;
+                                    console?: 'hidden' | 'visible' | undefined;
+                                    windowName?: string | undefined;
+                                } | undefined;
+                            } | null | undefined;
+                            windowsRemoteSessionLaunchMode?: 'windows_terminal' | 'hidden' | 'console' | null | undefined;
+                            windowsRemoteSessionConsole?: 'hidden' | 'visible' | null | undefined;
+                            windowsTerminalWindowName?: string | null | undefined;
+                            runtimeDescriptorV1?: {
+                                v: 1;
+                                agentId: string;
+                                agent: {
+                                    backendMode: string;
+                                    home?: 'user' | 'connectedService' | undefined;
+                                    connectedServiceId?: string | undefined;
+                                    connectedServiceProfileId?: string | undefined;
+                                    connectedServiceGroupId?: string | undefined;
+                                };
+                            } | null | undefined;
+                            permissionModeUpdatedAt?: number | undefined;
+                            launchEnvironment?: {
+                                values: Record<string, string>;
+                                unset: string[];
+                            } | undefined;
+                            providerSessionResume?: {
+                                kind: 'provider_session.v1';
+                                providerSessionId: string;
+                            } | undefined;
+                            conversation?: {
+                                kind: 'shared_run';
+                            } | {
+                                kind: 'fresh';
+                            } | {
+                                kind: 'origin_session';
+                            } | {
+                                kind: 'input';
+                                name: string;
+                            } | {
+                                kind: 'from_step';
+                                producer: {
+                                    blockId: string;
+                                    scope: {
+                                        kind: 'current';
+                                    } | {
+                                        kind: 'previous_iteration';
+                                        loopBlockId: string;
+                                    } | {
+                                        kind: 'outer';
+                                        levels: number;
+                                    };
+                                };
+                            } | {
+                                kind: 'existing_session';
+                                sessionId: string;
+                                machineId: string;
+                            } | undefined;
+                            workspace?: {
+                                kind: 'inherit';
+                            } | {
+                                kind: 'project_checkout';
+                            } | {
+                                kind: 'from_step';
+                                producer: {
+                                    blockId: string;
+                                    scope: {
+                                        kind: 'current';
+                                    } | {
+                                        kind: 'previous_iteration';
+                                        loopBlockId: string;
+                                    } | {
+                                        kind: 'outer';
+                                        levels: number;
+                                    };
+                                };
+                            } | {
+                                kind: 'new_worktree';
+                                source: {
+                                    kind: 'original';
+                                } | {
+                                    kind: 'workflow';
+                                } | {
+                                    kind: 'step';
+                                    producer: {
+                                        blockId: string;
+                                        scope: {
+                                            kind: 'current';
+                                        } | {
+                                            kind: 'previous_iteration';
+                                            loopBlockId: string;
+                                        } | {
+                                            kind: 'outer';
+                                            levels: number;
+                                        };
+                                    };
+                                };
+                                displayName?: string | undefined;
+                                baseRef?: string | null | undefined;
+                            } | undefined;
+                        };
+                        executionTarget: {
+                            kind: 'session';
+                        } | {
+                            kind: 'detached_run';
+                        };
+                        role?: {
+                            name: string;
+                            instructions: string;
+                            runsAs: {
+                                kind: 'session';
+                            } | {
+                                kind: 'background_run';
+                                intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                            };
+                            workspaceWrites: 'allow' | 'deny';
+                            secondOpinion: 'off' | 'encouraged';
+                            enabled: boolean;
+                            roleId: string;
+                            engine?: {
+                                agentTargetKey: string;
+                                modelId?: string | undefined;
+                                effort?: string | undefined;
+                            } | undefined;
+                            profileId?: string | undefined;
+                            canDelegateToOtherRoles?: boolean | undefined;
+                            changedAt?: 'workflow' | 'session' | 'settings' | 'run' | undefined;
+                            profileUnavailable?: boolean | undefined;
+                        } | undefined;
+                    }[];
+                } | undefined;
+                participantBindings?: {
+                    reference: {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
+                    };
+                    selections: {
+                        value: {
+                            kind: 'session';
+                            session: {
+                                serverId: string;
+                                sessionId: string;
+                            };
+                        } | {
+                            kind: 'model';
+                            launch: {
+                                executionTarget: {
+                                    serverId: string;
+                                    machineId: string;
+                                };
+                                directory: {
+                                    kind: 'path';
+                                    path: string;
+                                } | {
+                                    kind: 'managed';
+                                };
+                                agentTarget: {
+                                    kind: 'agent';
+                                    identity: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    definitionId?: string | undefined;
+                                };
+                                placementOrigin?: {
+                                    kind: 'machine_pool';
+                                    poolId: string;
+                                } | undefined;
+                                organizationPlacement?: {
+                                    folderId: string | null;
+                                    tagIds: string[];
+                                } | undefined;
+                                roleId?: string | undefined;
+                                modelSelection?: {
+                                    v: 1;
+                                    ref: {
+                                        agentTargetKey: string;
+                                        providerConnectionId: null;
+                                        modelId: string;
+                                    } | {
+                                        agentTargetKey: string;
+                                        providerConnectionId: string;
+                                        modelId: string;
+                                    };
+                                    updatedAt: number;
+                                } | undefined;
+                                profileId?: string | undefined;
+                                secretReferenceOverlay?: {
+                                    v: 1;
+                                    bindings: Record<string, {
+                                        ref: string;
+                                        revision?: number | undefined;
+                                    }>;
+                                } | undefined;
+                                permissionMode?: 'default' | 'plan' | 'read-only' | 'safe-yolo' | 'yolo' | undefined;
+                                agentModeId?: string | undefined;
+                                configuration?: {
+                                    mode: {
+                                        value: string | null;
+                                        updatedAtMs: number;
+                                    };
+                                    model: {
+                                        value: string | null;
+                                        updatedAtMs: number;
+                                    };
+                                    permissionIntent: {
+                                        value: 'default' | 'plan' | 'read-only' | 'safe-yolo' | 'yolo' | null;
+                                        updatedAtMs: number;
+                                    };
+                                    options: Record<string, {
+                                        value: string | number | boolean | null;
+                                        updatedAtMs: number;
+                                    }>;
+                                    workspaceWrites?: 'allow' | 'deny' | undefined;
+                                    providerSessionResume?: {
+                                        kind: 'provider_session.v1';
+                                        providerSessionId: string;
+                                    } | undefined;
+                                    allowedTools?: string[] | undefined;
+                                    unlistedTools?: 'deny' | 'ask' | undefined;
+                                } | undefined;
+                                connectedServices?: {
+                                    v: 2;
+                                    bindingsByServiceId: Record<string, {
+                                        source: 'native';
+                                    } | {
+                                        source: 'connected';
+                                        selection: 'group';
+                                        groupId: string;
+                                        profileId?: string | undefined;
+                                    } | {
+                                        source: 'connected';
+                                        selection: 'profile';
+                                        profileId: string;
+                                    } | {
+                                        source: 'team_resource';
+                                        resourceId: string;
+                                        deliveryMode: 'direct';
+                                        disclosedMember: {
+                                            service: {
+                                                pluginId: string;
+                                                localId: string;
+                                            };
+                                            accountId: string;
+                                        };
+                                    } | {
+                                        source: 'team_resource';
+                                        resourceId: string;
+                                        deliveryMode: 'brokered';
+                                        disclosedMember?: undefined;
+                                    }>;
+                                } | undefined;
+                                capabilitySelection?: {
+                                    mcp?: {
+                                        forceIncludeServerIds: string[];
+                                        forceExcludeServerIds: string[];
+                                        v: 1;
+                                        managedServersEnabled: boolean;
+                                    } | undefined;
+                                    skills?: {
+                                        forceIncludeSkillIds: string[];
+                                        forceExcludeSkillIds: string[];
+                                        excludeNativeSkillNames: string[];
+                                        v: 1;
+                                    } | undefined;
+                                } | undefined;
+                                transcriptStorage?: 'direct' | 'persisted' | undefined;
+                                terminal?: {
+                                    mode?: 'integrated' | 'plain' | 'tmux' | 'zellij' | 'herdr' | 'windows_terminal' | 'windows_console' | undefined;
+                                    tmux?: {
+                                        sessionName?: string | undefined;
+                                        isolated?: boolean | undefined;
+                                        tmpDir?: string | null | undefined;
+                                    } | undefined;
+                                    herdr?: {
+                                        sessionName?: string | undefined;
+                                    } | undefined;
+                                    windows?: {
+                                        launchMode?: 'windows_terminal' | 'hidden' | 'console' | undefined;
+                                        console?: 'hidden' | 'visible' | undefined;
+                                        windowName?: string | undefined;
+                                    } | undefined;
+                                } | undefined;
+                                checkoutCreationDraft?: {
+                                    kind: 'git_worktree';
+                                    displayName: string;
+                                    baseRef: string | null;
+                                    branchMode?: 'new' | 'existing' | undefined;
+                                } | null | undefined;
+                                title?: string | undefined;
+                                memoryEnabled?: boolean | undefined;
+                                primaryTeamId?: string | null | undefined;
+                                teamCredentialBindings?: ({
+                                    v: 1;
+                                    slot: {
+                                        kind: 'provider_model';
+                                    } | {
+                                        kind: 'connected_service_purpose';
+                                        purpose: {
+                                            consumer: {
+                                                pluginId: string;
+                                                localId: string;
+                                            };
+                                            purpose: string;
+                                        };
+                                    };
+                                    resourceId: string;
+                                    expectedResourceRevision: number;
+                                    deliveryMode: 'direct' | 'brokered';
+                                    teamId?: string | undefined;
+                                } | {
+                                    v: 1;
+                                    slot: {
+                                        kind: 'provider_model';
+                                    } | {
+                                        kind: 'connected_service_purpose';
+                                        purpose: {
+                                            consumer: {
+                                                pluginId: string;
+                                                localId: string;
+                                            };
+                                            purpose: string;
+                                        };
+                                    };
+                                    resourceId: null;
+                                })[] | undefined;
+                                allowedTools?: string[] | undefined;
+                                unlistedTools?: 'deny' | 'ask' | undefined;
+                            };
+                        };
+                        participant: {
+                            kind: 'session';
+                            session: {
+                                serverId: string;
+                                sessionId: string;
+                            };
+                            machineId: string;
+                        } | {
+                            kind: 'model';
+                            launch: {
+                                executionTarget: {
+                                    serverId: string;
+                                    machineId: string;
+                                };
+                                directory: {
+                                    kind: 'path';
+                                    path: string;
+                                } | {
+                                    kind: 'managed';
+                                };
+                                agentTarget: {
+                                    kind: 'agent';
+                                    identity: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    definitionId?: string | undefined;
+                                };
+                                placementOrigin?: {
+                                    kind: 'machine_pool';
+                                    poolId: string;
+                                } | undefined;
+                                organizationPlacement?: {
+                                    folderId: string | null;
+                                    tagIds: string[];
+                                } | undefined;
+                                roleId?: string | undefined;
+                                modelSelection?: {
+                                    v: 1;
+                                    ref: {
+                                        agentTargetKey: string;
+                                        providerConnectionId: null;
+                                        modelId: string;
+                                    } | {
+                                        agentTargetKey: string;
+                                        providerConnectionId: string;
+                                        modelId: string;
+                                    };
+                                    updatedAt: number;
+                                } | undefined;
+                                profileId?: string | undefined;
+                                secretReferenceOverlay?: {
+                                    v: 1;
+                                    bindings: Record<string, {
+                                        ref: string;
+                                        revision?: number | undefined;
+                                    }>;
+                                } | undefined;
+                                permissionMode?: 'default' | 'plan' | 'read-only' | 'safe-yolo' | 'yolo' | undefined;
+                                agentModeId?: string | undefined;
+                                configuration?: {
+                                    mode: {
+                                        value: string | null;
+                                        updatedAtMs: number;
+                                    };
+                                    model: {
+                                        value: string | null;
+                                        updatedAtMs: number;
+                                    };
+                                    permissionIntent: {
+                                        value: 'default' | 'plan' | 'read-only' | 'safe-yolo' | 'yolo' | null;
+                                        updatedAtMs: number;
+                                    };
+                                    options: Record<string, {
+                                        value: string | number | boolean | null;
+                                        updatedAtMs: number;
+                                    }>;
+                                    workspaceWrites?: 'allow' | 'deny' | undefined;
+                                    providerSessionResume?: {
+                                        kind: 'provider_session.v1';
+                                        providerSessionId: string;
+                                    } | undefined;
+                                    allowedTools?: string[] | undefined;
+                                    unlistedTools?: 'deny' | 'ask' | undefined;
+                                } | undefined;
+                                connectedServices?: {
+                                    v: 2;
+                                    bindingsByServiceId: Record<string, {
+                                        source: 'native';
+                                    } | {
+                                        source: 'connected';
+                                        selection: 'group';
+                                        groupId: string;
+                                        profileId?: string | undefined;
+                                    } | {
+                                        source: 'connected';
+                                        selection: 'profile';
+                                        profileId: string;
+                                    } | {
+                                        source: 'team_resource';
+                                        resourceId: string;
+                                        deliveryMode: 'direct';
+                                        disclosedMember: {
+                                            service: {
+                                                pluginId: string;
+                                                localId: string;
+                                            };
+                                            accountId: string;
+                                        };
+                                    } | {
+                                        source: 'team_resource';
+                                        resourceId: string;
+                                        deliveryMode: 'brokered';
+                                        disclosedMember?: undefined;
+                                    }>;
+                                } | undefined;
+                                capabilitySelection?: {
+                                    mcp?: {
+                                        forceIncludeServerIds: string[];
+                                        forceExcludeServerIds: string[];
+                                        v: 1;
+                                        managedServersEnabled: boolean;
+                                    } | undefined;
+                                    skills?: {
+                                        forceIncludeSkillIds: string[];
+                                        forceExcludeSkillIds: string[];
+                                        excludeNativeSkillNames: string[];
+                                        v: 1;
+                                    } | undefined;
+                                } | undefined;
+                                transcriptStorage?: 'direct' | 'persisted' | undefined;
+                                terminal?: {
+                                    mode?: 'integrated' | 'plain' | 'tmux' | 'zellij' | 'herdr' | 'windows_terminal' | 'windows_console' | undefined;
+                                    tmux?: {
+                                        sessionName?: string | undefined;
+                                        isolated?: boolean | undefined;
+                                        tmpDir?: string | null | undefined;
+                                    } | undefined;
+                                    herdr?: {
+                                        sessionName?: string | undefined;
+                                    } | undefined;
+                                    windows?: {
+                                        launchMode?: 'windows_terminal' | 'hidden' | 'console' | undefined;
+                                        console?: 'hidden' | 'visible' | undefined;
+                                        windowName?: string | undefined;
+                                    } | undefined;
+                                } | undefined;
+                                checkoutCreationDraft?: {
+                                    kind: 'git_worktree';
+                                    displayName: string;
+                                    baseRef: string | null;
+                                    branchMode?: 'new' | 'existing' | undefined;
+                                } | null | undefined;
+                                title?: string | undefined;
+                                memoryEnabled?: boolean | undefined;
+                                primaryTeamId?: string | null | undefined;
+                                teamCredentialBindings?: ({
+                                    v: 1;
+                                    slot: {
+                                        kind: 'provider_model';
+                                    } | {
+                                        kind: 'connected_service_purpose';
+                                        purpose: {
+                                            consumer: {
+                                                pluginId: string;
+                                                localId: string;
+                                            };
+                                            purpose: string;
+                                        };
+                                    };
+                                    resourceId: string;
+                                    expectedResourceRevision: number;
+                                    deliveryMode: 'direct' | 'brokered';
+                                    teamId?: string | undefined;
+                                } | {
+                                    v: 1;
+                                    slot: {
+                                        kind: 'provider_model';
+                                    } | {
+                                        kind: 'connected_service_purpose';
+                                        purpose: {
+                                            consumer: {
+                                                pluginId: string;
+                                                localId: string;
+                                            };
+                                            purpose: string;
+                                        };
+                                    };
+                                    resourceId: null;
+                                })[] | undefined;
+                                allowedTools?: string[] | undefined;
+                                unlistedTools?: 'deny' | 'ask' | undefined;
+                            };
+                        };
+                        selection: {
+                            allowedTools?: string[] | undefined;
+                            unlistedTools?: 'deny' | 'ask' | undefined;
+                            agentTarget?: {
+                                kind: 'agent';
+                                identity: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                definitionId?: string | undefined;
+                            } | null | undefined;
+                            modelSelection?: {
+                                v: 1;
+                                ref: {
+                                    agentTargetKey: string;
+                                    providerConnectionId: null;
+                                    modelId: string;
+                                } | {
+                                    agentTargetKey: string;
+                                    providerConnectionId: string;
+                                    modelId: string;
+                                };
+                                updatedAt: number;
+                            } | null | undefined;
+                            profileId?: string | null | undefined;
+                            permissionMode?: string | null | undefined;
+                            acpSessionModeId?: string | null | undefined;
+                            sessionConfigOptionOverrides?: {
+                                [x: string]: unknown;
+                                v: 1;
+                                updatedAt: number;
+                                overrides: Record<string, {
+                                    [x: string]: unknown;
+                                    updatedAt: number;
+                                    value: string | number | boolean | null;
+                                }>;
+                            } | null | undefined;
+                            capabilitySelection?: {
+                                mcp?: {
+                                    forceIncludeServerIds: string[];
+                                    forceExcludeServerIds: string[];
+                                    v: 1;
+                                    managedServersEnabled: boolean;
+                                } | undefined;
+                                skills?: {
+                                    forceIncludeSkillIds: string[];
+                                    forceExcludeSkillIds: string[];
+                                    excludeNativeSkillNames: string[];
+                                    v: 1;
+                                } | undefined;
+                            } | null | undefined;
+                            connectedServices?: {
+                                v: 2;
+                                bindingsByServiceId: Record<string, {
+                                    source: 'native';
+                                } | {
+                                    source: 'connected';
+                                    selection: 'group';
+                                    groupId: string;
+                                    profileId?: string | undefined;
+                                } | {
+                                    source: 'connected';
+                                    selection: 'profile';
+                                    profileId: string;
+                                } | {
+                                    source: 'team_resource';
+                                    resourceId: string;
+                                    deliveryMode: 'direct';
+                                    disclosedMember: {
+                                        service: {
+                                            pluginId: string;
+                                            localId: string;
+                                        };
+                                        accountId: string;
+                                    };
+                                } | {
+                                    source: 'team_resource';
+                                    resourceId: string;
+                                    deliveryMode: 'brokered';
+                                    disclosedMember?: undefined;
+                                }>;
+                            } | null | undefined;
+                            transcriptStorage?: 'direct' | 'persisted' | null | undefined;
+                            terminal?: {
+                                mode?: 'integrated' | 'plain' | 'tmux' | 'zellij' | 'herdr' | 'windows_terminal' | 'windows_console' | undefined;
+                                tmux?: {
+                                    sessionName?: string | undefined;
+                                    isolated?: boolean | undefined;
+                                    tmpDir?: string | null | undefined;
+                                } | undefined;
+                                herdr?: {
+                                    sessionName?: string | undefined;
+                                } | undefined;
+                                windows?: {
+                                    launchMode?: 'windows_terminal' | 'hidden' | 'console' | undefined;
+                                    console?: 'hidden' | 'visible' | undefined;
+                                    windowName?: string | undefined;
+                                } | undefined;
+                            } | null | undefined;
+                            windowsRemoteSessionLaunchMode?: 'windows_terminal' | 'hidden' | 'console' | null | undefined;
+                            windowsRemoteSessionConsole?: 'hidden' | 'visible' | null | undefined;
+                            windowsTerminalWindowName?: string | null | undefined;
+                            runtimeDescriptorV1?: {
+                                v: 1;
+                                agentId: string;
+                                agent: {
+                                    backendMode: string;
+                                    home?: 'user' | 'connectedService' | undefined;
+                                    connectedServiceId?: string | undefined;
+                                    connectedServiceProfileId?: string | undefined;
+                                    connectedServiceGroupId?: string | undefined;
+                                };
+                            } | null | undefined;
+                            permissionModeUpdatedAt?: number | undefined;
+                            launchEnvironment?: {
+                                values: Record<string, string>;
+                                unset: string[];
+                            } | undefined;
+                            providerSessionResume?: {
+                                kind: 'provider_session.v1';
+                                providerSessionId: string;
+                            } | undefined;
+                            conversation?: {
+                                kind: 'shared_run';
+                            } | {
+                                kind: 'fresh';
+                            } | {
+                                kind: 'origin_session';
+                            } | {
+                                kind: 'input';
+                                name: string;
+                            } | {
+                                kind: 'from_step';
+                                producer: {
+                                    blockId: string;
+                                    scope: {
+                                        kind: 'current';
+                                    } | {
+                                        kind: 'previous_iteration';
+                                        loopBlockId: string;
+                                    } | {
+                                        kind: 'outer';
+                                        levels: number;
+                                    };
+                                };
+                            } | {
+                                kind: 'existing_session';
+                                sessionId: string;
+                                machineId: string;
+                            } | undefined;
+                            workspace?: {
+                                kind: 'inherit';
+                            } | {
+                                kind: 'project_checkout';
+                            } | {
+                                kind: 'from_step';
+                                producer: {
+                                    blockId: string;
+                                    scope: {
+                                        kind: 'current';
+                                    } | {
+                                        kind: 'previous_iteration';
+                                        loopBlockId: string;
+                                    } | {
+                                        kind: 'outer';
+                                        levels: number;
+                                    };
+                                };
+                            } | {
+                                kind: 'new_worktree';
+                                source: {
+                                    kind: 'original';
+                                } | {
+                                    kind: 'workflow';
+                                } | {
+                                    kind: 'step';
+                                    producer: {
+                                        blockId: string;
+                                        scope: {
+                                            kind: 'current';
+                                        } | {
+                                            kind: 'previous_iteration';
+                                            loopBlockId: string;
+                                        } | {
+                                            kind: 'outer';
+                                            levels: number;
+                                        };
+                                    };
+                                };
+                                displayName?: string | undefined;
+                                baseRef?: string | null | undefined;
+                            } | undefined;
+                        };
+                        executionTarget: {
+                            kind: 'session';
+                        } | {
+                            kind: 'detached_run';
+                        };
+                        role?: {
+                            name: string;
+                            instructions: string;
+                            runsAs: {
+                                kind: 'session';
+                            } | {
+                                kind: 'background_run';
+                                intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                            };
+                            workspaceWrites: 'allow' | 'deny';
+                            secondOpinion: 'off' | 'encouraged';
+                            enabled: boolean;
+                            roleId: string;
+                            engine?: {
+                                agentTargetKey: string;
+                                modelId?: string | undefined;
+                                effort?: string | undefined;
+                            } | undefined;
+                            profileId?: string | undefined;
+                            canDelegateToOtherRoles?: boolean | undefined;
+                            changedAt?: 'workflow' | 'session' | 'settings' | 'run' | undefined;
+                            profileUnavailable?: boolean | undefined;
+                        } | undefined;
+                    }[];
                 } | undefined;
                 childRef?: string | undefined;
                 actionId?: string | undefined;
@@ -4059,8 +5851,10 @@ export type WorkflowsActionResultById = {
                     name: string;
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
+                    multiple?: boolean | undefined;
                     enum?: string[] | undefined;
                     default?: JsonValue | undefined;
+                    defaultFrom?: 'origin_session' | undefined;
                     description?: string | undefined;
                     optionsSourceId?: string | undefined;
                     inputType?: {
@@ -4070,7 +5864,7 @@ export type WorkflowsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'session' | 'period' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                 }[];
                 defaults: {
@@ -4202,6 +5996,9 @@ export type WorkflowsActionResultById = {
                     } | {
                         kind: 'origin_session';
                     } | {
+                        kind: 'input';
+                        name: string;
+                    } | {
                         kind: 'from_step';
                         producer: {
                             blockId: string;
@@ -4287,6 +6084,23 @@ export type WorkflowsActionResultById = {
                             updatedAt: number;
                         } | null | undefined;
                         effort?: string | undefined;
+                    } | {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
+                    } | undefined;
+                    participant?: {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
                     } | undefined;
                     executionTarget?: {
                         kind: 'session';
@@ -4310,6 +6124,7 @@ export type WorkflowsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 } | {
                     roleId: string;
                     name: string;
@@ -4328,6 +6143,7 @@ export type WorkflowsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 })[] | undefined;
                 blocks: readonly PluginActionWorkflowBlockV1[];
                 finalOutput?: {
@@ -4396,6 +6212,7 @@ export type WorkflowsActionResultById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             }[] | undefined;
         } | {
             startedBy: 'agent' | 'user' | 'trigger';
@@ -4446,7 +6263,6 @@ export type WorkflowsActionResultById = {
                 kind: 'detached_run';
             };
             materializedLeaves: {
-                [x: string]: any;
                 sourceKey: string;
                 blockId: string;
                 kind: 'workflow' | 'action' | 'step' | 'wait';
@@ -4579,6 +6395,9 @@ export type WorkflowsActionResultById = {
                     } | {
                         kind: 'origin_session';
                     } | {
+                        kind: 'input';
+                        name: string;
+                    } | {
                         kind: 'from_step';
                         producer: {
                             blockId: string;
@@ -4640,11 +6459,247 @@ export type WorkflowsActionResultById = {
                         baseRef?: string | null | undefined;
                     } | undefined;
                 };
+                authoredWorkspace: {
+                    kind: 'inherit';
+                } | {
+                    kind: 'project_checkout';
+                } | {
+                    kind: 'from_step';
+                    producer: {
+                        blockId: string;
+                        scope: {
+                            kind: 'current';
+                        } | {
+                            kind: 'previous_iteration';
+                            loopBlockId: string;
+                        } | {
+                            kind: 'outer';
+                            levels: number;
+                        };
+                    };
+                } | {
+                    kind: 'new_worktree';
+                    source: {
+                        kind: 'original';
+                    } | {
+                        kind: 'workflow';
+                    } | {
+                        kind: 'step';
+                        producer: {
+                            blockId: string;
+                            scope: {
+                                kind: 'current';
+                            } | {
+                                kind: 'previous_iteration';
+                                loopBlockId: string;
+                            } | {
+                                kind: 'outer';
+                                levels: number;
+                            };
+                        };
+                    };
+                    displayName?: string | undefined;
+                    baseRef?: string | null | undefined;
+                };
                 executionTarget: {
                     kind: 'session';
                 } | {
                     kind: 'detached_run';
                 };
+                participant?: {
+                    kind: 'session';
+                    session: {
+                        serverId: string;
+                        sessionId: string;
+                    };
+                    machineId: string;
+                } | {
+                    kind: 'model';
+                    launch: {
+                        executionTarget: {
+                            serverId: string;
+                            machineId: string;
+                        };
+                        directory: {
+                            kind: 'path';
+                            path: string;
+                        } | {
+                            kind: 'managed';
+                        };
+                        agentTarget: {
+                            kind: 'agent';
+                            identity: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            definitionId?: string | undefined;
+                        };
+                        placementOrigin?: {
+                            kind: 'machine_pool';
+                            poolId: string;
+                        } | undefined;
+                        organizationPlacement?: {
+                            folderId: string | null;
+                            tagIds: string[];
+                        } | undefined;
+                        roleId?: string | undefined;
+                        modelSelection?: {
+                            v: 1;
+                            ref: {
+                                agentTargetKey: string;
+                                providerConnectionId: null;
+                                modelId: string;
+                            } | {
+                                agentTargetKey: string;
+                                providerConnectionId: string;
+                                modelId: string;
+                            };
+                            updatedAt: number;
+                        } | undefined;
+                        profileId?: string | undefined;
+                        secretReferenceOverlay?: {
+                            v: 1;
+                            bindings: Record<string, {
+                                ref: string;
+                                revision?: number | undefined;
+                            }>;
+                        } | undefined;
+                        permissionMode?: 'default' | 'plan' | 'read-only' | 'safe-yolo' | 'yolo' | undefined;
+                        agentModeId?: string | undefined;
+                        configuration?: {
+                            mode: {
+                                value: string | null;
+                                updatedAtMs: number;
+                            };
+                            model: {
+                                value: string | null;
+                                updatedAtMs: number;
+                            };
+                            permissionIntent: {
+                                value: 'default' | 'plan' | 'read-only' | 'safe-yolo' | 'yolo' | null;
+                                updatedAtMs: number;
+                            };
+                            options: Record<string, {
+                                value: string | number | boolean | null;
+                                updatedAtMs: number;
+                            }>;
+                            workspaceWrites?: 'allow' | 'deny' | undefined;
+                            providerSessionResume?: {
+                                kind: 'provider_session.v1';
+                                providerSessionId: string;
+                            } | undefined;
+                            allowedTools?: string[] | undefined;
+                            unlistedTools?: 'deny' | 'ask' | undefined;
+                        } | undefined;
+                        connectedServices?: {
+                            v: 2;
+                            bindingsByServiceId: Record<string, {
+                                source: 'native';
+                            } | {
+                                source: 'connected';
+                                selection: 'group';
+                                groupId: string;
+                                profileId?: string | undefined;
+                            } | {
+                                source: 'connected';
+                                selection: 'profile';
+                                profileId: string;
+                            } | {
+                                source: 'team_resource';
+                                resourceId: string;
+                                deliveryMode: 'direct';
+                                disclosedMember: {
+                                    service: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    accountId: string;
+                                };
+                            } | {
+                                source: 'team_resource';
+                                resourceId: string;
+                                deliveryMode: 'brokered';
+                                disclosedMember?: undefined;
+                            }>;
+                        } | undefined;
+                        capabilitySelection?: {
+                            mcp?: {
+                                forceIncludeServerIds: string[];
+                                forceExcludeServerIds: string[];
+                                v: 1;
+                                managedServersEnabled: boolean;
+                            } | undefined;
+                            skills?: {
+                                forceIncludeSkillIds: string[];
+                                forceExcludeSkillIds: string[];
+                                excludeNativeSkillNames: string[];
+                                v: 1;
+                            } | undefined;
+                        } | undefined;
+                        transcriptStorage?: 'direct' | 'persisted' | undefined;
+                        terminal?: {
+                            mode?: 'integrated' | 'plain' | 'tmux' | 'zellij' | 'herdr' | 'windows_terminal' | 'windows_console' | undefined;
+                            tmux?: {
+                                sessionName?: string | undefined;
+                                isolated?: boolean | undefined;
+                                tmpDir?: string | null | undefined;
+                            } | undefined;
+                            herdr?: {
+                                sessionName?: string | undefined;
+                            } | undefined;
+                            windows?: {
+                                launchMode?: 'windows_terminal' | 'hidden' | 'console' | undefined;
+                                console?: 'hidden' | 'visible' | undefined;
+                                windowName?: string | undefined;
+                            } | undefined;
+                        } | undefined;
+                        checkoutCreationDraft?: {
+                            kind: 'git_worktree';
+                            displayName: string;
+                            baseRef: string | null;
+                            branchMode?: 'new' | 'existing' | undefined;
+                        } | null | undefined;
+                        title?: string | undefined;
+                        memoryEnabled?: boolean | undefined;
+                        primaryTeamId?: string | null | undefined;
+                        teamCredentialBindings?: ({
+                            v: 1;
+                            slot: {
+                                kind: 'provider_model';
+                            } | {
+                                kind: 'connected_service_purpose';
+                                purpose: {
+                                    consumer: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    purpose: string;
+                                };
+                            };
+                            resourceId: string;
+                            expectedResourceRevision: number;
+                            deliveryMode: 'direct' | 'brokered';
+                            teamId?: string | undefined;
+                        } | {
+                            v: 1;
+                            slot: {
+                                kind: 'provider_model';
+                            } | {
+                                kind: 'connected_service_purpose';
+                                purpose: {
+                                    consumer: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    purpose: string;
+                                };
+                            };
+                            resourceId: null;
+                        })[] | undefined;
+                        allowedTools?: string[] | undefined;
+                        unlistedTools?: 'deny' | 'ask' | undefined;
+                    };
+                } | undefined;
                 role?: {
                     name: string;
                     instructions: string;
@@ -4664,8 +6719,911 @@ export type WorkflowsActionResultById = {
                         effort?: string | undefined;
                     } | undefined;
                     profileId?: string | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                     changedAt?: 'workflow' | 'session' | 'settings' | 'run' | undefined;
                     profileUnavailable?: boolean | undefined;
+                } | undefined;
+                sessionAuthorityBindings?: {
+                    inputName: string;
+                    targets: {
+                        address: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        machineId: string;
+                    }[];
+                }[] | undefined;
+                sessionBindings?: {
+                    inputName: string;
+                    targets: {
+                        address: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        machineId: string;
+                    }[];
+                    defaultFrom?: 'origin_session' | undefined;
+                } | undefined;
+                engineBindings?: {
+                    reference: {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
+                    };
+                    selections: {
+                        value: {
+                            role: string;
+                        } | {
+                            agentTarget: {
+                                kind: 'agent';
+                                identity: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                definitionId?: string | undefined;
+                            };
+                            modelSelection?: {
+                                v: 1;
+                                ref: {
+                                    agentTargetKey: string;
+                                    providerConnectionId: null;
+                                    modelId: string;
+                                } | {
+                                    agentTargetKey: string;
+                                    providerConnectionId: string;
+                                    modelId: string;
+                                };
+                                updatedAt: number;
+                            } | null | undefined;
+                            effort?: string | undefined;
+                        };
+                        selection: {
+                            allowedTools?: string[] | undefined;
+                            unlistedTools?: 'deny' | 'ask' | undefined;
+                            agentTarget?: {
+                                kind: 'agent';
+                                identity: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                definitionId?: string | undefined;
+                            } | null | undefined;
+                            modelSelection?: {
+                                v: 1;
+                                ref: {
+                                    agentTargetKey: string;
+                                    providerConnectionId: null;
+                                    modelId: string;
+                                } | {
+                                    agentTargetKey: string;
+                                    providerConnectionId: string;
+                                    modelId: string;
+                                };
+                                updatedAt: number;
+                            } | null | undefined;
+                            profileId?: string | null | undefined;
+                            permissionMode?: string | null | undefined;
+                            acpSessionModeId?: string | null | undefined;
+                            sessionConfigOptionOverrides?: {
+                                [x: string]: unknown;
+                                v: 1;
+                                updatedAt: number;
+                                overrides: Record<string, {
+                                    [x: string]: unknown;
+                                    updatedAt: number;
+                                    value: string | number | boolean | null;
+                                }>;
+                            } | null | undefined;
+                            capabilitySelection?: {
+                                mcp?: {
+                                    forceIncludeServerIds: string[];
+                                    forceExcludeServerIds: string[];
+                                    v: 1;
+                                    managedServersEnabled: boolean;
+                                } | undefined;
+                                skills?: {
+                                    forceIncludeSkillIds: string[];
+                                    forceExcludeSkillIds: string[];
+                                    excludeNativeSkillNames: string[];
+                                    v: 1;
+                                } | undefined;
+                            } | null | undefined;
+                            connectedServices?: {
+                                v: 2;
+                                bindingsByServiceId: Record<string, {
+                                    source: 'native';
+                                } | {
+                                    source: 'connected';
+                                    selection: 'group';
+                                    groupId: string;
+                                    profileId?: string | undefined;
+                                } | {
+                                    source: 'connected';
+                                    selection: 'profile';
+                                    profileId: string;
+                                } | {
+                                    source: 'team_resource';
+                                    resourceId: string;
+                                    deliveryMode: 'direct';
+                                    disclosedMember: {
+                                        service: {
+                                            pluginId: string;
+                                            localId: string;
+                                        };
+                                        accountId: string;
+                                    };
+                                } | {
+                                    source: 'team_resource';
+                                    resourceId: string;
+                                    deliveryMode: 'brokered';
+                                    disclosedMember?: undefined;
+                                }>;
+                            } | null | undefined;
+                            transcriptStorage?: 'direct' | 'persisted' | null | undefined;
+                            terminal?: {
+                                mode?: 'integrated' | 'plain' | 'tmux' | 'zellij' | 'herdr' | 'windows_terminal' | 'windows_console' | undefined;
+                                tmux?: {
+                                    sessionName?: string | undefined;
+                                    isolated?: boolean | undefined;
+                                    tmpDir?: string | null | undefined;
+                                } | undefined;
+                                herdr?: {
+                                    sessionName?: string | undefined;
+                                } | undefined;
+                                windows?: {
+                                    launchMode?: 'windows_terminal' | 'hidden' | 'console' | undefined;
+                                    console?: 'hidden' | 'visible' | undefined;
+                                    windowName?: string | undefined;
+                                } | undefined;
+                            } | null | undefined;
+                            windowsRemoteSessionLaunchMode?: 'windows_terminal' | 'hidden' | 'console' | null | undefined;
+                            windowsRemoteSessionConsole?: 'hidden' | 'visible' | null | undefined;
+                            windowsTerminalWindowName?: string | null | undefined;
+                            runtimeDescriptorV1?: {
+                                v: 1;
+                                agentId: string;
+                                agent: {
+                                    backendMode: string;
+                                    home?: 'user' | 'connectedService' | undefined;
+                                    connectedServiceId?: string | undefined;
+                                    connectedServiceProfileId?: string | undefined;
+                                    connectedServiceGroupId?: string | undefined;
+                                };
+                            } | null | undefined;
+                            permissionModeUpdatedAt?: number | undefined;
+                            launchEnvironment?: {
+                                values: Record<string, string>;
+                                unset: string[];
+                            } | undefined;
+                            providerSessionResume?: {
+                                kind: 'provider_session.v1';
+                                providerSessionId: string;
+                            } | undefined;
+                            conversation?: {
+                                kind: 'shared_run';
+                            } | {
+                                kind: 'fresh';
+                            } | {
+                                kind: 'origin_session';
+                            } | {
+                                kind: 'input';
+                                name: string;
+                            } | {
+                                kind: 'from_step';
+                                producer: {
+                                    blockId: string;
+                                    scope: {
+                                        kind: 'current';
+                                    } | {
+                                        kind: 'previous_iteration';
+                                        loopBlockId: string;
+                                    } | {
+                                        kind: 'outer';
+                                        levels: number;
+                                    };
+                                };
+                            } | {
+                                kind: 'existing_session';
+                                sessionId: string;
+                                machineId: string;
+                            } | undefined;
+                            workspace?: {
+                                kind: 'inherit';
+                            } | {
+                                kind: 'project_checkout';
+                            } | {
+                                kind: 'from_step';
+                                producer: {
+                                    blockId: string;
+                                    scope: {
+                                        kind: 'current';
+                                    } | {
+                                        kind: 'previous_iteration';
+                                        loopBlockId: string;
+                                    } | {
+                                        kind: 'outer';
+                                        levels: number;
+                                    };
+                                };
+                            } | {
+                                kind: 'new_worktree';
+                                source: {
+                                    kind: 'original';
+                                } | {
+                                    kind: 'workflow';
+                                } | {
+                                    kind: 'step';
+                                    producer: {
+                                        blockId: string;
+                                        scope: {
+                                            kind: 'current';
+                                        } | {
+                                            kind: 'previous_iteration';
+                                            loopBlockId: string;
+                                        } | {
+                                            kind: 'outer';
+                                            levels: number;
+                                        };
+                                    };
+                                };
+                                displayName?: string | undefined;
+                                baseRef?: string | null | undefined;
+                            } | undefined;
+                        };
+                        executionTarget: {
+                            kind: 'session';
+                        } | {
+                            kind: 'detached_run';
+                        };
+                        role?: {
+                            name: string;
+                            instructions: string;
+                            runsAs: {
+                                kind: 'session';
+                            } | {
+                                kind: 'background_run';
+                                intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                            };
+                            workspaceWrites: 'allow' | 'deny';
+                            secondOpinion: 'off' | 'encouraged';
+                            enabled: boolean;
+                            roleId: string;
+                            engine?: {
+                                agentTargetKey: string;
+                                modelId?: string | undefined;
+                                effort?: string | undefined;
+                            } | undefined;
+                            profileId?: string | undefined;
+                            canDelegateToOtherRoles?: boolean | undefined;
+                            changedAt?: 'workflow' | 'session' | 'settings' | 'run' | undefined;
+                            profileUnavailable?: boolean | undefined;
+                        } | undefined;
+                    }[];
+                } | undefined;
+                participantBindings?: {
+                    reference: {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
+                    };
+                    selections: {
+                        value: {
+                            kind: 'session';
+                            session: {
+                                serverId: string;
+                                sessionId: string;
+                            };
+                        } | {
+                            kind: 'model';
+                            launch: {
+                                executionTarget: {
+                                    serverId: string;
+                                    machineId: string;
+                                };
+                                directory: {
+                                    kind: 'path';
+                                    path: string;
+                                } | {
+                                    kind: 'managed';
+                                };
+                                agentTarget: {
+                                    kind: 'agent';
+                                    identity: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    definitionId?: string | undefined;
+                                };
+                                placementOrigin?: {
+                                    kind: 'machine_pool';
+                                    poolId: string;
+                                } | undefined;
+                                organizationPlacement?: {
+                                    folderId: string | null;
+                                    tagIds: string[];
+                                } | undefined;
+                                roleId?: string | undefined;
+                                modelSelection?: {
+                                    v: 1;
+                                    ref: {
+                                        agentTargetKey: string;
+                                        providerConnectionId: null;
+                                        modelId: string;
+                                    } | {
+                                        agentTargetKey: string;
+                                        providerConnectionId: string;
+                                        modelId: string;
+                                    };
+                                    updatedAt: number;
+                                } | undefined;
+                                profileId?: string | undefined;
+                                secretReferenceOverlay?: {
+                                    v: 1;
+                                    bindings: Record<string, {
+                                        ref: string;
+                                        revision?: number | undefined;
+                                    }>;
+                                } | undefined;
+                                permissionMode?: 'default' | 'plan' | 'read-only' | 'safe-yolo' | 'yolo' | undefined;
+                                agentModeId?: string | undefined;
+                                configuration?: {
+                                    mode: {
+                                        value: string | null;
+                                        updatedAtMs: number;
+                                    };
+                                    model: {
+                                        value: string | null;
+                                        updatedAtMs: number;
+                                    };
+                                    permissionIntent: {
+                                        value: 'default' | 'plan' | 'read-only' | 'safe-yolo' | 'yolo' | null;
+                                        updatedAtMs: number;
+                                    };
+                                    options: Record<string, {
+                                        value: string | number | boolean | null;
+                                        updatedAtMs: number;
+                                    }>;
+                                    workspaceWrites?: 'allow' | 'deny' | undefined;
+                                    providerSessionResume?: {
+                                        kind: 'provider_session.v1';
+                                        providerSessionId: string;
+                                    } | undefined;
+                                    allowedTools?: string[] | undefined;
+                                    unlistedTools?: 'deny' | 'ask' | undefined;
+                                } | undefined;
+                                connectedServices?: {
+                                    v: 2;
+                                    bindingsByServiceId: Record<string, {
+                                        source: 'native';
+                                    } | {
+                                        source: 'connected';
+                                        selection: 'group';
+                                        groupId: string;
+                                        profileId?: string | undefined;
+                                    } | {
+                                        source: 'connected';
+                                        selection: 'profile';
+                                        profileId: string;
+                                    } | {
+                                        source: 'team_resource';
+                                        resourceId: string;
+                                        deliveryMode: 'direct';
+                                        disclosedMember: {
+                                            service: {
+                                                pluginId: string;
+                                                localId: string;
+                                            };
+                                            accountId: string;
+                                        };
+                                    } | {
+                                        source: 'team_resource';
+                                        resourceId: string;
+                                        deliveryMode: 'brokered';
+                                        disclosedMember?: undefined;
+                                    }>;
+                                } | undefined;
+                                capabilitySelection?: {
+                                    mcp?: {
+                                        forceIncludeServerIds: string[];
+                                        forceExcludeServerIds: string[];
+                                        v: 1;
+                                        managedServersEnabled: boolean;
+                                    } | undefined;
+                                    skills?: {
+                                        forceIncludeSkillIds: string[];
+                                        forceExcludeSkillIds: string[];
+                                        excludeNativeSkillNames: string[];
+                                        v: 1;
+                                    } | undefined;
+                                } | undefined;
+                                transcriptStorage?: 'direct' | 'persisted' | undefined;
+                                terminal?: {
+                                    mode?: 'integrated' | 'plain' | 'tmux' | 'zellij' | 'herdr' | 'windows_terminal' | 'windows_console' | undefined;
+                                    tmux?: {
+                                        sessionName?: string | undefined;
+                                        isolated?: boolean | undefined;
+                                        tmpDir?: string | null | undefined;
+                                    } | undefined;
+                                    herdr?: {
+                                        sessionName?: string | undefined;
+                                    } | undefined;
+                                    windows?: {
+                                        launchMode?: 'windows_terminal' | 'hidden' | 'console' | undefined;
+                                        console?: 'hidden' | 'visible' | undefined;
+                                        windowName?: string | undefined;
+                                    } | undefined;
+                                } | undefined;
+                                checkoutCreationDraft?: {
+                                    kind: 'git_worktree';
+                                    displayName: string;
+                                    baseRef: string | null;
+                                    branchMode?: 'new' | 'existing' | undefined;
+                                } | null | undefined;
+                                title?: string | undefined;
+                                memoryEnabled?: boolean | undefined;
+                                primaryTeamId?: string | null | undefined;
+                                teamCredentialBindings?: ({
+                                    v: 1;
+                                    slot: {
+                                        kind: 'provider_model';
+                                    } | {
+                                        kind: 'connected_service_purpose';
+                                        purpose: {
+                                            consumer: {
+                                                pluginId: string;
+                                                localId: string;
+                                            };
+                                            purpose: string;
+                                        };
+                                    };
+                                    resourceId: string;
+                                    expectedResourceRevision: number;
+                                    deliveryMode: 'direct' | 'brokered';
+                                    teamId?: string | undefined;
+                                } | {
+                                    v: 1;
+                                    slot: {
+                                        kind: 'provider_model';
+                                    } | {
+                                        kind: 'connected_service_purpose';
+                                        purpose: {
+                                            consumer: {
+                                                pluginId: string;
+                                                localId: string;
+                                            };
+                                            purpose: string;
+                                        };
+                                    };
+                                    resourceId: null;
+                                })[] | undefined;
+                                allowedTools?: string[] | undefined;
+                                unlistedTools?: 'deny' | 'ask' | undefined;
+                            };
+                        };
+                        participant: {
+                            kind: 'session';
+                            session: {
+                                serverId: string;
+                                sessionId: string;
+                            };
+                            machineId: string;
+                        } | {
+                            kind: 'model';
+                            launch: {
+                                executionTarget: {
+                                    serverId: string;
+                                    machineId: string;
+                                };
+                                directory: {
+                                    kind: 'path';
+                                    path: string;
+                                } | {
+                                    kind: 'managed';
+                                };
+                                agentTarget: {
+                                    kind: 'agent';
+                                    identity: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    definitionId?: string | undefined;
+                                };
+                                placementOrigin?: {
+                                    kind: 'machine_pool';
+                                    poolId: string;
+                                } | undefined;
+                                organizationPlacement?: {
+                                    folderId: string | null;
+                                    tagIds: string[];
+                                } | undefined;
+                                roleId?: string | undefined;
+                                modelSelection?: {
+                                    v: 1;
+                                    ref: {
+                                        agentTargetKey: string;
+                                        providerConnectionId: null;
+                                        modelId: string;
+                                    } | {
+                                        agentTargetKey: string;
+                                        providerConnectionId: string;
+                                        modelId: string;
+                                    };
+                                    updatedAt: number;
+                                } | undefined;
+                                profileId?: string | undefined;
+                                secretReferenceOverlay?: {
+                                    v: 1;
+                                    bindings: Record<string, {
+                                        ref: string;
+                                        revision?: number | undefined;
+                                    }>;
+                                } | undefined;
+                                permissionMode?: 'default' | 'plan' | 'read-only' | 'safe-yolo' | 'yolo' | undefined;
+                                agentModeId?: string | undefined;
+                                configuration?: {
+                                    mode: {
+                                        value: string | null;
+                                        updatedAtMs: number;
+                                    };
+                                    model: {
+                                        value: string | null;
+                                        updatedAtMs: number;
+                                    };
+                                    permissionIntent: {
+                                        value: 'default' | 'plan' | 'read-only' | 'safe-yolo' | 'yolo' | null;
+                                        updatedAtMs: number;
+                                    };
+                                    options: Record<string, {
+                                        value: string | number | boolean | null;
+                                        updatedAtMs: number;
+                                    }>;
+                                    workspaceWrites?: 'allow' | 'deny' | undefined;
+                                    providerSessionResume?: {
+                                        kind: 'provider_session.v1';
+                                        providerSessionId: string;
+                                    } | undefined;
+                                    allowedTools?: string[] | undefined;
+                                    unlistedTools?: 'deny' | 'ask' | undefined;
+                                } | undefined;
+                                connectedServices?: {
+                                    v: 2;
+                                    bindingsByServiceId: Record<string, {
+                                        source: 'native';
+                                    } | {
+                                        source: 'connected';
+                                        selection: 'group';
+                                        groupId: string;
+                                        profileId?: string | undefined;
+                                    } | {
+                                        source: 'connected';
+                                        selection: 'profile';
+                                        profileId: string;
+                                    } | {
+                                        source: 'team_resource';
+                                        resourceId: string;
+                                        deliveryMode: 'direct';
+                                        disclosedMember: {
+                                            service: {
+                                                pluginId: string;
+                                                localId: string;
+                                            };
+                                            accountId: string;
+                                        };
+                                    } | {
+                                        source: 'team_resource';
+                                        resourceId: string;
+                                        deliveryMode: 'brokered';
+                                        disclosedMember?: undefined;
+                                    }>;
+                                } | undefined;
+                                capabilitySelection?: {
+                                    mcp?: {
+                                        forceIncludeServerIds: string[];
+                                        forceExcludeServerIds: string[];
+                                        v: 1;
+                                        managedServersEnabled: boolean;
+                                    } | undefined;
+                                    skills?: {
+                                        forceIncludeSkillIds: string[];
+                                        forceExcludeSkillIds: string[];
+                                        excludeNativeSkillNames: string[];
+                                        v: 1;
+                                    } | undefined;
+                                } | undefined;
+                                transcriptStorage?: 'direct' | 'persisted' | undefined;
+                                terminal?: {
+                                    mode?: 'integrated' | 'plain' | 'tmux' | 'zellij' | 'herdr' | 'windows_terminal' | 'windows_console' | undefined;
+                                    tmux?: {
+                                        sessionName?: string | undefined;
+                                        isolated?: boolean | undefined;
+                                        tmpDir?: string | null | undefined;
+                                    } | undefined;
+                                    herdr?: {
+                                        sessionName?: string | undefined;
+                                    } | undefined;
+                                    windows?: {
+                                        launchMode?: 'windows_terminal' | 'hidden' | 'console' | undefined;
+                                        console?: 'hidden' | 'visible' | undefined;
+                                        windowName?: string | undefined;
+                                    } | undefined;
+                                } | undefined;
+                                checkoutCreationDraft?: {
+                                    kind: 'git_worktree';
+                                    displayName: string;
+                                    baseRef: string | null;
+                                    branchMode?: 'new' | 'existing' | undefined;
+                                } | null | undefined;
+                                title?: string | undefined;
+                                memoryEnabled?: boolean | undefined;
+                                primaryTeamId?: string | null | undefined;
+                                teamCredentialBindings?: ({
+                                    v: 1;
+                                    slot: {
+                                        kind: 'provider_model';
+                                    } | {
+                                        kind: 'connected_service_purpose';
+                                        purpose: {
+                                            consumer: {
+                                                pluginId: string;
+                                                localId: string;
+                                            };
+                                            purpose: string;
+                                        };
+                                    };
+                                    resourceId: string;
+                                    expectedResourceRevision: number;
+                                    deliveryMode: 'direct' | 'brokered';
+                                    teamId?: string | undefined;
+                                } | {
+                                    v: 1;
+                                    slot: {
+                                        kind: 'provider_model';
+                                    } | {
+                                        kind: 'connected_service_purpose';
+                                        purpose: {
+                                            consumer: {
+                                                pluginId: string;
+                                                localId: string;
+                                            };
+                                            purpose: string;
+                                        };
+                                    };
+                                    resourceId: null;
+                                })[] | undefined;
+                                allowedTools?: string[] | undefined;
+                                unlistedTools?: 'deny' | 'ask' | undefined;
+                            };
+                        };
+                        selection: {
+                            allowedTools?: string[] | undefined;
+                            unlistedTools?: 'deny' | 'ask' | undefined;
+                            agentTarget?: {
+                                kind: 'agent';
+                                identity: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                definitionId?: string | undefined;
+                            } | null | undefined;
+                            modelSelection?: {
+                                v: 1;
+                                ref: {
+                                    agentTargetKey: string;
+                                    providerConnectionId: null;
+                                    modelId: string;
+                                } | {
+                                    agentTargetKey: string;
+                                    providerConnectionId: string;
+                                    modelId: string;
+                                };
+                                updatedAt: number;
+                            } | null | undefined;
+                            profileId?: string | null | undefined;
+                            permissionMode?: string | null | undefined;
+                            acpSessionModeId?: string | null | undefined;
+                            sessionConfigOptionOverrides?: {
+                                [x: string]: unknown;
+                                v: 1;
+                                updatedAt: number;
+                                overrides: Record<string, {
+                                    [x: string]: unknown;
+                                    updatedAt: number;
+                                    value: string | number | boolean | null;
+                                }>;
+                            } | null | undefined;
+                            capabilitySelection?: {
+                                mcp?: {
+                                    forceIncludeServerIds: string[];
+                                    forceExcludeServerIds: string[];
+                                    v: 1;
+                                    managedServersEnabled: boolean;
+                                } | undefined;
+                                skills?: {
+                                    forceIncludeSkillIds: string[];
+                                    forceExcludeSkillIds: string[];
+                                    excludeNativeSkillNames: string[];
+                                    v: 1;
+                                } | undefined;
+                            } | null | undefined;
+                            connectedServices?: {
+                                v: 2;
+                                bindingsByServiceId: Record<string, {
+                                    source: 'native';
+                                } | {
+                                    source: 'connected';
+                                    selection: 'group';
+                                    groupId: string;
+                                    profileId?: string | undefined;
+                                } | {
+                                    source: 'connected';
+                                    selection: 'profile';
+                                    profileId: string;
+                                } | {
+                                    source: 'team_resource';
+                                    resourceId: string;
+                                    deliveryMode: 'direct';
+                                    disclosedMember: {
+                                        service: {
+                                            pluginId: string;
+                                            localId: string;
+                                        };
+                                        accountId: string;
+                                    };
+                                } | {
+                                    source: 'team_resource';
+                                    resourceId: string;
+                                    deliveryMode: 'brokered';
+                                    disclosedMember?: undefined;
+                                }>;
+                            } | null | undefined;
+                            transcriptStorage?: 'direct' | 'persisted' | null | undefined;
+                            terminal?: {
+                                mode?: 'integrated' | 'plain' | 'tmux' | 'zellij' | 'herdr' | 'windows_terminal' | 'windows_console' | undefined;
+                                tmux?: {
+                                    sessionName?: string | undefined;
+                                    isolated?: boolean | undefined;
+                                    tmpDir?: string | null | undefined;
+                                } | undefined;
+                                herdr?: {
+                                    sessionName?: string | undefined;
+                                } | undefined;
+                                windows?: {
+                                    launchMode?: 'windows_terminal' | 'hidden' | 'console' | undefined;
+                                    console?: 'hidden' | 'visible' | undefined;
+                                    windowName?: string | undefined;
+                                } | undefined;
+                            } | null | undefined;
+                            windowsRemoteSessionLaunchMode?: 'windows_terminal' | 'hidden' | 'console' | null | undefined;
+                            windowsRemoteSessionConsole?: 'hidden' | 'visible' | null | undefined;
+                            windowsTerminalWindowName?: string | null | undefined;
+                            runtimeDescriptorV1?: {
+                                v: 1;
+                                agentId: string;
+                                agent: {
+                                    backendMode: string;
+                                    home?: 'user' | 'connectedService' | undefined;
+                                    connectedServiceId?: string | undefined;
+                                    connectedServiceProfileId?: string | undefined;
+                                    connectedServiceGroupId?: string | undefined;
+                                };
+                            } | null | undefined;
+                            permissionModeUpdatedAt?: number | undefined;
+                            launchEnvironment?: {
+                                values: Record<string, string>;
+                                unset: string[];
+                            } | undefined;
+                            providerSessionResume?: {
+                                kind: 'provider_session.v1';
+                                providerSessionId: string;
+                            } | undefined;
+                            conversation?: {
+                                kind: 'shared_run';
+                            } | {
+                                kind: 'fresh';
+                            } | {
+                                kind: 'origin_session';
+                            } | {
+                                kind: 'input';
+                                name: string;
+                            } | {
+                                kind: 'from_step';
+                                producer: {
+                                    blockId: string;
+                                    scope: {
+                                        kind: 'current';
+                                    } | {
+                                        kind: 'previous_iteration';
+                                        loopBlockId: string;
+                                    } | {
+                                        kind: 'outer';
+                                        levels: number;
+                                    };
+                                };
+                            } | {
+                                kind: 'existing_session';
+                                sessionId: string;
+                                machineId: string;
+                            } | undefined;
+                            workspace?: {
+                                kind: 'inherit';
+                            } | {
+                                kind: 'project_checkout';
+                            } | {
+                                kind: 'from_step';
+                                producer: {
+                                    blockId: string;
+                                    scope: {
+                                        kind: 'current';
+                                    } | {
+                                        kind: 'previous_iteration';
+                                        loopBlockId: string;
+                                    } | {
+                                        kind: 'outer';
+                                        levels: number;
+                                    };
+                                };
+                            } | {
+                                kind: 'new_worktree';
+                                source: {
+                                    kind: 'original';
+                                } | {
+                                    kind: 'workflow';
+                                } | {
+                                    kind: 'step';
+                                    producer: {
+                                        blockId: string;
+                                        scope: {
+                                            kind: 'current';
+                                        } | {
+                                            kind: 'previous_iteration';
+                                            loopBlockId: string;
+                                        } | {
+                                            kind: 'outer';
+                                            levels: number;
+                                        };
+                                    };
+                                };
+                                displayName?: string | undefined;
+                                baseRef?: string | null | undefined;
+                            } | undefined;
+                        };
+                        executionTarget: {
+                            kind: 'session';
+                        } | {
+                            kind: 'detached_run';
+                        };
+                        role?: {
+                            name: string;
+                            instructions: string;
+                            runsAs: {
+                                kind: 'session';
+                            } | {
+                                kind: 'background_run';
+                                intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                            };
+                            workspaceWrites: 'allow' | 'deny';
+                            secondOpinion: 'off' | 'encouraged';
+                            enabled: boolean;
+                            roleId: string;
+                            engine?: {
+                                agentTargetKey: string;
+                                modelId?: string | undefined;
+                                effort?: string | undefined;
+                            } | undefined;
+                            profileId?: string | undefined;
+                            canDelegateToOtherRoles?: boolean | undefined;
+                            changedAt?: 'workflow' | 'session' | 'settings' | 'run' | undefined;
+                            profileUnavailable?: boolean | undefined;
+                        } | undefined;
+                    }[];
                 } | undefined;
                 childRef?: string | undefined;
                 actionId?: string | undefined;
@@ -4682,8 +7640,10 @@ export type WorkflowsActionResultById = {
                     name: string;
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
+                    multiple?: boolean | undefined;
                     enum?: string[] | undefined;
                     default?: JsonValue | undefined;
+                    defaultFrom?: 'origin_session' | undefined;
                     description?: string | undefined;
                     optionsSourceId?: string | undefined;
                     inputType?: {
@@ -4693,7 +7653,7 @@ export type WorkflowsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'session' | 'period' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                 }[];
                 defaults: {
@@ -4825,6 +7785,9 @@ export type WorkflowsActionResultById = {
                     } | {
                         kind: 'origin_session';
                     } | {
+                        kind: 'input';
+                        name: string;
+                    } | {
                         kind: 'from_step';
                         producer: {
                             blockId: string;
@@ -4910,6 +7873,23 @@ export type WorkflowsActionResultById = {
                             updatedAt: number;
                         } | null | undefined;
                         effort?: string | undefined;
+                    } | {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
+                    } | undefined;
+                    participant?: {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
                     } | undefined;
                     executionTarget?: {
                         kind: 'session';
@@ -4933,6 +7913,7 @@ export type WorkflowsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 } | {
                     roleId: string;
                     name: string;
@@ -4951,6 +7932,7 @@ export type WorkflowsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 })[] | undefined;
                 blocks: readonly PluginActionWorkflowBlockV1[];
                 finalOutput?: {
@@ -5002,6 +7984,14 @@ export type WorkflowsActionResultById = {
             origin: {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             metadata?: {
                 title: string;
@@ -5023,6 +8013,7 @@ export type WorkflowsActionResultById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             }[] | undefined;
         };
         authoredDefinition: Readonly<{
@@ -5031,8 +8022,10 @@ export type WorkflowsActionResultById = {
                 name: string;
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
+                multiple?: boolean | undefined;
                 enum?: string[] | undefined;
                 default?: JsonValue | undefined;
+                defaultFrom?: 'origin_session' | undefined;
                 description?: string | undefined;
                 optionsSourceId?: string | undefined;
                 inputType?: {
@@ -5042,7 +8035,7 @@ export type WorkflowsActionResultById = {
                     hostType: 'usageQuery';
                     field?: 'session' | 'period' | undefined;
                 } | {
-                    hostType: 'session' | 'workspace' | 'machine';
+                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                 } | undefined;
             }[];
             defaults: {
@@ -5174,6 +8167,9 @@ export type WorkflowsActionResultById = {
                 } | {
                     kind: 'origin_session';
                 } | {
+                    kind: 'input';
+                    name: string;
+                } | {
                     kind: 'from_step';
                     producer: {
                         blockId: string;
@@ -5259,6 +8255,23 @@ export type WorkflowsActionResultById = {
                         updatedAt: number;
                     } | null | undefined;
                     effort?: string | undefined;
+                } | {
+                    kind: 'input';
+                    name: string;
+                    path?: (string | number)[] | undefined;
+                } | {
+                    kind: 'item';
+                    field: 'value';
+                    path?: (string | number)[] | undefined;
+                } | undefined;
+                participant?: {
+                    kind: 'input';
+                    name: string;
+                    path?: (string | number)[] | undefined;
+                } | {
+                    kind: 'item';
+                    field: 'value';
+                    path?: (string | number)[] | undefined;
                 } | undefined;
                 executionTarget?: {
                     kind: 'session';
@@ -5282,6 +8295,7 @@ export type WorkflowsActionResultById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             } | {
                 roleId: string;
                 name: string;
@@ -5300,6 +8314,7 @@ export type WorkflowsActionResultById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             })[] | undefined;
             blocks: readonly PluginActionWorkflowBlockV1[];
             finalOutput?: {
@@ -5341,18 +8356,156 @@ export type WorkflowsActionResultById = {
     };
     readonly "workflow.run.wait": {
         run: {
-            [x: string]: any;
+            sourceArtifactId: string | null;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
-                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
+                cause?: {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'schedule';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        scheduledFor: number;
+                    };
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'pluginEvent';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        eventRef: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        sourceSelectorId: string;
+                    };
+                } | {
+                    evidence: {
+                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionStarted';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
+                    } | {
+                        event: 'userActionRequired';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        requestId: string;
+                        requestKind: 'permission' | 'user_action';
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    };
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'sessionLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'runLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        source: {
+                            kind: 'execution_run';
+                            machineId: string;
+                            runId: string;
+                            sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
+                        } | {
+                            kind: 'workflow_run';
+                            runId: string;
+                        };
+                        condition: 'terminal' | 'needs_attention';
+                        sourceRevision: number;
+                        originRunId?: string | undefined;
+                    };
+                } | {
+                    kind: 'manual';
+                    invokedAt: number;
+                } | {
+                    kind: 'conversation';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    triggerId?: (string) | undefined;
+                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -5372,10 +8525,25 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
+            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: any[] | undefined;
+                destinations?: {
+                    sourceKey: string;
+                    blockId: string;
+                    sessionIds: string[];
+                    ordinal?: number | undefined;
+                    name?: string | undefined;
+                    observation?: {
+                        recordId: string;
+                        sequence: string;
+                        attempt: string;
+                        contentRevision: string;
+                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
+                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
+                    } | undefined;
+                }[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -5392,7 +8560,13 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
+            where?: {
+                machineId: string;
+                directory: string;
+                workspaceRefId?: string | undefined;
+            } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         observation: 'terminal';
@@ -5400,18 +8574,156 @@ export type WorkflowsActionResultById = {
         result?: JsonValue | undefined;
     } | {
         run: {
-            [x: string]: any;
+            sourceArtifactId: string | null;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
-                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
+                cause?: {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'schedule';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        scheduledFor: number;
+                    };
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'pluginEvent';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        eventRef: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        sourceSelectorId: string;
+                    };
+                } | {
+                    evidence: {
+                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionStarted';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
+                    } | {
+                        event: 'userActionRequired';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        requestId: string;
+                        requestKind: 'permission' | 'user_action';
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    };
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'sessionLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'runLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        source: {
+                            kind: 'execution_run';
+                            machineId: string;
+                            runId: string;
+                            sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
+                        } | {
+                            kind: 'workflow_run';
+                            runId: string;
+                        };
+                        condition: 'terminal' | 'needs_attention';
+                        sourceRevision: number;
+                        originRunId?: string | undefined;
+                    };
+                } | {
+                    kind: 'manual';
+                    invokedAt: number;
+                } | {
+                    kind: 'conversation';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    triggerId?: (string) | undefined;
+                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -5431,10 +8743,25 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
+            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: any[] | undefined;
+                destinations?: {
+                    sourceKey: string;
+                    blockId: string;
+                    sessionIds: string[];
+                    ordinal?: number | undefined;
+                    name?: string | undefined;
+                    observation?: {
+                        recordId: string;
+                        sequence: string;
+                        attempt: string;
+                        contentRevision: string;
+                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
+                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
+                    } | undefined;
+                }[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -5451,7 +8778,13 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
+            where?: {
+                machineId: string;
+                directory: string;
+                workspaceRefId?: string | undefined;
+            } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         observation: 'paused';
@@ -5459,18 +8792,156 @@ export type WorkflowsActionResultById = {
         result?: JsonValue | undefined;
     } | {
         run: {
-            [x: string]: any;
+            sourceArtifactId: string | null;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
-                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
+                cause?: {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'schedule';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        scheduledFor: number;
+                    };
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'pluginEvent';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        eventRef: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        sourceSelectorId: string;
+                    };
+                } | {
+                    evidence: {
+                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionStarted';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
+                    } | {
+                        event: 'userActionRequired';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        requestId: string;
+                        requestKind: 'permission' | 'user_action';
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    };
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'sessionLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'runLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        source: {
+                            kind: 'execution_run';
+                            machineId: string;
+                            runId: string;
+                            sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
+                        } | {
+                            kind: 'workflow_run';
+                            runId: string;
+                        };
+                        condition: 'terminal' | 'needs_attention';
+                        sourceRevision: number;
+                        originRunId?: string | undefined;
+                    };
+                } | {
+                    kind: 'manual';
+                    invokedAt: number;
+                } | {
+                    kind: 'conversation';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    triggerId?: (string) | undefined;
+                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -5490,10 +8961,25 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
+            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: any[] | undefined;
+                destinations?: {
+                    sourceKey: string;
+                    blockId: string;
+                    sessionIds: string[];
+                    ordinal?: number | undefined;
+                    name?: string | undefined;
+                    observation?: {
+                        recordId: string;
+                        sequence: string;
+                        attempt: string;
+                        contentRevision: string;
+                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
+                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
+                    } | undefined;
+                }[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -5510,7 +8996,13 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
+            where?: {
+                machineId: string;
+                directory: string;
+                workspaceRefId?: string | undefined;
+            } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         observation: 'needs_attention';
@@ -5518,18 +9010,156 @@ export type WorkflowsActionResultById = {
         result?: JsonValue | undefined;
     } | {
         run: {
-            [x: string]: any;
+            sourceArtifactId: string | null;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
-                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
+                cause?: {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'schedule';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        scheduledFor: number;
+                    };
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'pluginEvent';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        eventRef: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        sourceSelectorId: string;
+                    };
+                } | {
+                    evidence: {
+                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionStarted';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
+                    } | {
+                        event: 'userActionRequired';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        requestId: string;
+                        requestKind: 'permission' | 'user_action';
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    };
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'sessionLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'runLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        source: {
+                            kind: 'execution_run';
+                            machineId: string;
+                            runId: string;
+                            sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
+                        } | {
+                            kind: 'workflow_run';
+                            runId: string;
+                        };
+                        condition: 'terminal' | 'needs_attention';
+                        sourceRevision: number;
+                        originRunId?: string | undefined;
+                    };
+                } | {
+                    kind: 'manual';
+                    invokedAt: number;
+                } | {
+                    kind: 'conversation';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    triggerId?: (string) | undefined;
+                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -5549,10 +9179,25 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
+            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: any[] | undefined;
+                destinations?: {
+                    sourceKey: string;
+                    blockId: string;
+                    sessionIds: string[];
+                    ordinal?: number | undefined;
+                    name?: string | undefined;
+                    observation?: {
+                        recordId: string;
+                        sequence: string;
+                        attempt: string;
+                        contentRevision: string;
+                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
+                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
+                    } | undefined;
+                }[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -5569,25 +9214,169 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
+            where?: {
+                machineId: string;
+                directory: string;
+                workspaceRefId?: string | undefined;
+            } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         observation: 'timeout';
         result?: JsonValue | undefined;
     } | {
         run: {
-            [x: string]: any;
+            sourceArtifactId: string | null;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
-                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
+                cause?: {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'schedule';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        scheduledFor: number;
+                    };
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'pluginEvent';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        eventRef: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        sourceSelectorId: string;
+                    };
+                } | {
+                    evidence: {
+                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionStarted';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
+                    } | {
+                        event: 'userActionRequired';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        requestId: string;
+                        requestKind: 'permission' | 'user_action';
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    };
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'sessionLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'runLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        source: {
+                            kind: 'execution_run';
+                            machineId: string;
+                            runId: string;
+                            sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
+                        } | {
+                            kind: 'workflow_run';
+                            runId: string;
+                        };
+                        condition: 'terminal' | 'needs_attention';
+                        sourceRevision: number;
+                        originRunId?: string | undefined;
+                    };
+                } | {
+                    kind: 'manual';
+                    invokedAt: number;
+                } | {
+                    kind: 'conversation';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    triggerId?: (string) | undefined;
+                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -5607,10 +9396,25 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
+            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: any[] | undefined;
+                destinations?: {
+                    sourceKey: string;
+                    blockId: string;
+                    sessionIds: string[];
+                    ordinal?: number | undefined;
+                    name?: string | undefined;
+                    observation?: {
+                        recordId: string;
+                        sequence: string;
+                        attempt: string;
+                        contentRevision: string;
+                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
+                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
+                    } | undefined;
+                }[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -5627,7 +9431,13 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
+            where?: {
+                machineId: string;
+                directory: string;
+                workspaceRefId?: string | undefined;
+            } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         observation: 'not_matched_terminal';
@@ -5635,18 +9445,156 @@ export type WorkflowsActionResultById = {
     };
     readonly "workflow.run.pause": {
         run: {
-            [x: string]: any;
+            sourceArtifactId: string | null;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
-                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
+                cause?: {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'schedule';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        scheduledFor: number;
+                    };
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'pluginEvent';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        eventRef: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        sourceSelectorId: string;
+                    };
+                } | {
+                    evidence: {
+                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionStarted';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
+                    } | {
+                        event: 'userActionRequired';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        requestId: string;
+                        requestKind: 'permission' | 'user_action';
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    };
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'sessionLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'runLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        source: {
+                            kind: 'execution_run';
+                            machineId: string;
+                            runId: string;
+                            sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
+                        } | {
+                            kind: 'workflow_run';
+                            runId: string;
+                        };
+                        condition: 'terminal' | 'needs_attention';
+                        sourceRevision: number;
+                        originRunId?: string | undefined;
+                    };
+                } | {
+                    kind: 'manual';
+                    invokedAt: number;
+                } | {
+                    kind: 'conversation';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    triggerId?: (string) | undefined;
+                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -5666,10 +9614,25 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
+            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: any[] | undefined;
+                destinations?: {
+                    sourceKey: string;
+                    blockId: string;
+                    sessionIds: string[];
+                    ordinal?: number | undefined;
+                    name?: string | undefined;
+                    observation?: {
+                        recordId: string;
+                        sequence: string;
+                        attempt: string;
+                        contentRevision: string;
+                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
+                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
+                    } | undefined;
+                }[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -5686,25 +9649,169 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
+            where?: {
+                machineId: string;
+                directory: string;
+                workspaceRefId?: string | undefined;
+            } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         intent: 'cancelled' | 'pause_requested' | 'paused' | 'unavailable' | 'cancel_requested' | 'resumed' | 'recovery_required';
     };
     readonly "workflow.run.resume": {
         run: {
-            [x: string]: any;
+            sourceArtifactId: string | null;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
-                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
+                cause?: {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'schedule';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        scheduledFor: number;
+                    };
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'pluginEvent';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        eventRef: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        sourceSelectorId: string;
+                    };
+                } | {
+                    evidence: {
+                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionStarted';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
+                    } | {
+                        event: 'userActionRequired';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        requestId: string;
+                        requestKind: 'permission' | 'user_action';
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    };
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'sessionLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'runLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        source: {
+                            kind: 'execution_run';
+                            machineId: string;
+                            runId: string;
+                            sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
+                        } | {
+                            kind: 'workflow_run';
+                            runId: string;
+                        };
+                        condition: 'terminal' | 'needs_attention';
+                        sourceRevision: number;
+                        originRunId?: string | undefined;
+                    };
+                } | {
+                    kind: 'manual';
+                    invokedAt: number;
+                } | {
+                    kind: 'conversation';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    triggerId?: (string) | undefined;
+                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -5724,10 +9831,25 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
+            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: any[] | undefined;
+                destinations?: {
+                    sourceKey: string;
+                    blockId: string;
+                    sessionIds: string[];
+                    ordinal?: number | undefined;
+                    name?: string | undefined;
+                    observation?: {
+                        recordId: string;
+                        sequence: string;
+                        attempt: string;
+                        contentRevision: string;
+                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
+                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
+                    } | undefined;
+                }[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -5744,25 +9866,169 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
+            where?: {
+                machineId: string;
+                directory: string;
+                workspaceRefId?: string | undefined;
+            } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         intent: 'cancelled' | 'pause_requested' | 'paused' | 'unavailable' | 'cancel_requested' | 'resumed' | 'recovery_required';
     };
     readonly "workflow.run.cancel": {
         run: {
-            [x: string]: any;
+            sourceArtifactId: string | null;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
-                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
+                cause?: {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'schedule';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        scheduledFor: number;
+                    };
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'pluginEvent';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        eventRef: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        sourceSelectorId: string;
+                    };
+                } | {
+                    evidence: {
+                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionStarted';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
+                    } | {
+                        event: 'userActionRequired';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        requestId: string;
+                        requestKind: 'permission' | 'user_action';
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    };
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'sessionLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'runLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        source: {
+                            kind: 'execution_run';
+                            machineId: string;
+                            runId: string;
+                            sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
+                        } | {
+                            kind: 'workflow_run';
+                            runId: string;
+                        };
+                        condition: 'terminal' | 'needs_attention';
+                        sourceRevision: number;
+                        originRunId?: string | undefined;
+                    };
+                } | {
+                    kind: 'manual';
+                    invokedAt: number;
+                } | {
+                    kind: 'conversation';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    triggerId?: (string) | undefined;
+                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -5782,10 +10048,25 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
+            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: any[] | undefined;
+                destinations?: {
+                    sourceKey: string;
+                    blockId: string;
+                    sessionIds: string[];
+                    ordinal?: number | undefined;
+                    name?: string | undefined;
+                    observation?: {
+                        recordId: string;
+                        sequence: string;
+                        attempt: string;
+                        contentRevision: string;
+                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
+                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
+                    } | undefined;
+                }[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -5802,17 +10083,23 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
+            where?: {
+                machineId: string;
+                directory: string;
+                workspaceRefId?: string | undefined;
+            } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         intent: 'cancelled' | 'pause_requested' | 'paused' | 'unavailable' | 'cancel_requested' | 'resumed' | 'recovery_required';
     };
     readonly "workflow.run.invocations.list": {
         invocations: {
-            [x: string]: any;
             id: string;
             runId: string;
             sequence: string;
+            parentRecordId: string | null;
             memberOrdinal: string;
             attempt: string;
             contentRevision: string;
@@ -5824,10 +10111,10 @@ export type WorkflowsActionResultById = {
         nextCursor?: string | undefined;
         invocationDetails?: {
             index: {
-                [x: string]: any;
                 id: string;
                 runId: string;
                 sequence: string;
+                parentRecordId: string | null;
                 memberOrdinal: string;
                 attempt: string;
                 contentRevision: string;
@@ -5836,7 +10123,6 @@ export type WorkflowsActionResultById = {
                 updatedAt: string;
             };
             progress: {
-                [x: string]: any;
                 kind: 'happier.workflow-progress.v1';
                 invocationPath: {
                     blockId: string;
@@ -5862,9 +10148,9 @@ export type WorkflowsActionResultById = {
                         kind: 'branch';
                         branchId: string;
                     } | {
-                        [x: string]: any;
                         kind: 'item';
                         index: string;
+                        displayLabel?: string | undefined;
                     } | {
                         kind: 'iteration';
                         index: string;
@@ -5873,7 +10159,21 @@ export type WorkflowsActionResultById = {
                 stepProgress?: {
                     completed: number;
                     total: number;
-                    destinations?: any[] | undefined;
+                    destinations?: {
+                        sourceKey: string;
+                        blockId: string;
+                        sessionIds: string[];
+                        ordinal?: number | undefined;
+                        name?: string | undefined;
+                        observation?: {
+                            recordId: string;
+                            sequence: string;
+                            attempt: string;
+                            contentRevision: string;
+                            lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
+                            blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
+                        } | undefined;
+                    }[] | undefined;
                     currentLoop?: {
                         completed: number;
                         total: number;
@@ -5883,12 +10183,46 @@ export type WorkflowsActionResultById = {
                     notificationCondition: 'matched' | 'suppressed';
                 }> | undefined;
                 container?: {
-                    [x: string]: any;
                     kind: 'body';
                     nextBlockOrdinal: string;
+                    frameInputs?: Record<string, JsonValue> | undefined;
+                    frameProjectWorkspace?: {
+                        creationIntent?: {
+                            kind: 'git_worktree';
+                            sourceDirectory: string;
+                            baseRef: string;
+                            displayName: string;
+                            branchMode: 'new';
+                        } | undefined;
+                        descriptor?: {
+                            machineId: string;
+                            directory: string;
+                            checkoutRootPath: string;
+                            workspaceRefId?: string | undefined;
+                            sourceInvocation?: {
+                                producer: {
+                                    blockId: string;
+                                    scope: {
+                                        kind: 'current';
+                                    } | {
+                                        kind: 'previous_iteration';
+                                        loopBlockId: string;
+                                    } | {
+                                        kind: 'outer';
+                                        levels: number;
+                                    };
+                                };
+                                invocationRecordId: string;
+                            } | undefined;
+                            checkout?: {
+                                kind: 'git_worktree';
+                                branchName: string;
+                            } | undefined;
+                        } | undefined;
+                    } | undefined;
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -5905,8 +10239,8 @@ export type WorkflowsActionResultById = {
                     kind: 'parallel';
                     nextBranchOrdinal: string;
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -5924,8 +10258,8 @@ export type WorkflowsActionResultById = {
                     selected: 'then' | 'otherwise';
                     nextBlockOrdinal: string;
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -5951,6 +10285,7 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'input';
                             name: string;
+                            path?: (string | number)[] | undefined;
                         };
                     } | {
                         kind: 'result';
@@ -5959,8 +10294,8 @@ export type WorkflowsActionResultById = {
                     };
                     count: string;
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -5986,6 +10321,7 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'input';
                             name: string;
+                            path?: (string | number)[] | undefined;
                         };
                     } | {
                         kind: 'result';
@@ -5994,8 +10330,8 @@ export type WorkflowsActionResultById = {
                     };
                     itemCount: string;
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -6014,8 +10350,8 @@ export type WorkflowsActionResultById = {
                     nextBodyBlockOrdinal: string;
                     mode: 'until';
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -6034,8 +10370,8 @@ export type WorkflowsActionResultById = {
                     nextBodyBlockOrdinal: string;
                     mode: 'evaluate';
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -6057,10 +10393,38 @@ export type WorkflowsActionResultById = {
                     completed: number;
                     total: number;
                 } | undefined;
+                input?: JsonValue | undefined;
                 validationIssues?: {
                     pointer: string;
                     message: string;
                 }[] | undefined;
+                result?: JsonValue | undefined;
+                replyOutcome?: {
+                    kind: 'answer';
+                    result: {
+                        sessionId: string;
+                        messageId: string;
+                    };
+                } | {
+                    kind: 'answer';
+                    publicationRef: {
+                        kind: 'session';
+                        session: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        messageId: string;
+                    } | {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    };
+                } | {
+                    kind: 'failed' | 'cancelled' | 'pass' | 'terminal_no_result' | 'declined';
+                } | undefined;
                 review?: {
                     resultSource?: {
                         kind: 'execution_input';
@@ -6103,28 +10467,51 @@ export type WorkflowsActionResultById = {
                     outputTokens?: number | undefined;
                     costUsd?: number | undefined;
                 } | undefined;
+                interaction?: JsonValue | undefined;
                 containerResult?: {
                     kind: 'container';
                     containerRecordId: string;
                 } | undefined;
+                resultContract?: JsonValue | undefined;
                 execution?: {
                     kind: 'session_ready';
                     sessionId: string;
                 } | {
-                    [x: string]: any;
                     localInputId: string;
                     kind: 'action';
                     actionId: string;
                     actionRequestId: string;
                     input: Record<string, JsonValue>;
                     turnId?: string | undefined;
+                    output?: JsonValue | undefined;
+                    awaitedRuns?: {
+                        key: string;
+                        runId: string;
+                        observation?: {
+                            kind: 'review_walkthrough';
+                            comparisonId: string;
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
+                        } | {
+                            comparisonId: string;
+                            kind: 'scm_diff_summary';
+                            output: 'summary' | 'walkthrough' | 'commitPlan';
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
+                        } | undefined;
+                    }[] | undefined;
+                    awaitedOperations?: {
+                        key: string;
+                        serverId: string;
+                        machineId: string;
+                        operationId: string;
+                    }[] | undefined;
                 } | {
                     localInputId: string;
                     kind: 'session';
                     sessionId: string;
                     turnId?: string | undefined;
                 } | {
-                    [x: string]: any;
                     localInputId: string;
                     kind: 'detached_run';
                     runId: string;
@@ -6243,20 +10630,66 @@ export type WorkflowsActionResultById = {
                         } | null | undefined;
                     };
                     turnId?: string | undefined;
+                    providerResumeIdentity?: {
+                        [x: string]: unknown;
+                        kind: 'provider_session.v1';
+                        backendTarget: {
+                            kind: 'backend';
+                            backendId: string;
+                            configuredBackendId?: string | undefined;
+                            sourceKind?: 'built_in' | 'configured' | undefined;
+                        };
+                        providerSessionId: string;
+                    } | undefined;
                 } | undefined;
                 sharedConversationInvocationRecordId?: {
-                    [x: string]: any;
+                    session?: string | undefined;
+                    detached_run?: string | undefined;
                 } | undefined;
                 observationDeadline?: {
                     kind: 'at';
                     expiresAt: string;
+                } | undefined;
+                workspace?: {
+                    creationIntent?: {
+                        kind: 'git_worktree';
+                        sourceDirectory: string;
+                        baseRef: string;
+                        displayName: string;
+                        branchMode: 'new';
+                    } | undefined;
+                    descriptor?: {
+                        machineId: string;
+                        directory: string;
+                        checkoutRootPath: string;
+                        workspaceRefId?: string | undefined;
+                        sourceInvocation?: {
+                            producer: {
+                                blockId: string;
+                                scope: {
+                                    kind: 'current';
+                                } | {
+                                    kind: 'previous_iteration';
+                                    loopBlockId: string;
+                                } | {
+                                    kind: 'outer';
+                                    levels: number;
+                                };
+                            };
+                            invocationRecordId: string;
+                        } | undefined;
+                        checkout?: {
+                            kind: 'git_worktree';
+                            branchName: string;
+                        } | undefined;
+                    } | undefined;
                 } | undefined;
                 reason?: {
                     code: string;
                     message?: string | undefined;
                     details?: {
                         code: 'workflow_conversation_unavailable';
-                        reason: any;
+                        reason: 'agentTarget' | 'modelSelection' | 'profileId' | 'terminal' | 'allowedTools' | 'unlistedTools' | 'permissionMode' | 'acpSessionModeId' | 'sessionConfigOptionOverrides' | 'capabilitySelection' | 'connectedServices' | 'transcriptStorage' | 'windowsRemoteSessionLaunchMode' | 'windowsRemoteSessionConsole' | 'windowsTerminalWindowName' | 'runtimeDescriptorV1' | 'recovery_execution_missing' | 'target_kind_mismatch' | 'session_unavailable' | 'producer_conversation_missing' | 'origin_session_missing' | 'session_identity_mismatch' | 'machine_mismatch' | 'workspace_mismatch' | 'workspace_unavailable' | 'account_scope_unavailable' | 'owner_metadata_unavailable' | 'work_depth_unavailable';
                         expected: {
                             kind: 'string' | 'number' | 'boolean' | 'object' | 'null' | 'array' | 'agent' | 'session' | 'detached_run' | 'action' | 'unavailable' | 'unset' | 'available' | 'session_ready';
                             ids?: string[] | undefined;
@@ -6266,7 +10699,90 @@ export type WorkflowsActionResultById = {
                             ids?: string[] | undefined;
                         };
                     } | undefined;
+                    runtimeIssueV1?: Readonly<{
+                        v: 1;
+                        scope: 'primary_session';
+                        status: 'failed';
+                        code: string;
+                        source: 'unknown' | 'agent_status_error' | 'agent_process_exit' | 'agent_process_exit_after_switch' | 'agent_session_error' | 'usage_limit' | 'team_credential' | 'auth_error' | 'dependency_failure' | 'stream_error' | 'permission_blocked';
+                        occurredAt: number;
+                        sessionSeq?: number | undefined;
+                        agentId?: string | undefined;
+                        agentTurnId?: string | undefined;
+                        sanitizedPreview?: string | undefined;
+                        usageLimit?: {
+                            v: 1;
+                            resetAtMs: number | null;
+                            retryAfterMs: number | null;
+                            quotaScope: 'unknown' | 'workspace' | 'model' | 'account' | 'organization' | 'provider';
+                            recoverability: 'unknown' | 'wait' | 'manual' | 'switch_account';
+                            providerLimitId?: string | undefined;
+                            planType?: string | null | undefined;
+                            utilization?: number | null | undefined;
+                            limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
+                            quotaSnapshotRef?: {
+                                serviceId: string;
+                                profileId?: string | undefined;
+                                groupId?: string | undefined;
+                                fetchedAtMs?: number | undefined;
+                            } | undefined;
+                            effectiveMeterId?: string | undefined;
+                            effectiveRemainingPct?: number | undefined;
+                            allWindows?: {
+                                meterId: string;
+                                scope?: string | undefined;
+                                remainingPct?: number | undefined;
+                                resetAtMs?: number | undefined;
+                                status?: string | undefined;
+                            }[] | undefined;
+                            recoveryDecision?: 'switching' | 'waiting_for_reset' | 'manual_intervention' | 'not_recoverable' | undefined;
+                            overage?: {
+                                status: 'unknown' | 'allowed' | 'allowed_warning' | 'rejected';
+                                resetAtMs: number | null;
+                                disabledReason?: string | null | undefined;
+                            } | null | undefined;
+                            action?: {
+                                kind: 'open_url';
+                                url: string;
+                                labelKey?: string | undefined;
+                            } | {
+                                kind: 'settings';
+                            } | {
+                                kind: 'none';
+                            } | null | undefined;
+                            connectedService?: {
+                                serviceId: string;
+                                profileId: string | null;
+                                groupId: string | null;
+                                groupExhausted?: boolean | undefined;
+                            } | null | undefined;
+                        } | undefined;
+                        teamCredential?: {
+                            v: 1;
+                            resourceId: string;
+                            reasonCode: 'invalid_request' | 'resource_forbidden' | 'resource_unavailable' | 'resource_changed' | 'session_not_active' | 'operation_not_current' | 'execution_run_not_found' | 'execution_run_terminal' | 'execution_run_authority_unavailable' | 'broker_unavailable' | 'update_required' | 'team_credential_usage_limit' | 'token_limit_unavailable' | 'cost_limit_unavailable' | 'duplicate_request';
+                            usageLimit?: {
+                                metric: 'inference_requests' | 'total_tokens' | 'cost_usd';
+                                remaining: string;
+                                resetsAtUtc: string;
+                            } | undefined;
+                        } | undefined;
+                        temporaryThrottle?: {
+                            v: 1;
+                            retryAfterMs: number | null;
+                            recoverability: 'unknown' | 'wait' | 'manual' | 'retry';
+                        } | undefined;
+                        agentProcessExitAfterSwitch?: {
+                            exitCode: number | null;
+                            signal: string | null;
+                            lastStderrLine: string | null;
+                            vendorResumeId: string | null;
+                            materializationRoot: string | null;
+                            effectiveStateMode: 'isolated' | 'shared' | null;
+                        } | undefined;
+                    }> | undefined;
                 } | undefined;
+                previousAttemptRecordId?: string | undefined;
                 recovery?: {
                     conversation: 'same_conversation' | 'fresh_agent';
                     input: {
@@ -6296,7 +10812,7 @@ export type WorkflowsActionResultById = {
                                         label: string;
                                         typeLabel: string;
                                         description?: string | undefined;
-                                        icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                                        icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
                                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                                     };
                                 }[];
@@ -6350,10 +10866,10 @@ export type WorkflowsActionResultById = {
     readonly "workflow.run.invocations.get": {
         invocation: {
             index: {
-                [x: string]: any;
                 id: string;
                 runId: string;
                 sequence: string;
+                parentRecordId: string | null;
                 memberOrdinal: string;
                 attempt: string;
                 contentRevision: string;
@@ -6362,7 +10878,6 @@ export type WorkflowsActionResultById = {
                 updatedAt: string;
             };
             progress: {
-                [x: string]: any;
                 kind: 'happier.workflow-progress.v1';
                 invocationPath: {
                     blockId: string;
@@ -6388,9 +10903,9 @@ export type WorkflowsActionResultById = {
                         kind: 'branch';
                         branchId: string;
                     } | {
-                        [x: string]: any;
                         kind: 'item';
                         index: string;
+                        displayLabel?: string | undefined;
                     } | {
                         kind: 'iteration';
                         index: string;
@@ -6399,7 +10914,21 @@ export type WorkflowsActionResultById = {
                 stepProgress?: {
                     completed: number;
                     total: number;
-                    destinations?: any[] | undefined;
+                    destinations?: {
+                        sourceKey: string;
+                        blockId: string;
+                        sessionIds: string[];
+                        ordinal?: number | undefined;
+                        name?: string | undefined;
+                        observation?: {
+                            recordId: string;
+                            sequence: string;
+                            attempt: string;
+                            contentRevision: string;
+                            lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
+                            blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
+                        } | undefined;
+                    }[] | undefined;
                     currentLoop?: {
                         completed: number;
                         total: number;
@@ -6409,12 +10938,46 @@ export type WorkflowsActionResultById = {
                     notificationCondition: 'matched' | 'suppressed';
                 }> | undefined;
                 container?: {
-                    [x: string]: any;
                     kind: 'body';
                     nextBlockOrdinal: string;
+                    frameInputs?: Record<string, JsonValue> | undefined;
+                    frameProjectWorkspace?: {
+                        creationIntent?: {
+                            kind: 'git_worktree';
+                            sourceDirectory: string;
+                            baseRef: string;
+                            displayName: string;
+                            branchMode: 'new';
+                        } | undefined;
+                        descriptor?: {
+                            machineId: string;
+                            directory: string;
+                            checkoutRootPath: string;
+                            workspaceRefId?: string | undefined;
+                            sourceInvocation?: {
+                                producer: {
+                                    blockId: string;
+                                    scope: {
+                                        kind: 'current';
+                                    } | {
+                                        kind: 'previous_iteration';
+                                        loopBlockId: string;
+                                    } | {
+                                        kind: 'outer';
+                                        levels: number;
+                                    };
+                                };
+                                invocationRecordId: string;
+                            } | undefined;
+                            checkout?: {
+                                kind: 'git_worktree';
+                                branchName: string;
+                            } | undefined;
+                        } | undefined;
+                    } | undefined;
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -6431,8 +10994,8 @@ export type WorkflowsActionResultById = {
                     kind: 'parallel';
                     nextBranchOrdinal: string;
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -6450,8 +11013,8 @@ export type WorkflowsActionResultById = {
                     selected: 'then' | 'otherwise';
                     nextBlockOrdinal: string;
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -6477,6 +11040,7 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'input';
                             name: string;
+                            path?: (string | number)[] | undefined;
                         };
                     } | {
                         kind: 'result';
@@ -6485,8 +11049,8 @@ export type WorkflowsActionResultById = {
                     };
                     count: string;
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -6512,6 +11076,7 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'input';
                             name: string;
+                            path?: (string | number)[] | undefined;
                         };
                     } | {
                         kind: 'result';
@@ -6520,8 +11085,8 @@ export type WorkflowsActionResultById = {
                     };
                     itemCount: string;
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -6540,8 +11105,8 @@ export type WorkflowsActionResultById = {
                     nextBodyBlockOrdinal: string;
                     mode: 'until';
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -6560,8 +11125,8 @@ export type WorkflowsActionResultById = {
                     nextBodyBlockOrdinal: string;
                     mode: 'evaluate';
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -6583,10 +11148,38 @@ export type WorkflowsActionResultById = {
                     completed: number;
                     total: number;
                 } | undefined;
+                input?: JsonValue | undefined;
                 validationIssues?: {
                     pointer: string;
                     message: string;
                 }[] | undefined;
+                result?: JsonValue | undefined;
+                replyOutcome?: {
+                    kind: 'answer';
+                    result: {
+                        sessionId: string;
+                        messageId: string;
+                    };
+                } | {
+                    kind: 'answer';
+                    publicationRef: {
+                        kind: 'session';
+                        session: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        messageId: string;
+                    } | {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    };
+                } | {
+                    kind: 'failed' | 'cancelled' | 'pass' | 'terminal_no_result' | 'declined';
+                } | undefined;
                 review?: {
                     resultSource?: {
                         kind: 'execution_input';
@@ -6629,28 +11222,51 @@ export type WorkflowsActionResultById = {
                     outputTokens?: number | undefined;
                     costUsd?: number | undefined;
                 } | undefined;
+                interaction?: JsonValue | undefined;
                 containerResult?: {
                     kind: 'container';
                     containerRecordId: string;
                 } | undefined;
+                resultContract?: JsonValue | undefined;
                 execution?: {
                     kind: 'session_ready';
                     sessionId: string;
                 } | {
-                    [x: string]: any;
                     localInputId: string;
                     kind: 'action';
                     actionId: string;
                     actionRequestId: string;
                     input: Record<string, JsonValue>;
                     turnId?: string | undefined;
+                    output?: JsonValue | undefined;
+                    awaitedRuns?: {
+                        key: string;
+                        runId: string;
+                        observation?: {
+                            kind: 'review_walkthrough';
+                            comparisonId: string;
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
+                        } | {
+                            comparisonId: string;
+                            kind: 'scm_diff_summary';
+                            output: 'summary' | 'walkthrough' | 'commitPlan';
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
+                        } | undefined;
+                    }[] | undefined;
+                    awaitedOperations?: {
+                        key: string;
+                        serverId: string;
+                        machineId: string;
+                        operationId: string;
+                    }[] | undefined;
                 } | {
                     localInputId: string;
                     kind: 'session';
                     sessionId: string;
                     turnId?: string | undefined;
                 } | {
-                    [x: string]: any;
                     localInputId: string;
                     kind: 'detached_run';
                     runId: string;
@@ -6769,20 +11385,66 @@ export type WorkflowsActionResultById = {
                         } | null | undefined;
                     };
                     turnId?: string | undefined;
+                    providerResumeIdentity?: {
+                        [x: string]: unknown;
+                        kind: 'provider_session.v1';
+                        backendTarget: {
+                            kind: 'backend';
+                            backendId: string;
+                            configuredBackendId?: string | undefined;
+                            sourceKind?: 'built_in' | 'configured' | undefined;
+                        };
+                        providerSessionId: string;
+                    } | undefined;
                 } | undefined;
                 sharedConversationInvocationRecordId?: {
-                    [x: string]: any;
+                    session?: string | undefined;
+                    detached_run?: string | undefined;
                 } | undefined;
                 observationDeadline?: {
                     kind: 'at';
                     expiresAt: string;
+                } | undefined;
+                workspace?: {
+                    creationIntent?: {
+                        kind: 'git_worktree';
+                        sourceDirectory: string;
+                        baseRef: string;
+                        displayName: string;
+                        branchMode: 'new';
+                    } | undefined;
+                    descriptor?: {
+                        machineId: string;
+                        directory: string;
+                        checkoutRootPath: string;
+                        workspaceRefId?: string | undefined;
+                        sourceInvocation?: {
+                            producer: {
+                                blockId: string;
+                                scope: {
+                                    kind: 'current';
+                                } | {
+                                    kind: 'previous_iteration';
+                                    loopBlockId: string;
+                                } | {
+                                    kind: 'outer';
+                                    levels: number;
+                                };
+                            };
+                            invocationRecordId: string;
+                        } | undefined;
+                        checkout?: {
+                            kind: 'git_worktree';
+                            branchName: string;
+                        } | undefined;
+                    } | undefined;
                 } | undefined;
                 reason?: {
                     code: string;
                     message?: string | undefined;
                     details?: {
                         code: 'workflow_conversation_unavailable';
-                        reason: any;
+                        reason: 'agentTarget' | 'modelSelection' | 'profileId' | 'terminal' | 'allowedTools' | 'unlistedTools' | 'permissionMode' | 'acpSessionModeId' | 'sessionConfigOptionOverrides' | 'capabilitySelection' | 'connectedServices' | 'transcriptStorage' | 'windowsRemoteSessionLaunchMode' | 'windowsRemoteSessionConsole' | 'windowsTerminalWindowName' | 'runtimeDescriptorV1' | 'recovery_execution_missing' | 'target_kind_mismatch' | 'session_unavailable' | 'producer_conversation_missing' | 'origin_session_missing' | 'session_identity_mismatch' | 'machine_mismatch' | 'workspace_mismatch' | 'workspace_unavailable' | 'account_scope_unavailable' | 'owner_metadata_unavailable' | 'work_depth_unavailable';
                         expected: {
                             kind: 'string' | 'number' | 'boolean' | 'object' | 'null' | 'array' | 'agent' | 'session' | 'detached_run' | 'action' | 'unavailable' | 'unset' | 'available' | 'session_ready';
                             ids?: string[] | undefined;
@@ -6792,7 +11454,90 @@ export type WorkflowsActionResultById = {
                             ids?: string[] | undefined;
                         };
                     } | undefined;
+                    runtimeIssueV1?: Readonly<{
+                        v: 1;
+                        scope: 'primary_session';
+                        status: 'failed';
+                        code: string;
+                        source: 'unknown' | 'agent_status_error' | 'agent_process_exit' | 'agent_process_exit_after_switch' | 'agent_session_error' | 'usage_limit' | 'team_credential' | 'auth_error' | 'dependency_failure' | 'stream_error' | 'permission_blocked';
+                        occurredAt: number;
+                        sessionSeq?: number | undefined;
+                        agentId?: string | undefined;
+                        agentTurnId?: string | undefined;
+                        sanitizedPreview?: string | undefined;
+                        usageLimit?: {
+                            v: 1;
+                            resetAtMs: number | null;
+                            retryAfterMs: number | null;
+                            quotaScope: 'unknown' | 'workspace' | 'model' | 'account' | 'organization' | 'provider';
+                            recoverability: 'unknown' | 'wait' | 'manual' | 'switch_account';
+                            providerLimitId?: string | undefined;
+                            planType?: string | null | undefined;
+                            utilization?: number | null | undefined;
+                            limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
+                            quotaSnapshotRef?: {
+                                serviceId: string;
+                                profileId?: string | undefined;
+                                groupId?: string | undefined;
+                                fetchedAtMs?: number | undefined;
+                            } | undefined;
+                            effectiveMeterId?: string | undefined;
+                            effectiveRemainingPct?: number | undefined;
+                            allWindows?: {
+                                meterId: string;
+                                scope?: string | undefined;
+                                remainingPct?: number | undefined;
+                                resetAtMs?: number | undefined;
+                                status?: string | undefined;
+                            }[] | undefined;
+                            recoveryDecision?: 'switching' | 'waiting_for_reset' | 'manual_intervention' | 'not_recoverable' | undefined;
+                            overage?: {
+                                status: 'unknown' | 'allowed' | 'allowed_warning' | 'rejected';
+                                resetAtMs: number | null;
+                                disabledReason?: string | null | undefined;
+                            } | null | undefined;
+                            action?: {
+                                kind: 'open_url';
+                                url: string;
+                                labelKey?: string | undefined;
+                            } | {
+                                kind: 'settings';
+                            } | {
+                                kind: 'none';
+                            } | null | undefined;
+                            connectedService?: {
+                                serviceId: string;
+                                profileId: string | null;
+                                groupId: string | null;
+                                groupExhausted?: boolean | undefined;
+                            } | null | undefined;
+                        } | undefined;
+                        teamCredential?: {
+                            v: 1;
+                            resourceId: string;
+                            reasonCode: 'invalid_request' | 'resource_forbidden' | 'resource_unavailable' | 'resource_changed' | 'session_not_active' | 'operation_not_current' | 'execution_run_not_found' | 'execution_run_terminal' | 'execution_run_authority_unavailable' | 'broker_unavailable' | 'update_required' | 'team_credential_usage_limit' | 'token_limit_unavailable' | 'cost_limit_unavailable' | 'duplicate_request';
+                            usageLimit?: {
+                                metric: 'inference_requests' | 'total_tokens' | 'cost_usd';
+                                remaining: string;
+                                resetsAtUtc: string;
+                            } | undefined;
+                        } | undefined;
+                        temporaryThrottle?: {
+                            v: 1;
+                            retryAfterMs: number | null;
+                            recoverability: 'unknown' | 'wait' | 'manual' | 'retry';
+                        } | undefined;
+                        agentProcessExitAfterSwitch?: {
+                            exitCode: number | null;
+                            signal: string | null;
+                            lastStderrLine: string | null;
+                            vendorResumeId: string | null;
+                            materializationRoot: string | null;
+                            effectiveStateMode: 'isolated' | 'shared' | null;
+                        } | undefined;
+                    }> | undefined;
                 } | undefined;
+                previousAttemptRecordId?: string | undefined;
                 recovery?: {
                     conversation: 'same_conversation' | 'fresh_agent';
                     input: {
@@ -6822,7 +11567,7 @@ export type WorkflowsActionResultById = {
                                         label: string;
                                         typeLabel: string;
                                         description?: string | undefined;
-                                        icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                                        icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
                                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                                     };
                                 }[];
@@ -6872,21 +11617,168 @@ export type WorkflowsActionResultById = {
                 };
             } | undefined;
         };
+        discussionResultDelivery?: {
+            discussion: {
+                serverId: string;
+                discussionId: string;
+            };
+            messageId: string;
+            throughSeq: number;
+            kind: 'originating_discussion';
+        } | undefined;
     };
     readonly "workflow.run.invocations.retry": {
         run: {
-            [x: string]: any;
+            sourceArtifactId: string | null;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
-                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
+                cause?: {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'schedule';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        scheduledFor: number;
+                    };
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'pluginEvent';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        eventRef: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        sourceSelectorId: string;
+                    };
+                } | {
+                    evidence: {
+                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionStarted';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
+                    } | {
+                        event: 'userActionRequired';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        requestId: string;
+                        requestKind: 'permission' | 'user_action';
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    };
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'sessionLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'runLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        source: {
+                            kind: 'execution_run';
+                            machineId: string;
+                            runId: string;
+                            sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
+                        } | {
+                            kind: 'workflow_run';
+                            runId: string;
+                        };
+                        condition: 'terminal' | 'needs_attention';
+                        sourceRevision: number;
+                        originRunId?: string | undefined;
+                    };
+                } | {
+                    kind: 'manual';
+                    invokedAt: number;
+                } | {
+                    kind: 'conversation';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    triggerId?: (string) | undefined;
+                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -6906,10 +11798,25 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
+            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: any[] | undefined;
+                destinations?: {
+                    sourceKey: string;
+                    blockId: string;
+                    sessionIds: string[];
+                    ordinal?: number | undefined;
+                    name?: string | undefined;
+                    observation?: {
+                        recordId: string;
+                        sequence: string;
+                        attempt: string;
+                        contentRevision: string;
+                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
+                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
+                    } | undefined;
+                }[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -6926,14 +11833,20 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
+            where?: {
+                machineId: string;
+                directory: string;
+                workspaceRefId?: string | undefined;
+            } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         invocation: {
-            [x: string]: any;
             id: string;
             runId: string;
             sequence: string;
+            parentRecordId: string | null;
             memberOrdinal: string;
             attempt: string;
             contentRevision: string;
@@ -6950,10 +11863,10 @@ export type WorkflowsActionResultById = {
     readonly "workflow.run.invocations.publish_draft": {
         invocation: {
             index: {
-                [x: string]: any;
                 id: string;
                 runId: string;
                 sequence: string;
+                parentRecordId: string | null;
                 memberOrdinal: string;
                 attempt: string;
                 contentRevision: string;
@@ -6962,7 +11875,6 @@ export type WorkflowsActionResultById = {
                 updatedAt: string;
             };
             progress: {
-                [x: string]: any;
                 kind: 'happier.workflow-progress.v1';
                 invocationPath: {
                     blockId: string;
@@ -6988,9 +11900,9 @@ export type WorkflowsActionResultById = {
                         kind: 'branch';
                         branchId: string;
                     } | {
-                        [x: string]: any;
                         kind: 'item';
                         index: string;
+                        displayLabel?: string | undefined;
                     } | {
                         kind: 'iteration';
                         index: string;
@@ -6999,7 +11911,21 @@ export type WorkflowsActionResultById = {
                 stepProgress?: {
                     completed: number;
                     total: number;
-                    destinations?: any[] | undefined;
+                    destinations?: {
+                        sourceKey: string;
+                        blockId: string;
+                        sessionIds: string[];
+                        ordinal?: number | undefined;
+                        name?: string | undefined;
+                        observation?: {
+                            recordId: string;
+                            sequence: string;
+                            attempt: string;
+                            contentRevision: string;
+                            lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
+                            blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
+                        } | undefined;
+                    }[] | undefined;
                     currentLoop?: {
                         completed: number;
                         total: number;
@@ -7009,12 +11935,46 @@ export type WorkflowsActionResultById = {
                     notificationCondition: 'matched' | 'suppressed';
                 }> | undefined;
                 container?: {
-                    [x: string]: any;
                     kind: 'body';
                     nextBlockOrdinal: string;
+                    frameInputs?: Record<string, JsonValue> | undefined;
+                    frameProjectWorkspace?: {
+                        creationIntent?: {
+                            kind: 'git_worktree';
+                            sourceDirectory: string;
+                            baseRef: string;
+                            displayName: string;
+                            branchMode: 'new';
+                        } | undefined;
+                        descriptor?: {
+                            machineId: string;
+                            directory: string;
+                            checkoutRootPath: string;
+                            workspaceRefId?: string | undefined;
+                            sourceInvocation?: {
+                                producer: {
+                                    blockId: string;
+                                    scope: {
+                                        kind: 'current';
+                                    } | {
+                                        kind: 'previous_iteration';
+                                        loopBlockId: string;
+                                    } | {
+                                        kind: 'outer';
+                                        levels: number;
+                                    };
+                                };
+                                invocationRecordId: string;
+                            } | undefined;
+                            checkout?: {
+                                kind: 'git_worktree';
+                                branchName: string;
+                            } | undefined;
+                        } | undefined;
+                    } | undefined;
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -7031,8 +11991,8 @@ export type WorkflowsActionResultById = {
                     kind: 'parallel';
                     nextBranchOrdinal: string;
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -7050,8 +12010,8 @@ export type WorkflowsActionResultById = {
                     selected: 'then' | 'otherwise';
                     nextBlockOrdinal: string;
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -7077,6 +12037,7 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'input';
                             name: string;
+                            path?: (string | number)[] | undefined;
                         };
                     } | {
                         kind: 'result';
@@ -7085,8 +12046,8 @@ export type WorkflowsActionResultById = {
                     };
                     count: string;
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -7112,6 +12073,7 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'input';
                             name: string;
+                            path?: (string | number)[] | undefined;
                         };
                     } | {
                         kind: 'result';
@@ -7120,8 +12082,8 @@ export type WorkflowsActionResultById = {
                     };
                     itemCount: string;
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -7140,8 +12102,8 @@ export type WorkflowsActionResultById = {
                     nextBodyBlockOrdinal: string;
                     mode: 'until';
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -7160,8 +12122,8 @@ export type WorkflowsActionResultById = {
                     nextBodyBlockOrdinal: string;
                     mode: 'evaluate';
                     closing?: {
-                        [x: string]: any;
                         code: string;
+                        causeInvocationRecordId?: string | undefined;
                         outcome?: {
                             kind: 'decision';
                             value: string;
@@ -7183,10 +12145,38 @@ export type WorkflowsActionResultById = {
                     completed: number;
                     total: number;
                 } | undefined;
+                input?: JsonValue | undefined;
                 validationIssues?: {
                     pointer: string;
                     message: string;
                 }[] | undefined;
+                result?: JsonValue | undefined;
+                replyOutcome?: {
+                    kind: 'answer';
+                    result: {
+                        sessionId: string;
+                        messageId: string;
+                    };
+                } | {
+                    kind: 'answer';
+                    publicationRef: {
+                        kind: 'session';
+                        session: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        messageId: string;
+                    } | {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    };
+                } | {
+                    kind: 'failed' | 'cancelled' | 'pass' | 'terminal_no_result' | 'declined';
+                } | undefined;
                 review?: {
                     resultSource?: {
                         kind: 'execution_input';
@@ -7229,28 +12219,51 @@ export type WorkflowsActionResultById = {
                     outputTokens?: number | undefined;
                     costUsd?: number | undefined;
                 } | undefined;
+                interaction?: JsonValue | undefined;
                 containerResult?: {
                     kind: 'container';
                     containerRecordId: string;
                 } | undefined;
+                resultContract?: JsonValue | undefined;
                 execution?: {
                     kind: 'session_ready';
                     sessionId: string;
                 } | {
-                    [x: string]: any;
                     localInputId: string;
                     kind: 'action';
                     actionId: string;
                     actionRequestId: string;
                     input: Record<string, JsonValue>;
                     turnId?: string | undefined;
+                    output?: JsonValue | undefined;
+                    awaitedRuns?: {
+                        key: string;
+                        runId: string;
+                        observation?: {
+                            kind: 'review_walkthrough';
+                            comparisonId: string;
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
+                        } | {
+                            comparisonId: string;
+                            kind: 'scm_diff_summary';
+                            output: 'summary' | 'walkthrough' | 'commitPlan';
+                            resultId?: string | undefined;
+                            afterRevision?: number | undefined;
+                        } | undefined;
+                    }[] | undefined;
+                    awaitedOperations?: {
+                        key: string;
+                        serverId: string;
+                        machineId: string;
+                        operationId: string;
+                    }[] | undefined;
                 } | {
                     localInputId: string;
                     kind: 'session';
                     sessionId: string;
                     turnId?: string | undefined;
                 } | {
-                    [x: string]: any;
                     localInputId: string;
                     kind: 'detached_run';
                     runId: string;
@@ -7369,20 +12382,66 @@ export type WorkflowsActionResultById = {
                         } | null | undefined;
                     };
                     turnId?: string | undefined;
+                    providerResumeIdentity?: {
+                        [x: string]: unknown;
+                        kind: 'provider_session.v1';
+                        backendTarget: {
+                            kind: 'backend';
+                            backendId: string;
+                            configuredBackendId?: string | undefined;
+                            sourceKind?: 'built_in' | 'configured' | undefined;
+                        };
+                        providerSessionId: string;
+                    } | undefined;
                 } | undefined;
                 sharedConversationInvocationRecordId?: {
-                    [x: string]: any;
+                    session?: string | undefined;
+                    detached_run?: string | undefined;
                 } | undefined;
                 observationDeadline?: {
                     kind: 'at';
                     expiresAt: string;
+                } | undefined;
+                workspace?: {
+                    creationIntent?: {
+                        kind: 'git_worktree';
+                        sourceDirectory: string;
+                        baseRef: string;
+                        displayName: string;
+                        branchMode: 'new';
+                    } | undefined;
+                    descriptor?: {
+                        machineId: string;
+                        directory: string;
+                        checkoutRootPath: string;
+                        workspaceRefId?: string | undefined;
+                        sourceInvocation?: {
+                            producer: {
+                                blockId: string;
+                                scope: {
+                                    kind: 'current';
+                                } | {
+                                    kind: 'previous_iteration';
+                                    loopBlockId: string;
+                                } | {
+                                    kind: 'outer';
+                                    levels: number;
+                                };
+                            };
+                            invocationRecordId: string;
+                        } | undefined;
+                        checkout?: {
+                            kind: 'git_worktree';
+                            branchName: string;
+                        } | undefined;
+                    } | undefined;
                 } | undefined;
                 reason?: {
                     code: string;
                     message?: string | undefined;
                     details?: {
                         code: 'workflow_conversation_unavailable';
-                        reason: any;
+                        reason: 'agentTarget' | 'modelSelection' | 'profileId' | 'terminal' | 'allowedTools' | 'unlistedTools' | 'permissionMode' | 'acpSessionModeId' | 'sessionConfigOptionOverrides' | 'capabilitySelection' | 'connectedServices' | 'transcriptStorage' | 'windowsRemoteSessionLaunchMode' | 'windowsRemoteSessionConsole' | 'windowsTerminalWindowName' | 'runtimeDescriptorV1' | 'recovery_execution_missing' | 'target_kind_mismatch' | 'session_unavailable' | 'producer_conversation_missing' | 'origin_session_missing' | 'session_identity_mismatch' | 'machine_mismatch' | 'workspace_mismatch' | 'workspace_unavailable' | 'account_scope_unavailable' | 'owner_metadata_unavailable' | 'work_depth_unavailable';
                         expected: {
                             kind: 'string' | 'number' | 'boolean' | 'object' | 'null' | 'array' | 'agent' | 'session' | 'detached_run' | 'action' | 'unavailable' | 'unset' | 'available' | 'session_ready';
                             ids?: string[] | undefined;
@@ -7392,7 +12451,90 @@ export type WorkflowsActionResultById = {
                             ids?: string[] | undefined;
                         };
                     } | undefined;
+                    runtimeIssueV1?: Readonly<{
+                        v: 1;
+                        scope: 'primary_session';
+                        status: 'failed';
+                        code: string;
+                        source: 'unknown' | 'agent_status_error' | 'agent_process_exit' | 'agent_process_exit_after_switch' | 'agent_session_error' | 'usage_limit' | 'team_credential' | 'auth_error' | 'dependency_failure' | 'stream_error' | 'permission_blocked';
+                        occurredAt: number;
+                        sessionSeq?: number | undefined;
+                        agentId?: string | undefined;
+                        agentTurnId?: string | undefined;
+                        sanitizedPreview?: string | undefined;
+                        usageLimit?: {
+                            v: 1;
+                            resetAtMs: number | null;
+                            retryAfterMs: number | null;
+                            quotaScope: 'unknown' | 'workspace' | 'model' | 'account' | 'organization' | 'provider';
+                            recoverability: 'unknown' | 'wait' | 'manual' | 'switch_account';
+                            providerLimitId?: string | undefined;
+                            planType?: string | null | undefined;
+                            utilization?: number | null | undefined;
+                            limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
+                            quotaSnapshotRef?: {
+                                serviceId: string;
+                                profileId?: string | undefined;
+                                groupId?: string | undefined;
+                                fetchedAtMs?: number | undefined;
+                            } | undefined;
+                            effectiveMeterId?: string | undefined;
+                            effectiveRemainingPct?: number | undefined;
+                            allWindows?: {
+                                meterId: string;
+                                scope?: string | undefined;
+                                remainingPct?: number | undefined;
+                                resetAtMs?: number | undefined;
+                                status?: string | undefined;
+                            }[] | undefined;
+                            recoveryDecision?: 'switching' | 'waiting_for_reset' | 'manual_intervention' | 'not_recoverable' | undefined;
+                            overage?: {
+                                status: 'unknown' | 'allowed' | 'allowed_warning' | 'rejected';
+                                resetAtMs: number | null;
+                                disabledReason?: string | null | undefined;
+                            } | null | undefined;
+                            action?: {
+                                kind: 'open_url';
+                                url: string;
+                                labelKey?: string | undefined;
+                            } | {
+                                kind: 'settings';
+                            } | {
+                                kind: 'none';
+                            } | null | undefined;
+                            connectedService?: {
+                                serviceId: string;
+                                profileId: string | null;
+                                groupId: string | null;
+                                groupExhausted?: boolean | undefined;
+                            } | null | undefined;
+                        } | undefined;
+                        teamCredential?: {
+                            v: 1;
+                            resourceId: string;
+                            reasonCode: 'invalid_request' | 'resource_forbidden' | 'resource_unavailable' | 'resource_changed' | 'session_not_active' | 'operation_not_current' | 'execution_run_not_found' | 'execution_run_terminal' | 'execution_run_authority_unavailable' | 'broker_unavailable' | 'update_required' | 'team_credential_usage_limit' | 'token_limit_unavailable' | 'cost_limit_unavailable' | 'duplicate_request';
+                            usageLimit?: {
+                                metric: 'inference_requests' | 'total_tokens' | 'cost_usd';
+                                remaining: string;
+                                resetsAtUtc: string;
+                            } | undefined;
+                        } | undefined;
+                        temporaryThrottle?: {
+                            v: 1;
+                            retryAfterMs: number | null;
+                            recoverability: 'unknown' | 'wait' | 'manual' | 'retry';
+                        } | undefined;
+                        agentProcessExitAfterSwitch?: {
+                            exitCode: number | null;
+                            signal: string | null;
+                            lastStderrLine: string | null;
+                            vendorResumeId: string | null;
+                            materializationRoot: string | null;
+                            effectiveStateMode: 'isolated' | 'shared' | null;
+                        } | undefined;
+                    }> | undefined;
                 } | undefined;
+                previousAttemptRecordId?: string | undefined;
                 recovery?: {
                     conversation: 'same_conversation' | 'fresh_agent';
                     input: {
@@ -7422,7 +12564,7 @@ export type WorkflowsActionResultById = {
                                         label: string;
                                         typeLabel: string;
                                         description?: string | undefined;
-                                        icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                                        icon?: 'file' | 'error' | 'check' | 'review' | 'attention' | 'terminal' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
                                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                                     };
                                 }[];
@@ -7472,21 +12614,168 @@ export type WorkflowsActionResultById = {
                 };
             } | undefined;
         };
+        discussionResultDelivery?: {
+            discussion: {
+                serverId: string;
+                discussionId: string;
+            };
+            messageId: string;
+            throughSeq: number;
+            kind: 'originating_discussion';
+        } | undefined;
     };
     readonly "workflow.run.invocations.complete_review": {
         run: {
-            [x: string]: any;
+            sourceArtifactId: string | null;
             ownerAccountId: string;
             visibleTeamId: string | null;
             id: string;
             origin: {
-                [x: string]: any;
                 kind: 'automation';
                 automationId: string;
                 originSessionId?: string | undefined;
+                cause?: {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'schedule';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        scheduledFor: number;
+                    };
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'pluginEvent';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        eventRef: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        sourceSelectorId: string;
+                    };
+                } | {
+                    evidence: {
+                        event: 'parentTurnCompleted' | 'parentTurnFailed' | 'parentTurnCancelled';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionStarted';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    } | {
+                        event: 'sessionArchived';
+                        sourceSessionId: string;
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                        originRunId?: string | undefined;
+                    } | {
+                        event: 'userActionRequired';
+                        sourceSessionId: string;
+                        sourceTurnId: string;
+                        requestId: string;
+                        requestKind: 'permission' | 'user_action';
+                        policy: {
+                            kind: 'nextMatches';
+                            count: number;
+                        } | {
+                            kind: 'currentTurn';
+                        } | {
+                            kind: 'firstMatch';
+                        } | {
+                            kind: 'everyMatch';
+                        };
+                    };
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'sessionLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                } | {
+                    kind: 'trigger';
+                    triggerId: string;
+                    triggerRevision: number;
+                    triggerKind: 'runLifecycle';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    evidence: {
+                        source: {
+                            kind: 'execution_run';
+                            machineId: string;
+                            runId: string;
+                            sessionId?: string | undefined;
+                            observation?: {
+                                kind: 'review_walkthrough';
+                                comparisonId: string;
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | {
+                                comparisonId: string;
+                                kind: 'scm_diff_summary';
+                                output: 'summary' | 'walkthrough' | 'commitPlan';
+                                resultId?: string | undefined;
+                                afterRevision?: number | undefined;
+                            } | undefined;
+                        } | {
+                            kind: 'workflow_run';
+                            runId: string;
+                        };
+                        condition: 'terminal' | 'needs_attention';
+                        sourceRevision: number;
+                        originRunId?: string | undefined;
+                    };
+                } | {
+                    kind: 'manual';
+                    invokedAt: number;
+                } | {
+                    kind: 'conversation';
+                    occurrenceKey: string;
+                    occurredAt: number;
+                    triggerId?: (string) | undefined;
+                } | undefined;
             } | {
                 kind: 'direct';
                 originSessionId?: string | undefined;
+                discussion?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
             };
             state: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'dispatch_failed' | 'skipped' | 'missed' | 'outcome_uncertain' | 'pause_requested' | 'paused' | 'interrupted' | 'waiting_for_review';
             revision: number;
@@ -7506,10 +12795,25 @@ export type WorkflowsActionResultById = {
             };
             createdAt: string;
             updatedAt: string;
+            startedBy?: 'agent' | 'user' | 'trigger' | null | undefined;
             stepProgress?: {
                 completed: number;
                 total: number;
-                destinations?: any[] | undefined;
+                destinations?: {
+                    sourceKey: string;
+                    blockId: string;
+                    sessionIds: string[];
+                    ordinal?: number | undefined;
+                    name?: string | undefined;
+                    observation?: {
+                        recordId: string;
+                        sequence: string;
+                        attempt: string;
+                        contentRevision: string;
+                        lifecycle: 'running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded';
+                        blockKind?: 'workflow' | 'action' | 'root' | 'step' | 'wait' | 'parallel' | 'loop' | 'if' | undefined;
+                    } | undefined;
+                }[] | undefined;
                 currentLoop?: {
                     completed: number;
                     total: number;
@@ -7526,14 +12830,20 @@ export type WorkflowsActionResultById = {
                 laneLabel?: string | undefined;
             } | null | undefined;
             heldCount?: number | undefined;
+            where?: {
+                machineId: string;
+                directory: string;
+                workspaceRefId?: string | undefined;
+            } | null | undefined;
             attentionRequired?: boolean | undefined;
+            automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
         invocation: {
-            [x: string]: any;
             id: string;
             runId: string;
             sequence: string;
+            parentRecordId: string | null;
             memberOrdinal: string;
             attempt: string;
             contentRevision: string;
@@ -7681,8 +12991,10 @@ export type WorkflowsActionResultById = {
                     name: string;
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
+                    multiple?: boolean | undefined;
                     enum?: string[] | undefined;
                     default?: JsonValue | undefined;
+                    defaultFrom?: 'origin_session' | undefined;
                     description?: string | undefined;
                     optionsSourceId?: string | undefined;
                     inputType?: {
@@ -7692,7 +13004,7 @@ export type WorkflowsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'session' | 'period' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                 }[];
                 defaults: {
@@ -7824,6 +13136,9 @@ export type WorkflowsActionResultById = {
                     } | {
                         kind: 'origin_session';
                     } | {
+                        kind: 'input';
+                        name: string;
+                    } | {
                         kind: 'from_step';
                         producer: {
                             blockId: string;
@@ -7909,6 +13224,23 @@ export type WorkflowsActionResultById = {
                             updatedAt: number;
                         } | null | undefined;
                         effort?: string | undefined;
+                    } | {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
+                    } | undefined;
+                    participant?: {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
                     } | undefined;
                     executionTarget?: {
                         kind: 'session';
@@ -7932,6 +13264,7 @@ export type WorkflowsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 } | {
                     roleId: string;
                     name: string;
@@ -7950,6 +13283,7 @@ export type WorkflowsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 })[] | undefined;
                 blocks: readonly PluginActionWorkflowBlockV1[];
                 finalOutput?: {
@@ -7986,8 +13320,10 @@ export type WorkflowsActionResultById = {
                 name: string;
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
+                multiple?: boolean | undefined;
                 enum?: string[] | undefined;
                 default?: JsonValue | undefined;
+                defaultFrom?: 'origin_session' | undefined;
                 description?: string | undefined;
                 optionsSourceId?: string | undefined;
                 inputType?: {
@@ -7997,7 +13333,7 @@ export type WorkflowsActionResultById = {
                     hostType: 'usageQuery';
                     field?: 'session' | 'period' | undefined;
                 } | {
-                    hostType: 'session' | 'workspace' | 'machine';
+                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                 } | undefined;
             }[];
             defaults: {
@@ -8129,6 +13465,9 @@ export type WorkflowsActionResultById = {
                 } | {
                     kind: 'origin_session';
                 } | {
+                    kind: 'input';
+                    name: string;
+                } | {
                     kind: 'from_step';
                     producer: {
                         blockId: string;
@@ -8214,6 +13553,23 @@ export type WorkflowsActionResultById = {
                         updatedAt: number;
                     } | null | undefined;
                     effort?: string | undefined;
+                } | {
+                    kind: 'input';
+                    name: string;
+                    path?: (string | number)[] | undefined;
+                } | {
+                    kind: 'item';
+                    field: 'value';
+                    path?: (string | number)[] | undefined;
+                } | undefined;
+                participant?: {
+                    kind: 'input';
+                    name: string;
+                    path?: (string | number)[] | undefined;
+                } | {
+                    kind: 'item';
+                    field: 'value';
+                    path?: (string | number)[] | undefined;
                 } | undefined;
                 executionTarget?: {
                     kind: 'session';
@@ -8237,6 +13593,7 @@ export type WorkflowsActionResultById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             } | {
                 roleId: string;
                 name: string;
@@ -8255,6 +13612,7 @@ export type WorkflowsActionResultById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             })[] | undefined;
             blocks: readonly PluginActionWorkflowBlockV1[];
             finalOutput?: {
@@ -8313,8 +13671,10 @@ export type WorkflowsActionResultById = {
                 name: string;
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
+                multiple?: boolean | undefined;
                 enum?: string[] | undefined;
                 default?: JsonValue | undefined;
+                defaultFrom?: 'origin_session' | undefined;
                 description?: string | undefined;
                 optionsSourceId?: string | undefined;
                 inputType?: {
@@ -8324,7 +13684,7 @@ export type WorkflowsActionResultById = {
                     hostType: 'usageQuery';
                     field?: 'session' | 'period' | undefined;
                 } | {
-                    hostType: 'session' | 'workspace' | 'machine';
+                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                 } | undefined;
             }[];
             defaults: {
@@ -8456,6 +13816,9 @@ export type WorkflowsActionResultById = {
                 } | {
                     kind: 'origin_session';
                 } | {
+                    kind: 'input';
+                    name: string;
+                } | {
                     kind: 'from_step';
                     producer: {
                         blockId: string;
@@ -8541,6 +13904,23 @@ export type WorkflowsActionResultById = {
                         updatedAt: number;
                     } | null | undefined;
                     effort?: string | undefined;
+                } | {
+                    kind: 'input';
+                    name: string;
+                    path?: (string | number)[] | undefined;
+                } | {
+                    kind: 'item';
+                    field: 'value';
+                    path?: (string | number)[] | undefined;
+                } | undefined;
+                participant?: {
+                    kind: 'input';
+                    name: string;
+                    path?: (string | number)[] | undefined;
+                } | {
+                    kind: 'item';
+                    field: 'value';
+                    path?: (string | number)[] | undefined;
                 } | undefined;
                 executionTarget?: {
                     kind: 'session';
@@ -8564,6 +13944,7 @@ export type WorkflowsActionResultById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             } | {
                 roleId: string;
                 name: string;
@@ -8582,6 +13963,7 @@ export type WorkflowsActionResultById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             })[] | undefined;
             blocks: readonly PluginActionWorkflowBlockV1[];
             finalOutput?: {
@@ -8640,8 +14022,10 @@ export type WorkflowsActionResultById = {
                 name: string;
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
+                multiple?: boolean | undefined;
                 enum?: string[] | undefined;
                 default?: JsonValue | undefined;
+                defaultFrom?: 'origin_session' | undefined;
                 description?: string | undefined;
                 optionsSourceId?: string | undefined;
                 inputType?: {
@@ -8651,7 +14035,7 @@ export type WorkflowsActionResultById = {
                     hostType: 'usageQuery';
                     field?: 'session' | 'period' | undefined;
                 } | {
-                    hostType: 'session' | 'workspace' | 'machine';
+                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                 } | undefined;
             }[];
             defaults: {
@@ -8783,6 +14167,9 @@ export type WorkflowsActionResultById = {
                 } | {
                     kind: 'origin_session';
                 } | {
+                    kind: 'input';
+                    name: string;
+                } | {
                     kind: 'from_step';
                     producer: {
                         blockId: string;
@@ -8868,6 +14255,23 @@ export type WorkflowsActionResultById = {
                         updatedAt: number;
                     } | null | undefined;
                     effort?: string | undefined;
+                } | {
+                    kind: 'input';
+                    name: string;
+                    path?: (string | number)[] | undefined;
+                } | {
+                    kind: 'item';
+                    field: 'value';
+                    path?: (string | number)[] | undefined;
+                } | undefined;
+                participant?: {
+                    kind: 'input';
+                    name: string;
+                    path?: (string | number)[] | undefined;
+                } | {
+                    kind: 'item';
+                    field: 'value';
+                    path?: (string | number)[] | undefined;
                 } | undefined;
                 executionTarget?: {
                     kind: 'session';
@@ -8891,6 +14295,7 @@ export type WorkflowsActionResultById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             } | {
                 roleId: string;
                 name: string;
@@ -8909,6 +14314,7 @@ export type WorkflowsActionResultById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             })[] | undefined;
             blocks: readonly PluginActionWorkflowBlockV1[];
             finalOutput?: {
@@ -8962,8 +14368,10 @@ export type WorkflowsActionResultById = {
                 name: string;
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
+                multiple?: boolean | undefined;
                 enum?: string[] | undefined;
                 default?: JsonValue | undefined;
+                defaultFrom?: 'origin_session' | undefined;
                 description?: string | undefined;
                 optionsSourceId?: string | undefined;
                 inputType?: {
@@ -8973,7 +14381,7 @@ export type WorkflowsActionResultById = {
                     hostType: 'usageQuery';
                     field?: 'session' | 'period' | undefined;
                 } | {
-                    hostType: 'session' | 'workspace' | 'machine';
+                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                 } | undefined;
             }[];
             defaults: {
@@ -9105,6 +14513,9 @@ export type WorkflowsActionResultById = {
                 } | {
                     kind: 'origin_session';
                 } | {
+                    kind: 'input';
+                    name: string;
+                } | {
                     kind: 'from_step';
                     producer: {
                         blockId: string;
@@ -9190,6 +14601,23 @@ export type WorkflowsActionResultById = {
                         updatedAt: number;
                     } | null | undefined;
                     effort?: string | undefined;
+                } | {
+                    kind: 'input';
+                    name: string;
+                    path?: (string | number)[] | undefined;
+                } | {
+                    kind: 'item';
+                    field: 'value';
+                    path?: (string | number)[] | undefined;
+                } | undefined;
+                participant?: {
+                    kind: 'input';
+                    name: string;
+                    path?: (string | number)[] | undefined;
+                } | {
+                    kind: 'item';
+                    field: 'value';
+                    path?: (string | number)[] | undefined;
                 } | undefined;
                 executionTarget?: {
                     kind: 'session';
@@ -9213,6 +14641,7 @@ export type WorkflowsActionResultById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             } | {
                 roleId: string;
                 name: string;
@@ -9231,6 +14660,7 @@ export type WorkflowsActionResultById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             })[] | undefined;
             blocks: readonly PluginActionWorkflowBlockV1[];
             finalOutput?: {
@@ -9277,8 +14707,10 @@ export type WorkflowsActionResultById = {
                     name: string;
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
+                    multiple?: boolean | undefined;
                     enum?: string[] | undefined;
                     default?: JsonValue | undefined;
+                    defaultFrom?: 'origin_session' | undefined;
                     description?: string | undefined;
                     optionsSourceId?: string | undefined;
                     inputType?: {
@@ -9288,7 +14720,7 @@ export type WorkflowsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'session' | 'period' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                 }[];
                 defaults: {
@@ -9420,6 +14852,9 @@ export type WorkflowsActionResultById = {
                     } | {
                         kind: 'origin_session';
                     } | {
+                        kind: 'input';
+                        name: string;
+                    } | {
                         kind: 'from_step';
                         producer: {
                             blockId: string;
@@ -9505,6 +14940,23 @@ export type WorkflowsActionResultById = {
                             updatedAt: number;
                         } | null | undefined;
                         effort?: string | undefined;
+                    } | {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
+                    } | undefined;
+                    participant?: {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
                     } | undefined;
                     executionTarget?: {
                         kind: 'session';
@@ -9528,6 +14980,7 @@ export type WorkflowsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 } | {
                     roleId: string;
                     name: string;
@@ -9546,6 +14999,7 @@ export type WorkflowsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 })[] | undefined;
                 blocks: readonly PluginActionWorkflowBlockV1[];
                 finalOutput?: {
@@ -9583,8 +15037,10 @@ export type WorkflowsActionResultById = {
                 name: string;
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
+                multiple?: boolean | undefined;
                 enum?: string[] | undefined;
                 default?: JsonValue | undefined;
+                defaultFrom?: 'origin_session' | undefined;
                 description?: string | undefined;
                 optionsSourceId?: string | undefined;
                 inputType?: {
@@ -9594,7 +15050,7 @@ export type WorkflowsActionResultById = {
                     hostType: 'usageQuery';
                     field?: 'session' | 'period' | undefined;
                 } | {
-                    hostType: 'session' | 'workspace' | 'machine';
+                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                 } | undefined;
             }[];
             defaults: {
@@ -9726,6 +15182,9 @@ export type WorkflowsActionResultById = {
                 } | {
                     kind: 'origin_session';
                 } | {
+                    kind: 'input';
+                    name: string;
+                } | {
                     kind: 'from_step';
                     producer: {
                         blockId: string;
@@ -9811,6 +15270,23 @@ export type WorkflowsActionResultById = {
                         updatedAt: number;
                     } | null | undefined;
                     effort?: string | undefined;
+                } | {
+                    kind: 'input';
+                    name: string;
+                    path?: (string | number)[] | undefined;
+                } | {
+                    kind: 'item';
+                    field: 'value';
+                    path?: (string | number)[] | undefined;
+                } | undefined;
+                participant?: {
+                    kind: 'input';
+                    name: string;
+                    path?: (string | number)[] | undefined;
+                } | {
+                    kind: 'item';
+                    field: 'value';
+                    path?: (string | number)[] | undefined;
                 } | undefined;
                 executionTarget?: {
                     kind: 'session';
@@ -9834,6 +15310,7 @@ export type WorkflowsActionResultById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             } | {
                 roleId: string;
                 name: string;
@@ -9852,6 +15329,7 @@ export type WorkflowsActionResultById = {
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             })[] | undefined;
             blocks: readonly PluginActionWorkflowBlockV1[];
             finalOutput?: {
@@ -9893,8 +15371,10 @@ export type WorkflowsActionResultById = {
                     name: string;
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
+                    multiple?: boolean | undefined;
                     enum?: string[] | undefined;
                     default?: JsonValue | undefined;
+                    defaultFrom?: 'origin_session' | undefined;
                     description?: string | undefined;
                     optionsSourceId?: string | undefined;
                     inputType?: {
@@ -9904,7 +15384,7 @@ export type WorkflowsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'session' | 'period' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                 }[];
                 defaults: {
@@ -10036,6 +15516,9 @@ export type WorkflowsActionResultById = {
                     } | {
                         kind: 'origin_session';
                     } | {
+                        kind: 'input';
+                        name: string;
+                    } | {
                         kind: 'from_step';
                         producer: {
                             blockId: string;
@@ -10121,6 +15604,23 @@ export type WorkflowsActionResultById = {
                             updatedAt: number;
                         } | null | undefined;
                         effort?: string | undefined;
+                    } | {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
+                    } | undefined;
+                    participant?: {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
                     } | undefined;
                     executionTarget?: {
                         kind: 'session';
@@ -10144,6 +15644,7 @@ export type WorkflowsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 } | {
                     roleId: string;
                     name: string;
@@ -10162,6 +15663,7 @@ export type WorkflowsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 })[] | undefined;
                 blocks: readonly PluginActionWorkflowBlockV1[];
                 finalOutput?: {
@@ -10407,8 +15909,10 @@ export type WorkflowsActionResultById = {
                         name: string;
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
+                        multiple?: boolean | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
+                        defaultFrom?: 'origin_session' | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -10418,7 +15922,7 @@ export type WorkflowsActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'session' | 'period' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                     }[];
                     defaults: {
@@ -10550,6 +16054,9 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'origin_session';
                         } | {
+                            kind: 'input';
+                            name: string;
+                        } | {
                             kind: 'from_step';
                             producer: {
                                 blockId: string;
@@ -10635,6 +16142,23 @@ export type WorkflowsActionResultById = {
                                 updatedAt: number;
                             } | null | undefined;
                             effort?: string | undefined;
+                        } | {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
+                        } | undefined;
+                        participant?: {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -10658,6 +16182,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     } | {
                         roleId: string;
                         name: string;
@@ -10676,6 +16201,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     })[] | undefined;
                     blocks: readonly PluginActionWorkflowBlockV1[];
                     finalOutput?: {
@@ -10730,6 +16256,7 @@ export type WorkflowsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 }[] | undefined;
                 inlineDefinition?: Readonly<{
                     version: 1;
@@ -10737,8 +16264,10 @@ export type WorkflowsActionResultById = {
                         name: string;
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
+                        multiple?: boolean | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
+                        defaultFrom?: 'origin_session' | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -10748,7 +16277,7 @@ export type WorkflowsActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'session' | 'period' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                     }[];
                     defaults: {
@@ -10880,6 +16409,9 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'origin_session';
                         } | {
+                            kind: 'input';
+                            name: string;
+                        } | {
                             kind: 'from_step';
                             producer: {
                                 blockId: string;
@@ -10965,6 +16497,23 @@ export type WorkflowsActionResultById = {
                                 updatedAt: number;
                             } | null | undefined;
                             effort?: string | undefined;
+                        } | {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
+                        } | undefined;
+                        participant?: {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -10988,6 +16537,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     } | {
                         roleId: string;
                         name: string;
@@ -11006,6 +16556,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     })[] | undefined;
                     blocks: readonly PluginActionWorkflowBlockV1[];
                     finalOutput?: {
@@ -11270,8 +16821,10 @@ export type WorkflowsActionResultById = {
                         name: string;
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
+                        multiple?: boolean | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
+                        defaultFrom?: 'origin_session' | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -11281,7 +16834,7 @@ export type WorkflowsActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'session' | 'period' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                     }[];
                     defaults: {
@@ -11413,6 +16966,9 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'origin_session';
                         } | {
+                            kind: 'input';
+                            name: string;
+                        } | {
                             kind: 'from_step';
                             producer: {
                                 blockId: string;
@@ -11498,6 +17054,23 @@ export type WorkflowsActionResultById = {
                                 updatedAt: number;
                             } | null | undefined;
                             effort?: string | undefined;
+                        } | {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
+                        } | undefined;
+                        participant?: {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -11521,6 +17094,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     } | {
                         roleId: string;
                         name: string;
@@ -11539,6 +17113,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     })[] | undefined;
                     blocks: readonly PluginActionWorkflowBlockV1[];
                     finalOutput?: {
@@ -11593,6 +17168,7 @@ export type WorkflowsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 }[] | undefined;
                 inlineDefinition?: Readonly<{
                     version: 1;
@@ -11600,8 +17176,10 @@ export type WorkflowsActionResultById = {
                         name: string;
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
+                        multiple?: boolean | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
+                        defaultFrom?: 'origin_session' | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -11611,7 +17189,7 @@ export type WorkflowsActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'session' | 'period' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                     }[];
                     defaults: {
@@ -11743,6 +17321,9 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'origin_session';
                         } | {
+                            kind: 'input';
+                            name: string;
+                        } | {
                             kind: 'from_step';
                             producer: {
                                 blockId: string;
@@ -11828,6 +17409,23 @@ export type WorkflowsActionResultById = {
                                 updatedAt: number;
                             } | null | undefined;
                             effort?: string | undefined;
+                        } | {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
+                        } | undefined;
+                        participant?: {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -11851,6 +17449,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     } | {
                         roleId: string;
                         name: string;
@@ -11869,6 +17468,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     })[] | undefined;
                     blocks: readonly PluginActionWorkflowBlockV1[];
                     finalOutput?: {
@@ -12135,8 +17735,10 @@ export type WorkflowsActionResultById = {
                         name: string;
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
+                        multiple?: boolean | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
+                        defaultFrom?: 'origin_session' | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -12146,7 +17748,7 @@ export type WorkflowsActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'session' | 'period' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                     }[];
                     defaults: {
@@ -12278,6 +17880,9 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'origin_session';
                         } | {
+                            kind: 'input';
+                            name: string;
+                        } | {
                             kind: 'from_step';
                             producer: {
                                 blockId: string;
@@ -12363,6 +17968,23 @@ export type WorkflowsActionResultById = {
                                 updatedAt: number;
                             } | null | undefined;
                             effort?: string | undefined;
+                        } | {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
+                        } | undefined;
+                        participant?: {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -12386,6 +18008,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     } | {
                         roleId: string;
                         name: string;
@@ -12404,6 +18027,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     })[] | undefined;
                     blocks: readonly PluginActionWorkflowBlockV1[];
                     finalOutput?: {
@@ -12458,6 +18082,7 @@ export type WorkflowsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 }[] | undefined;
                 inlineDefinition?: Readonly<{
                     version: 1;
@@ -12465,8 +18090,10 @@ export type WorkflowsActionResultById = {
                         name: string;
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
+                        multiple?: boolean | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
+                        defaultFrom?: 'origin_session' | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -12476,7 +18103,7 @@ export type WorkflowsActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'session' | 'period' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                     }[];
                     defaults: {
@@ -12608,6 +18235,9 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'origin_session';
                         } | {
+                            kind: 'input';
+                            name: string;
+                        } | {
                             kind: 'from_step';
                             producer: {
                                 blockId: string;
@@ -12693,6 +18323,23 @@ export type WorkflowsActionResultById = {
                                 updatedAt: number;
                             } | null | undefined;
                             effort?: string | undefined;
+                        } | {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
+                        } | undefined;
+                        participant?: {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -12716,6 +18363,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     } | {
                         roleId: string;
                         name: string;
@@ -12734,6 +18382,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     })[] | undefined;
                     blocks: readonly PluginActionWorkflowBlockV1[];
                     finalOutput?: {
@@ -13000,8 +18649,10 @@ export type WorkflowsActionResultById = {
                         name: string;
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
+                        multiple?: boolean | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
+                        defaultFrom?: 'origin_session' | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -13011,7 +18662,7 @@ export type WorkflowsActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'session' | 'period' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                     }[];
                     defaults: {
@@ -13143,6 +18794,9 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'origin_session';
                         } | {
+                            kind: 'input';
+                            name: string;
+                        } | {
                             kind: 'from_step';
                             producer: {
                                 blockId: string;
@@ -13228,6 +18882,23 @@ export type WorkflowsActionResultById = {
                                 updatedAt: number;
                             } | null | undefined;
                             effort?: string | undefined;
+                        } | {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
+                        } | undefined;
+                        participant?: {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -13251,6 +18922,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     } | {
                         roleId: string;
                         name: string;
@@ -13269,6 +18941,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     })[] | undefined;
                     blocks: readonly PluginActionWorkflowBlockV1[];
                     finalOutput?: {
@@ -13323,6 +18996,7 @@ export type WorkflowsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 }[] | undefined;
                 inlineDefinition?: Readonly<{
                     version: 1;
@@ -13330,8 +19004,10 @@ export type WorkflowsActionResultById = {
                         name: string;
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
+                        multiple?: boolean | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
+                        defaultFrom?: 'origin_session' | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -13341,7 +19017,7 @@ export type WorkflowsActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'session' | 'period' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                     }[];
                     defaults: {
@@ -13473,6 +19149,9 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'origin_session';
                         } | {
+                            kind: 'input';
+                            name: string;
+                        } | {
                             kind: 'from_step';
                             producer: {
                                 blockId: string;
@@ -13558,6 +19237,23 @@ export type WorkflowsActionResultById = {
                                 updatedAt: number;
                             } | null | undefined;
                             effort?: string | undefined;
+                        } | {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
+                        } | undefined;
+                        participant?: {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -13581,6 +19277,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     } | {
                         roleId: string;
                         name: string;
@@ -13599,6 +19296,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     })[] | undefined;
                     blocks: readonly PluginActionWorkflowBlockV1[];
                     finalOutput?: {
@@ -14030,8 +19728,10 @@ export type WorkflowsActionResultById = {
                         name: string;
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
+                        multiple?: boolean | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
+                        defaultFrom?: 'origin_session' | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -14041,7 +19741,7 @@ export type WorkflowsActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'session' | 'period' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                     }[];
                     defaults: {
@@ -14173,6 +19873,9 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'origin_session';
                         } | {
+                            kind: 'input';
+                            name: string;
+                        } | {
                             kind: 'from_step';
                             producer: {
                                 blockId: string;
@@ -14258,6 +19961,23 @@ export type WorkflowsActionResultById = {
                                 updatedAt: number;
                             } | null | undefined;
                             effort?: string | undefined;
+                        } | {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
+                        } | undefined;
+                        participant?: {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -14281,6 +20001,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     } | {
                         roleId: string;
                         name: string;
@@ -14299,6 +20020,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     })[] | undefined;
                     blocks: readonly PluginActionWorkflowBlockV1[];
                     finalOutput?: {
@@ -14353,6 +20075,7 @@ export type WorkflowsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 }[] | undefined;
                 inlineDefinition?: Readonly<{
                     version: 1;
@@ -14360,8 +20083,10 @@ export type WorkflowsActionResultById = {
                         name: string;
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
+                        multiple?: boolean | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
+                        defaultFrom?: 'origin_session' | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -14371,7 +20096,7 @@ export type WorkflowsActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'session' | 'period' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                     }[];
                     defaults: {
@@ -14503,6 +20228,9 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'origin_session';
                         } | {
+                            kind: 'input';
+                            name: string;
+                        } | {
                             kind: 'from_step';
                             producer: {
                                 blockId: string;
@@ -14588,6 +20316,23 @@ export type WorkflowsActionResultById = {
                                 updatedAt: number;
                             } | null | undefined;
                             effort?: string | undefined;
+                        } | {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
+                        } | undefined;
+                        participant?: {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -14611,6 +20356,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     } | {
                         roleId: string;
                         name: string;
@@ -14629,6 +20375,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     })[] | undefined;
                     blocks: readonly PluginActionWorkflowBlockV1[];
                     finalOutput?: {
@@ -14905,8 +20652,10 @@ export type WorkflowsActionResultById = {
                         name: string;
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
+                        multiple?: boolean | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
+                        defaultFrom?: 'origin_session' | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -14916,7 +20665,7 @@ export type WorkflowsActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'session' | 'period' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                     }[];
                     defaults: {
@@ -15048,6 +20797,9 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'origin_session';
                         } | {
+                            kind: 'input';
+                            name: string;
+                        } | {
                             kind: 'from_step';
                             producer: {
                                 blockId: string;
@@ -15133,6 +20885,23 @@ export type WorkflowsActionResultById = {
                                 updatedAt: number;
                             } | null | undefined;
                             effort?: string | undefined;
+                        } | {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
+                        } | undefined;
+                        participant?: {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -15156,6 +20925,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     } | {
                         roleId: string;
                         name: string;
@@ -15174,6 +20944,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     })[] | undefined;
                     blocks: readonly PluginActionWorkflowBlockV1[];
                     finalOutput?: {
@@ -15228,6 +20999,7 @@ export type WorkflowsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 }[] | undefined;
                 inlineDefinition?: Readonly<{
                     version: 1;
@@ -15235,8 +21007,10 @@ export type WorkflowsActionResultById = {
                         name: string;
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
+                        multiple?: boolean | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
+                        defaultFrom?: 'origin_session' | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -15246,7 +21020,7 @@ export type WorkflowsActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'session' | 'period' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                     }[];
                     defaults: {
@@ -15378,6 +21152,9 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'origin_session';
                         } | {
+                            kind: 'input';
+                            name: string;
+                        } | {
                             kind: 'from_step';
                             producer: {
                                 blockId: string;
@@ -15463,6 +21240,23 @@ export type WorkflowsActionResultById = {
                                 updatedAt: number;
                             } | null | undefined;
                             effort?: string | undefined;
+                        } | {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
+                        } | undefined;
+                        participant?: {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -15486,6 +21280,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     } | {
                         roleId: string;
                         name: string;
@@ -15504,6 +21299,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     })[] | undefined;
                     blocks: readonly PluginActionWorkflowBlockV1[];
                     finalOutput?: {
@@ -15770,8 +21566,10 @@ export type WorkflowsActionResultById = {
                         name: string;
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
+                        multiple?: boolean | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
+                        defaultFrom?: 'origin_session' | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -15781,7 +21579,7 @@ export type WorkflowsActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'session' | 'period' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                     }[];
                     defaults: {
@@ -15913,6 +21711,9 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'origin_session';
                         } | {
+                            kind: 'input';
+                            name: string;
+                        } | {
                             kind: 'from_step';
                             producer: {
                                 blockId: string;
@@ -15998,6 +21799,23 @@ export type WorkflowsActionResultById = {
                                 updatedAt: number;
                             } | null | undefined;
                             effort?: string | undefined;
+                        } | {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
+                        } | undefined;
+                        participant?: {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -16021,6 +21839,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     } | {
                         roleId: string;
                         name: string;
@@ -16039,6 +21858,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     })[] | undefined;
                     blocks: readonly PluginActionWorkflowBlockV1[];
                     finalOutput?: {
@@ -16093,6 +21913,7 @@ export type WorkflowsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 }[] | undefined;
                 inlineDefinition?: Readonly<{
                     version: 1;
@@ -16100,8 +21921,10 @@ export type WorkflowsActionResultById = {
                         name: string;
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
+                        multiple?: boolean | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
+                        defaultFrom?: 'origin_session' | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -16111,7 +21934,7 @@ export type WorkflowsActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'session' | 'period' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                     }[];
                     defaults: {
@@ -16243,6 +22066,9 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'origin_session';
                         } | {
+                            kind: 'input';
+                            name: string;
+                        } | {
                             kind: 'from_step';
                             producer: {
                                 blockId: string;
@@ -16328,6 +22154,23 @@ export type WorkflowsActionResultById = {
                                 updatedAt: number;
                             } | null | undefined;
                             effort?: string | undefined;
+                        } | {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
+                        } | undefined;
+                        participant?: {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -16351,6 +22194,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     } | {
                         roleId: string;
                         name: string;
@@ -16369,6 +22213,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     })[] | undefined;
                     blocks: readonly PluginActionWorkflowBlockV1[];
                     finalOutput?: {
@@ -16635,8 +22480,10 @@ export type WorkflowsActionResultById = {
                         name: string;
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
+                        multiple?: boolean | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
+                        defaultFrom?: 'origin_session' | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -16646,7 +22493,7 @@ export type WorkflowsActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'session' | 'period' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                     }[];
                     defaults: {
@@ -16778,6 +22625,9 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'origin_session';
                         } | {
+                            kind: 'input';
+                            name: string;
+                        } | {
                             kind: 'from_step';
                             producer: {
                                 blockId: string;
@@ -16863,6 +22713,23 @@ export type WorkflowsActionResultById = {
                                 updatedAt: number;
                             } | null | undefined;
                             effort?: string | undefined;
+                        } | {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
+                        } | undefined;
+                        participant?: {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -16886,6 +22753,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     } | {
                         roleId: string;
                         name: string;
@@ -16904,6 +22772,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     })[] | undefined;
                     blocks: readonly PluginActionWorkflowBlockV1[];
                     finalOutput?: {
@@ -16958,6 +22827,7 @@ export type WorkflowsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'allow' | 'deny' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 }[] | undefined;
                 inlineDefinition?: Readonly<{
                     version: 1;
@@ -16965,8 +22835,10 @@ export type WorkflowsActionResultById = {
                         name: string;
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
+                        multiple?: boolean | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
+                        defaultFrom?: 'origin_session' | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -16976,7 +22848,7 @@ export type WorkflowsActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'session' | 'period' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                     }[];
                     defaults: {
@@ -17108,6 +22980,9 @@ export type WorkflowsActionResultById = {
                         } | {
                             kind: 'origin_session';
                         } | {
+                            kind: 'input';
+                            name: string;
+                        } | {
                             kind: 'from_step';
                             producer: {
                                 blockId: string;
@@ -17193,6 +23068,23 @@ export type WorkflowsActionResultById = {
                                 updatedAt: number;
                             } | null | undefined;
                             effort?: string | undefined;
+                        } | {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
+                        } | undefined;
+                        participant?: {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -17216,6 +23108,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     } | {
                         roleId: string;
                         name: string;
@@ -17234,6 +23127,7 @@ export type WorkflowsActionResultById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     })[] | undefined;
                     blocks: readonly PluginActionWorkflowBlockV1[];
                     finalOutput?: {

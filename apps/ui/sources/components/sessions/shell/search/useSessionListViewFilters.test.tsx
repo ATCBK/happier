@@ -13,6 +13,7 @@ import { reduceSessionListFilterEditorSelection } from './sessionListFilterEdito
 import {
     clearSessionListViewFilterRetentionForTests,
     removeAuthoritativelyDeletedSessionListTagsForAccount,
+    showOnlyCoordinatorsInSessionList,
     retireSessionListViewFilterCredentialContributions,
     useSessionListViewFilters,
 } from './useSessionListViewFilters';
@@ -534,5 +535,34 @@ describe('useSessionListViewFilters', () => {
             audiences: [{ serverId: 'home-a', kind: 'team', teamId: 'team-1' }],
             searchQuery: '',
         });
+    });
+
+    it('shows only coordinators in the retained global list, mounted or not, and keeps following the mounted Homes', async () => {
+        const input = (homeServerIds: readonly string[]) => ({
+            contextKey: 'global',
+            accountScopeResolutions: boundAccountScopes({ serverId: 'home-a', accountId: 'account-a' }),
+            followDefaultHomeSelection: true,
+            defaults: { homeServerIds },
+        });
+        // Asked before the list ever mounted: the first mount opens already narrowed.
+        showOnlyCoordinatorsInSessionList();
+        const hook = await renderHook(
+            (homeServerIds: readonly string[]) => useSessionListViewFilters(input(homeServerIds)),
+            { initialProps: ['home-a'] },
+        );
+        expect(hook.getCurrent().filters.coordinator).toBe('coordinator');
+
+        // Asked while the list is mounted and narrowed some other way: only the coordinator facet remains.
+        await act(async () => hook.getCurrent().updateFilters((current) => ({
+            ...current, coordinator: undefined, scope: 'assigned_to_me', attention: 'needs_my_attention',
+        })));
+        expect(hook.getCurrent().filters.coordinator).toBeUndefined();
+        await act(async () => showOnlyCoordinatorsInSessionList());
+        expect(hook.getCurrent().filters).toMatchObject({
+            coordinator: 'coordinator', scope: 'my_work', attention: 'any', homeServerIds: ['home-a'],
+        });
+        const refreshed = await hook.rerender(['home-a', 'home-b']);
+        expect(refreshed.filters.homeServerIds).toEqual(['home-a', 'home-b']);
+        expect(refreshed.filters.coordinator).toBe('coordinator');
     });
 });

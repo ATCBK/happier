@@ -16,11 +16,35 @@ import {
 import type {
   AuthorizedSessionModelTransitionTarget,
 } from './sessionModelTransitionCoordinator';
+import { ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
+import { authorizeSessionModelTransitionProviderTargetWithLease } from './authorizeSessionModelTransitionTarget';
 
 type ExternalRuntimeBindingBasis = Extract<
   ProviderRuntimeBindingBasisV1,
   { deployment: { kind: 'external' } }
 >;
+
+it('retains the canonical Provider failure when fresh transition authorization cannot open its Account catalog', async () => {
+  const fixture = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+    runtimeOptions: { pluginIds: ['happier.agent.codex'] } });
+  const lease = await acquireAuthoritativePluginRuntimeRegistryLease();
+  try {
+    const selection = provider('pc_missing', 'model');
+    const target = active(selection, { runtimeBindingBasis: externalRuntimeBindingBasis(selection) });
+    const result = await authorizeSessionModelTransitionProviderTargetWithLease({
+      sessionId: 'session-provider-failure', machineId: 'machine-1', agentId: 'codex',
+      agentTargetKey: selection.agentTargetKey, lease,
+      input: { selection, activeSelection: selection, activeSessionBindingMetadata: target.sessionBindingMetadata! },
+    }).catch((error: unknown) => error);
+    expect(ProviderErrorV1Schema.parse(result)).toMatchObject({ code: 'provider_connection_not_found' });
+  } finally {
+    await lease.release();
+    await fixture.dispose();
+  }
+});
 
 const native = (modelId: string): ProviderBoundModelRef => ({
   agentTargetKey: 'agent:happier.agent.codex/codex',
@@ -698,6 +722,7 @@ describe('createSessionModelTransitionAuthorizer routing', () => {
       v: 1,
       deployment: {
         kind: 'managedLocal',
+        gatewayPlacement: { kind: 'sessionMachine' },
         implementationIdentity: {
           pluginId: 'provider.test',
           localId: 'gateway',

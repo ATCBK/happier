@@ -185,6 +185,9 @@ export type WorkflowAuthoringActionInputById = {
             } | {
                 kind: 'origin_session';
             } | {
+                kind: 'input';
+                name: string;
+            } | {
                 kind: 'from_step';
                 producer: {
                     blockId: string;
@@ -401,6 +404,9 @@ export type WorkflowAuthoringActionInputById = {
             } | {
                 kind: 'origin_session';
             } | {
+                kind: 'input';
+                name: string;
+            } | {
                 kind: 'from_step';
                 producer: {
                     blockId: string;
@@ -511,8 +517,10 @@ export type WorkflowAuthoringActionInputById = {
                 name: string;
                 valueType: 'string' | 'number' | 'boolean' | 'json';
                 required: boolean;
+                multiple?: boolean | undefined;
                 enum?: string[] | undefined;
                 default?: unknown;
+                defaultFrom?: 'origin_session' | undefined;
                 description?: string | undefined;
                 optionsSourceId?: string | undefined;
                 inputType?: {
@@ -522,7 +530,7 @@ export type WorkflowAuthoringActionInputById = {
                     hostType: 'usageQuery';
                     field?: 'session' | 'period' | undefined;
                 } | {
-                    hostType: 'workspace' | 'session' | 'machine';
+                    hostType: 'workspace' | 'session' | 'machine' | 'agentParticipant';
                 } | undefined;
             }[];
         } | {
@@ -556,9 +564,9 @@ export type WorkflowAuthoringActionInputById = {
         settings?: {
             description?: string | undefined;
             projectTarget?: {
-                machineId: unknown;
+                machineId: string;
                 directory: string;
-                workspaceRefId?: unknown;
+                workspaceRefId?: string | undefined;
             } | null | undefined;
             executionTarget?: 'session' | 'detached_run' | undefined;
             triggers?: {
@@ -741,9 +749,9 @@ export type WorkflowAuthoringActionInputById = {
                     enabled: boolean;
                 }[];
                 project: {
-                    machineId: unknown;
+                    machineId: string;
                     directory: string;
-                    workspaceRefId?: unknown;
+                    workspaceRefId?: string | undefined;
                 } | null;
                 inputs: Record<string, unknown>;
             } | undefined;
@@ -778,7 +786,7 @@ export type WorkflowAuthoringActionInputById = {
         draftId: string;
     };
     readonly "workflow.run.review.draft.set": {
-        runId: unknown;
+        runId: string;
         expectedContentRevision: string;
         value: unknown;
         scope: {
@@ -800,19 +808,6 @@ export type WorkflowAuthoringActionResultById = {
         reason: string;
     };
     readonly "workflow.authoring.draft.get": {
-        status: 'applied';
-        draftRevision?: number | undefined;
-        changedBlockIds?: string[] | undefined;
-    } | {
-        status: 'unchanged';
-        draftRevision?: number | undefined;
-    } | {
-        status: 'unavailable';
-    } | {
-        status: 'refused';
-        reason: string;
-        draftRevision?: number | undefined;
-    } | {
         status: 'available';
         drafts: {
             scope: {
@@ -1031,6 +1026,19 @@ export type WorkflowAuthoringActionResultById = {
             dirty: boolean;
             draftRevision: number;
         }[];
+    } | {
+        status: 'applied';
+        draftRevision?: number | undefined;
+        changedBlockIds?: string[] | undefined;
+    } | {
+        status: 'unchanged';
+        draftRevision?: number | undefined;
+    } | {
+        status: 'unavailable';
+    } | {
+        status: 'refused';
+        reason: string;
+        draftRevision?: number | undefined;
     };
     readonly "workflow.authoring.draft.edit": {
         status: 'applied';

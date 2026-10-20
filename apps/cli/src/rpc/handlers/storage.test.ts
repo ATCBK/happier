@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createProcessCustodyFixture } from '@/testkit/processCustodyFixture';
-import { MachineStorageCategoryListResultV1Schema } from '@happier-dev/protocol/storage/storageV1';
+import { MachineStorageCategoryListResultV1Schema, MachineStoragePileResultV1Schema, PileReviewV1Schema, PileApplyResultV1Schema } from '@happier-dev/protocol/storage/storageV1';
+import { createActivityLog } from '@/daemon/guard/activityLog';
+import { createMachineResourceSummary } from '@/daemon/resources/machineResourceSummary';
+import { createMachineVitalsSampler } from '@/daemon/vitals/createMachineVitalsSampler';
+import { createMinuteHistoryStore } from '@/daemon/vitals/history/minuteHistoryStore';
 import { createManagedSessionDirectories } from '@/session/creation/managedSessionDirectories';
 import type { RpcHandlerMap, RpcHandlerContext, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
@@ -341,11 +345,11 @@ describe('lazy storage Machine RPC', () => {
     });
     it('rejects unknown fields and malformed category, cursor and revision inputs before construction', async () => {
         const { handlers, constructions, routes } = setup();
-        for (const [method, input] of [[RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET, { unknown: true }],
-            [RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST, { categoryId: 'not-a-category' }],
-            [RPC_METHODS.DAEMON_STORAGE_SIZE_REFRESH, { categoryId: 'not-a-category' }],
-            [RPC_METHODS.DAEMON_STORAGE_WATCH, { sinceRevision: -1 }]] as const) {
-            await expect(handlers.get(method)!({ machineId: 'machine', ...input }, context())).rejects.toMatchObject({ name: 'ZodError' });
+        for (const [method, input, code, path] of [[RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET, { unknown: true }, 'unrecognized_keys', []],
+            [RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST, { categoryId: 'not-a-category' }, 'invalid_value', ['categoryId']],
+            [RPC_METHODS.DAEMON_STORAGE_SIZE_REFRESH, { categoryId: 'not-a-category' }, 'invalid_value', ['categoryId']],
+            [RPC_METHODS.DAEMON_STORAGE_WATCH, { sinceRevision: -1 }, 'too_small', ['sinceRevision']]] as const) {
+            await expect(handlers.get(method)!({ machineId: 'machine', ...input }, context())).rejects.toMatchObject({ issues: [{ code, path }] });
         }
         expect(constructions()).toBe(0);
         routes.dispose();
@@ -356,6 +360,89 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
     let scratch: string;
     beforeAll(async () => {
         scratch = join(nativeFixtureDirectory, 'sessions'); await mkdir(scratch);
+    });
+    it('serves a recipient own pile and Trash receipts through collect, restore and early empty without disclosing another Account', async () => {
+        const home = join(scratch, 'recipient-trash-home');
+        const server = join(home, 'server');
+        const directories = createManagedSessionDirectories({ activeServerDir: server });
+        const own = await directories.materializeForFreshSpawn({ sessionCreationTag: 'recipient-trash-own' });
+        const foreign = await directories.materializeForFreshSpawn({ sessionCreationTag: 'recipient-trash-foreign' });
+        await directories.bind({ allocationId: own.allocationId, sessionId: 'own-session' });
+        await directories.bind({ allocationId: foreign.allocationId, sessionId: 'foreign-session' });
+        await writeFile(join(own.directory, 'own.txt'), 'owned attachment');
+        await writeFile(join(foreign.directory, 'foreign.txt'), 'private foreign attachment');
+        const sampler = createMachineVitalsSampler({
+            // No OS samples are needed for the real Activity receipt owner.
+            readers: { read: async () => ({ state: 'unavailable', reason: 'helper_missing' }) },
+            historyStore: await createMinuteHistoryStore({ directory: join(server, 'history') }),
+        });
+        const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
+        const activityLog = await createActivityLog({ activeServerDir: server, resourceSummary });
+        let recipientSessionIds = new Set(['own-session']);
+        const { handlers, routes } = setup({ deps: () => ({ catalog: { happyHomeDir: home, activeServerDir: server,
+            managedSessionDirectories: directories, tempRoot: join(scratch, 'recipient-trash-no-temp'),
+            readProjects: () => ({ status: 'ready', projects: [] }),
+            readTrackedSessions: () => ['own-session', 'foreign-session'].map(sessionId => ({ sessionId, cwd: scratch, running: false, stoppedAt: 0 })),
+            readInUsePaths: () => ({ reliable: true, paths: [] }) }, activityLog, machineId: 'machine', serverId: 'home',
+            custodianAccountId: 'owner', homeDir: scratch,
+            readVolumes: () => [{ id: 'fixture', label: 'Fixture', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 }] }),
+            readOwnSessionIds: account => account === 'recipient' ? recipientSessionIds : new Set(account === 'foreign' ? ['foreign-session'] : []),
+        });
+        const invoke = (method: string, input: object, account = 'recipient', role: 'use' | 'manage' = 'use') =>
+            handlers.get(method)!({ machineId: 'machine', ...input }, context(account, role));
+        const listTrash = async (account = 'recipient', role: 'use' | 'manage' = 'use') =>
+            MachineStorageCategoryListResultV1Schema.parse(await invoke(RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST, { categoryId: 'trash' }, account, role));
+        const move = async (account: string) => {
+            const folders = MachineStorageCategoryListResultV1Schema.parse(await invoke(RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST,
+                { categoryId: 'sessionFolders' }, account));
+            const pile = MachineStoragePileResultV1Schema.parse(await invoke(RPC_METHODS.DAEMON_STORAGE_PILE_SET,
+                { add: folders.items.map(item => ({ itemId: item.itemId, path: item.path })) }, account));
+            expect(pile.items).toHaveLength(1);
+            expect(MachineStoragePileResultV1Schema.parse(await invoke(RPC_METHODS.DAEMON_STORAGE_PILE_GET, {}, account)).items).toEqual(pile.items);
+            if (account === 'foreign') {
+                expect(await invoke(RPC_METHODS.DAEMON_STORAGE_PILE_GET, {})).toMatchObject({ items: [], summary: { count: 0 } });
+            }
+            const checked = PileReviewV1Schema.parse(await invoke(RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK,
+                { refs: pile.items.map(({ itemId, path }) => ({ itemId, path })) }, account));
+            const result = PileApplyResultV1Schema.parse(await invoke(RPC_METHODS.DAEMON_STORAGE_TRASH_MOVE,
+                { items: checked.items.map(item => ({ ref: item.ref, expect: item.expect, claimedVerdict: item.verdict })) }, account));
+            expect(result.outcomes).toEqual([{ itemId: pile.items[0]!.itemId, status: 'moved' }]);
+            return result;
+        };
+        try {
+            expect(await listTrash()).toMatchObject({ items: [], trashEntries: [] });
+            for (const categoryId of ['caches', 'worktrees', 'logs', 'ownData']) {
+                await expect(invoke(RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST, { categoryId }))
+                    .rejects.toMatchObject({ rpcErrorCode: 'RPC_FORBIDDEN' });
+            }
+            const foreignMoved = await move('foreign');
+            expect(await listTrash()).toMatchObject({ items: [], trashEntries: [] });
+            expect(await invoke(RPC_METHODS.DAEMON_STORAGE_PILE_GET, {})).toMatchObject({ items: [], summary: { count: 0 } });
+            const ownMoved = await move('recipient');
+            const visible = await listTrash();
+            expect(visible.trashEntries).toEqual([expect.objectContaining({ batchId: ownMoved.batchId, originalPath: own.directory })]);
+            expect(JSON.stringify(visible)).not.toContain(foreign.directory);
+            expect(JSON.stringify(visible)).not.toContain(foreignMoved.batchId);
+            expect(JSON.stringify(visible)).not.toContain('ownerData');
+            expect((await listTrash('owner', 'manage')).trashEntries).toHaveLength(2);
+            const foreignEntry = (await listTrash('foreign')).trashEntries![0]!;
+            expect(await invoke(RPC_METHODS.DAEMON_STORAGE_TRASH_RESTORE, { entryIds: [foreignEntry.entryId] }))
+                .toMatchObject({ outcomes: [{ entryId: foreignEntry.entryId, status: 'refused', reason: { code: 'unauthorized' } }] });
+            expect(await invoke(RPC_METHODS.DAEMON_STORAGE_TRASH_EMPTY, { entryIds: [foreignEntry.entryId] }))
+                .toMatchObject({ outcomes: [{ entryId: foreignEntry.entryId, status: 'refused', reason: { code: 'unauthorized' } }] });
+            recipientSessionIds = new Set();
+            expect(await listTrash()).toMatchObject({ items: [], trashEntries: [] });
+            recipientSessionIds = new Set(['own-session']);
+            expect(await invoke(RPC_METHODS.DAEMON_STORAGE_TRASH_RESTORE, { batchId: ownMoved.batchId }))
+                .toMatchObject({ outcomes: [{ status: 'restored', path: own.directory }] });
+            expect(await readFile(join(own.directory, 'own.txt'), 'utf8')).toBe('owned attachment');
+            const again = await move('recipient');
+            const emptied = await invoke(RPC_METHODS.DAEMON_STORAGE_TRASH_EMPTY, { batchId: again.batchId });
+            expect(emptied, JSON.stringify(emptied))
+                .toMatchObject({ outcomes: [{ status: 'deleted' }] });
+            expect(await listTrash()).toMatchObject({ items: [], trashEntries: [] });
+            expect((await listTrash('foreign')).trashEntries).toEqual([expect.objectContaining({ batchId: foreignMoved.batchId })]);
+        } finally { routes.dispose(); resourceSummary.stop(); await sampler.stop(); }
     });
     it('discloses only proven-own folders through the real registrar and drops private Session identity fields', async () => {
         const home = join(scratch, 'home');

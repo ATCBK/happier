@@ -149,14 +149,17 @@ export function WalkthroughReviewFact(props: Readonly<{
     const { theme } = useUnistyles();
     const s = props.summary;
     const partial = s.state === 'partial';
+    const warning = partial || s.state === 'unavailable';
     const strong = (value: string) => <Text style={styles.factStrong}>{value}</Text>;
     let body: React.ReactNode;
-    if (props.variant?.kind === 'in_context') {
+    if (s.state === 'unavailable' || s.state === 'loading') {
+        body = <>{t(s.state === 'loading' ? 'common.loading' : 'common.requestFailed')}</>;
+    } else if (props.variant?.kind === 'in_context') {
         body = <>{strong(t('runPage.review.findingTotal', { count: s.total }))}{` ${t('reviewWalkthrough.inContext')}`}</>;
     } else if (props.variant?.kind === 'from_review') {
         body = <>{strong(t('runPage.review.findingTotal', { count: s.total }))}{` ${t('reviewWalkthrough.fromReviewAt', { time: props.variant.at })}`}</>;
     } else if (partial) {
-        body = <>{`${t('reviewWalkthrough.reviewLabel')} `}{strong(t('reviewWalkthrough.enginesOf', { count: s.finishedEngines, total: s.totalEngines }))}{` ${t('reviewWalkthrough.enginesFinished')}`}</>;
+        body = <>{`${t('reviewWalkthrough.reviewLabel')} `}{strong(t('reviewWalkthrough.enginesOf', { count: s.finishedEngines, total: s.totalEngines }))}{` ${t('reviewWalkthrough.enginesFinished', { count: s.totalEngines })}`}</>;
     } else {
         const detail = s.state === 'running'
             ? t('reviewWalkthrough.enginesRunning', { count: s.runningEngines })
@@ -165,13 +168,16 @@ export function WalkthroughReviewFact(props: Readonly<{
                 : s.elsewhere > 0
                     ? t('reviewWalkthrough.inStoryElsewhere', { inStory: s.inStory, elsewhere: s.elsewhere })
                     : t('reviewWalkthrough.allInStory');
+        // At zero there is no story placement to report: a finished clean review says so in one phrase.
         body = s.state === 'running' && s.total === 0
             ? <>{`${t('reviewWalkthrough.reviewLabel')} `}{strong(detail)}</>
+            : s.total === 0
+                ? <>{`${t('reviewWalkthrough.reviewLabel')} `}{strong(t('reviewWalkthrough.noFindings'))}</>
             : <>{`${t('reviewWalkthrough.reviewLabel')} `}{strong(t('runPage.review.findingTotal', { count: s.total }))}{` · ${detail}`}</>;
     }
     return (
         <View testID="walkthrough-review-fact" style={styles.fact}>
-            <Icon name={partial ? 'warning' : 'shield-check'} size={13} color={partial ? theme.colors.state.warning.foreground : theme.colors.text.tertiary} />
+            <Icon name={s.state === 'loading' ? 'circle' : warning ? 'warning' : 'shield-check'} size={13} color={warning ? theme.colors.state.warning.foreground : theme.colors.text.tertiary} />
             <Text style={styles.factText}>{body}</Text>
         </View>
     );
@@ -252,7 +258,7 @@ export function ReviewWalkthroughSteps(props: Readonly<{ progress: ReviewWalkthr
     const narration = props.progress.narration;
     const reviewLabel = reviewStepLabel(review, props.phone === true);
     const narrationLabel = !narration ? null
-        : narration.kind === 'ready' ? (props.phone ? t('reviewWalkthrough.steps.readyShort') : t('reviewWalkthrough.steps.ready'))
+        : narration.kind === 'ready' ? t('reviewWalkthrough.steps.readyShort')
             : narration.kind === 'failed' ? t('reviewWalkthrough.steps.failed')
                 : narration.kind === 'narrating' ? t('reviewWalkthrough.steps.narrating')
                     : narration.kind === 'narrator_writing' ? t('reviewWalkthrough.steps.narratorWriting', { narrator: narration.narrator })
@@ -284,6 +290,8 @@ function reviewStepLabel(review: ReviewWalkthroughProgress['review'], phone: boo
         case 'reviewed_at': return t('reviewWalkthrough.steps.reviewedAt', { time: review.at });
         case 'review_at': return t('reviewWalkthrough.steps.reviewAt', { time: review.at });
         case 'partial': return t('reviewWalkthrough.steps.partial', { count: review.findings });
+        case 'loading': return t('common.loading');
+        case 'unavailable': return t('common.requestFailed');
     }
 }
 
@@ -377,16 +385,17 @@ const styles = StyleSheet.create((theme) => ({
     steps: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.space.s8,
+        gap: theme.space.s6,
         height: 36,
-        paddingHorizontal: theme.space.s12,
+        paddingHorizontal: theme.space.s10,
         borderRadius: 10,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
     },
     stepsPhone: { justifyContent: 'center', height: 44, borderRadius: 12 },
     step: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6, flexShrink: 1 },
-    stepText: { fontSize: 14, color: theme.colors.text.secondary, ...Typography.default() },
+    // The bar's status reads at the bar's own text role, so it sits beside Propose commits as one row (WT5-R6).
+    stepText: { ...Typography.variant('body'), color: theme.colors.text.secondary },
     stepTextActive: { color: theme.colors.text.primary, ...Typography.default('semiBold') },
     waitingRing: { width: 10, height: 10, borderRadius: 5, borderWidth: 1.5, borderColor: theme.colors.text.tertiary },
 }));

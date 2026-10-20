@@ -8,12 +8,13 @@ import { forgetSpeakerCountForAssetsDir } from '@/voice/kokoro/runtime/kokoroSpe
 import { getFetch, getFs } from './installer/fs.native';
 import {
   createExpoModelPackInstallerHost,
+  getExpoModelPackPartialBytes,
   reconcileExpoModelPackPromotion,
   removeExpoModelPackWithHost,
 } from './installer/host.native';
 import { fetchRemoteManifest } from './installer/network';
 import { assertManifestPathsSafe, getMetaFile, getPackRootDir, normalizePackId } from './installer/paths';
-import type { InstallerFs, InstallMode, InstallerOverrides, InvalidatePackRuntime, UpdatePolicy } from './installer/types';
+import type { ExpoFsFile, InstallerFs, InstallMode, InstallerOverrides, InvalidatePackRuntime, UpdatePolicy } from './installer/types';
 
 /**
  * Runtime state derived from the live pack directory. Native voice engines and
@@ -71,6 +72,7 @@ async function installViaHost(opts: {
   manifest: ModelPackManifest;
   signal: AbortSignal;
   priorInstall: ModelPackPromotionPriorInstallV1;
+  priorManifest?: ModelPackManifest;
   onProgress?: (p: { loaded: number; total: number; file?: string }) => void;
 }): Promise<{ packDirUri: string; manifest: ModelPackManifest }> {
   const host = createExpoModelPackInstallerHost({
@@ -84,6 +86,7 @@ async function installViaHost(opts: {
     manifest: opts.manifest,
     signal: opts.signal,
     priorInstall: opts.priorInstall,
+    priorManifest: opts.priorManifest,
     onProgress: opts.onProgress,
   });
   return { packDirUri: result.rootLocation, manifest: result.manifest };
@@ -143,6 +146,7 @@ export async function ensureModelPackInstalled(
         invalidatePackRuntime,
         packId: id,
         manifest: remote,
+        priorManifest: installedManifest,
         signal: opts.signal,
         priorInstall: Object.freeze({ scopeKey: `expo-model-pack:${rootDir.uri}`, identityKey: id }),
         onProgress: opts.onProgress,
@@ -182,11 +186,13 @@ export async function ensureModelPackInstalled(
   });
 }
 
-async function readInstalledManifest(meta: any): Promise<ModelPackManifest | null> {
+async function readInstalledManifest(meta: Pick<ExpoFsFile, 'text'>): Promise<ModelPackManifest | null> {
   try {
     const parsed = JSON.parse(await meta.text());
     return parseModelPackManifest(parsed?.manifest ?? parsed);
-  } catch {
+  } catch (error) {
+    // Parser errors can include receipt contents, so report only their type.
+    console.warn('[modelPacks] Failed to read installed model pack manifest', error instanceof Error ? error.name : 'unknown');
     return null;
   }
 }
@@ -214,15 +220,7 @@ export async function checkModelPackUpdateAvailable(
   const rootDir = getPackRootDir(fs, id);
   const meta = getMetaFile(fs, rootDir);
 
-  let installedManifest: ModelPackManifest | null = null;
-  if (meta.exists) {
-    try {
-      const parsed = JSON.parse(await meta.text());
-      installedManifest = parseModelPackManifest(parsed?.manifest ?? parsed);
-    } catch {
-      installedManifest = null;
-    }
-  }
+  const installedManifest = meta.exists ? await readInstalledManifest(meta) : null;
 
   if (!opts.manifestUrl || !opts.manifestUrl.trim()) {
     return { installed: Boolean(installedManifest), updateAvailable: false, installedManifest, remoteManifest: null };
@@ -251,7 +249,7 @@ export async function checkModelPackUpdateAvailable(
 export async function getModelPackInstallSummary(
   opts: { packId: string | null },
   overrides: InstallerOverrides = {},
-): Promise<{ installed: boolean; packDirUri: string | null; manifest: ModelPackManifest | null }> {
+): Promise<{ installed: boolean; packDirUri: string | null; manifest: ModelPackManifest | null; partialBytes: number }> {
   const fs = await getFs(overrides);
   const id = normalizePackId(opts.packId);
   // X-M1: recover an interrupted swap before reporting install state.
@@ -263,17 +261,11 @@ export async function getModelPackInstallSummary(
   const rootDir = getPackRootDir(fs, id);
   const meta = getMetaFile(fs, rootDir);
 
-  if (!meta.exists) {
-    return { installed: false, packDirUri: rootDir.uri, manifest: null };
-  }
-
-  try {
-    const parsed = JSON.parse(await meta.text());
-    const manifest = parseModelPackManifest(parsed?.manifest ?? parsed);
-    return { installed: true, packDirUri: rootDir.uri, manifest };
-  } catch {
-    return { installed: false, packDirUri: rootDir.uri, manifest: null };
-  }
+  const manifest = meta.exists ? await readInstalledManifest(meta) : null;
+  return {
+    installed: manifest !== null, packDirUri: rootDir.uri, manifest,
+    partialBytes: manifest ? 0 : getExpoModelPackPartialBytes({ fs, packId: id }),
+  };
 }
 
 export async function removeModelPack(

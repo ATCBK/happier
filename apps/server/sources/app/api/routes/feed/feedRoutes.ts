@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { Fastify } from "../../types";
 import { FeedBodySchema } from "@/app/feed/types";
 import { feedGet } from "@/app/feed/feedGet";
@@ -13,17 +13,17 @@ export function feedRoutes(app: Fastify) {
             rateLimit: resolveApiHotEndpointRateLimit(process.env, "feed"),
         },
         schema: {
-            querystring: z.object({
-                before: z.string().optional(),
-                after: z.string().optional(),
-                limit: z.coerce.number().int().min(1).max(200).default(50)
-            }).optional(),
+            querystring: z.optional(z.object({
+                before: z.optional(z.string()),
+                after: z.optional(z.string()),
+                limit: z._default(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(200)), 50)
+            })),
             response: {
                 200: z.object({
                     items: z.array(z.object({
                         id: z.string(),
                         body: FeedBodySchema,
-                        repeatKey: z.string().nullable(),
+                        repeatKey: z.nullable(z.string()),
                         cursor: z.string(),
                         createdAt: z.number()
                     })),

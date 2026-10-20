@@ -13,7 +13,7 @@ export type SessionListHydrationPriorityResult<T> = Readonly<{
 type HydrationPriorityRow = Readonly<{
     id: string;
     active?: boolean;
-    reportsTo?: Readonly<{ sessionId: string }> | null;
+    manager?: Readonly<{ sessionId: string }> | null;
 }>;
 
 function normalizeSessionIds(sessionIds?: Iterable<string> | null): string[] {
@@ -102,28 +102,12 @@ export function orderRowsForSessionListHydration<T extends HydrationPriorityRow>
         reasonById,
         usedSessionIds,
         rowsById,
-        // A listed report is consumed by its lead's Work and the nested session list even
-        // before its transcript opens. Its summary is demanded content, not optional generic
-        // background work. Open the projection already in this page; never fetch each child.
-        sessionIds: normalizeSessionIds([
-            ...(params.prioritySessionIds ?? []),
-            ...params.rows.filter(row => row.reportsTo?.sessionId.trim()).map(row => row.id),
-        ]),
+        sessionIds: normalizeSessionIds(params.prioritySessionIds),
     });
-
-    for (const row of params.rows) {
-        if (row.active !== true || usedSessionIds.has(row.id)) continue;
-        usedSessionIds.add(row.id);
-        reasonById.set(row.id, 'active');
-        rows.push(row);
-        reasonCounts.active += 1;
-    }
 
     const remainingRows = params.rows.filter((row) => !usedSessionIds.has(row.id));
     const eagerHydrationCount = Math.max(0, Math.trunc(params.eagerHydrationCount ?? 0));
-    const maxBackgroundHydrationRows = params.maxBackgroundHydrationRows === undefined
-        ? Number.POSITIVE_INFINITY
-        : Math.max(0, Math.trunc(params.maxBackgroundHydrationRows));
+    const maxBackgroundHydrationRows = Math.max(0, Math.trunc(params.maxBackgroundHydrationRows ?? 0));
     const eagerRows = remainingRows.slice(0, eagerHydrationCount);
     const backgroundCandidates = remainingRows.slice(eagerHydrationCount);
     const backgroundRows = backgroundCandidates.slice(0, maxBackgroundHydrationRows);

@@ -9,6 +9,7 @@ import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 
 const api = vi.hoisted(() => ({
@@ -26,6 +27,8 @@ const followState = vi.hoisted(() => ({
 }));
 
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({ useFeatureEnabled: () => true }));
+// The anchored panel's portal and window measurement are the platform boundary; the panel's own parts stay real.
+vi.mock('@/components/ui/popover', async (importOriginal) => (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 vi.mock('@/sync/api/session/sessionFollowSourcesApi', () => ({
     listSessionFollowSources: api.list,
     removeSessionFollowSource: api.remove,
@@ -38,7 +41,10 @@ vi.mock('@/sync/runtime/connectivity/serverReachabilitySupervisorPool', async (i
     subscribeServerReachabilityNetworkAllowed: () => () => undefined,
 }));
 vi.mock('./openSessionFollowDestinationPicker', () => ({ openSessionFollowSourcePicker: picker.open }));
-vi.mock('@/text', () => ({ t: (key: string, params?: { title?: string }) => params?.title ? `${key}:${params.title}` : key }));
+vi.mock('@/text', async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    t: (key: string, params?: { title?: string }) => params?.title ? `${key}:${params.title}` : key,
+}));
 vi.mock('@/sync/domains/state/storage', async () => {
     const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
     return createStorageModuleStub({
@@ -48,8 +54,29 @@ vi.mock('@/sync/domains/state/storage', async () => {
 });
 
 import { SessionFollowSourcesEditor } from './SessionFollowSourcesEditor';
+/** The editor as a page section (two grouped sections); the pane form is tested on its own. */
+function renderPage(element: React.ReactElement, options?: Parameters<typeof renderSettingsView>[1]) {
+    return renderSettingsView(element, {
+        ...options,
+        wrapper: ({ children }) => <ListPresentationProvider value="page">{children}</ListPresentationProvider>,
+    });
+}
 let accountFixture: Awaited<ReturnType<typeof activateStorageAccountScope>> | undefined;
 afterEach(() => { standardCleanup(); accountFixture?.dispose(); accountFixture = undefined; });
+
+/** A Home switch changes the real Account lifetime, not only the editor's target props. */
+async function switchFixtureHome(serverId: string) {
+    await act(async () => {
+        accountFixture?.dispose();
+        accountFixture = await activateStorageAccountScope({ serverId, accountId: 'follow-account' });
+    });
+}
+
+/** The shared editor's preset segment (the pressable radio) of a source's policy editor. */
+function sourcePresetSegment(screen: Awaited<ReturnType<typeof renderSettingsView>>, sourceSessionId: string, preset: string) {
+    return screen.tree.root.findAll((node) => node.props.testID === `session-follow-source-${sourceSessionId}-policy.preset.${preset}`
+        && typeof node.props.onPress === 'function')[0];
+}
 
 function findSourceRow(
     screen: Awaited<ReturnType<typeof renderSettingsView>>,
@@ -59,6 +86,12 @@ function findSourceRow(
     return screen.listRows(testID).find((node) => (
         node.props.testID === testID && typeof node.props.subtitle === 'string'
     )) ?? null;
+}
+
+/** Opens a source's Follow panel the way a person does: pressing its row. */
+async function openSource(screen: Awaited<ReturnType<typeof renderSettingsView>>, sourceSessionId: string) {
+    await vi.waitFor(() => expect(findSourceRow(screen, sourceSessionId)).not.toBeNull());
+    await act(async () => { findSourceRow(screen, sourceSessionId)?.props.onPress?.(); await Promise.resolve(); });
 }
 
 /**
@@ -96,6 +129,7 @@ describe('SessionFollowSourcesEditor', () => {
                 sources: Array<{
                     sourceSessionId: string;
                     destinationSessionId: string;
+                    policy: { preset: 'quiet' };
                     deliveryState: 'eligible';
                     hasPendingUpdates: boolean;
                 }>;
@@ -121,7 +155,7 @@ describe('SessionFollowSourcesEditor', () => {
         // the lifetime of this pending observation.
         api.list.mockReturnValue(listed.promise);
         preparation.run.mockResolvedValueOnce({ kind: 'waiting', reason: 'runner_unreachable' });
-        const screen = await renderSettingsView(<SessionFollowSourcesEditor
+        const screen = await renderPage(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-a' })}
             serverId="home-a"
             destinationMachineId="runner-a"
@@ -133,7 +167,7 @@ describe('SessionFollowSourcesEditor', () => {
         // source-key preparation.
         await act(async () => {
             listed.resolve({ kind: 'ok', value: { sources: [{
-                sourceSessionId: 'source-a', destinationSessionId: 'destination-a', deliveryState: 'eligible', hasPendingUpdates: false,
+                sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'quiet' as const }, deliveryState: 'eligible', hasPendingUpdates: false,
             }] } });
             await listed.promise;
         });
@@ -142,6 +176,7 @@ describe('SessionFollowSourcesEditor', () => {
         await vi.waitFor(() => {
             expect(preparation.run).toHaveBeenCalledWith({
                 serverId: 'home-a', sourceSessionId: 'source-a', destinationSessionId: 'destination-a',
+                signal: expect.anything(),
             });
             expect(findSourceRow(screen, 'source-a')?.props.subtitle)
                 .toBe('session.follow.sources.waitingRuntime');
@@ -152,6 +187,7 @@ describe('SessionFollowSourcesEditor', () => {
 
         api.remove.mockResolvedValueOnce({ kind: 'ok', value: { changed: true } });
         api.list.mockResolvedValueOnce({ kind: 'ok', value: { sources: [] } });
+        await openSource(screen, 'source-a');
         const removeButton = screen.findByTestId('session-follow-source-source-a-remove');
         await act(async () => { removeButton?.props.onPress?.(); await Promise.resolve(); });
         expect(api.remove).toHaveBeenCalledWith({
@@ -162,7 +198,7 @@ describe('SessionFollowSourcesEditor', () => {
 
     it('prepares a source again when a removed committed edge is later re-added', async () => {
         const relation = {
-            sourceSessionId: 'source-a', destinationSessionId: 'destination-a', deliveryState: 'eligible' as const, hasPendingUpdates: false,
+            sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'quiet' as const }, deliveryState: 'eligible' as const, hasPendingUpdates: false,
         };
         followState.rows = {
             'home-a': {
@@ -181,7 +217,7 @@ describe('SessionFollowSourcesEditor', () => {
         let currentSources = [relation];
         api.list.mockImplementation(async () => ({ kind: 'ok', value: { sources: currentSources } }));
         preparation.run.mockResolvedValue({ kind: 'prepared' });
-        const screen = await renderSettingsView(<SessionFollowSourcesEditor
+        const screen = await renderPage(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-a' })}
             serverId="home-a"
             destinationMachineId="runner-a"
@@ -196,6 +232,7 @@ describe('SessionFollowSourcesEditor', () => {
 
         api.remove.mockResolvedValueOnce({ kind: 'ok', value: { changed: true } });
         currentSources = [];
+        await openSource(screen, 'source-a');
         await act(async () => {
             screen.findByTestId('session-follow-source-source-a-remove')?.props.onPress?.();
             await Promise.resolve();
@@ -216,7 +253,7 @@ describe('SessionFollowSourcesEditor', () => {
     it('retains preparation across a same-Machine reconnect but prepares again for a replacement Machine', async () => {
         const activeAt = Date.now();
         const relation = {
-            sourceSessionId: 'source-a', destinationSessionId: 'destination-a', mode: 'next_turn' as const,
+            sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'quiet' as const },
             deliveryState: 'eligible' as const, hasPendingUpdates: false,
         };
         api.list.mockResolvedValue({ kind: 'ok', value: { sources: [relation] } });
@@ -236,7 +273,7 @@ describe('SessionFollowSourcesEditor', () => {
             })],
         };
         const destination = createSessionFixture({ id: 'destination-a' });
-        const screen = await renderSettingsView(<SessionFollowSourcesEditor
+        const screen = await renderPage(<SessionFollowSourcesEditor
             destination={destination}
             serverId="home-a"
             destinationMachineId="runner-a"
@@ -244,7 +281,7 @@ describe('SessionFollowSourcesEditor', () => {
         await vi.waitFor(() => {
             expect(preparation.run).toHaveBeenCalledTimes(1);
             expect(findSourceRow(screen, 'source-a')?.props.subtitle)
-                .toBe('session.follow.sources.nextTurn');
+                .toBe('session.follow.policy.quiet');
         });
 
         followState.machinesByServer['home-a'] = [createMachineFixture({
@@ -292,6 +329,7 @@ describe('SessionFollowSourcesEditor', () => {
         await vi.waitFor(() => expect(preparation.run).toHaveBeenCalledTimes(2));
         expect(preparation.run).toHaveBeenLastCalledWith({
             serverId: 'home-a', sourceSessionId: 'source-a', destinationSessionId: 'destination-a',
+            signal: expect.anything(),
         });
         await screen.unmount();
     });
@@ -304,7 +342,7 @@ describe('SessionFollowSourcesEditor', () => {
             reason: 'source_key_unavailable';
         }>>();
         api.list.mockResolvedValue({ kind: 'ok', value: { sources: [{
-            sourceSessionId: 'source-a', destinationSessionId: 'destination-a', mode: 'next_turn',
+            sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'quiet' },
             deliveryState: 'eligible', hasPendingUpdates: false,
         }] } });
         preparation.run
@@ -325,7 +363,7 @@ describe('SessionFollowSourcesEditor', () => {
             })],
         };
         const destination = createSessionFixture({ id: 'destination-a' });
-        const screen = await renderSettingsView(<SessionFollowSourcesEditor
+        const screen = await renderPage(<SessionFollowSourcesEditor
             destination={destination}
             serverId="home-a"
             destinationMachineId="runner-a"
@@ -365,12 +403,12 @@ describe('SessionFollowSourcesEditor', () => {
 
     it('reloads only its exact Home/destination when a committed Session invalidation or reconnect wake arrives', async () => {
         const relation = {
-            sourceSessionId: 'source-a', destinationSessionId: 'destination-a', mode: 'next_turn' as const,
+            sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'quiet' as const },
             deliveryState: 'eligible' as const, hasPendingUpdates: false,
         };
         let currentSources = [relation];
         api.list.mockImplementation(async () => ({ kind: 'ok', value: { sources: currentSources } }));
-        const screen = await renderSettingsView(<SessionFollowSourcesEditor
+        const screen = await renderPage(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-a' })}
             serverId="home-a"
             destinationMachineId={null}
@@ -401,12 +439,80 @@ describe('SessionFollowSourcesEditor', () => {
         await screen.unmount();
     });
 
+    it('lands a read that a Home wake overlaps, so a busy Home cannot keep the list loading', async () => {
+        const relation = {
+            sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'quiet' as const },
+            deliveryState: 'eligible' as const, hasPendingUpdates: false,
+        };
+        const reads: Array<ReturnType<typeof createDeferred<Readonly<{ kind: 'ok'; value: { sources: Array<typeof relation> } }>>>> = [];
+        api.list.mockImplementation(() => {
+            const read = createDeferred<Readonly<{ kind: 'ok'; value: { sources: Array<typeof relation> } }>>();
+            reads.push(read);
+            return read.promise;
+        });
+        const screen = await renderPage(<SessionFollowSourcesEditor
+            destination={createSessionFixture({ id: 'destination-a' })}
+            serverId="home-a" destinationMachineId={null}
+        />);
+        await vi.waitFor(() => expect(reads.length).toBeGreaterThan(0));
+        expect(screen.getTextContent()).toContain('common.loading');
+
+        // Wakes arrive faster than the Home answers; each one used to discard the read before it.
+        await act(async () => { publishHomeAccountChange('home-a'); await Promise.resolve(); });
+        await act(async () => { publishHomeAccountChange('home-a'); await Promise.resolve(); });
+        await act(async () => {
+            reads[0]!.resolve({ kind: 'ok', value: { sources: [relation] } });
+            await reads[0]!.promise;
+        });
+
+        await vi.waitFor(() => expect(screen.findByTestId('session-follow-source-source-a')).not.toBeNull());
+        expect(screen.getTextContent()).not.toContain('common.loading');
+        await screen.unmount();
+    });
+
+    it('draws one flat pane section with its count and a plus, and two grouped sections inside a page', async () => {
+        api.list.mockResolvedValue({ kind: 'ok', value: { sources: [{
+            sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'important' },
+            deliveryState: 'eligible', hasPendingUpdates: false,
+        }] } });
+        const editor = <SessionFollowSourcesEditor
+            destination={createSessionFixture({ id: 'destination-a' })}
+            serverId="home-a" destinationMachineId={null}
+        />;
+        const pane = await renderSettingsView(editor);
+        await vi.waitFor(() => expect(findSourceRow(pane, 'source-a')).not.toBeNull());
+        expect(pane.findByTestId('session-follow-sources-pane')).not.toBeNull();
+        expect(pane.getTextContent()).not.toContain('common.add');
+        // The pane's "+" is the one add control, and it opens the source picker.
+        await act(async () => { pane.findByTestId('session-follow-source-add')?.props.onPress?.(); });
+        expect(picker.open).toHaveBeenCalledTimes(1);
+        await pane.unmount();
+
+        const page = await renderPage(<ListPresentationProvider value="page">{editor}</ListPresentationProvider>);
+        await vi.waitFor(() => expect(findSourceRow(page, 'source-a')).not.toBeNull());
+        expect(page.findByTestId('session-follow-sources-pane')).toBeNull();
+        expect(page.getTextContent()).toContain('common.add');
+        await page.unmount();
+    });
+
+    it('says what belongs under an empty Following instead of a lone placeholder', async () => {
+        api.list.mockResolvedValue({ kind: 'ok', value: { sources: [] } });
+        const pane = await renderSettingsView(<SessionFollowSourcesEditor
+            destination={createSessionFixture({ id: 'destination-a' })}
+            serverId="home-a" destinationMachineId={null}
+        />);
+        await vi.waitFor(() => expect(pane.findByTestId('session-follow-sources-empty')).not.toBeNull());
+        expect(pane.getTextContent()).toContain('session.follow.sources.empty');
+        expect(pane.getTextContent()).not.toContain('common.none');
+        await pane.unmount();
+    });
+
     it('keeps Stop updates available during preparation and rejects the old result after the edge is re-created', async () => {
         const firstPreparation = createDeferred<Readonly<{ kind: 'prepared' }>>();
         const relation = {
             sourceSessionId: 'source-a',
             destinationSessionId: 'destination-a',
-            mode: 'next_turn' as const,
+            policy: { preset: 'quiet' as const },
             deliveryState: 'eligible' as const,
             hasPendingUpdates: false,
         };
@@ -434,13 +540,14 @@ describe('SessionFollowSourcesEditor', () => {
             .mockReturnValueOnce(firstPreparation.promise)
             .mockResolvedValueOnce({ kind: 'waiting', reason: 'source_key_unavailable' });
 
-        const screen = await renderSettingsView(<SessionFollowSourcesEditor
+        const screen = await renderPage(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-a' })}
             serverId="home-a"
             destinationMachineId="runner-a"
         />);
         await vi.waitFor(() => expect(preparation.run).toHaveBeenCalledTimes(1));
 
+        await openSource(screen, 'source-a');
         const stop = screen.findByTestId('session-follow-source-source-a-remove');
         expect(stop?.props.disabled).toBe(false);
         await act(async () => {
@@ -467,11 +574,11 @@ describe('SessionFollowSourcesEditor', () => {
         await screen.unmount();
     });
 
-    it('offers wake mode only for the exact destination Machine capability and persists the selected mode', async () => {
+    it('offers shared policy presets and persists explicit policy independently of destination wake capability', async () => {
         api.list.mockResolvedValue({ kind: 'ok', value: { sources: [{
             sourceSessionId: 'source-a',
             destinationSessionId: 'destination-a',
-            mode: 'next_turn',
+            policy: { preset: 'quiet' },
             deliveryState: 'eligible',
             hasPendingUpdates: false,
         }] } });
@@ -491,7 +598,7 @@ describe('SessionFollowSourcesEditor', () => {
                 },
             })],
         };
-        const screen = await renderSettingsView(<SessionFollowSourcesEditor
+        const screen = await renderPage(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-a' })}
             serverId="home-a"
             destinationMachineId="runner-a"
@@ -502,20 +609,18 @@ describe('SessionFollowSourcesEditor', () => {
             await Promise.resolve();
         });
         expect(api.set).not.toHaveBeenCalled();
-        expect(screen.findByTestId('session-follow-source-source-a')?.props.accessibilityState).toMatchObject({ expanded: true });
-        expect(screen.findByTestId('session-follow-source-source-a-mode-next_turn')?.props['aria-checked']).toBe(true);
-        expect(screen.findByTestId('session-follow-source-source-a-mode-wake_on_human_change')?.props['aria-checked']).toBe(false);
-        expect(screen.findByTestId('session-follow-source-source-a-mode-next_turn')?.props.accessibilityState).toMatchObject({ checked: true });
-        expect(screen.findByTestId('session-follow-source-source-a-mode-wake_on_human_change')?.props.accessibilityState).toMatchObject({ checked: false });
+        expect(screen.findByTestId('session-follow-source-source-a-panel')).not.toBeNull();
+        expect(sourcePresetSegment(screen, 'source-a', 'quiet')?.props.checked).toBe(true);
+        expect(sourcePresetSegment(screen, 'source-a', 'everything')?.props.checked).toBe(false);
         await act(async () => {
-            screen.findByTestId('session-follow-source-source-a-mode-wake_on_human_change')?.props.onPress?.();
+            sourcePresetSegment(screen, 'source-a', 'everything')?.props.onPress?.();
             await Promise.resolve();
         });
         expect(api.set).toHaveBeenCalledWith({
             serverId: 'home-a',
             destinationSessionId: 'destination-a',
             sourceSessionId: 'source-a',
-            mode: 'wake_on_human_change',
+            policy: { preset: 'everything', voice: false },
         });
         await screen.unmount();
 
@@ -526,30 +631,88 @@ describe('SessionFollowSourcesEditor', () => {
             activeAt: Date.now(),
             operationProtocolCapabilities: { sessionFollow: { contextV1: true } },
         })];
-        const contextOnlyRuntime = await renderSettingsView(<SessionFollowSourcesEditor
+        const contextOnlyRuntime = await renderPage(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-a' })}
             serverId="home-a"
             destinationMachineId="runner-a"
         />);
-        // Without the wake capability the row offers no press action at all; stopping
-        // updates keeps its own labelled control instead of moving onto the row body.
-        await vi.waitFor(() => expect(contextOnlyRuntime.findByTestId('session-follow-source-source-a-remove')).not.toBeNull());
+        // Authoring policy remains available while an older destination runtime
+        // waits to update; capability readiness does not choose the saved policy.
+        await vi.waitFor(() => expect(findSourceRow(contextOnlyRuntime, 'source-a')).not.toBeNull());
         const contextOnlyRow = findSourceRow(contextOnlyRuntime, 'source-a');
         expect(contextOnlyRow?.props.detail).toBeUndefined();
-        expect(contextOnlyRow?.props.onPress).toBeUndefined();
-        // The label announces exactly what the row shows — its title and its delivery
-        // status — and nothing more: an inert row must not announce an action it does
-        // not perform, and the status must not be dropped.
+        expect(contextOnlyRow?.props.onPress).toBeTypeOf('function');
         expect(contextOnlyRow?.props.accessibilityLabel)
-            .toBe(`${contextOnlyRow?.props.title}. session.follow.sources.nextTurn`);
+            .toBe(`${contextOnlyRow?.props.title}. session.follow.policy.quiet`);
+        await act(async () => { contextOnlyRow?.props.onPress?.(); });
+        for (const preset of ['everything', 'important', 'quiet', 'custom']) {
+            expect(sourcePresetSegment(contextOnlyRuntime, 'source-a', preset)).toBeDefined();
+        }
         expect(api.set).not.toHaveBeenCalled();
         await contextOnlyRuntime.unmount();
     });
 
+    it('preserves the exact Custom draft and committed policy across failed save, passive refresh and retry', async () => {
+        api.list.mockResolvedValue({ kind: 'ok', value: { sources: [{
+            sourceSessionId: 'source-a', destinationSessionId: 'destination-a',
+            policy: { preset: 'important' }, deliveryState: 'eligible', hasPendingUpdates: false,
+        }] } });
+        api.set.mockResolvedValueOnce({ kind: 'failed', error: 'unavailable' });
+        const screen = await renderPage(<SessionFollowSourcesEditor
+            destination={createSessionFixture({ id: 'destination-a' })}
+            serverId="home-a" destinationMachineId={null}
+        />);
+        await vi.waitFor(() => expect(findSourceRow(screen, 'source-a')).not.toBeNull());
+        await act(async () => { findSourceRow(screen, 'source-a')?.props.onPress?.(); });
+        await act(async () => { sourcePresetSegment(screen, 'source-a', 'custom')?.props.onPress?.(); });
+        await vi.waitFor(() => expect(screen.findByTestId('session-follow-sources-error')).not.toBeNull());
+        const request = api.set.mock.calls[0]?.[0];
+        expect(request).toMatchObject({ policy: { preset: 'custom', events: {
+            needs_you: { decision: { delivery: 'interrupt' }, approval: { delivery: 'interrupt' }, blocked: { delivery: 'interrupt' } },
+            finished: { delivery: 'quiet' }, person_wrote: { delivery: 'quiet' }, message: { delivery: 'off' },
+        } } });
+        const reads = api.list.mock.calls.length;
+        await act(async () => { publishHomeAccountChange('home-a', ['destination-a']); });
+        await vi.waitFor(() => expect(api.list.mock.calls.length).toBeGreaterThan(reads));
+        expect(screen.findByTestId('session-follow-sources-error')).not.toBeNull();
+        expect(sourcePresetSegment(screen, 'source-a', 'custom')?.props.checked).toBe(true);
+        api.set.mockResolvedValueOnce({ kind: 'ok', value: { changed: true } });
+        await act(async () => { screen.findByTestId('session-follow-sources-error')?.props.onPress?.(); });
+        expect(api.set.mock.calls[1]?.[0]).toEqual(request);
+        await vi.waitFor(() => expect(screen.findByTestId('session-follow-sources-error')).toBeNull());
+        await screen.unmount();
+    });
+
+    it('edits one event of a Custom source policy through the shared editor and writes the whole policy', async () => {
+        api.list.mockResolvedValue({ kind: 'ok', value: { sources: [{
+            sourceSessionId: 'source-a', destinationSessionId: 'destination-a',
+            policy: { preset: 'custom', events: { finished: { delivery: 'quiet' }, person_wrote: { delivery: 'quiet' } } },
+            deliveryState: 'eligible', hasPendingUpdates: false,
+        }] } });
+        api.set.mockResolvedValue({ kind: 'ok', value: { changed: true } });
+        const screen = await renderPage(<SessionFollowSourcesEditor
+            destination={createSessionFixture({ id: 'destination-a' })}
+            serverId="home-a" destinationMachineId={null}
+        />);
+        await vi.waitFor(() => expect(findSourceRow(screen, 'source-a')).not.toBeNull());
+        await act(async () => { findSourceRow(screen, 'source-a')?.props.onPress?.(); });
+        const finishedPush = screen.tree.root.findAll((node) => node.props.testID === 'session-follow-source-source-a-policy.event.finished.interrupt'
+            && typeof node.props.onPress === 'function')[0];
+        expect(finishedPush).toBeDefined();
+        await act(async () => { finishedPush?.props.onPress(); });
+        expect(api.set).toHaveBeenCalledWith(expect.objectContaining({
+            sourceSessionId: 'source-a',
+            policy: expect.objectContaining({ preset: 'custom', events: expect.objectContaining({
+                finished: expect.objectContaining({ delivery: 'interrupt' }), person_wrote: { delivery: 'quiet' },
+            }) }),
+        }));
+        await screen.unmount();
+    });
+
     it('names each Stop updates control with its source session identity', async () => {
         api.list.mockResolvedValue({ kind: 'ok', value: { sources: [
-            { sourceSessionId: 'source-a', destinationSessionId: 'destination-a', mode: 'next_turn', deliveryState: 'eligible', hasPendingUpdates: false },
-            { sourceSessionId: 'source-b', destinationSessionId: 'destination-a', mode: 'next_turn', deliveryState: 'eligible', hasPendingUpdates: false },
+            { sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'quiet' }, deliveryState: 'eligible', hasPendingUpdates: false },
+            { sourceSessionId: 'source-b', destinationSessionId: 'destination-a', policy: { preset: 'quiet' }, deliveryState: 'eligible', hasPendingUpdates: false },
         ] } });
         followState.rows = {
             'home-a': {
@@ -565,14 +728,18 @@ describe('SessionFollowSourcesEditor', () => {
                 operationProtocolCapabilities: { sessionFollow: { contextV1: true, wakeOnHumanChangeV1: true } },
             })],
         };
-        const screen = await renderSettingsView(<SessionFollowSourcesEditor
+        const screen = await renderPage(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-a' })}
             serverId="home-a"
             destinationMachineId="runner-a"
         />);
 
-        await vi.waitFor(() => expect(screen.findByTestId('session-follow-source-source-b-remove')).not.toBeNull());
-        const labels = ['source-a', 'source-b'].map((id) => screen.findByTestId(`session-follow-source-${id}-remove`)?.props.accessibilityLabel);
+        // One panel is open at a time: each row opens its own, and Stop updates names that row's source.
+        const labels: Array<unknown> = [];
+        for (const id of ['source-a', 'source-b']) {
+            await openSource(screen, id);
+            labels.push(screen.findByTestId(`session-follow-source-${id}-remove`)?.props.accessibilityLabel);
+        }
         expect(labels).toEqual([
             'session.follow.sources.stopForSource:Alpha source',
             'session.follow.sources.stopForSource:Beta source',
@@ -581,21 +748,115 @@ describe('SessionFollowSourcesEditor', () => {
         await screen.unmount();
     });
 
+    it('opens a source panel from its row with its own title, Stop updates and Done, and Done closes it', async () => {
+        api.list.mockResolvedValue({ kind: 'ok', value: { sources: [{
+            sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'important' },
+            deliveryState: 'eligible', hasPendingUpdates: false,
+        }] } });
+        followState.rows = { 'home-a': {
+            'source-a': createSessionListRenderableSessionFixture({ id: 'source-a', metadata: { name: 'Alpha source', path: '/repo/alpha' }, encryptionMode: 'plain' }),
+        } };
+        const screen = await renderSettingsView(<SessionFollowSourcesEditor
+            destination={createSessionFixture({ id: 'destination-a' })} serverId="home-a" destinationMachineId={null}
+        />);
+        await vi.waitFor(() => expect(findSourceRow(screen, 'source-a')).not.toBeNull());
+        // The row is a compact index entry: nothing is edited inline until it is opened.
+        expect(screen.findByTestId('session-follow-source-source-a-panel')).toBeNull();
+        expect(screen.findByTestId('session-follow-source-source-a-remove')).toBeNull();
+        await openSource(screen, 'source-a');
+        expect(screen.findByTestId('session-follow-source-source-a-panel')).not.toBeNull();
+        const text = screen.getTextContent();
+        expect(text).toContain('session.follow.sources.row:Alpha source');
+        expect(text).toContain('session.follow.sources.panelSubtitle');
+        expect(screen.findByTestId('session-follow-source-source-a-remove')).not.toBeNull();
+        await act(async () => { screen.findByTestId('session-follow-source-source-a-done')?.props.onPress?.(); });
+        expect(screen.findByTestId('session-follow-source-source-a-panel')).toBeNull();
+        expect(api.remove).not.toHaveBeenCalled();
+        await screen.unmount();
+    });
+
+    it('lists every source kind as a row that opens the same panel and writes through its exact source ref', async () => {
+        const other = (source: Record<string, string>, extra: Record<string, unknown> = {}) => ({
+            source, destinationSessionId: 'destination-a', policy: { preset: 'important' as const }, deliveryState: 'eligible' as const,
+            sourceAvailability: 'available' as const, hasPendingUpdates: null, relation: 'follower' as const, ...extra,
+        });
+        api.list.mockResolvedValue({ kind: 'ok', value: { sources: [
+            { sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'quiet' }, deliveryState: 'eligible', hasPendingUpdates: false },
+            other({ kind: 'discussion', discussionId: 'disc-1' }),
+            other({ kind: 'execution_run', sessionId: 'source-a', runId: 'run-1' }),
+            other({ kind: 'workflow_run', runId: 'wf-1' }, { sourceAvailability: 'unavailable' }),
+        ] } });
+        api.remove.mockResolvedValue({ kind: 'ok', value: { changed: true } });
+        api.set.mockResolvedValue({ kind: 'ok', value: { changed: true } });
+        followState.rows = { 'home-a': {
+            'source-a': createSessionListRenderableSessionFixture({ id: 'source-a', metadata: { name: 'Alpha source', path: '/repo/alpha' }, encryptionMode: 'plain' }),
+        } };
+        const screen = await renderSettingsView(<SessionFollowSourcesEditor
+            destination={createSessionFixture({ id: 'destination-a' })} serverId="home-a" destinationMachineId={null}
+        />);
+        for (const key of ['source-a', 'discussion:disc-1', 'execution_run:source-a:run-1', 'workflow_run:wf-1']) {
+            await vi.waitFor(() => expect(findSourceRow(screen, key)).not.toBeNull());
+        }
+        // Each kind is named by its own owner, and a source the receiver can no longer read says so instead of a level.
+        expect(findSourceRow(screen, 'execution_run:source-a:run-1')?.props.title)
+            .toBe('session.follow.sources.executionRun:Alpha source');
+        expect(findSourceRow(screen, 'workflow_run:wf-1')?.props.subtitle).toBe('session.follow.sources.sourceUnavailable');
+
+        await openSource(screen, 'discussion:disc-1');
+        expect(screen.findByTestId('session-follow-source-discussion:disc-1-panel')).not.toBeNull();
+        expect(screen.getTextContent()).toContain('session.follow.sources.row:session.follow.sources.kindDiscussion');
+        await act(async () => { sourcePresetSegment(screen, 'discussion:disc-1', 'quiet')?.props.onPress?.(); await Promise.resolve(); });
+        expect(api.set).toHaveBeenCalledWith(expect.objectContaining({
+            destinationSessionId: 'destination-a', source: { kind: 'discussion', discussionId: 'disc-1' },
+        }));
+        await act(async () => { screen.findByTestId('session-follow-source-discussion:disc-1-remove')?.props.onPress?.(); await Promise.resolve(); });
+        await vi.waitFor(() => expect(api.remove).toHaveBeenCalledWith({
+            serverId: 'home-a', destinationSessionId: 'destination-a', source: { kind: 'discussion', discussionId: 'disc-1' },
+        }));
+        // Non-Session sources have no encrypted source key to prepare.
+        expect(preparation.run).not.toHaveBeenCalledWith(expect.objectContaining({ sourceSessionId: 'disc-1' }));
+        await screen.unmount();
+    });
+
+    it('places one source panel through a pushed page with the same policy writer, and leaves the page after Stop updates', async () => {
+        api.list.mockResolvedValue({ kind: 'ok', value: { sources: [{
+            sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'quiet' },
+            deliveryState: 'eligible', hasPendingUpdates: false,
+        }] } });
+        api.set.mockResolvedValue({ kind: 'ok', value: { changed: true } });
+        api.remove.mockResolvedValue({ kind: 'ok', value: { changed: true } });
+        const onClose = vi.fn();
+        const screen = await renderPage(<SessionFollowSourcesEditor
+            destination={createSessionFixture({ id: 'destination-a' })} serverId="home-a" destinationMachineId={null}
+            page={{ sourceKey: 'source-a', onClose, frame: (parts) => <>{parts.body}{parts.footer}</> }}
+        />);
+        await vi.waitFor(() => expect(sourcePresetSegment(screen, 'source-a', 'quiet')).toBeDefined());
+        // The page shows the source's panel, not the list.
+        expect(screen.findByTestId('session-follow-source-add')).toBeNull();
+        await act(async () => { sourcePresetSegment(screen, 'source-a', 'important')?.props.onPress?.(); await Promise.resolve(); });
+        expect(api.set).toHaveBeenCalledWith(expect.objectContaining({ sourceSessionId: 'source-a', policy: { preset: 'important', voice: false } }));
+        await act(async () => { screen.findByTestId('session-follow-source-source-a-remove')?.props.onPress?.(); await Promise.resolve(); });
+        await vi.waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+        expect(api.remove).toHaveBeenCalledWith(expect.objectContaining({ sourceSessionId: 'source-a' }));
+        await screen.unmount();
+    });
+
     it('never paints sources returned for a previous exact destination after the destination changes', async () => {
-        const first = createDeferred<Readonly<{ kind: 'ok'; value: { sources: Array<{ sourceSessionId: string; destinationSessionId: string; deliveryState: 'eligible'; hasPendingUpdates: boolean }> } }>>();
-        const second = createDeferred<Readonly<{ kind: 'ok'; value: { sources: Array<{ sourceSessionId: string; destinationSessionId: string; deliveryState: 'eligible'; hasPendingUpdates: boolean }> } }>>();
+        const first = createDeferred<Readonly<{ kind: 'ok'; value: { sources: Array<{ sourceSessionId: string; destinationSessionId: string; policy: { preset: 'quiet' }; deliveryState: 'eligible'; hasPendingUpdates: boolean }> } }>>();
+        const second = createDeferred<Readonly<{ kind: 'ok'; value: { sources: Array<{ sourceSessionId: string; destinationSessionId: string; policy: { preset: 'quiet' }; deliveryState: 'eligible'; hasPendingUpdates: boolean }> } }>>();
         api.list
             .mockReturnValueOnce(first.promise)
             .mockReturnValueOnce(second.promise);
 
         const firstDestination = createSessionFixture({ id: 'destination-a' });
         const secondDestination = createSessionFixture({ id: 'destination-b' });
-        const screen = await renderSettingsView(<SessionFollowSourcesEditor
+        const screen = await renderPage(<SessionFollowSourcesEditor
             destination={firstDestination}
             serverId="home-a"
             destinationMachineId={null}
         />);
 
+        await switchFixtureHome('home-b');
         await screen.update(<SessionFollowSourcesEditor
             destination={secondDestination}
             serverId="home-b"
@@ -603,7 +864,7 @@ describe('SessionFollowSourcesEditor', () => {
         />);
         await act(async () => {
             second.resolve({ kind: 'ok', value: { sources: [{
-                sourceSessionId: 'source-b', destinationSessionId: 'destination-b', deliveryState: 'eligible', hasPendingUpdates: false,
+                sourceSessionId: 'source-b', destinationSessionId: 'destination-b', policy: { preset: 'quiet' as const }, deliveryState: 'eligible', hasPendingUpdates: false,
             }] } });
             await second.promise;
         });
@@ -611,7 +872,7 @@ describe('SessionFollowSourcesEditor', () => {
 
         await act(async () => {
             first.resolve({ kind: 'ok', value: { sources: [{
-                sourceSessionId: 'source-a', destinationSessionId: 'destination-a', deliveryState: 'eligible', hasPendingUpdates: false,
+                sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'quiet' as const }, deliveryState: 'eligible', hasPendingUpdates: false,
             }] } });
             await first.promise;
         });
@@ -629,11 +890,11 @@ describe('SessionFollowSourcesEditor', () => {
             value: {
                 sources: input.sessionId === 'destination-a'
                     ? [{
-                        sourceSessionId: 'source-a', destinationSessionId: 'destination-a', mode: 'next_turn' as const,
+                        sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'quiet' as const },
                         deliveryState: 'eligible' as const, hasPendingUpdates: false,
                     }]
                     : [{
-                        sourceSessionId: 'source-b', destinationSessionId: 'destination-b', mode: 'next_turn' as const,
+                        sourceSessionId: 'source-b', destinationSessionId: 'destination-b', policy: { preset: 'quiet' as const },
                         deliveryState: 'eligible' as const, hasPendingUpdates: false,
                     }],
             },
@@ -661,19 +922,20 @@ describe('SessionFollowSourcesEditor', () => {
             })],
         };
 
-        const screen = await renderSettingsView(<SessionFollowSourcesEditor
+        const screen = await renderPage(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-a' })}
             serverId="home-a"
             destinationMachineId="runner-a"
         />, {
             createNodeMock: (element) => ({ focus: () => focused((element.props as { testID?: string }).testID) }),
         });
-        await vi.waitFor(() => expect(screen.findByTestId('session-follow-source-source-a-remove')).not.toBeNull());
+        await openSource(screen, 'source-a');
         await act(async () => {
             screen.findByTestId('session-follow-source-source-a-remove')?.props.onPress?.();
             await Promise.resolve();
         });
 
+        await switchFixtureHome('home-b');
         await screen.update(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-b' })}
             serverId="home-b"
@@ -685,14 +947,14 @@ describe('SessionFollowSourcesEditor', () => {
             await Promise.resolve();
         });
         await act(async () => {
-            screen.findByTestId('session-follow-source-source-b-mode-wake_on_human_change')?.props.onPress?.();
+            sourcePresetSegment(screen, 'source-b', 'everything')?.props.onPress?.();
             await Promise.resolve();
         });
         expect(api.set).toHaveBeenCalledWith({
             serverId: 'home-b',
             destinationSessionId: 'destination-b',
             sourceSessionId: 'source-b',
-            mode: 'wake_on_human_change',
+            policy: { preset: 'everything', voice: false },
         });
         expect(readControlDisabled(screen, 'session-follow-source-add')).toBe(true);
 
@@ -714,7 +976,7 @@ describe('SessionFollowSourcesEditor', () => {
         await screen.unmount();
     });
 
-    it('ignores a failed mode update from the previous destination while the current destination removal remains active', async () => {
+    it('ignores a failed policy update from the previous destination while the current destination removal remains active', async () => {
         const oldModeUpdate = createDeferred<Readonly<{ kind: 'error'; error: string }>>();
         const currentRemoval = createDeferred<Readonly<{ kind: 'ok'; value: { changed: true } }>>();
         api.list.mockImplementation(async (input: Readonly<{ sessionId: string }>) => ({
@@ -722,11 +984,11 @@ describe('SessionFollowSourcesEditor', () => {
             value: {
                 sources: input.sessionId === 'destination-a'
                     ? [{
-                        sourceSessionId: 'source-a', destinationSessionId: 'destination-a', mode: 'next_turn' as const,
+                        sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'quiet' as const },
                         deliveryState: 'eligible' as const, hasPendingUpdates: false,
                     }]
                     : [{
-                        sourceSessionId: 'source-b', destinationSessionId: 'destination-b', mode: 'next_turn' as const,
+                        sourceSessionId: 'source-b', destinationSessionId: 'destination-b', policy: { preset: 'quiet' as const },
                         deliveryState: 'eligible' as const, hasPendingUpdates: false,
                     }],
             },
@@ -754,7 +1016,7 @@ describe('SessionFollowSourcesEditor', () => {
             })],
         };
 
-        const screen = await renderSettingsView(<SessionFollowSourcesEditor
+        const screen = await renderPage(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-a' })}
             serverId="home-a"
             destinationMachineId="runner-a"
@@ -765,16 +1027,17 @@ describe('SessionFollowSourcesEditor', () => {
             await Promise.resolve();
         });
         await act(async () => {
-            screen.findByTestId('session-follow-source-source-a-mode-wake_on_human_change')?.props.onPress?.();
+            sourcePresetSegment(screen, 'source-a', 'everything')?.props.onPress?.();
             await Promise.resolve();
         });
 
+        await switchFixtureHome('home-b');
         await screen.update(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-b' })}
             serverId="home-b"
             destinationMachineId="runner-b"
         />);
-        await vi.waitFor(() => expect(screen.findByTestId('session-follow-source-source-b-remove')).not.toBeNull());
+        await openSource(screen, 'source-b');
         await act(async () => {
             screen.findByTestId('session-follow-source-source-b-remove')?.props.onPress?.();
             await Promise.resolve();
@@ -805,7 +1068,7 @@ describe('SessionFollowSourcesEditor', () => {
 
     it('retries the exact failed Stop following instead of reloading the list', async () => {
         const relation = {
-            sourceSessionId: 'source-a', destinationSessionId: 'destination-a', mode: 'next_turn' as const,
+            sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'quiet' as const },
             deliveryState: 'eligible' as const, hasPendingUpdates: false,
         };
         let removed = false;
@@ -823,12 +1086,12 @@ describe('SessionFollowSourcesEditor', () => {
             'home-a': [createMachineFixture({ id: 'runner-a', active: true })],
         };
 
-        const screen = await renderSettingsView(<SessionFollowSourcesEditor
+        const screen = await renderPage(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-a' })}
             serverId="home-a"
             destinationMachineId="runner-a"
         />);
-        await vi.waitFor(() => expect(screen.findByTestId('session-follow-source-source-a-remove')).not.toBeNull());
+        await openSource(screen, 'source-a');
 
         await act(async () => {
             screen.findByTestId('session-follow-source-source-a-remove')?.props.onPress?.();
@@ -854,9 +1117,9 @@ describe('SessionFollowSourcesEditor', () => {
     it('keeps loaded source choices visible but disables mutations while offline', async () => {
         connectivity.online = false;
         api.list.mockResolvedValueOnce({ kind: 'ok', value: { sources: [{
-            sourceSessionId: 'source-a', destinationSessionId: 'destination-a', deliveryState: 'eligible', hasPendingUpdates: false,
+            sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'quiet' as const }, deliveryState: 'eligible', hasPendingUpdates: false,
         }] } });
-        const screen = await renderSettingsView(<SessionFollowSourcesEditor
+        const screen = await renderPage(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-a' })}
             serverId="home-a"
             destinationMachineId={null}
@@ -864,6 +1127,7 @@ describe('SessionFollowSourcesEditor', () => {
 
         await act(async () => {});
         expect(findSourceRow(screen, 'source-a')).not.toBeNull();
+        await openSource(screen, 'source-a');
         expect(readControlDisabled(screen, 'session-follow-source-source-a-remove')).toBe(true);
         expect(readControlDisabled(screen, 'session-follow-source-add')).toBe(true);
         expect(screen.findByTestId('session-follow-sources-offline')).not.toBeNull();
@@ -878,8 +1142,8 @@ describe('SessionFollowSourcesEditor', () => {
         // The committed-edge read may be re-issued when the mount effect settles,
         // so answer every call rather than depending on effect scheduling.
         api.list.mockResolvedValue({ kind: 'ok', value: { sources: [
-            { sourceSessionId: 'source-a', destinationSessionId: 'destination-a', deliveryState: 'eligible', hasPendingUpdates: false },
-            { sourceSessionId: 'source-b', destinationSessionId: 'destination-a', deliveryState: 'paused_archived', hasPendingUpdates: false },
+            { sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'quiet' as const }, deliveryState: 'eligible', hasPendingUpdates: false },
+            { sourceSessionId: 'source-b', destinationSessionId: 'destination-a', policy: { preset: 'quiet' as const }, deliveryState: 'paused_archived', hasPendingUpdates: false },
         ] } });
         followState.rows = {
             'home-a': {
@@ -897,7 +1161,7 @@ describe('SessionFollowSourcesEditor', () => {
             })],
         };
 
-        const screen = await renderSettingsView(<SessionFollowSourcesEditor
+        const screen = await renderPage(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-a' })}
             serverId="home-a"
             destinationMachineId="runner-a"
@@ -911,8 +1175,8 @@ describe('SessionFollowSourcesEditor', () => {
         // a sighted person reads says the source is included in the next turn.
         await vi.waitFor(() => {
             const eligible = findSourceRow(screen, 'source-a');
-            expect(eligible?.props.subtitle).toBe('session.follow.sources.nextTurn');
-            expect(eligible?.props.accessibilityLabel).toContain('session.follow.sources.nextTurn');
+            expect(eligible?.props.subtitle).toBe('session.follow.policy.quiet');
+            expect(eligible?.props.accessibilityLabel).toContain('session.follow.policy.quiet');
             expect(eligible?.props.accessibilityLabel).not.toContain('session.follow.following');
         });
 
@@ -925,7 +1189,7 @@ describe('SessionFollowSourcesEditor', () => {
 
     it('does not enter Runner key preparation for a known plaintext source', async () => {
         api.list.mockResolvedValueOnce({ kind: 'ok', value: { sources: [{
-            sourceSessionId: 'source-plain', destinationSessionId: 'destination-a', deliveryState: 'eligible', hasPendingUpdates: false,
+            sourceSessionId: 'source-plain', destinationSessionId: 'destination-a', policy: { preset: 'quiet' as const }, deliveryState: 'eligible', hasPendingUpdates: false,
         }] } });
         followState.rows = {
             'home-a': {
@@ -942,7 +1206,7 @@ describe('SessionFollowSourcesEditor', () => {
             })],
         };
 
-        const screen = await renderSettingsView(<SessionFollowSourcesEditor
+        const screen = await renderPage(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-a' })}
             serverId="home-a"
             destinationMachineId="runner-a"
@@ -956,7 +1220,7 @@ describe('SessionFollowSourcesEditor', () => {
 
     it('uses the exact destination Machine to distinguish waiting from an unsupported runtime without preparing', async () => {
         api.list.mockResolvedValue({ kind: 'ok', value: { sources: [{
-            sourceSessionId: 'source-e2ee', destinationSessionId: 'destination-a', deliveryState: 'eligible', hasPendingUpdates: false,
+            sourceSessionId: 'source-e2ee', destinationSessionId: 'destination-a', policy: { preset: 'quiet' as const }, deliveryState: 'eligible', hasPendingUpdates: false,
         }] } });
         followState.rows = {
             'home-a': {
@@ -964,7 +1228,7 @@ describe('SessionFollowSourcesEditor', () => {
             },
         };
 
-        const unavailable = await renderSettingsView(<SessionFollowSourcesEditor
+        const unavailable = await renderPage(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-a' })}
             serverId="home-a"
             destinationMachineId="runner-a"
@@ -984,7 +1248,7 @@ describe('SessionFollowSourcesEditor', () => {
                 operationProtocolCapabilities: {},
             })],
         };
-        const unsupported = await renderSettingsView(<SessionFollowSourcesEditor
+        const unsupported = await renderPage(<SessionFollowSourcesEditor
             destination={createSessionFixture({ id: 'destination-a' })}
             serverId="home-a"
             destinationMachineId="runner-a"

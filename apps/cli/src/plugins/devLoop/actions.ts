@@ -4,10 +4,11 @@ import type { ActionExecutorContext, PluginDevLoopActionIdV1 } from '@happier-de
 import { installPluginFromLocator } from '@/plugins/projection/catalog/installed';
 import { readInstalledPluginCatalog } from '@/plugins/projection/catalog/installed';
 import { readInstalledPluginCatalogEntry } from '@/plugins/projection/catalog/installed';
-import { uninstallPluginFromCatalog } from '@/plugins/projection/catalog/installed';
 import { scaffoldLocalPlugin } from '@/plugins/scaffold/scaffold';
 import { controlDaemonPluginDevelopment, listDaemonPluginChanges, readDaemonPluginCatalog } from '@/daemon/controlClient';
 import {
+  describeUserPluginChangeFailure,
+  decideUserPluginChange,
   readUserPluginChangeStatus,
   requestUserPluginChange,
 } from '@/plugins/daemon/changeClient';
@@ -17,12 +18,20 @@ import { runPluginAuthorDoctor } from '@/plugins/authoring/doctor';
 import { packLocalPlugin } from '@/plugins/packaging/pack';
 import { resolveInvokerName } from '@/cli/runtime/resolveInvokerName';
 import { configuration } from '@/configuration';
+import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
 import { requestExactMarketplaceInstall } from '@/plugins/store/marketplace/exactInstall';
 import type { createMarketplaceIndexService } from '@/plugins/store/marketplace/service';
 import { resolveArchiveExpectedIntegrity } from '@/plugins/distribution/archive/integrity';
 import type { PluginChangeRequest } from '@/plugins/daemon/changeContract';
+import { ManagedResourceDispositionV1Schema } from '@happier-dev/protocol/machines/managed/managedDependencyV1';
+import { PluginUpdatePolicyV1Schema } from '@happier-dev/protocol/marketplace/pluginUpdatePolicyV1';
 
 export type PluginDevLoopActionId = PluginDevLoopActionIdV1;
+
+type PluginPendingReview = Extract<
+  Awaited<ReturnType<typeof requestUserPluginChange>>,
+  Readonly<{ kind: 'reviewRequired' }>
+>;
 
 export type PluginDevLoopActionServices = Readonly<{
   runPluginAuthorToolchain?: typeof runPluginAuthorToolchain;
@@ -30,7 +39,12 @@ export type PluginDevLoopActionServices = Readonly<{
   packLocalPlugin?: typeof packLocalPlugin;
   readUserPluginChangeStatus?: typeof readUserPluginChangeStatus;
   requestUserPluginChange?: typeof requestUserPluginChange;
+  decideUserPluginChange?: typeof decideUserPluginChange;
   controlPluginDevelopment?: typeof controlDaemonPluginDevelopment;
+  /** Exact daemon candidate retained in the approval Artifact being replayed. */
+  approvedInstallReview?: PluginPendingReview;
+  /** Host-only effect admission from the canonical Action executor, including a policy waiver. */
+  installEffectAdmitted?: true;
   /** Captured Account reader supplied by the production Action composition. */
   marketplaceIndexService?: Pick<ReturnType<typeof createMarketplaceIndexService>, 'queryExactListing'>;
 }>;
@@ -46,7 +60,7 @@ export type ExecutePluginDevLoopActionParams = Readonly<{
    * Narrow canonical Action context. The executor remains the sole caller
    * policy owner; the development cycle consumes only its cancellation signal.
    */
-  context?: Pick<ActionExecutorContext, 'actionCaller' | 'signal'>;
+  context?: Pick<ActionExecutorContext, 'actionCaller' | 'signal' | 'presentUserApproval' | 'actionRequestId'>;
 }>;
 
 function readInput(input: unknown): PluginDevLoopActionInput {
@@ -97,11 +111,6 @@ function summarizePluginChangeFailure(result: Exclude<
   };
 }
 
-type PluginPendingReview = Extract<
-  Awaited<ReturnType<typeof requestUserPluginChange>>,
-  Readonly<{ kind: 'reviewRequired' }>
->;
-
 function isPluginPendingReview(
   result: Awaited<ReturnType<typeof requestUserPluginChange>>,
 ): result is PluginPendingReview {
@@ -117,9 +126,53 @@ function projectPendingReview(
     kind: actionKind,
     outcome: 'reviewRequired' as const,
     // The exact daemon-issued union remains the only pending-decision
-    // authority. An Action can report it but cannot decide it or add user
-    // evidence.
+    // authority. Reporting it does not admit an effect or add user evidence.
     pendingReview,
+  };
+}
+
+function projectInstallChangeFailure(
+  change: Exclude<Awaited<ReturnType<typeof requestUserPluginChange>>, Readonly<{ kind: 'committed' }>>,
+  fallbackMessage: string,
+) {
+  const failure = describeUserPluginChangeFailure(change);
+  return {
+    ok: false,
+    kind: 'plugins_install' as const,
+    outcome: 'failed' as const,
+    change,
+    diagnostics: [{ code: failure.code, message: failure.message || fallbackMessage }],
+  };
+}
+
+async function settleApprovedInstallReview(
+  pendingReview: PluginPendingReview,
+  params: ExecutePluginDevLoopActionParams,
+  services: PluginDevLoopActionServices,
+): Promise<unknown> {
+  const proof = params.context?.presentUserApproval;
+  if (proof?.actionId !== 'plugins.install' && services.installEffectAdmitted !== true) {
+    return projectPendingReview('plugins_install', pendingReview);
+  }
+  const outcome = await (services.decideUserPluginChange ?? decideUserPluginChange)({
+    pendingChangeId: pendingReview.pendingChangeId,
+    decision: 'approve',
+    ...(params.context?.signal ? { signal: params.context.signal } : {}),
+  });
+  const settled = outcome.kind === 'terminal' ? outcome.result : outcome;
+  if (settled.kind === 'committed') {
+    return { ok: true, kind: 'plugins_install', outcome: 'applied', change: settled };
+  }
+  const errorCode = outcome.kind === 'terminal' || outcome.kind === 'reviewRequired'
+    ? 'plugin_change_superseded'
+    : outcome.kind === 'daemonUnavailable'
+      ? 'plugin_change_daemon_unavailable'
+      : `plugin_change_${outcome.kind}`;
+  return {
+    ok: false,
+    errorCode,
+    error: errorCode,
+    details: { change: outcome },
   };
 }
 
@@ -163,6 +216,25 @@ export async function executePluginDevLoopAction(
   services: PluginDevLoopActionServices = {},
 ): Promise<unknown> {
   const input = readInput(params.input);
+
+  if (params.actionId === 'plugins.enable' || params.actionId === 'plugins.disable'
+    || params.actionId === 'plugins.rollback' || params.actionId === 'plugins.trust.forget'
+    || params.actionId === 'plugins.update_policy.set'
+    || params.actionId === 'plugins.uninstall') {
+    const pluginId = readString(input, 'pluginId');
+    const dispositions = Array.isArray(input.managedResourceDispositions)
+      ? input.managedResourceDispositions.map(value => ManagedResourceDispositionV1Schema.parse(value)) : undefined;
+    const request: PluginChangeRequest = params.actionId === 'plugins.update_policy.set'
+      ? { kind: 'setUpdatePolicy', pluginId, policy: PluginUpdatePolicyV1Schema.parse(input.policy) }
+      : params.actionId === 'plugins.disable' || params.actionId === 'plugins.uninstall'
+        ? { kind: params.actionId === 'plugins.disable' ? 'disable' : readBoolean(input, 'deleteData') ? 'uninstallAndDeleteData' : 'uninstall',
+          pluginId, ...(dispositions ? { managedResourceDispositions: dispositions } : {}) }
+        : { kind: params.actionId === 'plugins.enable' ? 'enable' : params.actionId === 'plugins.rollback' ? 'rollback' : 'forgetTrust', pluginId };
+    const change = await (services.requestUserPluginChange ?? requestUserPluginChange)({ request, approval: 'none',
+      ...(params.context?.signal ? { signal: params.context.signal } : {}) });
+    return { ok: change.kind === 'committed', kind: params.actionId.replaceAll('.', '_'),
+      action: request.kind, pluginId, change };
+  }
 
   if (
     params.actionId === 'plugins.dev.install'
@@ -322,7 +394,20 @@ export async function executePluginDevLoopAction(
   }
 
   if (params.actionId === 'plugins.install') {
+    if (params.context?.presentUserApproval && services.approvedInstallReview) {
+      return await settleApprovedInstallReview(services.approvedInstallReview, params, services);
+    }
     const source = readInput(input.source);
+    if (readString(source, 'kind') === 'installed') {
+      const change = await (services.requestUserPluginChange ?? requestUserPluginChange)({
+        request: { kind: 'update', pluginId: readString(source, 'pluginId') }, approval: 'none',
+        ...(params.context?.signal ? { signal: params.context.signal } : {}),
+      });
+      if (isPluginPendingReview(change)) return await settleApprovedInstallReview(change, params, services);
+      return change.kind === 'committed'
+        ? { ok: true, kind: 'plugins_install', outcome: 'applied', change }
+        : projectInstallChangeFailure(change, 'The daemon did not apply the plugin update.');
+    }
     if (readString(source, 'kind') === 'marketplace') {
       if (!services.marketplaceIndexService) return {
         ok: false, errorCode: 'account_credentials_unavailable', error: 'account_credentials_unavailable',
@@ -333,8 +418,8 @@ export async function executePluginDevLoopAction(
         pluginId: readString(source, 'pluginId'),
         version: readString(source, 'version'),
         ...(readString(source, 'packageName') ? { packageName: readString(source, 'packageName') } : {}),
-        // The Action prepares a candidate. Only the authenticated present-user
-        // review boundary may answer that daemon-issued pending decision.
+        // Preparation cannot answer the daemon-issued pending decision. The
+        // admitted Action effect applies the user's approval policy below.
         approval: 'none',
       }, { requestChange: services.requestUserPluginChange, marketplaceIndexService: services.marketplaceIndexService });
       if (!result.ok) return {
@@ -344,11 +429,10 @@ export async function executePluginDevLoopAction(
           ? { kind: 'registryProfileRequired', ...result.requirement }
           : { kind: 'failed', code: result.code, message: result.message },
       };
-      if (isPluginPendingReview(result.change)) return projectPendingReview('plugins_install', result.change);
+      if (isPluginPendingReview(result.change)) return await settleApprovedInstallReview(result.change, params, services);
       return result.change.kind === 'committed'
         ? { ok: true, kind: 'plugins_install', outcome: 'applied', change: result.change }
-        : { ok: false, kind: 'plugins_install', outcome: 'failed', change: result.change,
-          diagnostics: [{ code: `plugin_change_${result.change.kind}`, message: 'The daemon did not apply the plugin install.' }] };
+        : projectInstallChangeFailure(result.change, 'The daemon did not apply the plugin install.');
     }
     const locator = readString(input, 'path');
     const sourceKind = readString(input, 'kind');
@@ -370,11 +454,10 @@ export async function executePluginDevLoopAction(
           expectedIntegrity: await resolveArchiveExpectedIntegrity({ locator, explicitIntegrity: readString(input, 'integrity') || null }) };
       if (readBoolean(input, 'dryRun')) return { ok: true, kind: 'plugins_install', dryRun: true, request };
       const change = await (services.requestUserPluginChange ?? requestUserPluginChange)({ request, approval: 'none' });
-      if (isPluginPendingReview(change)) return projectPendingReview('plugins_install', change);
+      if (isPluginPendingReview(change)) return await settleApprovedInstallReview(change, params, services);
       return change.kind === 'committed'
         ? { ok: true, kind: 'plugins_install', outcome: 'applied', change }
-        : { ok: false, kind: 'plugins_install', outcome: 'failed', change,
-          diagnostics: [{ code: `plugin_change_${change.kind}`, message: 'The daemon did not apply the plugin install.' }] };
+        : projectInstallChangeFailure(change, 'The daemon did not apply the plugin install.');
     }
     if (isRemotePluginInstallLocator(locator)) {
       return {
@@ -390,15 +473,20 @@ export async function executePluginDevLoopAction(
       };
     }
     if (readBoolean(input, 'dev') && !readBoolean(input, 'dryRun')) {
-      return await runPluginDevelopmentAction({
-        actionKind: 'plugins_dev_submit',
-        projectRoot: locator,
-        ...(readString(input, 'sdkRegistryOrigin')
-          ? { sdkRegistryOrigin: readString(input, 'sdkRegistryOrigin') }
-          : {}),
-        ...(params.context?.signal ? { signal: params.context.signal } : {}),
-        services,
+      const change = await (services.requestUserPluginChange ?? requestUserPluginChange)({
+        request: {
+          kind: 'development',
+          sourceRootPath: locator,
+          ...(readString(input, 'sdkRegistryOrigin')
+            ? { sdkRegistryOrigin: readString(input, 'sdkRegistryOrigin') }
+            : {}),
+        },
+        approval: 'none',
       });
+      if (isPluginPendingReview(change)) return await settleApprovedInstallReview(change, params, services);
+      return change.kind === 'committed'
+        ? { ok: true, kind: 'plugins_install', outcome: 'applied', change }
+        : projectInstallChangeFailure(change, 'The daemon did not apply the development plugin install.');
     }
     const result = await installPluginFromLocator({
       locator,
@@ -411,7 +499,7 @@ export async function executePluginDevLoopAction(
       if (
         result.change?.kind === 'reviewRequired'
       ) {
-        return projectPendingReview('plugins_install', result.change);
+        return await settleApprovedInstallReview(result.change, params, services);
       }
       return {
         ok: false,
@@ -426,38 +514,6 @@ export async function executePluginDevLoopAction(
       outcome: 'applied',
       alreadyInstalled: result.alreadyInstalled,
       plugin: summarizeCatalogEntry(result.entry),
-      change: result.change,
-    };
-  }
-
-  if (params.actionId === 'plugins.uninstall') {
-    const pluginId = readString(input, 'pluginId');
-    if (readBoolean(input, 'deleteData')) {
-      const change = await (services.requestUserPluginChange ?? requestUserPluginChange)({
-        request: { kind: 'uninstallAndDeleteData', pluginId }, approval: 'none',
-      });
-      return change.kind === 'committed'
-        ? { ok: true, kind: 'plugins_uninstall', change }
-        : { ok: false, kind: 'plugins_uninstall', change,
-          diagnostics: [{ code: `plugin_change_${change.kind}`, message: 'The daemon did not remove the plugin data.' }] };
-    }
-    const result = await uninstallPluginFromCatalog({
-      pluginId,
-      happyHomeDir: params.happyHomeDir,
-    });
-    if (!result.ok) {
-      return {
-        ok: false,
-        kind: 'plugins_uninstall',
-        diagnostics: result.diagnostics,
-      };
-    }
-
-    return {
-      ok: true,
-      kind: 'plugins_uninstall',
-      plugin: summarizeCatalogEntry(result.entry),
-      removedInstalledPath: result.removedInstalledPath,
       change: result.change,
     };
   }
@@ -509,8 +565,10 @@ export async function executePluginDevLoopAction(
 
   if (params.actionId === 'plugins.list') {
     const [catalog, pendingChanges] = await Promise.all([
-      readDaemonPluginCatalog(),
-      listDaemonPluginChanges(),
+      runTracedExternalActionStage(params.actionId, params.context?.actionRequestId,
+        'plugins.catalog', () => readDaemonPluginCatalog()),
+      runTracedExternalActionStage(params.actionId, params.context?.actionRequestId,
+        'plugins.pending_changes', () => listDaemonPluginChanges()),
     ]);
     if (catalog.kind !== 'available') {
       return {
@@ -521,6 +579,16 @@ export async function executePluginDevLoopAction(
           message: catalog.code === 'plugin_catalog_runtime_unavailable'
             ? 'The daemon plugin runtime is unavailable.'
             : 'The active daemon plugin catalog is unavailable.',
+        }],
+      };
+    }
+    if (pendingChanges.kind !== 'available') {
+      return {
+        ok: false,
+        kind: 'plugins_list',
+        diagnostics: [{
+          code: pendingChanges.code,
+          message: 'The daemon pending plugin-change list is unavailable.',
         }],
       };
     }

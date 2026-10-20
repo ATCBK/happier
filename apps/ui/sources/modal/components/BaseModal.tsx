@@ -4,6 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { KeyboardAwareModalFrame } from '@/components/ui/keyboardAvoidance';
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
 import { OverlayPortalHost, OverlayPortalProvider } from '@/components/ui/popover';
+import { PopoverScrollSourceProvider } from '@/components/ui/popover/PopoverScrollSource';
 import { requireRadixDismissableLayer, requireRadixFocusScope } from '@/utils/web/radixCjs';
 import { requireReactDOM } from '@/utils/web/reactDomCjs';
 import { ModalPortalTargetProvider, useModalPortalTarget } from '@/modal/portal/ModalPortalTarget';
@@ -11,7 +12,7 @@ import type { ModalPortalTarget } from '@/modal/portal/ModalPortalTarget';
 import { ModalBoundaryProvider } from '@/modal/context/ModalBoundaryContext';
 import { useGlassBlurSetting } from '@/components/ui/glass/useGlassBlurSetting';
 import { t } from '@/text';
-import { createBackdropNativeStyle, createBackdropWebStyle } from '@/components/ui/overlays/createBackdropLayerStyle';
+import { createBackdropNativeStyle, createModalScrimWebStyle } from '@/components/ui/overlays/createBackdropLayerStyle';
 import { resolveOverlayPointerEvents } from '@/components/ui/overlays/resolveOverlayPointerEvents';
 import {
     OverlayMotionFrame,
@@ -103,7 +104,16 @@ export function BaseModal({
     const { theme } = useUnistyles();
     // A bottom sheet that closes on its scrim also closes by dragging it down (its frame draws the grabber).
     const sheetDismiss = placement === 'bottom' && closeOnBackdrop && onClose ? onClose : null;
-    const sheetChildren = <SheetDismissProvider onDismiss={sheetDismiss}>{children}</SheetDismissProvider>;
+    const webContentShellRef = React.useRef<HTMLDivElement | null>(null);
+    const nativeScrollRef = React.useRef<ScrollView | null>(null);
+    // The page behind a modal is never what a list inside it scrolls: its content follows the modal's own overlay
+    // scroller, or none when the content owns its scrolling (the card body can still register its own).
+    const scrollSourceRef = scrollHost === 'overlay' ? (isWeb ? webContentShellRef : nativeScrollRef) : null;
+    const sheetChildren = (
+        <PopoverScrollSourceProvider scrollSourceRef={scrollSourceRef}>
+            <SheetDismissProvider onDismiss={sheetDismiss}>{children}</SheetDismissProvider>
+        </PopoverScrollSourceProvider>
+    );
     const { blurEnabled: materialBlurEnabled } = useGlassBlurSetting();
     const insets = useChromeSafeAreaInsets();
     const baseZ = zIndexBase ?? MODAL_Z_INDEX;
@@ -112,7 +122,6 @@ export function BaseModal({
     const modalPortalHostRef = React.useRef<HTMLDivElement | null>(null);
     const radixDismissableLayer = React.useMemo(() => (isWeb ? requireRadixDismissableLayer() : null), []);
     const radixFocusScope = React.useMemo(() => (isWeb ? requireRadixFocusScope() : null), []);
-    const webContentShellRef = React.useRef<HTMLDivElement | null>(null);
     const modalMotionPreset = React.useMemo(
         () => resolveOverlayMotionPreset({ kind: 'modal' }),
         [],
@@ -226,15 +235,10 @@ export function BaseModal({
                     ]
                     : []),
             ].join(', '),
-            ...createBackdropWebStyle({
-                backgroundColor: visible
-                    ? ((theme.colors.overlay.scrimWizard ?? theme.colors.overlay.scrim) as unknown as string)
-                    : 'transparent',
-                blurPx: visible ? 2 : 0,
-                enableBlur: materialBlurEnabled && visible,
-                fallbackBackgroundColorWhenBlurDisabled: visible
-                    ? ((theme.colors.overlay.scrimStrong ?? theme.colors.overlay.scrim) as unknown as string)
-                    : 'transparent',
+            ...createModalScrimWebStyle({
+                overlay: theme.colors.overlay as unknown as { scrim: string; scrimWizard?: string; scrimStrong?: string },
+                enableBlur: materialBlurEnabled,
+                visible,
             }),
         };
 
@@ -337,7 +341,7 @@ export function BaseModal({
                             ref={modalPortalHostRef}
                             style={portalHostStyle}
                         />
-                        <ModalPortalTargetProvider target={modalPortalTarget}>
+                        <ModalPortalTargetProvider target={modalPortalTarget} layerZIndex={baseZ + 1}>
                             <ModalBoundaryProvider>
                                 <KeyboardAwareModalFrame
                                     pointerEvents={interactivePointerEvents.nativePointerEvents}
@@ -453,6 +457,7 @@ export function BaseModal({
                         <ModalBoundaryProvider>
                             {/* Keep the body's native parent when chrome transfers scroll ownership. */}
                             <ScrollView
+                                ref={nativeScrollRef}
                                 style={styles.scrollContainer}
                                 contentContainerStyle={[styles.scrollContent, placement === 'bottom' ? styles.scrollContentBottom : null]}
                                 scrollEnabled={scrollHost === 'overlay'}

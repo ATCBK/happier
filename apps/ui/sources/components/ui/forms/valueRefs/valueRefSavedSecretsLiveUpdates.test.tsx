@@ -126,4 +126,27 @@ describe('value ref saved secrets live updates', () => {
             closeOnBackdrop: true,
         });
     });
+
+    it('clearing the picker disables save until another saved secret is selected', async () => {
+        const onSubmit = vi.fn(() => true);
+        const onClose = vi.fn();
+        const screen = await renderScreen(React.createElement(ValueRefEditorModal, {
+            onClose, kind: 'header', initialKey: 'Authorization',
+            initialValueRef: { t: 'savedSecret', secretId: 'original-key' }, secrets: [],
+            onSubmit, scope: home!.scope,
+        }));
+        await screen.pressByTestIdAsync('mcp.valueRefEditor.secret');
+        const picker = modalShowSpy.mock.calls[0]?.[0];
+        expect(picker.props.selectedId).toBe('original-key');
+        await act(async () => { picker.props.onSelectId(null); });
+        expect(namedRow(screen, 'mcp.valueRefEditor.save')?.props.disabled).toBe(true);
+        expect(namedRow(screen, 'mcp.valueRefEditor.secret')?.props.subtitle).toBe('settings.mcpServersValueSecretSelectSubtitle');
+        expect(onSubmit).not.toHaveBeenCalled();
+        expect(onClose).not.toHaveBeenCalled();
+        await act(async () => { picker.props.onSelectId('replacement-key'); });
+        expect(namedRow(screen, 'mcp.valueRefEditor.save')?.props.disabled).toBe(false);
+        await screen.pressByTestIdAsync('mcp.valueRefEditor.save');
+        expect(onSubmit).toHaveBeenCalledWith({ key: 'Authorization', valueRef: { t: 'savedSecret', secretId: 'replacement-key' } });
+        expect(onClose).toHaveBeenCalledOnce();
+    });
 });

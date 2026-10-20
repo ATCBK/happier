@@ -64,7 +64,7 @@ describe('ComposerKeyboardScaffold web', () => {
                 composer={<React.Fragment>composer</React.Fragment>}><React.Fragment>content</React.Fragment></ComposerKeyboardScaffold>
         </HappierMaterialRoleProvider>);
         for (const id of ['scaffold', 'composer']) {
-            const node = screen.tree.root.findAll(node => node.props.testID === id && (node.type === 'AnimatedView' || node.type === 'View'))[0]!;
+            const node = screen.tree.root.findAll(node => node.props.testID === id && typeof node.type === 'string' && ['AnimatedView', 'View'].includes(node.type))[0]!;
             expect(StyleSheet.flatten(node.props.style).backgroundColor).toBe('transparent');
         }
     });

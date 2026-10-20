@@ -9,6 +9,7 @@ import { createExecutionRunManagedProviderEndpointPreparer } from '@/agent/runti
 import { createRunnerManagedProviderRunSourceOpener } from '@/agent/runtime/session/process/runnerManagedProviderConsumerAccess';
 import { resolveCliEngineRegistry } from '@/agent/runtime/registry/engineRegistry';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
 
 const { directory, originalHome } = await vi.hoisted(async () => {
   const [{ mkdtemp }, { tmpdir }, { join }] = await Promise.all([import('node:fs/promises'), import('node:os'), import('node:path')]);
@@ -65,6 +66,7 @@ it('retains prepublication managed source cleanup in the actual rejected Run con
     const accountId = readAccountIdFromToken(requester.bootstrap.credentials.token);
     if (!accountId) throw new Error('Expected authenticated fixture Account');
     const purposeResolver = requester.resolveManagedPurposeBindingIntent;
+    if (!purposeResolver) throw new Error('Expected the admitted requester purpose resolver');
     const engineRegistry = await resolveCliEngineRegistry({ runtimeRegistry: fixture.fixture.lease.registry });
     const profileCatalog = await engineRegistry.resolveExecutionRunProfileCatalog({
       resolveAgentIdentity: () => ({ pluginId: fixture.context.retainedAgent.pluginId, localId: fixture.context.retainedAgent.localAgentId }),
@@ -81,7 +83,7 @@ it('retains prepublication managed source cleanup in the actual rejected Run con
     });
     const started = await manager.start({ sessionId: 'parent-session', intent: 'agent',
       backendTarget: { kind: 'builtInAgent', agentId: fixture.fixture.agentId },
-      modelSelection: { agentTargetKey: fixture.fixture.agentTargetKey, providerConnectionId: 'run-gateway', modelId: 'example' },
+      modelSelection: { agentTargetKey: fixture.fixture.agentTargetKey, providerConnectionId: ProviderConnectionIdSchema.parse('run-gateway'), modelId: 'example' },
       accountSettings: requester.readAccountSettingsSnapshot().settings, instructions: 'This Agent must never open after listener failure.',
       permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response' });
     await manager.waitForTerminal(started.runId);

@@ -1,5 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1 } from '@happier-dev/protocol/connect/plugin-connected-account-authentication-v2';
 import { ConnectedServiceCredentialHealthV1Schema, ConnectedServiceCredentialRevisionV1Schema, type ConnectedServiceCredentialHealthV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 import { QualifiedConnectedAccountCredentialMetadataV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
@@ -12,17 +12,17 @@ type MetadataWithHealth = Readonly<{
 }>;
 
 export const QualifiedConnectedServiceCredentialStoredMetadataV4Schema =
-    z.object({
+    z.strictObject({
         v: z.literal(4),
         storage: z.literal("stored_envelope_v1"),
         credentialRevision: ConnectedServiceCredentialRevisionV1Schema,
-        directExportContract: z.literal(
+        directExportContract: z.optional(z.literal(
             CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1,
-        ).optional(),
-        contributionContractVersion: z.string().trim().min(1).max(512).optional(),
+        )),
+        contributionContractVersion: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(512))),
         values: QualifiedConnectedAccountCredentialMetadataV4Schema,
-        health: ConnectedServiceCredentialHealthV1Schema.optional(),
-    }).strict();
+        health: z.optional(ConnectedServiceCredentialHealthV1Schema),
+    });
 
 export type QualifiedConnectedServiceCredentialStoredMetadataV4 = z.infer<
     typeof QualifiedConnectedServiceCredentialStoredMetadataV4Schema

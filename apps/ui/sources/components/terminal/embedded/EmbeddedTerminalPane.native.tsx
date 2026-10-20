@@ -28,7 +28,7 @@ import { resolveTermuxRendererSelection, type TermuxRendererSelectionOptions } f
 import { TermuxTerminalSurface } from '@/components/terminal/termux/surface.native';
 import type { EmbeddedTerminalRendererHandle } from '@/components/terminal/embedded/embeddedTerminalRendererHandle';
 import { useDeviceType } from '@/utils/platform/responsive';
-import { EmbeddedTerminalPaneFrame } from './EmbeddedTerminalPaneFrame';
+import { EmbeddedTerminalPaneFrame, terminalStatusAcceptsKeys } from './EmbeddedTerminalPaneFrame';
 import { TerminalKeyRail } from './keys/TerminalKeyRail';
 import { TerminalKeysSurface } from './keys/TerminalKeysSurface';
 import { useTerminalKeys } from './keys/useTerminalKeys';
@@ -169,13 +169,14 @@ export const EmbeddedTerminalPane = React.memo(function EmbeddedTerminalPaneNati
     const deviceType = useDeviceType();
     const showKeys = props.showQuickKeys ?? deviceType === 'phone';
     const find = useTerminalFind(props, showKeys);
+    const keysOffered = showKeys && terminalStatusAcceptsKeys(props.controller.status);
     const keys = useTerminalKeys({
         onInput: props.controller.onInput,
         focusRenderer: React.useCallback(() => props.terminalRef.current?.focus?.(), [props.terminalRef]),
     });
     const onRendererInput = showKeys ? keys.onInput : props.controller.onInput;
     const footer = showKeys
-        ? find.open ? find.bar : <TerminalKeyRail modifiers={keys.modifiers} onPressKey={keys.pressRailKey} testIdPrefix={props.testIdPrefix} />
+        ? find.open ? find.bar : keysOffered ? <TerminalKeyRail modifiers={keys.modifiers} onPressKey={keys.pressRailKey} testIdPrefix={props.testIdPrefix} /> : null
         : null;
 
     return (
@@ -194,7 +195,7 @@ export const EmbeddedTerminalPane = React.memo(function EmbeddedTerminalPaneNati
             keyboardBottomInset={keyboardBottomInset}
             platformOS={Platform.OS === 'android' ? 'android' : 'ios'}
             surface={(
-                <TerminalKeysSurface showArrowPad={showKeys && !find.open} onArrow={keys.pressArrow} testIdPrefix={props.testIdPrefix}>
+                <TerminalKeysSurface showArrowPad={keysOffered && !find.open} onArrow={keys.pressArrow} testIdPrefix={props.testIdPrefix}>
                     {effectiveRenderer === 'ios-ghosttykit' ? (
                         <GhosttyTerminalSurface
                             ref={props.terminalRef}

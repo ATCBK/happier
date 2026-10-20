@@ -24,7 +24,6 @@ export function describeWorkflowRunDestinationProgress(progress: WorkflowRunSumm
             title: leaf.name?.trim() || t('message.provenanceWorkflow') });
         const observed = leaf.observation
             ? describeWorkflowInvocationLifecycle(leaf.observation.lifecycle, { blockKind: leaf.observation.blockKind }).label : null;
-        return [[label, observed !== null && observed !== options?.saidStatus
-            ? t('workflows.list.observedProgress', { status: observed }) : null].filter(Boolean).join(' · ')];
+        return [[label, observed !== null && observed !== options?.saidStatus ? observed : null].filter(Boolean).join(' · ')];
     }) ?? [];
 }

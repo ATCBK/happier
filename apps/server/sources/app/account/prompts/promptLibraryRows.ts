@@ -7,8 +7,10 @@ import {
 import { listSavedSecretReferenceCatalogRefsV1 } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
 import { isDeepStrictEqual } from 'node:util';
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
+import { validateSavedSecretResourceReferencesInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
 import type { Tx } from '@/storage/inTx';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
+import { validateAccountSettingsVersionAtPublicationInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
 import type { TeamOperationAuthenticationContext } from '@/app/teams/actorContext';
 import { listReservedAccountScopedKvRowsInTx, mutateReservedAccountScopedKvRowInTx, readReservedAccountScopedKvRowInTx,
   type ReservedAccountScopedKvRowDomain } from '@/app/kv/reservedAccountScopedKvRow';
@@ -20,7 +22,7 @@ export const promptLibraryRowDomain: ReservedAccountScopedKvRowDomain<PromptLibr
   assertEnvelopeForMode: assertPromptLibraryContentForModeV1,
 };
 
-export function markPromptLibraryRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; key: PromptLibraryCatalogKeyV1; revision: number }>): Promise<number> {
+export function markPromptLibraryRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; key: PromptLibraryCatalogKeyV1; revision: number }>): ReturnType<typeof markAccountChanged> {
   return markAccountChanged(tx, { accountId: input.accountId, kind: 'account', entityId: buildPromptLibraryPhysicalKeyV1(input.key),
     hint: { promptLibrary: true, key: input.key, revision: input.revision } });
 }
@@ -55,18 +57,19 @@ export async function mutatePromptLibraryRowInTx(tx: Tx, input: Readonly<{
   if (input.content?.t === 'plain' && input.content.v.key !== key) return { status: 'invalid-stored-content' as const };
   if (input.expectedRevision === 'absent') {
     if (input.sourceSettingsVersion === undefined || input.content === null) throw new Error('Prompt catalog initialization requires captured source currentness');
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
     if (fence.status === 'account_not_found') return { status: 'account-not-found' as const };
     if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent' as const, reason: fence.reason };
     const source = await tx.account.findUniqueOrThrow({ where: { id: input.accountId }, select: { settingsVersion: true } });
     if (source.settingsVersion !== input.sourceSettingsVersion) return { status: 'settings-conflict' as const, revision: source.settingsVersion };
+    validateAccountSettingsVersionAtPublicationInTx(tx, { accountId: input.accountId, expectedVersion: input.sourceSettingsVersion });
   } else if (input.sourceSettingsVersion !== undefined) throw new Error('Only catalog initialization admits a source Settings version');
   if (key === 'registry-sources' && input.content !== null) {
     const mutation = PromptLibraryRowMutationV1Schema.parse({ expectedRevision: input.expectedRevision, content: input.content,
       sourceSettingsVersion: input.sourceSettingsVersion, referencedSavedSecretIds: input.referencedSavedSecretIds,
       savedSecretRevisions: input.savedSecretRevisions });
     // The incumbent Account fence covers both reference admission and row CAS.
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
     if (fence.status === 'account_not_found') return { status: 'account-not-found' as const };
     if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent' as const, reason: fence.reason };
     try { assertPromptLibraryContentForModeV1(input.content, fence.account.currentness.encryptionMode); }
@@ -81,7 +84,7 @@ export async function mutatePromptLibraryRowInTx(tx: Tx, input: Readonly<{
     if (input.content.t === 'plain' && !isDeepStrictEqual([...references].sort(), [...new Set(declaredReferences)].sort())) {
       return { status: 'invalid-reference' as const };
     }
-    if (!await (await import('@/app/account/savedSecrets/savedSecretResourceService')).validateSavedSecretResourceReferencesInTx(tx, {
+    if (!await validateSavedSecretResourceReferencesInTx(tx, {
       accountId: input.accountId, authentication: input.authentication, references, allowPersonal: true,
       savedSecretRevisions: mutation.savedSecretRevisions ?? [],
     })) return { status: 'invalid-reference' as const };

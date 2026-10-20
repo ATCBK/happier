@@ -1,20 +1,17 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PluginDeclarativeProjectedModelV1Schema } from '@happier-dev/protocol';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { applyAccountSettingsSavedSecretMutation, PluginDeclarativeProjectedModelV1Schema, resolveAccountSettingsPluginSecret, resolveAccountSettingsPluginSecretBinding } from '@happier-dev/protocol';
+import { PluginAccountAvailabilityIntentReadResponseV1Schema } from '@happier-dev/protocol/plugins/availability';
+import { installRealActionExecutorModuleLoader, serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { t } from '@/text';
 
 import type { BoundPluginSurfaceController } from './boundPluginSurfaceController';
 import type {
     ScopedPluginSettingsAdapter,
-    ScopedPluginSettingsReadResult,
 } from '@/sync/domains/plugins/settings/scopedPluginSettingsAdapter';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-
-const accountSecretSettingsBoundary = vi.hoisted(() => ({
-    read: vi.fn<ScopedPluginSettingsAdapter['read']>(),
-    write: vi.fn<ScopedPluginSettingsAdapter['write']>(),
-}));
 
 const ordinarySettingsBoundary = vi.hoisted(() => ({
     read: vi.fn<ScopedPluginSettingsAdapter['read']>(),
@@ -25,16 +22,6 @@ vi.mock('@/sync/domains/plugins/settings/scopedPluginSettingsRuntime', async (im
     const original = await importOriginal<typeof import('@/sync/domains/plugins/settings/scopedPluginSettingsRuntime')>();
     return {
         ...original,
-        // Account SavedSecret persistence is a real external-state boundary.
-        // The projection, renderer, currentness, and mutation path stay real.
-        scopedPluginAccountSecretSettingsAdapter: Object.freeze({
-            read: (...args: Parameters<typeof original.scopedPluginAccountSecretSettingsAdapter.read>) => (
-                accountSecretSettingsBoundary.read(...args)
-            ),
-            write: (...args: Parameters<typeof original.scopedPluginAccountSecretSettingsAdapter.write>) => (
-                accountSecretSettingsBoundary.write(...args)
-            ),
-        }),
         scopedPluginSettingsAdapter: Object.freeze({
             read: (...args: Parameters<typeof original.scopedPluginSettingsAdapter.read>) => (
                 ordinarySettingsBoundary.read(...args)
@@ -46,7 +33,12 @@ vi.mock('@/sync/domains/plugins/settings/scopedPluginSettingsRuntime', async (im
     };
 });
 
-import { DeclarativePluginSurface } from './DeclarativePluginSurface';
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
+const { DeclarativePluginSurface } = await import('./DeclarativePluginSurface');
+import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { renderScreen } from '@/dev/testkit';
 import {
     setServerProfileIdentityForUrl,
@@ -58,22 +50,6 @@ const ACCOUNT_TARGET = Object.freeze({
     kind: 'account' as const,
     serverIdentityId: 'srv_account_secret_surface',
 });
-
-function readyAccountSecret(input: Readonly<{
-    revision: number;
-    secretState: 'configured' | 'missing';
-}>): Extract<ScopedPluginSettingsReadResult, { status: 'ready' }> {
-    return {
-        status: 'ready',
-        snapshot: {
-            scope: { kind: 'account' },
-            target: ACCOUNT_TARGET,
-            revision: { kind: 'account-secret', value: input.revision },
-            values: {},
-            secretStates: { token: input.secretState },
-        },
-    };
-}
 
 function createAccountLifetime(): ActiveServerAccountScopeLifetime {
     return Object.freeze({
@@ -131,8 +107,6 @@ const dispatchAction: BoundPluginSurfaceController['dispatchAction'] = async () 
 const openSurface: BoundPluginSurfaceController['openSurface'] = async () => null;
 
 beforeEach(async () => {
-    accountSecretSettingsBoundary.read.mockReset();
-    accountSecretSettingsBoundary.write.mockReset();
     ordinarySettingsBoundary.read.mockReset();
     ordinarySettingsBoundary.write.mockReset();
     const profile = await upsertServerProfile({
@@ -148,26 +122,49 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-    accountSecretSettingsBoundary.read.mockReset();
-    accountSecretSettingsBoundary.write.mockReset();
     ordinarySettingsBoundary.read.mockReset();
     ordinarySettingsBoundary.write.mockReset();
 });
 
 describe('DeclarativePluginSurface Account secrets', () => {
-    it('requires an explicit local draft before saving a configured redacted secret, while empty save and delete remain distinct', async () => {
-        accountSecretSettingsBoundary.read.mockResolvedValue(readyAccountSecret({
-            revision: 5,
-            secretState: 'configured',
-        }));
-        accountSecretSettingsBoundary.write.mockImplementation(async (input) => (
-            readyAccountSecret({
-                revision: input.expectedRevision.kind === 'account-secret'
-                    ? input.expectedRevision.value + 1
-                    : 6,
-                secretState: input.mutation.kind === 'delete' ? 'missing' : 'configured',
-            })
-        ));
+    it('keeps a configured secret redacted and rejects an explicit empty Save without deleting its binding', async () => {
+        const secretTarget = { pluginId: 'acme.account-secret', localId: 'token' };
+        const seeded = applyAccountSettingsSavedSecretMutation({}, {
+            kind: 'replacePluginSecret', target: secretTarget, expectedSecretId: null, expectedSecretUpdatedAt: null,
+            secret: { id: 'existing-token', name: 'Account token', kind: 'other',
+                encryptedValue: { _isSecretValue: true, value: 'synthetic-redacted-token' }, createdAt: 1, updatedAt: 1 },
+        }).settings;
+        const homes = await serveAccountHomes({ homes: [{ key: 'secret', serverUrl: 'https://account-secret-surface',
+            serverIdentityId: ACCOUNT_TARGET.serverIdentityId, accountId: 'account-secret-test',
+            settings: { ...seeded, actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'plugins.settings.secret.delete': ['ui'] } } } }],
+            route: () => undefined });
+        onTestFinished(() => homes.dispose());
+        const restoreLoader = await installRealActionExecutorModuleLoader();
+        onTestFinished(restoreLoader);
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const accountLifetime = captureActiveServerAccountScopeLifetime();
+        expect(accountLifetime).not.toBeNull();
+        const { replacePluginAccountAvailabilityProjection, clearPluginAccountAvailabilityProjection } = await import('@/sync/domains/plugins/availability/projection');
+        onTestFinished(clearPluginAccountAvailabilityProjection);
+        replacePluginAccountAvailabilityProjection({ scope: accountLifetime!.scope, snapshot: {
+            availabilityCursor: 1, materializations: [], snapshots: [], intentReads: [{ pluginId: secretTarget.pluginId,
+                response: PluginAccountAvailabilityIntentReadResponseV1Schema.parse({ availabilityCursor: 1,
+                    hostingCapability: { enabled: false },
+                    intent: { pluginId: secretTarget.pluginId, desiredVersion: '1.0.0', enabled: true,
+                        offlineUiHosting: 'disabled', writableCollections: [], revision: 'intent-1' },
+                    release: { ref: { pluginId: secretTarget.pluginId, version: '1.0.0' },
+                        archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+                        normalizedManifest: { schemaVersion: 2, id: secretTarget.pluginId, version: '1.0.0',
+                            displayName: 'Account secret', runtime: { apiVersion: 1 }, contributes: { settings: [{
+                                id: 'token', title: 'Account token', scope: 'account', target: { kind: 'plugin' },
+                                fields: [{ id: 'token', title: 'Account token', schema: { type: 'string' }, secret: { custody: 'account' } }],
+                            }] } }, collectionContracts: [], uiSlots: [],
+                        packageAssetArchive: { archiveDigestSha256: `sha256:${'b'.repeat(64)}`, resources: [] },
+                    }, packageAssets: [], uiArtifacts: [],
+                }) }],
+        } });
+        const settingsWrites = () => homes.httpRequests.filter(request => request.path === '/v2/account/settings' && request.method === 'POST');
 
         const screen = await renderScreen(
             <DeclarativePluginSurface
@@ -181,19 +178,15 @@ describe('DeclarativePluginSurface Account secrets', () => {
                 openSurface={openSurface}
                 openSurfaceAvailable={false}
                 authorityGeneration={1}
-                accountLifetime={createAccountLifetime()}
+                accountLifetime={accountLifetime}
             />,
         );
-        await vi.waitFor(() => expect(accountSecretSettingsBoundary.read).toHaveBeenCalledWith(expect.objectContaining({
-            pluginId: 'acme.account-secret',
-            scope: { kind: 'account' },
-            target: ACCOUNT_TARGET,
-            fields: [{ key: 'token', redacted: true }],
-        })));
+        await vi.waitFor(() => expect(screen.findByTestId('plugin-declarative-field-delete:root.children[0]')?.props.disabled).toBe(false));
 
         const saveTestId = 'plugin-declarative-field-save:root.children[0]';
         const deleteTestId = 'plugin-declarative-field-delete:root.children[0]';
         expect(screen.findByTestId('plugin-declarative-field:root.children[0]')?.props.value).toBe('');
+        expect(screen.getTextContent()).not.toContain('synthetic-redacted-token');
         expect(screen.findByTestId(saveTestId)?.props.disabled).toBe(true);
         expect(screen.findByTestId(deleteTestId)?.props.disabled).toBe(false);
         expect(screen.findByTestId(saveTestId)?.props.accessibilityLabel).toBe(`${t('common.save')}: Account token`);
@@ -202,7 +195,7 @@ describe('DeclarativePluginSurface Account secrets', () => {
         await act(async () => {
             screen.pressByTestId(saveTestId);
         });
-        expect(accountSecretSettingsBoundary.write).not.toHaveBeenCalled();
+        expect(settingsWrites()).toHaveLength(0);
 
         await act(async () => {
             screen.changeTextByTestId('plugin-declarative-field:root.children[0]', '');
@@ -211,20 +204,25 @@ describe('DeclarativePluginSurface Account secrets', () => {
         await act(async () => {
             screen.pressByTestId(saveTestId);
         });
-        expect(accountSecretSettingsBoundary.write).toHaveBeenLastCalledWith(expect.objectContaining({
-            fieldId: 'token',
-            mutation: { kind: 'set', value: '' },
-            expectedRevision: { kind: 'account-secret', value: 5 },
-        }));
+        // Empty input is a failed replacement, never an implicit Delete. The
+        // SavedSecret owner rejects it before the Account CAS can be issued.
+        await vi.waitFor(() => expect(screen.findHostByTestId('plugin-declarative-settings-error')).not.toBeNull());
+        expect(storage.getState().settingsVersion).toBe(1);
+        expect(settingsWrites()).toHaveLength(0);
+        const { sync } = await import('@/sync/sync');
+        expect(sync.decryptSecretValue(resolveAccountSettingsPluginSecret(storage.getState().settings, secretTarget)?.secret.encryptedValue))
+            .toBe('synthetic-redacted-token');
+        expect(resolveAccountSettingsPluginSecretBinding(storage.getState().settings, secretTarget)?.savedSecretId).toBe('existing-token');
+        expect(screen.findByTestId(deleteTestId)?.props.disabled).toBe(false);
 
         await act(async () => {
             screen.pressByTestId(deleteTestId);
         });
-        expect(accountSecretSettingsBoundary.write).toHaveBeenLastCalledWith(expect.objectContaining({
-            fieldId: 'token',
-            mutation: { kind: 'delete' },
-            expectedRevision: { kind: 'account-secret', value: 6 },
-        }));
+        await vi.waitFor(() => expect(storage.getState().settingsVersion).toBe(2));
+        expect(settingsWrites()).toHaveLength(1);
+        expect(settingsWrites()[0]?.body).toMatchObject({ expectedVersion: 1 });
+        expect(resolveAccountSettingsPluginSecretBinding(storage.getState().settings, secretTarget)).toBeNull();
+        await vi.waitFor(() => expect(screen.findHostByTestId(deleteTestId)).toBeNull());
     });
 });
 
@@ -338,5 +336,81 @@ describe('DeclarativePluginSurface ordinary Settings', () => {
             screen.changeTextByTestId('plugin-declarative-field:root.children[0]', 'Source B draft');
         });
         expect(screen.findByTestId('plugin-declarative-field-save:root.children[0]')?.props.disabled).toBe(false);
+    });
+});
+
+describe('DeclarativePluginSurface settings rows', () => {
+    it('draws a group of declared preferences as one settings section of rows with each setting\'s declared description', async () => {
+        ordinarySettingsBoundary.read.mockResolvedValue({
+            status: 'ready',
+            snapshot: {
+                scope: { kind: 'account' },
+                target: ACCOUNT_TARGET,
+                revision: { kind: 'account', value: 1 },
+                values: { enabled: true, style: 'concise' },
+                secretStates: {},
+            },
+        });
+        ordinarySettingsBoundary.write.mockResolvedValue({ status: 'unavailable', reason: 'transport' });
+        const setting = (id: string, title: string, description: string, schema: Record<string, unknown>) => Object.freeze({
+            id,
+            contributionId: 'preferences',
+            qualifiedId: `acme.preferences/${id}`,
+            descriptor: Object.freeze({ id, title, description, target: Object.freeze({ kind: 'plugin' }), scope: 'account', schema: Object.freeze(schema) }),
+        });
+        const enabled = setting('enabled', 'Review reminders', 'Receive a reminder when a review is ready.', { type: 'boolean' });
+        const style = setting('style', 'Summary detail', 'Choose how much detail review summaries include.', { type: 'string', enum: ['concise', 'detailed'] });
+        const inventory = (entry: typeof enabled, schema: Record<string, unknown>) => Object.freeze({
+            pluginId: 'acme.preferences', id: entry.id, qualifiedId: entry.qualifiedId, schema: Object.freeze(schema), secret: false, setting: entry,
+        });
+        const parsed = PluginDeclarativeProjectedModelV1Schema.parse({
+            visible: true,
+            requiredHostMethods: [],
+            identity: { pluginId: 'acme.preferences', localId: 'page', qualifiedId: 'acme.preferences/page', occurrenceId: 'preferences-occurrence' },
+            declarativeInventory: {
+                actions: [], destinations: [], uiQueries: [],
+                settings: [inventory(enabled, { type: 'boolean' }), inventory(style, { type: 'string', enum: ['concise', 'detailed'] })],
+            },
+            root: {
+                kind: 'group', path: 'root', order: 0, title: 'Review preferences',
+                description: 'Choose when to hear about reviews and how their summaries read.',
+                children: [
+                    { kind: 'field', path: 'root.children[0]', order: 0, label: 'Review reminders', control: { kind: 'toggle', settingId: 'enabled' }, setting: enabled },
+                    { kind: 'field', path: 'root.children[1]', order: 1, label: 'Summary detail', control: { kind: 'select', settingId: 'style', options: [
+                        { value: 'concise', label: 'Concise' }, { value: 'detailed', label: 'Detailed' },
+                    ] }, setting: style },
+                ],
+            },
+        });
+        const screen = await renderScreen(
+            <DeclarativePluginSurface
+                pluginId="acme.preferences"
+                model={parsed}
+                interactionEnabled={true}
+                daemonInteractionEnabled={false}
+                settingsScopesEnabled={{ account: true, daemon: false }}
+                dispatchAction={dispatchAction}
+                actionAvailable={false}
+                openSurface={openSurface}
+                openSurfaceAvailable={false}
+                authorityGeneration={1}
+                accountLifetime={createAccountLifetime()}
+            />,
+        );
+        await vi.waitFor(() => expect(ordinarySettingsBoundary.read).toHaveBeenCalled());
+
+        // The declared descriptions (written once, on the setting) read under each row's label.
+        const text = screen.getTextContent();
+        expect(text).toContain('Receive a reminder when a review is ready.');
+        expect(text).toContain('Choose how much detail review summaries include.');
+        // The group is one settings section, its rows inside it.
+        const section = screen.findByTestId('plugin-declarative-settings-section:root');
+        expect(section).not.toBeNull();
+        expect(section?.findAll((node) => node.props.testID === 'plugin-declarative-field:root.children[0]:container').length).toBeGreaterThan(0);
+        // Two short options are one segmented choice, not two stacked buttons.
+        const segmented = screen.findAllByType(SegmentedTabBar);
+        expect(segmented).toHaveLength(1);
+        expect(segmented[0]?.props.role).toBe('radiogroup');
+        expect(segmented[0]?.props.activeTabId).toBe('0');
     });
 });

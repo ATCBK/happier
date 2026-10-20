@@ -29,7 +29,6 @@ import { SESSION_LIST_COLUMN_METRICS, sessionListStyles } from './sessionListSty
 import { resolveProjectGroupHeaderMenuItems } from './resolveProjectGroupHeaderMenuItems';
 import { resolveNewSessionGroupTarget } from './resolveSessionListHeaderActionHandlers';
 import {
-    resolveSessionListViewOptionSelectionDelta,
     resolveSessionListViewOptionsPresentation,
     type SessionListViewOptionDescriptor,
 } from './sessionListViewOptionsPresentation';
@@ -39,7 +38,7 @@ import { resolveWorkspaceRootTreeRowId, treeRowId } from './drop-resolution/tree
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
-import { useApplySettings } from '@/sync/store/settingsWriters';
+import { useSessionListViewOptionWriter } from './useSessionListViewOptionWriter';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 
 const HEADER_ACTION_TARGET_SIZE = resolveMinimumInteractiveTargetSize(Platform.OS);
@@ -148,7 +147,7 @@ export const SessionListViewOptionsButton = React.memo(function SessionListViewO
         sessionFolderViewModeV1,
         sessionListFolderSortModeV1,
     };
-    const applySettings = useApplySettings();
+    const applyViewOption = useSessionListViewOptionWriter();
     const sessionFoldersFeatureEnabled = useFeatureEnabled('sessions.folders', props.serverId
         ? { scopeKind: 'spawn', serverId: props.serverId }
         : { scopeKind: 'main_selection' });
@@ -292,20 +291,18 @@ export const SessionListViewOptionsButton = React.memo(function SessionListViewO
         } satisfies DropdownMenuItem] : []),
     ], [actionIconColor, organize.available, presentation, selectedTitle, theme.colors.text.secondary, withSelection]);
 
-    const handleMenuSelect = React.useCallback((itemId: string) => {
+    const handleMenuSelect = React.useCallback(async (itemId: string) => {
         if (itemId === SESSION_LIST_ORGANIZE_MENU_ITEM_ID) {
             setMenuOpen(false);
             organize.enter();
             return;
         }
-        const delta = resolveSessionListViewOptionSelectionDelta(itemId, settings);
-        if (!delta) return;
+        if (!await applyViewOption(itemId)) return;
         // An explicit layout choice retires the host's opening intent, so the
         // choice applies here and now instead of only after leaving the route.
         if (itemId.startsWith('layout:')) yieldLayoutIntent();
-        applySettings(delta);
         setMenuOpen(false);
-    }, [applySettings, organize, settings, yieldLayoutIntent]);
+    }, [applyViewOption, organize, yieldLayoutIntent]);
 
     return (
         <DropdownMenu
@@ -455,6 +452,8 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
     collapsed: boolean;
     onToggleCollapse: () => void;
     onRegisterDropTarget?: RegisterSessionFolderDropTarget;
+    onMoveUp?: () => void;
+    onMoveDown?: () => void;
 }>) {
     const styles = sessionListStyles;
     const { theme } = useUnistyles();
@@ -503,6 +502,8 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
         canAddFolder: sessionFoldersFeatureEnabled && workspace !== null,
         canRename: Boolean(item.workspaceScopeHint) && item.workspace?.t !== 'managedSessions',
         hasCustomLabel,
+        canMoveUp: typeof props.onMoveUp === 'function',
+        canMoveDown: typeof props.onMoveDown === 'function',
         actionIconColor,
     });
     const menuEnabled = menuItems.length > 0;
@@ -520,6 +521,7 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
             >
                 <Pressable
                     style={styles.groupHeaderContent}
+                    {...(isWeb ? { dataSet: { entityDragBody: 'true' } } : {})}
                     onPress={onToggleCollapse}
                     onHoverIn={isWeb ? () => setIsRowHovered(true) : undefined}
                     onHoverOut={isWeb ? () => setIsRowHovered(false) : undefined}
@@ -563,36 +565,38 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
                     </View>
                 </Pressable>
                 <View style={styles.groupHeaderTrailingActions}>
-                    {showHoverActions && reorderHandleKey ? (
+                    {reorderHandleKey ? (isWeb ? (
+                        <View
+                            style={[styles.groupHeaderActionButton, styles.groupHeaderDragHandle]}
+                            testID={`session-workspace-reorder-handle:${reorderHandleKey}`}
+                            pointerEvents="none"
+                            accessible={false}
+                        >
+                            <Icon name="list" size={14} color={actionIconColor} />
+                        </View>
+                    ) : (
                         <Pressable
                             style={styles.groupHeaderActionButton}
                             testID={`session-workspace-reorder-handle:${reorderHandleKey}`}
-                            onPress={(event) => {
-                                stopPressEventPropagation(event);
-                            }}
-                            onHoverIn={isWeb ? () => setIsActionsHovered(true) : undefined}
-                            onHoverOut={isWeb ? () => setIsActionsHovered(false) : undefined}
+                            onPress={stopPressEventPropagation}
                             accessible={false}
                             hitSlop={8}
                         >
-                            <Icon
-                                name="list"
-                                size={14}
-                                color={actionIconColor}
-                                style={[
-                                    styles.folderHeaderDragHandleIcon,
-                                    showHoverActions ? styles.folderHeaderDragHandleIconActive : null,
-                                ]}
-                            />
+                            <Icon name="list" size={14} color={actionIconColor}
+                                style={[styles.folderHeaderDragHandleIcon, styles.folderHeaderDragHandleIconActive]} />
                         </Pressable>
-                    ) : null}
-                    {showHoverActions && menuEnabled ? (
+                    )) : null}
+                    {menuEnabled ? (
                         <DropdownMenu
                             open={menuOpen}
                             onOpenChange={setMenuOpen}
                             items={menuItems}
                             onSelect={(itemId) => {
-                                if (itemId === 'openProject') {
+                                if (itemId === 'moveUp') {
+                                    props.onMoveUp?.();
+                                } else if (itemId === 'moveDown') {
+                                    props.onMoveDown?.();
+                                } else if (itemId === 'openProject') {
                                     onOpenProject();
                                 } else if (itemId === 'addFolder') {
                                     onAddFolder();
@@ -764,6 +768,8 @@ export const FolderGroupHeader = React.memo(function FolderGroupHeader(props: Re
             icon: <Icon name="folder-open" size={16} color={iconColor} />,
             disabled: actionsDisabled,
         }];
+        if (typeof props.onMoveUp === 'function') items.push({ id: 'move-up', title: t('common.moveUp'), disabled: actionsDisabled });
+        if (typeof props.onMoveDown === 'function') items.push({ id: 'move-down', title: t('common.moveDown'), disabled: actionsDisabled });
         if (typeof props.onMove === 'function') {
             items.push({
                 id: 'move',
@@ -785,10 +791,14 @@ export const FolderGroupHeader = React.memo(function FolderGroupHeader(props: Re
             disabled: actionsDisabled,
         });
         return items;
-    }, [actionsDisabled, iconColor, props.onMove]);
+    }, [actionsDisabled, iconColor, props.onMove, props.onMoveUp, props.onMoveDown]);
     const handleMenuSelect = React.useCallback(async (itemId: string) => {
         if (actionsDisabled) return;
-        if (itemId === 'new-session') {
+        if (itemId === 'move-up') {
+            props.onMoveUp?.();
+        } else if (itemId === 'move-down') {
+            props.onMoveDown?.();
+        } else if (itemId === 'new-session') {
             props.onNewSession();
         } else if (itemId === 'add-subfolder') {
             await props.onAddSubfolder();
@@ -870,6 +880,7 @@ export const FolderGroupHeader = React.memo(function FolderGroupHeader(props: Re
                 </Pressable>
                 <Pressable
                     testID={`${headerTestId}-focus`}
+                    {...(isWeb ? { dataSet: { entityDragBody: 'true' } } : {})}
                     style={styles.headerLabelRow}
                     onPress={actionsDisabled ? undefined : props.onPress}
                     accessibilityRole="button"
@@ -885,7 +896,7 @@ export const FolderGroupHeader = React.memo(function FolderGroupHeader(props: Re
                     testID={`session-folder-reorder-handle-${props.item.folderId ?? props.title}`}
                     style={[
                         styles.groupHeaderActionButton,
-                        showActions ? styles.webHoverVisibleChevron : styles.webHoverHiddenChevron,
+                        isWeb ? styles.groupHeaderDragHandle : styles.webHoverVisibleChevron,
                     ]}
                     pointerEvents="none"
                 >
@@ -895,7 +906,7 @@ export const FolderGroupHeader = React.memo(function FolderGroupHeader(props: Re
                         color={iconColor}
                         style={[
                             styles.folderHeaderDragHandleIcon,
-                            showActions ? styles.folderHeaderDragHandleIconActive : null,
+                            isWeb || showActions ? styles.folderHeaderDragHandleIconActive : null,
                         ]}
                     />
                 </View>
@@ -919,7 +930,7 @@ export const FolderGroupHeader = React.memo(function FolderGroupHeader(props: Re
                                 testID={`session-folder-menu-trigger-${props.item.folderId ?? props.title}`}
                                 style={[
                                     styles.groupHeaderActionButton,
-                                    isWeb && !showActions ? styles.webHoverHiddenChevron : styles.webHoverVisibleChevron,
+                                    styles.webHoverVisibleChevron,
                                 ]}
                                 onPress={(event) => {
                                     stopPressEventPropagation(event);

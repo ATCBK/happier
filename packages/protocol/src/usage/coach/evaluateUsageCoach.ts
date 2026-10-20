@@ -1,32 +1,33 @@
 import { computeCanonicalDomainSeparatedDigest } from '../../crypto/canonicalDigest.js';
-import { UsagePromptCompositionSchema } from './usagePromptComposition.js';
-import { UsageCoachModelRequestSchema } from './usagePromptComposition.js';
-import { UsageMcpBindingUsageSchema } from './usageMcpBindingUsage.js';
+import { selectLatestUsageMcpBindingWindows } from './usageMcpBindingUsage.js';
 import { resolveUsageCostBasis, estimateUsageModelCost } from '../usageCost.js';
 import { bundledUsageModelPriceCatalog, LITELLM_MODEL_PRICE_URL } from '../usageModelPriceCatalog.js';
 import { COACH_VENDOR_FACTS as facts, COACH_RESEARCH_SOURCES as research } from './coachVendorFacts.js';
 import { UsageRequestAttributionSchema } from '../usageAnalyticsContracts.js';
 import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
+import { selectUsageWorkPermissions } from '../usageWorkIntervals.js';
 import { UsageCoachPreferencesV1Schema, type UsageCoachPreferencesV1 } from '../../account/settings/usageCoachPreferencesV1.js';
-import { USAGE_COACH_DETECTOR_IDS, USAGE_COACH_REQUIRED_EVIDENCE, UsageCoachEvaluationSchema, type UsageCoachCapability, type UsageCoachEvaluation,
+import { USAGE_COACH_DETECTOR_IDS, USAGE_COACH_REQUIRED_EVIDENCE, type UsageCoachCapability, type UsageCoachEvaluation,
     type UsageCoachEvaluationInput, type UsageCoachConceptEvaluation, type UsageCoachDetectorId, type UsageCoachFinding,
     type UsageCoachAdmittedRemedy, type UsageCoachNativeCacheFact } from './coachFinding.js';
 
 export function applyUsageCoachPreferences(evaluation: UsageCoachEvaluation, preferences: UsageCoachPreferencesV1,
     nowMs: number): UsageCoachEvaluation {
     if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new RangeError('Invalid usage preference observation time');
-    const parsed = UsageCoachPreferencesV1Schema.parse(preferences);
-    const suppressions = new Map(parsed.suppressions.map(row => [row.evidenceKey, row]));
+    const suppressions = new Map(preferences.suppressions.map(row => [row.evidenceKey, row]));
     const evaluations = evaluation.evaluations.map(row => {
         if (row.status !== 'finding') return row;
         const suppression = suppressions.get(row.finding.evidenceKey);
+        const dismissed = suppression?.kind === 'dismissed';
+        const snoozedUntilMs = suppression?.kind === 'snoozed' && suppression.untilMs > nowMs ? suppression.untilMs : null;
+        if (row.finding.state.dismissed === dismissed && row.finding.state.snoozedUntilMs === snoozedUntilMs) return row;
         return { ...row, finding: { ...row.finding, state: { ...row.finding.state,
-            dismissed: suppression?.kind === 'dismissed',
-            snoozedUntilMs: suppression?.kind === 'snoozed' && suppression.untilMs > nowMs ? suppression.untilMs : null,
+            dismissed, snoozedUntilMs,
         } } };
     });
-    return UsageCoachEvaluationSchema.parse({ ...evaluation, evaluations,
-        findings: evaluations.flatMap(row => row.status === 'finding' ? [row.finding] : []) });
+    if (evaluations.every((row, index) => row === evaluation.evaluations[index])) return evaluation;
+    return { ...evaluation, evaluations,
+        findings: evaluations.flatMap(row => row.status === 'finding' ? [row.finding] : []) };
 }
 
 /** Supported owner effects attach only to the exact observed evidence, never by detector id alone. */
@@ -42,8 +43,8 @@ export function admitUsageCoachRemedies(evaluation: UsageCoachEvaluation, admitt
         return { ...row, finding: { ...row.finding, remedy,
             action: remedy ? { actionId: 'usage.coach.apply' as const, detectorId: row.detectorId, evidenceKey: row.finding.evidenceKey } : null } };
     });
-    return UsageCoachEvaluationSchema.parse({ ...evaluation, evaluations,
-        findings: evaluations.flatMap(row => row.status === 'finding' ? [row.finding] : []) });
+    return { ...evaluation, evaluations,
+        findings: evaluations.flatMap(row => row.status === 'finding' ? [row.finding] : []) };
 }
 
 export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoachEvaluation {
@@ -151,7 +152,7 @@ export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoach
         points: points.sort((a, b) => a.observedAtMs - b.observedAtMs || a.evidenceId.localeCompare(b.evidenceId)) });
     const usesComposition = enabled('duplicated_instructions') || enabled('cache_busting_prompt_changes') || enabled('idle_recaching') || enabled('cache_economics');
     const composition = !usesComposition || input.composition === undefined ? undefined
-        : unique(input.composition.map(row => UsagePromptCompositionSchema.parse(row)));
+        : unique(input.composition);
     const fullComposition = input.compositionCoverage === 'complete' && composition !== undefined
         && composition.every(row => row.coverage === 'complete_native');
     // The two retained preference ids are cause views of this ONE cache analysis.
@@ -269,15 +270,20 @@ export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoach
                 // history page is not that certificate; complete-only must remain insufficient.
                 if (preferences.modelSuggestion === 'complete_only') return insufficient(id, capability);
                 if (detail?.modelRequests && input.accounting?.contributions) {
-                    const requests = unique(detail.modelRequests.flatMap(row => {
-                        const parsed = UsageCoachModelRequestSchema.safeParse(row);
-                        return parsed.success && inPeriod(parsed.data.startedAtMs) ? [parsed.data] : [];
-                    }));
+                    const requests = unique(detail.modelRequests.filter(row => inPeriod(row.startedAtMs)));
+                    if (!requests.length) return insufficient(id, capability);
+                    const contributionsBySession = new Map<string | null, Map<string | null, Map<string, (typeof input.accounting.contributions)[number]>>>();
+                    for (const row of input.accounting.contributions) {
+                        let turns = contributionsBySession.get(row.sessionId);
+                        if (!turns) contributionsBySession.set(row.sessionId, turns = new Map());
+                        let contributions = turns.get(row.turnId);
+                        if (!contributions) turns.set(row.turnId, contributions = new Map());
+                        contributions.set(row.id, row);
+                    }
                     const priced = requests.flatMap(request => {
                         const selection = request.requestIdentity.selection;
                         if (selection.modelId === 'default' || selection.modelId === 'automatic') return [];
-                        const contributions = [...new Map(input.accounting!.contributions!.filter(row =>
-                            row.sessionId === request.sessionId && row.turnId === request.turnId).map(row => [row.id, row])).values()];
+                        const contributions = [...(contributionsBySession.get(request.sessionId)?.get(request.turnId)?.values() ?? [])];
                         if (!contributions.length || contributions.some(row => !inPeriod(row.observedAtMs)
                             || row.observedAtMs < request.startedAtMs || row.observedAtMs > request.observedAtMs
                             || row.modelId !== selection.modelId
@@ -354,10 +360,7 @@ export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoach
             }
             case 'approval_friction': {
                 if (!detail?.permissions) return insufficient(id, capability);
-                const rows = [...new Map(detail.permissions.filter(row => row.requestedAtMs !== null && inPeriod(row.requestedAtMs)
-                    || row.decidedAtMs !== null && inPeriod(row.decidedAtMs)).map(row => [JSON.stringify([row.workId, row.requestId]), row])).values()];
-                const paired = rows.filter(row => row.requestedAtMs !== null && row.decidedAtMs !== null
-                    && inPeriod(row.requestedAtMs) && inPeriod(row.decidedAtMs) && row.decidedAtMs > row.requestedAtMs);
+                const { requests: rows, paired } = selectUsageWorkPermissions(detail.permissions, input.period, input.asOfMs);
                 if (paired.length) return finding(id, capability, 'approval_wait_observed',
                     paired.map(row => ({ kind: 'permission', id: JSON.stringify([row.workId, row.requestId]), observedAtMs: row.decidedAtMs! })),
                     [{ metric: 'permission_wait', value: paired.reduce((sum, row) => sum + row.decidedAtMs! - row.requestedAtMs!, 0), unit: 'milliseconds' },
@@ -371,19 +374,12 @@ export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoach
                     && row.decidedAtMs >= row.requestedAtMs));
             }
             case 'mcp_overhead': {
-                const observed = unique((detail?.mcpUsage ?? []).flatMap(row => {
-                    const parsed = UsageMcpBindingUsageSchema.safeParse(row);
-                    return parsed.success && inPeriod(parsed.data.window.startMs) ? [parsed.data] : [];
-                }));
-                // A changed catalog configuration needs fresh native witnessing. Historical
-                // windows never impersonate usage of a newly configured binding.
-                const latestRevision = observed.reduce((latest, row) => row.bindings.reduce((revision, binding) =>
-                    Math.max(revision, binding.catalogRevision), latest), -1);
-                const rows = observed.filter(row => row.bindings.some(binding => binding.catalogRevision === latestRevision));
+                const observed = unique((detail?.mcpUsage ?? []).filter(row => inPeriod(row.window.startMs)));
+                const rows = selectLatestUsageMcpBindingWindows(observed);
                 if (!rows.length || rows.some(row => row.coverage !== 'complete')) return insufficient(id, capability);
                 const bindings = new Map<string, { calls: number; identity: string; consistent: boolean }>();
                 for (const row of rows) for (const binding of row.bindings) {
-                    const identity = JSON.stringify([binding.serverId, binding.serverRevision, binding.bindingRevision, binding.catalogRevision]);
+                    const identity = JSON.stringify([row.v, binding.serverId, binding.serverRevision, binding.bindingRevision]);
                     const previous = bindings.get(binding.bindingId);
                     bindings.set(binding.bindingId, { calls: (previous?.calls ?? 0) + binding.toolCallCount, identity,
                         consistent: (previous?.consistent ?? true) && (!previous || previous.identity === identity) });
@@ -593,10 +589,10 @@ export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoach
             default: return insufficient(id, capability);
         }
     });
-    const result = UsageCoachEvaluationSchema.parse({ v: 1, queryKey: input.queryKey, period: input.period, asOfMs: input.asOfMs,
+    const result: UsageCoachEvaluation = { v: 1, queryKey: input.queryKey, period: input.period, asOfMs: input.asOfMs,
         currentness: input.currentness, evaluations,
         findings: evaluations.flatMap(row => row.status === 'finding' ? [row.finding] : []),
         unavailableChecks: [{ check: 'fast_mode', reason: 'not_available' }, { check: 'scheduled_interval_vs_ttl', reason: 'not_available' }],
-    });
+    };
     return admitUsageCoachRemedies(result, input.admittedRemedies ?? []);
 }

@@ -1,11 +1,14 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
+import { StyleSheet, View } from 'react-native';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { FindHighlightedText } from '@/components/ui/text/FindHighlightedText';
 import { resolvePluginSurfaceStatePresentation } from '@/sync/domains/surfaces/copy';
 import { t } from '@/text';
+
+import { PluginSurfacePageHeaderContext } from '@/components/plugins/shared/pluginSurfaceInteractionAvailability';
 
 import { PluginSurfaceFallback, projectPluginSurfaceFallbackFindText } from './PluginSurfaceFallback';
 
@@ -71,6 +74,50 @@ describe('PluginSurfaceFallback', () => {
         expect(screen.findByTestId(
             'plugin-surface-unavailable-diagnostic-targeted_contributions_loading',
         )).toBeTruthy();
+    });
+
+    it('keeps a page route\'s identity header above its loading and unavailable states, and only there', async () => {
+        const header = <View testID="page-identity-header" />;
+        const loading = await renderScreen(
+            <PluginSurfacePageHeaderContext.Provider value={{ header, loadingFrame: 'column' }}>
+                <PluginSurfaceFallback testID="plugin-surface-unavailable" state="loading" />
+            </PluginSurfacePageHeaderContext.Provider>,
+        );
+        expect(loading.findByTestId('page-identity-header')).toBeTruthy();
+        expect(loading.findByTestId('plugin-surface-unavailable-loading-skeleton')).toBeTruthy();
+
+        const unavailable = await renderScreen(
+            <PluginSurfacePageHeaderContext.Provider value={{ header, loadingFrame: 'column' }}>
+                <PluginSurfaceFallback testID="plugin-surface-unavailable" reasonCode="hosted_web_bridge_timeout" />
+            </PluginSurfacePageHeaderContext.Provider>,
+        );
+        expect(unavailable.findByTestId('page-identity-header')).toBeTruthy();
+        expect(unavailable.findByTestId('plugin-surface-unavailable-title')).toBeTruthy();
+
+        const embedded = await renderScreen(<PluginSurfaceFallback testID="plugin-surface-unavailable" state="loading" />);
+        expect(embedded.findByTestId('page-identity-header')).toBeNull();
+    });
+
+    it('stands a Collection page\'s loading frame in the whole content area, not in the page column', async () => {
+        const header = <View testID="page-identity-header" />;
+        const widthLimited = async (loadingFrame: 'column' | 'collection') => {
+            const screen = await renderScreen(
+                <PluginSurfacePageHeaderContext.Provider value={{ header, loadingFrame }}>
+                    <PluginSurfaceFallback testID="plugin-surface-unavailable" state="loading" />
+                </PluginSurfacePageHeaderContext.Provider>,
+            );
+            expect(screen.findByTestId('page-identity-header')).toBeTruthy();
+            expect(screen.findByTestId('plugin-surface-unavailable-loading-skeleton')).toBeTruthy();
+            for (let node = screen.findByTestId('page-identity-header')?.parent ?? null; node !== null; node = node.parent) {
+                const style = StyleSheet.flatten(node.props.style) as { maxWidth?: unknown } | undefined;
+                if (style?.maxWidth !== undefined) return true;
+            }
+            return false;
+        };
+        // A page that heads itself with a page header keeps the reading column; a Collection page under its own
+        // toolbar fills the content area the loaded page fills.
+        expect(await widthLimited('column')).toBe(true);
+        expect(await widthLimited('collection')).toBe(false);
     });
 
     it('makes Retry the single action for a transient failure and wires it to the host retry', async () => {

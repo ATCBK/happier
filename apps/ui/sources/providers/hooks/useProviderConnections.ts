@@ -56,6 +56,7 @@ export function useProviderConnections(input: Readonly<{
         loading: false,
     });
     const generation = React.useRef(0);
+    const pendingRead = React.useRef<AbortController | null>(null);
     const currentAccountLifetimeRef = React.useRef(accountLifetime);
     currentAccountLifetimeRef.current = accountLifetime;
     const scopeKey = JSON.stringify([
@@ -107,6 +108,9 @@ export function useProviderConnections(input: Readonly<{
             return null;
         }
         if (!ready) return null;
+        pendingRead.current?.abort();
+        const controller = new AbortController();
+        pendingRead.current = controller;
         const machineId = input.machineId;
         const serverId = input.serverId;
         setState((current) => current.scopeKey === scopeKey
@@ -124,7 +128,7 @@ export function useProviderConnections(input: Readonly<{
             const accountResult = await describeProviderConnections({
                 serverId,
                 ...(input.connectionId ? { connectionId: input.connectionId } : {}),
-            });
+            }, { signal: controller.signal });
             if (requestGeneration !== generation.current || !requestStillCurrent()) return;
             if (accountResult.status === 'error') {
                 setState({ scopeKey, accountScopeKey, accountLifetime, data: null, accountData: null,
@@ -143,7 +147,7 @@ export function useProviderConnections(input: Readonly<{
             if (!machineId) return accountData;
             const result = await describeProviderConnections({ machineId, serverId,
                 ...(input.connectionId ? { connectionId: input.connectionId } : {}),
-            });
+            }, { signal: controller.signal });
             if (requestGeneration !== generation.current || !requestStillCurrent()) return;
             if (result.status === 'success') {
                 const connections = new Map(result.connections.map(connection => [connection.connectionId, connection]));
@@ -172,6 +176,7 @@ export function useProviderConnections(input: Readonly<{
                 error: accountData ? null : failure, machineError: accountData ? failure : null, loading: true });
             return accountData;
         } finally {
+            if (pendingRead.current === controller) pendingRead.current = null;
             if (requestGeneration === generation.current && requestStillCurrent()) {
                 setState((current) => current.scopeKey === scopeKey
                     && current.accountLifetime === accountLifetime
@@ -199,6 +204,8 @@ export function useProviderConnections(input: Readonly<{
         void read();
         return () => {
             generation.current += 1;
+            pendingRead.current?.abort();
+            pendingRead.current = null;
             unregister?.();
         };
     }, [accountLifetime, accountScopeKey, active, input.enabled, input.machineId, input.serverId, read, scopeKey]);

@@ -15,6 +15,7 @@ export type WorkflowInputResolutionErrorCode =
   | 'invalid_input'
   | 'missing_required_input'
   | 'workflow_session_context_unavailable'
+  | 'workflow_discussion_context_unavailable'
   | 'workflow_input_too_large';
 
 export class WorkflowInputResolutionError extends Error {
@@ -91,7 +92,7 @@ export function bindAutomationWorkflowInputs(params: Readonly<{
     const value = hasSuppliedValue ? params.evidence[input.name]
       : hasConstant ? params.constants![input.name] : input.default;
     if (value === undefined) {
-      if (input.required) throw new WorkflowInputResolutionError('missing_required_input');
+      if (input.required && input.defaultFrom !== 'origin_session') throw new WorkflowInputResolutionError('missing_required_input');
       continue;
     }
     if (!matchesDeclaredInputType(value, input.valueType)
@@ -127,7 +128,21 @@ export type WorkflowValueResolutionRuntime = Readonly<{
   ) => Promise<number>;
   resolveSessionContext?: (recentTurns: number) => Promise<WorkflowSessionContextV1>;
   resolveSessionContextField?: (field: 'usage.tokensUsed' | 'goal.tokenBudget') => Promise<number>;
+  /** C3 supplies authorized content and its frontier; Workflow never reads history itself. */
+  resolveDiscussionContext?: (scope: Extract<WorkflowValueReference, { kind: 'discussion_context' }>['scope']) => Promise<WorkflowJsonValue>;
 }>;
+
+/** One input preparation fixes each requested Discussion frontier, even with repeated references. */
+export function captureWorkflowDiscussionContext(runtime: WorkflowValueResolutionRuntime): WorkflowValueResolutionRuntime {
+  if (!runtime.resolveDiscussionContext) return runtime;
+  const read = runtime.resolveDiscussionContext;
+  const captured = new Map<Parameters<typeof read>[0], ReturnType<typeof read>>();
+  return { ...runtime, resolveDiscussionContext: scope => {
+    let value = captured.get(scope);
+    if (!value) { value = read(scope); captured.set(scope, value); }
+    return value;
+  } };
+}
 
 export function selectWorkflowResultPath(
   value: WorkflowJsonValue,
@@ -146,6 +161,10 @@ export async function resolveWorkflowValueReference(
   switch (reference.kind) {
     case 'literal':
       return reference.value;
+    case 'discussion_context': {
+      if (!runtime.resolveDiscussionContext) throw new WorkflowInputResolutionError('invalid_reference_scope');
+      return await runtime.resolveDiscussionContext(reference.scope);
+    }
     case 'session_context': {
       if (!runtime.resolveSessionContext) throw new WorkflowInputResolutionError('invalid_reference_scope');
       return WorkflowSessionContextV1Schema.parse(await runtime.resolveSessionContext(reference.recentTurns));
@@ -158,7 +177,7 @@ export async function resolveWorkflowValueReference(
       if (!Object.prototype.hasOwnProperty.call(runtime.inputs, reference.name)) {
         throw new WorkflowInputResolutionError('missing_reference');
       }
-      return runtime.inputs[reference.name]!;
+      return selectWorkflowResultPath(runtime.inputs[reference.name]!, reference.path ?? [], 'missing_reference');
     }
     case 'result': {
       if (runtime.resolveResultPath) return await runtime.resolveResultPath(reference.producer, reference.path);
@@ -193,7 +212,8 @@ async function referenceExists(
     return true;
   } catch (error) {
     if (error instanceof WorkflowInputResolutionError && error.code === 'missing_reference') return false;
-    if (error instanceof WorkflowInputResolutionError && error.code === 'workflow_session_context_unavailable') throw error;
+    if (error instanceof WorkflowInputResolutionError && (error.code === 'workflow_session_context_unavailable'
+      || error.code === 'workflow_discussion_context_unavailable')) throw error;
     if (error instanceof WorkflowInputResolutionError) {
       throw new WorkflowInputResolutionError('invalid_condition');
     }
@@ -209,7 +229,8 @@ async function resolveConditionValue(
     return await resolveWorkflowValueReference(reference, runtime);
   } catch (error) {
     if (reference.kind === 'session_context_field' && error instanceof WorkflowInputResolutionError && error.code === 'missing_reference') return undefined;
-    if (error instanceof WorkflowInputResolutionError && error.code === 'workflow_session_context_unavailable') throw error;
+    if (error instanceof WorkflowInputResolutionError && (error.code === 'workflow_session_context_unavailable'
+      || error.code === 'workflow_discussion_context_unavailable')) throw error;
     if (error instanceof WorkflowInputResolutionError) {
       throw new WorkflowInputResolutionError('invalid_condition');
     }
@@ -330,9 +351,10 @@ export async function materializeWorkflowStepInput(params: Readonly<{
     if (!tokens.has(index)) tokens.set(index, mention.token);
   }
   const resolvedInputs: { token?: string; reference: WorkflowValueReference; value: WorkflowJsonValue }[] = [];
+  const runtime = captureWorkflowDiscussionContext(params.runtime);
   for (const [index, reference] of params.references.entries()) {
     try {
-      const value = await resolveWorkflowValueReference(reference, params.runtime);
+      const value = await resolveWorkflowValueReference(reference, runtime);
       values.push(value);
       const token = tokens.get(index);
       resolvedInputs.push({ ...(token === undefined ? {} : { token }), reference, value });

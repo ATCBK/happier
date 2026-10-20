@@ -16,6 +16,12 @@ import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/librar
 import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { detectProviderMcpServers } from '@/mcp/providerDetection/detectProviderMcpServers';
+import { PluginAvailabilityActionHttpPathsV1 } from '@happier-dev/protocol/plugins/availability/actions';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListResponseV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { PromptBundleArtifactHeaderV1Schema } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
 
 // Home transport/cache-file I/O and process probing are real system boundaries.
 vi.mock('axios', () => ({ default: { get: vi.fn(), post: vi.fn(), isAxiosError: () => false } }));
@@ -39,6 +45,7 @@ function register(input: Readonly<{ unavailable?: boolean; retire?: boolean; ret
   rules?: typeof catalog.bindings;
   retireDuringDetection?: boolean; reenterDuringHandoff?: boolean;
   detected?: readonly DetectedMcpServerV1[];
+  discoverySources?: Parameters<typeof detectProviderMcpServers>[0]['mcpDiscoverySources'];
   detectionReady?: () => Promise<void>;
   probeResult?: () => Promise<McpServerProbeResult> }> = {}) {
   const diagnostics: unknown[] = [];
@@ -86,7 +93,8 @@ function register(input: Readonly<{ unavailable?: boolean; retire?: boolean; ret
     if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 0 } };
     if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({
       key, revision: 1, content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })) } };
-    if (path === '/v1/artifacts') return { status: 200, data: [] };
+    if (path === '/v1/artifacts') return { status: 200, data: new URL(String(url)).searchParams.has('kind')
+      ? { items: [], hasUnclassified: false } : [] };
     if (path === '/v1/account/entity-rows/mcp') {
       if (input.retire) retireAccount();
       const rowCatalog = input.project ? { ...catalog, bindings: catalog.bindings.map(rule => ({ ...rule,
@@ -99,7 +107,9 @@ function register(input: Readonly<{ unavailable?: boolean; retire?: boolean; ret
     if (path === '/v2/account/settings') return { status: 200, data: { version: 4, content: { t: 'plain', v: {} } } };
     throw new Error(`Unexpected HTTP path: ${path}`);
   });
-  vi.mocked(axios.post).mockResolvedValue({ status: 200, data: { status: 'updated', revision: 4, cursor: 1 } });
+  vi.mocked(axios.post).mockImplementation(async url => new URL(String(url)).pathname === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`
+    ? { status: 200, data: ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', rows: [], coverage: 'complete' }) }
+    : { status: 200, data: { status: 'updated', revision: 4, cursor: 1 } });
   registerMachineMcpServersRpcHandlers({
     rpcHandlerManager,
     deps: {
@@ -111,9 +121,10 @@ function register(input: Readonly<{ unavailable?: boolean; retire?: boolean; ret
         },
       }),
       probeMcpStdioServerTools: probe,
-      detectProviderMcpServers: async () => {
+      detectProviderMcpServers: async request => {
         await input.detectionReady?.();
         if (input.retireDuringDetection) retireAccount();
+        if (input.discoverySources) return detectProviderMcpServers({ ...request, mcpDiscoverySources: input.discoverySources });
         return { servers: input.detected ?? [], warnings: [] };
       },
     },
@@ -148,6 +159,158 @@ describe('Machine MCP catalog admission', () => {
     expect(await rpcHandlerManager.invokeLocal(RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW,
       { machineId: 'm1', directory: 'C:\\workspace', agentId: 'claude' }))
       .toMatchObject({ errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
+  });
+
+  it('previews only the selected Agent without waiting for or reporting another Agent discovery failure', async () => {
+    // Plugin-native discovery callbacks are the external integration boundary;
+    // keep the host filter, registration, resolver and strict consumer real.
+    const { rpcHandlerManager } = register({ discoverySources: [{
+      pluginId: 'codex', provider: 'codex', loadedInHappierSessions: true,
+      registration: { id: 'native-config', discover: async () => ({ endpoints: [{
+        id: 'native', name: 'native-tools', kind: 'http', url: 'https://native.example.test/mcp',
+      }] }) },
+    }, {
+      pluginId: 'claude', provider: 'claude', loadedInHappierSessions: true,
+      registration: { id: 'other-config', discover: async () => { throw new Error('Unrelated Agent discovery unavailable'); } },
+    }] });
+    const result = DaemonMcpServersPreviewResponseSchema.parse(await rpcHandlerManager.invokeLocal(
+      RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW, { machineId: 'm1', agentId: 'codex' },
+    ));
+    expect(result).toMatchObject({ ok: true, detected: [{ name: 'native-tools', provider: 'codex' }] });
+    expect(result).not.toHaveProperty('warnings');
+  });
+
+  it('reads current skill rules on each finite preview without retained Settings/history maintenance', async () => {
+    const { rpcHandlerManager } = register();
+    const request = { machineId: 'm1', agentId: 'codex' };
+    const initial = vi.mocked(axios.get).getMockImplementation()!;
+    let enabled = true;
+    const paths: string[] = [];
+    vi.mocked(axios.get).mockImplementation(async (...args) => {
+      const path = new URL(String(args[0])).pathname;
+      paths.push(path);
+      if (path !== PROMPT_LIBRARY_ROWS_ROUTE_V1) return initial(...args);
+      return { status: 200, data: { status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({
+        key, revision: enabled ? 1 : 2, content: { t: 'plain', v: key === 'skill-rules'
+          ? { key, value: { v: 1, rules: [{ id: 'fixture-rule', skillId: 'happier:happier', enabled,
+            target: { t: 'allMachines' }, createdAt: 1, updatedAt: 2 }] } }
+          : emptyPromptLibraryRecordV1(key) },
+      })) } };
+    });
+    const first = DaemonMcpServersPreviewResponseSchema.parse(await rpcHandlerManager.invokeLocal(
+      RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW, request,
+    ));
+    expect(first, JSON.stringify(first)).toMatchObject({ ok: true, skills: { items: [expect.objectContaining({
+      id: 'happier:happier', selected: true,
+    })] } });
+    enabled = false;
+    const second = DaemonMcpServersPreviewResponseSchema.parse(await rpcHandlerManager.invokeLocal(
+      RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW, request,
+    ));
+    expect(second).toMatchObject({ ok: true, skills: { items: [expect.objectContaining({
+      id: 'happier:happier', selected: false,
+    })] } });
+    expect(paths.filter(path => path === PROMPT_LIBRARY_ROWS_ROUTE_V1)).toHaveLength(2);
+    expect(paths.filter(path => path === '/v2/account/settings' || path.includes('/settings/history'))).toEqual([]);
+  });
+
+  it('does not serialize independent plugin and native discovery behind the Artifact inventory', async () => {
+    let nativeObserved = false;
+    let pluginObserved = false;
+    const { rpcHandlerManager } = register({ detectionReady: async () => { nativeObserved = true; } });
+    const get = vi.mocked(axios.get).getMockImplementation()!;
+    const post = vi.mocked(axios.post).getMockImplementation()!;
+    let inventoryEntered!: () => void;
+    let releaseInventory!: () => void;
+    const entered = new Promise<void>(resolve => { inventoryEntered = resolve; });
+    const released = new Promise<void>(resolve => { releaseInventory = resolve; });
+    vi.mocked(axios.get).mockImplementation(async (...args) => {
+      if (new URL(String(args[0])).pathname === '/v1/artifacts') {
+        inventoryEntered();
+        await released;
+      }
+      return get(...args);
+    });
+    vi.mocked(axios.post).mockImplementation(async (...args) => {
+      if (new URL(String(args[0])).pathname === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.materializations.read']) pluginObserved = true;
+      return post(...args);
+    });
+    const preview = rpcHandlerManager.invokeLocal(RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW,
+      { machineId: 'm1', agentId: 'codex' });
+    try {
+      await entered;
+      await vi.waitFor(() => {
+        expect(pluginObserved).toBe(true);
+        expect(nativeObserved).toBe(true);
+      });
+    } finally { releaseInventory(); await preview; }
+    expect(DaemonMcpServersPreviewResponseSchema.parse(await preview)).toMatchObject({ ok: true });
+  });
+
+  it('starts the read-only Artifact inventory while Account catalog admission is still pending', async () => {
+    const { rpcHandlerManager } = register();
+    const get = vi.mocked(axios.get).getMockImplementation()!;
+    let enteredCatalog!: () => void;
+    let releaseCatalog!: () => void;
+    const entered = new Promise<void>(resolve => { enteredCatalog = resolve; });
+    const released = new Promise<void>(resolve => { releaseCatalog = resolve; });
+    let inventoryObserved = false;
+    vi.mocked(axios.get).mockImplementation(async (...args) => {
+      const path = new URL(String(args[0])).pathname;
+      if (path === '/v1/account/entity-rows/mcp') { enteredCatalog(); await released; }
+      if (path === '/v1/artifacts') inventoryObserved = true;
+      return get(...args);
+    });
+    const preview = rpcHandlerManager.invokeLocal(RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW,
+      { machineId: 'm1', agentId: 'codex' });
+    try {
+      await entered;
+      await vi.waitFor(() => expect(inventoryObserved).toBe(true));
+    } finally { releaseCatalog(); await preview; }
+    expect(DaemonMcpServersPreviewResponseSchema.parse(await preview)).toMatchObject({ ok: true });
+  });
+
+  it('projects selected skill content through the existing Artifact batch read without per-skill requests', async () => {
+    const { rpcHandlerManager } = register();
+    const get = vi.mocked(axios.get).getMockImplementation()!;
+    const post = vi.mocked(axios.post).getMockImplementation()!;
+    const artifacts = ['selected-skill', 'off-skill'].map(id => ({ id, ownerAccountId: 'account', access: 'owner' as const,
+      encryptionMode: 'plain' as const, publicAudience: 'none' as const, dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+      headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
+      header: encodePlainArtifactStoredContent(PromptBundleArtifactHeaderV1Schema.parse({ v: 1, kind: 'prompt_bundle.v2',
+        title: id, bundleSchemaId: 'skills.skill_md_v1' })),
+      body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 1, entries: [{
+        path: 'SKILL.md', contentKind: 'utf8', contentBase64: Buffer.from(`---\nname: ${id}-content\n---\nRead it.`).toString('base64'),
+      }] }) }),
+    }));
+    vi.mocked(axios.get).mockImplementation(async (...args) => {
+      const path = new URL(String(args[0])).pathname;
+      if (path === '/v1/artifacts') {
+        const items = artifacts.map(({ body: _body, ...header }) => header);
+        return { status: 200, data: new URL(String(args[0])).searchParams.has('kind')
+          ? { items, hasUnclassified: false } : items };
+      }
+      // Isolated item routes are unavailable; a read preview must use the admitted batch.
+      if (path.startsWith('/v1/artifacts/')) return { status: 503, data: {} };
+      return get(...args);
+    });
+    vi.mocked(axios.post).mockImplementation(async (...args) => {
+      if (new URL(String(args[0])).pathname !== '/v1/artifacts/read') return post(...args);
+      const request = ArtifactReadBatchInputV1Schema.parse(args[1]);
+      expect(request.artifactIds).toEqual(['selected-skill']);
+      return { status: 200, data: ArtifactReadBatchResponseV1Schema.parse({ items: request.artifactIds.map(artifactId => ({
+        artifactId, ok: true, artifact: artifacts.find(item => item.id === artifactId), recipientCensus: null,
+      })) }) };
+    });
+    const result = DaemonMcpServersPreviewResponseSchema.parse(await rpcHandlerManager.invokeLocal(
+      RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW, { machineId: 'm1', agentId: 'codex', capabilitySelection: {
+        skills: { v: 1, forceIncludeSkillIds: ['selected-skill'], forceExcludeSkillIds: [], excludeNativeSkillNames: [] },
+      } },
+    ));
+    expect(result).toMatchObject({ ok: true, skills: { items: expect.arrayContaining([
+      expect.objectContaining({ id: 'selected-skill', name: 'selected-skill-content', state: 'delivered' }),
+      expect.objectContaining({ id: 'off-skill', state: 'off' }),
+    ]) } });
   });
 
   it('keeps an unavailable Account catalog as a refusal without preview data', async () => {
@@ -221,7 +384,8 @@ describe('Machine MCP catalog admission', () => {
       managed: [{ serverId: 'srv-row', selected: true }] });
     expect(await preview({ ...target, projectKey: 'other' })).toMatchObject({ ok: true,
       managed: [{ serverId: 'srv-row', selected: false }] });
-    expect(await preview(target)).toMatchObject({ ok: true, managed: [{ serverId: 'srv-row', selected: false }] });
+    const unassociated = await preview(target);
+    expect(unassociated, JSON.stringify(unassociated)).toMatchObject({ ok: true, managed: [{ serverId: 'srv-row', selected: false }] });
     expect(await preview({ ...target, projectKey: 1 })).toMatchObject({ ok: false, errorCode: 'invalid_request' });
   });
 

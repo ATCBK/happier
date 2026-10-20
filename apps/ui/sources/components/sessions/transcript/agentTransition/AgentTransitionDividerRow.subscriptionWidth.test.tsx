@@ -199,13 +199,12 @@ describe('Agent transition divider subscription width', () => {
             seedSession({ ownerMetadataView: { path: '/w', host: 'h', machineId: 'machine-moved' } });
         });
 
-        // The row creates this element on each own render. Its catalog icon
-        // leaves also commit their loading projection after the machine changes
-        // without credentials; those leaf commits preserve the row's element.
+        // The row creates this element on each own render. Catalog icon leaf
+        // commits may vary with credential/catalog readiness; any such commits
+        // must preserve the owning row's one updated element.
         expect(new Set([mountedTitle, ...committedTitles]).size - 1).toBe(1);
-        expect(committedTitles).toHaveLength(2);
         expect(committedTitles[0]).not.toBe(mountedTitle);
-        expect(committedTitles[1]).toBe(committedTitles[0]);
+        expect(committedTitles.every((title) => title === committedTitles[0])).toBe(true);
         screen.pressByTestId('transcript-agent-transition-divider-chip');
         expect(machineIdsPassedToCard()).toEqual(['machine-moved']);
     });

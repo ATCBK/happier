@@ -158,6 +158,22 @@ describe('fetchAgentCliLatestVersion', () => {
     })).resolves.toEqual({ latestVersion: '0.157.0', heldVersion: null });
   });
 
+  it.each(['native', 'npm'] as const)('preserves vendor latest for a %s install when the managed installer is pinned', async (installSource) => {
+    const fetchImpl: typeof fetch = async (url) => json({
+      tag_name: String(url).endsWith('/tags/qualified-v1.2.3') ? 'qualified-v1.2.3' : 'v1.2.4',
+    });
+    await expect(fetchAgentCliLatestVersion({
+      runtimeSpec: runtimeSpec({ managedInstall: {
+        kind: 'github_release_binary', githubRepo: 'acme/fixture', binaryName: 'fixture',
+        releaseTag: 'qualified-v1.2.3',
+      } }),
+      installSource,
+      deps: {
+        fetchGitHubLatestRelease: (params) => fetchGitHubLatestRelease({ ...params, fetchImpl }),
+      },
+    })).resolves.toEqual({ latestVersion: '1.2.4', heldVersion: null });
+  });
+
   it('offers a managed package only once the managed installer will take it', async () => {
     const managed = runtimeSpec({
       npmPackageName: null,

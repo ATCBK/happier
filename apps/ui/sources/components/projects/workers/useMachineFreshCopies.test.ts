@@ -2,13 +2,17 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { computeWorkspaceSyncPolicyDigest, type WorkspaceSyncRelationshipV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { decideApprovalAsInbox, installOwnMachineApprovalReplayBoundary } from '@/dev/testkit/harness/approvalInbox';
 import { Modal } from '@/modal';
+import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
@@ -28,7 +32,9 @@ const { settingsParse } = await import('@/sync/domains/settings/settings');
 let serverId: string;
 beforeEach(async () => {
   await homes.reset(); await loadSyncSingletonForTests(); rpc.machine.mockReset();
-  serverId = await homes.addHome({ name: 'Copies', serverUrl: 'https://fresh-copies.test', accountId: 'owner' });
+  serverId = await homes.addHome({ name: 'Copies', serverUrl: 'https://fresh-copies.test', serverIdentityId: 'srv_fresh_copies',
+    accountId: 'owner', currentAccount: true });
+  publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
 });
 afterEach(async () => { await homes.reset(); });
 
@@ -43,6 +49,9 @@ async function seed() {
     contentPolicy: { ...policy, policyDigest: computeWorkspaceSyncPolicyDigest(policy) }, createdAtMs: 1, updatedAtMs: 1,
     provenance: { kind: 'worker_clean_copy', sourceWorkspaceRefId: source.id, targetWorkspaceRefId: target.id },
   };
+  homes.answer(serverId, 'POST /v1/account/project-rows/list', { body: createPlainProjectAccountRowListFixture({
+    workspaceRefs: [source, target], relationships: [relationship, { ...relationship, provenance: undefined, relationshipId: 'ordinary' }],
+  }) });
   await act(async () => {
     storage.getState().activateProfileScope(scope);
     await storage.getState().activateSettingsScope(scope);
@@ -127,23 +136,30 @@ describe('Machine fresh-copy model', () => {
 
   it('continues Ask-first until a confirmed retirement receipt, then removes the row without replay', async () => {
     await seed(); answerFacts(); vi.spyOn(Modal, 'confirm').mockResolvedValue(true);
+    await homes.requireUiApproval(serverId, 'projects.worker.copy.retire');
+    await installOwnMachineApprovalReplayBoundary({ harness: homes, serverId, accountId: 'owner', machineId: 'controller' });
     const disposeExecutor = await installRealActionExecutorModuleLoader();
     const readFacts = rpc.machine.getMockImplementation()!;
     rpc.machine.mockImplementation(async input => input.method === 'projects.worker.copy.retire'
       ? { status: 'retired' } : await readFacts(input));
     const hook = await renderHook(() => useMachineFreshCopies(serverId, 'worker'));
+    await waitForHomeGovernance(() => expect(hook.getCurrent().copies?.[0]?.review?.ok).toBe(true));
     let pending: Promise<void>;
     await act(async () => { pending = hook.getCurrent().remove(hook.getCurrent().copies![0]!); void pending.catch(() => {}); });
     try {
       expect(hook.getCurrent()).toHaveProperty('approvalId');
-      await waitForHomeGovernance(() => expect(hook.getCurrent().approvalId).toBeTypeOf('string'));
+      await waitForHomeGovernance(() => expect(homes.artifacts(serverId).list()).toHaveLength(1));
+      const artifactId = homes.artifacts(serverId).list()[0]!.id;
+      const approval = ApprovalRequestV2Schema.parse(JSON.parse(homes.artifacts(serverId).readPlainBody(artifactId)!));
+      expect(approval.executionOriginV1).toMatchObject({ serverIdentityId: 'srv_fresh_copies', machineId: 'controller', accountId: 'owner' });
+      await waitForHomeGovernance(() => expect(hook.getCurrent().approvalId).toBe(artifactId));
       expect(hook.getCurrent().copies).toHaveLength(1);
       expect(rpc.machine.mock.calls.filter(([input]) => input.method === 'projects.worker.copy.retire')).toHaveLength(0);
-      await decideApprovalAsInbox(serverId, hook.getCurrent().approvalId!, 'approve');
+      expect(await decideApprovalAsInbox(serverId, hook.getCurrent().approvalId!, 'approve')).toMatchObject({ ok: true });
       // The disconnected network fixture has no push; read the real settled approval Artifact.
       await act(async () => { await hook.getCurrent().refreshApproval(); });
       await act(async () => { await pending!; });
-      expect(hook.getCurrent().copies).toEqual([]);
+      expect(hook.getCurrent().copies, JSON.stringify([...hook.getCurrent().notices.values()])).toEqual([]);
       expect(rpc.machine.mock.calls.filter(([input]) => input.method === 'projects.worker.copy.retire')).toHaveLength(1);
     } finally { await hook.unmount(); disposeExecutor(); }
   });
@@ -198,8 +214,11 @@ describe('Machine fresh-copy model', () => {
 
   it('rejects another removal while the existing approval is pending, then permits renewed intent after denial', async () => {
     await seed(); answerFacts();
+    await homes.requireUiApproval(serverId, 'projects.worker.copy.retire');
+    await installOwnMachineApprovalReplayBoundary({ harness: homes, serverId, accountId: 'owner', machineId: 'controller' });
     const disposeExecutor = await installRealActionExecutorModuleLoader();
     const hook = await renderHook(() => useMachineFreshCopies(serverId, 'worker'));
+    await waitForHomeGovernance(() => expect(hook.getCurrent().copies?.[0]?.review?.ok).toBe(true));
     let pending: Promise<void> | null = null;
     try {
       await act(async () => { pending = hook.getCurrent().remove(hook.getCurrent().copies![0]!); });

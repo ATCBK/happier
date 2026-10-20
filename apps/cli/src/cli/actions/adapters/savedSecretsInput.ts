@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import type { ActionExecuteResult } from '@happier-dev/protocol';
+import type { ActionExecuteResult, ActionId } from '@happier-dev/protocol';
 import { PERSONAL_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/account/settings/personalSavedSecretActionsV1';
 import { SharedSavedSecretListOutputV1Schema } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
 import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
@@ -10,7 +10,7 @@ import { isApprovalRequestCreatedResult, type ApprovalRequestCreatedResult } fro
 import type { ActionCliFailure } from '../commandPresentation';
 
 type Input = Readonly<Record<string, unknown>>;
-type ReadAction = (actionId: string, input: Input) => Promise<ActionExecuteResult>;
+type ReadAction = (actionId: ActionId, input: Input) => Promise<ActionExecuteResult>;
 
 /** The Action failed before a mutation; retain its typed outcome at the CLI boundary. */
 export class SavedSecretsInputFailure extends Error {
@@ -38,7 +38,7 @@ export function isPrivateSecretCliWrite(actionId: string): boolean {
   return actionId === 'secrets.create' || actionId === 'secrets.update' || actionId === 'secrets.delete';
 }
 
-async function readMetadata(execute: ReadAction, actionId: string): Promise<unknown> {
+async function readMetadata(execute: ReadAction, actionId: ActionId): Promise<unknown> {
   const result = normalizeActionExecuteResult(await execute(actionId, {}));
   if (!result.ok) throw new SavedSecretsInputFailure(result);
   const payload = unwrapCliActionSuccessPayload(result.data);
@@ -130,7 +130,8 @@ export async function prepareSavedSecretsCliInput(params: Readonly<{
       ? { ...resolved, name: input.rename }
       : { ...resolved, value: await readSecretValue(params.signal) };
   }
-  const { tokenSecret, secret, clear, npmProfile, clearNpmProfile, ...canonical } = input;
+  const { tokenSecret, secret, clear, npmProfile, clearNpmProfile, ...ordinaryInput } = input;
+  const canonical: Record<string, unknown> = ordinaryInput;
   const tokenIdentifier = actionId === 'registries.sources.create' ? tokenSecret : secret;
   if (typeof tokenIdentifier === 'string') canonical.token = { secretRef: await resolveSecretRef(execute, tokenIdentifier) };
   else if (clear === true) canonical.token = null;

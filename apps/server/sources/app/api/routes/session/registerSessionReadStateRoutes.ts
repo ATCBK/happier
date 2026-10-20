@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { SESSION_READ_STATE_HTTP_PATHS_V1, SessionReadStateRouteRequestBodyV1Schema, SessionReadStateRouteSuccessResponseV1Schema, SessionReadStateRouteInvalidRequestResponseV1Schema, SessionReadStateRouteForbiddenResponseV1Schema, SessionReadStateRouteNotTrackedResponseV1Schema, SessionReadStateRouteNotFoundResponseV1Schema, SessionReadStateRouteFailureResponseV1Schema } from '@happier-dev/protocol/sessions';
 
 import { publishSessionReadCursorUpdate } from "@/app/session/readCursor/publishSessionReadCursorUpdate";
@@ -7,18 +7,20 @@ import { loadSessionViewerProjection } from "@/app/session/personal/projection";
 import { type Fastify } from "../../types";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 import { requireRouteActionAuthority } from "@/app/api/utils/requireRouteActionAuthority";
-import { PresentUserRequiredResponseSchema } from "@/app/api/utils/requirePresentUser";
+import { AccountRouteAuthenticationForbiddenResponseSchema } from "@/app/api/utils/enableAuthentication";
 
 export function registerSessionReadStateRoutes(app: Fastify) {
     app.post(SESSION_READ_STATE_HTTP_PATHS_V1.set, {
         preHandler: [app.authenticate, requireRouteActionAuthority("session.read_state.set")],
+        config: { apiTokenSessionAction: 'session.read_state.set',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: {
             params: z.object({ sessionId: z.string() }),
             body: SessionReadStateRouteRequestBodyV1Schema,
             response: {
                 200: SessionReadStateRouteSuccessResponseV1Schema,
                 400: SessionReadStateRouteInvalidRequestResponseV1Schema,
-                403: z.union([SessionReadStateRouteForbiddenResponseV1Schema, PresentUserRequiredResponseSchema]),
+                403: z.union([SessionReadStateRouteForbiddenResponseV1Schema, AccountRouteAuthenticationForbiddenResponseSchema]),
                 409: SessionReadStateRouteNotTrackedResponseV1Schema,
                 404: SessionReadStateRouteNotFoundResponseV1Schema,
                 500: SessionReadStateRouteFailureResponseV1Schema,

@@ -1,8 +1,9 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { assertSessionCapabilityInTx, resolveSessionAccessForOperation } from "@/app/session/access/sessionAccess";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 import { markSessionProjectionRecipientsChanged } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
+import { prepareSessionAccountCursorLocks } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { clearSessionRuntimeActivityProjectionInTx } from "@/app/session/sessionWriteService";
 import { transitionSessionArchiveStateInTx } from "@/app/session/archive/transitionSessionArchiveStateInTx";
 import { inTx } from "@/storage/inTx";
@@ -10,11 +11,17 @@ import { db } from "@/storage/db";
 import { didSessionActivityBadgeSignalChange } from "@/app/activity/accountActivityBadge";
 import { SESSION_TRANSCRIPT_PUBLICATION_SELECT } from "@/app/session/sessionTranscriptPublicationPolicy";
 import { publishSessionArchiveTransition } from "@/app/session/archive/publishSessionArchiveTransition";
+import { resolveSessionAccountChangePublications } from "@/app/session/changeTracking/markAccountChangesForSessionAccounts";
+import { log } from "@/utils/logging/log";
 import { type Fastify } from "../../types";
 
 export function registerSessionArchiveRoutes(app: Fastify) {
     app.post("/v2/sessions/:sessionId/archive", {
         preHandler: app.authenticate,
+        config: {
+            apiTokenSessionAction: "session.archive",
+            restrictedCredentialBinding: { scope: "session", session: "params.sessionId" },
+        },
         schema: {
             params: z.object({ sessionId: z.string() }),
             response: {
@@ -95,7 +102,10 @@ export function registerSessionArchiveRoutes(app: Fastify) {
                     archivedAt: new Date(archivedAt),
                 }),
             };
-        }, { isolationLevel: "Serializable" /* Archive lifecycle decisions must serialize with rejoin, discussion posting and tracking effects. */ });
+        }, {
+            transactionClass: "session-archive",
+            prepare: () => prepareSessionAccountCursorLocks([sessionId], [userId], { includeLifecyclePublications: true }),
+        });
 
         if (!res.ok) {
             if (res.error === "authentication_required") return reply.code(403).send({ error: "team_authentication_required" });
@@ -106,17 +116,30 @@ export function registerSessionArchiveRoutes(app: Fastify) {
             return reply.code(404).send({ error: "Session not found" });
         }
 
+        // The durable mutation owns the receipt. Publication may perform slow
+        // reads after commit; it must neither hold nor contradict that receipt.
+        log({ module: "session-archive", sessionId, operation: "archive", phase: "committed" }, "Session archive transition committed");
+        reply.send({ success: true, archivedAt: res.archivedAt });
+        log({ module: "session-archive", sessionId, operation: "archive", phase: "publication_started" }, "Publishing Session archive transition");
         await publishSessionArchiveTransition({
             sessionId,
             projection: res.projection,
-            recipientCursors: res.recipientCursors,
+            recipientCursors: resolveSessionAccountChangePublications(res.recipientCursors),
             badgeAttentionChanged: res.badgeAttentionChanged,
+        }).then(() => {
+            log({ module: "session-archive", sessionId, operation: "archive", phase: "publication_completed" }, "Published Session archive transition");
+        }, () => {
+            log({ module: "session-archive", level: "warn", sessionId, operation: "archive", phase: "publication_failed" }, "Failed to publish committed Session archive transition");
         });
-        return reply.send({ success: true, archivedAt: res.archivedAt });
+        return reply;
     });
 
     app.post("/v2/sessions/:sessionId/unarchive", {
         preHandler: app.authenticate,
+        config: {
+            apiTokenSessionAction: "session.unarchive",
+            restrictedCredentialBinding: { scope: "session", session: "params.sessionId" },
+        },
         schema: {
             params: z.object({ sessionId: z.string() }),
             response: {
@@ -183,7 +206,10 @@ export function registerSessionArchiveRoutes(app: Fastify) {
                     archivedAt: null,
                 }),
             };
-        }, { isolationLevel: "Serializable" /* Archive lifecycle decisions must serialize with rejoin, discussion posting and tracking effects. */ });
+        }, {
+            transactionClass: "session-unarchive",
+            prepare: () => prepareSessionAccountCursorLocks([sessionId], [userId]),
+        });
 
         if (!res.ok) {
             if (res.error === "authentication_required") return reply.code(403).send({ error: "team_authentication_required" });
@@ -192,12 +218,19 @@ export function registerSessionArchiveRoutes(app: Fastify) {
             return reply.code(404).send({ error: "Session not found" });
         }
 
+        log({ module: "session-archive", sessionId, operation: "unarchive", phase: "committed" }, "Session archive transition committed");
+        reply.send({ success: true, archivedAt: null });
+        log({ module: "session-archive", sessionId, operation: "unarchive", phase: "publication_started" }, "Publishing Session archive transition");
         await publishSessionArchiveTransition({
             sessionId,
             projection: { archivedAt: null },
-            recipientCursors: res.recipientCursors,
+            recipientCursors: resolveSessionAccountChangePublications(res.recipientCursors),
             badgeAttentionChanged: res.badgeAttentionChanged,
+        }).then(() => {
+            log({ module: "session-archive", sessionId, operation: "unarchive", phase: "publication_completed" }, "Published Session archive transition");
+        }, () => {
+            log({ module: "session-archive", level: "warn", sessionId, operation: "unarchive", phase: "publication_failed" }, "Failed to publish committed Session unarchive transition");
         });
-        return reply.send({ success: true, archivedAt: null });
+        return reply;
     });
 }

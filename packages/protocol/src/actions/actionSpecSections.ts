@@ -1,0 +1,119 @@
+import type { ActionDiscoveryDefinitionV1 } from './actionDefinitionV1.js';
+import type { JsonSchemaObject } from './actionInputJsonSchema.js';
+import { PUBLIC_ACTION_OUTPUT_SCHEMAS } from './actionSpecs.js';
+
+function escapePointer(value: string): string {
+  return value.replace(/~/g, '~0').replace(/\//g, '~1');
+}
+
+function describeDefinition(body: unknown, name: string): string {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return `Shared grammar ${name}`;
+  const schema = body as JsonSchemaObject;
+  if (typeof schema.description === 'string') return schema.description;
+  if (typeof schema.title === 'string') return schema.title;
+  if (Array.isArray(schema.enum)) return `${name}: ${schema.enum.length} allowed values`;
+  const properties = schema.properties;
+  if (properties && typeof properties === 'object' && !Array.isArray(properties)) {
+    return `${name}: object fields ${Object.keys(properties).join(', ')}`;
+  }
+  return `${name}: ${typeof schema.type === 'string' ? schema.type : 'alternative shapes'}`;
+}
+
+function schemaSectionPathParts(path: string): string[] {
+  const parts = path.split('/').slice(1).map(part => part.replace(/~1/g, '/').replace(/~0/g, '~'));
+  if (!path.startsWith('/') || !['inputSchema', 'outputSchema'].includes(parts[0])) throw new Error('invalid_schema_path');
+  if (parts.length % 2 !== 1 || parts.some((part, index) => index % 2 === 1 && part !== 'definitions')) throw new Error('invalid_schema_path');
+  return parts;
+}
+
+/** Read only own schema properties; a pointer never addresses metadata or prototypes. */
+function readSchemaSection(definition: ActionDiscoveryDefinitionV1, path: string): JsonSchemaObject {
+  const parts = schemaSectionPathParts(path);
+  let value: unknown = definition;
+  for (const part of parts) {
+    if (!value || typeof value !== 'object' || !Object.hasOwn(value, part)) throw new Error('invalid_schema_path');
+    value = (value as Readonly<Record<string, unknown>>)[part];
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid_schema_path');
+  return value as JsonSchemaObject;
+}
+
+/**
+ * Tools read the same canonical schema in named sections, never a truncated schema.
+ * Definitions are already emitted by Zod's shared-schema projection. Keep their
+ * local references intact; section paths are relative to the original full spec.
+ */
+export function projectActionSpecSchemaSections(definition: ActionDiscoveryDefinitionV1, schemaPath?: string) {
+  const reference = (path: string) => ({ $ref: `happier-action-spec:${encodeURIComponent(definition.id)}#${path}` });
+  const schemaSections: { path: string; description: string }[] = [];
+  const project = (schema: JsonSchemaObject, root: string): JsonSchemaObject => {
+    const definitions = schema.definitions;
+    if (!definitions || typeof definitions !== 'object' || Array.isArray(definitions)) return schema;
+    for (const [name, body] of Object.entries(definitions)) {
+      const path = `/${root}/definitions/${escapePointer(name)}`;
+      schemaSections.push({ path, description: describeDefinition(body, name) });
+    }
+    const { definitions: _definitions, ...rootSchema } = schema;
+    return rootSchema;
+  };
+  if (schemaPath !== undefined) return {
+    actionSpec: { ...definition, inputSchema: reference('/inputSchema'),
+      ...(definition.outputSchema ? { outputSchema: reference('/outputSchema') } : {}) },
+    schemaSection: { path: schemaPath, schema: project(readSchemaSection(definition, schemaPath), schemaPath.slice(1)) }, schemaSections,
+  };
+  const actionSpec = { ...definition, inputSchema: project(definition.inputSchema, 'inputSchema'),
+    ...(definition.outputSchema ? { outputSchema: project(definition.outputSchema, 'outputSchema') } : {}) };
+  return { actionSpec, schemaSections };
+}
+
+/** Restore the existing sectioned discovery format before freezing executable schemas. */
+export async function readCompleteActionSpecV1(params: Readonly<{
+  actionId: string;
+  signal?: AbortSignal;
+  read: (input: Readonly<{ id: string; includeOutputSchema: true; schemaPath?: string }>) => Promise<unknown>;
+}>): Promise<ActionDiscoveryDefinitionV1> {
+  const read = async (schemaPath?: string) => {
+    params.signal?.throwIfAborted();
+    const result = await params.read({ id: params.actionId, includeOutputSchema: true,
+      ...(schemaPath !== undefined ? { schemaPath } : {}) });
+    params.signal?.throwIfAborted();
+    const parsed = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].parse(result);
+    if (parsed.actionSpec.id !== params.actionId || (schemaPath === undefined
+      ? parsed.schemaSection !== undefined : parsed.schemaSection?.path !== schemaPath)) {
+      throw new Error('invalid_action_schema_section');
+    }
+    return parsed;
+  };
+  const root = await read();
+  const restore = async (schema: JsonSchemaObject, path: string,
+    sections: readonly Readonly<{ path: string }>[]): Promise<JsonSchemaObject> => {
+    if (sections.length === 0) return schema;
+    const parent = schemaSectionPathParts(path);
+    // Sibling sections can be read independently from the discovery projection.
+    // Serial transport here multiplied every machine/Account admission read
+    // by the complete grammar size before a Workflow could admit its Run.
+    const definitions = await Promise.all(sections.map(async (section): Promise<readonly [string, JsonSchemaObject]> => {
+      const parts = schemaSectionPathParts(section.path);
+      if (parts.length !== parent.length + 2 || !parent.every((part, index) => parts[index] === part)) {
+        throw new Error('invalid_action_schema_section');
+      }
+      const response = await read(section.path);
+      if (!response.schemaSection) throw new Error('invalid_action_schema_section');
+      return [parts[parts.length - 1], await restore(response.schemaSection.schema, section.path, response.schemaSections ?? [])];
+    }));
+    const prior = schema.definitions;
+    return { ...schema, definitions: {
+      ...(prior && typeof prior === 'object' && !Array.isArray(prior) ? prior : {}),
+      ...Object.fromEntries<JsonSchemaObject>(definitions),
+    } };
+  };
+  const sections = root.schemaSections ?? [];
+  const inputSections = sections.filter(section => schemaSectionPathParts(section.path)[0] === 'inputSchema');
+  const outputSections = sections.filter(section => schemaSectionPathParts(section.path)[0] === 'outputSchema');
+  if (!root.actionSpec.outputSchema && outputSections.length) throw new Error('invalid_action_schema_section');
+  const [inputSchema, outputSchema] = await Promise.all([
+    restore(root.actionSpec.inputSchema, '/inputSchema', inputSections),
+    root.actionSpec.outputSchema ? restore(root.actionSpec.outputSchema, '/outputSchema', outputSections) : undefined,
+  ]);
+  return { ...root.actionSpec, inputSchema, ...(outputSchema ? { outputSchema } : {}) };
+}

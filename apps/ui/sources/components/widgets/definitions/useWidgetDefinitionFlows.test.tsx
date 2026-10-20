@@ -1,6 +1,6 @@
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { WIDGET_SIZE_POLICY_V1, type WidgetInstanceV1, type WidgetSizeDeclarationV1 } from '@happier-dev/protocol/widgets';
+import { WIDGET_SIZE_POLICY_V1, WidgetDefinitionV1Schema, type WidgetInstanceV1, type WidgetSizeDeclarationV1 } from '@happier-dev/protocol/widgets';
 
 // Imported from their owning testkit modules, never the `@/dev/testkit` barrel: the harness
 // installs its network boundaries with `vi.doMock`, which only reaches modules imported afterwards.
@@ -15,6 +15,13 @@ import type { WidgetAddSection } from '../add/widgetAddModel';
  * real Account Artifact store; only the network and the credential store are replaced.
  */
 const harness = createHomeGovernanceHarness();
+// Only physical confirmation is substituted; the real Action policy and its Inbox custody remain.
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
+// A native virtual list needs layout callbacks the host renderer cannot supply.
+vi.mock('@legendapp/list/react-native', async importOriginal =>
+    (await import('@/dev/testkit/mocks/legendList')).createCapturingLegendListMock({
+        original: await importOriginal<Record<string, unknown>>(), renderItems: true,
+    }).module);
 installHomeGovernanceBoundaries(harness);
 // The fixture Home is reachable. Deliver only the external transport event;
 // the real connection owner still establishes scoped request authority.
@@ -31,8 +38,9 @@ const { BoardWidgetAddPopover } = await import('../add/BoardWidgetAddPopover');
 const ACCOUNT_ID = 'account-a';
 let restoreUuid: (() => void) | null = null;
 
-async function addDefinitionHome(): Promise<string> {
-    const serverId = await harness.addHome({ name: 'Home A', serverUrl: 'https://definitions-home.example', accountId: ACCOUNT_ID });
+async function addDefinitionHome(portable = false): Promise<string> {
+    const serverId = await harness.addHome({ name: 'Home A', serverUrl: 'https://definitions-home.example',
+        ...(portable ? { publicServerUrl: 'https://definitions-home.example', serverIdentityId: 'srv_definitions' } : {}), accountId: ACCOUNT_ID });
     const { storage } = await import('@/sync/domains/state/storage');
     storage.setState({ profileScope: { serverId, accountId: ACCOUNT_ID }, settingsScope: { serverId, accountId: ACCOUNT_ID } });
     harness.answer(serverId, '/v1/auth/ping', { body: { success: true } });
@@ -73,9 +81,14 @@ describe('widget definition flows', () => {
         resetRuntimeFetch();
     });
 
-    it.each(['home', 'project'] as const)('copies resolved page inputs to %s through the shared menu and the existing Add Action approval path', async destinationKind => {
+    it.each([
+        { destinationKind: 'home', approval: true },
+        { destinationKind: 'project', approval: true },
+        { destinationKind: 'project', approval: false },
+    ] as const)('copies resolved page inputs to $destinationKind through the shared menu and Add Action (approval=$approval)', async ({ destinationKind, approval }) => {
         const serverId = await addDefinitionHome();
-        await harness.requireUiApproval(serverId, 'widgets.item.add');
+        if (approval) await harness.requireUiApproval(serverId, 'widgets.item.add');
+        const disconnect = await applyDefinitionHomeConnection();
         const React = await import('react');
         const { View } = await import('react-native');
         const { act } = await import('react-test-renderer');
@@ -132,17 +145,35 @@ describe('widget definition flows', () => {
             await act(async () => { await expect(setup.submit(setup.initial)).resolves.toMatchObject({ ok: false }); });
             expect(harness.artifacts(serverId).list()).toHaveLength(before.size);
             uuid.mockRestore();
-            await act(async () => { expect(await setup.submit(setup.initial)).toEqual({ ok: true, approvalPending: true }); });
-            const approval = harness.artifacts(serverId).list().find(row => !before.has(row.id));
-            expect(approval).toBeDefined();
-            const body = JSON.parse(harness.artifacts(serverId).readPlainBody(approval!.id)!);
+            const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
+            const inventory = createDeferred<void>();
+            // Unrelated Account inventory is a network boundary, not a prerequisite
+            // for acknowledging this known builtin's exact copy.
+            harness.answer(serverId, 'GET /v1/artifacts', { respondAfter: inventory.promise, body: { artifacts: [], nextCursor: null } });
+            let outcome: Awaited<ReturnType<typeof setup.submit>> | undefined;
+            const submission = setup.submit(setup.initial).then(result => { outcome = result; });
+            try {
+                await act(async () => { await expect.poll(() => outcome).toEqual(approval ? { ok: true, approvalPending: true } : { ok: true }); });
+            } finally { inventory.resolve(); await submission; }
+            const created = harness.artifacts(serverId).list().find(row => !before.has(row.id));
+            expect(created).toBeDefined();
+            if (!approval) {
+                const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+                const read = await createDefaultActionExecutor().execute('widgets.item.list', { surface: { serverId, accountId: ACCOUNT_ID,
+                    owner: { kind: 'project', projectId: 'destination-project' } } }, { serverId, surface: 'ui', authority: 'present_user' });
+                expect(read).toMatchObject({ ok: true, result: { instances: expect.arrayContaining([expect.objectContaining({ instance: expect.objectContaining({
+                    definition: source.definition, bindings: setup.initial.bindings,
+                }) })]) } });
+                return;
+            }
+            const body = JSON.parse(harness.artifacts(serverId).readPlainBody(created!.id)!);
             expect(body).toMatchObject({ actionId: 'widgets.item.add', actionArgs: { surface: { serverId, accountId: ACCOUNT_ID,
                 owner: destinationKind === 'home' ? { kind: 'home' } : { kind: 'project', projectId: 'destination-project' } },
                 instance: { definition: source.definition, bindings: setup.initial.bindings } } });
             expect(body.actionArgs.instance.id).not.toBe(source.id);
             expect(source.bindings.period).toEqual({ kind: 'context', slot: 'period' });
             expect(source.bindings.breakdown).toEqual({ kind: 'value', value: ['agent'] });
-        } finally { await screen.unmount(); }
+        } finally { await screen.unmount(); await disconnect(); }
     });
 
     it('discovers setup metadata through the list Action without opening definition bodies', async () => {
@@ -256,6 +287,7 @@ describe('widget definition flows', () => {
     it('offers saved widgets on a shared Board and submits an admitted inline copy to real approval custody', async () => {
         const serverId = await addDefinitionHome();
         await harness.requireUiApproval(serverId, 'widgets.item.add');
+        const disconnect = await applyDefinitionHomeConnection();
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         const { storage } = await import('@/sync/domains/state/storage');
         const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
@@ -314,7 +346,7 @@ describe('widget definition flows', () => {
                 expect(refused).toMatchObject({ ok: false });
                 expect(harness.artifacts(serverId).list()).toHaveLength(before.size + 1);
             } finally { await act(async () => { screen.tree.unmount(); }); }
-        } finally { storage.setState(previousScopes); }
+        } finally { await disconnect(); storage.setState(previousScopes); }
     });
 
     it('keeps authored gallery fields when the installed contribution declares different fields', async () => {
@@ -440,6 +472,7 @@ describe('widget definition flows', () => {
 
     it('projects the saved definition name and updated inputs from the existing Artifact header', async () => {
         const serverId = await addDefinitionHome();
+        const disconnect = await applyDefinitionHomeConnection();
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         const executor = createDefaultActionExecutor();
         const account = { serverId, accountId: ACCOUNT_ID };
@@ -464,11 +497,12 @@ describe('widget definition flows', () => {
             await act(async () => { expect(await executor.execute('widgets.definition.update', { account, artifactId: 'checks-definition', patch: { name: 'Updated checks' } },
                 { serverId, surface: 'ui', authority: 'present_user', bypassApprovals: true })).toMatchObject({ ok: true, result: { definition: { name: 'Updated checks' } } }); });
             await vi.waitFor(() => { expect(screen.getTextContent()).toContain('Updated checks'); });
-        } finally { await act(async () => { screen.tree.unmount(); }); storage.setState(previousScopes); }
+        } finally { await screen.unmount(); await disconnect(); storage.setState(previousScopes); }
     });
 
     it.each(['companion', 'area'] as const)('names the retained %s frame and its setup controls from the saved header without opening its body', async (placement) => {
         const serverId = await addDefinitionHome();
+        const disconnect = await applyDefinitionHomeConnection();
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         const { storage } = await import('@/sync/domains/state/storage');
         const account = { serverId, accountId: ACCOUNT_ID };
@@ -526,7 +560,7 @@ describe('widget definition flows', () => {
                 expect(menu.props.actions.some((action: { id: string }) => action.id === 'editInputs')).toBe(true);
                 expect(harness.requests.slice(before).some(request => request.path === '/v1/artifacts/checks-definition')).toBe(false);
             } finally { await act(async () => { screen.tree.unmount(); }); }
-        } finally { storage.setState(previousScopes); }
+        } finally { await disconnect(); storage.setState(previousScopes); }
     });
 
     it('describes placements in already opened WorkBoards without opening unrelated Board records', async () => {
@@ -545,7 +579,8 @@ describe('widget definition flows', () => {
             expect(await executor.execute('boards.apply', { intent: { kind: 'create', board: { id: 'board-a', name: 'Checks board' } } }, context)).toMatchObject({ ok: true });
             const ref = { surface: { ...account, owner: { kind: 'workBoard', boardId: 'board-a' } }, instanceId: 'copy-a' } as const;
             const instance = { v: 1, id: 'copy-a', definition: { kind: 'artifact', artifactId: 'checks-definition' }, bindings: { repo: { kind: 'value', value: 'main' } } } as const;
-            expect(await executor.execute('boards.apply', { intent: { kind: 'widget_add', boardId: 'board-a', ref, instance } }, context)).toEqual(expect.objectContaining({ ok: true }));
+            const placed = await executor.execute('boards.apply', { intent: { kind: 'widget_add', boardId: 'board-a', ref, instance } }, context);
+            expect(placed, JSON.stringify(placed)).toMatchObject({ ok: true });
             const before = harness.requests.length;
             const opened = await executor.execute('widgets.definition.get', { account, artifactId: 'checks-definition' }, context);
             expect(opened).toMatchObject({ ok: true, result: { placementSummary: { placements: expect.arrayContaining([ref]), unavailableScopes: expect.arrayContaining(['workBoard']) } } });
@@ -684,6 +719,63 @@ describe('widget definition flows', () => {
         } finally { await act(async () => { screen.tree.unmount(); }); }
     });
 
+    it('renews a mounted widget definition after same-Account activation and restoration', async () => {
+        const serverId = await addDefinitionHome();
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+        const { useWidgetDefinition } = await import('@/sync/domains/widgets/useWidgetDefinition');
+        const { renderHook } = await import('@/dev/testkit/hooks/renderHook');
+        const { act } = await import('react-test-renderer');
+        const snapshot = getActiveServerSnapshot();
+        const definition = WidgetDefinitionV1Schema.parse({ ...DRAFT, v: 1, id: 'inline-checks', provenance: { source: { kind: 'authored' } } });
+        const scope = { serverId, accountId: ACCOUNT_ID, owner: { kind: 'home' as const } };
+        publishAppliedActiveServerSnapshot(snapshot, false);
+        const hook = await renderHook(() => useWidgetDefinition(scope, { kind: 'inline', definition }));
+        try {
+            expect(hook.getCurrent().state).toBe('unavailable');
+            await act(async () => { publishAppliedActiveServerSnapshot(snapshot); });
+            expect(hook.getCurrent()).toMatchObject({ state: 'available', definition });
+            await act(async () => { publishAppliedActiveServerSnapshot(snapshot, false); });
+            expect(hook.getCurrent().definition).toBeNull();
+            await act(async () => { publishAppliedActiveServerSnapshot(snapshot); });
+            expect(hook.getCurrent().definition).toBe(definition);
+        } finally { await hook.unmount(); publishAppliedActiveServerSnapshot(snapshot); }
+    });
+
+    it('keeps a settled About definition while resizing into the phone sheet', async () => {
+        const serverId = await addDefinitionHome();
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const account = { serverId, accountId: ACCOUNT_ID };
+        expect(await createDefaultActionExecutor().execute('widgets.definition.create', { account, artifactId: 'resize-definition', definition: DRAFT },
+            { serverId, surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: true });
+        const React = await import('react');
+        const native = await import('react-native');
+        const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
+        const { useWidgetDefinitionFlows } = await import('./useWidgetDefinitionFlows');
+        const dimensions = vi.spyOn(native, 'useWindowDimensions').mockReturnValue({ width: 1440, height: 1000, scale: 1, fontScale: 1 });
+        function Card() {
+            const flows = useWidgetDefinitionFlows({ instance: { v: 1, id: 'copy', definition: { kind: 'artifact', artifactId: 'resize-definition' }, bindings: {} },
+                scope: { ...account, owner: { kind: 'home' } }, anchorRef: React.useRef(null), testID: 'resizeAbout' });
+            return React.createElement(native.View, {}, React.createElement(native.Pressable, { testID: 'openAbout', onPress: flows.about }), flows.panel);
+        }
+        const screen = await renderScreen(React.createElement(Card));
+        let release = () => {};
+        try {
+            await screen.pressByTestIdAsync('openAbout');
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain(DRAFT.name));
+            const pending = new Promise<void>(resolve => { release = resolve; });
+            harness.answer(serverId, '/v1/artifacts/resize-definition', { status: 503, body: {}, respondAfter: pending });
+            dimensions.mockReturnValue({ width: 390, height: 844, scale: 1, fontScale: 1 });
+            await screen.update(React.createElement(Card));
+            expect(screen.findByTestId('resizeAbout.about.loading')).toBeNull();
+            expect(screen.getTextContent()).toContain(DRAFT.name);
+            dimensions.mockReturnValue({ width: 1440, height: 1000, scale: 1, fontScale: 1 });
+            await screen.update(React.createElement(Card));
+            expect(screen.findByTestId('resizeAbout.about.loading')).toBeNull();
+            expect(screen.getTextContent()).toContain(DRAFT.name);
+        } finally { release(); dimensions.mockRestore(); await screen.unmount(); }
+    });
+
     it('dismisses About on a phone while loading, after an unavailable read, and for a resolved widget', async () => {
         const serverId = await addDefinitionHome();
         const React = await import('react');
@@ -745,14 +837,19 @@ describe('widget definition flows', () => {
                 bindings: { session: { kind: 'value', value: { serverId, sessionId: 'shared' } } } } } });
         const screen = await renderScreen(React.createElement(SessionWidgetHost, { serverId, sessionId: 'shared', session,
             item: { itemId: 'shared-copy', revision: 'r1', state: { kind: 'ready', item } }, host: 'details', primaryHost: 'details', density: 'full',
-            canEdit: true, executableCurrentness: 'current', heightBounds: { min: 96, max: 520 }, testID: 'sessionCopy' }));
+            canEdit: true, executableCurrentness: 'current', heightBounds: { min: 96, max: 520 }, testID: 'sessionCopy' }),
+            { createNodeMock: element => ({ testID: element.props.testID ?? null }) });
         try {
             const save = screen.tree.root.findAllByType(ItemRowActions).flatMap(menu => menu.props.actions)
                 .find((action: { id: string }) => action.id === 'saveAsYours');
-            expect(save).toBeDefined();
+            expect(save, screen.getTextContent()).toBeDefined();
             const onPress = save?.onPress;
             if (!onPress) throw new Error('Missing Save as yours widget action handler');
             await act(async () => { onPress(); });
+            // Every flow a Session card opens (Save as your widget, About, Add to, Post a snapshot) opens on its own card, the one
+            // anchor Post a snapshot already uses, so it never lands on a sibling or off the pane from a ⋯ measured elsewhere.
+            const { WidgetFlowShell } = await import('@/components/widgets/flow/WidgetFlowShell');
+            expect(screen.tree.root.findByType(WidgetFlowShell).props.anchorRef.current).toEqual({ testID: 'sessionCopy-card-region' });
             const panel = screen.tree.root.findByType(SaveAsWidgetPanel);
             expect(panel.props.converted).toEqual([{ path: 'session', title: 'Read Session', becomes: 'context' }]);
             const preview = screen.findByTestId('sessionCopy.save.preview');
@@ -781,13 +878,13 @@ describe('widget definition flows', () => {
             machineId: 'machine-b', serverId: 'home', platform: 'web' as const, accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' as const },
             reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {} };
         expect(readWidgetAboutSources({ definition: null, descriptor, resolution: { status: 'ready', runtime, target: { kind: 'app' }, input: {} } }))
-            .toEqual([{ key: 'acme.checks/bound-count', plugin: 'Admitted source B', machine: null, usesViewerConnection: false, read: 'bound-count' }]);
+            .toEqual([{ key: 'acme.checks/bound-count', plugin: 'Admitted source B', machine: null, usesViewerConnection: false, read: 'Bound count', identity: 'acme.checks/bound-count' }]);
         expect(readWidgetAboutSources({ definition: null, descriptor, resolution: { status: 'denied', reasonCode: 'widget_session_access_denied' } })
             .every(source => source.machine === null && !source.usesViewerConnection)).toBe(true);
     });
 
     it.each(['hostedHtml', 'builtin'] as const)('keeps the saved %s copy on its original Home while a refused link is retried after switching Homes', async kind => {
-        const serverId = await addDefinitionHome();
+        const serverId = await addDefinitionHome(true);
         if (kind === 'builtin') await harness.requireUiApproval(serverId, 'widgets.definition.saveFromSession');
         const disconnect = kind === 'builtin' ? await applyDefinitionHomeConnection() : null;
         const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
@@ -875,7 +972,7 @@ describe('widget definition flows', () => {
             const artifactId = harness.artifacts(serverId).list().at(-1)!.id;
             harness.answer(serverId, `GET /v1/public-shares?subjectKind=artifact&subjectId=${artifactId}`, { body: { publicShares: [] } });
             await screen.pressByTestIdAsync('copyHandoff.share:document-share-public-link');
-            await vi.waitFor(() => expect(screen.findByTestId('session-public-link-create')).not.toBeNull());
+            await vi.waitFor(() => expect(screen.findByTestId('session-public-link-create'), screen.getTextContent()).not.toBeNull());
             await screen.pressByTestIdAsync('session-public-link-create');
             await screen.pressByTestIdAsync('session-public-link-options-cancel');
             expect(harness.requestsFor('/v1/public-shares').filter(request => request.input)).toHaveLength(0);
@@ -910,7 +1007,8 @@ describe('widget definition flows', () => {
         const { SessionSurfaceItemV1Schema } = await import('@happier-dev/protocol/sessions/board');
         const { artifactHtmlBundleFromBodyV1, ARTIFACT_HTML_BUNDLE_MIME_V1 } = await import('@happier-dev/protocol/artifacts/artifactHtmlV1');
         const { decodePlainArtifactStoredContent } = await import('@happier-dev/protocol');
-        const session = createSessionFixture({ id: 'shared-html', serverId, encryptionMode: 'plain' });
+        // This copy needs no workspace; avoid giving its fixture an unrelated Project identity.
+        const session = createSessionFixture({ id: 'shared-html', serverId, encryptionMode: 'plain', metadata: null });
         storage.getState().applySessions([session]);
         const bundle = artifactHtmlBundleFromBodyV1('<p>Original HTML</p>');
         const item = SessionSurfaceItemV1Schema.parse({ v: 1, destination: 'transcript', title: 'Original HTML', frame: 'card',

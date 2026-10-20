@@ -1,63 +1,47 @@
-import { describe, expect, it, vi } from "vitest";
-import {
-    flushAfterTxCallbacks,
-    registerAfterTxCallback,
-    withAfterTxCallbacks,
-} from "../api/testkit/txHarness";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDbMocks, installDbModuleMock } from "../api/testkit/dbMocks";
 
-const emitUpdate = vi.fn();
-const buildNewFeedPostUpdate = vi.fn((_item: any, updSeq: number, updId: string) => ({
-    id: updId,
-    seq: updSeq,
-    body: { t: "new-feed-post" },
-}));
+const boundary = createDbMocks({ account: ["update"], accountChange: ["upsert"],
+    userFeedItem: ["create", "deleteMany"] } as const);
+const transaction = vi.fn(async <T>(fn: (tx: typeof boundary.db) => Promise<T>) => fn(boundary.db));
+installDbModuleMock(() => ({ db: { $transaction: transaction } }));
 
-vi.mock("@/app/events/eventRouter", () => ({
-    eventRouter: { emitUpdate },
-    buildNewFeedPostUpdate,
-}));
+const { eventRouter } = await import("../events/eventRouter");
+const { inTx } = await import("@/storage/inTx");
+const { Context } = await import("@/context");
+const { feedPost } = await import("./feedPost");
+const emit = vi.fn<(event: string, payload: { seq: number; body: { t: string } }) => void>();
 
-const randomKeyNaked = vi.fn(() => "upd-id");
-vi.mock("@/utils/keys/randomKeyNaked", () => ({ randomKeyNaked }));
-
-const markAccountChanged = vi.fn(async () => 909);
-vi.mock("@/app/changes/markAccountChanged", () => ({ markAccountChanged }));
-
-vi.mock("@/storage/inTx", () => ({
-    afterTx: (tx: any, callback: () => void | Promise<void>) => {
-        registerAfterTxCallback(tx, callback);
-    },
-}));
-
-describe("feedPost (AccountChange integration)", () => {
-    it("marks feed change and emits update using returned cursor", async () => {
-        const { feedPost } = await import("./feedPost");
-
-        const tx = withAfterTxCallbacks({
-            userFeedItem: {
-                deleteMany: vi.fn(async () => ({})),
-                create: vi.fn(async () => ({
-                    id: "f1",
-                    userId: "u1",
-                    repeatKey: null,
-                    body: { kind: "friend_request", uid: "u2" },
-                    counter: BigInt(7),
-                    createdAt: new Date(1),
-                })),
-            },
-            account: {
-                update: vi.fn(async () => ({ feedSeq: BigInt(7) })),
-            },
+describe("Feed commit publication", () => {
+    beforeEach(() => {
+        vi.stubEnv("HAPPIER_DB_PROVIDER", "sqlite");
+        boundary.reset();
+        emit.mockClear();
+        boundary.db.account.update.mockImplementation(async (args: { data: { feedSeq?: unknown } }) =>
+            args.data.feedSeq ? { feedSeq: 7n } : { seq: 909 });
+        boundary.db.accountChange.upsert.mockResolvedValue({});
+        boundary.db.userFeedItem.deleteMany.mockResolvedValue({ count: 0 });
+        boundary.db.userFeedItem.create.mockResolvedValue({ id: "f1", userId: "u1", repeatKey: "request",
+            body: { kind: "friend_request", uid: "u2" }, counter: 7n, createdAt: new Date(1) });
+        transaction.mockImplementation(async fn => {
+            const result = await fn(boundary.db);
+            expect(emit).not.toHaveBeenCalled();
+            return result;
         });
+        // Socket.IO is the transport boundary; routing, payloads and transaction publication stay real.
+        eventRouter.setIo({ to: () => ({ emit }) } as unknown as Parameters<typeof eventRouter.setIo>[0]);
+    });
+    afterEach(() => { eventRouter.clearIo(); vi.unstubAllEnvs(); });
 
-        const result = await feedPost(tx as any, { uid: "u1" } as any, { kind: "friend_request", uid: "u2" } as any, "rk");
-        await flushAfterTxCallbacks(tx);
+    it("sends the Feed wake with its allocated Account cursor only after commit", async () => {
+        await inTx(tx => feedPost(tx, Context.create("u1"), { kind: "friend_request", uid: "u2" }, "request"));
+        expect(emit.mock.calls.find(([, payload]) => payload.body.t === "new-feed-post")?.[1].seq).toBe(909);
+    });
 
-        expect(markAccountChanged).toHaveBeenCalledWith(
-            tx,
-            expect.objectContaining({ accountId: "u1", kind: "feed", entityId: "self", hint: { cursor: result.cursor } }),
-        );
-        expect(buildNewFeedPostUpdate).toHaveBeenCalledWith(expect.anything(), 909, expect.any(String));
-        expect(emitUpdate).toHaveBeenCalledTimes(1);
+    it("sends no Feed wake when the database rejects the commit", async () => {
+        transaction.mockImplementationOnce(async fn => { await fn(boundary.db); throw new Error("rollback"); });
+        await expect(inTx(tx => feedPost(tx, Context.create("u1"), { kind: "friend_request", uid: "u2" }, "request")))
+            .rejects.toThrow("rollback");
+        expect(emit).not.toHaveBeenCalled();
     });
 });

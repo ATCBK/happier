@@ -1,0 +1,636 @@
+import { createServer } from 'node:http';
+import { afterEach, expect, it, onTestFailed, vi } from 'vitest';
+import { createSocketTransportAdapter } from '@happier-dev/sync-client';
+import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentPostRequestV1Schema, DiscussionAgentCreateRequestV1Schema,
+  DiscussionAgentPostPublicationV1Schema, DiscussionAgentPublisherResponseV1Schema, type DiscussionAgentPublisherPublicationV1 } from '@happier-dev/protocol/discussions/api';
+import { DiscussionSummaryV1Schema, DiscussionMessageV1Schema } from '@happier-dev/protocol/discussions/models';
+import { DiscussionMessageContentV1Schema } from '@happier-dev/protocol/discussions/content';
+import { deriveDiscussionMutationEqualityTagV1, serializeDiscussionMutationEqualityIntentV1 } from '@happier-dev/protocol/discussions/equality';
+import { deriveSessionMessageReplyReturnLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import { createApiSessionSocketStub, createSessionTranscriptHomeStub, createSessionRuntimeActivityHomeStub } from '@/testkit/backends/apiSessionSocketHarness';
+import { createPlainSessionFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { applyRunnerMcpSessionContext } from '@/mcp/runtime/applyRunnerMcpSessionContext';
+import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
+import { createDiscussionActionDeps } from '@/discussions/discussionActionDeps';
+import { createDiscussionReplyReturnPublisher } from '@/discussions/discussionReplyReturnPublisher';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { logger } from '@/ui/logger';
+import { createDaemonApprovalExecutionOriginCurrentnessFromCredentials } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { createResourceDataKey, openResourceDataKey } from '@/api/encryption/resourceDataKey';
+import { libsodiumPublicKeyFromSecretKey } from '@/api/encryption';
+import { deriveKey } from '@/utils/deriveKey';
+import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
+import { openSessionStoredContent, sealSessionStoredContent } from '@/session/transport/encryption/sessionStoredContentCodec';
+import type { StoredCredentials } from '@/persistence';
+import { ApiSessionClient } from './sessionClient';
+import { readApprovedDiscussionPublication } from '@/discussions/approvedDiscussionPublication';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { prepareAnchoredDiscussionCreateV1, prepareSecondOpinionQuestionV1 } from '@happier-dev/protocol/actions/executor/discussionSecondOpinion';
+import { DiscussionSecondOpinionPreviewV1Schema } from '@happier-dev/protocol/discussions/secondOpinion';
+import { bootstrapAccountSettingsContext, resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+
+afterEach(() => { resetInMemoryAccountSettingsContextForTests(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+it.each([
+  { mode: 'plain', scope: 'draft creation' }, { mode: 'e2ee', scope: 'draft creation' },
+  { mode: 'plain', scope: 'publication replay' }, { mode: 'e2ee', scope: 'publication replay' },
+  { mode: 'plain', scope: 'satisfied return' }, { mode: 'e2ee', scope: 'satisfied return' },
+  { mode: 'plain', scope: 'pending explicit' }, { mode: 'e2ee', scope: 'pending explicit' },
+] as const)('Discussion $scope ($mode)', async ({ mode, scope }) => {
+  let phase = 'initialization';
+  let failedPhase: string | undefined;
+  onTestFailed(() => console.error('Discussion approval replay failed during:', mode, failedPhase ?? phase));
+  const sessionId = 'cmv3discussionparticipant';
+  const opinionSourceSessionId = sessionId;
+  const serverId = 'discussion-approval-home';
+  const machineId = 'participant-machine';
+  const token = `fixture.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.fixture`;
+  const credentials: StoredCredentials = { token, encryption: mode === 'plain' ? null
+    : { type: 'legacy', secret: new Uint8Array(32).fill(7) } };
+  const draftAccountSettings = accountSettingsParse({ actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
+    approvalWaivedSurfaces: { 'discussion.reply': ['agent'] } }) });
+  const key = await createResourceDataKey({ credentials, mode });
+  const contentKeyFingerprint = credentials.encryption?.type === 'legacy'
+    ? computeContentPublicKeyFingerprint(libsodiumPublicKeyFromSecretKey(await deriveKey(credentials.encryption.secret, 'Happy EnCoder', ['content']))) : null;
+  const crypto = key.mode === 'plain' ? { mode: 'plain' as const, ctx: null }
+    : { mode: 'e2ee' as const, ctx: { encryptionKey: key.dataKey, encryptionVariant: 'dataKey' as const } };
+  const content = { v: 1 as const, parts: [{ t: 'text' as const, text: 'An approved participant answer' }] };
+  const summary = DiscussionSummaryV1Schema.parse({ id: 'discussion-1', ownerAccountId: 'owner', encryptionMode: mode,
+    anchor: null, access: 'owner', keyReadiness: true, dataEncryptionKey: key.dataEncryptionKey, creationLocalId: 'create-1',
+    titleContent: sealSessionStoredContent({ ...crypto, payload: { v: 1, title: 'Discussion' } }),
+    latestMessage: { id: 'question-1', localId: 'question-1', seq: 1, authorAccountId: 'owner',
+      accountActor: { v: 1, accountId: 'owner', profile: null }, producerV1: null, createdAt: 1 }, messageSeq: 1,
+    lastReadSeq: 0, unreadCount: 0, unreadMentionCount: 0, recentAuthorAccountIds: [], archivedAt: null,
+    capabilities: { postMessages: true, rename: true, archive: true, restore: false, askAgent: true,
+      sendToSession: true, manageAccess: true, leave: false } });
+  const artifacts = new Map<string, Record<string, unknown>>();
+  const httpCalls: { method?: string; path: string }[] = [];
+  let createdDiscussion: ReturnType<typeof DiscussionSummaryV1Schema.parse> | null = null;
+  let createdFirstMessage: ReturnType<typeof DiscussionMessageV1Schema.parse> | null = null;
+  let humanWrites = 0;
+  let accountCurrent = true;
+  let terminalReturned = false;
+  let explicitReturned = false;
+  let corruptNextAck = false;
+  let participantPolicy = 'when_addressed';
+  let publicationAuthority: 'present_user' | 'account_automation' = 'account_automation';
+  // Real HTTP is the sole persistence boundary; Artifact encryption, approval
+  // transitions, replay, registration and Discussion resource crypto stay real.
+  const home = createServer(async (request, response) => {
+    response.setHeader('Content-Type', 'application/json');
+    const path = request.url?.split('?')[0] ?? '';
+    httpCalls.push({ method: request.method, path });
+    const reply = (body: unknown, status = 200) => { response.statusCode = status; response.end(JSON.stringify(body)); };
+    if (mode === 'plain' && path === '/v2/account/settings') return reply({ version: 1,
+      content: { t: 'plain', v: scope === 'draft creation' ? draftAccountSettings : {} } });
+    if (mode === 'plain' && path === '/v1/account/entity-rows/prompt-library') return reply({ status: 'listed',
+      rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1,
+        content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })) });
+    if (mode === 'plain' && path === '/v2/account/settings/history') return reply({ snapshots: [] });
+    if (path === '/v1/account/encryption') return reply({ mode, updatedAt: 1 });
+    if (path === '/v1/account/encryption/currentness') return reply({ mode, version: 1, updatedAt: 1,
+      signingKeyFingerprint: mode === 'e2ee' ? 'a'.repeat(64) : null, contentKeyFingerprint });
+    if (path === '/v1/account/profile') return reply({ id: accountCurrent ? 'owner' : 'revoked-owner' });
+    if (path === `/v1/sessions/${opinionSourceSessionId}/messages`) return reply({ messages: [
+      { id: 'source-answer', seq: 1, localId: 'source-answer', messageRole: 'agent', createdAt: 1,
+        content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'Actual source answer' } } } },
+    ], hasMore: false, nextBeforeSeq: null, nextAfterSeq: null });
+    if (path === `/v2/sessions/${opinionSourceSessionId}`) return reply({ session:
+      createSessionRecordFixture({ id: opinionSourceSessionId, share: null, encryptionMode: 'plain' }) });
+    if (path.endsWith('/messages/by-local-id/terminal-original/reply')
+      || path.endsWith('/messages/by-local-id/forged-terminal-original/reply')) return reply({ v: 1, status: 'available',
+      progress: { v: 1, mode: 'return', disposition: terminalReturned ? 'returned' : 'return_pending', acceptedTurnId: 'retired-turn',
+        discussion: { discussionId: summary.id, messageId: 'question-1', participantSessionId: sessionId, throughSeq: 1 },
+        outcome: { kind: 'failed' } } });
+    if (path.endsWith('/messages/by-local-id/satisfied-original/reply')) return reply({ v: 1, status: 'available',
+      progress: { v: 1, mode: 'return', disposition: explicitReturned ? 'returned' : 'return_pending', acceptedTurnId: 'retired-turn',
+        discussion: { discussionId: summary.id, messageId: 'question-1', participantSessionId: sessionId, throughSeq: 1 },
+        outcome: explicitReturned ? { kind: 'answer', publicationRef: { kind: 'discussion', discussion: { serverId, discussionId: summary.id },
+          messageId: 'committed-answer' } } : { kind: 'failed' } } });
+    if (path.includes('/messages/by-local-id/') && path.endsWith('/reply')) return reply({ v: 1, status: 'available',
+      progress: { v: 1, mode: 'return', disposition: 'return_pending',
+        acceptedTurnId: path.includes('/pending-original/') ? 'retired-turn' : 'native-draft-turn',
+        discussion: { discussionId: summary.id, messageId: 'question-1', participantSessionId: sessionId, throughSeq: 1 },
+        outcome: { kind: 'failed' } } });
+    if (path.startsWith('/v2/sessions/')) return reply({ session: createSessionRecordFixture({ id: sessionId, share: null }) });
+    if (path === '/v1/discussions/discussion-1' && request.method === 'GET') return reply({ discussion: summary });
+    if (path === '/v1/discussions/created-discussion' && request.method === 'GET') return reply({ discussion: createdDiscussion });
+    if (path === '/v1/discussions/created-discussion/messages' && request.method === 'GET') return reply({
+      messages: createdFirstMessage ? [createdFirstMessage] : [], hasMoreOlder: false, messageSeq: 1 });
+    if (path === '/v1/discussions/created-discussion/participants' && request.method === 'GET') return reply({
+      discussionId: 'created-discussion', ownerAccountId: 'owner', access: 'owner', grants: [],
+      participants: [{ participant: { kind: 'session', sessionId }, answerPolicy: 'when_addressed', createdAt: 1 }],
+    });
+    if (path === '/v1/discussions/discussion-1/participants' && request.method === 'GET') return reply({
+      discussionId: summary.id, ownerAccountId: 'owner', access: 'owner', grants: [],
+      participants: [{ participant: { kind: 'session', sessionId }, answerPolicy: participantPolicy, createdAt: 1 }],
+    });
+    if (path === '/v1/discussions' && request.method === 'GET') return reply({ discussions: createdDiscussion ? [createdDiscussion] : [], nextCursor: null });
+    if (path === '/v1/discussions/discussion-1/data-key/recipients') return reply({ discussionId: summary.id,
+      ownerAccountId: 'owner', encryptionMode: mode, access: 'owner', dataEncryptionKey: key.dataEncryptionKey,
+      callerDataEncryptionKey: key.dataEncryptionKey, recipients: [] });
+    if (path.startsWith('/v1/artifacts')) {
+      if (path === '/v1/artifacts' && request.method === 'GET') return reply([...artifacts.values()]);
+      if (path.endsWith('/access/recipients')) {
+        const artifactId = decodeURIComponent(path.split('/')[3] ?? '');
+        const row = artifacts.get(artifactId);
+        return row ? reply({ artifactId, ownerAccountId: 'owner', encryptionMode: mode, access: 'owner',
+          dataEncryptionKey: row.dataEncryptionKey, callerDataEncryptionKey: row.dataEncryptionKey, recipients: [] })
+          : reply({ error: 'artifact_not_found' }, 404);
+      }
+      const id = decodeURIComponent(path.split('/').at(-1) ?? '');
+      if (request.method === 'GET') return artifacts.has(id) ? reply(artifacts.get(id)) : reply({ error: 'not_found' }, 404);
+      let bytes = ''; for await (const chunk of request) bytes += chunk.toString();
+      // This is an HTTP boundary fixture; canonical stores produce these bytes.
+      const body = JSON.parse(bytes) as Record<string, unknown>;
+      if (path === '/v1/artifacts' && typeof body.id === 'string') {
+        artifacts.set(body.id, { ...body, ownerAccountId: 'owner', access: 'owner', encryptionMode: mode, publicAudience: 'none',
+          headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+        return reply({ id: body.id, headerVersion: 1, bodyVersion: 1 });
+      }
+      const row = artifacts.get(id);
+      if (!row) return reply({ error: 'not_found' }, 404);
+      if (row.headerVersion !== body.expectedHeaderVersion || row.bodyVersion !== body.expectedBodyVersion)
+        return reply({ success: false, error: 'version-mismatch' });
+      Object.assign(row, { header: body.header, body: body.body, headerVersion: Number(row.headerVersion) + 1,
+        bodyVersion: Number(row.bodyVersion) + 1, seq: Number(row.seq) + 1, updatedAt: Number(row.updatedAt) + 1 });
+      return reply({ success: true, headerVersion: row.headerVersion, bodyVersion: row.bodyVersion });
+    }
+    if (request.method === 'POST' && path.startsWith('/v1/discussions')) humanWrites++;
+    return reply({ error: 'not_found' }, 404);
+  });
+  await new Promise<void>(resolve => home.listen(0, '127.0.0.1', resolve));
+  const address = home.address();
+  if (!address || typeof address === 'string') throw new Error('Missing test Home address');
+  const serverUrl = `http://127.0.0.1:${address.port}`;
+  let advertisedHomeId = 'srv_fixture_home';
+  vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    httpCalls.push({ method: init?.method ?? 'GET', path: `fetch:${new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, serverUrl).pathname}` });
+    return new Response(JSON.stringify({ features: { sessions: { enabled: true,
+    conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } }, capabilities: {
+    serverIdentity: { serverIdentityId: advertisedHomeId }, session: { pendingInput: { protocolVersion: 1 },
+      runtimeActivity: { protocolVersion: 2 }, publisherAuthority: { protocolVersion: 1 } } } }), { status: 200 });
+  }));
+  const publications: DiscussionAgentPublisherPublicationV1[] = [];
+  const transcript = createSessionTranscriptHomeStub();
+  const activity = createSessionRuntimeActivityHomeStub({ machineId });
+  const defaults = createApiSessionSocketStub();
+  const socket = createApiSessionSocketStub({ connected: true, emitWithAck: async (event, payload) => {
+    if (event !== DISCUSSION_AGENT_POST_EVENT_V1) return transcript.answer(event, payload)
+      ?? activity.answer(event, payload) ?? defaults.emitWithAck(event, payload);
+    if (payload && typeof payload === 'object' && 'operation' in payload) {
+      const parsed = DiscussionAgentCreateRequestV1Schema.parse(payload);
+      publications.push(parsed);
+      createdDiscussion = DiscussionSummaryV1Schema.parse({ ...summary, id: 'created-discussion',
+        creationLocalId: parsed.request.creationLocalId, titleContent: parsed.request.titleContent,
+        anchor: parsed.request.anchor ?? null,
+        dataEncryptionKey: parsed.request.dataEncryptionKey ?? null,
+        latestMessage: { ...summary.latestMessage, id: 'created-first', localId: parsed.request.firstMessage.localId } });
+      createdFirstMessage = DiscussionMessageV1Schema.parse({ id: 'created-first',
+        discussionId: createdDiscussion.id, localId: parsed.request.firstMessage.localId, seq: 1, authorAccountId: 'owner',
+        accountActor: { v: 1, accountId: 'owner', profile: null }, producerV1: { v: 1, kind: 'agent', sessionId },
+        content: parsed.request.firstMessage.content, mentionedAccountIds: [], createdAt: 1 });
+      return { v: 1, ok: true, value: { discussion: createdDiscussion, firstMessage: createdFirstMessage } };
+    }
+    const parsed = DiscussionAgentPostPublicationV1Schema.parse(payload);
+    publications.push(parsed);
+    if (parsed.replyReturn?.requestLocalId === 'satisfied-original') explicitReturned = true;
+    // Home committed the write, but the response is not usable by the caller.
+    if (corruptNextAck) { corruptNextAck = false; return { committedButAcknowledgementUnavailable: true }; }
+    return { v: 1, ok: true, value: { messageSeq: 2, message: { id: 'committed-answer', discussionId: summary.id,
+      localId: parsed.request.localId, seq: 2, authorAccountId: 'owner', accountActor: { v: 1, accountId: 'owner', profile: null },
+      producerV1: { v: 1, kind: 'agent', sessionId }, content: parsed.request.content, mentionedAccountIds: [], createdAt: 1 } } };
+  } });
+  if (mode === 'plain') await runWithServerHttpBaseUrl(serverUrl, () => bootstrapAccountSettingsContext({ credentials, mode: 'blocking' }));
+  const client = new ApiSessionClient(token, createPlainSessionFixture({ id: sessionId }), { localMachineId: machineId,
+    metadataAuthority: { kind: 'owner', credentials }, transport: { serverId, serverUrl,
+      createSessionSocketTransport: () => ({ socket: socket as never, transport: createSocketTransportAdapter(socket as never) }) } });
+  const lifetime = new AbortController();
+  applyRunnerMcpSessionContext(client, { getActiveTurnAdmissionWitness: () => null,
+    getRuntimeLifetimeSignal: () => lifetime.signal });
+  try {
+    const currentness = createDaemonApprovalExecutionOriginCurrentnessFromCredentials({ credentials,
+      machineId, serverId, serverApiUrl: serverUrl, isSessionCallerCurrent: ({ caller, signal }) =>
+        caller.sessionId === sessionId && !lifetime.signal.aborted && !signal?.aborted });
+    if (!currentness) throw new Error('Missing canonical currentness owner');
+    const store = createCliApprovalsArtifactStore({ credentials, serverId, serverHttpBaseUrl: serverUrl });
+    const secondKeyResults: unknown[] = [];
+    const draftAutomationResults: unknown[] = [];
+    const nonhumanCreateResults: unknown[] = [];
+    let lastPublicationReplay: string | undefined;
+    const deps = createDiscussionActionDeps({ credentials, serverId, serverHttpBaseUrl: serverUrl,
+      postAgentMessage: async (request, options) => {
+        lastPublicationReplay = options?.approvedActionReplay?.artifactId;
+        // JSON transport omits absent optional fields; preserve that boundary
+        // shape when invoking the actual registrar in-process.
+        const replay = options?.approvedActionReplay ? { approvedActionReplay: options.approvedActionReplay } : {};
+        if (participantPolicy === 'drafts_for_approval') {
+          draftAutomationResults.push(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1',
+            { request, ...replay }, { ...options, rpcContext: { callerAuthority: 'account_automation' } }));
+          draftAutomationResults.push(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1',
+            { request: { ...request, draftReview: { artifactId: 'forged-review', decidingAccountId: 'owner' } }, ...replay },
+            { ...options, rpcContext: { callerAuthority: 'present_user' } }));
+        }
+        const alternateRequests = 'operation' in request ? [
+          { ...request, request: { ...request.request, creationLocalId: 'second-unapproved-creation' } },
+          { ...request, request: { ...request.request, firstMessage: { ...request.request.firstMessage, localId: 'second-unapproved-first' } } },
+        ] : [{ ...request, request: { ...request.request, localId: 'second-unapproved-wire-key' } }];
+        const message = 'operation' in request ? request.request.firstMessage : request.request;
+        const requestKey = 'operation' in request
+          ? await openResourceDataKey({ credentials, mode, dataEncryptionKey: request.request.dataEncryptionKey ?? null }) : key;
+        const requestCrypto = requestKey.mode === 'plain' ? { mode: 'plain' as const, ctx: null }
+          : { mode: 'e2ee' as const, ctx: { encryptionKey: requestKey.dataKey, encryptionVariant: 'dataKey' as const } };
+        const opened = DiscussionMessageContentV1Schema.parse(openSessionStoredContent({ ...requestCrypto, content: message.content }));
+        // The original discussion.create Action requires a present person;
+        // Doc comment/propose keep their own configurable posting authority.
+        if ('operation' in request && !('kind' in opened)) nonhumanCreateResults.push(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', {
+          request, approvedActionReplay: options?.approvedActionReplay,
+        }, { ...options, rpcContext: { callerAuthority: 'account_automation' } }));
+        if ('kind' in opened) {
+          const marker = message.docEditProposal ? undefined : true as const;
+          const markerSubstitution = 'operation' in request
+            ? { ...request, request: { ...request.request, firstMessage: { ...request.request.firstMessage, docEditProposal: marker } } }
+            : { ...request, request: { ...request.request, docEditProposal: marker } };
+          secondKeyResults.push(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', {
+            request: markerSubstitution, approvedActionReplay: options?.approvedActionReplay,
+          }, options));
+          const changed = opened.kind === 'doc_passage_comment'
+            ? { ...opened, content: { v: 1, parts: [{ t: 'text', text: 'Unreviewed comment' }] } }
+            : { ...opened, proposal: { ...opened.proposal, after: 'Unreviewed replacement' } };
+          const replaced = sealSessionStoredContent({ ...requestCrypto, payload: changed });
+          const alternate = 'operation' in request
+            ? { ...request, request: { ...request.request, firstMessage: { ...request.request.firstMessage, content: replaced } } }
+            : { ...request, request: { ...request.request, content: replaced } };
+          secondKeyResults.push(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', {
+            request: alternate, approvedActionReplay: options?.approvedActionReplay,
+          }, options));
+        }
+        for (const alternate of alternateRequests) secondKeyResults.push(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', {
+          request: alternate, ...replay,
+        }, options));
+        return DiscussionAgentPublisherResponseV1Schema.parse(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1',
+          { request, ...replay },
+          { ...options, rpcContext: { callerAuthority: 'operation' in request ? 'present_user' : publicationAuthority } }));
+      } });
+    // The live Session is plain in both Account/Discussion encryption modes;
+    // its Action ports must not reuse the independent Discussion resource key.
+    const fresh = () => createActionExecutor({ ...createCliActionDeps({ credentials, token, sessionId,
+      serverId, serverHttpBaseUrl: serverUrl, mode: 'plain', ctx: null }),
+      ...store, ...deps, isApprovalExecutionOriginCurrent: currentness });
+    const actionArgs = { discussionId: summary.id, content }; // Omitted generated localId is a valid approved input.
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'agent', sessionId }, actionId: 'discussion.post', actionArgs,
+      executionOriginV1: { v: 1, authority: 'account_automation', surface: 'agent', caller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 },
+        serverId, accountId: 'owner', machineId, sessionId, actionId: 'discussion.post', requestId: 'approved-tool',
+        sessionInputSource: { sourceSessionId: sessionId, sourceInputId: 'original', sourceTurnId: 'retired-turn', via: 'action' } },
+      summary: 'Publish approved answer', approval: { flow: 'deferred', result: 'required' } });
+    const docTarget = { ref: { kind: 'doc' as const, artifactId: 'doc-1', serverId },
+      revision: { headerVersion: 1, bodyVersion: 2 }, range: { start: 0, end: 3 }, quote: 'old' };
+    const approve = async (operation: 'post' | 'create' | 'doc-root' | 'doc-proposal' = 'post') => {
+      const proposal = operation === 'post' ? request : operation === 'create' ? ApprovalRequestV2Schema.parse({ ...request, actionId: 'discussion.create',
+        createdBy: { surface: 'mcp', sessionId },
+        actionArgs: { title: 'Created by approved Session', firstMessage: { content } },
+        executionOriginV1: { ...request.executionOriginV1, surface: 'mcp', actionId: 'discussion.create', requestId: 'approved-create' } })
+        : ApprovalRequestV2Schema.parse({ ...request,
+          actionId: operation === 'doc-root' ? 'doc.comment.reply' : 'doc.edit.propose',
+          actionArgs: operation === 'doc-root' ? { target: docTarget, localId: 'approved-doc-root', content }
+            : { target: docTarget, localId: 'approved-doc-proposal', discussionRef: { serverId, discussionId: summary.id },
+              baseRevision: docTarget.revision, before: 'old', after: 'new', reason: 'Clarify' },
+          executionOriginV1: { ...request.executionOriginV1,
+            actionId: operation === 'doc-root' ? 'doc.comment.reply' : 'doc.edit.propose', requestId: `approved-${operation}` } });
+      const created = await store.approvalsCreate({ request: proposal, serverId });
+      expect(await store.approvalsUpdate({ artifactId: created.artifactId, serverId, request: { ...proposal,
+        status: 'approved', updatedAtMs: 2, decision: { kind: 'approve', decidedAtMs: 2, authority: 'present_user' } } })).toMatchObject({ ok: true });
+      return created.artifactId;
+    };
+    await runWithServerHttpBaseUrl(serverUrl, async () => {
+      if (scope === 'pending explicit') {
+        phase = 'pending explicit approval and final fallback share original custody';
+        const { createCliActionExecutor } = await import('@/session/actions/createCliActionExecutor');
+        const policy = createActionSettingsProvider({ getAccountSettings: () => accountSettingsParse({}),
+          allowEnvironmentOverride: false });
+        const explicit = createCliActionExecutor({ credentials, token, sessionId, mode: 'plain', ctx: null,
+          serverId, serverIdentityId: 'srv_fixture_home', serverHttpBaseUrl: serverUrl, actionsSettingsProvider: policy });
+        const original = { serverId, requestSessionId: sessionId, requestLocalId: 'pending-original',
+          acceptedTurnId: 'retired-turn', discussion: { discussionId: summary.id, messageId: 'question-1',
+            throughSeq: 1, participantSessionId: sessionId }, message: 'A later final answer cannot replace the explicit draft',
+          outcome: { kind: 'failed' as const } };
+        await explicit.execute('discussion.reply', { discussionId: summary.id, localId: 'explicit-tool-local',
+          replyTarget: { kind: 'message', messageId: 'question-1' }, content,
+        }, { serverId, serverIdentityId: 'srv_fixture_home', surface: 'agent', authority: 'account_automation',
+          defaultSessionId: sessionId, defaultSessionMachineId: machineId, actionRequestId: 'explicit-tool',
+          actionCaller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 },
+          sessionInputSource: { sourceSessionId: sessionId, sourceTurnId: 'retired-turn', sourceInputId: 'pending-original',
+            via: 'action', discussionAddressing: original.discussion } });
+        expect(artifacts.size).toBe(1);
+        const captured = structuredClone([...artifacts.entries()]);
+        await createDiscussionReplyReturnPublisher({ credentials, machineId, serverId, serverHttpBaseUrl: serverUrl,
+          signal: lifetime.signal, isCurrent: async () => true, actionsSettingsProvider: policy })(original);
+        expect(artifacts.size).toBe(1);
+        expect([...artifacts.entries()]).toEqual(captured);
+        expect(publications).toEqual([]);
+        expect(humanWrites).toBe(0);
+        return;
+      }
+      if (scope === 'satisfied return') {
+        phase = 'explicit publication wins before final Action admission';
+        corruptNextAck = true;
+        await expect(client.postAgentDiscussionMessage({ discussionId: summary.id,
+          request: { localId: deriveSessionMessageReplyReturnLocalIdV1({ sessionId, localId: 'satisfied-original', acceptedTurnId: 'retired-turn' }),
+            content: sealSessionStoredContent({ ...crypto, payload: content }), mentionedAccountIds: [],
+            replyTarget: { kind: 'message', messageId: 'question-1' },
+            ...(key.mode === 'e2ee' ? { requestEqualityEvidenceV1: { kind: 'e2eeTag' as const,
+              tag: deriveDiscussionMutationEqualityTagV1({ dataKey: key.dataKey,
+                canonicalIntent: serializeDiscussionMutationEqualityIntentV1({ kind: 'post', content,
+                  mentionedAccountIds: [], mentionedSessionIds: [], replyTarget: { kind: 'message', messageId: 'question-1' } }) }) } } : {}) },
+          replyReturn: { serverId, requestLocalId: 'satisfied-original', acceptedTurnId: 'retired-turn' },
+        })).rejects.toThrow();
+        expect(explicitReturned).toBe(true);
+        const publish = createDiscussionReplyReturnPublisher({ credentials, machineId, serverId,
+          serverHttpBaseUrl: serverUrl, signal: lifetime.signal, isCurrent: async () => true,
+          actionsSettingsProvider: createActionSettingsProvider({ getAccountSettings: () => accountSettingsParse({}),
+            allowEnvironmentOverride: false }),
+        });
+        // Recovery captured this terminal result before the explicit append
+        // committed. The actual Home read now reports that same original as
+        // satisfied; final Action admission must not create another approval.
+        await publish({ serverId, requestSessionId: sessionId, requestLocalId: 'satisfied-original',
+          acceptedTurnId: 'retired-turn', discussion: { discussionId: summary.id, messageId: 'question-1',
+            throughSeq: 1, participantSessionId: sessionId }, message: 'The later final answer must not replace the explicit one',
+          outcome: { kind: 'failed' } });
+        expect(artifacts.size).toBe(0);
+        expect(publications).toHaveLength(1);
+        expect(humanWrites).toBe(0);
+        expect(httpCalls).toContainEqual({ method: 'GET',
+          path: `/v2/sessions/${sessionId}/messages/by-local-id/satisfied-original/reply` });
+        return;
+      }
+      if (scope === 'draft creation') {
+        phase = 'native result private draft creation';
+        participantPolicy = 'drafts_for_approval';
+        const returnWarnings = vi.spyOn(logger, 'warnLocalFile');
+        const publish = createDiscussionReplyReturnPublisher({ credentials, machineId, serverId,
+          serverHttpBaseUrl: serverUrl, signal: lifetime.signal, isCurrent: async () => true,
+          // Ordinary Action confirmation is waived; participant policy must
+          // still retain the native result in the private approval store.
+          // Use the same Account-backed policy owner as daemon recovery.
+          // A runtime-only policy deliberately has no private Artifact authority.
+          actionsSettingsProvider: createActionSettingsProvider({ getAccountSettings: () => draftAccountSettings,
+            allowEnvironmentOverride: false }),
+        });
+        const original = { serverId, requestSessionId: sessionId, requestLocalId: 'native-draft-input',
+          acceptedTurnId: 'native-draft-turn', discussion: { discussionId: summary.id, messageId: 'question-1',
+            throughSeq: 1, participantSessionId: sessionId }, message: 'Actual private native answer',
+          outcome: { kind: 'answer' as const, result: { sessionId, messageId: 'native-final-message' } } };
+        advertisedHomeId = '';
+        await publish(original);
+        expect(artifacts.size).toBe(0);
+        expect(publications).toEqual([]);
+        advertisedHomeId = 'srv_fixture_home';
+        await publish(original);
+        const reopened = createCliApprovalsArtifactStore({ credentials, serverId, serverHttpBaseUrl: serverUrl });
+        const listed = await reopened.approvalsList({ status: 'open', limit: 10, serverId });
+        expect(listed.items, JSON.stringify({ storedArtifacts: artifacts.size,
+          warnings: returnWarnings.mock.calls, httpCalls })).toHaveLength(1);
+        const artifactId = listed.items[0]!.artifactId;
+        const privateDraft = await reopened.approvalsGet({ artifactId, serverId });
+        expect(privateDraft).toMatchObject({ v: 2, status: 'open', discussionDraftReview: true,
+          actionId: 'discussion.reply', actionArgs: { discussionId: summary.id,
+            replyTarget: { kind: 'message', messageId: 'question-1' },
+            content: { v: 1, parts: [{ t: 'text', text: original.message }] } },
+          executionOriginV1: { serverId, serverIdentityId: 'srv_fixture_home', sessionId, machineId, accountId: 'owner', discussionReplyReturn: {
+            serverId, requestLocalId: original.requestLocalId, acceptedTurnId: original.acceptedTurnId } } });
+        if (privateDraft?.v !== 2) throw new Error('Missing captured native return approval');
+        if (mode === 'plain') {
+          // Consume the actual persisted producer output through the incumbent
+          // replay composition. A different local profile still reaches the
+          // same portable Home; a genuinely different Home remains stale.
+          const current = createDaemonApprovalExecutionOriginCurrentnessFromCredentials({ credentials, machineId,
+            serverId: 'reviewing-browser-profile', serverApiUrl: serverUrl });
+          if (!current) throw new Error('Missing canonical approval currentness owner');
+          expect(await current({ origin: privateDraft.executionOriginV1, request: privateDraft })).toBe(true);
+          advertisedHomeId = 'srv_other_home';
+          const staleReasons: string[] = [];
+          expect(await current({ origin: privateDraft.executionOriginV1, request: privateDraft,
+            reportStale: reason => staleReasons.push(reason) })).toBe(false);
+          expect(staleReasons).toEqual(['home_changed']);
+          advertisedHomeId = 'srv_fixture_home';
+        }
+        await publish({ ...original, message: 'A later retry cannot replace the captured draft' });
+        expect((await reopened.approvalsList({ status: 'open', limit: 10, serverId })).items)
+          .toEqual(listed.items);
+        expect(await reopened.approvalsGet({ artifactId, serverId })).toEqual(privateDraft);
+        expect(publications).toEqual([]);
+        expect(humanWrites).toBe(0);
+        return;
+      }
+      phase = 'approved post';
+      const artifactId = await approve();
+      expect(await fresh().replayApprovedApprovalRequest({ artifactId, callerAuthority: 'present_user' }))
+        .toMatchObject({ ok: true, result: { status: 'executed' } });
+      expect(secondKeyResults).toEqual([expect.objectContaining({ ok: false, error: 'discussion_post_denied' })]);
+      expect(publications).toHaveLength(1);
+      expect(publications[0]?.sourceSession).toEqual(request.executionOriginV1.sessionInputSource);
+      expect(openSessionStoredContent({ ...crypto, content: DiscussionAgentPostRequestV1Schema.parse(publications[0]).request.content })).toEqual(content);
+      expect(await fresh().replayApprovedApprovalRequest({ artifactId, callerAuthority: 'present_user' }))
+        .toMatchObject({ ok: true, result: { status: 'executed' } });
+      expect(publications).toHaveLength(1);
+      phase = 'private draft publication';
+      participantPolicy = 'drafts_for_approval';
+      const draft = ApprovalRequestV2Schema.parse({ ...request, actionId: 'discussion.reply',
+        actionArgs: { ...actionArgs, localId: 'reviewed-draft', replyTarget: { kind: 'message', messageId: 'question-1' } },
+        executionOriginV1: { ...request.executionOriginV1, actionId: 'discussion.reply', requestId: 'draft-tool' } });
+      const createdDraft = await store.approvalsCreate({ request: draft, serverId });
+      expect(await store.approvalsUpdate({ artifactId: createdDraft.artifactId, serverId, request: { ...draft,
+        status: 'approved', updatedAtMs: 2, decision: { kind: 'approve', decidedAtMs: 2, authority: 'present_user', decidingAccountId: 'forged-reviewer' } } }))
+        .toMatchObject({ ok: true });
+      publicationAuthority = 'present_user';
+      expect(await fresh().replayApprovedApprovalRequest({ artifactId: createdDraft.artifactId, callerAuthority: 'present_user' }))
+        .toMatchObject({ ok: true, result: { status: 'executed' } });
+      expect(publications.at(-1)).toMatchObject({ draftReview: { artifactId: createdDraft.artifactId, decidingAccountId: 'owner' } });
+      expect(DiscussionAgentPostRequestV1Schema.safeParse(publications.at(-1)).success).toBe(false);
+      expect(draftAutomationResults).toEqual(Array.from({ length: 2 }, () => expect.objectContaining({ ok: false, error: 'discussion_post_denied' })));
+      const afterDraft = publications.length;
+      expect(await fresh().replayApprovedApprovalRequest({ artifactId: createdDraft.artifactId, callerAuthority: 'present_user' }))
+        .toMatchObject({ ok: true, result: { status: 'executed' } });
+      expect(publications).toHaveLength(afterDraft);
+      participantPolicy = 'when_addressed';
+      publicationAuthority = 'account_automation';
+      const revoked = await approve(); accountCurrent = false;
+      expect(await fresh().replayApprovedApprovalRequest({ artifactId: revoked, callerAuthority: 'present_user' }))
+        .toMatchObject({ ok: true, result: { status: 'failed', execution: { ok: false, errorCode: 'approval_stale', effectAttempted: false } } });
+      expect(publications).toHaveLength(afterDraft);
+      expect(humanWrites).toBe(0);
+      accountCurrent = true;
+      secondKeyResults.length = 0;
+      phase = 'approved atomic create';
+      const createArtifactId = await approve('create');
+      expect(await fresh().replayApprovedApprovalRequest({ artifactId: createArtifactId, callerAuthority: 'present_user' }))
+        .toMatchObject({ ok: true, result: { status: 'executed' } });
+      expect(nonhumanCreateResults).toEqual([expect.objectContaining({ ok: false, error: 'discussion_post_denied' })]);
+      expect(secondKeyResults).toEqual([expect.objectContaining({ ok: false, error: 'discussion_post_denied' }),
+        expect.objectContaining({ ok: false, error: 'discussion_post_denied' })]);
+      const created = DiscussionAgentCreateRequestV1Schema.parse(publications.at(-1));
+      expect(created.request.creationLocalId).not.toBe(created.request.firstMessage.localId);
+      const createdKey = await openResourceDataKey({ credentials, mode, dataEncryptionKey: created.request.dataEncryptionKey ?? null });
+      const createdCrypto = createdKey.mode === 'plain' ? { mode: 'plain' as const, ctx: null }
+        : { mode: 'e2ee' as const, ctx: { encryptionKey: createdKey.dataKey, encryptionVariant: 'dataKey' as const } };
+      expect(openSessionStoredContent({ ...createdCrypto, content: created.request.firstMessage.content })).toEqual(content);
+      phase = 'approved second opinion source binding';
+      const source = { kind: 'session' as const, message: { kind: 'session' as const,
+        session: { serverId, sessionId: opinionSourceSessionId }, messageId: 'source-answer' } };
+      const reviewer = { selection: { kind: 'session' as const, session: { serverId, sessionId: 'cmv3secondopinionreviewer' } },
+        sourceAccess: 'quote_only' as const };
+      const preview = DiscussionSecondOpinionPreviewV1Schema.parse({ source, sourceAudienceAccountIds: ['owner'],
+        sourceContentReady: true, discussionAudienceAccountIds: ['owner'], missingDiscussionSourceAccountIds: [],
+        discussionDisclosure: { ok: true }, canGrantSource: true, reviewers: [{ ...reviewer,
+          runtimeAccountId: 'owner', audienceAccountIds: ['owner'], missingSourceAccountIds: [],
+          canGrantSource: true, disclosure: { ok: true } }] });
+      const secondOpinion = { intent: 'ask' as const, source, title: 'Approved source review', question: 'Check this answer',
+        reviewers: [reviewer], publisherSessionId: sessionId,
+        retry: { creationLocalId: 'approved-opinion-create', quoteLocalId: 'approved-opinion-quote', questionLocalId: 'approved-opinion-question' },
+        confirmedPreview: preview };
+      const opinionApproval = ApprovalRequestV2Schema.parse({ ...request, actionId: 'discussion.second_opinion.start', actionArgs: secondOpinion,
+        executionOriginV1: { ...request.executionOriginV1, actionId: 'discussion.second_opinion.start', requestId: 'approved-opinion' } });
+      const opinionArtifact = await store.approvalsCreate({ request: opinionApproval, serverId });
+      expect(await store.approvalsUpdate({ artifactId: opinionArtifact.artifactId, serverId, request: { ...opinionApproval,
+        status: 'approved', updatedAtMs: 2, decision: { kind: 'approve', decidedAtMs: 2, authority: 'present_user' } } })).toMatchObject({ ok: true });
+      expect(await store.approvalsUpdate({ artifactId: opinionArtifact.artifactId, serverId, request: { ...opinionApproval,
+        status: 'executing', updatedAtMs: 3, decision: { kind: 'approve', decidedAtMs: 2, authority: 'present_user' } } })).toMatchObject({ ok: true });
+      const sourceExecutor = createActionExecutor(createCliActionDeps({ credentials, token, sessionId,
+        serverId, serverHttpBaseUrl: serverUrl, mode: 'plain', ctx: null }));
+      const executeSourceAction = sourceExecutor.execute;
+      const expectedCreate = prepareAnchoredDiscussionCreateV1({ source, title: secondOpinion.title, quote: 'Actual source answer',
+        creationLocalId: secondOpinion.retry.creationLocalId, quoteLocalId: secondOpinion.retry.quoteLocalId });
+      let capturedPublication: unknown;
+      const producer = createDiscussionActionDeps({ credentials, serverId, serverHttpBaseUrl: serverUrl,
+        postAgentMessage: async publication => {
+          capturedPublication = publication;
+          return { v: 1, ok: false, error: 'discussion_post_denied' };
+        } }).discussionAction!;
+      const opinionPublicationContext = { serverId, surface: 'agent' as const, authority: 'present_user' as const, defaultSessionId: sessionId,
+        actionCaller: request.executionOriginV1.caller, approvedActionReplay: { artifactId: opinionArtifact.artifactId } };
+      expect(await producer({ actionId: 'discussion.create', input: expectedCreate, context: opinionPublicationContext }))
+        .toMatchObject({ ok: false, errorCode: 'discussion_post_denied' });
+      const wireCreate = DiscussionAgentCreateRequestV1Schema.parse(capturedPublication);
+      const opinionKey = await openResourceDataKey({ credentials, mode, dataEncryptionKey: wireCreate.request.dataEncryptionKey ?? null });
+      const opinionCrypto = opinionKey.mode === 'plain' ? { mode: 'plain' as const, ctx: null }
+        : { mode: 'e2ee' as const, ctx: { encryptionKey: opinionKey.dataKey, encryptionVariant: 'dataKey' as const } };
+      const verifyOpinion = (publication: typeof wireCreate) => readApprovedDiscussionPublication({
+        artifactId: opinionArtifact.artifactId, request: publication, credentials, sessionId, serverId, serverUrl,
+        callerAuthority: 'present_user', isApprovalExecutionOriginCurrent: currentness, executeSourceAction,
+      });
+      expect(await verifyOpinion(wireCreate)).toMatchObject({ sourceSession: request.executionOriginV1.sessionInputSource });
+      expect(await verifyOpinion({ ...wireCreate, request: { ...wireCreate.request, firstMessage: { ...wireCreate.request.firstMessage,
+        content: sealSessionStoredContent({ ...opinionCrypto, payload: content }) } } })).toBeNull();
+      expect(await verifyOpinion({ ...wireCreate, request: { ...wireCreate.request, creationLocalId: 'unapproved-opinion' } })).toBeNull();
+      if (mode === 'plain') {
+        expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', {
+          request: wireCreate, approvedActionReplay: { artifactId: opinionArtifact.artifactId },
+        }, { rpcContext: { callerAuthority: 'present_user' } })).toMatchObject({ ok: true });
+      }
+      await client.postAgentDiscussionMessage({ operation: 'create', request: wireCreate.request,
+        sourceSession: request.executionOriginV1.sessionInputSource ?? undefined });
+      const expectedQuestion = prepareSecondOpinionQuestionV1({ discussionId: 'created-discussion',
+        sessionId: reviewer.selection.session.sessionId, question: secondOpinion.question,
+        questionLocalId: secondOpinion.retry.questionLocalId, quoteMessageId: 'created-first' });
+      expect(await producer({ actionId: 'discussion.post', input: expectedQuestion, context: opinionPublicationContext }))
+        .toMatchObject({ ok: false, errorCode: 'discussion_post_denied' });
+      const questionRequest = DiscussionAgentPostRequestV1Schema.parse(capturedPublication);
+      const verifyQuestion = (publication: typeof questionRequest) => readApprovedDiscussionPublication({
+        artifactId: opinionArtifact.artifactId, request: publication, credentials, sessionId, serverId, serverUrl,
+        callerAuthority: 'present_user', isApprovalExecutionOriginCurrent: currentness, executeSourceAction,
+      });
+      expect(await verifyQuestion(questionRequest)).toMatchObject({ sourceSession: request.executionOriginV1.sessionInputSource });
+      expect(await verifyQuestion({ ...questionRequest, discussionId: summary.id })).toBeNull();
+      expect(await verifyQuestion({ ...questionRequest, request: { ...questionRequest.request,
+        replyTarget: { kind: 'message', messageId: 'other-source-quote' } } })).toBeNull();
+      expect(await verifyQuestion({ ...questionRequest, request: { ...questionRequest.request,
+        content: sealSessionStoredContent({ ...opinionCrypto, payload: content }) } })).toBeNull();
+      for (const operation of ['doc-root', 'doc-proposal'] as const) {
+        phase = operation;
+        secondKeyResults.length = 0;
+        const prior = publications.length;
+        const docApproval = await approve(operation);
+        const replay = await fresh().replayApprovedApprovalRequest({ artifactId: docApproval, callerAuthority: 'present_user' });
+        expect(replay, JSON.stringify(replay))
+          .toMatchObject({ ok: true, result: { status: 'executed' } });
+        expect(publications).toHaveLength(prior + 1);
+        expect(secondKeyResults).toEqual(Array.from({ length: operation === 'doc-root' ? 4 : 3 },
+          () => expect.objectContaining({ ok: false, error: 'discussion_post_denied' })));
+        const published = publications.at(-1)!;
+        const message = 'operation' in published ? published.request.firstMessage : published.request;
+        const publishedKey = 'operation' in published
+          ? await openResourceDataKey({ credentials, mode, dataEncryptionKey: published.request.dataEncryptionKey ?? null }) : key;
+        const publishedCrypto = publishedKey.mode === 'plain' ? { mode: 'plain' as const, ctx: null }
+          : { mode: 'e2ee' as const, ctx: { encryptionKey: publishedKey.dataKey, encryptionVariant: 'dataKey' as const } };
+        expect(openSessionStoredContent({ ...publishedCrypto, content: message.content })).toMatchObject({
+          kind: operation === 'doc-root' ? 'doc_passage_comment' : 'doc_edit_proposal',
+        });
+        expect(published.sourceSession).toEqual(request.executionOriginV1.sessionInputSource);
+      }
+      phase = 'terminal retry';
+      const terminalContent = { v: 1 as const, parts: [{ t: 'text' as const, text: 'The requested session failed.' }] };
+      const body = { localId: deriveSessionMessageReplyReturnLocalIdV1({ sessionId, localId: 'terminal-original', acceptedTurnId: 'retired-turn' }),
+        content: sealSessionStoredContent({ ...crypto, payload: terminalContent }), mentionedAccountIds: [],
+        replyTarget: { kind: 'message' as const, messageId: 'question-1' },
+        ...(key.mode === 'e2ee' ? { requestEqualityEvidenceV1: { kind: 'e2eeTag' as const,
+          tag: deriveDiscussionMutationEqualityTagV1({ dataKey: key.dataKey, canonicalIntent: serializeDiscussionMutationEqualityIntentV1({
+            kind: 'post', content: terminalContent, mentionedAccountIds: [], mentionedSessionIds: [],
+            replyTarget: { kind: 'message', messageId: 'question-1' } }) }) } } : {}) };
+      const terminal = { v: 1 as const, sessionId, discussionId: summary.id, request: body,
+        replyReturn: { serverId, requestLocalId: 'terminal-original', acceptedTurnId: 'retired-turn' } };
+      corruptNextAck = true;
+      await expect(client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: terminal })).rejects.toThrow();
+      expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: terminal })).toMatchObject({ ok: true });
+      terminalReturned = true;
+      expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: terminal })).toMatchObject({ ok: true });
+      expect(openSessionStoredContent({ ...crypto, content: DiscussionAgentPostRequestV1Schema.parse(publications.at(-1)).request.content })).toEqual(terminalContent);
+      phase = 'approved unknown acknowledgement';
+      const unknownArtifactId = await approve();
+      corruptNextAck = true;
+      expect(await fresh().replayApprovedApprovalRequest({ artifactId: unknownArtifactId, callerAuthority: 'present_user' }))
+        .toMatchObject({ ok: true, result: { status: 'failed', execution: { ok: false, errorCode: 'outcome_unknown', effectAttempted: true } } });
+      let lastHostApprovalArtifactId: string | undefined;
+      const replayHostReturn = async (text: string, requestLocalId = 'terminal-original') => {
+        const returnLocalId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId, localId: requestLocalId, acceptedTurnId: 'retired-turn' });
+        const proposal = ApprovalRequestV2Schema.parse({ ...request, actionId: 'discussion.reply',
+          actionArgs: { discussionId: summary.id, localId: returnLocalId,
+            content: { v: 1, parts: [{ t: 'text', text }] }, replyTarget: { kind: 'message', messageId: 'question-1' } },
+          executionOriginV1: { ...request.executionOriginV1, caller: { kind: 'host' }, sessionId,
+            sessionInputSource: undefined, discussionReplyReturn: { ...terminal.replyReturn, requestLocalId },
+            actionId: 'discussion.reply', requestId: returnLocalId } });
+        const { artifactId } = await store.approvalsCreate({ request: proposal, serverId });
+        lastHostApprovalArtifactId = artifactId;
+        expect(await store.approvalsUpdate({ artifactId, serverId, request: { ...proposal, status: 'approved', updatedAtMs: 2,
+          decision: { kind: 'approve', decidedAtMs: 2, authority: 'present_user' } } })).toMatchObject({ ok: true });
+        return fresh().replayApprovedApprovalRequest({ artifactId, callerAuthority: 'present_user' });
+      };
+      phase = 'approved host return';
+      const beforeHost = publications.length;
+      expect(await replayHostReturn('The requested session failed.')).toMatchObject({ ok: true, result: { status: 'executed' } });
+      expect(publications).toHaveLength(beforeHost + 1);
+      expect(lastPublicationReplay).toBe(lastHostApprovalArtifactId);
+      expect(publications.at(-1)).toMatchObject({ sessionId, replyReturn: terminal.replyReturn });
+      expect(await replayHostReturn('Invented success instead of failed original', 'forged-terminal-original')).toMatchObject({ ok: true,
+        result: { status: 'failed', execution: { errorCode: 'discussion_post_denied' } } });
+      expect(publications).toHaveLength(beforeHost + 1);
+      expect(humanWrites).toBe(0);
+    });
+  } catch (error) {
+    failedPhase = phase;
+    throw error;
+  } finally {
+    phase = 'client cleanup';
+    await client.close();
+    phase = 'HTTP cleanup';
+    await new Promise<void>((resolve, reject) => home.close(error => error ? reject(error) : resolve()));
+  }
+});

@@ -3,7 +3,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Encryption } from '@/sync/encryption/encryption';
 import { createSocketIoBoundaryStub } from '@/dev/testkit/mocks/socketIo';
 
+vi.mock('socket.io-client', async () => {
+    const { createSocketIoBoundaryStub } = await import('@/dev/testkit/mocks/socketIo');
+    return { io: () => createSocketIoBoundaryStub().socket };
+});
+
 function createSocketStub() { return createSocketIoBoundaryStub().socket; }
+
+// Prepare the source graph before the per-case mock/connection lifecycle.
+// Each case still receives its fresh module graph and the original time budget.
+await import('./apiSocket');
+vi.resetModules();
 
 afterEach(async () => {
     vi.useRealTimers();
@@ -20,54 +30,43 @@ afterEach(async () => {
 });
 
 describe('apiSocket reachability supervision', () => {
-    it('does not import an ambient Home runtime origin into an exact HTTPS target', async () => {
-        const startParams: Array<Record<string, unknown>> = [];
-        vi.doMock('@/sync/runtime/connectivity/serverReachabilitySupervisorPool', async (importOriginal) => {
-            const actual = await importOriginal<typeof import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool')>();
-            return {
-                ...actual,
-                subscribeServerReachabilityState: () => () => {},
-                startServerReachabilitySupervisor: async (params: Record<string, unknown>) => {
-                    startParams.push(params);
-                },
-            };
+    it.each(['loopback', 'semantic'] as const)('does not import an ambient %s Home carrier into an exact HTTPS target', async kind => {
+        const runtime = await import('@/sync/domains/server/serverRuntime');
+        const pool = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
+        const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+        const previousServerId = runtime.getActiveServerSnapshot().serverId;
+        await runtime.upsertAndActivateServer({ serverUrl: 'https://b.example.test' });
+        const target = runtime.captureActiveServerRuntimeTarget();
+        const lease = { target, leaseId: 'ambient-b-test-lease' };
+        const carrier = { endpointId: 'ambient-b-carrier', readObservedPath: () => 'relay' as const,
+            request: vi.fn(async () => Response.json({})), createWebSocket: vi.fn() };
+        expect(runtime.publishActiveServerRuntimeOrigin({ ...lease, carrier: 'iroh',
+            ...(kind === 'loopback' ? { runtimeOrigin: 'http://127.0.0.1:49999' } : { homeCarrier: carrier }) })).toBe(true);
+        const start = vi.spyOn(pool, 'startServerReachabilitySupervisor');
+        const requestOrigins: string[] = [];
+        setRuntimeFetch(async input => {
+            requestOrigins.push(new URL(String(input)).origin);
+            return Response.json({});
         });
-        vi.doMock('@/sync/domains/server/serverRuntime', async (importOriginal) => ({
-            ...await importOriginal<typeof import('@/sync/domains/server/serverRuntime')>(),
-            getActiveServerSnapshot: () => ({
-                serverId: 'server-b',
-                serverUrl: 'https://b.example.test',
-                runtimeOrigin: 'http://127.0.0.1:49999',
-                carrier: 'iroh',
-                generation: 9,
-            }),
-            getActiveServerHomeCarrier: () => ({ endpointId: 'ambient-b-carrier' }),
-        }));
-        vi.doMock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
-            const actual = await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>();
-            return {
-                ...actual,
-                getServerProfileById: () => null,
-                subscribeActiveServerRuntimeOrigin: () => () => {},
-            };
-        });
-
-        const { apiSocket } = await import('./apiSocket');
-        const encryption = { getSessionEncryption: () => null } as unknown as Encryption;
-        apiSocket.initialize({
-            endpoint: 'https://a.example.test',
-            token: 'token-a',
-            serverId: 'server-a',
-            generation: 3,
-            homeCarrier: null,
-        }, encryption);
-
-        expect(startParams).toEqual([{
-            serverUrl: 'https://a.example.test',
-            runtimeOrigin: 'https://a.example.test',
-            token: 'token-a',
-            homeCarrier: null,
-        }]);
+        let socket: typeof import('./apiSocket')['apiSocket'] | undefined;
+        try {
+            ({ apiSocket: socket } = await import('./apiSocket'));
+            const token = 'token-a';
+            socket.initialize({ endpoint: 'https://a.example.test', token,
+                serverId: 'server-a', generation: 3, homeCarrier: null }, null);
+            expect(start.mock.calls.map(([params]) => params)).toEqual([{
+                serverUrl: 'https://a.example.test', runtimeOrigin: 'https://a.example.test', token, homeCarrier: null,
+            }]);
+            await vi.waitFor(() => expect(requestOrigins).toContain(new URL('https://a.example.test').origin));
+            expect(requestOrigins.every(value => value === new URL('https://a.example.test').origin)).toBe(true);
+            expect(carrier.request).not.toHaveBeenCalled();
+        } finally {
+            socket?.disconnect();
+            start.mockRestore();
+            resetRuntimeFetch();
+            runtime.releaseActiveServerRuntimeOrigin(lease);
+            await runtime.setActiveServer({ serverId: previousServerId });
+        }
     });
 
     it('re-subscribes to reachability when initialized with a new endpoint', async () => {

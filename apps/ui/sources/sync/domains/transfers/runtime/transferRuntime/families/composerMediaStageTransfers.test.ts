@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 
@@ -27,11 +27,10 @@ vi.mock('../plumbing/machineCarrierHttpLease', () => ({
     resolveMachineCarrierRoute: (...args: unknown[]) => resolveMachineCarrierRouteMock(...args),
 }));
 
-describe('uploadComposerMediaStageFromReader', () => {
-    beforeEach(() => {
-        vi.resetModules();
-    });
+// Load the real transfer graph during collection; each test resets its transport boundaries below.
+const composerMediaStageTransfers = await import('./composerMediaStageTransfers');
 
+describe('uploadComposerMediaStageFromReader', () => {
     afterEach(() => {
         machineRpcMock.mockReset();
         getReadyServerFeaturesMock.mockReset();
@@ -47,7 +46,7 @@ describe('uploadComposerMediaStageFromReader', () => {
             errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND,
         });
 
-        const { getComposerMediaContentAvailability } = await import('./composerMediaStageTransfers');
+        const { getComposerMediaContentAvailability } = composerMediaStageTransfers;
 
         await expect(getComposerMediaContentAvailability({ executionTarget })).resolves.toEqual({ available: false });
         expect(machineRpcMock).toHaveBeenCalledWith(expect.objectContaining({
@@ -65,12 +64,47 @@ describe('uploadComposerMediaStageFromReader', () => {
             capability: 'composer.mediaContent.v1',
         });
 
-        const { getComposerMediaContentAvailability } = await import('./composerMediaStageTransfers');
+        const { getComposerMediaContentAvailability } = composerMediaStageTransfers;
 
         await expect(getComposerMediaContentAvailability({ executionTarget })).resolves.toEqual({
             available: true,
             capability: 'composer.mediaContent.v1',
         });
+    });
+
+    it('captures the source submission through the strict claim operation and requires its fork handle', async () => {
+        const handle = { v: 1, id: 'source-stage',
+            executionTarget: { serverId: 'server-current', machineId: 'machine-current' },
+            owner: { pluginId: 'com.example.media', localId: 'composer' },
+            mediaKind: 'image', mimeType: 'image/png', name: 'captured.png', sizeBytes: 5, sha256: 'a'.repeat(64),
+        } as const;
+        const capture = { sourceComposerRef: { kind: 'session', sessionId: 'source-session' },
+            destinationComposerRef: { kind: 'session', sessionId: 'destination-session' },
+            attachmentInstanceId: 'attachment-a', messageLocalId: 'ask-1',
+        } as const;
+        const fork = { ...handle, id: 'captured-stage' };
+        getReadyServerFeaturesMock.mockResolvedValue(null);
+        machineRpcMock.mockResolvedValue({ success: true, newlyAcquired: true, handle: fork });
+        const { captureComposerContentSubmission } = composerMediaStageTransfers;
+        await expect(captureComposerContentSubmission(handle, capture))
+            .resolves.toEqual({ status: 'claimed', newlyAcquired: true, handle: fork });
+        expect(machineRpcMock).toHaveBeenCalledWith(expect.objectContaining({
+            method: RPC_METHODS.DAEMON_TRANSFER_COMPOSER_MEDIA_CLAIM,
+            payload: { handle, claimant: { composer: capture.sourceComposerRef, attachmentInstanceId: capture.attachmentInstanceId },
+                submission: { destinationComposerRef: capture.destinationComposerRef, messageLocalId: capture.messageLocalId } },
+        }));
+        machineRpcMock.mockResolvedValue({ success: true, newlyAcquired: false });
+        await expect(captureComposerContentSubmission(handle, capture)).resolves.toEqual({ status: 'unavailable' });
+        machineRpcMock.mockResolvedValue({ success: true, newlyAcquired: false, handle });
+        await expect(captureComposerContentSubmission(handle, capture)).resolves.toEqual({ status: 'unavailable' });
+        machineRpcMock.mockResolvedValue({ success: true, newlyAcquired: true, handle: { ...fork, sha256: 'b'.repeat(64) } });
+        await expect(captureComposerContentSubmission(handle, capture)).resolves.toEqual({ status: 'unavailable' });
+        machineRpcMock.mockClear();
+        const cancelled = new AbortController();
+        cancelled.abort();
+        await expect(captureComposerContentSubmission(handle, capture, { signal: cancelled.signal }))
+            .resolves.toEqual({ status: 'unavailable' });
+        expect(machineRpcMock).not.toHaveBeenCalled();
     });
 
     it('inspects a bounded opaque stage range and releases it through the same target-scoped transfer caller', async () => {
@@ -114,7 +148,7 @@ describe('uploadComposerMediaStageFromReader', () => {
             throw new Error(`Unexpected machine RPC method: ${input.method}`);
         });
 
-        const { inspectComposerContent, releaseComposerContent } = await import('./composerMediaStageTransfers');
+        const { inspectComposerContent, releaseComposerContent } = composerMediaStageTransfers;
         const inspection = await inspectComposerContent(handle, { offset: 2, maxBytes: 2 }, { sessionId: 'session-a' });
         expect(inspection).toEqual({
             success: true,
@@ -176,7 +210,7 @@ describe('uploadComposerMediaStageFromReader', () => {
             };
         });
 
-        const { inspectComposerContent } = await import('./composerMediaStageTransfers');
+        const { inspectComposerContent } = composerMediaStageTransfers;
         await expect(inspectComposerContent(handle, { offset: 0, maxBytes: 2 })).resolves.toEqual({
             success: false,
             error: 'The direct machine connection was interrupted. Retry the transfer.',

@@ -26,11 +26,11 @@ import { activateContributionModule } from '@/plugins/runtime/lifecycle/activati
 import { createManagedPluginSourceCustody } from '@/plugins/runtime/lifecycle/contributions/runtimeIdentity.testkit';
 import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
-import type { ResolvedActionContribution } from '@/plugins/projection/registry/types';
+import { buildPluginContributionRegistry } from '@/plugins/projection/registry/normalize/package';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
-import { createTargetActionInvocationRegistry } from '@/plugins/runtime/invocation/targetActionRegistry';
-import { createTargetActionHostBindingResolver } from '@/plugins/runtime/hostAccess/resolve';
-import { resolveManifestHostAccessRequests } from '@/plugins/runtime/hostAccess/manifestRequests';
+import { buildTargetActionInvocationRegistry } from '@/plugins/runtime/invocation/buildTargetActionRegistry';
+import { createTargetActionHostBindingResolver, createTargetActionHostPolicyResolver } from '@/plugins/runtime/hostAccess/resolve';
+import { deriveContributionRegistrationRightsForManifest } from '@/plugins/runtime/api/registrationRightsHost';
 import { addExecServiceBinding, createLoggerAvailablePluginInvocationServiceBinding,
   createPluginInvocationServicesFactory, createUnavailablePluginServicesFactory } from '@/plugins/runtime/invocation/services/factory';
 import { createUnavailableManagedServices } from '@/plugins/runtime/invocation/services/managedServicesAdapter';
@@ -85,16 +85,16 @@ async function lifecycleFixture(root: string, onTestFinished: (cleanup: () => vo
         run: async input => { effects.push('acquire'); return { kind: 'bound', resource: resource(input.launch.name) }; } },
       bootstrap: { title: 'Bootstrap', surfaces: ['plugin'], dangerLevel: 'safe', execution: { target: 'daemon' },
         inputSchema: schemas.bootstrapInput, resultSchema: MachineProvisionerBootstrapCarrierV1Schema,
-        run: async () => ({ kind: 'native', transport: { contributionRef, schemaVersion: 1 } }) },
+        run: async () => MachineProvisionerBootstrapCarrierV1Schema.parse({ kind: 'native', transport: { contributionRef, schemaVersion: 1 } }) },
       inspect: { title: 'Inspect', surfaces: ['plugin'], dangerLevel: 'safe', execution: { target: 'daemon' },
         inputSchema: schemas.resourceInput, resultSchema: MachineProvisionerObservationV1Schema,
-        run: async () => ({ observedAt: 1, availability: 'present', power: 'running' }) },
+        run: async () => MachineProvisionerObservationV1Schema.parse({ observedAt: 1, availability: 'present', power: 'running' }) },
       rebuild: { title: 'Rebuild', surfaces: ['plugin'], dangerLevel: 'safe', execution: { target: 'daemon' },
         inputSchema: schemas.rebuildInput, resultSchema: schemas.rebuildResult,
         run: async input => { effects.push('rebuild'); return { kind: 'bound', resource: resource(`${input.resource.name}-replacement`) }; } },
       destroy: { title: 'Destroy', surfaces: ['plugin'], dangerLevel: 'safe', execution: { target: 'daemon' },
         inputSchema: schemas.resourceInput, resultSchema: MachineProvisionerPowerResultV1Schema,
-        run: async () => ({ kind: 'confirmed' }) },
+        run: async () => MachineProvisionerPowerResultV1Schema.parse({ kind: 'confirmed' }) },
       exec: { title: 'Native exec', surfaces: ['plugin'], dangerLevel: 'safe', execution: { target: 'daemon' },
         inputSchema: schemas.execInput, resultSchema: MachineProvisionerNativeExecResultV1Schema,
         run: async () => { throw new Error('Default fixture must stop before native installation'); } },
@@ -105,18 +105,20 @@ async function lifecycleFixture(root: string, onTestFinished: (cleanup: () => vo
   });
   const manifest = normalizePluginManifestV2(author.manifest);
   const occurrenceId = createPluginRuntimeOccurrenceId(pluginId);
-  const activated = await activateContributionModule({ pluginId, occurrenceId, manifest, moduleNamespace: author,
+  const activated = await activateContributionModule({ pluginId, occurrenceId, manifest, moduleNamespace: { activate: author.activate },
     isOccurrenceCurrent: () => true });
   onTestFinished(() => activated.dispose());
   expect(activated.status).toBe('active');
-  const registrations = activated.registrations.flatMap(registration => {
-    if (registration.family !== 'actions') return [];
-    const action = manifest.contributes.actions.find(action => action.id === registration.localId)!;
-    return [{ pluginId, pluginVersion: manifest.version, occurrenceId, sourceCustody: createManagedPluginSourceCustody('child-lifecycle'),
-      localId: registration.localId, definition: { ...action,
-        hostAccessRequests: resolveManifestHostAccessRequests({ manifest, pluginId,
-          contribution: { family: 'actions', localId: registration.localId }, ...(action.hostAccess ? { requestIds: action.hostAccess } : {}) }),
-      }, handler: registration.value }];
+  const sourceSpec = { kind: 'path', locator: root, trustPolicy: 'local_trusted', installPolicy: 'link' } as const;
+  const manifestPath = join(root, 'plugin.json');
+  const normalized = buildPluginContributionRegistry({ loadedPlugins: [{ pluginId, pluginRootPath: root,
+    manifestPath, daemonEntryPath: null, devDaemonEntryPath: null, sourceSpec, manifest }] });
+  const contributes = createResolvedContributionRegistry({ occurrenceIdsByPluginId: { [pluginId]: occurrenceId },
+    activationTargets: [{ pluginId, manifest, provenance: 'external', source: { kind: 'path' }, manifestPath,
+      daemonEntryPath: null, sourceSpec }],
+    machineProvisioners: normalized.machineProvisioners.map(definition => ({ ...definition, provenance: 'external',
+      source: { kind: 'path' }, identity: { pluginId, localId: definition.definition.id } })),
+    actions: normalized.actions.map(action => ({ ...action, provenance: 'external', source: { kind: 'path' } })),
   });
   const unavailableManaged = createUnavailableManagedServices();
   const managedServices = firstPartyNativeRun ? createManagedServicesOwner({
@@ -140,9 +142,16 @@ async function lifecycleFixture(root: string, onTestFinished: (cleanup: () => vo
         resolvePath: async () => { throw new Error('Unexpected native path resolution outside the run boundary'); },
       },
     }) : createUnavailablePluginServicesFactory();
-  const invocations = createTargetActionInvocationRegistry({ actions: registrations, readCurrentPluginOccurrenceId: () => occurrenceId,
+  const invocations = buildTargetActionInvocationRegistry({ contributes,
+    targetRegistrations: activated.registrations.map(registration => ({ pluginId, occurrenceId, registration })),
+    targetActivationFacts: [{ pluginId, pluginVersion: manifest.version, source: 'localPath', occurrenceId,
+      host: 'daemon', platform: 'linux', occurredAtMs: 1, status: activated.status,
+      required: deriveContributionRegistrationRightsForManifest(manifest), bound: activated.registrations, diagnostics: activated.diagnostics }],
+    readCurrentPluginOccurrenceId: () => occurrenceId,
+    readCurrentPluginSourceCustody: () => createManagedPluginSourceCustody('child-lifecycle'),
     resolveAuthorizationFacts: () => ({ generation: { targetGeneration: occurrenceId, desiredGeneration: occurrenceId, appliedGeneration: occurrenceId },
       resourceSelections: [], scopedGrants: [], operatingSystemAuthorization: [] }),
+    resolveHostPolicy: createTargetActionHostPolicyResolver(),
     resolveHostBinding: createTargetActionHostBindingResolver(firstPartyNativeRun ? {
       createServiceBinding: (occurrence, id, requests) => addExecServiceBinding(
         createLoggerAvailablePluginInvocationServiceBinding(occurrence, id), requests ?? [], true),
@@ -155,20 +164,12 @@ async function lifecycleFixture(root: string, onTestFinished: (cleanup: () => vo
       return { ...services, exec: { ...services.exec, run: firstPartyNativeRun } };
     } });
   onTestFinished(() => invocations.dispose());
-  const contributes = createResolvedContributionRegistry({ occurrenceIdsByPluginId: { [pluginId]: occurrenceId },
-    activationTargets: [{ pluginId, manifest, provenance: 'external', source: { kind: 'path' }, manifestPath: join(root, 'plugin.json'),
-      daemonEntryPath: null, sourceSpec: { kind: 'path', path: root } }],
-    machineProvisioners: manifest.contributes.machineProvisioners.map(definition => ({ pluginId, identity: { pluginId, localId: definition.id }, definition })),
-    actions: manifest.contributes.actions.map((action): ResolvedActionContribution => ({ pluginId, provenance: 'external', source: { kind: 'path' },
-      definition: { id: action.id, title: action.id, description: null, kindVersion: 1, placements: [], slash: null, bindings: null, examples: null,
-        surfaces: { plugin: action.surfaces.includes('plugin'), cli: action.surfaces.includes('cli'), ui: false, voice: false, agent: false, mcp: false, rpc: false, api: false },
-        inputHints: null, inputSchema: action.inputSchema, execution: { target: 'daemon' }, safety: 'safe', dangerLevel: action.dangerLevel } })),
-  });
   // The genuinely activated external module replaces only filesystem module loading.
   const runtimeRegistry = { contributes, targetActionInvocations: invocations, readPluginOccurrenceId: () => occurrenceId } as unknown as ResolvedExecutablePluginRuntimeRegistry;
   const unavailable = async (): Promise<never> => { throw new Error('This native fixture consumes no upstream Account credential'); };
   const authority = createManagedProviderOperationAuthority({ materializationBaseDir: root,
-    purposeBindingOwner: createConnectedAccountPurposeBindingOwner({ store: { read: async () => ({ v: 1, bindings: [] }), update: unavailable },
+    purposeBindingOwner: createConnectedAccountPurposeBindingOwner({ store: { read: async () => ({ v: 1, bindings: [] }), update: unavailable,
+      subscribe: () => ({ dispose() {} }) },
       selectTarget: unavailable, resolveTarget: unavailable, materializeAccount: unavailable,
       projectTargetAccounts: unavailable, assertTargetAccountMaterializable: unavailable }),
     requestAuthRegistry: createConnectedAccountRequestAuthSubjectRegistry(), resolveRequestAuthHttpPort: () => 43123,

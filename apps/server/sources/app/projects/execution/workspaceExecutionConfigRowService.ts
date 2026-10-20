@@ -15,11 +15,13 @@ import { markAccountChanged } from '@/app/changes/markAccountChanged';
 import {
     listReservedAccountScopedKvRowsInTx,
     mutateReservedAccountScopedKvRowInTx,
+    readReservedAccountScopedKvRowMutationConflict,
     readReservedAccountScopedKvRowInTx,
     type ReservedAccountScopedKvRowDomain,
     type ReservedAccountScopedKvRowFailure,
     type ReservedAccountScopedKvRowReadResult,
     type ReservedAccountScopedKvRowMutationResult,
+    type ReservedAccountScopedKvRowMutationInTxResult,
 } from '@/app/kv/reservedAccountScopedKvRow';
 import { inTx, type Tx } from '@/storage/inTx';
 
@@ -36,7 +38,7 @@ export const workspaceExecutionConfigRowDomain: ReservedAccountScopedKvRowDomain
     assertEnvelopeForMode: assertWorkspaceExecutionConfigContentForModeV1,
 });
 
-export async function markWorkspaceExecutionConfigChangedInTx(tx: Tx, input: Readonly<{ accountId: string; rowId: string; revision: number }>): Promise<number> {
+export async function markWorkspaceExecutionConfigChangedInTx(tx: Tx, input: Readonly<{ accountId: string; rowId: string; revision: number }>): ReturnType<typeof markAccountChanged> {
     return await markAccountChanged(tx, {
         accountId: input.accountId, kind: 'account', entityId: buildWorkspaceExecutionConfigPhysicalKeyV1(input.rowId),
         hint: WorkspaceExecutionConfigChangeHintV1Schema.parse({ workspaceExecutionConfig: true, rowId: input.rowId, revision: input.revision }),
@@ -68,7 +70,7 @@ export async function listWorkspaceExecutionConfigRowsInTx(tx: Tx, input: Readon
 export async function mutateWorkspaceExecutionConfigRowInTx(tx: Tx, input: Readonly<{
     accountId: string; address: WorkspaceExecutionConfigAddressV1;
     expectedRevision: number | 'absent'; content: WorkspaceExecutionConfigContentV1 | null;
-}>): Promise<ReservedAccountScopedKvRowMutationResult> {
+}>): Promise<ReservedAccountScopedKvRowMutationInTxResult> {
     const rowId = buildWorkspaceExecutionConfigRowIdV1(input.address);
     return await mutateReservedAccountScopedKvRowInTx(tx, {
         accountId: input.accountId, physicalKey: buildWorkspaceExecutionConfigPhysicalKeyV1(rowId),
@@ -79,6 +81,11 @@ export async function mutateWorkspaceExecutionConfigRowInTx(tx: Tx, input: Reado
 export function readWorkspaceExecutionConfigRow(input: Parameters<typeof readWorkspaceExecutionConfigRowInTx>[1]): Promise<ReservedAccountScopedKvRowReadResult<WorkspaceExecutionConfigContentV1>> {
     return inTx(tx => readWorkspaceExecutionConfigRowInTx(tx, input), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
 }
-export function mutateWorkspaceExecutionConfigRow(input: Parameters<typeof mutateWorkspaceExecutionConfigRowInTx>[1]): Promise<ReservedAccountScopedKvRowMutationResult> {
-    return inTx(tx => mutateWorkspaceExecutionConfigRowInTx(tx, input));
+export async function mutateWorkspaceExecutionConfigRow(input: Parameters<typeof mutateWorkspaceExecutionConfigRowInTx>[1]): Promise<ReservedAccountScopedKvRowMutationResult> {
+    try { return await inTx(tx => mutateWorkspaceExecutionConfigRowInTx(tx, input)); }
+    catch (error) {
+        const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+        if (conflict) return conflict;
+        throw error;
+    }
 }

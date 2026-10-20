@@ -199,11 +199,14 @@ vi.mock('@/platform/cryptoRandom', () => ({
 }));
 
 import { normalizeAccountSettingsHistoryAfterTransfer, purgeAccountSettingsHistoryVersions, restoreAccountSettingsFromHistorySnapshot } from './accountSettingsHistoryRestore';
+import { requireOneShotAccountSettingsMutationApplied, syncSettings } from './syncSettings';
 import { createSettingsDomain } from '@/sync/store/domains/settings';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { loadAccountSettings, saveAccountSettings } from '@/sync/domains/state/accountSettingsPersistence';
 import { applyCrashReportsOptOut } from '@/utils/system/sentry';
 import { encodeBase64 } from '@/encryption/base64';
+import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
+import { ImportLegacySessionOrganizationResponseSchema } from '@happier-dev/protocol/sessions/organization/mutations';
 
 const credentials: AuthCredentials = {
     token: 'token',
@@ -479,6 +482,123 @@ describe('classification-aware account settings history restore', () => {
         expect(await restoreAccountSettingsFromHistorySnapshot({ credentials, encryption: null, settingsScope: SETTINGS_SCOPE,
             historyVersion: 3, expectedSettingsVersion: 7 })).toEqual({ status: 'conflict', currentSettingsVersion: 7 });
         expect(mocks.serverFetch.mock.calls.filter(([path, init]) => path === '/v2/account/settings' && init?.method === 'POST')).toHaveLength(1);
+    });
+
+    it.each([undefined, null, {}, { value: undefined }, { settings: undefined }, { settings: null },
+        { settings: [] }, { settings: 'invalid' }, { settings: 42 }, { settings: new Date(0) },
+        Object.create({ settings: {} }) as unknown, { settings: Object.create({ showLineNumbers: false }) as unknown }])(
+        'refuses a malformed prepared Settings baseline without issuing any write (%j)', async (prepared) => {
+        mocks.serverFetch.mockImplementation(async (path: string, init?: RequestInit) => {
+            if (path === '/v1/account/encryption/currentness') return currentnessResponse('plain');
+            if (path === '/v1/account/encryption') return jsonResponse({ mode: 'plain', updatedAt: 0 });
+            if (path === '/v2/account/settings' && init?.method === 'POST') return jsonResponse({ success: true, version: 8 });
+            if (path === '/v2/account/settings') return jsonResponse({ content: { t: 'plain', v: LATEST_BASELINE }, version: 7 });
+            throw new Error(`Unexpected request ${path}`);
+        });
+        const commitPrepared = vi.fn(async () => ({ status: 'applied' as const, settingsVersion: 8 }));
+        const result = await syncSettings({ credentials, encryption: null, settingsScope: SETTINGS_SCOPE,
+            pendingSettings: {}, clearPendingSettings: () => {}, oneShotServerSettingsMutation: {
+                expectedSettingsVersion: 7,
+                // @ts-expect-error Exercise a malformed JavaScript/plugin caller at the runtime write boundary.
+                mutate: () => prepared,
+                commitPrepared,
+            } });
+        expect(result).toEqual({ status: 'invalid', reason: 'invalidPreparedMutation' });
+        if (result?.status !== 'invalid') throw new Error('Expected refused prepare');
+        expect(() => requireOneShotAccountSettingsMutationApplied(result)).toThrow(expect.objectContaining({
+            code: 'account_settings_mutation_invalid', result,
+        }));
+        expect(commitPrepared).not.toHaveBeenCalled();
+        expect(mocks.serverFetch.mock.calls.filter(([, init]) => init?.method === 'POST')).toEqual([]);
+    });
+
+    it('allows an explicitly prepared empty document and refuses a malformed rebase candidate', async () => {
+        let version = 7;
+        mocks.serverFetch.mockImplementation(async (path: string, init?: RequestInit) => {
+            if (path === '/v1/account/encryption/currentness') return currentnessResponse('plain');
+            if (path === '/v1/account/encryption') return jsonResponse({ mode: 'plain', updatedAt: 0 });
+            if (path === '/v2/account/settings' && init?.method === 'POST') {
+                version += 1;
+                return jsonResponse({ success: false, error: 'version-mismatch', currentVersion: version,
+                    currentContent: { t: 'plain', v: LATEST_BASELINE } });
+            }
+            if (path === '/v2/account/settings') return jsonResponse({ content: { t: 'plain', v: LATEST_BASELINE }, version });
+            throw new Error(`Unexpected request ${path}`);
+        });
+        const commitPrepared = vi.fn(async () => ({ status: 'applied' as const, settingsVersion: 8 }));
+        expect(await syncSettings({ credentials, encryption: null, settingsScope: SETTINGS_SCOPE,
+            pendingSettings: {}, clearPendingSettings: () => {}, oneShotServerSettingsMutation: {
+                expectedSettingsVersion: 7, mutate: () => ({ settings: {}, value: undefined }), commitPrepared,
+            } })).toMatchObject({ status: 'applied', settingsVersion: 8 });
+        expect(commitPrepared.mock.calls).toHaveLength(1);
+
+        let preparations = 0;
+        expect(await syncSettings({ credentials, encryption: null, settingsScope: SETTINGS_SCOPE,
+            pendingSettings: {}, clearPendingSettings: () => {}, oneShotServerSettingsMutation: {
+                expectedSettingsVersion: 7, rebaseOnConflict: true,
+                // @ts-expect-error A later JavaScript prepare can be malformed even when the first candidate was valid.
+                mutate: (raw) => ++preparations === 1 ? { settings: { ...raw, showLineNumbers: false }, value: undefined } : { value: undefined },
+            } })).toEqual({ status: 'invalid', reason: 'invalidPreparedMutation' });
+        expect(preparations).toBe(2);
+        expect(mocks.serverFetch.mock.calls.filter(([path, init]) => path === '/v2/account/settings' && init?.method === 'POST')).toHaveLength(1);
+    });
+
+    it('refuses malformed preparation before importing legacy organization, while valid preparation still imports', async () => {
+        const baseline = { ...LATEST_BASELINE, pinnedSessionKeysV1: ['server-a:session-one'] };
+        const snapshot = SessionOrganizationSnapshotResponseSchema.parse({ snapshot: { schemaVersion: 1, version: 0,
+            pins: [], folders: [], folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [] } });
+        const imported = ImportLegacySessionOrganizationResponseSchema.parse({ imported: {
+            pins: 1, folders: 0, tags: 0, orderEntries: 0, labels: 0,
+        } });
+        mocks.serverFetch.mockImplementation(async (path: string, init?: RequestInit) => {
+            if (path === '/v1/account/encryption/currentness') return currentnessResponse('plain');
+            if (path === '/v1/account/encryption') return jsonResponse({ mode: 'plain', updatedAt: 0 });
+            if (path === '/v2/account/settings' && init?.method === 'POST') return jsonResponse({ success: true, version: 8 });
+            if (path === '/v2/account/settings') return jsonResponse({ content: { t: 'plain', v: baseline }, version: 7 });
+            if (path.startsWith('/v2/session-organization')) return jsonResponse(init?.method === 'POST' ? imported : snapshot);
+            throw new Error(`Unexpected request ${path}`);
+        });
+        expect(await syncSettings({ credentials, encryption: null, settingsScope: SETTINGS_SCOPE,
+            pendingSettings: {}, clearPendingSettings: () => {}, oneShotServerSettingsMutation: {
+                expectedSettingsVersion: 7,
+                // @ts-expect-error Exercise malformed preparation through the real import/write composition.
+                mutate: () => ({ value: undefined }),
+            } })).toEqual({ status: 'invalid', reason: 'invalidPreparedMutation' });
+        expect(mocks.serverFetch.mock.calls.filter(([, init]) => init?.method === 'POST')).toEqual([]);
+
+        expect(await syncSettings({ credentials, encryption: null, settingsScope: SETTINGS_SCOPE,
+            pendingSettings: {}, clearPendingSettings: () => {}, oneShotServerSettingsMutation: {
+                expectedSettingsVersion: 7, mutate: raw => ({ settings: { ...raw, showLineNumbers: false }, value: undefined }),
+            } })).toMatchObject({ status: 'applied' });
+        expect(mocks.serverFetch.mock.calls.some(([path, init]) => path === '/v2/session-organization/import'
+            && init?.method === 'POST')).toBe(true);
+    });
+
+    it('restores retained stored preferences through canonical normalization before writing', async () => {
+        const origins = { 'acme.plugin': { serverIdentityId: 'srv_home', materializationRef: {
+            machineId: 'machine-one', materializationId: 'materialization-one', pluginId: 'acme.plugin',
+        } } };
+        const history = { sessionReplayMaxSeedChars: 1024, machineAdministrationSelectionsV1: {
+            v: 1, targetsByKey: { agents: { serverIdentityId: 'srv_home', machineId: 'machine-one' } },
+            pluginExecutionOriginsByPluginId: origins,
+        } };
+        mocks.serverFetch.mockImplementation(async (path: string, init?: RequestInit) => {
+            if (path === '/v1/account/encryption/currentness') return currentnessResponse('plain');
+            if (path === '/v1/account/encryption') return jsonResponse({ mode: 'plain', updatedAt: 0 });
+            if (path === '/v2/account/settings/history/3') return jsonResponse({ content: { t: 'plain', v: history },
+                version: 3, createdAt: '2026-01-01T00:00:00.000Z' });
+            if (path === '/v2/account/settings' && init?.method === 'POST') return jsonResponse({ success: true, version: 8 });
+            if (path === '/v2/account/settings') return jsonResponse({ content: { t: 'plain', v: LATEST_BASELINE }, version: 7 });
+            throw new Error(`Unexpected request ${path}`);
+        });
+        expect(await restoreAccountSettingsFromHistorySnapshot({ credentials, encryption: null, settingsScope: SETTINGS_SCOPE,
+            historyVersion: 3, expectedSettingsVersion: 7 })).toEqual({ status: 'applied', settingsVersion: 8 });
+        const post = mocks.serverFetch.mock.calls.find(([path, init]) => path === '/v2/account/settings' && init?.method === 'POST');
+        expect(JSON.parse(String(post?.[1]?.body)).content).toEqual({ t: 'plain', v: {
+            sessionReplayMaxSeedChars: 120000,
+            machineAdministrationSelectionsV1: { v: 1, pluginExecutionOriginsByPluginId: origins },
+            profiles: LATEST_BASELINE.profiles, schemaVersion: ACCOUNT_SETTINGS_SUPPORTED_SCHEMA_VERSION,
+        } });
     });
 
     it('merges the recorded snapshot into the latest baseline under current classification and CASes it in plain mode', async () => {

@@ -16,12 +16,14 @@ export type ReviewWalkthroughTranslations = {
     fromReviewAt: (params: Readonly<{ time: string }>) => string;
     reviewLabel: string;
     enginesOf: (params: Readonly<{ count: number; total: number }>) => string;
-    enginesFinished: string;
+    enginesFinished: (params: Count) => string;
     enginesRunning: (params: Count) => string;
     fromEngines: (params: Readonly<{ engines: string; inStory: number }>) => string;
     and: string;
     inStoryElsewhere: (params: Readonly<{ inStory: number; elsewhere: number }>) => string;
     allInStory: string;
+    /** A finished review that found nothing: replaces the count and its story placement. */
+    noFindings: string;
     seeded: { title: string; body: (params: Readonly<{ reviewers: string; time: string }>) => string; changed: (params: Count) => string };
     findingsFrom: (params: Readonly<{ count: number; engine: string }>) => string;
     publishedBefore: (params: Readonly<{ time: string }>) => string;
@@ -34,7 +36,6 @@ export type ReviewWalkthroughTranslations = {
         reviewedAt: (params: Readonly<{ time: string }>) => string;
         reviewAt: (params: Readonly<{ time: string }>) => string;
         partial: (params: Count) => string;
-        ready: string;
         readyShort: string;
         failed: string;
         narrating: string;
@@ -104,12 +105,13 @@ export const en: ReviewWalkthroughTranslations = {
     fromReviewAt: ({ time }) => `from the ${time} review`,
     reviewLabel: 'Review:',
     enginesOf: ({ count, total }) => `${count} of ${total}`,
-    enginesFinished: 'engines finished',
+    enginesFinished: ({ count }) => count === 1 ? 'engine finished' : 'engines finished',
     enginesRunning: ({ count }) => (count === 1 ? '1 engine still running' : `${count} engines still running`),
     fromEngines: ({ engines, inStory }) => `from ${engines} · ${inStory} in the story`,
     and: ' and ',
     inStoryElsewhere: ({ inStory, elsewhere }) => `${inStory} in the story, ${elsewhere} elsewhere`,
     allInStory: 'all in the story',
+    noFindings: 'no findings',
     seeded: {
         title: 'Written after the review, by a new run.',
         body: ({ reviewers, time }) => `The narrator didn’t review the code; every finding cited here comes from ${reviewers} at ${time}.`,
@@ -125,8 +127,7 @@ export const en: ReviewWalkthroughTranslations = {
         engineReviewed: ({ engine, count }) => (count === 1 ? `${engine} · 1 finding` : `${engine} · ${count} findings`),
         reviewedAt: ({ time }) => `Reviewed ${time}`,
         reviewAt: ({ time }) => `Review ${time}`,
-        partial: ({ count }) => (count === 1 ? 'Partial review · 1 finding' : `Partial review · ${count} findings`),
-        ready: 'Walkthrough ready',
+        partial: ({ count }) => (count === 1 ? 'Partial · 1 finding' : `Partial · ${count} findings`),
         readyShort: 'Walkthrough',
         failed: 'Walkthrough failed',
         narrating: 'Narrating',

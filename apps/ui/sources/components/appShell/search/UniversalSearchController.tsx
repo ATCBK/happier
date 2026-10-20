@@ -13,6 +13,7 @@ import { isMemoryDocumentSearchHitV1, isMemoryExternalTranscriptSearchHitV1, typ
 import { normalizeMemorySearchSessionId } from '@/sync/domains/memory/applyMemorySearchSessionEligibility';
 
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { usePluginUiClientExecutableRegistrationRevision } from '@/components/plugins/reactNative/clientExecutableContributions';
 import { useOptionalCurrentUiContextReader } from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
 import { useScopedPluginUiProjection } from '@/components/plugins/projection/useScopedPluginUiProjection';
 import { usePluginSurfaceDestinationNavigationBinding } from '@/components/plugins/surfaces/pluginSurfaceDestinationNavigation';
@@ -63,8 +64,9 @@ import {
     captureMemorySearchSessionReadAuthority,
     readMemorySearchSessionForServerScope,
 } from '@/sync/domains/memory/hydrateMemorySearchSessionTargets';
-import { searchWorkspaceFiles } from '@/sync/domains/workspaces/files/workspaceFileSearch';
+import { searchWorkspaceFiles, WorkspaceFileSearchUnavailableError } from '@/sync/domains/workspaces/files/workspaceFileSearch';
 import { searchWorkspaceFileContents } from '@/sync/domains/workspaces/files/workspaceFileContentSearch';
+import { boundedReplyHints } from './searchBoundedReplyHints';
 import { parseSearchFileTarget } from '@/utils/url/sessionFileDeepLink';
 import { isAbsoluteLocalPath, resolvePathRelativeToRoot } from '@/utils/path/resolvePathRelativeToRoot';
 import { IconButton } from '@/components/ui/buttons/IconButton';
@@ -74,12 +76,17 @@ import { searchWorkspaceCommits } from '@/scm/search/searchWorkspaceCommits';
 import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { resolveWorkspaceTargetForSession } from '@/sync/domains/session/resolveWorkspaceTargetForSession';
 import { findWorkspaceRefByScope } from '@/sync/domains/workspaces/workspaceRefs';
+import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { isWorkspaceScopeReachable } from '@/sync/domains/workspaces/workspaceReachability';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
+import { isSessionContentUnsettled } from '@/sync/domains/session/encryptedContentAvailability';
+import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
 import { Icon } from '@/components/ui/icons/Icon';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { t } from '@/text';
 import { transcriptSearchUnavailableHint } from './transcriptSearchUnavailableHint';
+import { presentCommitSearchFailure, presentContentSearchError, workspaceFolderMissingFailure } from './universalSearchMachineFailures';
 import { readSessionListRowsForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import {
     buildCanonicalSessionListPrimarySearchText,
@@ -142,6 +149,7 @@ const styles = StyleSheet.create(() => ({
 }));
 
 type PendingActivation = () => Promise<unknown>;
+const NO_SESSION_ADDRESSES: readonly SessionAddress[] = [];
 const MEMORY_SEARCH_CORPORA: readonly MemorySearchCorpusV1[] = ['documents', 'sessions', 'external_transcripts'];
 
 function useUniversalSearchDynamicCache(
@@ -294,6 +302,11 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     const canonicalScopeServerId = scope.serverId
         ? resolveServerProfileScopeIdForIdentifier(scope.serverId)
         : null;
+    // Results name Sessions from encrypted content: the undecided ones are demanded like visible list rows.
+    const undecidedSessions = React.useMemo(() => Object.values(readSessionListRowsForServerId(sessionListRowsByServerId, canonicalScopeServerId) ?? {})
+        .filter(row => typeof row.archivedAt !== 'number' && isSessionContentUnsettled(row))
+        .map((row): SessionAddress => ({ serverId: canonicalScopeServerId ?? '', sessionId: row.id })), [canonicalScopeServerId, sessionListRowsByServerId]);
+    useSessionContentDemand(canonicalScopeServerId ? undecidedSessions : NO_SESSION_ADDRESSES, { tag: 'search.hydrateSessionRows', hydrate: 'unsettled' });
     const sessionOrganizationProjection = useSessionOrganizationProjection(canonicalScopeServerId);
     const sessionOrganizationListViewState = React.useMemo(() => buildSessionOrganizationListViewState({
         serverId: canonicalScopeServerId ?? '',
@@ -459,58 +472,64 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         return {
             status: 'ready',
             resolverKey: `conversations:${conversationScopeKey}:${homeCredentialRevision}:${JSON.stringify(providers)}`,
-            resolve: async (value, signal) => {
+            resolve: async (value, signal, onProgress) => {
                 const lifetime = selectedCredentialBinding;
                 if (!lifetime?.isCurrent() || lifetime.accountId !== scope.accountId) return [];
+                const project = (response: Awaited<ReturnType<typeof searchConversationsForAccount>>) => {
+                    const results = response.hits.flatMap<UniversalSearchResult>(row => {
+                        if (row.mode !== 'indexed') return [];
+                        const hit = row.hit;
+                        if (isMemoryExternalTranscriptSearchHitV1(hit)) {
+                            if (!row.machineId) return [];
+                            return [{ id: buildUniversalSearchScopeKey([row.machineId, hit.source.sourceKey, hit.source.nativeSessionId, hit.sourceItemId]),
+                                scopeKey: conversationScopeKey, sourceId: UNIVERSAL_SEARCH_SOURCE_IDS.transcript, kind: 'externalConversation',
+                                // An Agent's own conversation has no Happier title: the Agent names the row, the match says why.
+                                title: resolveAgentCatalogTitle(hit.source.agentId),
+                                conversation: { snippet: hit.summary, query: value, agentId: hit.source.agentId,
+                                    machineLabel: machineNameById.get(row.machineId) ?? row.machineId, atMs: hit.createdAtToMs },
+                                target: { kind: 'externalConversation', serverId: canonicalScopeServerId,
+                                    accountId: lifetime.accountId, machineId: row.machineId, agentId: hit.source.agentId,
+                                    sourceKey: hit.source.sourceKey, candidate: { remoteSessionId: hit.source.nativeSessionId, updatedAtMs: hit.createdAtToMs },
+                                    sourceItemId: hit.sourceItemId, query: value } }];
+                        }
+                        if (isMemoryDocumentSearchHitV1(hit)) {
+                            const topic = typeof hit.location === 'object' ? hit.location.title : null;
+                            const location = typeof hit.location === 'object' ? hit.location.type : hit.location;
+                            const identity = [hit.ref.serverId, hit.ref.artifactId, location, topic, hit.factId];
+                            return [{ id: buildUniversalSearchScopeKey(identity),
+                                scopeKey: buildUniversalSearchScopeKey([lifetime.accountId, canonicalScopeServerId, ...identity]),
+                                sourceId: UNIVERSAL_SEARCH_SOURCE_IDS.transcript, kind: 'memoryDocument', title: hit.summary,
+                                target: { kind: 'memoryDocument', serverId: canonicalScopeServerId, accountId: lifetime.accountId,
+                                    ref: hit.ref, location: hit.location, ...(hit.factId !== undefined ? { factId: hit.factId } : {}) } }];
+                        }
+                        const freshRow = readSessionListRowsForServerId(storage.getState().sessionListRowsByServerId, canonicalScopeServerId)?.[hit.sessionId];
+                        const title = (freshRow ? getSessionName(freshRow, canonicalScopeServerId) : '')
+                            || sessionNameByTarget.get(buildUniversalSearchSessionTitleKey(lifetime.accountId, canonicalScopeServerId, hit.sessionId));
+                        return [{ ...memoryHitResult(hit, canonicalScopeServerId, lifetime.accountId,
+                            title && title !== hit.summary ? title : t('sessionsList.sessionFallbackLabel'), value),
+                            conversation: { snippet: hit.summary, query: value, atMs: hit.createdAtToMs } }];
+                    });
+                    // Which machines were not fully covered, by name and reason. A machine whose index is off
+                    // is only worth saying when every machine was asked; otherwise the Home answers for it.
+                    const coverage = describeConversationSearchCoverage({ machines: response.machines, homeStatus: response.homeStatus, failures: response.failures,
+                        machineName: (machineId) => machineNameById.get(machineId) ?? machineId,
+                        ...(scope.machineScope === 'all' ? {} : { omit: ['disabled-by-settings'] as const }) });
+                    const documentHint = response.machines.some(machine => machine.documents === 'ready') ? null
+                        : response.machines.some(machine => machine.documents === 'pending') ? t('memorySearchSettings.status.indexing')
+                        : t('memoryContext.memory.documentSearchUnavailable');
+                    return { results, resultHint: [coverage, documentHint].filter(Boolean).join(' · ') };
+                };
                 const response = await searchConversationsForAccount({
                     query: { v: 1, query: value, scope: { type: 'global' }, mode: 'auto', corpora: [...MEMORY_SEARCH_CORPORA], maxResults: 20 },
                     accountLifetime: lifetime, providers, mode: 'indexed', signal,
+                    onProgress: onProgress ? response => {
+                        if (!signal.aborted && lifetime.isCurrent()) onProgress(project(response));
+                    } : undefined,
                     ...(scope.machineScope !== 'all' && (scope.machineId || memoryProvider.daemonTarget)
                         ? { machineIds: [scope.machineId ?? memoryProvider.daemonTarget!.machineId] } : {}),
                 });
                 if (signal.aborted || !lifetime.isCurrent()) return [];
-                const results = response.hits.flatMap<UniversalSearchResult>(row => {
-                    if (row.mode !== 'indexed') return [];
-                    const hit = row.hit;
-                    if (isMemoryExternalTranscriptSearchHitV1(hit)) {
-                        if (!row.machineId) return [];
-                        return [{ id: buildUniversalSearchScopeKey([row.machineId, hit.source.sourceKey, hit.source.nativeSessionId, hit.sourceItemId]),
-                            scopeKey: conversationScopeKey, sourceId: UNIVERSAL_SEARCH_SOURCE_IDS.transcript, kind: 'externalConversation',
-                            // An Agent's own conversation has no Happier title: the Agent names the row, the match says why.
-                            title: resolveAgentCatalogTitle(hit.source.agentId),
-                            conversation: { snippet: hit.summary, query: value, agentId: hit.source.agentId,
-                                machineLabel: machineNameById.get(row.machineId) ?? row.machineId, atMs: hit.createdAtToMs },
-                            target: { kind: 'externalConversation', serverId: canonicalScopeServerId,
-                                accountId: lifetime.accountId, machineId: row.machineId, agentId: hit.source.agentId,
-                                sourceKey: hit.source.sourceKey, candidate: { remoteSessionId: hit.source.nativeSessionId, updatedAtMs: hit.createdAtToMs },
-                                sourceItemId: hit.sourceItemId, query: value } }];
-                    }
-                    if (isMemoryDocumentSearchHitV1(hit)) {
-                        const topic = typeof hit.location === 'object' ? hit.location.title : null;
-                        const location = typeof hit.location === 'object' ? hit.location.type : hit.location;
-                        const identity = [hit.ref.serverId, hit.ref.artifactId, location, topic, hit.factId];
-                        return [{ id: buildUniversalSearchScopeKey(identity),
-                            scopeKey: buildUniversalSearchScopeKey([lifetime.accountId, canonicalScopeServerId, ...identity]),
-                            sourceId: UNIVERSAL_SEARCH_SOURCE_IDS.transcript, kind: 'memoryDocument', title: hit.summary,
-                            target: { kind: 'memoryDocument', serverId: canonicalScopeServerId, accountId: lifetime.accountId,
-                                ref: hit.ref, location: hit.location, ...(hit.factId !== undefined ? { factId: hit.factId } : {}) } }];
-                    }
-                    const freshRow = readSessionListRowsForServerId(storage.getState().sessionListRowsByServerId, canonicalScopeServerId)?.[hit.sessionId];
-                    const title = (freshRow ? getSessionName(freshRow, canonicalScopeServerId) : '')
-                        || sessionNameByTarget.get(buildUniversalSearchSessionTitleKey(lifetime.accountId, canonicalScopeServerId, hit.sessionId));
-                    return [{ ...memoryHitResult(hit, canonicalScopeServerId, lifetime.accountId,
-                        title && title !== hit.summary ? title : t('sessionsList.sessionFallbackLabel'), value),
-                        conversation: { snippet: hit.summary, query: value, atMs: hit.createdAtToMs } }];
-                });
-                // Which machines were not fully covered, by name and reason. A machine whose index is off
-                // is only worth saying when every machine was asked; otherwise the Home answers for it.
-                const coverage = describeConversationSearchCoverage({ machines: response.machines, homeStatus: response.homeStatus,
-                    machineName: (machineId) => machineNameById.get(machineId) ?? machineId,
-                    ...(scope.machineScope === 'all' ? {} : { omit: ['disabled-by-settings'] as const }) });
-                const documentHint = response.machines.some(machine => machine.documents === 'ready') ? null
-                    : response.machines.some(machine => machine.documents === 'pending') ? t('memorySearchSettings.status.indexing')
-                    : t('memoryContext.memory.documentSearchUnavailable');
-                return { results, resultHint: [coverage, documentHint].filter(Boolean).join(' · ') };
+                return project(response);
             },
         };
     }, [canonicalScopeServerId, conversationScopeKey, homeCredentialRevision, machineNameById, memoryProvider, scope.accountId, scope.machineId, scope.machineScope,
@@ -556,10 +575,13 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     // Session/workspace reference with an offline machine is still a real
     // target, but it cannot answer until the machine is reachable; expose that
     // state as a non-activatable section hint instead of issuing a doomed RPC.
-    const workspaceScopeReachable = workspaceScope ? isWorkspaceScopeReachable(workspaceScope) : false;
+    const workspaceMachinePresence = useMachinePresenceSummary(workspaceScope?.serverId, workspaceScope?.machineId);
+    const workspaceScopeReachable = workspaceMachinePresence.reachability === 'reachable';
     const workspaceSearchAvailable = workspaceActivationAvailable && selectedCredentialIsCurrent;
     // Names the machine, as the History browser does (lab ST: "MacBook Pro is offline").
     const offlineMachineName = workspaceScope ? machineNameById.get(workspaceScope.machineId) : undefined;
+    // The failure lines name the machine the folder lives on, never a raw id.
+    const machineLabel = offlineMachineName ?? t('universalSearch.thisMachine');
     const workspaceUnavailableHint = offlineMachineName
         ? t('externalSessions.browseMachineOfflineTitle', { machine: offlineMachineName })
         : t('newSession.machineOfflineInlineTitle');
@@ -574,37 +596,39 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                 if (parsedTarget && ((parsedTarget.serverId && !areServerProfileIdentifiersEquivalent(parsedTarget.serverId, workspaceScope.serverId)) || (parsedTarget.sessionId && parsedTarget.sessionId !== activeSession?.id) || (parsedTarget.workspaceRefId && parsedTarget.workspaceRefId !== workspaceRef?.id))) return { results: [], emptyHint: t('universalSearch.content.unavailable') };
                 const parsedPath = parsedTarget ? (isAbsoluteLocalPath(parsedTarget.path.replace(/\\/g, '/')) ? resolvePathRelativeToRoot({ path: parsedTarget.path, root: workspaceScope.rootPath }) : parsedTarget.path.replace(/\\/g, '/')) : null;
                 if (parsedTarget && parsedPath === null) return { results: [], emptyHint: t('universalSearch.content.unavailable') };
-                const searchFilePage = (query: string) => searchWorkspaceFiles({
-                    scope: workspaceScope,
-                    query,
-                    limit: 20,
-                    resultType: 'file',
-                    accountLifetime: selectedCredentialBinding,
-                    signal,
-                    includeCoverage: true,
-                });
+                const searchFilePage = async (query: string) => {
+                    try {
+                        return await searchWorkspaceFiles({
+                            scope: workspaceScope, query, limit: 20, resultType: 'file',
+                            accountLifetime: selectedCredentialBinding, signal, includeCoverage: true,
+                        });
+                    } catch (error) {
+                        if (error instanceof WorkspaceFileSearchUnavailableError && error.errorCode === 'root_not_found') throw workspaceFolderMissingFailure();
+                        throw error;
+                    }
+                };
                 const [page, literalPage] = await Promise.all([
                     searchFilePage(parsedPath ?? value),
                     parsedTarget && !parsedTarget.sessionId && !parsedTarget.workspaceRefId && parsedPath !== value ? searchFilePage(value) : Promise.resolve(null),
                 ]);
                 const fileItems = [...page.items, ...(literalPage?.items ?? []).filter((candidate) => !page.items.some((item) => item.fullPath === candidate.fullPath))];
+                const fileResults = buildUniversalSearchWorkspaceFileResults({
+                    files: fileItems,
+                    accountId: selectedCredentialBinding.accountId,
+                    scope: workspaceScope,
+                    workspaceRefId: workspaceRef?.id ?? null,
+                    sessionId: activeSession?.id ?? null,
+                });
                 return {
-                    results: buildUniversalSearchWorkspaceFileResults({
-                        files: fileItems,
-                        accountId: selectedCredentialBinding.accountId,
-                        scope: workspaceScope,
-                        workspaceRefId: workspaceRef?.id ?? null,
-                        sessionId: activeSession?.id ?? null,
-                    }).map((result) => {
+                    results: fileResults.map((result) => {
                         if (!parsedTarget?.anchor || !parsedPath || result.target.kind !== 'workspaceFile') return result;
                         const actualPath = resolvePathRelativeToRoot({ path: `${workspaceScope.rootPath}/${result.target.path}`, root: workspaceScope.rootPath });
                         const targetPath = resolvePathRelativeToRoot({ path: `${workspaceScope.rootPath}/${parsedPath}`, root: workspaceScope.rootPath });
                         const exactPath = actualPath !== null && targetPath !== null ? actualPath === targetPath : result.target.path === parsedPath;
                         return exactPath ? { ...result, target: { ...result.target, anchor: parsedTarget.anchor, ...(parsedTarget.anchorSource ? { anchorSource: parsedTarget.anchorSource } : {}) } } : result;
                     }),
-                    ...(page.hasMore || literalPage?.hasMore
-                        ? { resultHint: t('universalSearch.moreResultsAvailable') }
-                        : {}),
+                    // One rule with the plugin groups: an empty bounded reply says what was searched, not that more exist.
+                    ...boundedReplyHints({ rowCount: fileResults.length, incomplete: page.hasMore || literalPage?.hasMore === true }),
                 };
             },
         };
@@ -618,8 +642,9 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                 const page = await searchWorkspaceFileContents({ scope: workspaceScope, accountLifetime: selectedCredentialBinding, query: value, matchCase, regex, signal });
                 if (signal.aborted || !selectedCredentialBinding.isCurrent()) throw Object.assign(new Error('Search cancelled'), { name: 'AbortError' });
                 if (page.error) {
-                    const hint = page.error === 'update_required' ? t('universalSearch.content.updateRequired') : page.error === 'invalid_pattern' ? t('universalSearch.content.invalidPattern') : t('universalSearch.content.unavailable');
-                    return { results: [], emptyHint: hint, resultHint: hint };
+                    const presented = presentContentSearchError(page.error, { machine: machineLabel, group: t('universalSearch.content.textInFiles') });
+                    if (presented.kind === 'failure') throw presented.failure;
+                    return { results: [], emptyHint: presented.hint, resultHint: presented.hint };
                 }
                 const scopeKey = buildUniversalSearchScopeKey([selectedCredentialBinding.accountId, workspaceScope.serverId, workspaceScope.machineId, workspaceScope.rootPath]);
                 const results: UniversalSearchResult[] = page.items.flatMap((file) => file.matches.map((match) => {
@@ -630,7 +655,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                     ...(page.coverage === 'partial' ? { resultHint: t('universalSearch.content.partial') } : {}) };
             },
         };
-    }, [activeSession?.id, matchCase, regex, selectedCredentialBinding, source, workspaceRef?.id, workspaceResolverKey, workspaceScope, workspaceScopeReachable, workspaceSearchAvailable, workspaceUnavailableHint]);
+    }, [activeSession?.id, matchCase, regex, selectedCredentialBinding, source, workspaceRef?.id, workspaceResolverKey, workspaceScope, workspaceScopeReachable, workspaceSearchAvailable, workspaceUnavailableHint, machineLabel]);
     const commits = React.useMemo<UniversalSearchSource>(() => {
         // An offline folder is said once, under Text in files (lab ST "Machine offline"); this group steps aside.
         if (!workspaceScope || !workspaceSearchAvailable || !selectedCredentialBinding || !workspaceScopeReachable) return { status: 'absent' };
@@ -646,7 +671,9 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                     limit: 20,
                     signal,
                 });
-                if (outcome.status === 'unavailable') throw new Error(outcome.message ?? outcome.reason);
+                if (outcome.status === 'unavailable') {
+                    throw presentCommitSearchFailure(outcome, { machine: machineLabel, folder: workspaceScope.rootPath }) ?? new Error(outcome.message ?? outcome.reason);
+                }
                 if (outcome.status === 'recentOnly') {
                     return {
                         results: [],
@@ -664,7 +691,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                 }));
             },
         };
-    }, [activeSession?.id, selectedCredentialBinding, workspaceRef?.id, workspaceResolverKey, workspaceScope, workspaceScopeReachable, workspaceSearchAvailable, workspaceUnavailableHint]);
+    }, [activeSession?.id, selectedCredentialBinding, workspaceRef?.id, workspaceResolverKey, workspaceScope, workspaceScopeReachable, workspaceSearchAvailable, workspaceUnavailableHint, machineLabel]);
 
     const accountLifetime = pluginAccount.lifetime;
     const currentPluginProjectionRef = React.useRef(pluginProjection.pluginUiProjection);
@@ -677,6 +704,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                 provider.pluginId === pluginId && provider.occurrenceId === occurrenceId
             ));
     }, [accountLifetime]);
+    const clientRegistrationRevision = usePluginUiClientExecutableRegistrationRevision();
     const pluginSections = React.useMemo(() => buildPluginSearchProviderSections({
         projection: pluginProjection.pluginUiProjection,
         scopedLaunchFacts: {
@@ -690,7 +718,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         readCurrentUiContext: currentUiContextReader?.readCurrentUiContext,
         openSurface: pluginNavigationBinding?.openSurface,
         onCommitActivation: (activate) => { committedPluginActivationRef.current = activate; },
-    }), [accountLifetime, currentUiContextReader, pluginAccount.revision, pluginNavigationBinding?.openSurface, pluginProjection, pluginScopeIsCurrent, scope.machineId, scope.serverId]);
+    }), [accountLifetime, clientRegistrationRevision, currentUiContextReader, pluginAccount.revision, pluginNavigationBinding?.openSurface, pluginProjection, pluginScopeIsCurrent, scope.machineId, scope.serverId]);
 
     const accountIdByServerId = React.useMemo(() => new Map(
         [...credentialBindings].map(([serverId, binding]) => [serverId, binding.accountId]),
@@ -766,8 +794,10 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         if (next !== 'fileContent') { setMatchCase(false); setRegex(false); }
     }, []);
     const showAllFileMatches = React.useCallback(() => selectSource('fileContent'), [selectSource]);
+    const fileContentFolderLabel = workspaceScope
+        ? workspaceRef?.label?.trim() || workspaceScope.rootPath.split(/[\\/]/).filter(Boolean).pop() : undefined;
     const fileContentScopeLabel = workspaceScope ? [
-        workspaceRef?.label?.trim() || workspaceScope.rootPath.split(/[\\/]/).filter(Boolean).pop(),
+        fileContentFolderLabel,
         machineNameById.get(workspaceScope.machineId) ?? workspaceScope.machineId,
     ].filter(Boolean).join(' · ') : undefined;
     // No folder in scope: Text in files offers the recent project folders instead of guessing one.
@@ -969,7 +999,8 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                                 state: { requestToken: 0, linkingCandidateKey: null },
                                 openSession: (sessionId, destination, seed) => openChatWithFindSeed({
                                     handoff: paneContext?.fileFindSeedHandoff, destination: { sessionId, serverId: destination.serverId ?? '' },
-                                    seed, authority: binding, open: () => navigateToSession(sessionId, { serverId: destination.serverId ?? undefined }),
+                                    seed, authority: paneContext?.fileFindSeedAccountBindings.get(resolveServerProfileScopeIdForIdentifier(destination.serverId)),
+                                    open: () => navigateToSession(sessionId, { serverId: destination.serverId ?? undefined }),
                                 }),
                             });
                         },
@@ -978,7 +1009,8 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                             return openChatWithFindSeed({
                                 handoff: paneContext?.fileFindSeedHandoff,
                                 destination: { sessionId, serverId: destination.serverId ?? '' }, seed: find,
-                                authority: credentialBindings.get(resolveServerProfileScopeIdForIdentifier(destination.serverId)),
+                                // The destination owns launch custody after Search dismisses.
+                                authority: paneContext?.fileFindSeedAccountBindings.get(resolveServerProfileScopeIdForIdentifier(destination.serverId)),
                                 open: () => navigateToSession(sessionId, destination),
                             });
                         },
@@ -1018,13 +1050,16 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     const sourceFilters = React.useMemo<readonly SelectionListFilter[]>(() => source === 'fileContent' ? [{
         id: 'source',
         label: t('tools.names.search'),
-        valueLabel: t('universalSearch.content.textInFiles'),
+        // Names the folder and machine it searches (lab G1s "Text in happier · MacBook Pro"), not only what it searches.
+        valueLabel: fileContentScopeLabel ? t('universalSearch.content.textInScope', { scope: fileContentScopeLabel }) : t('universalSearch.content.textInFiles'),
+        // The chip row beneath the field on a phone names the folder alone (lab G1sp "Text in happier"); the machine stays in the name.
+        ...(fileContentFolderLabel ? { rowValueLabel: t('universalSearch.content.textInScope', { scope: fileContentFolderLabel }) } : {}),
         icon: <Icon name="text-aa" size={12} color={theme.colors.text.secondary} />,
         active: true,
         onClear: () => selectSource('everything'),
         clearAccessibilityLabel: t('universalSearch.content.everything'),
         testID: 'universal-search:source',
-    }] : [], [selectSource, source, theme.colors.text.secondary]);
+    }] : [], [fileContentFolderLabel, fileContentScopeLabel, selectSource, source, theme.colors.text.secondary]);
     const combinedFilters = React.useMemo(() => [...(scopeFilters ?? []), ...sourceFilters], [scopeFilters, sourceFilters]);
     // ⌫ on an empty field drops the Text in files token, as it leaves the Terminals scope (lab G1s).
     const sourceInputBehavior = React.useMemo<SelectionListInputBehavior | undefined>(() => source === 'fileContent' ? {
@@ -1059,7 +1094,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
             onBack={() => setExternalConversationSearch(null)}
             onRequestClose={props.onRequestClose}
             onOpenSession={async (sessionId, target, find) => {
-                const authority = externalConversationSearch.accountLifetime;
+                const authority = paneContext?.fileFindSeedAccountBindings.get(resolveServerProfileScopeIdForIdentifier(target.serverId));
                 await openChatWithFindSeed({
                     handoff: paneContext?.fileFindSeedHandoff,
                     destination: { sessionId, serverId: target.serverId ?? '' }, seed: find, authority,

@@ -1,25 +1,31 @@
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import type { DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Icon } from '@/components/ui/icons/Icon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { StatusPill } from '@/components/ui/status/StatusPill';
 import { t, tLoose } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { getVoiceContributedSettingsDeclarations, voiceSettingsDeclarationRegistry } from '@/voice/settings/voiceContributedSettingsDeclarations';
+import { VOICE_CONVERSATIONS_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
+import type { SettingRef } from '@/components/settings/catalog/settingDeclarations';
+import { BUILT_IN_LOCAL_NEURAL_VOICE_PROVIDER_ID } from '@happier-dev/protocol/sessions/instructions/sessionVoicePreferenceV1';
+import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
+import { localNeuralTtsPreviewController } from '../localTts/providers/localNeural/previewLocalNeuralTts';
 import type { VoiceRemoteCatalogState } from '@/voice/settings/remoteCatalogState';
 
 import {
-  playRealtimeCatalogPreview,
   readRealtimeCatalogPreview,
   stopRealtimeCatalogPreview,
   subscribeRealtimeCatalogPreview,
-  type VoiceCatalogPreviewSynthesizer,
 } from './catalogPreview';
-import { fetchVoiceSettingsCatalog, type VoiceCatalogRow } from './voiceCatalog';
-import type { BundledConversationProviderClient } from '@/voice/credentials/bundledConversationClient';
+import { readVoiceCatalogSettingsActionResult, type VoiceCatalogRow } from './voiceCatalog';
 
 const PREVIEW_TARGET_SIZE = resolveMinimumInteractiveTargetSize(Platform.OS);
 
@@ -33,50 +39,79 @@ function retainCatalogRows(targetKey: string, rows: readonly VoiceCatalogRow[]) 
   retainedCatalogListeners.get(targetKey)?.forEach((listener) => listener());
 }
 
+type CatalogOperation = 'preview' | 'stopPreview' | 'listCatalog' | 'retryCatalog';
+function readCatalogOperationSetting(providerId: string, operation: CatalogOperation): SettingRef | undefined {
+  if (providerId === BUILT_IN_LOCAL_NEURAL_VOICE_PROVIDER_ID) {
+    const localOperation = { preview: 'ttsPreview', stopPreview: 'ttsPreviewStop', listCatalog: 'ttsCatalog', retryCatalog: 'ttsCatalogRetry' } as const;
+    return VOICE_CONVERSATIONS_SETTINGS.settings[localOperation[operation]];
+  }
+  const page = getVoiceContributedSettingsDeclarations(voiceSettingsDeclarationRegistry)
+    .find(page => page.pageId === 'voiceConversations' && page.sections[`provider.${providerId}`]);
+  return Object.values(page?.settings ?? {}).find(candidate => candidate.anchor.endsWith(`.${operation}`));
+}
+
 /** The one catalog preview player per provider, shared by Settings and a Session's Work voice picker. */
 export function useRealtimeCatalogPreview(providerId: string, options?: Readonly<{
   targetKey?: string;
-  synthesize?: VoiceCatalogPreviewSynthesizer;
 }>): Readonly<{
   previewingId: string | null;
-  playPreview: (row: VoiceCatalogRow) => void;
-  stopPreview: () => void;
+  playPreview: (row: VoiceCatalogRow) => Promise<void>;
+  stopPreview: () => Promise<void>;
+  retirePreview: () => void;
 }> {
+  const scope = useAccountSettingsScope();
+  const actions = useMountedActionExecution(scope, { openOnRequest: true });
   const snapshot = React.useSyncExternalStore(
     subscribeRealtimeCatalogPreview,
     readRealtimeCatalogPreview,
     readRealtimeCatalogPreview,
   );
-  const previewingId =
-    snapshot?.providerId === providerId ? snapshot.voiceId : null;
+  const localPreviewId = React.useSyncExternalStore(localNeuralTtsPreviewController.subscribe,
+    localNeuralTtsPreviewController.read, localNeuralTtsPreviewController.read);
+  const localNeural = providerId === BUILT_IN_LOCAL_NEURAL_VOICE_PROVIDER_ID;
+  const previewingId = localNeural ? localPreviewId : snapshot?.providerId === providerId ? snapshot.voiceId : null;
   const targetKey = options?.targetKey ?? providerId;
-  const synthesize = options?.synthesize;
-  const targetRef = React.useRef({ providerId, targetKey });
-  targetRef.current = { providerId, targetKey };
-  const stopPreview = React.useCallback(() => {
-    stopRealtimeCatalogPreview(providerId);
-  }, [providerId, targetKey]);
-  React.useEffect(() => stopPreview, [stopPreview]);
+  const previewLifetime = React.useMemo(() => ({ controller: new AbortController() }), [providerId, targetKey]);
+  const ownedPreview = React.useRef<ReturnType<typeof readRealtimeCatalogPreview>>(null);
+  const retirePreview = React.useCallback(() => {
+    previewLifetime.controller.abort();
+    previewLifetime.controller = new AbortController();
+    // URL playback outlives its completed Action. Only release this picker's sample;
+    // pending/native playback is retired by its own Action cancellation signal.
+    if (ownedPreview.current && readRealtimeCatalogPreview() === ownedPreview.current) stopRealtimeCatalogPreview(providerId);
+    ownedPreview.current = null;
+  }, [previewLifetime, providerId]);
+  React.useEffect(() => {
+    if (previewLifetime.controller.signal.aborted) previewLifetime.controller = new AbortController();
+    return retirePreview;
+  }, [previewLifetime, retirePreview]);
+  const invoke = React.useCallback(async (operation: 'preview' | 'stopPreview', voiceId?: string) => {
+    const setting = readCatalogOperationSetting(providerId, operation);
+    if (!setting) return;
+    const signal = previewLifetime.controller.signal;
+    const result = await actions.execute('settings.invoke', { anchor: setting.anchor,
+      ...(voiceId ? { input: { kind: 'voice_preview', voiceId } } : {}) }, { signal });
+    if (!localNeural && operation === 'preview' && result.ok && !signal.aborted) {
+      const receipt = SettingsDeclarationActionOutputSchemasV1['settings.invoke'].safeParse(result.result);
+      const playing = readRealtimeCatalogPreview();
+      if (receipt.success && receipt.data.status === 'completed' && playing?.providerId === providerId && playing.voiceId === voiceId) {
+        ownedPreview.current = playing;
+      }
+    }
+  }, [actions.execute, localNeural, previewLifetime, providerId]);
+  const stopPreview = React.useCallback(() => invoke('stopPreview'), [invoke]);
   const playPreview = React.useCallback(
-    (row: VoiceCatalogRow) => {
-      if (!row.previewUrl && !synthesize) return;
+    async (row: VoiceCatalogRow) => {
+      if (!row.previewUrl && !row.previewAvailable && !localNeural) return;
       if (previewingId === row.id) {
-        stopPreview();
+        await stopPreview();
         return;
       }
-      fireAndForget(
-        playRealtimeCatalogPreview({
-          providerId,
-          row,
-          synthesize,
-          isCurrent: () => targetRef.current.providerId === providerId && targetRef.current.targetKey === targetKey,
-        }),
-        { tag: 'RealtimeCatalogPreview.play' },
-      );
+      await invoke('preview', row.id);
     },
-    [previewingId, providerId, stopPreview, synthesize, targetKey],
+    [invoke, localNeural, previewingId, stopPreview],
   );
-  return { previewingId, playPreview, stopPreview };
+  return { previewingId, playPreview, stopPreview, retirePreview };
 }
 
 /**
@@ -90,10 +125,12 @@ export function useRealtimeCatalogMenuItems(
     credentialUsable: boolean;
     credentialUnavailableDetail: string;
     previewingId: string | null;
-    onPreview: (row: VoiceCatalogRow) => void;
+    onPreview: (row: VoiceCatalogRow) => void | Promise<void>;
     canPreview?: boolean;
     inUseId?: string | null;
     category?: string;
+    /** Asks the catalog again: the failure row's one recovery. */
+    onRetry?: () => void;
   }>,
 ): Readonly<{
   statusRows: DropdownMenuItem[];
@@ -109,6 +146,7 @@ export function useRealtimeCatalogMenuItems(
     canPreview,
     inUseId,
     category,
+    onRetry,
   } = params;
   return React.useMemo(() => {
     const catalogRows: DropdownMenuItem[] =
@@ -116,7 +154,7 @@ export function useRealtimeCatalogMenuItems(
         ? catalog.rows.map((row) => {
             const inUse =
               inUseId !== undefined && inUseId !== null && inUseId === row.id;
-            const preview = row.previewUrl || canPreview ? (
+            const preview = row.previewUrl || row.previewAvailable || canPreview ? (
               <IconButton
                 variant="plain"
                 minimumInteractiveTargetSize={PREVIEW_TARGET_SIZE}
@@ -126,7 +164,8 @@ export function useRealtimeCatalogMenuItems(
                 )}
                 onPress={(event) => {
                   event?.stopPropagation?.();
-                  onPreview(row);
+                  const pending = onPreview(row);
+                  if (pending) fireAndForget(pending, { tag: 'RealtimeCatalogPreview.play' });
                 }}
                 icon={<Icon
                   name={previewingId === row.id ? 'stop-circle' : 'play-circle'}
@@ -135,26 +174,24 @@ export function useRealtimeCatalogMenuItems(
                 />}
               />
             ) : null;
+            // The preview leads the row (as in the lab's voice list), so names align on one edge and the
+            // right edge is left for the one fact that can need it: the voice in use.
             return {
               id: row.id,
               title: row.name,
               subtitle: row.subtitle,
               ...(category ? { category } : {}),
-              rightElement: inUse ? (
-                <View
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 }}
-                >
+              ...(preview ? { icon: preview } : {}),
+              ...(inUse ? {
+                rightElement: (
                   <StatusPill
                     variant="neutral"
                     hideDot
                     label={t('sessionVoice.inUse')}
                     labelVariant="phrase"
                   />
-                  {preview}
-                </View>
-              ) : (
-                (preview ?? undefined)
-              ),
+                ),
+              } : {}),
             };
           })
         : [];
@@ -171,8 +208,22 @@ export function useRealtimeCatalogMenuItems(
         : catalog.phase === 'error'
           ? [
               {
+                // One sentence and its one recovery, kept at the foot of the account-voice row.
+                // One sentence and its one recovery, kept at the foot of the account-voice row.
                 id: '__retry__',
-                title: tLoose('settingsVoice.realtimeProviders.catalog.retry'),
+                title: tLoose('settingsVoice.realtimeProviders.catalog.loadFailed'),
+                rightElement: (
+                  <RoundButton
+                    testID="voice-catalog.retry"
+                    size="small"
+                    display="secondary"
+                    title={t('common.retry')}
+                    onPress={(event) => {
+                      event?.stopPropagation?.();
+                      onRetry?.();
+                    }}
+                  />
+                ),
               },
             ]
           : catalog.phase === 'ready' && catalog.rows.length === 0
@@ -195,17 +246,19 @@ export function useRealtimeCatalogMenuItems(
     credentialUsable,
     inUseId,
     onPreview,
+    onRetry,
     previewingId,
     theme.colors.text.secondary,
   ]);
 }
 
 /**
- * The provider's voice catalog, fetched on demand (opening a picker) through its bundled client and
- * retained per `targetKey` (provider + credential): the one fetch owner for Settings and Work.
+ * The provider's voice catalog, read on demand through its declared Settings Action and retained
+ * per `targetKey` (provider + credential): one UI request/retention owner for Settings and Work.
  */
 export function useRealtimeVoiceCatalog(params: Readonly<{
-  client: Pick<BundledConversationProviderClient, 'fetchVoiceCatalog'> | null;
+  providerId: string | null;
+  catalogAvailable: boolean;
   credentialUsable: boolean;
   targetKey: string;
   declaredRows?: readonly VoiceCatalogRow[] | null;
@@ -215,7 +268,9 @@ export function useRealtimeVoiceCatalog(params: Readonly<{
   requestCatalog: () => void;
   resetCatalog: () => void;
 }> {
-  const { client, credentialUsable, targetKey, declaredRows } = params;
+  const { providerId, catalogAvailable, credentialUsable, targetKey, declaredRows } = params;
+  const scope = useAccountSettingsScope();
+  const actions = useMountedActionExecution(scope, { openOnRequest: true });
   const subscribeRetainedRows = React.useCallback((listener: () => void) => {
     const listeners = retainedCatalogListeners.get(targetKey) ?? new Set<() => void>();
     retainedCatalogListeners.set(targetKey, listeners);
@@ -233,13 +288,19 @@ export function useRealtimeVoiceCatalog(params: Readonly<{
     : state?.targetKey === targetKey ? state.value : { phase: 'idle' };
   const requestRef = React.useRef<{ generation: number; controller: AbortController | null }>({ generation: 0, controller: null });
   const requestCatalog = React.useCallback(() => {
-    if (declaredRows || !client || !credentialUsable || catalog.phase === 'loading') return;
+    if (!providerId || (!catalogAvailable && !declaredRows) || !credentialUsable || catalog.phase === 'loading') return;
     requestRef.current.controller?.abort();
     const controller = new AbortController();
     const generation = requestRef.current.generation + 1;
     requestRef.current = { generation, controller };
     setState({ targetKey, value: { phase: 'loading' } });
-    void fetchVoiceSettingsCatalog(client, controller.signal).then((rows) => {
+    const read = async () => {
+      const setting = readCatalogOperationSetting(providerId, catalog.phase === 'error' ? 'retryCatalog' : 'listCatalog');
+      if (!setting) throw new Error('voice_catalog_unavailable');
+      const result = await actions.execute('settings.invoke', { anchor: setting.anchor }, { signal: controller.signal });
+      return readVoiceCatalogSettingsActionResult(result);
+    };
+    void read().then((rows) => {
       if (requestRef.current.generation === generation && !controller.signal.aborted) {
         retainCatalogRows(targetKey, rows);
         setState({ targetKey, value: { phase: 'ready', rows } });
@@ -247,7 +308,7 @@ export function useRealtimeVoiceCatalog(params: Readonly<{
     }).catch(() => {
       if (requestRef.current.generation === generation && !controller.signal.aborted) setState({ targetKey, value: { phase: 'error' } });
     });
-  }, [catalog.phase, client, credentialUsable, declaredRows, targetKey]);
+  }, [actions.execute, catalog.phase, catalogAvailable, credentialUsable, declaredRows, providerId, targetKey]);
   const resetCatalog = React.useCallback(() => {
     requestRef.current.controller?.abort();
     requestRef.current = { generation: requestRef.current.generation + 1, controller: null };

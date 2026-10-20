@@ -4,8 +4,8 @@ import { type SetSessionAttentionStandingRequest } from '@happier-dev/protocol/s
 
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import { scheduleAccountActivityBadgeRefresh } from "@/app/activity/refreshAccountActivityBadgePushes";
-import { acknowledgeCurrentSessionDiscussionFrontiersInTx } from "@/app/session/discussions/readState";
 import { applyViewerReadCursorOperationInTx } from "@/app/session/personal/readState";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { afterTx, inTx } from "@/storage/inTx";
 import {
     areSessionOrganizationDisplayEnvelopesAllowedForAccount,
@@ -483,6 +483,7 @@ export async function setSessionAttentionStandingInTx(tx: SessionOrganizationTx,
         return { standing: mapSessionAttentionStanding(existingStanding) };
     }
     if (typeof params.request.remindAt === "number") {
+        await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId], [params.accountId]);
         // The read-state owner, rather than cursor-row existence, decides whether
         // this Account is currently tracked. An unfollowed collaborator may
         // retain an inert historical row; setting a reminder is still valid and
@@ -495,12 +496,6 @@ export async function setSessionAttentionStandingInTx(tx: SessionOrganizationTx,
         });
         if (!read.ok && read.error !== "session-not-tracked") {
             return { error: "session-not-found" };
-        }
-        if (read.ok) {
-            await acknowledgeCurrentSessionDiscussionFrontiersInTx(tx, {
-                accountId: params.accountId,
-                sessionId: params.sessionId,
-            });
         }
     }
 
@@ -768,6 +763,7 @@ export async function setSessionFolderAssignmentInTx(tx: SessionOrganizationTx, 
         }
     }
 
+    await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId], [params.accountId]);
     if (params.folderId === null) {
         await tx.sessionFolderAssignment.deleteMany({
             where: {

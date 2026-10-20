@@ -124,6 +124,10 @@ export type OneShotAccountSettingsMutationResult<T> =
         currentSettingsVersion: number;
     }>
     | Readonly<{
+        status: 'invalid';
+        reason: 'invalidPreparedMutation';
+    }>
+    | Readonly<{
         /** The one-shot write may have reached storage without its durable result. */
         status: 'outcomeUnknown';
         lastKnownSettingsVersion: number;
@@ -143,6 +147,12 @@ export type AccountSettingsMutationCapture = Readonly<{
     beforeVersion: number;
 }>;
 
+export function requireOneShotAccountSettingsMutationApplied(
+    result: Exclude<OneShotAccountSettingsMutationResult<unknown>, Readonly<{ status: 'applied' }>>,
+): never;
+export function requireOneShotAccountSettingsMutationApplied<T>(
+    result: OneShotAccountSettingsMutationResult<T>,
+): Extract<OneShotAccountSettingsMutationResult<T>, Readonly<{ status: 'applied' }>>;
 export function requireOneShotAccountSettingsMutationApplied<T>(
     result: OneShotAccountSettingsMutationResult<T>,
 ): Extract<OneShotAccountSettingsMutationResult<T>, Readonly<{ status: 'applied' }>> {
@@ -152,10 +162,18 @@ export function requireOneShotAccountSettingsMutationApplied<T>(
         {
             code: result.status === 'conflict'
                 ? 'account_settings_mutation_conflict'
-                : 'account_settings_mutation_outcome_unknown',
+                : result.status === 'invalid'
+                    ? 'account_settings_mutation_invalid'
+                    : 'account_settings_mutation_outcome_unknown',
             result,
         },
     );
+}
+
+function isPlainSettingsRecord(value: unknown): value is Record<string, unknown> {
+    if (value === null || typeof value !== 'object') return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
 }
 
 export type SyncSettingsParams<TOneShotMutationValue = never> = {
@@ -228,7 +246,7 @@ export async function retireLegacyAuthoringMemoryKey(params: Readonly<{
     requestContext: NonNullable<SyncSettingsParams['requestContext']>;
     key: typeof LEGACY_AUTHORING_MEMORY_SETTINGS_KEYS[number];
     expectedSettingsVersion: number;
-}>): Promise<OneShotAccountSettingsMutationResult<void>> {
+}>): Promise<Exclude<OneShotAccountSettingsMutationResult<void>, Readonly<{ status: 'invalid' }>>> {
     if (!LEGACY_AUTHORING_MEMORY_SETTINGS_KEYS.includes(params.key)) {
         throw new Error('Invalid authoring-memory retirement key');
     }
@@ -266,7 +284,7 @@ export async function retireLegacyAuthoringMemoryKey(params: Readonly<{
             randomBytes: getRandomBytes,
         }) };
     }
-    const recoverUnknownOutcome = async (): Promise<OneShotAccountSettingsMutationResult<void>> => {
+    const recoverUnknownOutcome = async (): Promise<Exclude<OneShotAccountSettingsMutationResult<void>, Readonly<{ status: 'invalid' }>>> => {
         try {
             const readback = await readBaseline();
             return { status: 'outcomeUnknown', lastKnownSettingsVersion: readback.version, safeSnapshotVersion: readback.version };
@@ -298,6 +316,12 @@ export async function retireLegacyAuthoringMemoryKey(params: Readonly<{
     throw new Error(`Authoring-memory retirement rejected: ${parsed.data.error}`);
 }
 
+export function syncSettings<TOneShotMutationValue>(
+    params: SyncSettingsParams<TOneShotMutationValue> & Required<Pick<SyncSettingsParams<TOneShotMutationValue>, 'oneShotServerSettingsMutation'>>,
+): Promise<OneShotAccountSettingsMutationResult<TOneShotMutationValue>>;
+export function syncSettings<TOneShotMutationValue = never>(
+    params: SyncSettingsParams<TOneShotMutationValue>,
+): Promise<OneShotAccountSettingsMutationResult<TOneShotMutationValue> | void>;
 export async function syncSettings<TOneShotMutationValue = never>(
     params: SyncSettingsParams<TOneShotMutationValue>,
 ): Promise<OneShotAccountSettingsMutationResult<TOneShotMutationValue> | void> {
@@ -847,9 +871,8 @@ export async function syncSettings<TOneShotMutationValue = never>(
 
         let baseline = initialBaseline;
         prefetchedFinalBaseline = null;
-        let pendingLegacySessionOrganizationImported = await maybeImportLegacySessionOrganization(
-            mergePendingLegacySessionOrganizationSettings(baseline.raw),
-        );
+        let pendingLegacySessionOrganizationImported = params.oneShotServerSettingsMutation ? false
+            : await maybeImportLegacySessionOrganization(mergePendingLegacySessionOrganizationSettings(baseline.raw));
         while (retryCount < maxRetries) {
             const version = baseline.version;
             if (params.oneShotServerSettingsMutation
@@ -868,6 +891,17 @@ export async function syncSettings<TOneShotMutationValue = never>(
             const oneShotMutation = params.oneShotServerSettingsMutation
                 ? await params.oneShotServerSettingsMutation.mutate(baseline.raw ?? {})
                 : null;
+            if (params.oneShotServerSettingsMutation
+                && (!isPlainSettingsRecord(oneShotMutation)
+                    || !Object.hasOwn(oneShotMutation, 'settings')
+                    || !isPlainSettingsRecord(oneShotMutation.settings))) {
+                return Object.freeze({ status: 'invalid', reason: 'invalidPreparedMutation' });
+            }
+            if (params.oneShotServerSettingsMutation) {
+                pendingLegacySessionOrganizationImported = await maybeImportLegacySessionOrganization(
+                    mergePendingLegacySessionOrganizationSettings(baseline.raw),
+                ) || pendingLegacySessionOrganizationImported;
+            }
             const immutableMutation = params.accountSettingsMutation
                 ? applyAccountSettingMutationV1(
                     baseline.raw ?? {},
@@ -1035,9 +1069,11 @@ export async function syncSettings<TOneShotMutationValue = never>(
                     pendingKeys: Object.keys(pendingServerSettings).sort(),
                 };
                 baseline = await baselineFromVersionMismatch(data);
-                pendingLegacySessionOrganizationImported = await maybeImportLegacySessionOrganization(
-                    mergePendingLegacySessionOrganizationSettings(baseline.raw),
-                ) || pendingLegacySessionOrganizationImported;
+                if (!params.oneShotServerSettingsMutation) {
+                    pendingLegacySessionOrganizationImported = await maybeImportLegacySessionOrganization(
+                        mergePendingLegacySessionOrganizationSettings(baseline.raw),
+                    ) || pendingLegacySessionOrganizationImported;
+                }
                 if (params.oneShotServerSettingsMutation?.rebaseOnConflict === true) {
                     dbgSettings('syncSettings: one-shot version-mismatch rebase', {
                         endpoint: settingsEndpointUrl,

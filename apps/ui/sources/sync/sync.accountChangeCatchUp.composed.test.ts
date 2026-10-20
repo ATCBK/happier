@@ -7,6 +7,10 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { waitForNetworkResponseForTests } from '@/dev/testkit/mocks/runtimeFetch';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { RenderScreenResult } from '@/dev/testkit/render/renderScreen';
 import {
@@ -22,12 +26,14 @@ import { SESSION_DRAFT_V2_ROUTE_LIST, SessionDraftListResponseV2Schema } from '@
 import {
     PluginAvailabilityActionHttpPathsV1,
     PluginAvailabilityIntentReadActionOutputV1Schema,
+    normalizePluginReleaseFactsV1,
 } from '@happier-dev/protocol/plugins/availability';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { ChangesCursorScope } from '@/sync/domains/state/persistence';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { FeedResponseSchema } from '@/sync/domains/social/feedTypes';
+import type { InvalidateSync } from '@/utils/sessions/sync';
 
 import {
     installLocalStorageMock,
@@ -132,6 +138,15 @@ const changesResponse = vi.hoisted(() => vi.fn());
 const profileResponseGate = vi.hoisted(() => vi.fn<() => Promise<void>>());
 let account: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let authScreen: RenderScreenResult | undefined;
+let syncRuntime: typeof import('./syncEngine').sync | undefined;
+let syncBridge: Awaited<ReturnType<typeof loadSyncSingletonForTests>> | undefined;
+
+async function loadTestSync(): Promise<void> {
+    syncBridge = await loadSyncSingletonForTests();
+    syncRuntime = (await import('./syncEngine')).sync;
+}
+
+await loadTestSync();
 
 async function restoreTestAccount(options: {
     mountAuth?: boolean;
@@ -139,19 +154,24 @@ async function restoreTestAccount(options: {
     accountMode?: 'plain' | 'e2ee';
     draftsEnabled?: boolean;
     onRequest?: (path: string) => void;
+    runtimeRequest?: (path: string, init?: RequestInit) => Response | undefined;
 } = {}): Promise<void> {
-    await loadSyncSingletonForTests();
+    await loadTestSync();
     const { profileDefaults } = await import('./domains/profiles/profile');
     let bootstrapping = true;
     account = await restoreServerAccountForTest({
         serverUrl: 'http://localhost:53288',
         accountId: ACCOUNT_ID,
         credentials: options.credentials ?? { token: ACCOUNT_TOKEN },
-        request: async (url, init) => {
+        request: (url, init) => waitForNetworkResponseForTests((async () => {
             const path = new URL(String(url)).pathname;
             options.onRequest?.(path);
+            if (!bootstrapping) {
+                const response = options.runtimeRequest?.(path, init);
+                if (response) return response;
+            }
             if (path === '/health') return jsonResponse({});
-            if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse({
+            if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse({
                 features: { sessions: { drafts: { enabled: options.draftsEnabled === true } } },
             }));
             if (path === '/v1/account/encryption') return jsonResponse({ mode: options.accountMode ?? 'plain', updatedAt: 1 });
@@ -179,19 +199,37 @@ async function restoreTestAccount(options: {
             if (path === '/v1/feed') return jsonResponse(FeedResponseSchema.parse({ items: [], hasMore: false }));
             if (bootstrapping && path === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.materializations.read']) return jsonResponse({ availabilityCursor: 0, snapshots: [] });
             if (bootstrapping && path === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list']) return jsonResponse({ availabilityCursor: 0, pluginIds: [], intentReads: [], failedPluginIds: [] });
+            // Account bootstrap continues after core readiness. Its independent
+            // inventory reads need real empty protocol replies throughout the test.
+            if (path === '/v2/session-organization' || path === '/v2/sessions/metadata-upgrades' || path === '/v1/account/pets') {
+                return createEmptyAccountBootstrapHttpResponse(path, init)!;
+            }
             if (path === '/v2/cursor') return jsonResponse({ cursor: 0, changesFloor: 0 });
             if (path === '/v2/changes') {
                 const page = await changesResponse({ url: String(url), init });
                 return jsonResponse({ changes: page?.changes ?? [], nextCursor: Number(page?.nextCursor ?? 0) });
             }
             return domainHttp({ url: String(url), init });
-        },
+        })(), init?.signal),
     });
     const { storage } = await import('./domains/state/storage');
     await waitForHomeGovernance(() => {
         expect(storage.getState().isDataReady).toBe(true);
         expect(storage.getState().profile.id).toBe(ACCOUNT_ID);
     });
+    const { sync } = await import('./syncEngine');
+    const bootstrap = sync as unknown as {
+        sessionsSync: Pick<InvalidateSync, 'awaitQueue'>;
+        pluginAvailabilitySync: Pick<InvalidateSync, 'awaitQueue'>;
+        resumeInFlight: Promise<void> | null;
+        ensureSessionDraftRepositoryRuntimeReady(): Promise<void>;
+    };
+    await sync.awaitBootstrapForegroundAcquisition();
+    // Core readiness deliberately precedes the independent background readers.
+    // Finish their initial empty census before a case installs held domain replies.
+    await bootstrap.ensureSessionDraftRepositoryRuntimeReady();
+    await Promise.all([bootstrap.sessionsSync.awaitQueue(), bootstrap.pluginAvailabilitySync.awaitQueue()]);
+    await bootstrap.resumeInFlight;
     bootstrapping = false;
     if (!options.mountAuth) return;
     const { AuthProvider } = await import('@/auth/context/AuthContext');
@@ -301,7 +339,7 @@ describe('sync AccountChange catch-up projection', () => {
         webLocks = installWebLockManagerMock();
         sockets.length = 0;
         domainHttp.mockReset();
-        domainHttp.mockResolvedValue(Response.json({}, { status: 404 }));
+        domainHttp.mockImplementation(async () => Response.json({}, { status: 404 }));
         changesResponse.mockReset();
         profileResponseGate.mockReset();
         profileResponseGate.mockResolvedValue(undefined);
@@ -310,19 +348,189 @@ describe('sync AccountChange catch-up projection', () => {
     afterEach(async () => {
         await authScreen?.unmount();
         authScreen = undefined;
+        // Retire the fixture's runtime before its HTTP/credential boundary.
+        // Do not import a new Engine during cleanup of a failed import.
+        syncRuntime?.disposeEmbedSession();
+        syncRuntime?.disconnectServer();
+        const { abortServerFetches } = await import('./http/client');
+        abortServerFetches();
         await account?.dispose();
         account = undefined;
-        const { sync } = await import('./syncEngine');
-        sync.disposeEmbedSession();
+        // A reset while a background reader is still importing can strand the
+        // next Engine import in a half-retired module graph.
+        await vi.dynamicImportSettled();
+        syncBridge?.dispose();
+        syncBridge = undefined;
+        syncRuntime = undefined;
         vi.restoreAllMocks();
         vi.unstubAllGlobals();
         localStorage?.restore();
         localStorage = null;
         webLocks?.restore();
         webLocks = null;
-        vi.resetModules();
         vi.clearAllMocks();
         vi.unstubAllGlobals();
+    });
+
+    it.each(['blocked', 'held'] as const)('revalidates mounted skill reach while the focused catch-up is %s', async phase => {
+        const { createPromptLibraryCatalogBoundary } = await import('@/dev/testkit/harness/promptLibraryCatalogBoundary');
+        const { PROJECT_ACCOUNT_ROWS_KV_PREFIX_V1 } = await import('@happier-dev/protocol/projects/projectAccountRowsV1');
+        const catalog = createPromptLibraryCatalogBoundary({ records: [{ key: 'skill-rules', value: { v: 1,
+            rules: [{ id: 'built-in-on', skillId: 'happier:happier', target: { t: 'allMachines' }, enabled: true,
+                createdAt: 1, updatedAt: 1 }] } }] });
+        const work: string[] = [];
+        let measuring = false;
+        const ruleResponseGate = createDeferred<void>();
+        let ruleRequested = false;
+        domainHttp.mockImplementation(async ({ url, init }) => {
+            const path = new URL(url).pathname;
+            const response = await catalog.handle(path, init);
+            if (measuring && path.endsWith('/prompt-library/skill-rules') && (init?.method ?? 'GET') === 'GET') {
+                ruleRequested = true;
+                await ruleResponseGate.promise;
+            }
+            return response ?? Response.json({}, { status: 404 });
+        });
+        await restoreTestAccount({ onRequest: path => { if (measuring) work.push(path); } });
+        const rowCodec = await import('@happier-dev/protocol/prompts/library/promptLibraryRowsV1');
+        const decrypts = vi.spyOn(rowCodec, 'openPromptLibraryContentV1');
+        const readers = await import('./api/account/apiPromptLibraryCatalog');
+        const catalogReads = vi.spyOn(readers, 'readPromptLibraryCatalogProjection');
+        const rowReads = vi.spyOn(readers, 'readPromptLibraryCatalogRowsProjection');
+        const { useSkillsLibrary } = await import('./domains/skills/useSkillsLibrary');
+        const { buildSkillsReach } = await import('@/components/settings/skills/skillsCollectionModel');
+        const { resetPromptLibraryCatalogEngineForTests } = await import('./engine/settings/promptLibraryCatalogEngine');
+        const { resetPromptLibraryCatalogSnapshotsForTests } = await import('./store/settings/promptLibraryCatalogSnapshot');
+        const hook = await renderHook(() => useSkillsLibrary());
+        const runtime = syncRuntime as unknown as SyncAccountChangeWakeSchedulingHarness;
+        const responseGate = createDeferred<void>();
+        let requestedChanges = false;
+        const count = () => buildSkillsReach(hook.getCurrent().items, [{ machineId: 'online', name: 'Online',
+            platform: 'posix', agentIds: ['codex'], offline: false, lastSeenAt: null }]).reachingCount;
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent().items.find(item => item.skillId === 'happier:happier')?.rules[0]?.enabled).toBe(true));
+            expect(count()).toBe(1);
+            const record = catalog.read('skill-rules');
+            if (record.key !== 'skill-rules') throw new Error('Expected rules');
+            const response = await catalog.handle('/v1/account/entity-rows/prompt-library/skill-rules', {
+                method: 'POST', body: JSON.stringify({ expectedRevision: catalog.revision('skill-rules'), content: { t: 'plain',
+                    v: { ...record, value: { ...record.value, rules: record.value.rules.map(rule => ({ ...rule, enabled: false, updatedAt: 2 })) } } } }),
+            });
+            expect(await response?.json()).toMatchObject({ status: 'updated', revision: 2 });
+            // This real ChangeEntry is an unmaterializable historical row. The newer reach
+            // write lies beyond this short page, so it cannot supply an exact row wake.
+            changesResponse.mockImplementationOnce(async () => {
+                requestedChanges = true;
+                if (phase === 'held') await responseGate.promise;
+                return { changes: [{ cursor: 1, changedAt: 1, kind: 'account',
+                    entityId: `${PROJECT_ACCOUNT_ROWS_KV_PREFIX_V1}unrecognized`, hint: null }], nextCursor: 1 };
+            });
+            const cursorBefore = runtime.changesCursor;
+            measuring = true;
+            decrypts.mockClear(); catalogReads.mockClear(); rowReads.mockClear();
+            await act(async () => {
+                if (phase === 'held') await runtime.handleUpdate(accountChangeWake('reach-changed-during-catch-up'));
+                else await runtime.resumeViaChanges({ accountId: ACCOUNT_ID });
+            });
+            await vi.waitFor(() => expect(requestedChanges).toBe(true));
+            await vi.waitFor(() => expect(ruleRequested).toBe(true));
+            const { publishHomeAccountChange } = await import('./runtime/orchestration/homeAccountChange');
+            const entityId = rowCodec.buildPromptLibraryPhysicalKeyV1('skill-rules');
+            // The detailed wake can arrive before the early read answers. It must
+            // not cause a second request for the revision that read then receives.
+            publishHomeAccountChange(account!.serverId, [entityId], { entityRevisions: { [entityId]: 2 } });
+            ruleResponseGate.resolve();
+            await vi.waitFor(() => expect(hook.getCurrent().items.find(item => item.skillId === 'happier:happier')?.rules[0]?.enabled).toBe(false));
+            expect(count()).toBe(0);
+            expect(runtime.changesCursor).toBe(cursorBefore);
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(work.filter(path => path.includes('prompt-library') || path.includes('/artifacts') || path.includes('/account/settings')))
+                .toEqual(['/v1/account/entity-rows/prompt-library/skill-rules']);
+            expect(decrypts).toHaveBeenCalledTimes(1);
+            expect(catalogReads).not.toHaveBeenCalled();
+            expect(rowReads).toHaveBeenCalledTimes(1);
+            console.info(JSON.stringify({ phase, requests: work, rowDecrypts: decrypts.mock.calls.length,
+                catalogRefreshes: catalogReads.mock.calls.length, scopedRowRefreshes: rowReads.mock.calls.length }));
+        } finally {
+            ruleResponseGate.resolve();
+            responseGate.resolve();
+            await runtime.resumeInFlight;
+            await hook.unmount(); resetPromptLibraryCatalogEngineForTests(); resetPromptLibraryCatalogSnapshotsForTests();
+        }
+    });
+
+    it('refreshes shared Machine access in the open store after an AccountChange wake', async () => {
+        let role: 'use' | 'manage' = 'use';
+        const machine = createPlainMachineRowFixture({ id: 'shared-machine', accountId: 'custodian' });
+        await restoreTestAccount({ runtimeRequest: path => path === '/v1/machines'
+            ? jsonResponse([{ ...machine, access: { ...machine.access!, role } }]) : undefined });
+        const { sync } = await import('./syncEngine');
+        const runtime = sync as unknown as SyncAccountChangeWakeSchedulingHarness;
+        const { storage } = await import('./domains/state/storage');
+        const refresh = sync as unknown as { refreshMachines(): Promise<void> };
+        await refresh.refreshMachines();
+        expect(storage.getState().machines['shared-machine']?.access?.role).toBe('use');
+        role = 'manage';
+        changesResponse.mockResolvedValueOnce({ changes: [{ kind: 'machine', entityId: machine.id, cursor: 1, changedAt: 1 }], nextCursor: 1 });
+        await runtime.handleUpdate(accountChangeWake('grant-changed'));
+        await vi.waitFor(() => expect(storage.getState().machines['shared-machine']?.access?.role).toBe('manage'));
+    });
+
+    it('publishes a failed activation authorization into the open Session store without changing the queue version', async () => {
+        await restoreTestAccount();
+        const { sync } = await import('./syncEngine');
+        const runtime = sync as unknown as SyncAccountChangeWakeSchedulingHarness;
+        const { storage } = await import('./domains/state/storage');
+        const scope = runtime.getChangesCursorScope();
+        if (!scope || typeof scope === 'string' || !scope.serverScope) throw new Error('Expected the active Account cursor scope');
+        const serverId = scope.serverScope;
+        const waiting = { requestId: 'pending-one', requestedAt: 1, status: 'waiting' as const };
+        storage.getState().applySessions([createSessionFixture({ id: 'activation-session', serverId,
+            pendingCount: 1, pendingVersion: 4, pendingActivationAuthorization: waiting })]);
+        await runtime.handleUpdate({ id: 'activation-failed', seq: 1, createdAt: 2, body: {
+            t: 'pending-changed', sid: 'activation-session', sessionId: 'activation-session',
+            pendingCount: 1, pendingVersion: 4,
+            pendingActivationAuthorization: { ...waiting, status: 'failed', failureCode: 'runtime_start_failed' },
+        } });
+        expect(storage.getState().sessions['activation-session']?.pendingActivationAuthorization).toMatchObject({
+            status: 'failed', failureCode: 'runtime_start_failed',
+        });
+    });
+
+    it('refreshes the demanded pending hold on Machine access changes without a queue-version change', async () => {
+        let hold = 'managed_power_required';
+        const sessionId = 'grant-held-session';
+        await restoreTestAccount({ runtimeRequest: path => path === `/v2/sessions/${sessionId}/pending`
+            ? jsonResponse({ pending: [{ localId: 'held-input', messageRole: 'user', requestedAction: { v: 1, kind: 'enqueue' },
+                content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'retained input' } } },
+                status: 'queued', deliveryStatus: { status: 'queued' }, position: 0, createdAt: 1, updatedAt: 1,
+                activationHoldReason: hold }], pendingVersion: 4 }) : undefined });
+        const { sync } = await import('./syncEngine');
+        const runtime = sync as unknown as SyncAccountChangeWakeSchedulingHarness;
+        const { storage } = await import('./domains/state/storage');
+        const scope = runtime.getChangesCursorScope();
+        if (!scope || typeof scope === 'string' || !scope.serverScope) throw new Error('Expected the active Account cursor scope');
+        const serverId = scope.serverScope;
+        storage.getState().applySessions([createSessionFixture({ id: sessionId, serverId, pendingCount: 1, pendingVersion: 4 })]);
+        const { registerSessionRealtimeTranscriptConsumer } = await import('@/sync/runtime/sessionRealtimeTranscriptConsumers');
+        const release = registerSessionRealtimeTranscriptConsumer(sessionId, serverId);
+        const { resolveSessionLiveConsumption } = await import('@/sync/runtime/sessionLiveConsumption');
+        const { subscribeHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+        const wakes: unknown[] = [];
+        const unsubscribe = subscribeHomeAccountChange(event => wakes.push(event));
+        try {
+            await sync.fetchPendingMessages(sessionId);
+            expect(storage.getState().sessionPending[sessionId]?.messages[0]?.pendingActivationHoldReason).toBe('managed_power_required');
+            expect(resolveSessionLiveConsumption(sessionId, serverId).isFullContentConsumer).toBe(true);
+            hold = 'resume_not_requested';
+            changesResponse.mockResolvedValueOnce({ changes: [{ kind: 'machine', entityId: 'controller', cursor: 1, changedAt: 1 }], nextCursor: 1 });
+            await runtime.handleUpdate(accountChangeWake('grant-pending-changed'));
+            await vi.waitFor(() => expect(wakes).toContainEqual(expect.objectContaining({ serverId, changeKinds: ['machine'] })));
+            expect(storage.getState().sessions[sessionId]).toMatchObject({ serverId, pendingCount: 1, pendingVersion: 4 });
+            expect(resolveSessionLiveConsumption(sessionId, serverId).isFullContentConsumer).toBe(true);
+            await vi.waitFor(() => expect(storage.getState().sessionPending[sessionId]?.messages[0]?.pendingActivationHoldReason).toBe('resume_not_requested'));
+            expect(storage.getState().sessions[sessionId]?.pendingVersion).toBe(4);
+        } finally { unsubscribe(); release(); }
     });
 
     it('boots and renews the embed session with only its explicit child credential and session corridor', async () => {
@@ -332,7 +540,7 @@ describe('sync AccountChange catch-up projection', () => {
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
         const storedCredentialRead = vi.spyOn(TokenStorage, 'getCredentials');
         const scopedCredentialRead = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl');
-        await loadSyncSingletonForTests();
+        await loadTestSync();
         const { sync } = await import('./syncEngine');
         const { apiSocket } = await import('@/sync/api/session/apiSocket');
         const apiRequest = vi.spyOn(apiSocket, 'request');
@@ -643,8 +851,87 @@ describe('sync AccountChange catch-up projection', () => {
         syncHarness.disconnectServer();
     });
 
+    it.each(['disable', 'release'] as const)('refreshes an open external plugin after an Account intent change supersedes an in-flight Availability read (%s)', async (change) => {
+        const harness = await prepareAccountChangeWakeSchedulingHarness();
+        const { getActiveServerAccountScope } = await import('./domains/scope/activeServerAccountScope');
+        const { readPluginAccountAvailability, replacePluginAccountAvailabilityProjection } = await import('./domains/plugins/availability/projection');
+        const scope = getActiveServerAccountScope()!;
+        const slot = { pluginId: AVAILABILITY_PLUGIN_ID, contributionId: 'page', tier: 'hostedWeb' as const, platform: 'web' as const };
+        const intentResponse = (version: string, enabled: boolean, cursor: number) => PluginAvailabilityIntentReadActionOutputV1Schema.parse({
+            ...availabilityIntentValue(AVAILABILITY_PLUGIN_ID), availabilityCursor: cursor,
+            intent: { ...availabilityIntentValue(AVAILABILITY_PLUGIN_ID).intent, desiredVersion: version, enabled, revision: String(cursor) },
+            release: normalizePluginReleaseFactsV1({
+                ref: { pluginId: AVAILABILITY_PLUGIN_ID, version }, archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+                normalizedManifest: { schemaVersion: 2, id: AVAILABILITY_PLUGIN_ID, version, displayName: 'External plugin',
+                    runtime: { apiVersion: 1 }, contributes: {} },
+                collectionContracts: [], uiSlots: [{ contributionId: slot.contributionId, tier: slot.tier, platform: slot.platform,
+                    artifactId: 'page', artifactDigest: `sha256:${(cursor === 0 ? 'a' : 'b').repeat(64)}`, hostUiApiRange: '^1.0.0' }],
+                packageAssetArchive: { archiveDigestSha256: `sha256:${'c'.repeat(64)}`, resources: [] },
+            }),
+        });
+        const successor = intentResponse(change === 'release' ? '2.0.0' : '1.2.3', change !== 'disable', 2);
+        replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+            availabilityCursor: 0, materializations: [], snapshots: [],
+            intentReads: [{ pluginId: AVAILABILITY_PLUGIN_ID, response: intentResponse('1.2.3', true, 0) }],
+        } });
+        const reader = readPluginAccountAvailability(scope);
+        expect(reader.readCurrentArtifact(slot)).toMatchObject({ kind: 'available', artifact: { releaseVersion: '1.2.3' } });
+        const firstReadStarted = createDeferred<void>();
+        const releaseFirstRead = createDeferred<void>();
+        let readCount = 0;
+        domainHttp.mockImplementation(async ({ url }) => {
+            const path = new URL(url).pathname;
+            if (path === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.materializations.read']) {
+                readCount += 1;
+                if (readCount === 1) {
+                    firstReadStarted.resolve();
+                    await releaseFirstRead.promise;
+                }
+                return jsonResponse({ availabilityCursor: 2, snapshots: [] });
+            }
+            if (path === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list']) {
+                return jsonResponse({ availabilityCursor: 2, pluginIds: [AVAILABILITY_PLUGIN_ID], failedPluginIds: [],
+                    intentReads: [{ pluginId: AVAILABILITY_PLUGIN_ID, response: successor }],
+                });
+            }
+            if (path === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intent.set']) {
+                return jsonResponse({ intent: successor.intent });
+            }
+            return jsonResponse({});
+        });
+        const changePage = (cursor: number) => ({ changes: [{ cursor, kind: 'pluginDomain',
+            entityId: `pluginDomain/${AVAILABILITY_PLUGIN_ID}/availability`, changedAt: cursor,
+            hint: { pluginDomain: 'availability', pluginId: AVAILABILITY_PLUGIN_ID } }], nextCursor: String(cursor) });
+        changesResponse.mockResolvedValueOnce(changePage(1)).mockResolvedValueOnce(changePage(2));
+        try {
+            await harness.handleUpdate(accountChangeWake('availability-first'));
+            await firstReadStarted.promise;
+            await waitForHomeGovernance(() => expect(harness.resumeInFlight).toBeNull());
+            if (change === 'release') {
+                const { setActivePluginAccountAvailabilityIntent } = await import('./api/plugins/availability/setActivePluginAccountAvailabilityIntent');
+                const { revision: _revision, ...intent } = successor.intent!;
+                await expect(setActivePluginAccountAvailabilityIntent({ ...intent, expectedRevision: '0' }))
+                    .resolves.toMatchObject({ kind: 'updated', intent: { desiredVersion: '2.0.0' } });
+            }
+            await harness.handleUpdate(accountChangeWake('availability-disabled'));
+            await waitForHomeGovernance(() => expect(harness.changesCursor).toBe('2'));
+            releaseFirstRead.resolve();
+            const queue = harness as typeof harness & { pluginAvailabilitySync: { awaitQueue(): Promise<unknown> } };
+            await queue.pluginAvailabilitySync.awaitQueue();
+            expect(reader.readMaterializations()).toMatchObject({ kind: 'available', availabilityCursor: 2,
+                intentReads: [{ pluginId: AVAILABILITY_PLUGIN_ID, response: { intent: successor.intent } }],
+            });
+            expect(reader.readCurrentArtifact(slot)).toMatchObject(change === 'disable'
+                ? { kind: 'unavailable', code: 'artifact_not_current' }
+                : { kind: 'available', artifact: { releaseVersion: '2.0.0', digest: `sha256:${'b'.repeat(64)}` } });
+        } finally {
+            releaseFirstRead.resolve();
+            harness.disconnectServer();
+        }
+    });
+
     it.each(['present', 'malformed', 'absent', 'deleted'] as const)('materializes a cold Session draft from one change page without transcript or Account collection reads (%s)', async status => {
-        await loadSyncSingletonForTests();
+        await loadTestSync();
         // Prior cases retain device-local drafts. The restored empty Home census
         // confirms those rows absent through the genuine exact-read boundary.
         domainHttp.mockImplementation(async ({ url }) => new URL(url).pathname === '/v2/account/session-drafts/read'
@@ -675,19 +962,18 @@ describe('sync AccountChange catch-up projection', () => {
         if (!scope) throw new Error('Restoration must establish the Account scope');
         const { sync } = await import('./syncEngine');
         const syncHarness = sync as unknown as SyncAccountChangeCatchUpHarness & {
-            encryption: InstanceType<typeof Encryption>;
+            encryption: Awaited<ReturnType<typeof Encryption.create>>;
             ensureSessionDraftRepositoryRuntimeReady(): Promise<void>;
         };
         // Complete the real Account draft bootstrap before measuring one change page.
         await syncHarness.ensureSessionDraftRepositoryRuntimeReady();
-        await syncHarness.encryption.initializeSessions(new Map([[address.sessionId, null]]), {
-            accountId: scope.accountId, serverId: scope.serverId,
-        });
         storage.getState().applyServerScopedSessionListRows(scope.serverId, [createSessionListRenderableSessionFixture({
-            id: address.sessionId, encryptionMode: 'e2ee', serverId: scope.serverId,
+            id: address.sessionId, encryptionMode: 'e2ee',
         })], { source: 'ordinary', mode: 'append' });
         expect(storage.getState().sessions[address.sessionId]).toBeUndefined();
-        expect(syncHarness.encryption.getSessionEncryption(address.sessionId)).not.toBeNull();
+        // Keep the reader cold: only the remote author has the Session cipher.
+        // Catch-up must acquire its exact encryption context without full hydration.
+        expect(syncHarness.encryption.getSessionEncryption(address.sessionId)).toBeNull();
         author.writeExistingSessionDraft({ scope, sessionId: address.sessionId, patch: { text: 'retained draft' } });
         const document = author.getSessionDraftSnapshot(scope, address)!.document;
         const content = await cipher.seal(address, document);
@@ -785,14 +1071,14 @@ describe('sync AccountChange catch-up projection', () => {
         if (!lifetime || !harness.credentials) throw new Error('Restoration must establish the Account');
         const credentials = harness.credentials;
         const isCurrent = () => lifetime.isCurrent();
-        const disclosures: Array<'plain' | 'e2ee' | null> = [];
+        const disclosures: Array<ReturnType<typeof usePluginSurfaceAccountEncryptionMode>> = [];
         const hook = await renderHook(() => {
             const mode = usePluginSurfaceAccountEncryptionMode({ accountLifetime: lifetime, credentials, isCurrent });
             disclosures.push(mode);
             return mode;
         });
         try {
-            await waitForHomeGovernance(() => expect(hook.getCurrent()).toBe('plain'));
+            await waitForHomeGovernance(() => expect(hook.getCurrent()).toEqual({ status: 'ready', mode: 'plain' }));
             disclosures.length = 0;
             const revision = getAccountEncryptionModeCacheRevision();
             changesResponse.mockResolvedValueOnce({
@@ -805,9 +1091,9 @@ describe('sync AccountChange catch-up projection', () => {
             await act(async () => {
                 await expect(harness.resumeViaChanges({ accountId: ACCOUNT_ID })).resolves.toMatchObject({ status: 'ok' });
             });
-            expect(disclosures).not.toContain(null);
+            expect(disclosures.every(disclosure => disclosure.status === 'ready' && disclosure.mode === 'plain')).toBe(true);
             expect(getAccountEncryptionModeCacheRevision()).toBe(revision);
-            expect(hook.getCurrent()).toBe('plain');
+            expect(hook.getCurrent()).toEqual({ status: 'ready', mode: 'plain' });
             expect(harness.changesCursor).toBe('2');
             // A migration changes both Settings and mode. Its extra hint must
             // not be mistaken for an ordinary Settings write.
@@ -820,9 +1106,9 @@ describe('sync AccountChange catch-up projection', () => {
             await act(async () => {
                 await expect(harness.resumeViaChanges({ accountId: ACCOUNT_ID })).resolves.toMatchObject({ status: 'ok' });
             });
-            expect(disclosures).toContain(null);
+            expect(disclosures).toContainEqual({ status: 'loading' });
             expect(getAccountEncryptionModeCacheRevision()).toBeGreaterThan(revision);
-            await waitForHomeGovernance(() => expect(hook.getCurrent()).toBe('plain'));
+            await waitForHomeGovernance(() => expect(hook.getCurrent()).toEqual({ status: 'ready', mode: 'plain' }));
         } finally {
             await hook.unmount();
         }

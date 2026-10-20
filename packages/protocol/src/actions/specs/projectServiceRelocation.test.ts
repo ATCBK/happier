@@ -4,6 +4,8 @@ import { ActionIdSchema } from '../actionIds.js';
 import { ActionSpecSchema } from '../actionSpecs.js';
 import { createActionExecutor, type ActionExecutorDeps } from '../actionExecutor.js';
 import { isRuntimeActionExecutorReal, resolveRuntimeActionSurfaces } from '../surfaces.js';
+import { isProjectServiceMoveChildInputV1 } from '../../workspaces/projectServiceRelocationV1.js';
+import { createProjectServiceDeclarationTargetIdV1 } from '../../local/services/actions/v1.js';
 
 function relocationInput(currentTarget: Readonly<Record<string, unknown>>) {
   const destination = { kind: 'workers' as const, destination: { kind: 'machine' as const, machineId: 'new' } };
@@ -15,6 +17,27 @@ function relocationInput(currentTarget: Readonly<Record<string, unknown>>) {
 }
 
 describe('service relocation Action', () => {
+  it('keeps a reviewed destination Start on its exact workspace and resolved placement', () => {
+    const selection = { kind: 'manifest' as const, name: 'worker' };
+    const root = relocationInput({ kind: 'managed_service', managedServiceId: 'service', machineId: 'old',
+      workspaceId: 'workspace', cwd: '/old', declaration: { workspaceRefId: 'workspace', selection } });
+    const start = { machineId: 'new', targetId: createProjectServiceDeclarationTargetIdV1({ id: 'receiving',
+      serverId: 'home', machineId: 'new' }, selection), workspaceId: 'receiving',
+      workspace: { serverId: 'home', machineId: 'new', workspaceId: 'receiving', rootPath: '/new' },
+      declaration: { workspaceRefId: 'receiving', selection }, choice: root.destination };
+    expect(isProjectServiceMoveChildInputV1(root, 'localServices.launcher.start', 'new', start)).toBe(true);
+    for (const change of [
+      { choice: { kind: 'workers', destination: { kind: 'machine', machineId: 'unreviewed' } } },
+      { choice: { kind: 'primary' } }, { workspaceId: 'another-workspace' }, { sessionId: 'another-session' },
+    ]) expect(isProjectServiceMoveChildInputV1(root, 'localServices.launcher.start', 'new', { ...start, ...change })).toBe(false);
+    const inspect = { workspace: start.workspace, reviewSetupConsent: true };
+    expect(isProjectServiceMoveChildInputV1(root, 'projects.inspect', 'new', inspect)).toBe(true);
+    expect(isProjectServiceMoveChildInputV1(root, 'projects.inspect', 'new', { ...inspect,
+      workspace: { ...start.workspace, serverId: 'another-home' } })).toBe(false);
+    expect(isProjectServiceMoveChildInputV1(root, 'projects.inspect', 'new', { ...inspect,
+      workspace: { ...start.workspace, machineId: 'unreviewed' } })).toBe(false);
+    expect(isProjectServiceMoveChildInputV1(root, 'projects.manifest.update', 'new', inspect)).toBe(false);
+  });
   it('advertises relocation with the same real runtime executor family as native controls', () => {
     expect(isRuntimeActionExecutorReal('projects.service.relocate')).toBe(true);
     expect(resolveRuntimeActionSurfaces('projects.service.relocate').ui).toBe(true);
@@ -42,7 +65,7 @@ describe('service relocation Action', () => {
     expect(spec.executionPlacement).toBe('machine');
     expect(spec.operation).toMatchObject({ version: 1, progress: 'reported' });
     expect(spec.bindings?.rpcMethod).toBeUndefined();
-    expect(spec.surfaces).toMatchObject({ cli: true, mcp: false, voice: false, rpc: false });
+    expect(spec.surfaces).toMatchObject({ cli: true, mcp: true, voice: true, rpc: false });
     expect(ActionSpecSchema.safeParse(spec).success).toBe(true);
   });
 

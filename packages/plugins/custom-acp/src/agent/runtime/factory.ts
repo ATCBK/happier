@@ -1,4 +1,5 @@
 import type { AgentAcpRuntimeOptions, AgentRuntime } from '@happier-dev/plugin-sdk/agents/runtime';
+import { PluginError } from '@happier-dev/plugin-sdk';
 
 // The selected Account definition is admitted and materialized by the host ACP
 // launch owner. This reference never selects an executable from plugin services.
@@ -16,6 +17,13 @@ export function createCustomAcpAgentRuntime(): AgentRuntime {
       open: (request, context) => context.protocols.acp.open(request, OPTIONS),
       executionRunContextV1: {
         open: (request, context) => context.protocols.acp.openExecutionRunV1(request, OPTIONS),
+        openConversation(request, context) {
+          if (!context.protocols.acp.openExecutionRunConversationV1) {
+            throw new PluginError({ code: 'execution_run_protocol_unsupported',
+              message: 'This host does not support retained detached ACP conversations.' });
+          }
+          return context.protocols.acp.openExecutionRunConversationV1(request, OPTIONS);
+        },
       },
     },
   };

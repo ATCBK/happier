@@ -13,7 +13,52 @@ import { createCliActionDeps } from './createCliActionDeps';
 afterEach(() => vi.restoreAllMocks());
 
 describe('CLI inactive goal transport', () => {
-    it('executes the authenticated daemon wake through real admission and resume without inventing user authority', async () => {
+    it.each([false, true])('FIX75 routes configured ACP Goal Set/Get/complete through daemon custody (bound=%s)', async bound => {
+        const sessionId = 'c123456789012345678901234';
+        const credentials = { token: 'goal-token', encryption: null };
+        const rawSession = createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', active: false,
+            machineId: 'target-machine', metadata: JSON.stringify({ machineId: 'target-machine', path: '/repo',
+                runtimeDescriptorV1: { v: 1, agentId: 'custom-acp', agent: { definitionId: 'configured-test' } },
+                acpConfiguredBackendV1: { v: 1, updatedAt: 1, backendId: 'configured-test', title: 'Configured Agent' },
+            }) });
+        vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+        vi.spyOn(persistence, 'readSettings').mockResolvedValue({ schemaVersion: 6, onboardingCompleted: true, machineId: 'target-machine' });
+        vi.spyOn(axios, 'get').mockImplementation(async url => {
+            if (String(url).endsWith('/v1/account/encryption/currentness')) return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
+            if (String(url).includes(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session: rawSession } };
+            throw new Error(`Unexpected HTTP boundary: ${url}`);
+        });
+        const handlers = new Map<string, (raw: unknown) => Promise<unknown>>();
+        registerMachineSessionGoalRpcHandlers({ rpcHandlerManager: {
+            registerHandler: <TRequest, TResponse>(method: string, handler: RpcHandler<TRequest, TResponse>) => {
+                handlers.set(method, async raw => handler(raw as TRequest));
+            },
+        } satisfies RpcHandlerRegistrar, deps: { currentMachineId: 'target-machine', stageWorkStateMutation: async ({ mutation }) => {
+            rawSession.metadata = JSON.stringify({ ...JSON.parse(rawSession.metadata ?? '{}'),
+                sessionWorkStateV1: mutation.op.kind === 'set' ? mutation.op.value : null });
+        } } });
+        await expect(handlers.get(RPC_METHODS.DAEMON_SESSION_GOAL_SET)?.({ sessionId, objective: 'Finish the objective' }))
+            .resolves.toMatchObject({ workState: { items: [expect.objectContaining({ origin: 'happier', status: 'active' })] } });
+        await expect(handlers.get(RPC_METHODS.DAEMON_SESSION_GOAL_GET)?.({ sessionId }))
+            .resolves.toMatchObject({ nativeGoalOwner: false, workState: { items: [expect.objectContaining({ title: 'Finish the objective' })] } });
+        // The Workflow Action host has no daemon outbox, even on the same
+        // Machine. Its request must reach the registered target Goal owner.
+        const actionDeps = createCliActionDeps({ token: credentials.token, credentials, sessionId, mode: 'plain', ctx: null,
+            ...(bound ? { rawSession,
+                getCurrentSessionMetadata: () => JSON.parse(rawSession.metadata ?? '{}'),
+                invokeBoundSessionRpc: async () => ({ ok: false, errorCode: 'unsupported_session_runtime_method' }),
+            } : {}),
+            machineActionDirectTargetTransport: { machineId: 'target-machine', invoke: async (method, request) => {
+                const handler = handlers.get(method);
+                if (!handler) throw new Error(`Unexpected Goal RPC: ${method}`);
+                return handler(request);
+            } },
+        });
+        await expect(actionDeps.sessionGoalSet!({ sessionId, status: 'complete' }))
+            .resolves.toMatchObject({ workState: { items: [expect.objectContaining({ status: 'complete' })] } });
+    });
+
+    it('refuses an authenticated daemon wake without its Goal owner and still checks caller authority', async () => {
         const sessionId = 'c123456789012345678901234';
         const credentials = { token: 'goal-token', encryption: null };
         const rawSession = createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', active: false, seq: 19,
@@ -22,11 +67,16 @@ describe('CLI inactive goal transport', () => {
         // Only persisted credentials/settings and the HTTP/process transport are replaced.
         vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
         vi.spyOn(persistence, 'readSettings').mockResolvedValue({ schemaVersion: 6, onboardingCompleted: true, machineId: 'target-machine' });
+        const transportReads: string[] = [];
         vi.spyOn(axios, 'get').mockImplementation(async url => {
             if (String(url).endsWith('/v1/account/encryption/currentness')) {
+                transportReads.push('currentness');
                 return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
             }
-            if (String(url).includes(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session: rawSession } };
+            if (String(url).includes(`/v2/sessions/${sessionId}`)) {
+                transportReads.push('session');
+                return { status: 200, data: { session: rawSession } };
+            }
             throw new Error(`Unexpected HTTP boundary: ${url}`);
         });
         const requests: unknown[] = [];
@@ -47,10 +97,13 @@ describe('CLI inactive goal transport', () => {
         const signal = new AbortController().signal;
         const context: RpcHandlerContext = { signal, callerAuthority: 'account_automation' };
         await expect(handlers.get(RPC_METHODS.DAEMON_SESSION_GOAL_SET_V2)?.({ sessionId, objective: 'Finish',
-            resumeInactiveWithInitialGoal: true, tokenBudget: null }, context)).resolves.toEqual({ ok: true });
-        expect(requests).toEqual([expect.objectContaining({ type: 'resume-session', sessionId,
-            initialGoal: { objective: 'Finish', tokenBudget: null }, initialTranscriptAfterSeq: 19 })]);
-        expect(requests[0]).not.toHaveProperty('executionAuthorization');
+            resumeInactiveWithInitialGoal: true, tokenBudget: null }, context)).resolves.toMatchObject({
+                ok: false, errorCode: 'inactive_agent_runtime_unavailable',
+            });
+        expect(requests).toEqual([]);
+        // Daemon admission and the nested Goal Action share this request's
+        // transport fact. A second HTTP read adds latency without new authority.
+        expect(transportReads).toEqual(['currentness', 'session']);
         requests.length = 0;
         await expect(handlers.get(RPC_METHODS.DAEMON_SESSION_GOAL_SET_V2)?.({ sessionId, objective: 'Finish',
             resumeInactiveWithInitialGoal: true }, { signal, localActionContext: {
@@ -62,6 +115,8 @@ describe('CLI inactive goal transport', () => {
                 },
             } })).resolves.toMatchObject({ ok: false, errorCode: 'subtree_denied' });
         expect(requests).toEqual([]);
+        // A different invocation still obtains fresh Account/Session facts.
+        expect(transportReads).toEqual(['currentness', 'session', 'currentness', 'session']);
     });
 
     it.each(['account_automation', undefined] as const)('retains automation authority and cancellation at the direct target daemon boundary (%s)', async authority => {

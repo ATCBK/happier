@@ -8,7 +8,8 @@ export const CLAUDE_NATIVE_PERMISSION_MODES = Object.freeze({
     auto: 'auto',
     yolo: 'bypassPermissions',
     'safe-yolo': 'auto',
-    'read-only': 'dontAsk',
+    // Plan routes native writers through host approval even when allow rules match.
+    'read-only': 'plan',
 } as const);
 
 export type ClaudeProviderPermissionMode = (typeof CLAUDE_NATIVE_PERMISSION_MODES)[keyof typeof CLAUDE_NATIVE_PERMISSION_MODES];

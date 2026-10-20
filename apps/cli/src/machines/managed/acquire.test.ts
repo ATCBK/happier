@@ -1,5 +1,8 @@
 import axios from 'axios';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
+import { createServer } from 'node:http';
 import { createPublicKey, generateKeyPairSync } from 'node:crypto';
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import * as filesystem from 'node:fs/promises';
@@ -22,11 +25,14 @@ import { createStablePluginConnectedAccountsHost } from '@/plugins/runtime/invoc
 import { createStablePluginHttpHost } from '@/plugins/runtime/fetch/service';
 import { resolveHomeTargetFromDescriptor } from '@happier-dev/cli-common/homeTarget';
 import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
+import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
 import { PluginConnectedAccountAuthenticationV2Schema, type JsonValue } from '@happier-dev/protocol';
 import type { PluginServices, PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import { ManagedBootstrapCredentialCreateV1Schema, ManagedControllerCurrentInputV1Schema, ManagedControllerReportV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { MachineProvisionersListResultV1Schema } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 import { logger } from '@/ui/logger';
-import { ManagedMachineV1Schema } from '@happier-dev/protocol/machines/managed/managedMachineV1';
+import { ManagedMachineV1Schema, type ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
+import { MachineProvisionerNativeExecResultV1Schema } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 import type { SharedSavedSecretCreateInputV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
 import { openSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
@@ -40,6 +46,7 @@ import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsRowReadResponseV
 import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, ConnectedAccountCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { REMOTE_HOST_ROWS_ROUTE_V1, RemoteHostCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
 import { NOTIFICATION_CHANNELS_ROUTE_V1, NotificationChannelCatalogReadResponseV1Schema } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
+import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryRowReadResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { AccountSettingsPersistedObjectSchema } from '@happier-dev/protocol/account/settings/accountSettingsPersistedObject';
 import { openEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
 import { sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
@@ -76,7 +83,7 @@ const machine = {
     id: 'managed', homeId: 'home', custodianAccountId: 'owner', launch: input.selection.launch,
     controller, allocation: 'may-exist', creationState: 'active', desired: 'start',
     desiredWhen: 'now', intentRevision: 0, retention: input.selection.retention, wakeOnAcceptedMessage: false,
-};
+} satisfies ManagedMachineV1;
 const unavailableTransport = async (): Promise<never> => { throw new Error('Unexpected credential transport'); };
 const managedProviderOperationAuthority = createManagedProviderOperationAuthority({
     materializationBaseDir: tmpdir(),
@@ -94,6 +101,18 @@ const accountInputs = {
         canonicalAuthUrl: 'https://home.example', applicationUrl: 'https://home.example', webappUrl: 'https://home.example',
         credentialDestination: null, preferredTransport: 'https' as const, authority: 'current_connection' as const },
 };
+const nativeAccountAuthentication = PluginConnectedAccountAuthenticationV2Schema.parse({ defaultModeId: 'token', modes: [{
+    id: 'token', kind: 'manual', outcomeReconciliation: 'none', fields: [{ id: 'token', title: 'Token',
+        schema: { type: 'string', minLength: 1 }, secret: true }],
+}] });
+function nativeAccountReferenceManifest(localIds: readonly string[]) {
+    return normalizePluginManifestV2({
+        schemaVersion: 2, id: 'acme.accounts', version: '1.0.0', displayName: 'Native fixture accounts',
+        runtime: { apiVersion: 1 }, contributes: { connectedAccountDescriptors: localIds.map(id => ({
+            id, title: id, authentication: nativeAccountAuthentication,
+        })) },
+    });
+}
 function driver() {
     // Only the absent native module-loading boundary is substituted. Empty
     // contribution resolution still uses the real canonical registry owner.
@@ -101,6 +120,136 @@ function driver() {
     return createManagedMachineAcquisitionDriver({ token: 'token', serverUrl: 'https://home.example', homeId: 'home', controller, runtimeRegistry, ...accountInputs });
 }
 describe('creation environment stage', () => {
+    it.each(['recover', 'expire', 'late-confirmation'] as const)('keeps Create truthful when controller Home currentness is unavailable after guest enrollment (%s)', async scenario => {
+        const root = await filesystem.mkdtemp(join(tmpdir(), 'managed-controller-home-recovery-'));
+        const guestHome = join(root, 'guest');
+        const payload = join(root, 'payload');
+        const homeId = 'srv_controller_home_recovery';
+        let retained = ManagedMachineV1Schema.parse({ ...machine, homeId, allocation: 'bound', resource: {
+            contributionRef: input.selection.launch.provider, schemaVersion: 1, value: {},
+        } });
+        let unavailableReads = 0;
+        let nowMs = Date.now();
+        const startedAt = nowMs;
+        const server = createServer((request, response) => {
+            response.setHeader('Content-Type', 'application/json');
+            if (request.url?.endsWith('/controller/current') && retained.enrolledMachineId
+                && (scenario === 'expire' || scenario === 'recover' && unavailableReads === 0)) {
+                unavailableReads++;
+                if (scenario === 'expire' && unavailableReads === 2) nowMs = startedAt + 10 * 60_000 + 1;
+                response.writeHead(503);
+                response.end(JSON.stringify({ error: 'database_connection_unavailable' }));
+                return;
+            }
+            if (request.url?.startsWith('/v1/features')) {
+                response.end(JSON.stringify({ features: {}, capabilities: { serverIdentity: { serverIdentityId: homeId } }, homeConnectionDescriptor: descriptor }));
+            } else if (request.url === '/v1/account/encryption/currentness') {
+                response.end(JSON.stringify({ mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 }));
+            } else if (request.url === '/v1/auth/response') response.end('{}');
+            else response.end(JSON.stringify({ machine: retained, ...(request.url?.endsWith('/admit') ? { replayed: true } : {}) }));
+        });
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+        const address = server.address();
+        if (!address || typeof address === 'string') throw new Error('Home HTTP fixture did not bind');
+        const serverUrl = `http://127.0.0.1:${address.port}`;
+        const descriptor = { v: 1 as const, homeServerIdentityId: homeId, canonicalServerUrl: serverUrl, revision: 1,
+            endpoints: [{ kind: 'https' as const, url: serverUrl }] };
+        const homeTarget = resolveHomeTargetFromDescriptor({ descriptor, authority: 'trusted_enrollment' });
+        const { reloadConfiguration } = await import('@/configuration');
+        const oldHome = process.env.HAPPIER_HOME_DIR;
+        const execFileAsync = promisify(execFile);
+        try {
+            await filesystem.mkdir(join(root, 'servers', homeId), { recursive: true });
+            await filesystem.mkdir(guestHome);
+            await filesystem.mkdir(payload);
+            await writeFile(join(root, 'settings.json'), JSON.stringify({ schemaVersion: 5, onboardingCompleted: true, activeServerId: homeId,
+                servers: { [homeId]: { id: homeId, name: 'Test Home', serverUrl, webappUrl: serverUrl,
+                    homeConnectionDescriptor: descriptor, createdAt: 1, updatedAt: 1, lastUsedAt: 1 } } }));
+            await writeFile(join(root, 'servers', homeId, 'access.key'), JSON.stringify({ token: 'token', encryption: null }));
+            vi.stubEnv('HAPPIER_HOME_DIR', root);
+            vi.stubEnv('HAPPIER_FIRST_PARTY_REMOTE_CLI_PAYLOAD_ROOT', payload);
+            reloadConfiguration();
+            const pairing = { kind: 'remote_home_enrollment_pairing_request', protocolVersion: 1,
+                publicKey: Buffer.alloc(32, 3).toString('base64'), homeServerIdentityId: homeId,
+                pairing: { secretB64Url: Buffer.alloc(32, 4).toString('base64url'), createdAtMs: nowMs, expiresAtMs: nowMs + 15 * 60_000 },
+                supportsTokenOnly: true, pairingRequirement: 'v3', remoteProfileId: homeId };
+            const completion = { kind: 'remote_home_enrollment_result', protocolVersion: 1, success: true,
+                homeServerIdentityId: homeId, machineId: 'enrolled-guest', encryptionType: 'tokenOnly', pairingAuthentication: 'v3', remoteProfileId: homeId };
+            // The guest executable/native transport and Home HTTP are the only
+            // substituted systems. Controller, installer, auth, task, Action,
+            // currentness parser and operation store run their real owners.
+            await writeFile(join(payload, 'happier'), `#!/bin/sh\ncase "$1 $2" in\n'auth request') cat >/dev/null; printf '%s\\n' '${JSON.stringify(pairing)}';;\n'auth wait') printf '%s\\n' '${JSON.stringify(completion)}';;\n'auth status') printf '%s\\n' '{"ok":true,"data":{"authenticated":true,"credentialState":"valid","machineRegistrationState":"server-confirmed","machineId":"enrolled-guest"}}';;\n*) printf '%s\\n' '{"ok":true,"data":{}}';;\nesac\n`);
+            const results: Partial<Record<'bootstrap' | 'exec', JsonValue>> = { bootstrap: { kind: 'native',
+                transport: { contributionRef: input.selection.launch.provider, schemaVersion: 1 },
+                guestHome: { homeDir: guestHome, happyHomeDir: join(guestHome, '.happier'), daemonStartup: 'native-process' } } };
+            const native = nativeFixture({ privateNative: true, credentialPurposes: [], nativeRoleResults: results,
+                onNativeRole: async (role, body) => {
+                    if (role === 'putFile' && body && typeof body === 'object' && !Array.isArray(body)
+                        && typeof body.guestPath === 'string' && typeof body.bytesBase64 === 'string') {
+                        await filesystem.mkdir(dirname(body.guestPath), { recursive: true });
+                        await writeFile(body.guestPath, Buffer.from(body.bytesBase64, 'base64'));
+                    }
+                    if (role !== 'exec') return;
+                    const parsed = body && typeof body === 'object' && !Array.isArray(body) ? body : null;
+                    if (parsed?.processConfig) { results.exec = { kind: 'process-configured' }; return; }
+                    const argv = parsed?.argv;
+                    if (!Array.isArray(argv) || typeof argv[2] !== 'string') throw new Error('Native command missing');
+                    const command = argv[2];
+                    const child = execFileAsync('/bin/sh', ['-c', command], { env: { ...process.env, HOME: guestHome } });
+                    child.child.stdin?.on('error', () => {});
+                    child.child.stdin?.end(typeof parsed?.inputBase64 === 'string' ? Buffer.from(parsed.inputBase64, 'base64') : '');
+                    const result = await child;
+                    if (/auth.*wait/u.test(command)) {
+                        retained = ManagedMachineV1Schema.parse({ ...retained, enrolledMachineId: 'enrolled-guest' });
+                        if (scenario === 'late-confirmation') nowMs = startedAt + 10 * 60_000 + 1;
+                    }
+                    results.exec = { termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } },
+                        stdoutBase64: Buffer.from(result.stdout).toString('base64'), stderrBase64: '', stdoutTruncated: false, stderrTruncated: false };
+                } });
+            vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+            const acquisition = createManagedMachineAcquisitionDriver({ token: 'token', serverUrl, homeId, controller,
+                ...accountInputs, runtimeRegistry: native.runtimeRegistry, homeTarget });
+            const operations = createHostActionOperationRuntime({ machineId: controller.machineId, resolveAccountId: async () => 'owner',
+                generateOperationId: () => `controller-home-${scenario}` });
+            const actionInput = { ...input, selection: { ...input.selection, homeId } };
+            let work: Promise<unknown> | undefined;
+            const executor = createActionExecutor({ managedMachineAction: async ({ actionId, input, context }) =>
+                await acquisition.execute(actionId, input, { requestId: 'creation', context, signal: context.signal }) } as ActionExecutorDeps);
+            await operations.observeExecution({ actionId: 'machines.managed.acquire', input: actionInput, actionRequestId: 'creation',
+                execute: async context => {
+                    const execution = executor.execute('machines.managed.acquire', actionInput, { ...context, surface: 'cli', authority: 'present_user',
+                        presentUserConfirmation: { actionId: 'machines.managed.acquire' } });
+                    work = execution;
+                    return await execution;
+                } });
+            let taskId = '';
+            await expect.poll(async () => {
+                const found = await operations.handlers.getV2({ operationId: `controller-home-${scenario}` });
+                if (found.kind === 'found' && found.operation.state === 'failed') throw new Error(JSON.stringify(found.operation.error));
+                const domain = found.kind === 'found' ? found.operation.domainRef : undefined;
+                if (domain?.kind === 'managedMachine' && domain.bootstrapTask?.prompt) taskId = domain.bootstrapTask.id;
+                return taskId;
+            }, { timeout: 20_000 }).not.toBe('');
+            const { getLiveSystemTasksRunnerAdapter } = await import('@/capabilities/systemTasks/liveSystemTasksRunner');
+            await getLiveSystemTasksRunnerAdapter().respond({ taskId, answer: { approved: true } });
+            await work;
+            const found = await operations.handlers.getV2({ operationId: `controller-home-${scenario}`, waitForTerminal: true });
+            expect(found, JSON.stringify(found.kind === 'found' ? found.operation.error : found)).toMatchObject({ kind: 'found', operation: scenario === 'expire'
+                ? { state: 'running', observation: { kind: 'outcome_uncertain', code: 'action_outcome_unknown' } } : { state: 'succeeded' } });
+            expect(unavailableReads).toBe(scenario === 'expire' ? 2 : scenario === 'recover' ? 1 : 0);
+            if (scenario === 'expire' && found.kind === 'found') expect(found.operation.settledAt).toBeUndefined();
+            expect(retained.enrolledMachineId).toBe('enrolled-guest');
+        } finally {
+            vi.restoreAllMocks();
+            vi.unstubAllEnvs();
+            if (oldHome === undefined) delete process.env.HAPPIER_HOME_DIR;
+            else process.env.HAPPIER_HOME_DIR = oldHome;
+            reloadConfiguration();
+            server.closeAllConnections();
+            await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+            await filesystem.rm(root, { recursive: true, force: true });
+        }
+    });
     it.each(['succeeded', 'skipped'] as const)('retains the original first message across failed setup until exact paid row becomes %s', async state => {
         let retained = ManagedMachineV1Schema.parse({ ...machine, allocation: 'bound', enrolledMachineId: 'guest',
             preset: { id: 'preset', revision: 4 }, environmentSetup: { environment: { setupScript: 'echo admitted' }, state: 'pending' },
@@ -299,13 +448,11 @@ describe('managed acquisition durable custody', () => {
         await expect(stat(deliveredPath)).rejects.toMatchObject({ code: 'ENOENT' });
         await expect(stat(deliveredPath + '.pub')).rejects.toMatchObject({ code: 'ENOENT' });
     });
-    it.each(['available', 'retired', 'unavailable'] as const)('projects each declared native purpose once with authorized labelled accounts and refuses retired occurrence (%s)', async availability => {
+    it.each(['available', 'retired', 'unavailable', 'targeted'] as const)('projects each declared native purpose once with authorized labelled accounts and refuses retired occurrence (%s)', async availability => {
         const services = [{ pluginId: 'acme.accounts', localId: 'cloud' }, { pluginId: 'acme.accounts', localId: 'cua' }, { pluginId: 'acme.accounts', localId: 'maintenance' }];
         const purposes = services.map(service => ({ purpose: service.localId, service }));
-        const authentication = PluginConnectedAccountAuthenticationV2Schema.parse({ defaultModeId: 'token', modes: [{
-            id: 'token', kind: 'manual', outcomeReconciliation: 'none', fields: [{ id: 'token', title: 'Token',
-                schema: { type: 'string', minLength: 1 }, secret: true }],
-        }] });
+        const authentication = nativeAccountAuthentication;
+        const referenceManifests = [nativeAccountReferenceManifest(services.map(service => service.localId))];
         let native: ReturnType<typeof nativeFixture>;
         const requestedServices: string[] = [];
         let releaseInventory!: () => void;
@@ -325,7 +472,7 @@ describe('managed acquisition durable custody', () => {
                 listAccounts: async service => {
                     if (availability === 'unavailable') throw new Error('An unauthorized purpose must not read account inventory');
                     if (availability === 'retired') native.retire();
-                    if (availability === 'available') {
+                    if (availability === 'available' || availability === 'targeted') {
                         requestedServices.push(service.localId);
                         await inventoryReady;
                     }
@@ -339,22 +486,27 @@ describe('managed acquisition durable custody', () => {
                 listGroups: async () => ({ groups: [] }), readGroup: async () => null,
             },
         });
-        const declared = nativeFixture({ cold: true, credentialPurposes: purposes, credentialOwner: runtime.owner });
+        const declared = nativeFixture({ cold: true, credentialPurposes: purposes, credentialOwner: runtime.owner, referenceManifests });
         const manifest = declared.runtimeRegistry.contributes.activationTargets[0]!.manifest;
         const requiredAccess = manifest.hostAccess?.required ?? [];
-        native = nativeFixture({ cold: true, credentialPurposes: purposes, credentialOwner: runtime.owner,
+        native = nativeFixture({ cold: true, credentialPurposes: purposes, credentialOwner: runtime.owner, referenceManifests,
             fixtureManifest: normalizePluginManifestV2({ ...manifest,
                 ...(availability === 'unavailable' ? { hostAccess: {
                     required: requiredAccess.filter(request => request.id !== 'cloud'),
                     optional: requiredAccess.filter(request => request.id === 'cloud'),
                 } } : {}),
                 contributes: { ...manifest.contributes,
-                ...(availability === 'available' ? { machineProvisioners: [
+                ...(availability === 'available' || availability === 'targeted' ? { machineProvisioners: [
                     ...manifest.contributes.machineProvisioners,
-                    { ...manifest.contributes.machineProvisioners[0]!, id: 'vm-z' },
+                    { ...manifest.contributes.machineProvisioners[0]!, id: 'vm-z',
+                        ...(availability === 'targeted' ? { actions: { ...manifest.contributes.machineProvisioners[0]!.actions, acquire: 'local-acquire' } } : {}) },
                 ] } : {}),
-                actions: manifest.contributes.actions.map(action => action.id === 'acquire'
+                actions: [...manifest.contributes.actions.map(action => action.id === 'acquire'
                     ? { ...action, hostAccess: action.hostAccess?.filter(id => id !== 'maintenance') } : action),
+                    ...(availability === 'targeted' ? manifest.contributes.actions.filter(action => action.id === 'acquire').map(action => {
+                        const { hostAccess: _hostAccess, ...localAction } = action;
+                        return { ...localAction, id: 'local-acquire' };
+                    }) : [])],
             } }),
         });
         const authority = createManagedProviderOperationAuthority({ materializationBaseDir: tmpdir(), purposeBindingOwner: runtime,
@@ -364,12 +516,34 @@ describe('managed acquisition durable custody', () => {
         });
         const nativeDriver = createManagedMachineAcquisitionDriver({ token: 'token', serverUrl: 'https://home.example', homeId: 'home',
             controller, runtimeRegistry: native.runtimeRegistry, ...accountInputs, managedProviderOperationAuthority: authority });
-        const result = nativeDriver.execute('machines.provisioners.list', { homeId: 'home', controller }, { requestId: 'catalog-request' });
+        const selectedContribution = { ...input.selection.launch.provider, localId: 'vm-z' };
+        const started = performance.now();
+        const result = nativeDriver.execute('machines.provisioners.list', { homeId: 'home', controller,
+            ...(availability === 'targeted' ? { contribution: selectedContribution } : {}) }, { requestId: 'catalog-request' });
+        if (availability === 'targeted') {
+            try {
+                // The selected local descriptor has no account inventory dependency.
+                // Unrelated cloud inventory remains deliberately unresolved.
+                await expect(result).resolves.toMatchObject({ controller, provisioners: [{ contribution: selectedContribution }] });
+                expect(MachineProvisionersListResultV1Schema.parse(await result).provisioners).toHaveLength(1);
+                expect(requestedServices).toEqual([]);
+                console.info(`QB91 selected descriptor completed in ${Math.round(performance.now() - started)} ms with unrelated inventory held`);
+            } finally { releaseInventory(); }
+            expect(native.activations()).toBe(0);
+            expect(native.effects()).toBe(0);
+            return;
+        }
         if (availability === 'available') {
             try {
                 // Independent credential discoveries must reach HTTP together; one slow
                 // service must not prevent the other authorized request from starting.
                 await expect.poll(() => requestedServices).toEqual(['cloud', 'cua', 'cloud', 'cua']);
+                let settled = false;
+                void result.then(() => { settled = true; });
+                // Controlled network latency, not a product timeout or performance threshold.
+                await new Promise(resolve => setTimeout(resolve, 250));
+                expect(settled).toBe(false);
+                console.info(`QB91 full catalog still pending after ${Math.round(performance.now() - started)} ms with inventory held`);
             } finally { releaseInventory(); }
         }
         if (availability === 'retired') await expect(result).rejects.toMatchObject({ code: 'provider_unavailable' });
@@ -457,6 +631,44 @@ describe('managed acquisition durable custody', () => {
         expect(requests[2]).toEqual(requests[0]);
         expect(writes.some(path => /\/(submit|create-bootstrap-credential|enrollment-context)$/u.test(path))).toBe(false);
     });
+    it('routes enrolled service-managed native Retry to the installer and retains its failure on the same resource', async () => {
+        const homeId = 'srv_managed_native_update';
+        const retained = ManagedMachineV1Schema.parse({ ...machine, homeId, allocation: 'bound', enrolledMachineId: 'ordinary-machine',
+            resource: { contributionRef: input.selection.launch.provider, schemaVersion: 1, value: {} } });
+        const writes: string[] = [];
+        vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+            writes.push(String(url));
+            if (String(url).endsWith('/current')) ManagedControllerCurrentInputV1Schema.parse(body);
+            return { status: 200, data: { machine: retained, ...(String(url).endsWith('/context') ? { requestId: 'original-request' } : {}) } };
+        });
+        const roles: string[] = [];
+        const native = nativeFixture({ privateNative: true, nativeRoleResults: {
+            bootstrap: { kind: 'native', transport: { contributionRef: input.selection.launch.provider, schemaVersion: 1 } },
+            // Native process IO is the boundary: platform inspection fails before delivery.
+            exec: { termination: { observed: { kind: 'exit', exitCode: 1 }, requestedBy: { kind: 'none' } },
+                stdoutBase64: '', stderrBase64: '', stdoutTruncated: false, stderrTruncated: false },
+        }, onNativeRole: role => { roles.push(role); } });
+        const homeTarget = resolveHomeTargetFromDescriptor({ descriptor: { v: 1, homeServerIdentityId: homeId,
+            canonicalServerUrl: 'https://home.example', revision: 1, endpoints: [{ kind: 'https', url: 'https://home.example' }] }, authority: 'current_connection' });
+        const nativeDriver = createManagedMachineAcquisitionDriver({ token: 'token', serverUrl: 'https://home.example', homeId,
+            controller, runtimeRegistry: native.runtimeRegistry, ...accountInputs, homeTarget });
+        const retry = { homeId, managedId: retained.id, expectedIntentRevision: retained.intentRevision };
+        const operations = createHostActionOperationRuntime({ machineId: controller.machineId, resolveAccountId: async () => 'owner',
+            generateOperationId: () => 'native-update' });
+        let work: Promise<JsonValue | null> | undefined;
+        await expect(operations.observeExecution({ actionId: 'machines.managed.bootstrap.retry', input: retry, actionRequestId: 'update-request',
+            execute: async context => {
+                work = nativeDriver.execute('machines.managed.bootstrap.retry', retry, { requestId: 'update-request', context, signal: context.signal });
+                return { ok: true, result: await work };
+            } })).resolves.toMatchObject({ ok: true, result: { managedId: retained.id, operation: { operationId: 'native-update' } } });
+        await expect(work).rejects.toMatchObject({ code: 'provider_unavailable' });
+        expect(await operations.handlers.getV2({ operationId: 'native-update', waitForTerminal: true })).toMatchObject({
+            kind: 'found', operation: { state: 'failed', domainRef: { kind: 'managedMachine', id: retained.id,
+                controller: retained.controller, resource: retained.resource } },
+        });
+        expect(roles).toEqual(['bootstrap', 'exec']);
+        expect(writes.some(url => /\/(submit|create-bootstrap-credential|enrollment-context)$/u.test(url))).toBe(false);
+    });
     it('does not lend managed bootstrap credentials to an ordinary contributed Action', async () => {
         let ordinaryEntered = false;
         const native = nativeFixture({ nativeCredentialService: true, onOrdinary: async context => {
@@ -484,9 +696,9 @@ describe('managed acquisition durable custody', () => {
             credentials: accountInputs.credentials, reloadController: pluginReloadController, getAccountEncryptionMode: async () => 'plain',
             // Exact API snapshot boundaries; the metadata and revision owners remain real.
             readCredential: async () => ({ ref: account, authenticationModeId: 'configured', revisionSemantics: 'revisioned',
-                credentialRevision, configurationRevision, metadata: {},
+                credentialRevision, configurationRevision, metadata: { scopes: [] },
                 content: sealQualifiedConnectedAccountContentEnvelope({ kind: 'credential', accountMode: 'plain', payload: { v: 1, values: { token: 'private' } }, randomBytes: length => new Uint8Array(length) }) }),
-            readConfiguration: async () => ({ target: { kind: 'account', ref: account }, authenticationModeId: 'configured', revisionSemantics: 'revisioned',
+            readConfiguration: async () => configurationRevision === null ? null : ({ target: { kind: 'account', ref: account }, authenticationModeId: 'configured', revisionSemantics: 'revisioned',
                 credentialRevision, configurationRevision,
                 configurationContent: sealQualifiedConnectedAccountContentEnvelope({ kind: 'configuration', accountMode: 'plain', payload: { values: { endpoint: 'https://coordinator.example' }, secretRefs: {} }, randomBytes: length => new Uint8Array(length) }) }),
             configuration: { read: async () => null, secrets: { admit: async () => undefined, has: async () => false, read: async () => null } },
@@ -495,7 +707,7 @@ describe('managed acquisition durable custody', () => {
             materializationBaseDir: tmpdir(), requestAuthRegistry: createConnectedAccountRequestAuthSubjectRegistry(), resolveRequestAuthHttpPort: () => 43123,
             createRedactionLease: () => ({ add() {}, close() {} }),
             purposeBindingOwner: createConnectedAccountPurposeBindingOwner({
-                store: { read: async () => ({ v: 1, bindings: [] }), update: unavailableTransport },
+                store: { read: async () => ({ v: 1, bindings: [] }), update: unavailableTransport, subscribe: () => ({ dispose() {} }) },
                 selectTarget: unavailableTransport, resolveTarget: unavailableTransport, materializeAccount: unavailableTransport,
                 projectTargetAccounts: unavailableTransport, assertTargetAccountMaterializable: unavailableTransport,
                 resolveCredentialConfigurationRevision: (account, signal) => established.readCredentialConfigurationRevision({ account, signal }),
@@ -545,6 +757,58 @@ describe('managed acquisition durable custody', () => {
             expect(native.effects()).toBe(2);
         }
     });
+    it('records the actual credential used by a managed native provider HTTP effect', async () => {
+        const homeId = 'srv_managed_credential_receipt';
+        const service = { pluginId: 'acme.accounts', localId: 'cloud' };
+        const credential = { purpose: { consumer: input.selection.launch.provider, purpose: 'cloud' },
+            account: { service, accountId: 'selected-cloud' }, configurationRevision: 'cloud-configuration' };
+        const credentialOwner = createConnectedAccountPurposeBindingOwner({
+            credentialOwnerAccountId: 'credential-owner',
+            store: { read: async () => ({ v: 1, bindings: [] }), update: unavailableTransport, subscribe: () => ({ dispose() {} }) },
+            selectTarget: unavailableTransport,
+            resolveTarget: async target => target.kind === 'account' ? { account: target.account, displayName: 'Cloud deployment account' } : null,
+            materializeAccount: async () => ({ kind: 'environment', env: { TOKEN: 'private-cloud-token' } }),
+            resolveCredentialConfigurationRevision: async () => 'cloud-configuration',
+            projectTargetAccounts: unavailableTransport, assertTargetAccountMaterializable: unavailableTransport,
+        });
+        const authority = createManagedProviderOperationAuthority({ materializationBaseDir: tmpdir(), purposeBindingOwner: credentialOwner,
+            requestAuthRegistry: createConnectedAccountRequestAuthSubjectRegistry(), resolveRequestAuthHttpPort: () => 43123,
+            createRedactionLease: () => ({ add() {}, close() {} }) });
+        // The remote provider API is the effect boundary. Custody, target
+        // dispatch, SDK materialization and the binding owner remain real.
+        const providerHttp = vi.fn<typeof fetch>(async () => new Response('{}', { status: 200 }));
+        vi.stubGlobal('fetch', providerHttp);
+        const native = nativeFixture({ privateNative: true, credentialOwner,
+            credentialPurposes: [{ purpose: 'cloud', service }], referenceManifests: [nativeAccountReferenceManifest(['cloud'])],
+            nativeRoleResults: { destroy: { kind: 'confirmed' } },
+            onNativeRole: async (role, _body, context) => {
+                if (role !== 'destroy') return;
+                const material = await context.services.connectedAccounts.materialize('cloud', { kind: 'environment', keys: ['TOKEN'] });
+                if (material.kind !== 'environment') throw new Error('Expected native credential');
+                await fetch('https://provider.example/resources/managed', { method: 'DELETE', headers: { authorization: `Bearer ${material.env.TOKEN}` } });
+            },
+        });
+        const retained = ManagedMachineV1Schema.parse({ ...machine, homeId, allocation: 'bound',
+            launch: { ...machine.launch, credentials: [credential] }, resource: { contributionRef: machine.launch.provider, schemaVersion: 1, value: {} } });
+        const driverInput = { token: 'token', serverUrl: 'https://home.example', homeId, controller, runtimeRegistry: native.runtimeRegistry,
+            ...accountInputs, managedProviderOperationAuthority: authority,
+            homeTarget: resolveHomeTargetFromDescriptor({ descriptor: { v: 1, homeServerIdentityId: homeId, canonicalServerUrl: 'https://home.example', revision: 1,
+                endpoints: [{ kind: 'https', url: 'https://home.example' }] }, authority: 'current_connection' }) };
+        const recordOperationCredentialUse = vi.fn();
+        const options = { requestId: 'native-credential-receipt', context: { operationOwnerUpdate: { update() {} }, recordOperationCredentialUse } };
+        vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { machine: retained } });
+        const client = createManagedMachineControllerClient(driverInput, options, 'machines.managed.delete');
+        const invocation = createManagedNativeInvocation({ input: driverInput, options, client, machine: retained, action: 'machines.managed.delete' }, () => retained);
+        await expect(invocation.invoke('destroy', { resource: {} })).resolves.toEqual({ kind: 'confirmed' });
+        expect(providerHttp).toHaveBeenCalledWith('https://provider.example/resources/managed', {
+            method: 'DELETE', headers: { authorization: 'Bearer private-cloud-token' },
+        });
+        expect(recordOperationCredentialUse.mock.calls).toEqual([[{
+            v: 1, kind: 'connected_account', label: 'Cloud deployment account', owner: { kind: 'account', accountId: 'credential-owner' }, service,
+            why: { kind: 'purpose_binding', purpose: { consumer: { pluginId: 'acme.compute', localId: 'destroy' }, purpose: 'cloud' }, target: 'account' },
+            currentness: { kind: 'current_at_materialization' },
+        }]]);
+    });
     it('materializes both captured native purposes after default changes and refuses a changed secondary connection', async () => {
         const homeId = 'srv_managed_plural_credentials';
         const credentialPurposes = ['cloud', 'cua'].map(purpose => ({ purpose,
@@ -559,7 +823,7 @@ describe('managed acquisition durable custody', () => {
             store: { read: async () => ({ v: 1, bindings: credentialPurposes.map(({ purpose, service }) => ({
                 purpose: { consumer: { pluginId: 'acme.compute', localId: 'destroy' }, purpose },
                 target: { kind: 'account' as const, account: { service, accountId: `${standingDefault}-${purpose}` } },
-            })) }), update: unavailableTransport },
+            })) }), update: unavailableTransport, subscribe: () => ({ dispose() {} }) },
             // These callbacks are the external Account/profile and credential
             // transport boundary. The exact-purpose and configuration owners run real.
             resolveTarget: async target => target.kind === 'account' ? { account: target.account, displayName: target.account.accountId } : null,
@@ -574,7 +838,8 @@ describe('managed acquisition durable custody', () => {
         const authority = createManagedProviderOperationAuthority({ materializationBaseDir: tmpdir(), purposeBindingOwner: credentialOwner,
             requestAuthRegistry: createConnectedAccountRequestAuthSubjectRegistry(), resolveRequestAuthHttpPort: () => 43123,
             createRedactionLease: () => ({ add() {}, close() {} }) });
-        const native = nativeFixture({ privateNative: true, credentialOwner, credentialPurposes });
+        const native = nativeFixture({ privateNative: true, credentialOwner, credentialPurposes,
+            referenceManifests: [nativeAccountReferenceManifest(credentialPurposes.map(({ service }) => service.localId))] });
         const retained = ManagedMachineV1Schema.parse({ ...machine, homeId, allocation: 'bound',
             launch: { ...machine.launch, credentials }, resource: { contributionRef: machine.launch.provider, schemaVersion: 1, value: {} } });
         const homeTarget = resolveHomeTargetFromDescriptor({ descriptor: { v: 1, homeServerIdentityId: homeId,
@@ -796,7 +1061,7 @@ describe('managed acquisition durable custody', () => {
                 nativeCalls.push(role);
                 expect(body).toMatchObject({ resource: retained.resource!.value, credentialRef: reference });
                 if (!body || typeof body !== 'object' || Array.isArray(body)
-                    || typeof body.bootstrapPublicKey !== 'string') throw new Error('Bootstrap public key was not delivered');
+                    || !('bootstrapPublicKey' in body) || typeof body.bootstrapPublicKey !== 'string') throw new Error('Bootstrap public key was not delivered');
                 expect(JSON.stringify(body)).not.toContain('PRIVATE KEY');
                 expect(Object.keys(body).sort()).toEqual(['bootstrapPublicKey', 'credentialRef', 'resource']);
                 bootstrapPublicKeys.push(body.bootstrapPublicKey);
@@ -936,7 +1201,7 @@ describe('managed acquisition durable custody', () => {
         const canceled = new AbortController();
         canceled.abort();
         const resource = { contributionRef: input.selection.launch.provider, schemaVersion: 1, value: { id: 'paid-resource' } };
-        const bound = { ...machine, allocation: 'bound', resource };
+        const bound = { ...machine, allocation: 'bound', resource } satisfies ManagedMachineV1;
         const post = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { machine: bound } });
         const client = createManagedMachineControllerClient({
             token: 'token', serverUrl: 'https://home.example', homeId: 'home', controller,
@@ -950,12 +1215,124 @@ describe('managed acquisition durable custody', () => {
     it('retires native custody when the retained identity changes without an intent revision change', async () => {
         const bound = { ...machine, allocation: 'bound', resource: {
             contributionRef: input.selection.launch.provider, schemaVersion: 1, value: { id: 'original' },
-        } };
+        } } satisfies ManagedMachineV1;
         vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { machine: { ...bound, resource: { ...bound.resource, value: { id: 'replacement' } } } } });
         const client = createManagedMachineControllerClient({ token: 'token', serverUrl: 'https://home.example', homeId: 'home', controller,
             runtimeRegistry: { contributes: createResolvedContributionRegistry({}) } as ResolvedExecutablePluginRuntimeRegistry, ...accountInputs,
         }, { requestId: 'request' }, 'machines.managed.bootstrap.retry');
         expect(await client.isCurrent(bound)).toBe(false);
+    });
+    it.each(['permission_denied', 'server-conflict', 'server-validation', 'global-code', 'fastify-code', 'rejected-http', 'typed-transport', 'transport', 'replaced-resource'] as const)('keeps the native currentness refusal typed before handler IO (%s)', async refusal => {
+        const homeId = 'srv_native_currentness';
+        const native = nativeFixture({ credentialPurposes: [] });
+        const retained = ManagedMachineV1Schema.parse({ ...machine, homeId, allocation: 'bound', resource: {
+            contributionRef: input.selection.launch.provider, schemaVersion: 1, value: {},
+        } });
+        let reads = 0;
+        const post = vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+            expect(String(url)).toBe('https://home.example/v1/machines/managed/controller/current');
+            expect(ManagedControllerCurrentInputV1Schema.parse(body)).toEqual({ homeId, managedId: retained.id,
+                expectedIntentRevision: retained.intentRevision, controller, requestId: 'retained-creation' });
+            if (++reads === 1) return { status: 200, data: { machine: retained } };
+            if (refusal === 'permission_denied') return { status: 403, data: { code: 'permission_denied' } };
+            if (refusal === 'server-conflict') return { status: 503, data: { error: 'database_transaction_conflict_exhausted', statusCode: 503 } };
+            if (refusal === 'server-validation') return { status: 400, data: { error: 'invalid-params' } };
+            if (refusal === 'global-code') return { status: 503, data: { code: 'database_transaction_conflict_exhausted', statusCode: 503 } };
+            if (refusal === 'fastify-code') return { status: 500, data: { code: 'FST_ERR_RESPONSE_SERIALIZATION', error: 'Internal Server Error', message: 'Private server diagnostic' } };
+            if (refusal === 'rejected-http') throw Object.assign(new Error('Private HTTP diagnostic'), { isAxiosError: true,
+                response: { status: 503, data: { error: 'database_transaction_conflict_exhausted', statusCode: 503 } } });
+            if (refusal === 'typed-transport') throw Object.assign(new Error('Private transport diagnostic'), { isAxiosError: true, code: 'ECONNABORTED' });
+            if (refusal === 'transport') throw new Error('Private transport diagnostic must not reach the operation');
+            return { status: 200, data: { machine: { ...retained, resource: { ...retained.resource!, value: { replaced: true } } } } };
+        });
+        const driverInput = { token: 'token', serverUrl: 'https://home.example', homeId, controller,
+            ...accountInputs, runtimeRegistry: native.runtimeRegistry,
+            homeTarget: resolveHomeTargetFromDescriptor({ descriptor: { v: 1, homeServerIdentityId: homeId,
+                canonicalServerUrl: 'https://home.example', revision: 1, endpoints: [{ kind: 'https', url: 'https://home.example' }] },
+                authority: 'current_connection' }) };
+        const options = { requestId: 'retained-creation', context: { operationOwnerUpdate: { update() {} } } };
+        const action = 'machines.managed.bootstrap.retry' as const;
+        const client = createManagedMachineControllerClient(driverInput, options, action);
+        const invocation = createManagedNativeInvocation({ input: driverInput, options, client, machine: retained, action }, () => retained);
+        const code = refusal === 'transport' ? 'managed_controller_request_failed' : refusal === 'replaced-resource' ? 'intent_changed'
+            : refusal === 'server-conflict' || refusal === 'global-code' || refusal === 'rejected-http' ? 'database_transaction_conflict_exhausted'
+            : refusal === 'typed-transport' ? 'ECONNABORTED'
+            : refusal === 'fastify-code' ? 'FST_ERR_RESPONSE_SERIALIZATION' : refusal === 'server-validation' ? 'invalid-params' : refusal;
+        await expect(invocation.invoke('exec', { resource: {}, argv: ['true'] })).rejects.toMatchObject({
+            name: 'ManagedMachineControllerError', code, message: code,
+            ...(refusal === 'server-conflict' || refusal === 'global-code' || refusal === 'rejected-http' ? { status: 503 } : refusal === 'fastify-code' ? { status: 500 }
+                : refusal === 'server-validation' ? { status: 400 } : refusal === 'permission_denied' ? { status: 403 } : {}),
+        });
+        expect(native.effects()).toBe(0);
+        expect(native.activations()).toBe(0);
+        expect(await client.isCurrent(retained)).toBe(false);
+        post.mockResolvedValue({ status: 200, data: { machine: retained } });
+        const recovered = MachineProvisionerNativeExecResultV1Schema.parse(await invocation.invoke('exec', { resource: {}, argv: ['true'] }));
+        expect(recovered).toMatchObject({ termination: { observed: { kind: 'exit', exitCode: 0 } } });
+        expect(native.effects()).toBe(1);
+    });
+    it.each(['status', 'schema', 'transport'] as const)('persists typed managed currentness failure through the real enrollment task and operation (%s)', async category => {
+        const homeId = 'srv_native_currentness_task';
+        const native = nativeFixture({ credentialPurposes: [] });
+        const retained = ManagedMachineV1Schema.parse({ ...machine, homeId, allocation: 'bound', resource: {
+            contributionRef: input.selection.launch.provider, schemaVersion: 1, value: {},
+        } });
+        let installing = false;
+        // Real HTTP producer, installer/task runner and operation store. Only
+        // the unavailable native process boundary comes from nativeFixture.
+        const server = createServer((request, response) => {
+            if (request.url?.endsWith('/current') && installing) {
+                if (category === 'transport') { request.socket.destroy(); return; }
+                response.writeHead(category === 'status' ? 500 : 200, { 'Content-Type': 'application/json' });
+                response.end(JSON.stringify(category === 'status'
+                    ? { code: 'P2024', message: 'private database diagnostic', token: 'private-server-token' }
+                    : { machine: { token: 'private-schema-token' } }));
+                return;
+            }
+            response.writeHead(200, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ machine: retained,
+                ...(request.url?.endsWith('/context') ? { requestId: 'retained-creation' } : {}) }));
+        });
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+        const address = server.address();
+        if (!address || typeof address === 'string') throw new Error('HTTP fixture did not bind');
+        const serverUrl = `http://127.0.0.1:${address.port}`;
+        const recovery = createManagedMachineAcquisitionDriver({ token: 'private-controller-token', serverUrl, homeId, controller,
+            ...accountInputs, runtimeRegistry: native.runtimeRegistry,
+            homeTarget: resolveHomeTargetFromDescriptor({ descriptor: { v: 1, homeServerIdentityId: homeId,
+                canonicalServerUrl: 'https://home.example', revision: 1, endpoints: [{ kind: 'https', url: 'https://home.example' }] },
+                authority: 'current_connection' }) });
+        const operations = createHostActionOperationRuntime({ machineId: controller.machineId,
+            resolveAccountId: async () => 'owner', generateOperationId: () => `typed-currentness-${category}` });
+        const retry = { homeId, managedId: retained.id, expectedIntentRevision: retained.intentRevision };
+        const executor = createActionExecutor({ managedMachineAction: async ({ actionId, input, context }) => {
+            return await recovery.execute(actionId, input, { requestId: 'fresh-retry', signal: context.signal,
+                context: { ...context, operationOwnerUpdate: { update(value) {
+                    if (value.progress?.phase === 'ssh.installCli') installing = true;
+                    context.operationOwnerUpdate?.update(value);
+                } } } });
+        } } as ActionExecutorDeps);
+        try {
+            await operations.observeExecution({ actionId: 'machines.managed.bootstrap.retry', input: retry,
+                actionRequestId: 'fresh-retry', execute: async context => {
+                    return await executor.execute('machines.managed.bootstrap.retry', retry, { ...context, surface: 'cli', authority: 'present_user',
+                        presentUserConfirmation: { actionId: 'machines.managed.bootstrap.retry' } });
+                } });
+            const result = await operations.handlers.getV2({ operationId: `typed-currentness-${category}`, waitForTerminal: true });
+            expect(result).toMatchObject({ kind: 'found', operation: { state: 'failed', error: {
+                errorCode: category === 'status' ? 'P2024' : category === 'transport' ? 'ECONNRESET' : 'managed_controller_request_failed',
+                details: { kind: 'managedControllerRequest', path: '/v1/machines/managed/controller/current', category,
+                    ...(category === 'status' ? { status: 500, code: 'P2024' } : category === 'schema' ? { status: 200 } : { code: 'ECONNRESET' }) },
+            } } });
+            expect(JSON.stringify(result)).not.toMatch(/private-|database diagnostic/);
+            const legacy = await operations.handlers.get({ operationId: `typed-currentness-${category}` });
+            if (result.kind !== 'found' || legacy.kind !== 'found') throw new Error('Operation read did not retain its terminal failure');
+            expect(legacy.operation.error).toEqual({ errorCode: result.operation.error!.errorCode, error: result.operation.error!.error });
+            expect(installing).toBe(true);
+        } finally {
+            server.closeAllConnections();
+            await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+        }
     });
     it('retires pending recovery when the retained native handle changes without an intent revision change', async () => {
         const pending = { ...machine, nativeOperationRef: {
@@ -970,12 +1347,77 @@ describe('managed acquisition durable custody', () => {
         expect(await client.isCurrent(pending)).toBe(false);
     });
     it('permits exact inactive native inspection without admitting new creation effects', async () => {
-        const canceled = { ...machine, creationState: 'canceled', intentRevision: 1 };
+        const canceled = { ...machine, creationState: 'canceled', intentRevision: 1 } satisfies ManagedMachineV1;
         vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { machine: canceled } });
         const connection = { token: 'token', serverUrl: 'https://home.example', homeId: 'home', controller,
             runtimeRegistry: { contributes: createResolvedContributionRegistry({}) } as ResolvedExecutablePluginRuntimeRegistry, ...accountInputs };
         expect(await createManagedMachineControllerClient(connection, { requestId: 'request' }, 'machines.managed.inspect').isCurrent(canceled)).toBe(true);
         expect(await createManagedMachineControllerClient(connection, { requestId: 'request' }, 'machines.managed.bootstrap.retry').isCurrent(canceled)).toBe(false);
+    });
+    it.each(['bound', 'pending'] as const)('keeps approved canceled %s cleanup current without admitting other effects', async target => {
+        const canceled = ManagedMachineV1Schema.parse({ ...machine, creationState: 'canceled', intentRevision: 1,
+            desired: 'delete', desiredWhen: 'now', cleanup: { disposition: 'pending', reason: 'creation_canceled' },
+            ...(target === 'bound' ? { allocation: 'bound', resource: {
+                contributionRef: input.selection.launch.provider, schemaVersion: 1, value: { id: 'paid-resource' },
+            } } : { allocation: 'may-exist', nativeOperationRef: {
+                contributionRef: input.selection.launch.provider, schemaVersion: 1, value: { requestId: 'paid-operation' },
+            } }),
+        });
+        const http = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { machine: canceled } });
+        const connection = { token: 'token', serverUrl: 'https://home.example', homeId: 'home', controller,
+            runtimeRegistry: { contributes: createResolvedContributionRegistry({}) } as ResolvedExecutablePluginRuntimeRegistry, ...accountInputs };
+        const client = createManagedMachineControllerClient(connection, { requestId: 'approved-cleanup' }, 'machines.managed.delete');
+        expect(await client.isCurrent(canceled)).toBe(true);
+        expect(await createManagedMachineControllerClient(connection, { requestId: 'approved-cleanup' }, 'machines.managed.power.set').isCurrent(canceled)).toBe(false);
+        expect(await createManagedMachineControllerClient(connection, { requestId: 'approved-cleanup' }, 'machines.managed.bootstrap.retry').isCurrent(canceled)).toBe(false);
+        const archived = { ...canceled, archivedAt: 1 };
+        http.mockResolvedValue({ status: 200, data: { machine: archived } });
+        expect(await client.isCurrent(archived)).toBe(false);
+    });
+    it('executes approved canceled cleanup through the real intent and native custody owners', async () => {
+        const homeId = 'srv_canceled_cleanup';
+        const resource = { contributionRef: input.selection.launch.provider, schemaVersion: 1, value: {} };
+        let retained = ManagedMachineV1Schema.parse({ ...machine, homeId, creationState: 'canceled', intentRevision: 2,
+            allocation: 'bound', resource, desired: 'delete', desiredWhen: 'now',
+            cleanup: { disposition: 'pending', reason: 'creation_canceled' } });
+        const destroyed: unknown[] = [];
+        const native = nativeFixture({ privateNative: true,
+            nativeRoleResults: { inspect: { observedAt: 1, availability: 'absent' } },
+            onNativeRole: (role, body) => { if (role === 'destroy') destroyed.push(body); },
+        });
+        // Home HTTP and the native provider are boundaries. Admission parsing,
+        // intent execution, operation acceptance and private custody remain real.
+        vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+            const path = new URL(String(url)).pathname;
+            if (path.endsWith('/report-intent')) {
+                expect(body).toMatchObject({ result: { kind: 'confirmed' }, observation: { availability: 'absent' } });
+                retained = ManagedMachineV1Schema.parse({ ...retained, allocation: 'confirmed-absent', cleanup: undefined,
+                    observation: { observedAt: 1, availability: 'absent' } });
+            }
+            return { status: 200, data: { machine: retained,
+                ...(path.endsWith('/admit-control') ? { replayed: false } : {}),
+                ...(path.endsWith('/submit-intent') ? { submitted: true } : {}),
+            } };
+        });
+        const homeTarget = resolveHomeTargetFromDescriptor({ descriptor: { v: 1, homeServerIdentityId: homeId,
+            canonicalServerUrl: 'https://home.example', revision: 1, endpoints: [{ kind: 'https', url: 'https://home.example' }] }, authority: 'current_connection' });
+        const cleanup = createManagedMachineAcquisitionDriver({ token: 'token', serverUrl: 'https://home.example', homeId,
+            controller, runtimeRegistry: native.runtimeRegistry, ...accountInputs, homeTarget });
+        const actionInput = { homeId, managedId: retained.id, when: 'now', expectedRevision: 1, intent: 'delete', reviewedDependencies: true };
+        const operations = createHostActionOperationRuntime({ machineId: controller.machineId,
+            resolveAccountId: async () => 'owner', generateOperationId: () => 'canceled-cleanup' });
+        let work: Promise<JsonValue | null> | undefined;
+        await operations.observeExecution({ actionId: 'machines.managed.delete', input: actionInput, actionRequestId: 'approved-cleanup',
+            execute: async context => {
+                work = cleanup.execute('machines.managed.delete', actionInput, { requestId: 'approved-cleanup', context, signal: context.signal });
+                return { ok: true, result: await work };
+            } });
+        await expect(work).resolves.toMatchObject({ kind: 'accepted', managedId: retained.id });
+        expect(destroyed).toEqual([{ resource: resource.value }]);
+        expect(retained).toMatchObject({ creationState: 'canceled', allocation: 'confirmed-absent' });
+        expect(await operations.handlers.getV2({ operationId: 'canceled-cleanup', waitForTerminal: true })).toMatchObject({
+            kind: 'found', operation: { state: 'succeeded' },
+        });
     });
     it('reopens retry from the authenticated controller context using the retained creation correlation', async () => {
         const enrolled = { ...machine, allocation: 'bound', resource: {
@@ -997,6 +1439,16 @@ describe('managed acquisition durable custody', () => {
         await expect(driver().execute('machines.provisioners.list', { homeId: 'home' }, { requestId: 'discovery' }))
             .resolves.toEqual({ controller, provisioners: [] });
         expect(post).not.toHaveBeenCalled();
+    });
+    it('returns no catalog entry for a different qualified provisioner without activating native code', async () => {
+        const native = nativeFixture({ credentialPurposes: [] });
+        const reader = createManagedMachineAcquisitionDriver({ token: 'token', serverUrl: 'https://home.example', homeId: 'home',
+            controller, runtimeRegistry: native.runtimeRegistry, ...accountInputs });
+        const result = await reader.execute('machines.provisioners.list', { homeId: 'home', controller,
+            contribution: { pluginId: 'another.compute', localId: 'vm' } }, { requestId: 'missing-contribution' });
+        expect(MachineProvisionersListResultV1Schema.parse(result)).toEqual({ controller, provisioners: [] });
+        expect(native.activations()).toBe(0);
+        expect(native.effects()).toBe(0);
     });
     it('omits unconfirmed provisioners and refuses their probe without native effects when occurrence custody is unavailable', async () => {
         const post = vi.spyOn(axios, 'post');
@@ -1022,19 +1474,31 @@ describe('managed acquisition durable custody', () => {
         }, { requestId: 'options' })).resolves.toEqual({ choices: [] });
         expect(post).not.toHaveBeenCalled();
     });
-    it.each(['valid', 'unknown-action', 'invalid-input'] as const)('validates the %s prerequisite repair against the current ordinary Action without running it', async repair => {
+    it.each(['valid', 'no-schema', 'unknown-action', 'invalid-input'] as const)('validates the %s prerequisite repair against the current ordinary Action without running it', async repair => {
         const result = { available: false, prerequisites: [{ requirement: { kind: 'systemTool', id: 'fixture-tool' },
             status: 'unavailable', repairAction: {
                 action: { pluginId: 'acme.compute', localId: repair === 'unknown-action' ? 'missing-repair' : 'ordinary' },
                 input: repair === 'invalid-input' ? { machineName: 7 } : { machineName: 'guest' },
             } }] };
         const post = vi.spyOn(axios, 'post');
-        const native = nativeFixture({ privateNative: true, repairAction: true, nativeRoleResults: { check: result } });
+        let native = nativeFixture({ privateNative: true, repairAction: true, nativeRoleResults: { check: result } });
+        if (repair === 'no-schema') {
+            const manifest = native.runtimeRegistry.contributes.activationTargets.find(target => target.pluginId === 'acme.compute')?.manifest;
+            if (!manifest) throw new Error('Missing real repair Action manifest');
+            native = nativeFixture({ privateNative: true, repairAction: true, nativeRoleResults: { check: result },
+                fixtureManifest: normalizePluginManifestV2({ ...manifest, contributes: { ...manifest.contributes,
+                    actions: manifest.contributes.actions.map(action => {
+                        if (action.id !== 'ordinary') return action;
+                        const { inputSchema: _inputSchema, ...withoutInputSchema } = action;
+                        return withoutInputSchema;
+                    }),
+                } }) });
+        }
         const probeDriver = createManagedMachineAcquisitionDriver({ token: 'token', serverUrl: 'https://home.example',
             homeId: 'home', controller, runtimeRegistry: native.runtimeRegistry, ...accountInputs });
         const work = probeDriver.execute('machines.provisioners.check', { homeId: 'home', controller,
             contribution: input.selection.launch.provider }, { requestId: 'check-repair' });
-        if (repair === 'valid') await expect(work).resolves.toEqual(result);
+        if (repair === 'valid' || repair === 'no-schema') await expect(work).resolves.toEqual(result);
         else await expect(work).rejects.toMatchObject({ code: 'provider_unavailable' });
         // Discovery invokes Check only. Actual repair retains its ordinary
         // Action admission/approval path rather than running while projecting.
@@ -1106,7 +1570,7 @@ describe('managed acquisition durable custody', () => {
         } })).resolves.toMatchObject({ ok: true, result: { managedId: retained.id, operation: { operationId: 'pending-recovery' } } });
         if (passive && !withdrawn) await expect(work).resolves.toMatchObject({ machine: { id: retained.id, resource } });
         else if (passive) await expect(work).rejects.toMatchObject({ code: 'admission_unavailable' });
-        else if (withdrawn) await expect(work).rejects.toMatchObject({ code: 'intent_changed' });
+        else if (withdrawn) await expect(work).rejects.toMatchObject({ code: 'admission_unavailable' });
         else await expect(work).rejects.toBeInstanceOf(Error);
         expect(events).toEqual(passive ? withdrawn ? ['reconcile'] : ['reconcile', 'report', 'report']
             : withdrawn ? ['reconcile', 'report'] : ['reconcile', 'report', 'bootstrap']);
@@ -1228,7 +1692,7 @@ describe('managed acquisition durable custody', () => {
             ? { homeId: nativeHomeId, managedId: machine.id, expectedIntentRevision: 0 } : nativeInput;
         const resource = { contributionRef: input.selection.launch.provider, schemaVersion: 1, value: {} };
         const nativeOperationRef = { contributionRef: input.selection.launch.provider, schemaVersion: 1, value: { requestId: 'request-1' } };
-        const nativeResult = resultKind === 'bound' ? { kind: 'bound' as const, resource } : { kind: 'pending' as const, nativeOperationRef };
+        const nativeResult: JsonValue = resultKind === 'bound' ? { kind: 'bound', resource } : { kind: 'pending', nativeOperationRef };
         let retained = ManagedMachineV1Schema.parse({ ...machine, homeId: nativeHomeId, allocation: 'unsubmitted' });
         const nativeCalls: string[] = [];
         let originCurrent = true;
@@ -1298,7 +1762,8 @@ describe('managed acquisition durable custody', () => {
                     externalActionTarget: wireAuthorization.binding.target } : {}) }, signal: context.signal });
             return { ok: true, result: await work };
         } })).resolves.toMatchObject({ ok: true, result: { managedId: retained.id, operation: { operationId: 'late-resource' } } });
-        await expect(work).rejects.toMatchObject({ code: resultKind === 'pending' ? 'native_acquisition_unconfirmed' : 'intent_changed' });
+        await expect(work).rejects.toMatchObject({ code: resultKind === 'pending' ? 'native_acquisition_unconfirmed'
+            : retirement === 'operation-cancel' ? 'intent_changed' : 'admission_unavailable' });
         if (retirement === 'operation-cancel') expect(cancellation).toEqual({ kind: 'requested' });
         expect(reports).toEqual([{ homeId: nativeHomeId, managedId: retained.id, expectedIntentRevision: 0,
             requestId: 'creation', controller, result: nativeResult,
@@ -1483,14 +1948,18 @@ describe('managed acquisition durable custody', () => {
         function storedToken() {
             const credential = created[0];
             if (!credential) throw new Error('Native token was not persisted before vendor entry');
-            const dataKey = mode === 'plain' ? null : openEncryptedDataKeyEnvelopeV1({
-                envelope: Buffer.from(credential.keyEnvelopes[0]!.encryptedDataKey, 'base64'), recipientSecretKeyOrSeed: machineKey,
+            const envelope = credential.keyEnvelopes?.[0];
+            if (mode === 'e2ee' && !envelope) throw new Error('Native token recipient envelope was not retained');
+            const dataKey = mode === 'plain' || !envelope ? null : openEncryptedDataKeyEnvelopeV1({
+                envelope: Buffer.from(envelope.encryptedDataKey, 'base64'), recipientSecretKeyOrSeed: machineKey,
             });
             if (mode === 'e2ee' && !dataKey) throw new Error('Native token envelope could not be opened');
             try {
-                const content = openSavedSecretResourceStoredContentV1({ resourceId: credential.resourceId, mode,
-                    storedContent: credential.storedContent, ...(dataKey ? { resourceDataKey: dataKey } : {}),
-                });
+                const content = mode === 'plain'
+                    ? openSavedSecretResourceStoredContentV1({ resourceId: credential.resourceId, mode,
+                        storedContent: credential.storedContent })
+                    : dataKey ? openSavedSecretResourceStoredContentV1({ resourceId: credential.resourceId, mode,
+                        storedContent: credential.storedContent, resourceDataKey: dataKey }) : null;
                 if (!content) throw new Error('Native token could not be opened');
                 return content;
             } finally { dataKey?.fill(0); }
@@ -1567,7 +2036,7 @@ describe('managed acquisition durable custody', () => {
                 materialReads += 1;
                 const credential = created[0]!;
                 const content = storedToken();
-                const envelope = credential.keyEnvelopes[0];
+                const envelope = credential.keyEnvelopes?.[0];
                 return { status: 200, data: { resources: [{ resourceId: credential.resourceId, encryptionMode: mode,
                     storedContent: credential.storedContent, recipientEnvelope: envelope ? {
                         encryptedDataKey: envelope.encryptedDataKey, recipientContentPublicKeyFingerprint: envelope.recipientContentPublicKeyFingerprint,
@@ -1701,17 +2170,20 @@ describe('managed acquisition durable custody', () => {
                 if (fileLease.kind !== 'file') throw new Error('SSH file lease was not returned');
                 sshLeaseFiles.push(fileLease.path);
                 expect(await readFile(fileLease.path, 'utf8')).toBe(disclosedContent.value);
-                if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.bootstrapPublicKey !== 'string') {
+                if (!body || typeof body !== 'object' || Array.isArray(body)
+                    || !('bootstrapPublicKey' in body) || typeof body.bootstrapPublicKey !== 'string') {
                     throw new Error('The retained SSH public carrier was not admitted');
                 }
+                const bootstrapPublicKey = body.bootstrapPublicKey;
+                const content = disclosedContent;
                 const fixedKey = { relativePath: `state/crabbox/testboxes/${mode === 'plain' ? 'cbx_abcdef123456' : 'cbx_abcdef123457'}/id_ed25519` };
                 let claimPath = '';
                 // The real reconciliation binding reopens and decrypts the
                 // retained SavedSecret; no private binding callback is replaced.
                 await context.services.machineProvisioners.withBootstrapCredentialFile(fixedKey, async lease => {
                     nativeKeyFiles.push(lease.path);
-                    expect(await readFile(lease.path, 'utf8')).toBe(disclosedContent.value);
-                    expect(await readFile(lease.path + '.pub', 'utf8')).toBe(body.bootstrapPublicKey);
+                    expect(await readFile(lease.path, 'utf8')).toBe(content.value);
+                    expect(await readFile(lease.path + '.pub', 'utf8')).toBe(bootstrapPublicKey);
                     claimPath = join(dirname(lease.path), 'claim.json');
                     await writeFile(claimPath, mode);
                 });
@@ -1766,6 +2238,8 @@ describe('managed acquisition durable custody', () => {
             if (new URL(path).pathname === NOTIFICATION_CHANNELS_ROUTE_V1) return { status: 200, data: NotificationChannelCatalogReadResponseV1Schema.parse({ status: 'absent' }) };
             if (new URL(path).pathname === MCP_SERVER_CATALOG_ROWS_ROUTE_V1) return { status: 200, data: McpServerCatalogRowReadResponseV1Schema.parse({ status: 'absent' }) };
             if (new URL(path).pathname === ACP_CATALOG_ROWS_ROUTE_V1) return { status: 200, data: AcpCatalogRowReadResponseV1Schema.parse({ status: 'absent' }) };
+            if (new URL(path).pathname === `${PROMPT_LIBRARY_ROWS_ROUTE_V1}/registry-sources`) return { status: 200,
+                data: PromptLibraryRowReadResponseV1Schema.parse({ status: 'absent' }) };
             if (new URL(path).pathname === PROVIDER_CONNECTIONS_ROWS_ROUTE_V1) return { status: 200, data: ProviderConnectionsRowReadResponseV1Schema.parse({ status: 'absent' }) };
             if (new URL(path).pathname === REMOTE_HOST_ROWS_ROUTE_V1) return { status: 200, data: RemoteHostCatalogRowReadResponseV1Schema.parse({ status: 'absent' }) };
             if (new URL(path).pathname === NOTIFICATION_CHANNELS_ROUTE_V1) return { status: 200, data: NotificationChannelCatalogReadResponseV1Schema.parse({ status: 'absent' }) };
@@ -1776,7 +2250,7 @@ describe('managed acquisition durable custody', () => {
             if (path.endsWith('/v2/account/settings/history')) return { status: 200, data: { snapshots: [] } };
             if (path.endsWith('/resources/materials')) {
                 const credential = created[0];
-                const envelope = credential?.keyEnvelopes[0];
+                const envelope = credential?.keyEnvelopes?.[0];
                 return { status: 200, data: { resources: catalogReady && credential && disclosedContent ? [{
                     resourceId: credential.resourceId, encryptionMode: mode, storedContent: credential.storedContent,
                     recipientEnvelope: envelope ? { encryptedDataKey: envelope.encryptedDataKey,
@@ -1846,11 +2320,12 @@ describe('managed acquisition durable custody', () => {
         expect(retained.bootstrapCredentialRef?.resourceId).toBe(credential.resourceId);
         let content: ReturnType<typeof openSavedSecretResourceStoredContentV1>;
         if (mode === 'plain') {
-            expect(credential.keyEnvelopes.length).toBe(0);
+            expect(credential.keyEnvelopes ?? []).toHaveLength(0);
             content = openSavedSecretResourceStoredContentV1({ resourceId: credential.resourceId, mode, storedContent: credential.storedContent });
         } else {
-            expect(credential.keyEnvelopes.length).toBe(1);
-            const envelope = credential.keyEnvelopes[0]!;
+            expect(credential.keyEnvelopes).toHaveLength(1);
+            const envelope = credential.keyEnvelopes?.[0];
+            if (!envelope) throw new Error('Bootstrap SavedSecret recipient envelope was not retained');
             expect(envelope.recipientAccountId).toBe(retained.custodianAccountId);
             const dataKey = openEncryptedDataKeyEnvelopeV1({ envelope: Buffer.from(envelope.encryptedDataKey, 'base64'), recipientSecretKeyOrSeed: machineKey });
             if (!dataKey) throw new Error('Bootstrap SavedSecret envelope could not be opened');

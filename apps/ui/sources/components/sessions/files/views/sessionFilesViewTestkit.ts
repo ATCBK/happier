@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { V2SessionByIdNotFoundSchema } from '@happier-dev/protocol';
 import { afterAll, vi } from 'vitest';
 import { AccountProfileSchema, AccountSettingsV2GetResponseSchema, AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema, MACHINE_PLAIN_DATA_KEY_MARKER, ScmWorkingSnapshotSchema } from '@happier-dev/protocol';
 import { createScmCapabilities } from '@happier-dev/protocol/scm/capabilities';
@@ -9,11 +10,13 @@ import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoring
 import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
 
 export type FileViewRpcRequest = Readonly<{ targetId: string; method: string; payload: unknown }>;
 type FileViewTransport = Readonly<{
     rpc: (request: FileViewRpcRequest) => unknown | Promise<unknown>;
-    http: NonNullable<Parameters<typeof restoreServerAccountForTest>[0]['request']>;
+    http: RuntimeFetch;
+    emissions: { event: string; payload: unknown }[];
 }>;
 // Fake network routing, not application state: two real Homes must not share a responder.
 const transportsByOrigin = new Map<string, FileViewTransport>();
@@ -27,7 +30,10 @@ installDisconnectedServerSocketBoundary((socket, serverUrl) => {
         for (const listener of socket.listeners('connect')) listener();
         return socket;
     });
-    vi.spyOn(socket, 'emit').mockReturnValue(socket);
+    vi.spyOn(socket, 'emit').mockImplementation((event, payload) => {
+        if (origin) transportsByOrigin.get(origin)?.emissions.push({ event, payload });
+        return socket;
+    });
     vi.spyOn(socket, 'disconnect').mockImplementation(() => {
         socket.connected = false;
         for (const listener of socket.listeners('disconnect')) listener('io client disconnect');
@@ -45,12 +51,16 @@ installDisconnectedServerSocketBoundary((socket, serverUrl) => {
 
 /** Only native/Expo presentation and the embedded editor cross this renderer boundary. */
 export function installSessionFilesViewBoundaries(options: Readonly<{
+    platformOS?: 'ios' | 'android' | 'web';
+    confirmResult?: boolean;
     renderItemLimit?: number;
+    emitViewability?: boolean;
     onRecycler?: (state: import('@/dev/testkit/mocks/legendList').CapturingLegendListMockState) => void;
 }> = {}) {
     vi.doMock('react-native', async () => {
-        const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeNativeMock({ platformOS: 'ios' });
+        const { createReactNativeNativeMock, createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+        return options.platformOS === 'web' ? createReactNativeWebMock()
+            : createReactNativeNativeMock({ platformOS: options.platformOS ?? 'ios' });
     });
     vi.doMock('react-native-unistyles', async () => {
         const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
@@ -61,13 +71,13 @@ export function installSessionFilesViewBoundaries(options: Readonly<{
     vi.doMock('@legendapp/list/react-native', async importOriginal => {
         const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
         const recycler = createCapturingLegendListMock({ original: await importOriginal<Record<string, unknown>>(),
-            renderItemLimit: options.renderItemLimit, emitViewability: true });
+            renderItemLimit: options.renderItemLimit, emitViewability: options.emitViewability ?? true });
         options.onRecycler?.(recycler.state);
         return recycler.module;
     });
     vi.doMock('@/modal', async () => {
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock().module;
+        return createModalModuleMock({ confirmResult: options.confirmResult }).module;
     });
     vi.doMock('@/components/ui/popover', async importOriginal => {
         const { createInlinePopoverModuleMock } = await import('@/dev/testkit/mocks/popover');
@@ -93,6 +103,9 @@ export async function createSessionFilesViewFixture(input: Readonly<{
     rootPath?: string;
     sessionId?: string;
     machineId?: string;
+    machine?: import('@/sync/domains/state/storageTypes').Machine | null;
+    credentials?: Parameters<typeof restoreServerAccountForTest>[0]['credentials'];
+    serverIdentityId?: string;
     rpc?: (request: FileViewRpcRequest) => unknown | Promise<unknown>;
     request?: NonNullable<Parameters<typeof restoreServerAccountForTest>[0]['request']>;
     machineCarrierOrigin?: string;
@@ -106,18 +119,20 @@ export async function createSessionFilesViewFixture(input: Readonly<{
     const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
     const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
     const requests: FileViewRpcRequest[] = [];
+    const emissions: FileViewTransport['emissions'] = [];
     const dispatch = (request: FileViewRpcRequest) => {
         requests.push(request);
         return input.rpc?.(request) ?? { success: false, error: 'RPC method not available', errorCode: 'METHOD_NOT_AVAILABLE' };
     };
     const features = createRootLayoutFeaturesResponse({ features: { machines: transferFeatures().features.machines } });
     const authoringMemory = createAuthoringMemoryHttpBoundary();
-    const machine = { ...transferMachine({ id: input.machineId ?? 'm1', storageMode: 'plain' }), active: true, activeAt: Date.now() };
-    const machineRow = { ...machine, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+    const machine = input.machine === null ? null
+        : { ...(input.machine ?? transferMachine({ id: input.machineId ?? 'm1', storageMode: 'plain' })), active: true, activeAt: Date.now() };
+    const machineRow = machine ? { ...machine, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
         metadata: encodePlainMachineStoredContent(machine.metadata),
-        daemonState: machine.daemonState ? encodePlainMachineStoredContent(machine.daemonState) : null };
+        daemonState: machine.daemonState ? encodePlainMachineStoredContent(machine.daemonState) : null } : null;
     const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'alice', encryptionMode: 'plain' });
-    const homeRequest: NonNullable<Parameters<typeof restoreServerAccountForTest>[0]['request']> = async (url, init) => {
+    const homeRequest: RuntimeFetch = async (url, init) => {
         const requestUrl = new URL(String(url));
         const path = requestUrl.pathname;
         const handled = await input.request?.(url, init);
@@ -136,21 +151,27 @@ export async function createSessionFilesViewFixture(input: Readonly<{
         if (path === '/v2/account/settings') return Response.json(AccountSettingsV2GetResponseSchema.parse({ content: { t: 'plain', v: {} }, version: 0 }));
         if (path === AUTHORING_MEMORY_ROUTE_V1) return Response.json(AuthoringMemoryListResponseV1Schema.parse({ rows: [] }));
         if (path.endsWith('/messages')) return Response.json({ messages: [], hasMore: false });
-        if (path === `/v1/machines/${machine.id}`) return Response.json({ machine: machineRow });
-        if (path === '/v1/machines') return Response.json([machineRow]);
+        if (machine && path === `/v1/machines/${machine.id}`) return Response.json({ machine: machineRow });
+        if (path === '/v1/machines') return Response.json(machineRow ? [machineRow] : []);
+        if ((init?.method ?? 'GET') === 'GET' && /^\/v2\/sessions\/[^/]+$/.test(path)) {
+            return Response.json(V2SessionByIdNotFoundSchema.parse({ error: 'Session not found' }), { status: 404 });
+        }
         return Response.json({}, { status: 404 });
     };
     const serverUrl = input.serverUrl ?? 'https://session-file-views.test';
     const origin = new URL(serverUrl).origin;
-    const transport = { rpc: dispatch, http: homeRequest } satisfies FileViewTransport;
+    const transport = { rpc: dispatch, http: homeRequest, emissions } satisfies FileViewTransport;
     transportsByOrigin.set(origin, transport);
-    const connection = await restoreServerAccountForTest({ serverUrl, accountId: 'alice', request: homeRequest });
+    const connection = await restoreServerAccountForTest({ serverUrl, accountId: 'alice', request: homeRequest,
+        credentials: input.credentials, serverIdentityId: input.serverIdentityId });
     const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
     setRuntimeFetch(async (url, init) => {
         const requestUrl = new URL(String(url));
         if (requestUrl.origin === input.machineCarrierOrigin) {
             if (!input.request) throw new Error('No machine carrier HTTP responder');
-            return input.request(url, init);
+            const response = await input.request(url, init);
+            if (!response) throw new Error(`Unhandled machine carrier request: ${requestUrl.pathname}`);
+            return response;
         }
         const addressed = transportsByOrigin.get(requestUrl.origin);
         if (!addressed) throw new Error(`Unexpected file view Home: ${requestUrl.origin}`);
@@ -169,7 +190,7 @@ export async function createSessionFilesViewFixture(input: Readonly<{
     storage.getState().applySettingsLocal({ experiments: true, featureToggles: { 'scm.writeOperations': true, 'files.reviewComments': false, 'files.diffSyntaxHighlighting': false, 'files.editor': false } });
     storage.getState().applySessions([session]);
     return {
-        ...connection, scope, session, requests, storage,
+        ...connection, scope, session, requests, emissions, storage,
         async dispose() {
             const { scmStatusSync } = await import('@/scm/scmStatusSync');
             scmStatusSync.clearForSession(session.id, scope.serverId);

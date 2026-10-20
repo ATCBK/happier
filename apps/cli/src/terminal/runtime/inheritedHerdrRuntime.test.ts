@@ -1,26 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const herdrClientMocks = vi.hoisted(() => ({
   sessions: [{ name: 'work', socketPath: '/tmp/work.sock', running: true }],
 }));
 
-// Replace executable/socket boundaries while keeping version checks and Herdr parsing real.
+// Replace session inventory/socket boundaries; version probes use a real executable.
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   const { promisify } = await import('node:util');
-  const { EventEmitter } = await import('node:events');
-  const { PassThrough } = await import('node:stream');
   return {
     ...actual,
-    execFile: Object.assign(vi.fn((_binary: string, _args: readonly string[], _options: unknown, callback: (error: Error | null, stdout: string, stderr: string) => void) => {
-      const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), kill: () => true });
-      setImmediate(() => {
-        child.emit('exit', 0, null);
-        callback(null, 'herdr 0.9.2', '');
-        child.emit('close', 0, null);
-      });
-      return child;
-    }), {
+    execFile: Object.assign(vi.fn((...args: Parameters<typeof actual.execFile>) => actual.execFile(...args)), {
       [promisify.custom]: async (_binary: string, args: readonly string[]) => ({
         stdout: args.includes('--version') ? 'herdr 0.9.2' : JSON.stringify({ sessions: herdrClientMocks.sessions.map((session) => ({
           name: session.name, socket_path: session.socketPath, running: session.running,
@@ -55,6 +45,9 @@ vi.mock('node:net', async (importOriginal) => {
 });
 
 import { resolveInheritedHerdrRuntime } from './inheritedHerdrRuntime';
+
+beforeEach(() => vi.stubEnv('HERDR_BIN_PATH', process.execPath));
+afterEach(() => vi.unstubAllEnvs());
 
 describe('resolveInheritedHerdrRuntime', () => {
   it('uses the successfully probed pane socket even when session-list liveness has not converged yet', async () => {

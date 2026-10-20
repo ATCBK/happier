@@ -2,15 +2,18 @@ import * as React from 'react';
 import {
   Platform,
   Pressable,
-  type AccessibilityRole,
   type AccessibilityState,
-  type PressableProps,
-  type StyleProp,
-  type View,
   type ViewStyle,
 } from 'react-native';
 
 import { resolveHappierMinimumInteractiveTargetSize } from '../../environment/interactiveTarget.js';
+import type {
+  HappierAccessibilityRole,
+  HappierAccessibilityState,
+  HappierGestureResponderEvent,
+  HappierStyleProp,
+} from '../portableTypes.js';
+import type { HappierPressableProps } from './Pressable.js';
 
 const nativeTargetStyle = (): ViewStyle | undefined => {
   if (Platform.OS !== 'ios' && Platform.OS !== 'android') return undefined;
@@ -25,17 +28,17 @@ const ComposerChipPressable = Pressable as React.ComponentType<
 
 export type HappierComposerChipProps = Readonly<{
   children?: React.ReactNode;
-  onPress: NonNullable<PressableProps['onPress']>;
+  onPress: (event: HappierGestureResponderEvent) => void;
   disabled?: boolean;
   selected?: boolean;
   expressesSelection?: boolean;
   testID?: string;
-  accessibilityRole?: AccessibilityRole;
+  accessibilityRole?: HappierAccessibilityRole;
   accessibilityLabel?: string;
   accessibilityHint?: string;
-  accessibilityState?: AccessibilityState;
-  hitSlop?: PressableProps['hitSlop'];
-  style?: (pressed: boolean) => StyleProp<ViewStyle>;
+  accessibilityState?: HappierAccessibilityState;
+  hitSlop?: HappierPressableProps['hitSlop'];
+  style?: (pressed: boolean) => HappierStyleProp;
 }>;
 
 /**
@@ -43,7 +46,7 @@ export type HappierComposerChipProps = Readonly<{
  * Callers supply semantic content and the rail's theme chrome; this owner keeps
  * press, disabled/selected semantics, and native touch geometry identical.
  */
-export const HappierComposerChip = React.forwardRef<View, HappierComposerChipProps>(
+export const HappierComposerChip = React.forwardRef<unknown, HappierComposerChipProps>(
   function HappierComposerChip(props, ref) {
     const disabled = props.disabled === true || props.accessibilityState?.disabled === true;
     const accessibilityState = {
@@ -54,7 +57,8 @@ export const HappierComposerChip = React.forwardRef<View, HappierComposerChipPro
 
     return (
       <ComposerChipPressable
-        ref={ref}
+        // The native renderer owns the instance; the public ref is deliberately opaque.
+        ref={ref as React.ComponentProps<typeof ComposerChipPressable>['ref']}
         testID={props.testID}
         accessibilityRole={props.accessibilityRole ?? 'button'}
         accessibilityLabel={props.accessibilityLabel}

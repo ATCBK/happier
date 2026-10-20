@@ -1,53 +1,41 @@
-import React from 'react';
+import * as React from 'react';
 import { act } from 'react-test-renderer';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred, createMachineFixture, flushHookEffects, standardCleanup } from '@/dev/testkit';
+import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { installTerminalRouteCommonModuleMocks } from '@/__tests__/routes/(app)/terminal/terminalRouteTestHelpers';
+import { arrangeMachineDetailsHomeForTests, initializeMachineDetailsRuntimeForTests } from './machineDetailsRuntimeHarness';
+import { socketRpcCodec } from '@happier-dev/sync-client';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+const routerParamsRef = vi.hoisted(() => ({ current: { id: 'machine-1', page: 'doctor' } as Record<string, string> }));
+installTerminalRouteCommonModuleMocks({
+    text: async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({
+        translate: (key, params) => key === 'machine.runtimeSummary'
+            ? `summary:${params?.cliVersion}:${params?.daemonVersion}:${params?.installationCount}:${params?.serviceCount}:${params?.warningCount}`
+            : key,
+    }),
+    router: async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+        params: () => routerParamsRef.current,
+    }).module,
+});
 
-import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
-import { clearCachedMachineDoctorSnapshot, writeCachedMachineDoctorSnapshot } from '@/components/machines/doctorSnapshot/machineDoctorSnapshotCache';
-import { installMachineDetailsCommonModuleMocks } from './machineDetailsTestHelpers';
+const network = await initializeMachineDetailsRuntimeForTests();
+const { clearCachedMachineDoctorSnapshot, writeCachedMachineDoctorSnapshot } = await import('@/components/machines/doctorSnapshot/machineDoctorSnapshotCache');
+const disposeActionExecutorLoader = await installRealActionExecutorModuleLoader();
+afterAll(disposeActionExecutorLoader);
+const machinesOps = await import('@/sync/ops/machines');
+let machineCollectBugReportDiagnosticsMock = vi.spyOn(machinesOps, 'machineCollectBugReportDiagnostics');
+let home: Awaited<ReturnType<typeof arrangeMachineDetailsHomeForTests>> | null = null;
+let otherHome: Awaited<ReturnType<typeof network.addHome>>;
+let blockedSwitch: ReturnType<typeof createDeferred<void>> | null = null;
+let diagnosticsResponder: (machineId: string, options?: { serverId?: string | null }) => unknown | Promise<unknown>;
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-(globalThis as any).expo = { EventEmitter: class {} };
-
-const machineCollectBugReportDiagnosticsMock = vi.hoisted(() => vi.fn());
-const activeServerIdRef = vi.hoisted(() => ({ current: 'server-a' }));
-const routerParamsRef = vi.hoisted(() => ({ current: { id: 'machine-1' } as Record<string, string> }));
-const setActiveServerAndSwitchMock = vi.hoisted(() => vi.fn(async () => true));
-const machineListByServerIdRef = vi.hoisted(() => ({
-    current: {} as Record<string, Array<{ id: string }>>,
-}));
-
-installMachineDetailsCommonModuleMocks({
-    router: async () => {
-        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-        const mock = createExpoRouterMock({
-            router: { back: vi.fn(), push: vi.fn(), replace: vi.fn(), setParams: vi.fn() },
-            params: routerParamsRef.current,
-        });
-        return {
-            ...mock.module,
-            useLocalSearchParams: () => routerParamsRef.current,
-            useGlobalSearchParams: () => routerParamsRef.current,
-        };
-    },
-    text: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({
-            translate: (key: string, params?: Record<string, unknown>) => {
-                if (key === 'machine.runtimeSummary' && params) {
-                    return `summary:${String(params.cliVersion ?? '')}:${String(params.daemonVersion ?? '')}:${String(params.installationCount ?? '')}:${String(params.serviceCount ?? '')}:${String(params.warningCount ?? '')}`;
-                }
-                return key;
-            },
-        });
-    },
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            useSessions: () => [],
-            useMachineListByServerId: () => machineListByServerIdRef.current,
-            useMachine: () => ({
+beforeEach(async () => {
+    machineCollectBugReportDiagnosticsMock = vi.spyOn(machinesOps, 'machineCollectBugReportDiagnostics');
+    machineCollectBugReportDiagnosticsMock.mockClear();
+    routerParamsRef.current = { id: 'machine-1', page: 'doctor' };
+    const machine = createMachineFixture({
                 id: 'machine-1',
                 active: true,
                 activeAt: Date.now(),
@@ -71,73 +59,17 @@ installMachineDetailsCommonModuleMocks({
                 },
                 daemonStateVersion: 2,
                 revokedAt: null,
-            }),
-            useSetting: () => false,
-            useSettingMutable: () => [null, vi.fn()],
-            useSettings: () => ({}),
-        });
-    },
-});
-
-vi.mock('@/sync/ops/machines', () => ({
-    machineCollectBugReportDiagnostics: machineCollectBugReportDiagnosticsMock,
-}));
-
-vi.mock('@/components/machines/MachineTransferExposureSection', () => ({ MachineTransferExposureSection: () => null }));
-vi.mock('@/components/machines/InstallableDepInstaller', () => ({ InstallableDepInstaller: () => null }));
-vi.mock('@/components/ui/forms/Switch', () => ({ Switch: () => null }));
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({ DropdownMenu: () => null }));
-vi.mock('@/components/ui/pathBrowser/PathInputBrowseButton', () => ({ PathInputBrowseButton: () => null }));
-vi.mock('@/components/ui/pathBrowser/openMachinePathBrowserModal', () => ({ openMachinePathBrowserModal: vi.fn(async () => null) }));
-vi.mock('@/components/sessions/runs/ExecutionRunRow', () => ({ ExecutionRunRow: () => null }));
-vi.mock('@/hooks/server/useMachineCapabilitiesCache', () => ({ useMachineCapabilitiesCache: () => ({ state: { status: 'idle' }, refresh: vi.fn() }) }));
-vi.mock('@/hooks/session/useNavigateToSession', () => ({ useNavigateToSession: () => () => {} }));
-vi.mock('@/hooks/ui/useMountedShouldContinue', () => ({ useMountedShouldContinue: () => () => true }));
-vi.mock('@/sync/domains/server/activeServerSwitch', () => ({ setActiveServerAndSwitch: setActiveServerAndSwitchMock }));
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>(),
-    areServerProfileIdentifiersEquivalent: (left: unknown, right: unknown) => String(left ?? '').trim() === String(right ?? '').trim(),
-    getActiveServerId: () => activeServerIdRef.current,
-}));
-vi.mock('@/sync/sync', () => ({ sync: { refreshMachinesThrottled: vi.fn(), refreshMachines: vi.fn(), retryNow: vi.fn() } }));
-vi.mock('@/utils/errors/daemonUnavailableAlert', () => ({
-    tryShowDaemonUnavailableAlertForRpcError: () => false,
-    tryShowDaemonUnavailableAlertForRpcFailure: () => false,
-}));
-vi.mock('@/utils/path/pathUtils', () => ({ resolveAbsolutePath: () => '' }));
-vi.mock('@/utils/sessions/machineUtils', () => ({ isMachineOnline: () => true }));
-vi.mock('@/utils/sessions/sessionUtils', () => ({ formatOSPlatform: (platform?: string) => platform ?? '', formatPathRelativeToHome: () => '', getSessionName: () => '', getSessionSubtitle: () => '' }));
-vi.mock('@/sync/domains/session/spawn/windowsRemoteSessionConsole', () => ({ resolveWindowsRemoteSessionConsoleFromMachineMetadata: () => 'visible' }));
-vi.mock('@/sync/domains/session/spawn/windowsRemoteSessionLaunchMode', () => ({
-    readMachineWindowsRemoteSessionLaunchMode: () => undefined,
-    resolveEffectiveWindowsRemoteSessionLaunchMode: () => ({ mode: 'visible' }),
-}));
-vi.mock('@/sync/domains/session/spawn/windowsRemoteSessionLaunchModeOptions', () => ({ WINDOWS_REMOTE_SESSION_LAUNCH_MODE_OPTIONS: [] }));
-vi.mock('@/sync/ops', () => ({
-    machineSpawnNewSession: vi.fn(async () => ({ type: 'error', errorCode: 'unexpected', errorMessage: 'noop' })),
-    machineStopDaemon: vi.fn(async () => ({ message: 'noop' })),
-    machineStopSession: vi.fn(async () => ({ ok: true })),
-    machineUpdateMetadata: vi.fn(async () => ({})),
-    machineExecutionRunsList: vi.fn(async () => ({ ok: true, runs: [] })),
-    machineRevokeFromAccount: vi.fn(async () => ({ ok: true })),
-}));
-vi.mock('@/sync/ops/sessionExecutionRuns', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/ops/sessionExecutionRuns')>(),
-    sessionExecutionRunStop: vi.fn(async () => ({ ok: true })),
-}));
-
-describe('MachineDetailScreen runtime inventory', () => {
-    beforeEach(() => {
-        machineCollectBugReportDiagnosticsMock.mockReset();
-        activeServerIdRef.current = 'server-a';
-        // The runtime inventory is the Doctor sub-page's (MPG-9).
-        routerParamsRef.current = { id: 'machine-1', page: 'doctor' };
-        machineListByServerIdRef.current = {};
-        setActiveServerAndSwitchMock.mockReset();
-        setActiveServerAndSwitchMock.mockResolvedValue(true);
-        clearCachedMachineDoctorSnapshot({ serverId: 'server-a', machineId: 'machine-1' });
-        clearCachedMachineDoctorSnapshot({ serverId: 'server-b', machineId: 'machine-1' });
-        machineCollectBugReportDiagnosticsMock.mockResolvedValue({
+            });
+    home = await arrangeMachineDetailsHomeForTests(network, {
+        serverUrl: 'https://inventory-a.example.test', machines: [machine],
+    });
+    otherHome = await network.addHome('https://inventory-b.example.test', 'inventory-account-b');
+    home.storage.getState().applyMachines([machine], true, {
+        sourceServerId: otherHome.id, sourceAccountId: otherHome.accountId,
+    });
+    clearCachedMachineDoctorSnapshot({ serverId: home.home.id, machineId: machine.id });
+    clearCachedMachineDoctorSnapshot({ serverId: otherHome.id, machineId: machine.id });
+    diagnosticsResponder = async () => ({
             doctorSnapshot: {
                 capturedAt: '2026-04-07T10:11:12.000Z',
                 server: {
@@ -247,174 +179,182 @@ describe('MachineDetailScreen runtime inventory', () => {
                 ],
             },
         });
+    network.setRpcResponder(async request => {
+        const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, request.payload, 'rpc');
+        const response = request.method === RPC_METHODS.BUGREPORT_COLLECT_DIAGNOSTICS
+            ? await diagnosticsResponder(request.targetId, { serverId: request.serverUrl === home!.home.serverUrl ? home!.home.id : otherHome.id })
+            : {};
+        return await socketRpcCodec.encodeResponse({ mode: 'plain' }, response, decoded.callId);
     });
+});
 
-    afterEach(() => {
-        standardCleanup();
-    });
+afterEach(async () => {
+    blockedSwitch?.resolve();
+    blockedSwitch = null;
+    await standardCleanup();
+    await home?.dispose();
+    home = null;
+    network.resetRequests();
+    machineCollectBugReportDiagnosticsMock.mockRestore();
+});
 
+describe('MachineDetailScreen runtime inventory', () => {
     it('shows the runtime inventory section with summary and warnings', async () => {
-        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
-        const screen = await renderScreen(React.createElement(MachineDetailScreen));
+            const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
+            const screen = await home!.render(MachineDetailScreen);
 
-        await flushHookEffects({ cycles: 2, turns: 2 });
+            await flushHookEffects({ cycles: 2, turns: 2 });
 
-        const text = screen.getTextContent();
-        expect(text).toContain('machine.runtimeInventory');
-        expect(text).toContain('summary:1.2.3:1.2.0:1:1:1');
-        expect(text).toContain('machine.runtimeInventoryInstallations');
-        expect(text).toContain('machine.runtimeInventoryServices');
-        expect(text).toContain('machine.backgroundServiceModes.defaultFollowing');
-        expect(text).toContain('MULTIPLE_HAPPIER_INSTALLATIONS_ON_PATH');
-    });
+            const text = screen.getTextContent();
+            expect(text).toContain('machine.runtimeInventory');
+            expect(text).toContain('summary:1.2.3:1.2.0:1:1:1');
+            expect(text).toContain('machine.runtimeInventoryInstallations');
+            expect(text).toContain('machine.runtimeInventoryServices');
+            expect(text).toContain('machine.backgroundServiceModes.defaultFollowing');
+            expect(text).toContain('MULTIPLE_HAPPIER_INSTALLATIONS_ON_PATH');
+        });
 
     it('uses the machine list server id for runtime inventory when the route has no serverId param', async () => {
-        machineListByServerIdRef.current = {
-            'server-b': [{ id: 'machine-1' }],
-        };
-        machineCollectBugReportDiagnosticsMock.mockImplementation(async (_machineId: string, options?: { serverId?: string | null }) => {
-            if (options?.serverId !== 'server-b') {
-                return null;
-            }
+            home!.state.machines = [];
+            await home!.sync.refreshMachines();
+            diagnosticsResponder = async (_machineId: string, options?: { serverId?: string | null }) => {
+                if (options?.serverId !== otherHome.id) {
+                    return null;
+                }
 
-            return {
-                doctorSnapshot: {
+                return {
+                    doctorSnapshot: {
+                        capturedAt: '2026-04-07T10:11:14.000Z',
+                        server: {
+                            activeServerId: 'server-b',
+                            serverUrl: 'https://server-b.example.test',
+                            publicServerUrl: 'https://server-b.example.test',
+                            webappUrl: 'https://server-b.example.test',
+                        },
+                        accountId: 'acct_b',
+                        settings: {
+                            activeServerId: 'server-b',
+                            servers: [],
+                            knownAccountIds: ['acct_b'],
+                        },
+                        daemonStatus: {
+                            server: {
+                                activeServerId: 'server-b',
+                                serverUrl: 'https://server-b.example.test',
+                                localServerUrl: 'http://127.0.0.1:3005',
+                                publicServerUrl: 'https://server-b.example.test',
+                                webappUrl: 'https://server-b.example.test',
+                                comparableKey: 'https://server-b.example.test',
+                            },
+                            daemon: {
+                                running: true,
+                                pid: 4321,
+                                httpPort: 3005,
+                                startedWithCliVersion: '1.2.0',
+                                startedWithPublicReleaseChannel: 'stable',
+                            },
+                            service: { installed: true, running: true },
+                            auth: {
+                                authenticated: true,
+                                machineRegistered: true,
+                                machineId: 'machine-1',
+                                needsAuth: false,
+                                accountId: 'acct_b',
+                            },
+                        },
+                    },
+                };
+            };
+
+            const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
+            const screen = await home!.render(MachineDetailScreen);
+
+            await flushHookEffects({ cycles: 2, turns: 2 });
+
+            await vi.waitFor(() => expect(machineCollectBugReportDiagnosticsMock).toHaveBeenCalledWith('machine-1', expect.objectContaining({
+                serverId: otherHome.id,
+            })));
+            expect(screen.getTextContent()).toContain('machine.runtimeInventory');
+        });
+
+    it('does not prefetch the runtime inventory until the requested server becomes active', async () => {
+            routerParamsRef.current = { id: 'machine-1', serverId: otherHome.id, page: 'doctor' };
+            writeCachedMachineDoctorSnapshot({
+                serverId: otherHome.id,
+                machineId: 'machine-1',
+                cachedAt: 444,
+                snapshot: {
                     capturedAt: '2026-04-07T10:11:14.000Z',
                     server: {
-                        activeServerId: 'server-b',
+                        activeServerId: otherHome.id,
                         serverUrl: 'https://server-b.example.test',
                         publicServerUrl: 'https://server-b.example.test',
                         webappUrl: 'https://server-b.example.test',
                     },
                     accountId: 'acct_b',
                     settings: {
-                        activeServerId: 'server-b',
+                        activeServerId: otherHome.id,
                         servers: [],
                         knownAccountIds: ['acct_b'],
                     },
-                    daemonStatus: {
-                        server: {
-                            activeServerId: 'server-b',
-                            serverUrl: 'https://server-b.example.test',
-                            localServerUrl: 'http://127.0.0.1:3005',
-                            publicServerUrl: 'https://server-b.example.test',
-                            webappUrl: 'https://server-b.example.test',
-                            comparableKey: 'https://server-b.example.test',
+                    warnings: [
+                        {
+                            code: 'SERVER_B_ONLY_WARNING',
+                            severity: 'warning',
+                            message: 'Server B cached warning',
+                            repairCommands: ['happier doctor --json'],
                         },
-                        daemon: {
-                            running: true,
-                            pid: 4321,
-                            httpPort: 3005,
-                            startedWithCliVersion: '1.2.0',
-                            startedWithPublicReleaseChannel: 'stable',
-                        },
-                        service: { installed: true, running: true },
-                        auth: {
-                            authenticated: true,
-                            machineRegistered: true,
-                            machineId: 'machine-1',
-                            needsAuth: false,
-                            accountId: 'acct_b',
-                        },
-                    },
+                    ],
                 },
-            };
-        });
-
-        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
-        const screen = await renderScreen(React.createElement(MachineDetailScreen));
-
-        await flushHookEffects({ cycles: 2, turns: 2 });
-
-        expect(machineCollectBugReportDiagnosticsMock).toHaveBeenCalledWith('machine-1', expect.objectContaining({
-            serverId: 'server-b',
-        }));
-        expect(screen.getTextContent()).toContain('machine.runtimeInventory');
-    });
-
-    it('does not prefetch the runtime inventory until the requested server becomes active', async () => {
-        routerParamsRef.current = { id: 'machine-1', serverId: 'server-b', page: 'doctor' };
-        writeCachedMachineDoctorSnapshot({
-            serverId: 'server-b',
-            machineId: 'machine-1',
-            cachedAt: 444,
-            snapshot: {
-                capturedAt: '2026-04-07T10:11:14.000Z',
-                server: {
-                    activeServerId: 'server-b',
-                    serverUrl: 'https://server-b.example.test',
-                    publicServerUrl: 'https://server-b.example.test',
-                    webappUrl: 'https://server-b.example.test',
-                },
-                accountId: 'acct_b',
-                settings: {
-                    activeServerId: 'server-b',
-                    servers: [],
-                    knownAccountIds: ['acct_b'],
-                },
-                warnings: [
-                    {
-                        code: 'SERVER_B_ONLY_WARNING',
-                        severity: 'warning',
-                        message: 'Server B cached warning',
-                        repairCommands: ['happier doctor --json'],
-                    },
-                ],
-            },
-        });
-        let resolveSwitch: (() => void) | null = null;
-        setActiveServerAndSwitchMock.mockImplementation(async () => {
-            await new Promise<void>((resolve) => {
-                resolveSwitch = resolve;
             });
-            activeServerIdRef.current = 'server-b';
-            return true;
+            blockedSwitch = createDeferred<void>();
+            const switchReleased = blockedSwitch.promise;
+            home!.state.beforeRequest = async url => {
+                if (url.origin === new URL(otherHome.serverUrl).origin) await switchReleased;
+            };
+
+            const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
+            const screen = await home!.render(MachineDetailScreen);
+
+            await flushHookEffects({ cycles: 2, turns: 2 });
+            expect(machineCollectBugReportDiagnosticsMock).not.toHaveBeenCalled();
+            expect(screen.getTextContent()).not.toContain('machine.runtimeInventory');
+            expect(screen.getTextContent()).not.toContain('SERVER_B_ONLY_WARNING');
+
+            await act(async () => {
+                blockedSwitch!.resolve();
+            });
+            await flushHookEffects({ cycles: 2, turns: 2 });
+            await vi.waitFor(() => expect(machineCollectBugReportDiagnosticsMock).toHaveBeenCalledWith('machine-1', expect.objectContaining({
+                serverId: otherHome.id,
+            })));
+            expect(screen.getTextContent()).toContain('machine.runtimeInventory');
         });
-
-        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
-        const screen = await renderScreen(React.createElement(MachineDetailScreen));
-
-        await flushHookEffects({ cycles: 2, turns: 2 });
-        expect(machineCollectBugReportDiagnosticsMock).not.toHaveBeenCalled();
-        expect(screen.getTextContent()).not.toContain('machine.runtimeInventory');
-        expect(screen.getTextContent()).not.toContain('SERVER_B_ONLY_WARNING');
-
-        await act(async () => {
-            if (typeof resolveSwitch === 'function') {
-                resolveSwitch();
-            }
-        });
-        await flushHookEffects({ cycles: 2, turns: 2 });
-        expect(machineCollectBugReportDiagnosticsMock).toHaveBeenCalledWith('machine-1', expect.objectContaining({
-            serverId: 'server-b',
-        }));
-        expect(screen.getTextContent()).toContain('machine.runtimeInventory');
-    });
 
     it('asks the machine for its doctor snapshot only on the Doctor page, never on the Overview', async () => {
-        routerParamsRef.current = { id: 'machine-1' };
-        const { MachinePageScreen } = await import('@/components/machines/page/MachinePageScreen');
-        const screen = await renderScreen(React.createElement(MachinePageScreen));
-        await flushHookEffects({ cycles: 2, turns: 2 });
+            routerParamsRef.current = { id: 'machine-1' };
+            const { MachinePageScreen } = await import('@/components/machines/page/MachinePageScreen');
+            const screen = await home!.render(MachinePageScreen);
+            await flushHookEffects({ cycles: 2, turns: 2 });
 
-        expect(screen.findByTestId('machine-page-row-doctor')).toBeTruthy();
-        expect(machineCollectBugReportDiagnosticsMock).not.toHaveBeenCalled();
-        expect(screen.getTextContent()).not.toContain('machine.runtimeInventory');
-    });
+            expect(screen.findByTestId('machine-page-row-doctor')).toBeTruthy();
+            expect(machineCollectBugReportDiagnosticsMock).not.toHaveBeenCalled();
+            expect(screen.getTextContent()).not.toContain('machine.runtimeInventory');
+        });
 
     it('re-fetches the runtime inventory when pull-to-refresh runs', async () => {
-        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
-        const screen = await renderScreen(React.createElement(MachineDetailScreen));
+            const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
+            const screen = await home!.render(MachineDetailScreen);
 
-        await flushHookEffects({ cycles: 2, turns: 2 });
-        expect(machineCollectBugReportDiagnosticsMock).toHaveBeenCalledTimes(1);
+            await flushHookEffects({ cycles: 2, turns: 2 });
+            expect(machineCollectBugReportDiagnosticsMock).toHaveBeenCalledTimes(1);
 
-        const refreshControl = screen.findByType('ScrollView').props.refreshControl;
-        await act(async () => {
-            await refreshControl.props.onRefresh();
+            const refreshControl = screen.findByType('ScrollView').props.refreshControl;
+            await act(async () => {
+                await refreshControl.props.onRefresh();
+            });
+            await flushHookEffects({ cycles: 2, turns: 2 });
+
+            expect(machineCollectBugReportDiagnosticsMock).toHaveBeenCalledTimes(2);
         });
-        await flushHookEffects({ cycles: 2, turns: 2 });
-
-        expect(machineCollectBugReportDiagnosticsMock).toHaveBeenCalledTimes(2);
-    });
 });

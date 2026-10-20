@@ -6,7 +6,7 @@ import { createProcessesAnswer } from '@/components/machines/processes/testkit/p
 import { readTranscriptMachineResourcesCall } from './transcriptMachineResourcesReference';
 
 const toolName = (
-  id: 'machines.processes.list' | 'machines.storage.trash.move' | 'machines.processes.kill' | 'machines.processes.leftBehind.cleanUp',
+  id: 'machines.processes.list' | 'machines.storage.trash.move' | 'machines.storage.deleteNow' | 'machines.processes.kill' | 'machines.processes.leftBehind.cleanUp',
 ) => getActionSpec(id).bindings!.mcpToolName!;
 const ref = {
   itemId: 'wt',
@@ -24,19 +24,19 @@ describe('readTranscriptMachineResourcesCall', () => {
     const call = readTranscriptMachineResourcesCall({ name: toolName(actionId), state: 'running', input, result: null });
     expect(call).toMatchObject({ kind: 'proposing', actionId, proposal: { items: [{ key: 'process-1' }] } });
   });
-  it('renders a set Action still being proposed as the analysing frame, with rows from its input', () => {
+  it.each(['machines.storage.trash.move', 'machines.storage.deleteNow'] as const)('renders %s still being proposed through its real tool binding and strict input', (actionId) => {
     const call = readTranscriptMachineResourcesCall({
-      name: toolName('machines.storage.trash.move'),
+      name: toolName(actionId),
       state: 'running',
       result: null,
-      input: {
+      input: getActionSpec(actionId).inputSchema.parse({
         machineId: 'm1',
-        items: [{ ref, expect: 'e', claimedVerdict: 'safe' }],
-      },
+        items: [{ ref, expect: 'e', ...(actionId === 'machines.storage.trash.move' ? { claimedVerdict: 'safe' } : {}) }],
+      }),
     });
     expect(call).toMatchObject({
       kind: 'proposing',
-      actionId: 'machines.storage.trash.move',
+      actionId,
     });
     expect(
       call?.kind === 'proposing'

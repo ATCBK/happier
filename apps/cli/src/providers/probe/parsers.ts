@@ -158,7 +158,15 @@ function parseOpenAiModels(input: unknown): ParsedProviderCatalogResponse {
     models: normalizeModels(rows.map((row) => {
       const id = requiredOwnString(row, 'id');
       const name = optionalOwnString(row, 'name');
-      return name === undefined ? { id } : { id, name };
+      const purposeProperty = Object.getOwnPropertyDescriptor(row, 'happier_connected_account_purposes');
+      if (purposeProperty && (!purposeProperty.enumerable || !('value' in purposeProperty))) {
+        throw new TypeError('Provider model purposes must be data');
+      }
+      const connectedAccountPurposes = purposeProperty
+        ? ProviderCatalogProbeModelV1Schema.shape.connectedAccountPurposes.parse(purposeProperty.value)
+        : undefined;
+      return { id, ...(name === undefined ? {} : { name }),
+        ...(connectedAccountPurposes === undefined ? {} : { connectedAccountPurposes }) };
     })),
     loadStates: [],
   };

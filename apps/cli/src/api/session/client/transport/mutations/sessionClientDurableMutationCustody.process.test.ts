@@ -15,6 +15,8 @@ const fixturePath = join(
     dirname(fileURLToPath(import.meta.url)),
     'sessionClientDurableMutationCustody.child.ts',
 );
+const cliRootDir = join(dirname(fixturePath), '../../../../../..');
+const sourceRuntimePath = join(cliRootDir, '../../packages/cli-common/registerSourceRuntime.mjs');
 
 type RunningChild = Readonly<{
     child: ChildProcess;
@@ -26,8 +28,11 @@ function startChild(params: Readonly<{
     args: readonly string[];
     homeDir: string;
 }>): RunningChild {
-    const child = spawn(process.execPath, ['--import', 'tsx', fixturePath, params.mode, ...params.args], {
-        cwd: join(dirname(fixturePath), '../../../../../..'),
+    const child = spawn(process.execPath, [
+        '--conditions=happier-source', '--import', sourceRuntimePath,
+        fixturePath, params.mode, ...params.args,
+    ], {
+        cwd: cliRootDir,
         env: {
             ...process.env,
             HAPPIER_HOME_DIR: params.homeDir,

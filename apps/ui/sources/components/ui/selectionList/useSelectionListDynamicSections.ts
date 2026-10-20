@@ -37,6 +37,8 @@ export type DynamicSectionState = Readonly<{
     notFound?: boolean;
     /** Optional override copy for the notFound hint. */
     notFoundHint?: string;
+    /** `status: 'error'` only: re-runs the section's resolver for the seed that failed. */
+    retry?: () => void;
 }>;
 
 /**
@@ -443,7 +445,8 @@ export function useSelectionListDynamicSections(params: {
                     return next;
                 });
 
-                const handleSuccess = (result: SelectionListDynamicSectionResolveResult) => {
+                let settled = false;
+                const publishResult = (result: SelectionListDynamicSectionResolveResult, complete: boolean) => {
                     // RUX-11.1: hard-abort first — `isMountedRef.current ===
                     // false` means the hook has unmounted (popover closed),
                     // and writing to the module-level cache after unmount
@@ -457,7 +460,7 @@ export function useSelectionListDynamicSections(params: {
                     // Write the cross-mount cache only on a true success
                     // (not on notFound, which intentionally preserves the
                     // prior cached options for typo recovery).
-                    if (result.notFound !== true) {
+                    if (complete && result.notFound !== true) {
                         const cacheKey = buildDynamicSectionCacheKey(id, section.resolverKey, seed);
                         cacheRef.current.set(cacheKey, result.options);
                     }
@@ -472,7 +475,7 @@ export function useSelectionListDynamicSections(params: {
                             ? previous?.lastSuccessOptions
                             : result.options;
                         next.set(id, {
-                            status: 'success',
+                            status: complete ? 'success' : 'loading',
                             options: result.options,
                             emptyHint: result.emptyHint,
                             resultHint: result.resultHint,
@@ -486,6 +489,7 @@ export function useSelectionListDynamicSections(params: {
                 };
 
                 const handleError = (err: unknown) => {
+                    settled = true;
                     if (!isMountedRef.current) return;
                     if (sequenceCounters.current.get(id) !== sequence) return;
                     if (currentRequestIdentityByIdRef.current.get(id) !== requestIdentity) return;
@@ -507,13 +511,16 @@ export function useSelectionListDynamicSections(params: {
                             resultHint: previous?.resultHint,
                             seed,
                             lastSuccessOptions: stale,
+                            retry: dispatch,
                         });
                         return next;
                     });
                 };
 
                 try {
-                    section.resolve(seed, controller.signal).then(handleSuccess, handleError);
+                    section.resolve(seed, controller.signal, result => {
+                        if (!settled) publishResult(result, false);
+                    }).then(result => { settled = true; publishResult(result, true); }, handleError);
                 } catch (err) {
                     handleError(err);
                 }

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -150,9 +151,9 @@ function createBridge(overrides: Partial<Parameters<typeof createExecutionRunCon
 describe('createExecutionRunConnectedServicesBridge', () => {
     it('retains the native checkpoint through credential rematerialization of the exact Run activation', async () => {
         const h = createBridge();
-        const first = await h.bridge.materialize(MATERIALIZE_INPUT);
+        const first = await h.bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() });
         if (!first.ok) throw new Error(first.errorMessage);
-        const second = await h.bridge.materialize({ ...MATERIALIZE_INPUT,
+        const second = await h.bridge.materialize({ activationId: randomUUID(), ...MATERIALIZE_INPUT,
             recovery: { activationId: first.activationId, nativeResumeId: 'native-checkpoint' } });
         expect(second.ok).toBe(true);
         expect(h.cleanupOnExit).not.toHaveBeenCalled();
@@ -199,6 +200,13 @@ describe('createExecutionRunConnectedServicesBridge', () => {
             caseName: 'contributed Agent stays on qualified request-auth authority',
             contributions: REQUEST_AUTH_CONTRIBUTIONS,
             expectsLegacyCompatibility: false,
+            parentSessionId: 'session-1',
+        },
+        {
+            caseName: 'detached contributed Agent binds request-auth to its Run without a Session',
+            contributions: REQUEST_AUTH_CONTRIBUTIONS,
+            expectsLegacyCompatibility: false,
+            parentSessionId: null,
         },
         {
             caseName: 'legacy catalog Agent retains service-keyed compatibility',
@@ -209,10 +217,12 @@ describe('createExecutionRunConnectedServicesBridge', () => {
                 },
             },
             expectsLegacyCompatibility: true,
+            parentSessionId: 'session-1',
         },
     ])('$caseName', async ({
         contributions,
         expectsLegacyCompatibility,
+        parentSessionId,
     }) => {
         const materializedRoot = '/materialized/run_abc/codex';
         const capabilityPath = `${materializedRoot}/request-auth/capability.json`;
@@ -249,7 +259,7 @@ describe('createExecutionRunConnectedServicesBridge', () => {
         };
         const activatePurposeBindings = vi.fn((input) => {
             activatedRunSubject = input.subject;
-            return purposeLease;
+            return { lease: purposeLease };
         });
         const capturedSubject:
             { current:
@@ -295,12 +305,14 @@ describe('createExecutionRunConnectedServicesBridge', () => {
                 cleanupOnExit,
                 connectedServicesBindings: RUN_BINDINGS,
                 targetMaterializedRoot: materializedRoot,
+                requestAuthMaterializedRoot: materializedRoot,
                 requestAuthPurposeBindings,
                 qualifiedPurposeBindingSnapshot,
             };
         });
         let generationCurrent = true;
         const { bridge } = createBridge({
+            captureRunnerIdentity: () => ({ identity: contributions, parentSessionId, isCurrent: () => true }),
             resolveAuthForSpawn: resolveAuthForSpawn as never,
             acquireAgentPurposeContributions: async () => ({
                 contributions,
@@ -314,7 +326,7 @@ describe('createExecutionRunConnectedServicesBridge', () => {
             requestAuthRegistry: requestAuthRegistry as never,
         });
 
-        const result = await bridge.materialize(MATERIALIZE_INPUT);
+        const result = await bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() });
 
         expect(result).toMatchObject({
             ok: true,
@@ -341,7 +353,8 @@ describe('createExecutionRunConnectedServicesBridge', () => {
             bindings: [expect.objectContaining({
                 target: expect.objectContaining({ kind: 'account' }),
             })],
-        }, { parentSessionId: 'session-1' });
+        }, { parentSessionId });
+        if (parentSessionId === null) expect(capturedSubject.current).not.toHaveProperty('parentSessionId');
         expect(requestAuthRegistry.activate).toHaveBeenCalledWith({
             subject: expect.objectContaining({
                 subjectId: purposeLease.subjectId,
@@ -398,13 +411,13 @@ describe('createExecutionRunConnectedServicesBridge', () => {
                 'openai-codex': { source: 'native' as const },
             },
         };
-        const activatePurposeBindings = vi.fn(() => ({
+        const activatePurposeBindings = vi.fn(() => ({ lease: {
             subjectId: 'execution-run:run_abc/runner:4242/agent:codex',
             isCurrent: () => true,
             resolvePurposeBinding: () => null,
             listPurposeBindings: () => [],
             dispose: vi.fn(),
-        }));
+        } }));
         const requestAuthRegistry = {
             activate: vi.fn(),
             retire: vi.fn(),
@@ -437,7 +450,7 @@ describe('createExecutionRunConnectedServicesBridge', () => {
             requestAuthRegistry: requestAuthRegistry as never,
         });
 
-        const result = await bridge.materialize({
+        const result = await bridge.materialize({ activationId: randomUUID(),
             ...MATERIALIZE_INPUT,
             connectedServices: nativeBindings,
         });
@@ -468,7 +481,7 @@ describe('createExecutionRunConnectedServicesBridge', () => {
     it('resolves via the canonical spawn-auth owner with a run-scoped key and registers run targets', async () => {
         const { bridge, resolveAuthForSpawn, registerRunTargets } = createBridge();
 
-        const result = await bridge.materialize(MATERIALIZE_INPUT);
+        const result = await bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() });
 
         expect(result.ok).toBe(true);
         if (!result.ok) throw new Error('expected ok');
@@ -513,7 +526,7 @@ describe('createExecutionRunConnectedServicesBridge', () => {
     it('fails closed when the agent id is not a catalog agent (no resolver call)', async () => {
         const { bridge, resolveAuthForSpawn, registerRunTargets } = createBridge();
 
-        const result = await bridge.materialize({ ...MATERIALIZE_INPUT, agentId: 'not-a-real-agent' });
+        const result = await bridge.materialize({ activationId: randomUUID(), ...MATERIALIZE_INPUT, agentId: 'not-a-real-agent' });
 
         expect(result.ok).toBe(false);
         expect(resolveAuthForSpawn).not.toHaveBeenCalled();
@@ -533,7 +546,7 @@ describe('createExecutionRunConnectedServicesBridge', () => {
             }) as never,
         });
 
-        const result = await bridge.materialize(MATERIALIZE_INPUT);
+        const result = await bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() });
 
         expect(result).toMatchObject({
             ok: false,
@@ -545,7 +558,7 @@ describe('createExecutionRunConnectedServicesBridge', () => {
     it('fails closed when the resolver resolves no connected auth for a connected selection', async () => {
         const { bridge } = createBridge({ resolveAuthForSpawn: (async () => null) as never });
 
-        const result = await bridge.materialize(MATERIALIZE_INPUT);
+        const result = await bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() });
 
         expect(result).toMatchObject({
             ok: false,
@@ -561,7 +574,7 @@ describe('createExecutionRunConnectedServicesBridge', () => {
             clearTerminalCleanupReceipt,
         } = createBridge();
 
-        const result = await bridge.materialize(MATERIALIZE_INPUT);
+        const result = await bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() });
         if (!result.ok) throw new Error('expected materialization to succeed');
         await expect(bridge.release({
             runId: 'run_abc',
@@ -585,7 +598,7 @@ describe('createExecutionRunConnectedServicesBridge', () => {
     it('does not let a stale runner PID release the current run authority or targets', async () => {
         const { bridge, unregisterRunTargets, cleanupOnExit } = createBridge();
 
-        const result = await bridge.materialize(MATERIALIZE_INPUT);
+        const result = await bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() });
         if (!result.ok) throw new Error('expected materialization to succeed');
         await expect(bridge.release({
             runId: 'run_abc',
@@ -611,7 +624,7 @@ describe('createExecutionRunConnectedServicesBridge', () => {
             unregisterRunTargets,
             cleanupOnExit,
         } = createBridge();
-        const result = await bridge.materialize(MATERIALIZE_INPUT);
+        const result = await bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() });
         if (!result.ok) throw new Error('expected materialization to succeed');
 
         await bridge.releaseForRunnerExit({
@@ -675,7 +688,7 @@ describe('createExecutionRunConnectedServicesBridge', () => {
             createAdoptedRootCleanup,
         });
 
-        const materialization = bridge.materialize(MATERIALIZE_INPUT);
+        const materialization = bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() });
         await resolutionStarted;
         runnerCurrent = false;
         let exitCleanupSettled = false;
@@ -732,7 +745,7 @@ describe('createExecutionRunConnectedServicesBridge', () => {
             }),
         });
 
-        await expect(bridge.materialize(MATERIALIZE_INPUT)).resolves.toMatchObject({
+        await expect(bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() })).resolves.toMatchObject({
             ok: false,
             errorCode: 'connected_service_run_materialization_blocked',
         });
@@ -765,9 +778,9 @@ describe('createExecutionRunConnectedServicesBridge', () => {
         const { bridge } = createBridge({
             resolveAuthForSpawn: resolveAuthForSpawn as never,
         });
-        await bridge.materialize(MATERIALIZE_INPUT);
+        await bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() });
 
-        const replacement = bridge.materialize(MATERIALIZE_INPUT);
+        const replacement = bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() });
         await Promise.resolve();
         await Promise.resolve();
         expect(resolveAuthForSpawn).toHaveBeenCalledTimes(1);
@@ -779,8 +792,8 @@ describe('createExecutionRunConnectedServicesBridge', () => {
 
     it('does not let stale same-PID cleanup retire a replacement activation', async () => {
         const { bridge, unregisterRunTargets } = createBridge();
-        const first = await bridge.materialize(MATERIALIZE_INPUT);
-        const second = await bridge.materialize(MATERIALIZE_INPUT);
+        const first = await bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() });
+        const second = await bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() });
         if (!first.ok || !second.ok) {
             throw new Error('expected both materializations to succeed');
         }
@@ -839,9 +852,9 @@ describe('createExecutionRunConnectedServicesBridge', () => {
             resolveAuthForSpawn: resolveAuthForSpawn as never,
         });
 
-        const firstPromise = bridge.materialize(MATERIALIZE_INPUT);
+        const firstPromise = bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() });
         await firstResolutionEntered;
-        const secondPromise = bridge.materialize(MATERIALIZE_INPUT);
+        const secondPromise = bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() });
         await Promise.resolve();
         await Promise.resolve();
         expect(resolveAuthForSpawn).toHaveBeenCalledTimes(1);
@@ -904,7 +917,7 @@ describe('createExecutionRunConnectedServicesBridge', () => {
                 targetMaterializedRoot: '/materialized/run_abc/codex',
             })) as never,
         });
-        const result = await bridge.materialize(MATERIALIZE_INPUT);
+        const result = await bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() });
         if (!result.ok) throw new Error('expected materialization to succeed');
 
         const releaseInput = {
@@ -916,7 +929,7 @@ describe('createExecutionRunConnectedServicesBridge', () => {
         const releaseTwo = bridge.release(releaseInput);
         rejectFirst(new Error('busy'));
         await expect(Promise.all([releaseOne, releaseTwo])).resolves.toEqual([
-            { ok: true, released: false },
+            { ok: false, errorCode: 'connected_service_run_cleanup_failed' },
             { ok: true, released: true },
         ]);
         await expect(bridge.release(releaseInput))
@@ -979,7 +992,7 @@ describe('createExecutionRunConnectedServicesBridge', () => {
             }),
         });
 
-        const result = await bridge.materialize(MATERIALIZE_INPUT);
+        const result = await bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() });
 
         if (result.ok !== false) throw new Error('expected a blocked bridge result');
         expect(result.errorCode).toBe('connected_service_run_materialization_blocked');
@@ -997,7 +1010,7 @@ describe('createExecutionRunConnectedServicesBridge', () => {
                 throw new Error(`credential refresh failed for ${secretToken} under ${localPath}`);
             }),
         });
-        const failureResult = await failing.bridge.materialize(MATERIALIZE_INPUT);
+        const failureResult = await failing.bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() });
         if (failureResult.ok !== false) throw new Error('expected a blocked bridge result');
         const failureSerialized = JSON.stringify(failureResult);
         expect(failureSerialized).not.toContain(secretToken);
@@ -1101,7 +1114,7 @@ describe('createExecutionRunConnectedServicesBridge', () => {
                 isCurrent: () => true,
                 release: async () => undefined,
             }),
-            purposeBindingOwner,
+            purposeBindingOwner: { activatePurposeBindings: async input => ({ lease: await purposeBindingOwner.activatePurposeBindings(input) }) },
             requestAuthRegistry: restartedRegistry,
         });
         const registration = {
@@ -1374,7 +1387,7 @@ describe('createExecutionRunConnectedServicesBridge', () => {
                 qualifiedPurposeBindingSnapshot: null,
             }),
         });
-        const incumbent = await bridge.materialize(MATERIALIZE_INPUT);
+        const incumbent = await bridge.materialize({ ...MATERIALIZE_INPUT, activationId: randomUUID() });
         if (!incumbent.ok) throw new Error('expected incumbent materialization');
 
         await expect(bridge.adoptLiveMaterialization({

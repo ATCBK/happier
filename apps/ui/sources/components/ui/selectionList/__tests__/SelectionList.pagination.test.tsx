@@ -218,5 +218,21 @@ describe('SelectionList pagination contract', () => {
         expect(screen.getTextContent()).toContain('All sessions loaded');
         expect(screen.tree.root.findAll((node) => node.props?.role === 'group')).toHaveLength(2);
         expect(legendListState.props?.onEndReached).toBeUndefined();
+
+        await screen.update(<SelectionList {...createProps({
+            pagination: {
+                hasMore: false,
+                loadingMore: false,
+                requestKey: null,
+                onEndReached,
+                loadingLabel: 'Loading more sessions',
+                moreLabel: 'Load more sessions',
+                retryLabel: 'Retry loading sessions',
+                endReachedLabel: '',
+            },
+        })} />);
+        // A quiet end has no empty live region or group taking space below the rows.
+        expect(screen.findHostByTestId('browse:pagination:end')).toBeNull();
+        expect(screen.tree.root.findAll((node) => node.props?.role === 'group')).toHaveLength(1);
     });
 });

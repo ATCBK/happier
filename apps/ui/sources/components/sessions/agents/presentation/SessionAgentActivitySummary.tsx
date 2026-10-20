@@ -78,7 +78,7 @@ export const SessionAgentActivitySummary = React.memo((props: Readonly<{
         : phase === 'live' && presentation.statusShownByActivity !== true
             ? <Text testID={testID ? `${testID}:state:label` : undefined}>{presentation.statusLabel}</Text>
             : null;
-    const ending = trailingState ? null : (phase === 'finished' || phase === 'idle')
+    const ending = trailingState ? null : (phase === 'finished' || phase === 'idle') && presentation.statusLabel !== ''
         ? (
             <Text
                 testID={testID ? `${testID}:state:label` : undefined}

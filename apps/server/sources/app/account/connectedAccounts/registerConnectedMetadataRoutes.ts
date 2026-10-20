@@ -11,7 +11,8 @@ import {
 import type { Fastify } from '@/app/api/types';
 import { asServerProtocolZod } from '@/app/api/utils/protocolComposableZodAdapter';
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';
-import { inTx } from '@/storage/inTx';
+import { inReadSnapshot, inTx } from '@/storage/inTx';
+import { readReservedAccountScopedKvRowMutationConflict } from '@/app/kv/reservedAccountScopedKvRow';
 import {
     readConnectedPresentationRowInTx,
     readConnectedAcknowledgementsRowInTx,
@@ -27,13 +28,13 @@ export function registerConnectedMetadataRoutes(app: Fastify): void {
     app.get(CONNECTED_PRESENTATION_ROWS_ROUTE_V1, { preHandler: app.authenticate, config,
         schema: { response: { 200: asServerProtocolZod(ConnectedPresentationRowReadResponseV1Schema), 500: internal } },
     }, async (request, reply) => {
-        try { return reply.send(await inTx(tx => readConnectedPresentationRowInTx(tx, { accountId: request.userId }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true })); }
+        try { return reply.send(await inReadSnapshot(tx => readConnectedPresentationRowInTx(tx, { accountId: request.userId }))); }
         catch { return reply.code(500).send({ error: 'internal' }); }
     });
     app.get(CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1, { preHandler: app.authenticate, config,
         schema: { response: { 200: asServerProtocolZod(ConnectedAcknowledgementsRowReadResponseV1Schema), 500: internal } },
     }, async (request, reply) => {
-        try { return reply.send(await inTx(tx => readConnectedAcknowledgementsRowInTx(tx, { accountId: request.userId }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true })); }
+        try { return reply.send(await inReadSnapshot(tx => readConnectedAcknowledgementsRowInTx(tx, { accountId: request.userId }))); }
         catch { return reply.code(500).send({ error: 'internal' }); }
     });
     app.post(CONNECTED_PRESENTATION_ROWS_ROUTE_V1, { preHandler: app.authenticate, config,
@@ -41,13 +42,19 @@ export function registerConnectedMetadataRoutes(app: Fastify): void {
             response: { 200: asServerProtocolZod(ConnectedMetadataRowMutationResponseV1Schema), 500: internal } },
     }, async (request, reply) => {
         try { return reply.send(await inTx(tx => mutateConnectedPresentationRowInTx(tx, { ...request.body, accountId: request.userId }))); }
-        catch { return reply.code(500).send({ error: 'internal' }); }
+        catch (error) {
+            const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+            return conflict ? reply.send(conflict) : reply.code(500).send({ error: 'internal' });
+        }
     });
     app.post(CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1, { preHandler: app.authenticate, config,
         schema: { body: asServerProtocolZod(ConnectedAcknowledgementsRowMutationV1Schema),
             response: { 200: asServerProtocolZod(ConnectedMetadataRowMutationResponseV1Schema), 500: internal } },
     }, async (request, reply) => {
         try { return reply.send(await inTx(tx => mutateConnectedAcknowledgementsRowInTx(tx, { ...request.body, accountId: request.userId }))); }
-        catch { return reply.code(500).send({ error: 'internal' }); }
+        catch (error) {
+            const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+            return conflict ? reply.send(conflict) : reply.code(500).send({ error: 'internal' });
+        }
     });
 }

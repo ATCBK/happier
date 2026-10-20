@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fastify from 'fastify';
-import { z } from 'zod';
+import Ajv from 'ajv';
+import { z } from 'zod/mini';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { accountSettingsParse, deriveSessionCreationTagV1, FeaturesResponseSchema, SessionCreationCorrespondenceV1Schema, SessionInputRequestSchema } from '@happier-dev/protocol';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+import { accountSettingsParse, deriveSessionCreationTagV1, FeaturesResponseSchema, normalizeActionsSettingsV1, projectSessionAccessCapabilitiesV1, SessionCreationCorrespondenceV1Schema, SessionInputRequestSchema, V2SessionByIdResponseSchema, type AccountSettings } from '@happier-dev/protocol';
+import { SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { encrypt, decrypt, encodeBase64 } from '@/api/encryption';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { publishServerHttpRuntimeOrigin } from '@/api/client/serverHttpBaseUrl';
@@ -17,11 +20,20 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
+import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
+import { buildSessionMetadataEnvelopeFields } from '@/session/metadata/buildSessionMetadataEnvelopeCreateFields';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import * as daemonControlClient from '@/daemon/controlClient';
 import { restartSessionRunnerOnCurrentRuntime } from '@/daemon/plannedRunnerRestart/restartSessionRunnerOnCurrentRuntime';
 import { requestPlannedRunnerRestart } from '@/daemon/plannedRunnerRestart/requestPlannedRunnerRestart';
 import type { TrackedSession } from '@/daemon/types';
+import { ActionDiscoveryDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
+import { getActionSpec, PUBLIC_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/actionSpecs';
+import type { HappyMcpSessionClient } from './startHappyServer';
+import { createSessionDaemonAuthorityFixture } from './runtime/sessionDaemonAuthority.testkit';
+import { configuration } from '@/configuration';
+import { HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY, readCurrentRunnerAgentRuntimeDaemonServiceAuthority } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
+import { resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 const env = process.env;
 
@@ -78,18 +90,103 @@ const catalogHostTurn = {
     causalPermissionAuthority: { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'yolo' as const } }),
 };
 
+function hostClient(sessionId: string, overrides: Partial<HappyMcpSessionClient> = {}): HappyMcpSessionClient {
+  return {
+    sessionId,
+    getServerBinding: getTestServerBinding,
+    rpcHandlerManager: new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' }),
+    updateMetadata() {},
+    getMetadataSnapshot: () => createTestMetadata(),
+    ...catalogHostTurn,
+    ...overrides,
+  };
+}
+
+async function withMcpClient(runtime: ReturnType<typeof createHappierMcpServer>, run: (client: Client) => Promise<void>) {
+  const client = new Client({ name: 'session-mcp-contract-test', version: '1' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await runtime.mcp.connect(serverTransport);
+    await client.connect(clientTransport);
+    await run(client);
+  } finally {
+    await client.close();
+    await runtime.mcp.close();
+  }
+}
+
+async function withTitleHost(
+  sessionId: string,
+  getAccountSettings: () => AccountSettings,
+  run: (fixture: Readonly<{
+    runtime: ReturnType<typeof createHappierMcpServer>;
+    readSharedMetadata: () => unknown;
+    persistedWrites: () => number;
+    localWrites: () => number;
+  }>) => Promise<void>,
+) {
+  const credentials = { token: 'title-daemon-account', encryption: null };
+  const fields = buildSessionMetadataEnvelopeFields({ credentials, accountEncryptionMode: 'plain', storedContentMode: 'plain',
+    metadata: createTestMetadata(), agentState: null });
+  let metadata = fields.sharedMetadata.ciphertext;
+  let ownerMetadata = fields.ownerMetadata;
+  let metadataVersion = 1;
+  let agentStateVersion = 0;
+  let writes = 0;
+  let localWrites = 0;
+  const app = fastify();
+  const restore = installAxiosFastifyAdapter({ app, origin: getTestServerBinding().serverUrl });
+  app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode: 'plain' }));
+  app.get('/v2/sessions/:sessionId', async () => V2SessionByIdResponseSchema.parse({ session: createSessionRecordFixture({ id: sessionId,
+    encryptionMode: 'plain', metadataLayoutVersion: 1, metadata, ownerMetadata, metadataVersion, agentStateVersion, share: null,
+    effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: projectSessionAccessCapabilitiesV1({ owner: true, grants: [] }) },
+  }) }));
+  app.patch('/v2/sessions/:sessionId', async request => {
+    const patch = SessionMetadataTuplePatchV1Schema.parse(request.body);
+    if (patch.mode !== 'owner') throw new Error('Expected an owner metadata tuple');
+    expect(patch.sharedMetadata.expectedVersion).toBe(metadataVersion);
+    expect(patch.expectedOwnerMetadata).toEqual(ownerMetadata);
+    metadata = patch.sharedMetadata.ciphertext;
+    ownerMetadata = patch.ownerMetadata;
+    writes += 1;
+    return SessionMetadataTuplePatchSuccessV1Schema.parse({ success: true, metadataLayoutVersion: 1,
+      sharedMetadata: { version: ++metadataVersion }, agentState: { version: ++agentStateVersion } });
+  });
+  // Home persistence and the daemon are external boundaries. The actual Action
+  // policy, title mutation, envelope projection and HTTP CAS remain real.
+  const { executor } = createCliActionExecutorHarness({ token: credentials.token, credentials, sessionId,
+    mode: 'plain', ctx: null, serverId: getTestServerBinding().serverId, serverHttpBaseUrl: getTestServerBinding().serverUrl,
+    actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1(getAccountSettings().actionsSettingsV1) },
+  });
+  const daemon = await createSessionDaemonAuthorityFixture({ sessionId,
+    execute: operation => executor.execute(ActionIdSchema.parse(operation.actionId), operation.input,
+      { surface: operation.surface, authority: 'account_automation', actionCaller: { kind: 'host' }, defaultSessionId: sessionId }),
+  });
+  const runtime = createHappierMcpServer(hostClient(sessionId, {
+    updateMetadata: () => { localWrites += 1; },
+    getActiveTurnAdmissionWitness: () => ({ turnId: 'title-turn', inputId: 'title-input', userMessageSeq: 1, userMessageSeqs: [1],
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'yolo' } }),
+  }), { credentials: null, getAccountSettings });
+  try {
+    await run({ runtime, readSharedMetadata: () => JSON.parse(metadata), persistedWrites: () => writes, localWrites: () => localWrites });
+  } finally {
+    try {
+      await runtime.mcp.close();
+      await daemon.close();
+    } finally { restore(); await app.close(); }
+  }
+}
+
 function resetEnvironment() {
   process.env = { ...env };
   delete process.env.HAPPIER_ACTIONS_SETTINGS_V1;
+  resetActiveAccountSettingsSnapshotForTests();
 }
 
 function unmockCaseModules() {
-  vi.doUnmock('@modelcontextprotocol/sdk/server/mcp.js');
-  vi.doUnmock('@happier-dev/protocol');
   vi.doUnmock('@/session/actions/createCliActionExecutorHarness');
   vi.doUnmock('@/mcp/server/registerHappierMcpBuiltInTools');
-  vi.doUnmock('@/agent/tools/happierTools/dispatchBuiltInHappierTool');
-  vi.doUnmock('@/session/discussions/sessionDiscussionActionDeps');
+  vi.doUnmock('@/discussions/discussionActionDeps');
   vi.doUnmock('@/api/accountServerActionDeps');
   vi.doUnmock('@/api/sessionFollowActionDeps');
 }
@@ -101,6 +198,85 @@ describe('createHappierMcpServer real host admission', () => {
   beforeEach(resetEnvironment);
   afterEach(unmockCaseModules);
   afterEach(() => vi.restoreAllMocks());
+
+  it('discovers complete widget and Board inputs over MCP and reads output schemas explicitly', async () => {
+    const sessionId = 'c666666666666666666666666';
+    const daemon = await installAccountCatalogDaemonTransport({ sessionId, readMetadata: () => createTestMetadata() });
+    const runtime = createHappierMcpServer({
+      sessionId, getServerBinding: getTestServerBinding,
+      rpcHandlerManager: new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' }),
+      updateMetadata() {}, getMetadataSnapshot: () => createTestMetadata(), ...catalogHostTurn,
+    });
+    const client = new Client({ name: 'widget-spec-discovery', version: '1' }, { capabilities: {} });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await runtime.mcp.connect(serverTransport);
+      await client.connect(clientTransport);
+      const tools = await client.listTools();
+      expect(tools.tools.find(tool => tool.name === 'action_spec_get')?.inputSchema.properties)
+        .toHaveProperty('includeOutputSchema');
+      expect(tools.tools.find(tool => tool.name === 'action_spec_get')?.inputSchema.properties)
+        .toHaveProperty('schemaPath');
+      const readDefinition = async (id: string, includeOutputSchema = false) => {
+        const reply = CallToolResultSchema.parse(await client.callTool({ name: 'action_spec_get', arguments: { id, includeOutputSchema } }));
+        expect(reply.isError, id).not.toBe(true);
+        const text = reply.content.find(content => content.type === 'text');
+        if (!text || text.type !== 'text') throw new Error('Missing discovery result');
+        expect(text.text.length, id).toBeLessThan(50000);
+        const payload: unknown = JSON.parse(text.text);
+        const result = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].parse(payload);
+        const definition = ActionDiscoveryDefinitionV1Schema.parse(result.actionSpec);
+        for (const entry of result.schemaSections ?? []) {
+          const part = CallToolResultSchema.parse(await client.callTool({ name: 'action_spec_get', arguments: { id, schemaPath: entry.path } }));
+          const partText = part.content.find(content => content.type === 'text');
+          if (!partText || partText.type !== 'text') throw new Error('Missing schema section');
+          expect(partText.text.length, entry.path).toBeLessThan(50000);
+          const section = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].parse(JSON.parse(partText.text)).schemaSection;
+          if (!section) throw new Error('Missing schema section');
+          const [root, , name] = entry.path.slice(1).split('/');
+          const schema = root === 'inputSchema' ? definition.inputSchema : definition.outputSchema;
+          if (!schema || !name) throw new Error('Unknown schema root');
+          const definitions = schema.definitions && typeof schema.definitions === 'object' ? schema.definitions : {};
+          schema.definitions = { ...definitions, [name.replace(/~1/g, '/').replace(/~0/g, '~')]: section.schema };
+        }
+        return definition;
+      };
+      for (const id of ['widgets.catalog.list', 'boards.apply', 'home.hub.layout.update', 'session.board.item.upsert'] as const) {
+        const definition = await readDefinition(id);
+        expect(definition.id).toBe(id);
+        expect(definition.outputSchema).toBeUndefined();
+        const validate = new Ajv({ strict: false }).compile(definition.inputSchema);
+        expect(validate({}), id).toBe(false);
+        if (id === 'boards.apply') {
+          const input = { boardId: 'board-1', intent: { kind: 'update', boardId: 'board-1', patch: { name: 'Renamed' } } };
+          expect(getActionSpec(id).inputSchema.safeParse(input).success).toBe(true);
+          expect(validate(input)).toBe(true);
+          expect(validate({ ...input, intent: { ...input.intent, kind: 'unknown' } })).toBe(false);
+        }
+        if (id === 'home.hub.layout.update') {
+          const input = { intent: { kind: 'visibility', sectionId: 'machines', hidden: false } };
+          expect(getActionSpec(id).inputSchema.safeParse(input).success).toBe(true);
+          expect(validate(input)).toBe(true);
+          expect(validate({ intent: { ...input.intent, hidden: 'false' } })).toBe(false);
+        }
+        if (id === 'session.board.item.upsert') {
+          const input = { sessionId, itemId: 'discovered-note', expectedItemRevision: null, item: { v: 1, title: 'Note', frame: 'card',
+            height: { mode: 'auto', fallback: 'regular' }, source: { kind: 'declarative', document: {
+              version: 1, root: { kind: 'stack', children: [{ kind: 'text', text: 'Complete schema' }] },
+            } } } };
+          expect(getActionSpec(id).inputSchema.safeParse(input).success).toBe(true);
+          expect(validate(input)).toBe(true);
+          expect(validate({ ...input, item: { ...input.item, title: 42 } })).toBe(false);
+          expect(validate({ ...input, item: { ...input.item, source: { ...input.item.source,
+            document: { version: 1, root: { kind: 'unknown' } },
+          } } })).toBe(false);
+        }
+      }
+      const full = await readDefinition('widgets.catalog.list', true);
+      expect(full.outputSchema).toBeDefined();
+      expect(new Ajv({ strict: false }).compile(full.outputSchema!)({})).toBe(false);
+    } finally { await client.close(); await runtime.mcp.close(); await daemon.close(); }
+  });
 
   it('publishes client-compilable tools before the successor runner has a turn witness', async () => {
     const sessionId = 'c444444444444444444444444';
@@ -151,6 +327,7 @@ describe('createHappierMcpServer real host admission', () => {
       getServerBinding: getTestServerBinding,
       rpcHandlerManager: new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' }),
       updateMetadata() {},
+      enqueueSessionEventCommitted: async () => ({ persisted: true, delivered: true }),
       getMetadataSnapshot: () => metadata,
       getPermissionMode: () => 'yolo' as const,
       getCurrentSessionLocation: () => ({ machineId: 'machine-1', path: '/repo' }),
@@ -342,7 +519,7 @@ describe('createHappierMcpServer real host admission', () => {
     } finally { await runtime.mcp.close(); }
   });
 
-  it.each(['mixed-corpus', 'documents-only'] as const)('keeps credentialless %s searches within the MCP-bound Session', async (selection) => {
+  it.each(['mixed-corpus', 'documents-only', 'project'] as const)('keeps credentialless %s searches within the MCP-bound Session', async (selection) => {
     const manager = new RpcHandlerManager({ scopePrefix: 'bound-session', encryptionMode: 'plain' });
     const queries: unknown[] = [];
     manager.registerHandler(RPC_METHODS.DAEMON_MEMORY_SEARCH, async (query: unknown) => {
@@ -364,10 +541,13 @@ describe('createHappierMcpServer real host admission', () => {
     } } }) });
     try {
       const result = await runtime.executeTool({ toolName: 'memory_search', args: {
-        query: { v: 1, query: 'private', scope: { type: 'global' }, mode: 'deep',
+        query: { v: 1, query: 'private', scope: selection === 'project'
+          ? { type: 'project', projectRef: { serverId: 'test-home', projectKey: 'payments' } } : { type: 'global' }, mode: 'deep',
           corpora: selection === 'mixed-corpus' ? ['sessions', 'documents'] : ['documents'] },
       } });
-      expect(result).toEqual({ ok: true, result: {
+      if (selection === 'project') {
+        expect(result).toMatchObject({ ok: true, result: { ok: false, errorCode: 'memory_project_scope_unsupported' } });
+      } else expect(result).toEqual({ ok: true, result: {
         v: 1, ok: true, hits: selection === 'mixed-corpus' ? [{ sessionId: 'bound-session', seqFrom: 1, seqTo: 1,
           createdAtFromMs: 1, createdAtToMs: 1, summary: 'readable', score: 1 }] : [], documents: { state: 'unavailable' },
       } });
@@ -447,6 +627,7 @@ describe('createHappierMcpServer real host admission', () => {
       sessionId = 'source-session-a';
       rpcHandlerManager = new RpcHandlerManager({ scopePrefix: this.sessionId, encryptionMode: 'plain' });
       updateMetadata() {}
+      async enqueueSessionEventCommitted() { return { persisted: true, delivered: true }; }
       getServerBinding() { return { serverId: 'cross-session-home', serverUrl: origin }; }
       getServerFeaturesSnapshot() { return features; }
       getPermissionMode() { return 'yolo' as const; }
@@ -514,11 +695,6 @@ describe('createHappierMcpServer real host admission', () => {
           callerDepth: backgroundRun ? 4 : Math.max(starterDepth, turnDepth),
         } },
       });
-      const projects = runtime
-        ? await runtime.executeTool({ toolName: 'action_execute', args: { actionId: 'projects.list', input: {} } })
-        : await client.callTool({ name: 'action_execute', arguments: { actionId: 'projects.list', input: {} } });
-      expect(JSON.stringify(projects)).toContain('projects');
-      expect(JSON.stringify(projects)).not.toContain('action_disabled');
       if (backgroundRun) {
         const start = await client.callTool({ name: 'execution_run_start', arguments: {
           intent: 'review', backendTarget: source.getBackendTarget(), instructions: 'Review the change',
@@ -584,21 +760,19 @@ describe('createHappierMcpServer', () => {
   });
   afterEach(unmockCaseModules);
 
-  it('wires Account-server, Pool, Follow, and Discussion owners into the authenticated in-session Agent host', async () => {
+  it('wires Account-server, Pool, and Follow owners into the authenticated in-session Agent host', async () => {
     const captured: { params?: Record<string, unknown>; overrides?: Record<string, unknown> } = {};
     const accountInputs: Array<Record<string, unknown>> = [];
     const followInputs: Array<Record<string, unknown>> = [];
-    const discussionInputs: Array<Record<string, unknown>> = [];
     const machinePoolAction = vi.fn();
     const homeDomainAction = vi.fn();
     const sessionFollowGet = vi.fn();
-    const sessionDiscussionAction = vi.fn();
     const resolveServerFeaturesSnapshot = vi.fn(() => ({
       status: 'ready' as const,
       provenance: 'authenticated' as const,
       features: {
         features: {},
-        capabilities: { serverIdentity: { serverIdentityId: 'stable-home-identity' } },
+        capabilities: { serverIdentity: { serverIdentityId: 'srv_stable-home-identity' } },
       },
     }));
 
@@ -612,12 +786,6 @@ describe('createHappierMcpServer', () => {
       createSessionFollowActionDeps: (input: Record<string, unknown>) => {
         followInputs.push(input);
         return { sessionFollowGet };
-      },
-    }));
-    vi.doMock('@/session/discussions/sessionDiscussionActionDeps', () => ({
-      createSessionDiscussionActionDeps: (input: Record<string, unknown>) => {
-        discussionInputs.push(input);
-        return { sessionDiscussionAction };
       },
     }));
     vi.doMock('@/session/actions/createCliActionExecutorHarness', () => ({
@@ -651,38 +819,30 @@ describe('createHappierMcpServer', () => {
     expect((accountInputs[0]?.resolveServerFeaturesSnapshot as (() => unknown))()).toEqual(
       resolveServerFeaturesSnapshot.mock.results[0]?.value,
     );
-    expect(resolveServerFeaturesSnapshot).toHaveBeenCalledTimes(2);
     expect(followInputs[0]).toMatchObject({
       token: credentials.token,
       prepareSourceKeyAfterSet: expect.any(Function),
     });
     expect(accountInputs[0]?.serverId).toEqual(followInputs[0]?.serverId);
     expect(accountInputs[0]?.serverHttpBaseUrl).toEqual(followInputs[0]?.serverHttpBaseUrl);
-    expect(captured.params).toMatchObject({ serverIdentityId: 'stable-home-identity' });
+    expect(captured.params).toMatchObject({ serverIdentityId: 'srv_stable-home-identity' });
     expect(captured.params?.resolveServerFeaturesSnapshot).toBeTypeOf('function');
-    expect(accountInputs[0]).toMatchObject({ serverIdentityId: 'stable-home-identity' });
-    expect(followInputs[0]).toMatchObject({ serverIdentityId: 'stable-home-identity' });
-    expect(discussionInputs[0]).toMatchObject({
-      credentials,
-      serverIdentityId: 'stable-home-identity',
-    });
+    expect(accountInputs[0]).toMatchObject({ serverIdentityId: 'srv_stable-home-identity' });
+    expect(followInputs[0]).toMatchObject({ serverIdentityId: 'srv_stable-home-identity' });
     expect(captured.overrides).toMatchObject({
       machinePoolAction,
       homeDomainAction,
       sessionFollowGet,
-      sessionDiscussionAction,
     });
   });
 
-  it('keeps restricted runtime credentials Session-scoped and omits Account-wide Action owners', async () => {
+  it('keeps restricted runtime credentials Session-scoped while advertising daemon-owned Account Actions', async () => {
     const captured: { params?: Record<string, unknown>; overrides?: Record<string, unknown>; enabled?: (id: string) => boolean } = {};
     const accountOwner = vi.fn(() => ({}));
     const followOwner = vi.fn(() => ({}));
-    const discussionOwner = vi.fn(() => ({}));
     const sessionList = vi.fn();
     vi.doMock('@/api/accountServerActionDeps', () => ({ createAccountServerActionDeps: accountOwner }));
     vi.doMock('@/api/sessionFollowActionDeps', () => ({ createSessionFollowActionDeps: followOwner }));
-    vi.doMock('@/session/discussions/sessionDiscussionActionDeps', () => ({ createSessionDiscussionActionDeps: discussionOwner }));
     vi.doMock('@/session/actions/createCliActionExecutorHarness', () => ({
       createCliActionExecutorHarness: (params: Record<string, unknown>, overrides: Record<string, unknown>) => {
         captured.params = params;
@@ -713,18 +873,17 @@ describe('createHappierMcpServer', () => {
 
     expect(accountOwner).not.toHaveBeenCalled();
     expect(followOwner).not.toHaveBeenCalled();
-    // Discussions are Session-placed: the Session transport credentials reach
-    // them, never Account authority (the real read/post path is proven below).
-    expect(discussionOwner).toHaveBeenCalledWith(expect.objectContaining({ credentials: sessionCredentials }));
     expect(captured.params).toMatchObject({ token: sessionCredentials.token });
     expect(captured.params).not.toHaveProperty('credentials');
     expect(captured.overrides?.sessionList).toBe(sessionList);
     expect(captured.enabled?.('session.title.set')).toBe(true);
-    expect(captured.enabled?.('account.apiTokens.list')).toBe(false);
-    expect(captured.enabled?.('machines.list')).toBe(false);
+    // Tool visibility is shared policy, while the daemon capability owns
+    // Account authorization (the real refusal is exercised above).
+    expect(captured.enabled?.('account.apiTokens.list')).toBe(true);
+    expect(captured.enabled?.('machines.list')).toBe(true);
   });
 
-  it('opens a Session-scoped runtime\'s own E2EE Board and Discussions with its Session material and no Account credentials', async () => {
+  it('opens a Session-scoped runtime\'s own E2EE Board with its Session material and no Account credentials', async () => {
     const { default: fastify } = await import('fastify');
     const { installAxiosFastifyAdapter } = await import('@/testkit/http/axiosAdapter');
     const { FeaturesResponseSchema, projectSessionAccessCapabilitiesV1 } = await import('@happier-dev/protocol');
@@ -761,31 +920,6 @@ describe('createHappierMcpServer', () => {
       },
     }));
     app.get('/v2/sessions/:sessionId/system-records', async () => ({ records: [], nextCursor: null, hasNext: false }));
-    app.get('/v2/sessions/:sessionId/discussions', async (request) => ({
-      discussions: [{
-        id: 'discussion-1',
-        sessionId: (request.params as { sessionId: string }).sessionId,
-        creationLocalId: 'creation-1',
-        titleContent: sealSessionStoredContent({ ...crypto, payload: { v: 1, title: 'Runner notes' } }),
-        latestMessage: {
-          id: 'message-1',
-          localId: 'message-1',
-          seq: 1,
-          authorAccountId: 'account-1',
-          accountActor: { v: 1, accountId: 'account-1', profile: null },
-          producerV1: null,
-          createdAt: 1,
-        },
-        messageSeq: 1,
-        lastReadSeq: 1,
-        unreadCount: 0,
-        unreadMentionCount: 0,
-        recentAuthorAccountIds: ['account-1'],
-        archivedAt: null,
-        capabilities: { postMessages: true, rename: true, archive: true, restore: false, askAgent: true, sendToSession: true },
-      }],
-      nextCursor: null,
-    }));
 
     const runtime = createHappierMcpServer({
       sessionId: 'runner-session',
@@ -817,14 +951,6 @@ describe('createHappierMcpServer', () => {
       const board = await runtime.executeTool({ toolName: 'session_board_get', args: {} });
       expect(JSON.stringify(board)).toContain('"title":"Overview"');
       expect(JSON.stringify(board)).not.toContain('not_authenticated');
-
-      // Discussions are discoverable-only for Agents, so they run through the
-      // canonical action_execute tool.
-      const discussions = await runtime.executeTool({
-        toolName: 'action_execute',
-        args: { actionId: 'session.discussion.list', input: {} },
-      });
-      expect(JSON.stringify(discussions)).toContain('Runner notes');
 
       // The material answers only for the bound Session: another E2EE Session
       // stays closed instead of borrowing it or degrading to Plain.
@@ -890,6 +1016,7 @@ describe('createHappierMcpServer', () => {
               board: { enabled: boardEnabled },
               conversations: { enabled: conversationsEnabled },
             },
+            sharing: { enabled: true, session: { enabled: true } },
           },
           capabilities: {},
         }),
@@ -901,12 +1028,12 @@ describe('createHappierMcpServer', () => {
     createHappierMcpServer(createClient(true, true) as any, { credentials: null });
 
     expect(capturedEnablement).toHaveLength(3);
-    expect(capturedEnablement[0]?.('session.board.get')).toBe(false);
-    expect(capturedEnablement[1]?.('session.board.get')).toBe(true);
-    expect(capturedEnablement[2]?.('session.board.get')).toBe(false);
-    expect(capturedEnablement[0]?.('session.discussion.list')).toBe(false);
-    expect(capturedEnablement[1]?.('session.discussion.list')).toBe(true);
-    expect(capturedEnablement[2]?.('session.discussion.list')).toBe(false);
+    expect(capturedEnablement[0]?.('session.board.layout.update')).toBe(false);
+    expect(capturedEnablement[1]?.('session.board.layout.update')).toBe(true);
+    expect(capturedEnablement[2]?.('session.board.layout.update')).toBe(false);
+    expect(capturedEnablement[0]?.('discussion.list')).toBe(false);
+    expect(capturedEnablement[1]?.('discussion.list')).toBe(true);
+    expect(capturedEnablement[2]?.('discussion.list')).toBe(false);
     expect(capturedEnablement[0]?.('session.list')).toBe(true);
   });
 
@@ -928,6 +1055,7 @@ describe('createHappierMcpServer', () => {
     } as any;
 
     const { toolNames } = createHappierMcpServer(fakeClient, {
+      sessionCredentials: { token: 'reviewed-session-policy', encryption: null },
       accountSettings: {
         actionsSettingsV1: {
           v: 1,
@@ -947,430 +1075,67 @@ describe('createHappierMcpServer', () => {
   });
 
   it('reads current account action settings when registered session-agent MCP tools run', async () => {
-    const handlers: Record<string, (args: any) => Promise<any>> = {};
-
-    vi.doMock('@modelcontextprotocol/sdk/server/mcp.js', () => ({
-      McpServer: class FakeMcpServer {
-        registerResource() {}
-        registerTool(name: string, _meta: any, handler: any) {
-          handlers[name] = handler;
-        }
-      },
+    let settings = accountSettingsParse({});
+    await withTitleHost('c111111111111111111111112', () => settings, async fixture => withMcpClient(fixture.runtime, async client => {
+      settings = accountSettingsParse({ actionsSettingsV1: { v: 1, actions: {
+        'session.title.set': { enabled: false },
+      } } });
+      const denied = CallToolResultSchema.parse(await client.callTool({ name: 'change_title', arguments: { title: 'Denied' } }));
+      expect(denied.isError).toBe(true);
+      expect(JSON.stringify(denied)).toContain('action_disabled');
+      expect(fixture.persistedWrites()).toBe(0);
+      settings = accountSettingsParse({});
+      const accepted = CallToolResultSchema.parse(await client.callTool({ name: 'change_title', arguments: { title: 'Allowed' } }));
+      expect(accepted.isError, JSON.stringify(accepted)).not.toBe(true);
+      expect(fixture.readSharedMetadata()).toMatchObject({ summary: { text: 'Allowed' } });
     }));
-
-    const { createHappierMcpServer } = await import('@/mcp/createHappierMcpServer');
-
-    let currentAccountSettings: any = {
-      actionsSettingsV1: {
-        v: 1,
-        actions: {
-          'review.start': {
-            disabledSurfaces: ['agent'],
-          },
-        },
-      },
-    };
-
-    createHappierMcpServer({
-      sessionId: 'sess_mcp_live_settings_1',
-      getServerBinding: getTestServerBinding,
-      rpcHandlerManager: { invokeLocal: async () => ({}) },
-      updateMetadata: () => {},
-    } as any, {
-      getAccountSettings: () => currentAccountSettings,
-    } as any);
-
-    const handler = handlers.action_spec_get;
-    expect(typeof handler).toBe('function');
-
-    const disabledResult = await handler({ id: 'review.start' });
-    expect(disabledResult.isError).toBe(true);
-    expect(JSON.parse(disabledResult.content[0].text)).toMatchObject({
-      errorCode: 'action_disabled',
-      details: {
-        actionId: 'review.start',
-        surface: 'agent',
-        reason: 'disabled_by_settings',
-      },
-    });
-
-    currentAccountSettings = {
-      actionsSettingsV1: {
-        v: 1,
-        actions: {},
-      },
-    };
-
-    const enabledResult = await handler({ id: 'review.start' });
-    expect(enabledResult.isError).toBe(false);
-    expect(JSON.parse(enabledResult.content[0].text)).toMatchObject({
-      actionSpec: {
-        id: 'review.start',
-      },
-    });
-
-    const planResult = await handler({ id: 'subagents.plan.start' });
-    expect(planResult.isError).toBe(false);
-    expect(JSON.parse(planResult.content[0].text)).toMatchObject({
-      actionSpec: {
-        kindVersion: 1,
-        inputSchema: {
-          type: 'object',
-          properties: {
-            backendTargetKeys: {
-              type: 'array',
-              minItems: 1,
-              items: {
-                anyOf: expect.arrayContaining([
-                  expect.objectContaining({
-                    type: 'string',
-                    pattern: '^(agent|acpBackend):.+$',
-                  }),
-                ]),
-              },
-            },
-            permissionMode: {
-              description: expect.any(String),
-            },
-          },
-        },
-      },
-    });
-
-    const spawnResult = await handler({ id: 'session.spawn_new' });
-    expect(spawnResult.isError).toBe(false);
-    expect(JSON.parse(spawnResult.content[0].text)).toMatchObject({
-      actionSpec: {
-        inputSchema: {
-          properties: {
-            executionTarget: {
-              properties: {
-                serverId: { minLength: 1, maxLength: 191 },
-              },
-            },
-            organizationPlacement: {
-              properties: {
-                tagIds: { type: 'array', maxItems: 500 },
-              },
-            },
-          },
-        },
-      },
-    });
   });
 
   it('uses account action settings for in-session MCP approval policy when provided', async () => {
-    process.env.HAPPIER_ACTIONS_SETTINGS_V1 = JSON.stringify({
-      v: 1,
-      actions: {
-        'session.list': { disabledSurfaces: [] },
-      },
+    const settings = accountSettingsParse({ actionsSettingsV1: { v: 1, actions: {
+      'session.title.set': { approvalRequiredSurfaces: ['agent'] },
+    } } });
+    await withTitleHost('c111111111111111111111113', () => settings, async fixture => {
+      const result = await fixture.runtime.executeTool({ toolName: 'change_title', args: { title: 'Unapproved title' } });
+      expect(result).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+      expect(fixture.persistedWrites()).toBe(0);
     });
-    const captured: { deps?: any } = {};
-
-    vi.doMock('@happier-dev/protocol', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('@happier-dev/protocol')>();
-      return {
-        ...actual,
-        createActionExecutor: (deps: any) => {
-          captured.deps = deps;
-          return {} as any;
-        },
-      };
-    });
-
-    const { createHappierMcpServer } = await import('@/mcp/createHappierMcpServer');
-
-    createHappierMcpServer({
-      sessionId: 'sess_mcp_approval_policy_1',
-      getServerBinding: getTestServerBinding,
-      rpcHandlerManager: { invokeLocal: async () => ({}) },
-      updateMetadata: () => {},
-    } as any, {
-      accountSettings: {
-        actionsSettingsV1: {
-          v: 1,
-          actions: {
-            'session.list': {
-              disabledSurfaces: [],
-              approvalRequiredSurfaces: ['agent'],
-            },
-          },
-        },
-      },
-    } as any);
-
-    expect(captured.deps).toBeDefined();
-    expect(captured.deps.isActionApprovalRequired('session.list', { surface: 'agent' })).toBe(true);
-  });
-
-  it('reads current session-agent spawn policy when action-backed tools execute', async () => {
-    const executorExecute = vi.fn(async (actionId: string, input: unknown, ctx: unknown) => ({
-      ok: true,
-      result: { actionId, input, ctx },
-    }));
-    const captured: { deps?: any } = {};
-
-    vi.doMock('@/session/actions/createCliActionExecutorHarness', () => ({
-      createCliActionExecutorHarness: () => ({
-        executor: {
-          execute: executorExecute,
-        },
-      }),
-    }));
-
-    vi.doMock('@/mcp/server/registerHappierMcpBuiltInTools', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('@/mcp/server/registerHappierMcpBuiltInTools')>();
-      return {
-        ...actual,
-        registerHappierMcpBuiltInTools: (_server: any, params: any) => {
-          captured.deps = params.deps;
-          return { toolNames: [] };
-        },
-      };
-    });
-
-    const { createHappierMcpServer } = await import('@/mcp/createHappierMcpServer');
-
-    const firstPolicy = { allowedBackendTargetKeys: ['agent:codex'] };
-    const secondPolicy = { allowedBackendTargetKeys: ['agent:claude'] };
-    let currentAccountSettings: any = {
-      sessionAgentSpawnPolicyV1: firstPolicy,
-    };
-
-    createHappierMcpServer({
-      sessionId: 'sess_mcp_live_spawn_policy_1',
-      getServerBinding: getTestServerBinding,
-      rpcHandlerManager: { invokeLocal: async () => ({}) },
-      updateMetadata: () => {},
-    } as any, {
-      getAccountSettings: () => currentAccountSettings,
-    } as any);
-
-    expect(captured.deps).toBeDefined();
-    await captured.deps.executeActionByToolName('action_execute', {
-      actionId: 'session.spawn_new',
-      input: { prompt: 'Spawn a helper' },
-    }, 'sess_mcp_live_spawn_policy_1');
-    expect(executorExecute).toHaveBeenLastCalledWith(
-      'session.spawn_new',
-      { prompt: 'Spawn a helper' },
-      expect.objectContaining({
-        sessionAgentSpawnPolicyV1: firstPolicy,
-      }),
-    );
-
-    currentAccountSettings = {
-      sessionAgentSpawnPolicyV1: secondPolicy,
-    };
-
-    await captured.deps.executeActionByToolName('action_execute', {
-      actionId: 'session.spawn_new',
-      input: { prompt: 'Spawn another helper' },
-    }, 'sess_mcp_live_spawn_policy_1');
-    expect(executorExecute).toHaveBeenLastCalledWith(
-      'session.spawn_new',
-      { prompt: 'Spawn another helper' },
-      expect.objectContaining({
-        sessionAgentSpawnPolicyV1: secondPolicy,
-      }),
-    );
   });
 
   it('executes native Agent tool calls through the live Session authority and policy owner', async () => {
-    const executorExecute = vi.fn(async (actionId: string, input: unknown, ctx: unknown) => ({
-      ok: true,
-      result: { actionId, input, ctx },
-    }));
-
-    vi.doMock('@/session/actions/createCliActionExecutorHarness', () => ({
-      createCliActionExecutorHarness: () => ({
-        executor: {
-          execute: executorExecute,
-        },
-      }),
-    }));
-
-    const { createHappierMcpServer } = await import('@/mcp/createHappierMcpServer');
+    const sessionId = 'sess_native_agent_tool_1';
     const causalPermissionAuthority = {
-      kind: 'admittedSessionInputV1',
-      admittedPermissionCeiling: 'read_only',
+      kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'read-only',
     } as const;
-    const spawnPolicy = { allowedBackendTargetKeys: ['agent:codex'] };
-    const runtime = createHappierMcpServer({
-      sessionId: 'sess_native_agent_tool_1',
-      getServerBinding: getTestServerBinding,
-      rpcHandlerManager: { invokeLocal: async () => ({}) },
-      updateMetadata: () => {},
+    const operations: Array<Parameters<Parameters<typeof createSessionDaemonAuthorityFixture>[0]['execute']>[0]> = [];
+    const daemon = await createSessionDaemonAuthorityFixture({ sessionId, execute: async operation => {
+      operations.push(operation);
+      return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+    } });
+    const runtime = createHappierMcpServer(hostClient(sessionId, {
       getPermissionMode: () => 'yolo',
-      getActiveTurnPermissionWitness: () => ({
-        turnId: 'turn_native_agent_tool_1',
-        causalPermissionAuthority,
+      getActiveTurnPermissionWitness: () => ({ turnId: 'native-turn', causalPermissionAuthority }),
+      getActiveTurnAdmissionWitness: () => ({
+        turnId: 'native-turn', inputId: 'native-input', userMessageSeq: 1, userMessageSeqs: [1],
+        callerPermissionMode: 'yolo', causalPermissionAuthority,
+        agentStartCaller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 },
       }),
-    } as any, {
-      accountSettings: {
-        sessionAgentSpawnPolicyV1: spawnPolicy,
-      },
-      requiredDirectActionIds: ['session.transcript.get'],
-      sessionInputVia: 'action',
-    } as any);
-
-    await runtime.executeTool({
-      toolName: 'action_execute',
-      args: {
-        actionId: 'session.spawn_new',
-        input: { prompt: 'Spawn a helper' },
-      },
-      toolCallId: 'native_tool_call_1',
-    });
-
-    expect(executorExecute).toHaveBeenCalledWith(
-      'session.spawn_new',
-      { prompt: 'Spawn a helper' },
-      expect.objectContaining({
-        defaultSessionId: 'sess_native_agent_tool_1',
-        surface: 'agent',
-        callerPermissionMode: 'yolo',
-        causalPermissionAuthority,
-        sessionInputSource: {
-          sourceSessionId: 'sess_native_agent_tool_1',
-          sourceTurnId: 'turn_native_agent_tool_1',
-          via: 'action',
-        },
-        sessionAgentSpawnPolicyV1: spawnPolicy,
-        actionRequestId: 'native_tool_call_1',
-        approvalOrigin: {
-          kind: 'transcript_tool_call',
-          sessionId: 'sess_native_agent_tool_1',
-          toolCallId: 'native_tool_call_1',
-          toolName: 'action_execute',
-        },
-      }),
-    );
-
-    await runtime.executeTool({
-      toolName: 'session_transcript_get',
-      args: { limit: 10 },
-      toolCallId: 'native_tool_call_2',
-    });
-    expect(executorExecute).toHaveBeenCalledWith(
-      'session.transcript.get',
-      expect.objectContaining({ sessionId: 'sess_native_agent_tool_1', limit: 10 }),
-      expect.objectContaining({
-        defaultSessionId: 'sess_native_agent_tool_1',
-        surface: 'agent',
-        actionRequestId: 'native_tool_call_2',
-      }),
-    );
-  });
-
-  it('binds Agent Discussion posts to the live Session publisher carrier', async () => {
-    const postAgentDiscussionMessage = vi.fn(async () => ({
-      ok: false as const,
-      v: 1 as const,
-      error: 'session_discussion_post_denied' as const,
-    }));
-    let capturedTransport: ((request: any, options?: any) => Promise<unknown>) | undefined;
-
-    vi.doMock('@/session/discussions/sessionDiscussionActionDeps', () => ({
-      createSessionDiscussionActionDeps: (options: any) => {
-        capturedTransport = options.postAgentMessage;
-        return { sessionDiscussionAction: vi.fn() };
-      },
-    }));
-    vi.doMock('@/session/actions/createCliActionExecutorHarness', () => ({
-      createCliActionExecutorHarness: () => ({
-        executor: { execute: vi.fn() },
-      }),
-    }));
-    vi.doMock('@/mcp/server/registerHappierMcpBuiltInTools', () => ({
-      registerHappierMcpBuiltInTools: () => ({ toolNames: [] }),
-    }));
-
-    const { createHappierMcpServer } = await import('@/mcp/createHappierMcpServer');
-    createHappierMcpServer({
-      sessionId: 'session-1',
-      getServerBinding: getTestServerBinding,
-      rpcHandlerManager: { invokeLocal: async () => ({}) },
-      updateMetadata: () => {},
-      postAgentDiscussionMessage,
-    } as any, {
-      credentials: { token: 'token-1' } as any,
-    });
-
-    expect(capturedTransport).toBeTypeOf('function');
-    const signal = new AbortController().signal;
-    await capturedTransport!({
-      v: 1,
-      sessionId: 'session-1',
-      discussionId: 'discussion-1',
-      request: {
-        localId: 'message-1',
-        content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'Done' }] } },
-        mentionedAccountIds: [],
-      },
-      runId: 'run-1',
-      toolCallId: 'tool-1',
-    }, { signal });
-
-    expect(postAgentDiscussionMessage).toHaveBeenCalledWith({
-      discussionId: 'discussion-1',
-      request: expect.objectContaining({ localId: 'message-1' }),
-      runId: 'run-1',
-      toolCallId: 'tool-1',
-    }, { signal });
-  }, 60_000);
-
-  it('uses the live session permission mode for session-agent action execution instead of stale metadata', async () => {
-    const executorExecute = vi.fn(async (actionId: string, input: unknown, ctx: unknown) => ({
-      ok: true,
-      result: { actionId, input, ctx },
-    }));
-    const captured: { deps?: any } = {};
-
-    vi.doMock('@/session/actions/createCliActionExecutorHarness', () => ({
-      createCliActionExecutorHarness: () => ({
-        executor: {
-          execute: executorExecute,
-        },
-      }),
-    }));
-
-    vi.doMock('@/mcp/server/registerHappierMcpBuiltInTools', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('@/mcp/server/registerHappierMcpBuiltInTools')>();
-      return {
-        ...actual,
-        registerHappierMcpBuiltInTools: (_server: any, params: any) => {
-          captured.deps = params.deps;
-          return { toolNames: [] };
-        },
-      };
-    });
-
-    const { createHappierMcpServer } = await import('@/mcp/createHappierMcpServer');
-
-    createHappierMcpServer({
-      sessionId: 'sess_mcp_live_permission_1',
-      getServerBinding: getTestServerBinding,
-      rpcHandlerManager: { invokeLocal: async () => ({}) },
-      updateMetadata: () => {},
-      getMetadataSnapshot: () => ({ permissionMode: 'default', permissionModeUpdatedAt: 1 }),
-      getPermissionMode: () => 'yolo',
-    } as any);
-
-    expect(captured.deps).toBeDefined();
-    await captured.deps.executeActionByToolName('action_execute', {
-      actionId: 'session.spawn_new',
-      input: { permissionMode: 'bypassPermissions' },
-    }, 'sess_mcp_live_permission_1');
-
-    expect(executorExecute).toHaveBeenLastCalledWith(
-      'session.spawn_new',
-      { permissionMode: 'bypassPermissions' },
-      expect.objectContaining({
-        callerPermissionMode: 'yolo',
-      }),
-    );
+    }), { requiredDirectActionIds: ['session.transcript.get'], sessionInputVia: 'action' });
+    try {
+      await runtime.executeTool({ toolName: 'action_execute', args: {
+        actionId: 'session.spawn_new', input: { prompt: 'Spawn a helper' },
+      }, toolCallId: 'native_tool_call_1' });
+      await runtime.executeTool({ toolName: 'session_transcript_get', args: { limit: 10 },
+        toolCallId: 'native_tool_call_2' });
+      expect(operations).toMatchObject([
+        { kind: 'action.execute', actionId: 'session.spawn_new', input: { prompt: 'Spawn a helper' },
+          toolCallId: 'native_tool_call_1', surface: 'agent', witness: { turnId: 'native-turn',
+            callerPermissionMode: 'yolo', causalPermissionAuthority,
+            agentStartCaller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 } } },
+        { kind: 'action.execute', actionId: 'session.transcript.get',
+          input: { sessionId, limit: 10 }, toolCallId: 'native_tool_call_2', surface: 'agent' },
+      ]);
+    } finally { await runtime.mcp.close(); await daemon.close(); }
   });
 
   it('passes the live session backend target into action executor deps', async () => {
@@ -1532,356 +1297,53 @@ describe('createHappierMcpServer', () => {
     });
   });
 
-  it('forwards execution.run.list request payloads through the shared action executor deps', async () => {
-    const captured: { deps?: any } = {};
 
-    vi.doMock('@happier-dev/protocol', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('@happier-dev/protocol')>();
-      return {
-        ...actual,
-        createActionExecutor: (deps: any) => {
-          captured.deps = deps;
-          return {} as any;
-        },
-      };
-    });
 
-    const { createHappierMcpServer } = await import('@/mcp/createHappierMcpServer');
 
-    const invokeLocal = vi.fn(async (_method: string, params: unknown) => params);
-    createHappierMcpServer({
-      sessionId: 'sess_mcp_payload_1',
-      getServerBinding: getTestServerBinding,
-      rpcHandlerManager: { invokeLocal },
-      updateMetadata: () => {},
-    } as any);
-
-    expect(captured.deps).toBeDefined();
-    await captured.deps.executionRunList('sess_mcp_payload_1', { status: 'running' });
-    expect(invokeLocal).toHaveBeenCalledWith('execution.run.list', { status: 'running' });
-  });
-
-  it('prefers the session execution-run service when the client provides one', async () => {
-    const captured: { deps?: any } = {};
-
-    vi.doMock('@happier-dev/protocol', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('@happier-dev/protocol')>();
-      return {
-        ...actual,
-        createActionExecutor: (deps: any) => {
-          captured.deps = deps;
-          return {} as any;
-        },
-      };
-    });
-
-    const { createHappierMcpServer } = await import('@/mcp/createHappierMcpServer');
-
-    const invokeLocal = vi.fn(async (_method: string, params: unknown) => params);
-    const list = vi.fn(async () => ({ ok: true, data: { runs: [{ runId: 'run_1' }] } }));
-    createHappierMcpServer({
-      sessionId: 'sess_mcp_payload_2',
-      getServerBinding: getTestServerBinding,
-      rpcHandlerManager: { invokeLocal },
-      updateMetadata: () => {},
-      executionRuns: {
-        start: vi.fn(),
-        list,
-        get: vi.fn(),
-        send: vi.fn(),
-        stop: vi.fn(),
-        action: vi.fn(),
-      },
-    } as any);
-
-    expect(captured.deps).toBeDefined();
-    await captured.deps.executionRunList('sess_mcp_payload_2', { status: 'running' });
-    expect(list).toHaveBeenCalledWith({ status: 'running' });
-    expect(invokeLocal).not.toHaveBeenCalled();
-  });
-
-  it('treats raw local execution-run rpc error payloads as errors in the fallback bridge', async () => {
-    const captured: { deps?: any } = {};
-
-    vi.doMock('@happier-dev/protocol', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('@happier-dev/protocol')>();
-      return {
-        ...actual,
-        createActionExecutor: (deps: any) => {
-          captured.deps = deps;
-          return {} as any;
-        },
-      };
-    });
-
-    const { createHappierMcpServer } = await import('@/mcp/createHappierMcpServer');
-
-    const invokeLocal = vi.fn(async () => ({
-      error: 'RPC method not available',
-      errorCode: 'RPC_METHOD_NOT_AVAILABLE',
-    }));
-    createHappierMcpServer({
-      sessionId: 'sess_mcp_payload_3',
-      getServerBinding: getTestServerBinding,
-      rpcHandlerManager: { invokeLocal },
-      updateMetadata: () => {},
-    } as any);
-
-    expect(captured.deps).toBeDefined();
-    await expect(captured.deps.executionRunList('sess_mcp_payload_3', { status: 'running' })).resolves.toEqual({
-      ok: false,
-      code: 'RPC_METHOD_NOT_AVAILABLE',
-      message: 'RPC method not available',
-    });
-  });
-
-  it('routes session control deps through the shared CLI action deps (not unsupported stubs)', async () => {
-    const captured: { deps?: any } = {};
-
-    vi.doMock('@happier-dev/protocol', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('@happier-dev/protocol')>();
-      return {
-        ...actual,
-        createActionExecutor: (deps: any) => {
-          captured.deps = deps;
-          return {} as any;
-        },
-      };
-    });
-
-    const { createHappierMcpServer } = await import('@/mcp/createHappierMcpServer');
-
-    createHappierMcpServer({
-      sessionId: 'sess_mcp_session_control_1',
-      getServerBinding: getTestServerBinding,
-      rpcHandlerManager: { invokeLocal: async () => ({}) },
-      updateMetadata: () => {},
-    } as any);
-
-    expect(captured.deps).toBeDefined();
-    await expect(
-      captured.deps.sessionList({ limit: 1, cursor: null, activeOnly: false, archivedOnly: false, includeSystem: false, resumableOnly: false }),
-    ).resolves.toEqual({ ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' });
-  });
 
   it('dispatches registered tools using the agent surface (internal MCP)', async () => {
-    const captured: { surface?: string } = {};
-    const handlers: Record<string, (args: any) => Promise<any>> = {};
-
-    vi.doMock('@modelcontextprotocol/sdk/server/mcp.js', () => ({
-      McpServer: class FakeMcpServer {
-        registerResource() {}
-        registerTool(name: string, _meta: any, handler: any) {
-          handlers[name] = handler;
-        }
-      },
+    const settings = accountSettingsParse({ actionsSettingsV1: { v: 1, actions: {
+      'session.title.set': { disabledSurfaces: ['mcp'] },
+    } } });
+    await withTitleHost('c111111111111111111111114', () => settings, async fixture => withMcpClient(fixture.runtime, async client => {
+      const accepted = CallToolResultSchema.parse(await client.callTool({ name: 'change_title', arguments: { title: 'Agent title' } }));
+      expect(accepted.isError, JSON.stringify(accepted)).not.toBe(true);
+      expect(fixture.readSharedMetadata()).toMatchObject({ summary: { text: 'Agent title' } });
     }));
-
-    vi.doMock('@/agent/tools/happierTools/dispatchBuiltInHappierTool', () => ({
-      dispatchBuiltInHappierTool: async (params: any) => {
-        captured.surface = params.surface;
-        return { ok: true, result: { ok: true } };
-      },
-    }));
-
-    const { createHappierMcpServer } = await import('@/mcp/createHappierMcpServer');
-
-    const fakeClient = {
-      sessionId: 'sess_mcp_surface_1',
-      getServerBinding: getTestServerBinding,
-      rpcHandlerManager: { invokeLocal: async () => ({}) },
-      updateMetadata: () => {},
-    } as any;
-
-    createHappierMcpServer(fakeClient);
-
-    expect(typeof handlers.change_title).toBe('function');
-    await handlers.change_title({ title: 'Hello' });
-    expect(captured.surface).toBe('agent');
   });
 
   it('routes change_title through the action executor (so approvals/enablement apply)', async () => {
-    const execute = vi.fn(async () => ({ ok: true, result: { ok: true } }));
-    const captured: { deps?: any } = {};
-
-    vi.doMock('@/session/actions/createCliActionExecutorHarness', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('@/session/actions/createCliActionExecutorHarness')>();
-      return {
-        ...actual,
-        createCliActionExecutorHarness: () => ({ executor: { execute } }),
-      };
+    const settings = accountSettingsParse({ actionsSettingsV1: { v: 1, actions: {
+      'session.title.set': { enabled: false },
+    } } });
+    await withTitleHost('c111111111111111111111115', () => settings, async fixture => {
+      const result = await fixture.runtime.executeTool({ toolName: 'change_title', args: { title: 'Must not commit' } });
+      expect(result).toMatchObject({ ok: false, errorCode: 'action_disabled' });
+      expect(fixture.persistedWrites()).toBe(0);
     });
-
-    vi.doMock('@/mcp/server/registerHappierMcpBuiltInTools', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('@/mcp/server/registerHappierMcpBuiltInTools')>();
-      return {
-        ...actual,
-        registerHappierMcpBuiltInTools: (_server: any, params: any) => {
-          captured.deps = params.deps;
-          return { toolNames: [] };
-        },
-      };
-    });
-
-    const { createHappierMcpServer } = await import('@/mcp/createHappierMcpServer');
-    createHappierMcpServer(
-      {
-        sessionId: 'sess_change_title_1',
-        getServerBinding: getTestServerBinding,
-        rpcHandlerManager: { invokeLocal: async () => ({}) },
-        updateMetadata: () => {},
-      } as any,
-      { credentials: null },
-    );
-
-    expect(captured.deps).toBeDefined();
-    await captured.deps.changeTitle('sess_change_title_1', 'New title');
-    expect(execute).toHaveBeenCalledWith(
-      'session.title.set',
-      { sessionId: 'sess_change_title_1', title: 'New title' },
-      { surface: 'agent', defaultSessionId: 'sess_change_title_1' },
-    );
   });
 
-  it('does not perform a redundant metadata write after change_title commits', async () => {
-    const execute = vi.fn(async () => ({ ok: true, result: { ok: true } }));
-    const updateMetadata = vi.fn(() => {
-      throw new Error('local metadata sync failed');
+  it('commits a credentialless Session title through its daemon once without a redundant local write', async () => {
+    await withTitleHost('c111111111111111111111116', () => accountSettingsParse({}), async fixture => {
+      const path = process.env[HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY];
+      if (!path) throw new Error('Expected the Session daemon authority path');
+      const authority = await readCurrentRunnerAgentRuntimeDaemonServiceAuthority({
+        happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
+        path, expectedSessionId: 'c111111111111111111111116',
+      });
+      if (!authority) throw new Error('Expected current Session daemon authority');
+      const probe = await fetch(`http://127.0.0.1:${authority.httpPort}/`, { method: 'HEAD' });
+      expect(probe.status).toBe(404);
+      await withMcpClient(fixture.runtime, async client => {
+        const result = CallToolResultSchema.parse(await client.callTool({ name: 'change_title', arguments: { title: 'New title' } }));
+        expect(result.isError, JSON.stringify(result)).not.toBe(true);
+        const text = result.content.find(block => block.type === 'text');
+        expect(text?.type === 'text' ? JSON.parse(text.text) : null).toMatchObject({ success: true, title: 'New title' });
+      });
+      expect(fixture.readSharedMetadata()).toMatchObject({ summary: { text: 'New title' } });
+      expect(fixture.persistedWrites()).toBe(1);
+      expect(fixture.localWrites()).toBe(0);
     });
-    const captured: { deps?: any } = {};
-
-    vi.doMock('@/session/actions/createCliActionExecutorHarness', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('@/session/actions/createCliActionExecutorHarness')>();
-      return {
-        ...actual,
-        createCliActionExecutorHarness: () => ({ executor: { execute } }),
-      };
-    });
-
-    vi.doMock('@/mcp/server/registerHappierMcpBuiltInTools', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('@/mcp/server/registerHappierMcpBuiltInTools')>();
-      return {
-        ...actual,
-        registerHappierMcpBuiltInTools: (_server: any, params: any) => {
-          captured.deps = params.deps;
-          return { toolNames: [] };
-        },
-      };
-    });
-
-    const { createHappierMcpServer } = await import('@/mcp/createHappierMcpServer');
-    createHappierMcpServer(
-      {
-        sessionId: 'sess_change_title_refresh_1',
-        getServerBinding: getTestServerBinding,
-        rpcHandlerManager: { invokeLocal: async () => ({}) },
-        updateMetadata,
-      } as any,
-      { credentials: null },
-    );
-
-    expect(captured.deps).toBeDefined();
-    await expect(captured.deps.changeTitle('sess_change_title_refresh_1', 'New title')).resolves.toEqual({
-      success: true,
-      title: 'New title',
-    });
-    expect(updateMetadata).not.toHaveBeenCalled();
   });
 
-  it('routes direct-exposed execution_run_start through the shared action executor path', async () => {
-    const activeTurnAuthority = {
-      kind: 'admittedSessionInputV1',
-      admittedPermissionCeiling: 'default',
-    } as const;
-    const invokeLocal = vi.fn(async (method: string, params: unknown) => {
-      if (method === 'execution.run.start' || method === 'execution.run.send') {
-        return {
-          runId: 'run_1',
-          callId: 'call_1',
-          sidechainId: 'side_1',
-          request: params,
-        };
-      }
-      return {};
-    });
-    const captured: { deps?: any } = {};
-    const executorExecute = vi.fn(async (actionId: string, input: unknown, ctx: unknown) => ({
-      ok: true,
-      result: { actionId, input, ctx },
-    }));
-
-    vi.doMock('@/mcp/server/registerHappierMcpBuiltInTools', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('@/mcp/server/registerHappierMcpBuiltInTools')>();
-      return {
-        ...actual,
-        registerHappierMcpBuiltInTools: (_server: any, params: any) => {
-          captured.deps = params.deps;
-          return { toolNames: [] };
-        },
-      };
-    });
-    vi.doMock('@/session/actions/createCliActionExecutorHarness', () => ({
-      createCliActionExecutorHarness: () => ({
-        executor: {
-          execute: executorExecute,
-        },
-      }),
-    }));
-
-    const { createHappierMcpServer } = await import('@/mcp/createHappierMcpServer');
-    createHappierMcpServer(
-      {
-        sessionId: 'sess_execution_run_start_1',
-        getServerBinding: getTestServerBinding,
-        rpcHandlerManager: { invokeLocal },
-        updateMetadata: () => {},
-        // The mutable Session mode has widened since this turn was admitted.
-        getPermissionMode: () => 'yolo',
-        getActiveTurnPermissionWitness: () => ({
-          turnId: 'turn-active',
-          causalPermissionAuthority: activeTurnAuthority,
-        }),
-      } as any,
-      {
-        credentials: null,
-        accountSettings: {
-          actionsSettingsV1: {
-            v: 1,
-            actions: {
-              'execution.run.start': {
-                toolExposureModes: {
-                  agent: 'direct',
-                },
-              },
-            },
-          },
-        },
-      } as any,
-    );
-
-    expect(captured.deps).toBeDefined();
-    await captured.deps.executeActionByToolName('execution_run_start', {
-      intent: 'plan',
-      backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
-      instructions: 'Plan.',
-      permissionMode: 'read_only',
-      retentionPolicy: 'ephemeral',
-      runClass: 'bounded',
-      ioMode: 'request_response',
-    });
-    expect(executorExecute).toHaveBeenCalledWith('execution.run.start', expect.objectContaining({
-      intent: 'plan',
-      backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
-      instructions: 'Plan.',
-      permissionMode: 'read_only',
-      retentionPolicy: 'ephemeral',
-      runClass: 'bounded',
-      ioMode: 'request_response',
-    }), expect.objectContaining({
-      surface: 'agent',
-      callerPermissionMode: 'yolo',
-      causalPermissionAuthority: activeTurnAuthority,
-    }));
-    expect(invokeLocal).not.toHaveBeenCalled();
-  });
 });

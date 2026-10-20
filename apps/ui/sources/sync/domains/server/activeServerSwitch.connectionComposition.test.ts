@@ -4,36 +4,39 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
+
+installTokenStorageWebPlatformMocks();
+
+const initialNetwork = await installSessionOpsNetworkBoundary();
+await loadSyncSingletonForTests();
+await initialNetwork.dispose();
 
 describe('active focus transaction with the production connection manager and Sync', () => {
     let network: Awaited<ReturnType<typeof installSessionOpsNetworkBoundary>> | null = null;
+    let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | null = null;
+    let runtimeLoaded = false;
 
     afterEach(async () => {
         const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
-        await disconnectActiveServerConnection();
+        if (runtimeLoaded) await disconnectActiveServerConnection();
+        runtimeLoaded = false;
         const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
         const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
         serverScopedRpcSocketPool.resetForTests();
         resetScopedMachineTransportCacheForTests();
         await network?.dispose();
         network = null;
+        browser?.restore();
+        browser = null;
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
     });
 
     it('does not hand focused ownership to the next Home until full Sync applies the current Home', async () => {
         vi.resetModules();
-        const lockTails = new Map<string, Promise<void>>();
-        vi.stubGlobal('navigator', {
-            locks: {
-                request: <T>(name: string, callback: () => T | PromiseLike<T>): Promise<T> => {
-                    const previous = lockTails.get(name) ?? Promise.resolve();
-                    const result = previous.then(callback);
-                    lockTails.set(name, result.then(() => undefined, () => undefined));
-                    return result;
-                },
-            },
-        });
+        browser = await installBrowserRuntimeForTests({ url: 'https://app.happier.dev' });
         network = await installSessionOpsNetworkBoundary();
         const active = await network.addHome('https://active.example.test', 'active-account');
         const middle = await network.addHome('https://middle.example.test', 'middle-account');
@@ -63,6 +66,7 @@ describe('active focus transaction with the production connection manager and Sy
         const profiles = await import('./serverProfiles');
         await profiles.setActiveServerId(active.id, { scope: 'device' });
         await loadSyncSingletonForTests();
+        runtimeLoaded = true;
         const connection = await import('@/sync/runtime/orchestration/connectionManager');
         await connection.restoreConnectionToActiveServer({ token: active.token });
         const switches = await import('./activeServerSwitch');

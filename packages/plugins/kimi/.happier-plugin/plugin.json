@@ -142,7 +142,7 @@
                       "-Command",
                       "Invoke-RestMethod https://code.kimi.com/kimi-code/install.ps1 | Invoke-Expression"
                     ],
-                    "cmd": "powershell"
+                    "cmd": "powershell.exe"
                   }
                 ]
               }
@@ -262,6 +262,7 @@
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [
       {
         "executableNames": [
@@ -434,6 +435,7 @@
     "voiceModelPacks": [],
     "voiceProviders": [],
     "webhooks": [],
+    "workItems": [],
     "workflows": []
   },
   "displayName": "Kimi",

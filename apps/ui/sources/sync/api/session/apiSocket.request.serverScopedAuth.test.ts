@@ -92,7 +92,6 @@ describe('apiSocket.request server-scoped credentials', () => {
     });
 
     afterEach(async () => {
-        delete process.env.EXPO_PUBLIC_HAPPIER_SERVER_REACHABILITY_WAIT_TIMEOUT_MS;
         try {
             const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
             await resetServerReachabilitySupervisors();
@@ -486,8 +485,6 @@ describe('apiSocket.request server-scoped credentials', () => {
     });
 
     it('gates requests behind server reachability (does not attempt request while unreachable)', async () => {
-        process.env.EXPO_PUBLIC_HAPPIER_SERVER_REACHABILITY_WAIT_TIMEOUT_MS = '5';
-
         const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
             const url = typeof input === 'string' ? input : String(input);
             // "The network is down" must fail every readiness route: an authenticated client probes
@@ -507,8 +504,8 @@ describe('apiSocket.request server-scoped credentials', () => {
         const { apiSocket } = await import('./apiSocket');
         (apiSocket as any).config = { endpoint: 'https://stack.example.test', token: 'unused' };
 
-        await expect(apiSocket.request('/v1/ping')).rejects.toMatchObject({
-            name: 'ServerFetchConnectivityTimeoutError',
+        await expect(apiSocket.request('/v1/ping', undefined, { timeoutMs: 5 })).rejects.toMatchObject({
+            name: 'ServerFetchWriteTimeoutError',
         });
 
         const pingCalls = fetchMock.mock.calls.filter(([input]) => String(input).includes('/v1/ping'));
@@ -516,8 +513,6 @@ describe('apiSocket.request server-scoped credentials', () => {
     }, longTimeoutMs);
 
     it('keeps a prepared socket target behind reachability supervision', async () => {
-        process.env.EXPO_PUBLIC_HAPPIER_SERVER_REACHABILITY_WAIT_TIMEOUT_MS = '5';
-
         const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
             const url = String(input);
             if (url.endsWith('/health') || url.endsWith('/v1/auth/ping')) {
@@ -538,8 +533,8 @@ describe('apiSocket.request server-scoped credentials', () => {
             generation: 7,
         });
 
-        await expect(apiSocket.request('/v1/ping')).rejects.toMatchObject({
-            name: 'ServerFetchConnectivityTimeoutError',
+        await expect(apiSocket.request('/v1/ping', undefined, { timeoutMs: 5 })).rejects.toMatchObject({
+            name: 'ServerFetchWriteTimeoutError',
         });
 
         const applicationCalls = fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/v1/ping'));

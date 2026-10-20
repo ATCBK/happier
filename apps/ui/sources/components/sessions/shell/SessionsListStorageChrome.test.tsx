@@ -6,19 +6,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { ITEM_GROUP_HEADER_NO_TITLE_PADDING_TOP_PX } from '@/components/ui/lists/itemGroupSpacing';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { storage } from '@/sync/domains/state/storageStore';
+import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import { resolveSessionListDensityViewState } from './resolveSessionListDensityViewState';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const routerPushSpy = vi.hoisted(() => vi.fn());
-// The one `sessions.direct` decision the Sessions list and its destinations read.
-const externalSessionsState = vi.hoisted(() => ({ enabled: true }));
-
-vi.mock('@/hooks/server/useFeatureDecision', () => ({
-    useFeatureDecision: (featureId: string) => (featureId === 'sessions.direct' && externalSessionsState.enabled
-        ? { featureId, state: 'enabled' }
-        : null),
-}));
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -60,6 +54,14 @@ vi.mock('@/components/ui/lists/Item', () => ({
     Item: (props: any) => React.createElement('Item', props, props.children),
 }));
 
+const runtime = installSessionPaneRuntimeTestHarness({ scopeId: 'app' });
+
+function setExternalSessionsEnabled(enabled: boolean) {
+    storage.setState({ settings: { ...storage.getState().settings, featureToggles: {
+        ...storage.getState().settings.featureToggles, 'sessions.direct': enabled,
+    } } });
+}
+
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (Array.isArray(style)) {
         return Object.assign({}, ...style.map((entry) => flattenStyle(entry)));
@@ -72,13 +74,14 @@ describe('SessionsListStorageChrome', () => {
     beforeEach(() => {
         standardCleanup();
         routerPushSpy.mockReset();
-        externalSessionsState.enabled = true;
+        setExternalSessionsEnabled(true);
     });
 
     it('renders the external browse action above every unified-list filter and routes it to the canonical browse screen', async () => {
         const { SessionsListStorageChrome } = await import('./SessionsListStorageChrome');
         const screen = await renderScreen(
-            <SessionsListStorageChrome storageKind="all" />,
+            <SessionsListStorageChrome storageKind="all" column="sessions" />,
+            { wrapper: runtime.Wrapper },
         );
 
         const itemGroups = screen.findAllByType('ItemGroup' as never);
@@ -131,10 +134,11 @@ describe('SessionsListStorageChrome', () => {
     });
 
     it('hides only the external browse action when the feature is disabled', async () => {
-        externalSessionsState.enabled = false;
+        setExternalSessionsEnabled(false);
         const { SessionsListStorageChrome } = await import('./SessionsListStorageChrome');
         const screen = await renderScreen(
-            <SessionsListStorageChrome storageKind="all" />,
+            <SessionsListStorageChrome storageKind="all" column="sessions" />,
+            { wrapper: runtime.Wrapper },
         );
 
         expect(screen.findAllByProps({ testID: 'external-sessions-browse-button' })).toHaveLength(0);

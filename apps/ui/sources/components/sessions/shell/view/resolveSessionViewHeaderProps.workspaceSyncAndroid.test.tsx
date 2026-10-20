@@ -76,7 +76,7 @@ describe('resolveSessionViewHeaderProps workspace sync on Android', () => {
             statusErrorColor: '#f00',
             externalSessionRuntime: null,
             onOpenWorkspaceSyncConflicts: () => {},
-        };
+        } satisfies Parameters<typeof resolveSessionViewHeaderProps>[0];
         const labels = (attention: Readonly<{ conflictedLinkCount: number; unknownLinkCount: number }>) => {
             const result = resolveSessionViewHeaderProps({ ...base, workspaceSyncAttention: attention });
             return React.Children.toArray(

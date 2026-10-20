@@ -4,7 +4,7 @@ import type { ReviewCommentActorRefV1 } from '@happier-dev/protocol/reviews/comm
 import type { ReviewCommentPrincipalHeaderV1 } from '@happier-dev/protocol/reviews/comments/actions';
 import type { z } from "zod/mini";
 import { GENERAL_PLUGIN_PERMISSION_SUBJECT_V1 } from '@happier-dev/protocol/plugins/permissions/grants';
-import { createReviewCommentPrincipalSigningInputV1, REVIEW_COMMENT_PRINCIPAL_HEADER_V1, ReviewCommentBulkTransitionRequestV1Schema, ReviewCommentGetRequestV1Schema, ReviewCommentListRequestV1Schema, ReviewCommentPrincipalHeaderV1Schema, stringifyReviewCommentPrincipalCanonicalJsonV1 } from '@happier-dev/protocol/reviews/comments/actions';
+import { createReviewCommentPrincipalSigningInputV1, isWorkflowSessionScopeTargetV1, readWorkflowActionInvocationV1, REVIEW_COMMENT_PRINCIPAL_HEADER_V1, ReviewCommentBulkTransitionRequestV1Schema, ReviewCommentGetRequestV1Schema, ReviewCommentListRequestV1Schema, ReviewCommentPrincipalHeaderV1Schema, stringifyReviewCommentPrincipalCanonicalJsonV1 } from '@happier-dev/protocol/reviews/comments/actions';
 import { REVIEW_COMMENT_DIRECT_WRITE_SCOPE_V1, ReviewCommentAttachEvidenceRequestV1Schema, ReviewCommentCreateRequestV1Schema, ReviewCommentEditRequestV1Schema, ReviewCommentRedactRequestV1Schema, ReviewCommentReplyRequestV1Schema, ReviewCommentSetDispositionRequestV1Schema, ReviewCommentTransitionRequestV1Schema } from '@happier-dev/protocol/reviews/comments/v1';
 import { ReviewCommentPublicationTransportRequestV1Schema } from '@happier-dev/protocol/reviews/comments/publicationTransport';
 import { ReviewCommentPrepareMutationRequestV1Schema, ReviewCommentCommitMutationRequestV1Schema } from '@happier-dev/protocol/reviews/comments/mutation';
@@ -26,7 +26,7 @@ import { resolveTrustedPluginPermissionGrants } from "@/app/plugins/permissions/
 import { workflowRunIdentityWhere } from "@/app/workflows/workflowRunService";
 import { resolveSessionAccessForOperation } from "@/app/session/access/sessionAccess";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
-import { readSessionLedSubtreeSessionIdsInTx } from "@/app/session/relations/sessionReportsToSubtree";
+import { readSessionManagedSubtreeSessionIdsInTx } from "@/app/session/follow/sessionManagerSubtree";
 import { resolveEffectiveSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 
 const DEFAULT_REVIEW_COMMENT_PRINCIPAL_PROOF_MAX_AGE_MS = 5 * 60_000;
@@ -133,6 +133,7 @@ async function verifyReviewCommentPrincipalHeader(params: Readonly<{
 }>): Promise<Readonly<{
     actor: ReviewCommentActorRefV1;
     currentIntent?: ReviewCommentPrincipalHeaderV1["currentIntent"];
+    workflowScope?: ReviewCommentPrincipalHeaderV1["workflowScope"];
     machineId: string;
     installationId: string;
 }>> {
@@ -219,6 +220,7 @@ async function verifyReviewCommentPrincipalHeader(params: Readonly<{
         createReviewCommentPrincipalSigningInputV1({
             actor: params.headerPrincipal.actor,
             ...(currentIntent ? { currentIntent } : {}),
+            ...(params.headerPrincipal.workflowScope ? { workflowScope: params.headerPrincipal.workflowScope } : {}),
             proof: {
                 v: proof.v,
                 alg: proof.alg,
@@ -243,6 +245,7 @@ async function verifyReviewCommentPrincipalHeader(params: Readonly<{
     return {
         actor: params.headerPrincipal.actor,
         ...(currentIntent ? { currentIntent } : {}),
+        ...(params.headerPrincipal.workflowScope ? { workflowScope: params.headerPrincipal.workflowScope } : {}),
         machineId: proof.machineId,
         installationId: proof.installationId,
     };
@@ -297,19 +300,44 @@ async function resolveDefaultPrincipal(request: Parameters<ReviewCommentRoutePri
         }) : null;
     const scopeSessionId = actor.kind === "agent" ? actor.sessionId
         : actor.kind === "workflow" ? workflow?.originSessionId : null;
+    const workflowScope = verifiedHeaderPrincipal?.workflowScope;
+    if (actor.kind === "workflow") {
+        // The installed host may attest only for its assigned Run. Account
+        // credentials or another installed Machine do not confer Run authority.
+        if (!workflow || !verifiedHeaderPrincipal || workflow.assignments[0]?.machineId !== verifiedHeaderPrincipal.machineId
+            || (workflow.claimedByMachineId !== null && workflow.claimedByMachineId !== verifiedHeaderPrincipal.machineId)) {
+            throw new ReviewCommentOperationError("review_comment_permission_denied", "Workflow review host is unavailable");
+        }
+        if (workflowScope) {
+            const identity = readWorkflowActionInvocationV1(actor.runId, workflowScope.actionRequestId);
+            const [logical, invocation] = identity ? await Promise.all([
+                db.workflowRunInvocation.findFirst({ where: { id: identity.logicalInvocationId, runId: actor.runId },
+                    select: { parentRecordId: true, memberOrdinal: true } }),
+                db.workflowRunInvocation.findFirst({ where: { id: workflowScope.invocationId, runId: actor.runId },
+                    select: { parentRecordId: true, memberOrdinal: true, attempt: true, lifecycle: true } }),
+            ]) : [null, null];
+            if (!identity || !logical || !invocation || invocation.attempt.toString() !== identity.attempt
+                || invocation.lifecycle === "superseded" || invocation.parentRecordId !== logical.parentRecordId
+                || invocation.memberOrdinal !== logical.memberOrdinal) {
+                throw new ReviewCommentOperationError("review_comment_permission_denied", "Workflow review invocation is unavailable");
+            }
+        }
+    }
     const workflowMaterialization = actor.kind === "workflow" && verifiedHeaderPrincipal?.currentIntent?.kind === "review_findings_materialization";
     if (workflowMaterialization && verifiedHeaderPrincipal) {
         const body = canonicalRequest?.mutation.actionId === "reviews.comments.create" ? canonicalRequest.mutation.input : ReviewCommentCreateRequestV1Schema.parse(request.body);
         if (!workflow || workflow.assignments[0]?.machineId !== verifiedHeaderPrincipal.machineId
             || (workflow.claimedByMachineId !== null && workflow.claimedByMachineId !== verifiedHeaderPrincipal.machineId)
             || body.workspace?.machineId !== verifiedHeaderPrincipal.machineId
-            || (body.sessionId !== undefined && body.sessionId !== scopeSessionId)) {
+            || (body.sessionId !== undefined && !isWorkflowSessionScopeTargetV1({
+                originSessionId: scopeSessionId, scope: workflowScope, sessionId: body.sessionId,
+            }))) {
             throw new ReviewCommentOperationError("review_comment_permission_denied", "Workflow finding materialization does not match its assigned host");
         }
     }
     let ledSubtreeSessionIds: string[] | undefined;
     if (actor.kind === "agent" || actor.kind === "workflow") {
-        if ((!scopeSessionId && !workflowMaterialization) || !request.authAuthority) {
+        if ((!scopeSessionId && !workflowScope?.sessions.length && !workflowMaterialization) || !request.authAuthority) {
             throw new ReviewCommentOperationError("review_comment_permission_denied", "Verified Session review authority is unavailable");
         }
         const access = scopeSessionId ? await resolveSessionAccessForOperation(db, {
@@ -321,11 +349,21 @@ async function resolveDefaultPrincipal(request: Parameters<ReviewCommentRoutePri
         if (access && access.status !== "allowed") {
             throw new ReviewCommentOperationError("review_comment_permission_denied", "Session review access is unavailable");
         }
+        for (const address of workflowScope?.sessions ?? []) {
+            const current = await resolveSessionAccessForOperation(db, {
+                accountId: request.userId, sessionId: address.sessionId,
+                authentication: readSessionAccessAuthenticationFromRequest(request),
+                capability: request.method === "GET" ? "readTranscript" : "submitAgentInput",
+            });
+            if (current.status !== "allowed") {
+                throw new ReviewCommentOperationError("review_comment_permission_denied", "Workflow review Session access is unavailable");
+            }
+        }
         if (actor.kind === "agent" && (request.method === "GET"
             || request.path?.endsWith("/transition") || request.path?.endsWith("/disposition")
             || canonicalRequest?.mutation.actionId === "reviews.comments.transition" || canonicalRequest?.mutation.actionId === "reviews.comments.setDisposition" || canonicalRequest?.mutation.actionId === "reviews.comments.bulkTransition")) {
             const authentication = readSessionAccessAuthenticationFromRequest(request);
-            ledSubtreeSessionIds = await readSessionLedSubtreeSessionIdsInTx(db, {
+            ledSubtreeSessionIds = await readSessionManagedSubtreeSessionIdsInTx(db, {
                 accountId: request.userId, rootSessionId: actor.sessionId, authentication,
             });
             if (request.method !== "GET") {
@@ -358,6 +396,7 @@ async function resolveDefaultPrincipal(request: Parameters<ReviewCommentRoutePri
         accountId: request.userId,
         actor,
         ...(actor.kind === "workflow" && scopeSessionId ? { workflowOriginSessionId: scopeSessionId } : {}),
+        ...(actor.kind === "workflow" && workflowScope ? { workflowScope } : {}),
         ...(ledSubtreeSessionIds ? { ledSubtreeSessionIds } : {}),
         grants: trustedGrants.map((grant) => grant.capability),
         ...(verifiedHeaderPrincipal?.currentIntent ? { currentIntent: verifiedHeaderPrincipal.currentIntent } : {}),

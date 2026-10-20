@@ -1,4 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
+import { lstat } from 'node:fs/promises';
+import { join } from 'node:path';
+import { resolveVerifiedNativeHomePath } from '@happier-dev/plugin-sdk/fs';
 
 import { ConnectedServiceIdSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { ExternalSessionAgentIdSchema, ExternalSessionRefSchema, ExternalSessionSourceIdSchema } from '@happier-dev/protocol/sessions/external/sourceCatalog';
@@ -21,7 +24,7 @@ import { isAgentExternalSessionsFailureCode } from '@happier-dev/plugin-sdk/sess
 
 import type { ResolvedAgentRichDefinition } from '@/plugins/projection/registry/types';
 import { logger } from '@/ui/logger';
-import { resolveCatalogAgentId } from '@/agent/catalog/resolution';
+import type { AgentCatalogEntry } from '@/agent/catalog/types';
 import { resolveConnectedServiceMaterializedHomeRoot } from '@/daemon/connectedServices/catalogHooks';
 import { canonicalAbsolutePathsEqual } from '@/utils/path/expandHomeDirPath';
 import {
@@ -81,6 +84,8 @@ export type ConfiguredExternalSessionSourceAgentContribution = Readonly<{
   id: string;
   identity?: PluginContributionIdentityV1;
   richDefinition?: ResolvedAgentRichDefinition;
+  /** Executable facts carried by the same retained generation, when applicable. */
+  catalogEntry?: AgentCatalogEntry | null;
 }>;
 
 export type ConfiguredExternalSessionSourceAccountProjection = Pick<AccountProfile, 'connectedServicesV2'>;
@@ -219,12 +224,14 @@ export function configuredExternalSessionSourcesUseConnectedProfiles(
  * mismatched caller path would let a request address a directory the account's
  * connected-service namespace never admitted.
  */
-export function resolveConfiguredExternalSessionSourceAtAdmission(params: Readonly<{
+export async function resolveConfiguredExternalSessionSourceAtAdmission(params: Readonly<{
   agents: readonly ConfiguredExternalSessionSourceAgentContribution[];
   activeServerDir?: string;
   agentId: string;
   source: unknown;
-}>): ResolvedExternalSessionSourceProjection {
+  /** Executable facts acquired under the caller's current runtime lease. */
+  catalogEntry: AgentCatalogEntry | null;
+}>): Promise<ResolvedExternalSessionSourceProjection> {
   const projection = { agents: params.agents };
   const resolved = resolveExternalSessionSourceFromAgentProjection(
     projection,
@@ -246,7 +253,8 @@ export function resolveConfiguredExternalSessionSourceAtAdmission(params: Readon
   if (!acceptsMaterializedHome) return resolved;
 
   const activeServerDir = params.activeServerDir?.trim();
-  const catalogAgentId = resolveCatalogAgentId(params.agentId);
+  const catalogAgentId = params.catalogEntry?.id === params.agentId
+    ? params.catalogEntry.id : null;
   const serviceId = ConnectedServiceIdSchema.safeParse(connectedProfile.profile.serviceId);
   if (!activeServerDir || !catalogAgentId || !serviceId.success) {
     return { ok: false, code: 'source_invalid' };
@@ -255,28 +263,46 @@ export function resolveConfiguredExternalSessionSourceAtAdmission(params: Readon
     activeServerDir,
     serviceId: serviceId.data,
     profileId: connectedProfile.profile.profileId,
-  });
+  }, params.catalogEntry);
   if (!homePath) return { ok: false, code: 'source_invalid' };
 
+  // The host owns the namespace. Checking only the final directory in a
+  // plugin misses profile/service/Agent ancestor links. The entire homes
+  // root may be relocated; declared shared state inside a home may be linked.
+  const exists = await lstat(homePath).then(() => true, (error: unknown) => {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return false;
+    throw error;
+  }).catch(() => null);
+  const grantedHomePath = exists ? await resolveVerifiedNativeHomePath({
+    homesRoot: join(activeServerDir, 'daemon', 'connected-services', 'homes'),
+    expectedPath: homePath,
+  }) : homePath;
+  if (exists === null || !grantedHomePath) return { ok: false, code: 'source_invalid' };
+  // Missing homes have no readable corpus. Preserve the native contribution's
+  // retryable unavailable result for a profile that has never been launched.
   const requestedHomePath = (resolved.source as Record<string, unknown>).homePath;
   if (
     typeof requestedHomePath === 'string'
     && requestedHomePath.trim().length > 0
     && !canonicalAbsolutePathsEqual(requestedHomePath, homePath)
-  ) {
-    return { ok: false, code: 'source_invalid' };
-  }
+    && !canonicalAbsolutePathsEqual(requestedHomePath, grantedHomePath)
+  ) return { ok: false, code: 'source_invalid' };
 
+  // Retain the verified physical read root, including through configured and
+  // retained adapters. Re-resolving its lexical ancestors later can redirect
+  // reads when a relocated homes root is repointed after admission.
   const stamped = resolveExternalSessionSourceFromAgentProjection(
     projection,
     params.agentId,
-    Object.freeze({ ...resolved.source, homePath }),
+    Object.freeze({ ...resolved.source, homePath: grantedHomePath }),
   );
   return stamped.ok ? stamped : { ok: false, code: 'source_invalid' };
 }
 
 export async function resolveConfiguredExternalSessionFollowTarget(params: Readonly<{
   agents: readonly ConfiguredExternalSessionSourceAgentContribution[];
+  /** Acquired from the same registry occurrence as the provider operations. */
+  resolveCatalogEntry: (agentId: string) => Promise<AgentCatalogEntry | null>;
   account: ConfiguredExternalSessionSourceAccountProjection;
   agentSettings?: unknown;
   activeServerId?: string | null;
@@ -353,11 +379,12 @@ export async function resolveConfiguredExternalSessionFollowTarget(params: Reado
             agentSettings: params.agentSettings,
             activeServerId: params.activeServerId ?? null,
           }),
-          resolveSource: (agentId, source) => resolveConfiguredExternalSessionSourceAtAdmission({
+          resolveSource: async (agentId, source) => resolveConfiguredExternalSessionSourceAtAdmission({
             agents: params.agents,
             ...(params.activeServerDir ? { activeServerDir: params.activeServerDir } : {}),
             agentId,
             source,
+            catalogEntry: await params.resolveCatalogEntry(agentId),
           }),
           resolveProviderOps,
           signal: operationSignal,
@@ -791,6 +818,8 @@ function readAuthorFollowEvent(
 
 export async function createConfiguredPluginExternalSessionsAdapter(params: Readonly<{
   agents: readonly ConfiguredExternalSessionSourceAgentContribution[];
+  /** Acquired from the same registry occurrence as the provider operations. */
+  resolveCatalogEntry: (agentId: string) => Promise<AgentCatalogEntry | null>;
   account: ConfiguredExternalSessionSourceAccountProjection;
   agentSettings?: unknown;
   activeServerId?: string | null;
@@ -835,11 +864,12 @@ export async function createConfiguredPluginExternalSessionsAdapter(params: Read
       agentSettings: params.agentSettings,
       activeServerId: params.activeServerId ?? null,
     }),
-    resolveSource: (agentId, source) => resolveConfiguredExternalSessionSourceAtAdmission({
+    resolveSource: async (agentId, source) => resolveConfiguredExternalSessionSourceAtAdmission({
       agents: params.agents,
       ...(params.activeServerDir ? { activeServerDir: params.activeServerDir } : {}),
       agentId,
       source,
+      catalogEntry: await params.resolveCatalogEntry(agentId),
     }),
     resolveProviderOps,
   });
@@ -1540,6 +1570,7 @@ const EMPTY_CANDIDATE_INDEX_IDENTITIES: readonly ConfiguredExternalSessionCandid
 
 export async function createLiveConfiguredPluginExternalSessionsAdapter(params: Readonly<{
   agents: readonly ConfiguredExternalSessionSourceAgentContribution[];
+  resolveCatalogEntry: (agentId: string) => Promise<AgentCatalogEntry | null>;
   readAccount: () => Promise<ConfiguredExternalSessionSourceAccountProjection>;
   readAgentSettings?: () => unknown;
   activeServerId?: string | null;
@@ -1568,6 +1599,7 @@ export async function createLiveConfiguredPluginExternalSessionsAdapter(params: 
   ): void;
 }>): Promise<LiveConfiguredPluginExternalSessionsAdapter> {
   let disposed = false;
+  const lifecycleRetirement = new AbortController();
   let lifecycleRevision = 0;
   const readAccountRevision = (): string | null => {
     try {
@@ -1606,6 +1638,7 @@ export async function createLiveConfiguredPluginExternalSessionsAdapter(params: 
     const retirement = new AbortController();
     const next = await createConfiguredPluginExternalSessionsAdapter({
       agents: params.agents,
+      resolveCatalogEntry: params.resolveCatalogEntry,
       account,
       agentSettings: params.readAgentSettings?.(),
       activeServerId: params.activeServerId ?? null,
@@ -1773,6 +1806,44 @@ export async function createLiveConfiguredPluginExternalSessionsAdapter(params: 
       : 'plugin_external_sources_reconfiguring';
     throw new PluginError({ code, message: code }, rebuildFailureCause());
   };
+  const currentForFollow = async (
+    signal?: AbortSignal,
+  ): Promise<ConfiguredPluginExternalSessionsComposition> => {
+    synchronizeRevision();
+    if (active) return active;
+    if (disposed || params.isCurrent() !== true) return current();
+    const worker = rebuildWorker ?? (pendingRebuild ? ensureRebuildWorker() : null);
+    if (!worker) return current();
+    const waitSignal = signal
+      ? AbortSignal.any([signal, lifecycleRetirement.signal])
+      : lifecycleRetirement.signal;
+    if (waitSignal.aborted) {
+      const code = signal?.aborted
+        ? 'plugin_operation_aborted'
+        : 'plugin_generation_retired';
+      throw new PluginError({ code, message: code });
+    }
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = (): void => {
+        const code = signal?.aborted
+          ? 'plugin_operation_aborted'
+          : 'plugin_generation_retired';
+        reject(new PluginError({ code, message: code }));
+      };
+      waitSignal.addEventListener('abort', onAbort, { once: true });
+      void worker.then(
+        () => {
+          waitSignal.removeEventListener('abort', onAbort);
+          resolve();
+        },
+        (error: unknown) => {
+          waitSignal.removeEventListener('abort', onAbort);
+          reject(error);
+        },
+      );
+    });
+    return current();
+  };
   const bindAuthorService = (
     contextualTakeover?: ContextualExternalSessionTakeoverAdapter,
     isPublicLinkAdmissionAvailable?: () => boolean,
@@ -1789,6 +1860,19 @@ export async function createLiveConfiguredPluginExternalSessionsAdapter(params: 
         );
       }
       return boundService;
+    };
+    const currentBoundForFollow = async (
+      signal?: AbortSignal,
+    ): Promise<HostExternalSessionsAuthorService> => {
+      const owner = await currentForFollow(signal);
+      if (owner === boundOwner && boundService) return boundService;
+      const service = owner.bindAuthorService(
+        contextualTakeover,
+        isPublicLinkAdmissionAvailable,
+      );
+      boundOwner = owner;
+      boundService = service;
+      return service;
     };
     return Object.freeze({
     capabilities: async (options?: PluginCancellationOptions) => {
@@ -1820,7 +1904,8 @@ export async function createLiveConfiguredPluginExternalSessionsAdapter(params: 
       options: AuthorFollowOptions,
       listener: AuthorFollowListener,
     ) => (
-      await currentBound().followTranscript(ref, options, listener)
+      await (await currentBoundForFollow(options?.signal))
+        .followTranscript(ref, options, listener)
     ),
     takeover: async (
       ref: AuthorTakeoverRef,
@@ -1844,14 +1929,21 @@ export async function createLiveConfiguredPluginExternalSessionsAdapter(params: 
     current().admitPersistedTakeoverSource(input)
   );
   const compositionPort: ExternalSessionsCompositionPort = Object.freeze({
-    resolveSourceIdentity: async (input: CompositionResolveIdentityInput) => await current().compositionPort.resolveSourceIdentity(input),
-    resolveFollowTarget: async (input: CompositionResolveInput) => await current().compositionPort.resolveFollowTarget(input),
+    resolveSourceIdentity: async (input: CompositionResolveIdentityInput) => (
+      await (await currentForFollow(input.signal))
+        .compositionPort.resolveSourceIdentity(input)
+    ),
+    resolveFollowTarget: async (input: CompositionResolveInput) => (
+      await (await currentForFollow(input.signal))
+        .compositionPort.resolveFollowTarget(input)
+    ),
     followTranscript: async (
       target: CompositionFollowTarget,
       options: CompositionFollowOptions,
       listener: CompositionFollowListener,
     ) => (
-      await current().compositionPort.followTranscript(target, options, listener)
+      await (await currentForFollow(options.signal))
+        .compositionPort.followTranscript(target, options, listener)
     ),
   });
   return Object.freeze({
@@ -1869,6 +1961,7 @@ export async function createLiveConfiguredPluginExternalSessionsAdapter(params: 
     dispose() {
       if (disposed) return;
       disposed = true;
+      lifecycleRetirement.abort();
       lifecycleRevision += 1;
       activeRetirement?.abort();
       active?.dispose();

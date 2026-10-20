@@ -47,8 +47,9 @@ export async function createCodexVoiceRuntimeEnvironment() {
     const { createExternalVoiceProviderActivationScope } = await import('@/voice/registry/externalVoiceProviderActivation.testkit');
     const { getExternalVoiceProviderRegistration } = await import('@/voice/registry/externalVoiceProviderRegistrations');
     const browserStorage = typeof globalThis.localStorage === 'undefined' ? installLocalStorageMock() : null;
-    const entry = BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.find(candidate => candidate.declaration.id === 'realtime-codex');
-    if (!entry) throw new Error('realtime_codex bundled entry missing');
+    const foundEntry = BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.find(candidate => candidate.declaration.id === 'realtime-codex');
+    if (!foundEntry) throw new Error('realtime_codex bundled entry missing');
+    const entry = foundEntry;
     const providerId = buildQualifiedPluginContributionKey(createPluginContributionIdentity({ pluginId: entry.pluginId, localId: entry.declaration.id }));
     const accountId = 'codex-composed-account';
     const server = getActiveServerSnapshot();

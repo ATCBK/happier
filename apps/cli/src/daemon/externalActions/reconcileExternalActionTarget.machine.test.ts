@@ -1,6 +1,19 @@
 import { expect, it } from 'vitest';
 import { reconcileExternalActionTarget, resolveExternalActionMachineTarget } from './reconcileExternalActionTarget';
 
+it('selects an inherited spawn Machine before creation choices are resolved while retaining explicit locality', () => {
+  const spawn = { actionId: 'session.spawn_new' as const,
+    rawInput: { directory: { kind: 'path', path: '/tmp' } }, fallbackMachineId: 'caller-machine' };
+  expect(resolveExternalActionMachineTarget(spawn)).toEqual({ kind: 'ready', machineId: 'caller-machine' });
+  const selected = { ...spawn, rawInput: { ...spawn.rawInput,
+    executionTarget: { serverId: 'home', machineId: 'selected-machine' } } };
+  expect(resolveExternalActionMachineTarget(selected)).toEqual({ kind: 'ready', machineId: 'selected-machine' });
+  expect(reconcileExternalActionTarget({ ...selected, target: { kind: 'machine', machineId: 'other' },
+    currentMachineId: 'other' })).toMatchObject({ kind: 'rejected', execution: { errorCode: 'target_not_local' } });
+  expect(resolveExternalActionMachineTarget({ ...spawn, rawInput: { ...spawn.rawInput, agentTarget: null } }))
+    .toMatchObject({ kind: 'rejected', execution: { errorCode: 'invalid_parameters' } });
+});
+
 it('binds plugin installation to its semantic Machine at caller selection and actual daemon ingress', () => {
   const install = { actionId: 'plugins.install' as const,
     rawInput: { machineId: 'selected-machine', source: { kind: 'marketplace' as const,

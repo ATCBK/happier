@@ -7,6 +7,7 @@ import { ENCRYPTED_DATA_KEY_V1_BYTES } from '../../crypto/encryptedDataKeyEnvelo
 import { SessionIdSchema } from '../idsV1.js';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 import { readRpcErrorCode, RPC_ERROR_CODES } from '../../rpc/errors.js';
+import { PendingLocalIdSchema } from '../pending/pendingLocalId.js';
 
 const SessionIdZodSchema = asProtocolZod(SessionIdSchema);
 
@@ -22,6 +23,7 @@ export const SessionFollowSourceKeyPrepareAuthorizationV1Schema = lazyZodSchema(
   kind: z.literal(SESSION_FOLLOW_SOURCE_KEY_PREPARE_AUTHORIZATION_KIND_V1),
   sourceSessionId: SessionIdZodSchema,
   destinationSessionId: SessionIdZodSchema,
+  localInputId: z.optional(PendingLocalIdSchema),
 }).check(z.superRefine((value, context) => {
   if (value.sourceSessionId === value.destinationSessionId) {
     context.addIssue({ code: 'custom', path: ['sourceSessionId'], message: 'Follow requires distinct Sessions' });
@@ -33,6 +35,7 @@ export const SessionFollowSourceKeyPrepareRequestV1Schema = lazyZodSchema(() => 
   v: z.literal(1),
   sourceSessionId: SessionIdZodSchema,
   destinationSessionId: SessionIdZodSchema,
+  localInputId: z.optional(PendingLocalIdSchema),
   sourceDataEncryptionKeyBase64: SourceDataEncryptionKeyBase64Schema,
 }).check(z.superRefine((value, context) => {
   if (value.sourceSessionId === value.destinationSessionId) {
@@ -51,6 +54,7 @@ export function buildSessionFollowSourceKeyPrepareRequestV1(params: Readonly<{
   sourceSessionId: string;
   destinationSessionId: string;
   sourceDataEncryptionKeyBase64: string;
+  localInputId?: string;
 }>): Readonly<{
   authorization: SessionFollowSourceKeyPrepareAuthorizationV1;
   request: SessionFollowSourceKeyPrepareRequestV1;
@@ -58,6 +62,7 @@ export function buildSessionFollowSourceKeyPrepareRequestV1(params: Readonly<{
   const relation = {
     sourceSessionId: params.sourceSessionId,
     destinationSessionId: params.destinationSessionId,
+    ...(params.localInputId !== undefined ? { localInputId: params.localInputId } : {}),
   };
   return {
     authorization: SessionFollowSourceKeyPrepareAuthorizationV1Schema.parse({
@@ -91,6 +96,33 @@ export type SessionFollowSourceKeyPreparationWaitingReasonV1 = z.infer<
   typeof SessionFollowSourceKeyPreparationWaitingReasonV1Schema
 >;
 
+/** Diagnostic branch only: never includes native errors, content, or authority. */
+export const SessionFollowSourceKeyPreparationWaitingCauseV1Schema = lazyZodSchema(() => z.enum([
+  'credentials_unavailable',
+  'action_context_unavailable',
+  'preparation_exception',
+  'server_features_exception',
+  'source_transport_exception',
+  'destination_transport_exception',
+  'source_transport_unavailable',
+  'destination_transport_unavailable',
+  'source_key_exception',
+  'source_key_unavailable',
+  'home_identity_unavailable',
+  'destination_machine_exception',
+  'destination_machine_unresolved',
+  'destination_machine_missing',
+  'rpc_method_unavailable',
+  'machine_content_key_unavailable',
+  'machine_content_mode_mismatch',
+  'machine_target_not_current',
+  'machine_rpc_failed',
+  'machine_rpc_invalid_response',
+]));
+export type SessionFollowSourceKeyPreparationWaitingCauseV1 = z.infer<
+  typeof SessionFollowSourceKeyPreparationWaitingCauseV1Schema
+>;
+
 /** Host-visible outcome after the durable Follow edge has already committed. */
 export const SessionFollowSourceKeyPreparationResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('not_needed') }),
@@ -98,6 +130,7 @@ export const SessionFollowSourceKeyPreparationResultV1Schema = lazyZodSchema(() 
   z.strictObject({
     kind: z.literal('waiting'),
     reason: SessionFollowSourceKeyPreparationWaitingReasonV1Schema,
+    cause: z.optional(SessionFollowSourceKeyPreparationWaitingCauseV1Schema),
   }),
 ]));
 export type SessionFollowSourceKeyPreparationResultV1 = z.infer<
@@ -125,6 +158,7 @@ export function projectSessionFollowSourceKeyPreparationAfterSetV1<
   details: Readonly<{
     status: 'waiting';
     reason: SessionFollowSourceKeyPreparationWaitingReasonV1;
+    cause?: SessionFollowSourceKeyPreparationWaitingCauseV1;
     edgeCommitted: true;
     source: TCommitted['source'];
   }>;
@@ -137,6 +171,7 @@ export function projectSessionFollowSourceKeyPreparationAfterSetV1<
     details: {
       status: 'waiting',
       reason: preparation.reason,
+      ...(preparation.cause ? { cause: preparation.cause } : {}),
       edgeCommitted: true,
       source: committed.source,
     },
@@ -163,12 +198,13 @@ export function resolveSessionFollowSourceKeyPreparationFailureV1(
   error: unknown,
 ): SessionFollowSourceKeyPreparationResultV1 {
   const code = readPreparationFailureCode(error);
-  if (code === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) return { kind: 'waiting', reason: 'unsupported' };
+  if (code === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) return { kind: 'waiting', reason: 'unsupported', cause: 'rpc_method_unavailable' };
   if (code === 'machine_kind_mismatch') return { kind: 'not_needed' };
   if (code === 'machine_content_key_unavailable' || code === 'machine_content_mode_mismatch') {
-    return { kind: 'waiting', reason: 'runner_key_unavailable' };
+    return { kind: 'waiting', reason: 'runner_key_unavailable', cause: code };
   }
-  return { kind: 'waiting', reason: 'runner_unreachable' };
+  return { kind: 'waiting', reason: 'runner_unreachable',
+    cause: code === 'machine_target_not_current' ? code : 'machine_rpc_failed' };
 }
 
 export function decodeSessionFollowSourceDataEncryptionKeyV1(value: string): Uint8Array {

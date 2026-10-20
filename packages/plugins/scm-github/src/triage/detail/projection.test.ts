@@ -76,6 +76,19 @@ describe('GitHub detail timeline projection', () => {
     expect(row?.atMs).toBe(Date.parse('2026-08-04T12:00:00Z'));
   });
 
+  it('reads only the subject line of a commit message, not its body', () => {
+    const projected = projectGithubTimelineRows([
+      githubTimelineCommitEvent({
+        sha: '9f2c1a7d4b6e08f3a5c9d2e1b0847af63d5c1e29',
+        message: 'Stream terminal frames\n\nThe body explains why and runs for several lines.',
+        committedAt: '2026-08-04T12:00:00Z',
+        authorName: 'Mona Lisa',
+      }),
+    ], BOUNDS);
+
+    expect(projected.rows[0]?.summary).toBe('Stream terminal frames');
+  });
+
   it('reads a reviewed event, which names its author on user and its instant on submitted_at', () => {
     const projected = projectGithubTimelineRows([
       githubTimelineReviewEvent({

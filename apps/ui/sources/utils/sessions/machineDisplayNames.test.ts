@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { t } from '@/text';
 
-import { describeMachineLockedReason, getMachineDisplayName, readMachineName, resolveMachineDisplayNames } from './machineDisplayNames';
+import { describeMachineLockedReason, getMachineDisplayName, getMachineSentenceName, getSessionMachineLabel, readMachineName, resolveMachineDisplayNames } from './machineDisplayNames';
 
 const m = (id: string, displayName?: string, host?: string) => ({ id, metadata: { displayName, host } });
 
@@ -111,6 +111,13 @@ describe('locked machines', () => {
         expect(getMachineDisplayName(hydrating)).toBe(t('common.loading'));
         expect(describeMachineLockedReason(hydrating)).toBeNull();
     });
+
+    it('never gives machines still loading their names an id suffix, which would read as their identity', () => {
+        const names = resolveMachineDisplayNames([{ id: 'd06f1111', metadata: null }, { id: '8b442222', metadata: null }, m('c-3', 'Laptop')]);
+        expect(names.get('d06f1111')).toBe(t('common.loading'));
+        expect(names.get('8b442222')).toBe(t('common.loading'));
+        expect(names.get('c-3')).toBe('Laptop');
+    });
 });
 
 describe('describeMachineLockedReason', () => {
@@ -125,5 +132,64 @@ describe('describeMachineLockedReason', () => {
 
     it('has no reason for a readable machine', () => {
         expect(describeMachineLockedReason(m('a-1', 'Studio'))).toBeNull();
+    });
+});
+
+describe('getMachineSentenceName', () => {
+    it('names a loaded machine as its display name', () => {
+        expect(getMachineSentenceName(m('a-1', 'Studio Mac'))).toBe('Studio Mac');
+    });
+
+    it('never puts a placeholder title inside a sentence', () => {
+        const generic = t('machine.thisMachineInSentence');
+        expect(getMachineSentenceName({ id: 'a-1', metadata: null })).toBe(generic);
+        expect(getMachineSentenceName({ id: 'a-1', metadata: null, availability: { kind: 'locked' } })).toBe(generic);
+        expect(getMachineSentenceName(null)).toBe(generic);
+    });
+
+    it('keeps a removed machine named by what happened to it', () => {
+        expect(getMachineSentenceName({ id: 'a-1', metadata: null, absence: 'removed' })).toBe(t('machine.removedMachine'));
+    });
+});
+
+describe('getSessionMachineLabel', () => {
+    const SESSION_MACHINE = '58f6e63a-cd69-4302-83f1-325d10da7ec3';
+
+    it('names the machine from the inventory when it is listed', () => {
+        expect(getSessionMachineLabel({
+            machineId: SESSION_MACHINE, machine: m(SESSION_MACHINE, 'Studio', 'studio.local'),
+            session: { machineId: SESSION_MACHINE, host: 'NLDW3' },
+        })).toBe('Studio');
+    });
+
+    it('names a machine whose details are still locked or loading by the host its own session published', () => {
+        const locked = { id: SESSION_MACHINE, metadata: null, availability: { kind: 'locked' } };
+        const hydrating = { id: SESSION_MACHINE, metadata: null };
+        const session = { machineId: SESSION_MACHINE, host: 'NLDW3-5-36-33' };
+        expect(getSessionMachineLabel({ machineId: SESSION_MACHINE, machine: locked, session })).toBe('NLDW3-5-36-33');
+        expect(getSessionMachineLabel({ machineId: SESSION_MACHINE, machine: hydrating, session })).toBe('NLDW3-5-36-33');
+        // Without a published host the placeholder stays what it is.
+        expect(getSessionMachineLabel({ machineId: SESSION_MACHINE, machine: locked, session: { machineId: SESSION_MACHINE } }))
+            .toBe(t('machine.lockedMachine'));
+    });
+
+    it('reads the session\'s own host when its machine is not in the inventory, never the raw id', () => {
+        const label = getSessionMachineLabel({
+            machineId: SESSION_MACHINE, machine: null, session: { machineId: SESSION_MACHINE, host: 'NLDW3-5-36-33' },
+        });
+        expect(label).toBe('NLDW3-5-36-33');
+    });
+
+    it('does not borrow the session host for a different machine the session reaches', () => {
+        const label = getSessionMachineLabel({
+            machineId: 'other-machine', machine: null, session: { machineId: SESSION_MACHINE, host: 'NLDW3-5-36-33' },
+        });
+        expect(label).toBe(t('machine.unlistedMachine'));
+        expect(label).not.toContain('other-machine');
+    });
+
+    it('calls an unlisted machine with no known host by what it is, not by its id', () => {
+        expect(getSessionMachineLabel({ machineId: SESSION_MACHINE, machine: null, session: { machineId: SESSION_MACHINE, host: ' ' } }))
+            .toBe(t('machine.unlistedMachine'));
     });
 });

@@ -60,9 +60,12 @@ describe('workstream memory document Agent approval', () => {
     expect(preview).toMatchObject({ ok: true, result: { revision: { headerVersion: 1, bodyVersion: 1 } } });
     await executor.execute('prompt_doc.update', { artifactId: 'memory', title: 'Memory', markdown: 'Reviewed proposal',
       expectedRevision: { headerVersion: 1, bodyVersion: 1 } }, agent);
-    const human = { surface: 'ui', authority: 'present_user', serverId: 'home' } as const;
-    await executor.execute('prompt_doc.update', { artifactId: 'memory', title: 'Memory', markdown: 'Newer content' }, human);
-    await executor.execute('approval.request.decide', { artifactId: 'approval', decision: 'approve' }, human);
+    const human = { surface: 'ui', authority: 'present_user', serverId: 'home', actionRequestId: 'human-edit',
+      presentUserConfirmation: { actionId: 'prompt_doc.update' } } as const;
+    expect(await executor.execute('prompt_doc.update', { artifactId: 'memory', title: 'Memory', markdown: 'Newer content' }, human))
+      .toMatchObject({ ok: true, result: { ok: true } });
+    expect(read().markdown).toBe('Newer content');
+    expect((await executor.execute('approval.request.decide', { artifactId: 'approval', decision: 'approve' }, human)).ok).toBe(true);
     expect(read()).toMatchObject({ markdown: 'Newer content', approval: { status: 'failed',
       execution: { ok: false, errorCode: 'version_mismatch' } } });
   });
@@ -88,10 +91,12 @@ describe('workstream memory document Agent approval', () => {
     expect(read()).toMatchObject({ markdown: 'Now: investigate', approval: {
       status: 'open', actionId: 'prompt_doc.update', actionArgs: { artifactId: 'memory', markdown: 'Done: investigation' },
     } });
-    const context = { surface: 'ui', authority: 'present_user', serverId: 'home' } as const;
+    const context = { surface: 'ui', authority: 'present_user', serverId: 'home', actionRequestId: 'human-edit',
+      presentUserConfirmation: { actionId: 'prompt_doc.update' } } as const;
     expect((await executor.execute('approval.request.decide', { artifactId: 'approval', decision: 'approve' }, context)).ok).toBe(true);
     expect(read()).toMatchObject({ markdown: 'Done: investigation', approval: { status: 'executed' } });
-    await executor.execute('prompt_doc.update', { artifactId: 'memory', title: 'Memory', markdown: 'Next: user edit' }, context);
+    expect(await executor.execute('prompt_doc.update', { artifactId: 'memory', title: 'Memory', markdown: 'Next: user edit' }, context))
+      .toMatchObject({ ok: true, result: { ok: true } });
     expect((await executor.execute('approval.request.decide', { artifactId: 'approval', decision: 'approve' }, context)).ok).toBe(true);
     expect(read()).toMatchObject({ markdown: 'Next: user edit', approval: { status: 'executed' } });
   });
@@ -100,8 +105,9 @@ describe('workstream memory document Agent approval', () => {
     const { executor, read } = harness();
     const request = { artifactId: 'memory', title: 'Memory', markdown: 'Proposed change' };
     await executor.execute('prompt_doc.update', request, { surface: 'agent', defaultSessionId: 'worker', serverId: 'home', actionRequestId: 'proposal' });
-    const context = { surface: 'ui', authority: 'present_user', serverId: 'home' } as const;
-    await executor.execute('approval.request.decide', { artifactId: 'approval', decision: 'reject' }, context);
+    const context = { surface: 'ui', authority: 'present_user', serverId: 'home', actionRequestId: 'human-edit',
+      presentUserConfirmation: { actionId: 'prompt_doc.update' } } as const;
+    expect((await executor.execute('approval.request.decide', { artifactId: 'approval', decision: 'reject' }, context)).ok).toBe(true);
     expect(read()).toMatchObject({ markdown: 'Now: investigate', approval: { status: 'rejected' } });
     expect((await executor.execute('prompt_doc.update', request, context)).ok).toBe(true);
     expect(read().markdown).toBe('Proposed change');

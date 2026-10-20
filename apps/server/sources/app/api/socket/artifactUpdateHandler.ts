@@ -1,6 +1,6 @@
 import { websocketEventsCounter } from "@/app/monitoring/metrics/index";
 import { buildNewArtifactUpdate, buildUpdateArtifactUpdate, buildDeleteArtifactUpdate, eventRouter } from "@/app/events/eventRouter";
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot } from "@/storage/inTx";
 import { log } from "@/utils/logging/log";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { Socket } from "socket.io";
@@ -8,6 +8,7 @@ import * as privacyKit from "privacy-kit";
 import { createArtifact, deleteArtifact, updateArtifact } from "@/app/artifacts/artifactWriteService";
 import { readArtifactForCallerInTx } from "@/app/artifacts/artifactAccessService";
 import { hasCurrentSocketCredential } from "./socketCredentialCurrentness";
+import { ArtifactCoarseKindV1Schema, type ArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 
 /**
  * Refuses a socket operation whose credential is no longer current and closes
@@ -37,9 +38,7 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
                 return;
             }
 
-            const read = await inTx(tx => readArtifactForCallerInTx(tx, { actorAccountId: userId, artifactId }), {
-                isolationLevel: "Serializable" /* Artifact admission, mode/key and disclosed content span multiple rows. */,
-            });
+            const read = await inReadSnapshot(tx => readArtifactForCallerInTx(tx, { actorAccountId: userId, artifactId }));
             if (!read.ok) {
                 callback?.({ result: 'error', message: read.error === 'artifact_not_found' ? 'Artifact not found' : 'Internal error' });
                 return;
@@ -86,6 +85,8 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
     // Update artifact with optimistic concurrency control
     socket.on('artifact-update', async (data: {
         artifactId: string;
+        kind?: ArtifactCoarseKindV1;
+        expectedHeaderVersion?: number;
         header?: {
             data: string;
             expectedVersion: number;
@@ -101,6 +102,20 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
             websocketEventsCounter.inc({ event_type: 'artifact-update' });
 
             const { artifactId, header, body } = data;
+
+            if (data.kind !== undefined && !ArtifactCoarseKindV1Schema.safeParse(data.kind).success) {
+                callback?.({ result: 'error', message: 'Invalid parameters' });
+                return;
+            }
+            if (data.expectedHeaderVersion !== undefined && (!Number.isInteger(data.expectedHeaderVersion) || data.expectedHeaderVersion < 0)) {
+                callback?.({ result: 'error', message: 'Invalid parameters' });
+                return;
+            }
+
+            if (Object.hasOwn(data, 'memoryDecisionSource')) {
+                callback?.({ result: 'error', error: 'memory_decision_source_unsupported' });
+                return;
+            }
 
             if ((data.provenance != null && typeof data.provenance !== 'string')
                 || (data.provenanceDataEncryptionKey != null && typeof data.provenanceDataEncryptionKey !== 'string')) {
@@ -139,6 +154,8 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
             const result = await updateArtifact({
                 actorUserId: userId,
                 artifactId,
+                kind: data.kind,
+                expectedHeaderVersion: data.expectedHeaderVersion,
                 header: header ? { bytes: privacyKit.decodeBase64(header.data), expectedVersion: header.expectedVersion } : undefined,
                 body: body ? { bytes: privacyKit.decodeBase64(body.data), expectedVersion: body.expectedVersion } : undefined,
                 provenance: data.provenance == null ? undefined : privacyKit.decodeBase64(data.provenance),
@@ -199,7 +216,7 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
             for (const recipient of result.recipientUpdates) {
                 eventRouter.emitUpdate({
                     userId: recipient.accountId,
-                    payload: buildUpdateArtifactUpdate(artifactId, recipient.cursor, randomKeyNaked(12), headerUpdate, bodyUpdate, recipient),
+                    payload: buildUpdateArtifactUpdate(artifactId, recipient.cursor.resolveCursor(), randomKeyNaked(12), headerUpdate, bodyUpdate, recipient),
                     recipientFilter: { type: 'user-scoped-only' }
                 });
             }
@@ -223,6 +240,7 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
     // Create new artifact
     socket.on('artifact-create', async (data: {
         id: string;
+        kind?: ArtifactCoarseKindV1;
         header: string;
         body: string;
         dataEncryptionKey: string;
@@ -233,6 +251,16 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
             websocketEventsCounter.inc({ event_type: 'artifact-create' });
 
             const { id, header, body, dataEncryptionKey } = data;
+
+            if (data.kind !== undefined && !ArtifactCoarseKindV1Schema.safeParse(data.kind).success) {
+                callback?.({ result: 'error', message: 'Invalid parameters' });
+                return;
+            }
+
+            if (Object.hasOwn(data, 'memoryDecisionSource')) {
+                callback?.({ result: 'error', error: 'memory_decision_source_unsupported' });
+                return;
+            }
 
             if ((data.provenance != null && typeof data.provenance !== 'string')
                 || (data.provenanceDataEncryptionKey != null && typeof data.provenanceDataEncryptionKey !== 'string')) {
@@ -257,6 +285,7 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
             const result = await createArtifact({
                 actorUserId: userId,
                 artifactId: id,
+                kind: data.kind,
                 header: privacyKit.decodeBase64(header),
                 body: privacyKit.decodeBase64(body),
                 dataEncryptionKey: privacyKit.decodeBase64(dataEncryptionKey),
@@ -284,7 +313,7 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
             }
 
             if (result.didWrite) {
-                const newArtifactPayload = buildNewArtifactUpdate(result.artifact, result.cursor, randomKeyNaked(12));
+                const newArtifactPayload = buildNewArtifactUpdate(result.artifact, result.cursor.resolveCursor(), randomKeyNaked(12));
                 eventRouter.emitUpdate({
                     userId,
                     payload: newArtifactPayload,
@@ -358,7 +387,7 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
                 return;
             }
 
-            const deletePayload = buildDeleteArtifactUpdate(artifactId, result.cursor, randomKeyNaked(12));
+            const deletePayload = buildDeleteArtifactUpdate(artifactId, result.cursor.resolveCursor(), randomKeyNaked(12));
             eventRouter.emitUpdate({
                 userId,
                 payload: deletePayload,

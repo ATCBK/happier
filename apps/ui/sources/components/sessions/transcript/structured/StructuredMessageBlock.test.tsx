@@ -4,6 +4,7 @@ import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMessageStructuredPresentationV1 } from '@happier-dev/protocol';
+import { ScmDiffSummaryGenerateSuccessSchema } from '@happier-dev/protocol/scm/diffSummary';
 import { renderWithSessionTranscriptSource as renderScreen } from '@/dev/testkit';
 import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import {
@@ -69,7 +70,7 @@ const editableInteraction = deriveTranscriptInteraction({
     isSessionActive: true,
 });
 
-const { StructuredMessageBlock } = await import('./StructuredMessageBlock');
+const { StructuredMessageBlock, renderStructuredMessage, projectStructuredMessageFindText } = await import('./StructuredMessageBlock');
 
 beforeEach(() => {
     machinePluginStructuredMessageActionExecuteMock.mockReset();
@@ -80,6 +81,17 @@ beforeEach(() => {
 });
 
 describe('StructuredMessageBlock', () => {
+    it.each(['pending', 'complete'] as const)('keeps the published SCM %s notice readable as transcript prose rather than an unavailable plugin', state => {
+        const payload = ScmDiffSummaryGenerateSuccessSchema.parse({ success: true, sourceKey: 'comparison', summaryMarkdown: 'Captured changes.',
+            metadata: { source: { kind: 'workingTree' }, sourceKey: 'comparison' },
+            requestedOutputs: ['walkthrough'], outputs: { walkthrough: { state,
+                ...(state === 'complete' ? { value: { title: 'Invoice changes', intro: '', stops: [], otherChangeRefs: [] } } : {}) } } });
+        const message = { kind: 'agent-text' as const, id: `notice-${state}`, localId: null, createdAt: 1,
+            text: state === 'pending' ? 'Writing the walkthrough.' : 'Walkthrough saved.',
+            meta: { happier: { kind: 'scm_diff_summary.v1', payload } } };
+        expect(renderStructuredMessage({ message, sessionId: 's1', interaction: editableInteraction, onJumpToAnchor: () => {} })).toBeNull();
+        expect(projectStructuredMessageFindText(message)).toBeNull();
+    });
     it('renders a persisted structured snapshot without resolving current daemon content', async () => {
         const screen = await renderScreen(
             <StructuredMessageBlock
@@ -281,6 +293,7 @@ describe('StructuredMessageBlock', () => {
         // action owner without reviving the retired structured-message route.
         expect(machinePluginStructuredMessageActionExecuteMock).toHaveBeenCalledWith('machine-1', {
             serverId: 'server-1',
+            isCurrent: expect.any(Function),
             expectedContributorOccurrenceId: 'open-report-occurrence-a',
             qualifiedActionId: 'acme.preview/open-report',
             input: { reportId: 'report-1' },

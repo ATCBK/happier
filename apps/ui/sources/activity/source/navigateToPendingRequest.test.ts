@@ -15,6 +15,15 @@ const tool: ToolCallMessage = { kind: 'tool-call', id: 'tool:question', localId:
         permission: { id: 'question', status: 'pending' } }, children: [] };
 
 describe('pending navigation landing revalidation', () => {
+    it('rejects a native dialog that becomes inactive between selection and landing, including settled revalidation', () => {
+        const source = 'claude_unified_terminal_dialog_choice';
+        const dialog = { ...request, source };
+        for (const requests of [[dialog], []]) {
+            expect(planPendingNavigationRoute({ target: { ...target, requestSource: source }, nowMs: 20,
+                details: { kind: 'available', session: { ...session, active: false }, messages: [], requests } }))
+                .toEqual({ kind: 'unavailable' });
+        }
+    });
     it('retains the confirmation approval requirement when the selected request settles before routing', () => {
         const confirmationTarget = { ...target, requestSource: 'happier_action' };
         const approvalOnly = createSessionFixture({ ...session,

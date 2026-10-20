@@ -2,12 +2,15 @@ import { describe, expect, it, vi } from 'vitest';
 import type { MachineLiveStreamRelayEnvelopeV1 } from '@happier-dev/protocol';
 import { browserViewKey } from '@happier-dev/protocol/browser/view/key';
 import { BrowserEventBatchV1Schema } from '@happier-dev/protocol/browser/events/v1';
+import { MachineLiveStreamDecodedEnvelopeV1Schema } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
+import { MachineLiveStreamReceiptV1Schema } from '@happier-dev/protocol/machines/peer/mediation/stream/receipts';
 import { createBrowserSidecarCdpControlAdapter, type BrowserSidecarCdpEventSubscriber } from '../sidecar/controlAdapter';
 import { createBrowserAutomationDaemonService } from '../automation/service';
 import { createBrowserAutomationCdpAdapter } from '../automation/adapters/cdp';
 import { createControlAdapterAutomationTransport } from '../automation/adapters/controlBridge';
 import { createMachineLiveStreamCaptureRegistry } from '../../peer/mediation/stream/captureRegistry';
 import { createMachineLiveStreamRelayTerminator } from '../../peer/mediation/stream/relay';
+import { createDaemonMachineLiveStreamCaptureAdapter } from '../../peer/mediation/stream/captureAdapter';
 import { createBrowserCdpScreencastProducer } from './cdpScreencast';
 import { registerBrowserLiveCapture } from './registration';
 import { registerDaemonLiveStreamRelayHandlers } from '@/rpc/handlers/daemonLiveStreamRelay';
@@ -50,7 +53,7 @@ describe('browser live capture', () => {
         const registry = createMachineLiveStreamCaptureRegistry();
         const registration = registerBrowserLiveCapture({ registry, contextCapture, producer, automation: () => automation });
         const envelopes: MachineLiveStreamRelayEnvelopeV1[] = [];
-        const relay = createMachineLiveStreamRelayTerminator({ registry, machineId: 'machine', nowMs: Date.now,
+        const relay = createMachineLiveStreamRelayTerminator({ captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry), machineId: 'machine', nowMs: Date.now,
             emitEnvelope: envelope => { envelopes.push(envelope); } });
         try {
             await adapter.dispatchCommand({ kind: 'openView', commandId: 'open', focus: true, ...view, platform: 'web',
@@ -79,8 +82,9 @@ describe('browser live capture', () => {
             expect(input('next')).toEqual({ ok: true });
             await vi.waitFor(() => expect(automation.getTimeline(view).entries.some(entry => entry.automationRequestId === 'next')).toBe(true));
             expect(commands).toEqual(['agent effect']);
-            expect(envelopes.filter(envelope => envelope.message.kind === 'receipt'
-                && envelope.message.receipt.terminal === false)).toHaveLength(2);
+            expect(envelopes.map(envelope => MachineLiveStreamDecodedEnvelopeV1Schema.parse(envelope))
+                .filter(envelope => envelope.message.kind === 'receipt'
+                    && MachineLiveStreamReceiptV1Schema.parse(envelope.message.receipt).terminal === false)).toHaveLength(2);
             expect(await automation.recordHumanInput({ ...view, authority: 'present_user' }))
                 .toEqual({ ok: true, completion: 'uncertain' });
             expect(await automation.execute({ ...request, automationRequestId: 'observe', requestedBy: 'user',
@@ -118,14 +122,15 @@ describe('browser live capture', () => {
         const registration = registerBrowserLiveCapture({ registry, contextCapture, producer, automation: () => automation,
             resolveInputControl: () => control });
         const envelopes: MachineLiveStreamRelayEnvelopeV1[] = [];
-        const relay = createMachineLiveStreamRelayTerminator({ registry, machineId: 'machine', nowMs: () => 1_000,
+        const relay = createMachineLiveStreamRelayTerminator({ captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry), machineId: 'machine', nowMs: () => 1_000,
             emitEnvelope: envelope => {
                 envelopes.push(envelope);
                 if (envelope.message.kind === 'frame') relay.applyControl({ v: 1, sourceMachineId: 'machine', targetMachineId: 'viewer',
                     message: { kind: 'control', control: { v: 1, streamId: envelope.message.frame.streamId, kind: 'ack',
                         nextSequence: envelope.message.frame.sequence + 1 } } });
             } });
-        const handlers = new Map<string, RpcHandler<unknown, unknown>>();
+        // Registration is the RPC boundary; handlers validate their own request schemas.
+        const handlers = new Map<string, RpcHandler>();
         registerDaemonLiveStreamRelayHandlers({ registerHandler(method, handler) { handlers.set(method, handler); } }, {
             relay: { start: (request, authority?: RpcHandlerContext['callerAuthority']) => relay.start(request, authority) },
         });
@@ -219,7 +224,7 @@ describe('browser live capture', () => {
         const browserEvents = () => envelopes.flatMap(envelope => envelope.message.kind === 'frame'
             && envelope.message.frame.payloadKind === 'metadata'
             ? BrowserEventBatchV1Schema.parse(JSON.parse(Buffer.from(envelope.message.frame.payloadBase64, 'base64').toString('utf8'))).events : []);
-        const relay = createMachineLiveStreamRelayTerminator({ registry, machineId: 'machine', nowMs: Date.now,
+        const relay = createMachineLiveStreamRelayTerminator({ captureAdapter: createDaemonMachineLiveStreamCaptureAdapter(registry), machineId: 'machine', nowMs: Date.now,
             emitEnvelope: envelope => {
                 envelopes.push(envelope);
                 if (envelope.message.kind === 'frame') relay.applyControl({ v: 1, sourceMachineId: 'machine', targetMachineId: 'viewer',
@@ -246,6 +251,19 @@ describe('browser live capture', () => {
             expect(envelopes.filter(envelope => envelope.message.kind === 'frame' && envelope.message.frame.payloadKind !== 'metadata')).toMatchObject([
                 { message: { frame: { streamId: 'stream', sequence: expect.any(Number), payloadBase64: 'AQID', codecId: 'image.mjpeg' } } },
             ]);
+            // A second tab or a remounted viewer joins the same static page: Chromium need not
+            // repaint, and restarting its shared screencast would disrupt the existing viewer.
+            const lateStart = { ...start, streamId: 'late-human', authorization: { ...start.authorization,
+                payload: { ...start.authorization.payload, streamId: 'late-human' } } };
+            expect(await relay.start(lateStart, 'present_user')).toEqual({ ok: true, streamId: 'late-human' });
+            const lateImage = envelopes.find(envelope => envelope.message.kind === 'frame'
+                && envelope.message.frame.streamId === 'late-human' && envelope.message.frame.payloadKind === 'image_keyframe');
+            expect(lateImage).toBeDefined();
+            expect(MachineLiveStreamDecodedEnvelopeV1Schema.parse(lateImage)).toMatchObject({ message: { frame: {
+                streamId: 'late-human', payloadBase64: 'AQID', codecId: 'image.mjpeg',
+            } } });
+            expect(commands.filter(command => command.method === 'Page.startScreencast')).toHaveLength(1);
+            expect(commands.filter(command => command.method === 'Page.screencastFrameAck')).toHaveLength(1);
             expect(browserEvents()).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'controllerChanged', state: expect.objectContaining({ controller: 'none' }) })]));
             for (const listener of [...listeners]) listener({ method: 'Page.frameNavigated', sessionId: 'cdp-page',
                 params: { frame: { id: 'main', loaderId: 'next-document', url: 'https://example.test/next' } } });
@@ -296,6 +314,10 @@ describe('browser live capture', () => {
             const observationStart = { ...start, streamId: 'observation', authorization: { ...start.authorization,
                 payload: { ...start.authorization.payload, streamId: 'observation' } } };
             expect(await relay.start(observationStart)).toEqual({ ok: true, streamId: 'observation' });
+            // Agent/recording observation must wait for a fresh frame, never inherit a retained
+            // human picture which may have been captured during a confidential hold.
+            expect(envelopes.filter(envelope => envelope.message.kind === 'frame'
+                && envelope.message.frame.streamId === 'observation' && envelope.message.frame.payloadKind !== 'metadata')).toEqual([]);
             for (const listener of [...listeners]) listener({ method: 'Page.screencastFrame', sessionId: 'cdp-page',
                 params: { sessionId: 3, data: 'BwgJ', metadata: { deviceWidth: 400, deviceHeight: 200 } } });
             const metadataFor = (streamId: string) => envelopes.filter(envelope => envelope.message.kind === 'frame'

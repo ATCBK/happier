@@ -84,6 +84,23 @@ describe('ModalCardFrame', () => {
         } finally { Platform.OS = previousOS; }
     });
 
+    it('registers its own scrolling body as the scroll source of its content, and keeps the modal\'s otherwise', async () => {
+        const { renderScreen } = await import('@/dev/testkit');
+        const { ModalCardFrame } = await import('./ModalCardFrame');
+        const { PopoverScrollSourceProvider, usePopoverScrollSourceRef } = await import('@/components/ui/popover/PopoverScrollSource');
+        const bodyScroller = { bodyScroller: true };
+        const modalScroller = { current: { modalScroller: true } };
+        let seen: React.RefObject<unknown> | null = null;
+        function SourceProbe() { seen = usePopoverScrollSourceRef(); return null; }
+        const frame = (bodyScroll: 'auto' | 'none') => <PopoverScrollSourceProvider scrollSourceRef={modalScroller}>
+            <ModalCardFrame title="Sheet" bodyScroll={bodyScroll}><SourceProbe /></ModalCardFrame>
+        </PopoverScrollSourceProvider>;
+        const screen = await renderScreen(frame('auto'), { createNodeMock: (element) => (element.type === 'ScrollView' ? bodyScroller : null) });
+        expect(seen!.current).toBe(bodyScroller);
+        await screen.update(frame('none'));
+        expect(seen).toBe(modalScroller);
+    });
+
     it('fills the viewport for full-page chrome and keeps content mounted across presentation changes', async () => {
         windowState.width = 390;
         windowState.height = 844;
@@ -530,13 +547,20 @@ describe('ModalCardFrame', () => {
         const { ModalCardFrame } = await import('./ModalCardFrame');
         const screen = await renderScreen(React.createElement(ModalCardFrame, {
             children: React.createElement('Child'),
-            footer: React.createElement(RoundButton, { title: 'Save' }),
+            footer: React.createElement(React.Fragment, null,
+                React.createElement(RoundButton, { title: 'Generate', display: 'secondary' }),
+                React.createElement(RoundButton, { title: 'Discard', display: 'destructive' }),
+                React.createElement(RoundButton, { title: 'Save' }),
+            ),
         }));
 
         expect(flattenStyle(screen.findByTestId('modal-card-footer')?.props.style).borderTopWidth).toBeUndefined();
-        const saveLabel = screen.findAllByType('Text').find((node) => node.props.children === 'Save');
         const { resolveHappierTypeScale } = await import('@happier-dev/plugin-ui/presentation');
         const { Platform } = await import('react-native');
-        expect(flattenStyle(saveLabel?.props.style).fontSize).toBe(resolveHappierTypeScale('label', Platform.OS).fontSize);
+        // One dialog action family: secondary and destructive peers use the same label words as the primary.
+        for (const title of ['Generate', 'Discard', 'Save']) {
+            const label = screen.findAllByType('Text').find((node) => node.props.children === title);
+            expect(flattenStyle(label?.props.style).fontSize).toBe(resolveHappierTypeScale('label', Platform.OS).fontSize);
+        }
     });
 });

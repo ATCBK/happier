@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { ConnectedServiceBindingsV2 } from '@happier-dev/protocol/connect/connected-service-bindings';
 
 import type { AgentInputChipPickerOption } from '@/components/sessions/agentInput/components/AgentInputChipPickerTypes';
 import { buildAcpConfigOptionOverridesV1 } from '@happier-dev/protocol/sessions/metadata/overrides';
@@ -61,12 +62,11 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
     capabilityServerId: string;
     projectionCurrent: boolean;
     selectedPath: string | null;
-    settings: Settings;
+    readSettings: () => Settings;
     favoriteModelSelections?: readonly FavoriteModelSelectionV1[];
     setFavoriteModelSelections?: (favorites: FavoriteModelSelectionV1[]) => void;
     favoriteBackendTargetKeys?: ReadonlyArray<string>;
     setFavoriteBackendTargetKeys?: (favorites: string[]) => void;
-    rememberedAgentPickerView?: NewSessionAgentPickerViewV1;
     onRememberAgentPickerView?: (view: NewSessionAgentPickerViewV1) => void;
     rememberEngineSelectionsEnabled?: boolean;
     rememberedEngineSelectionsByScope?: RememberedEngineSelectionsByScopeV1 | null;
@@ -80,6 +80,7 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
     refreshProbe?: OptionPickerProbeState | null;
     providerProjection?: NewSessionEngineOptionDetailProps['providerProjection'];
     selectedNativeSourceLabel?: string | null;
+    selectedConnectedServices?: ConnectedServiceBindingsV2 | null;
     experimentalConfirmation?: SessionModelPickerExperimentalConfirmationController;
 }>): Readonly<{
     agentPickerOptions?: ReadonlyArray<AgentInputChipPickerOption>;
@@ -87,6 +88,19 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
     handleAgentPickerSelect: (selectedId: string) => void;
     handleAgentClick: () => void;
 }> {
+    // Account echoes remember the next opening; they do not steer this mounted picker.
+    const [rememberedAgentPickerView, setRememberedAgentPickerView] = React.useState(
+        () => params.readSettings().lastNewSessionAgentPickerViewV1,
+    );
+    const rememberAgentPickerView = React.useCallback((view: NewSessionAgentPickerViewV1) => {
+        setRememberedAgentPickerView((previous) => {
+            if (previous?.kind !== view?.kind) return view;
+            if (previous?.kind === 'backend' && view?.kind === 'backend'
+                && previous.backendTargetKey !== view.backendTargetKey) return view;
+            return previous;
+        });
+        params.onRememberAgentPickerView?.(view);
+    }, [params.onRememberAgentPickerView]);
     const {
         getEngineSelectionForTargetKey,
         selectEngineSelection,
@@ -211,7 +225,7 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
         selectedBackendTargetKey,
         selectedModelId: String(params.modelMode),
         selectedModelSelection: params.modelSelection ?? null,
-        settings: params.settings,
+        readSettings: params.readSettings,
         refreshProbe: params.refreshProbe,
         favoriteModelSelections: params.favoriteModelSelections ?? [],
         favoriteBackendTargetKeys: params.favoriteBackendTargetKeys ?? [],
@@ -221,9 +235,10 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
         onToggleFavoriteModel: handleToggleFavoriteModel,
         onToggleFavoriteBackendTarget: params.setFavoriteBackendTargetKeys ? handleToggleFavoriteBackendTarget : undefined,
         onRemoveFavoriteModelSelection: handleRemoveFavoriteModelSelection,
-        onRememberAgentPickerView: params.onRememberAgentPickerView,
+        onRememberAgentPickerView: rememberAgentPickerView,
         ...(params.providerProjection ? { providerProjection: params.providerProjection } : {}),
         selectedNativeSourceLabel: params.selectedNativeSourceLabel,
+        ...('selectedConnectedServices' in params ? { selectedConnectedServices: params.selectedConnectedServices } : {}),
         experimentalConfirmation: params.experimentalConfirmation,
         ...(params.getBackendEntryMachineAgent && params.selectedMachineId ? {
             getBackendEntryMachineAgent: params.getBackendEntryMachineAgent,
@@ -254,6 +269,7 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
         params.projectionCurrent,
         params.providerProjection,
         params.selectedNativeSourceLabel,
+        params.selectedConnectedServices,
         params.refreshProbe,
         params.resolvedBackendEntries,
         params.selectedMachineId,
@@ -261,9 +277,9 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
         params.selectedProfileId,
         params.setFavoriteBackendTargetKeys,
         selectedBackendTargetKey,
-        params.settings,
+        params.readSettings,
         params.useProfiles,
-        params.onRememberAgentPickerView,
+        rememberAgentPickerView,
         params.experimentalConfirmation,
         handleSelectFavoriteModel,
         handleRemoveFavoriteModelSelection,
@@ -273,7 +289,6 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
     ]);
 
     const fallbackOptionId = params.selectedBackendEntry?.backendTargetKey ?? params.selectedBackendTargetKey;
-    const rememberedAgentPickerView = params.rememberedAgentPickerView;
     const preferredOptionId = React.useMemo(() => {
         if (rememberedAgentPickerView?.kind === 'favoriteModels') {
             return FAVORITE_MODELS_AGENT_PICKER_OPTION_ID;
@@ -295,7 +310,7 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
         fallbackOptionId,
         preferredOptionId,
         onSelectEntry: (nextEntry) => {
-            params.onRememberAgentPickerView?.({
+            rememberAgentPickerView({
                 kind: 'backend',
                 backendTargetKey: nextEntry.backendTargetKey,
             });
@@ -303,7 +318,7 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
         },
         onSelectNonEntryOption: (selectedId) => {
             if (selectedId !== FAVORITE_MODELS_AGENT_PICKER_OPTION_ID) return;
-            params.onRememberAgentPickerView?.({ kind: 'favoriteModels' });
+            rememberAgentPickerView({ kind: 'favoriteModels' });
         },
     });
 

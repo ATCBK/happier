@@ -87,8 +87,10 @@ const provisioner: MachineProvisionersListResultV1['provisioners'][number] = { c
 } };
 
 function seedOptionsDeclaration(row: MachineProvisionersListResultV1['provisioners'][number], inputSchema: PluginJsonSchemaV2,
-    schemaAvailable = true, installed?: Readonly<Record<string, unknown>>) {
-    const action = { pluginId: row.contribution.pluginId, localId: row.descriptor.actions.options };
+    schemaAvailable: boolean | 'missing-input-schema' = true, installed?: Readonly<Record<string, unknown>>) {
+    const localId = row.descriptor.actions.options;
+    if (!localId) throw new Error('The provisioner must declare an options Action');
+    const action = { pluginId: row.contribution.pluginId, localId };
     const actionKey = buildQualifiedPluginContributionKey(action);
     // Infrastructure role metadata may be CLI/plugin-only. Reading its public
     // schema for a managed options query does not make it a new UI Action.
@@ -107,8 +109,8 @@ function seedOptionsDeclaration(row: MachineProvisionersListResultV1['provisione
             expect(request.machineId).toBe(preset.controller.machineId);
             expect(request.payload).toEqual({ machineId: preset.controller.machineId,
                 expectedOccurrenceId: projectedAction.occurrenceId, qualifiedActionId: actionKey });
-            return DaemonPluginActionSchemasReadResponseSchema.parse(schemaAvailable
-                ? { ok: true, inputSchema } : { ok: false, code: 'stale_occurrence' });
+            return DaemonPluginActionSchemasReadResponseSchema.parse(schemaAvailable === 'missing-input-schema'
+                ? { ok: true } : schemaAvailable ? { ok: true, inputSchema } : { ok: false, code: 'stale_occurrence' });
         }
         return { ok: false, code: 'unsupported' };
     });
@@ -308,7 +310,7 @@ describe('reachable preset detail', () => {
         if (code === 'permission_denied') expect(route.replace).not.toHaveBeenCalled();
         else expect(route.replace).toHaveBeenCalledWith(`/settings/machines/presets/preset?serverId=${encodeURIComponent(scopeId)}`);
     });
-    it.each([true, false])('revalidates saved native sizing only through its current declared same-path selectors (schema available: %s)', async schemaAvailable => {
+    it.each([true, false, 'missing-input-schema'] as const)('revalidates saved native sizing only through its current declared same-path selectors (schema available: %s)', async schemaAvailable => {
         const serverId = await seed();
         const scopeId = await seedConfiguration(serverId);
         // Public Cua schemas/options from machine-cua/src/machine/schemas.ts
@@ -358,7 +360,7 @@ describe('reachable preset detail', () => {
         } });
         const screen = await renderSettingsView(<MachinePresetView serverId={scopeId} presetId={preset.id} />);
         await waitForHomeGovernance(() => expect(screen.findByTestId('machine-preset.detail')).not.toBeNull());
-        if (!schemaAvailable) {
+        if (schemaAvailable !== true) {
             await waitForHomeGovernance(() => expect(screen.findByTestId('machine-preset.configuration-unavailable')).not.toBeNull());
             expect(harness.requestsFor('/v1/actions/machines.provisioners.options')).toHaveLength(0);
         } else {

@@ -2,11 +2,12 @@ import type { ArtifactCallerAccessV1 } from './artifactAccessV1.js';
 import type { ArtifactAccessGrantsListResponseV1 } from './artifactAccessV1.js';
 import type { ArtifactPublicAudienceV1 } from './artifactActionsV1.js';
 import type { ArtifactBodyV1 } from './artifactBinaryV1.js';
+import { isArtifactHtmlHeaderV1 } from './artifactHtmlV1.js';
 import { APPROVAL_ARTIFACT_KINDS_V1 } from '../approvals/approvalArtifactKindV1.js';
 import { WIDGET_SURFACE_ARTIFACT_KIND_V1, readWidgetSurfaceArtifactV1 } from '../widgets/widgetSurfaceArtifactV1.js';
 import { HOME_HUB_ARTIFACT_KIND_V1 } from '../home/homeHubArtifactV1.js';
 import { WIDGET_LAYOUT_FRAGMENT_ARTIFACT_KIND_V1 } from '../widgets/widgetLayoutFragmentArtifactV1.js';
-import { USAGE_NOTICE_ARTIFACT_KIND_V1 } from '../activity/usageNoticeArtifactV1.js';
+import { USAGE_NOTICE_ARTIFACT_KIND_V1, ACCOUNT_NOTICE_ARTIFACT_KIND_V1 } from '../activity/accountNoticeArtifactKindsV1.js';
 import { WorkflowDefinitionArtifactHeaderV1ReadSchema } from '../workflows/workflowDefinitionV1.js';
 import { roleArtifactSharingAdapterV1 } from '../prompts/roles/roleArtifactSharingV1.js';
 import { launchProfileArtifactSharingAdapterV1 } from '../launchProfiles/launchProfileArtifactV1.js';
@@ -202,6 +203,7 @@ const kindPolicies: readonly Readonly<ArtifactKindPolicyV1 & {
   { ...privatePolicy, kind: HOME_HUB_ARTIFACT_KIND_V1, useKind: 'open', requiresTextBody: false },
   { ...privatePolicy, kind: WIDGET_LAYOUT_FRAGMENT_ARTIFACT_KIND_V1, useKind: 'open', requiresTextBody: true },
   { ...privatePolicy, kind: USAGE_NOTICE_ARTIFACT_KIND_V1, useKind: 'open', requiresTextBody: true },
+  { ...privatePolicy, kind: ACCOUNT_NOTICE_ARTIFACT_KIND_V1, useKind: 'open', requiresTextBody: true },
 ];
 
 /** Unknown and untyped ordinary documents retain generic document behavior. */
@@ -212,6 +214,13 @@ export function getArtifactKindPolicyV1(kind: unknown): ArtifactKindPolicyV1 {
 /** The current specialized kind owners all require a JSON text document, never a blob reference. */
 export function artifactKindRequiresTextBodyV1(kind: unknown): boolean {
   return kindPolicies.find(policy => policy.kind === kind)?.requiresTextBody ?? false;
+}
+
+/** Collaboration edits ordinary prose only; structured content retains its existing kind-owned writer. */
+export function artifactSupportsProseCollaborationV1(resource: ArtifactSharingResourceV1): boolean {
+  const policy = kindPolicies.find(policy => policy.kind === resource.header.kind);
+  return (policy?.browserListed ?? true) && (policy?.useKind ?? 'open') === 'open'
+    && !isArtifactHtmlHeaderV1(resource.header) && typeof resource.body === 'string';
 }
 
 /** Only these existing content adapters own shared widget-input admission. */

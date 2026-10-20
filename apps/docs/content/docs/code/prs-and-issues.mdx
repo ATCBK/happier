@@ -100,6 +100,13 @@ you attached.
 
 ## Pull-request explanations in development
 
+The configured Actions catalog keeps your custom rows and order and adds missing
+built-in actions. A stored empty list therefore does not turn built-ins off.
+Turn a built-in off explicitly to keep it unavailable; removing a custom action
+deletes that row. In the Actions editor's **Restore defaults** section, choose
+**Restore** to remove the override and show the current built-ins. If the catalog
+cannot be read, retry that read before starting an action.
+
 The GitHub source's unreleased comparison retrieval keeps paged file evidence,
 captured base/head and explicit missing-patch or stale states. The PR detail
 preview alone is not a complete comparison. **Walk through** routes through

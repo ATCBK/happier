@@ -87,12 +87,15 @@ function normalizeJsonValue(value: unknown, depth: number, seen: WeakSet<object>
   }
 }
 
-function addIssue(context: z.core.$RefinementCtx, message: string, path?: (string | number)[]): void {
-  context.addIssue({
+function addIssue(context: z.core.ParsePayload | z.core.$RefinementCtx, message: string, path?: (string | number)[]): void {
+  ('addIssue' in context ? context.addIssue({
     code: "custom",
     message,
     ...(path ? { path } : {}),
-  });
+  }) : context.issues.push({
+    code: "custom",
+    message,
+    ...(path ? { path } : {}), input: context.value }));
 }
 
 const PluginAccountSettingsValuesV1RawSchema = lazyZodSchema(() => z.strictObject({

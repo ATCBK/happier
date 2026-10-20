@@ -32,7 +32,9 @@ vi.mock('@/text', async () => {
     return createTextModuleMock();
 });
 
-import { ArtifactsBrowser } from './ArtifactsBrowserScreen';
+import { ArtifactsBrowser, ArtifactsBrowserScreen } from './ArtifactsBrowserScreen';
+import { sealArtifactPrivateRevisionMetadata } from '@/sync/domains/artifacts/accountArtifactEnvelope';
+import { ArtifactView } from './ArtifactView';
 import { NavigationTitleChromeProvider } from '@/components/ui/layout/navigationTitleChrome';
 
 const initialState = getStorage().getState();
@@ -174,9 +176,10 @@ describe('Artifacts browser row operations', () => {
         await act(async () => { await menu.props.onSecondaryAction('delete'); });
         expect(served.requests.filter(request => request.method === 'DELETE')).toEqual([]);
         expect(getStorage().getState().artifacts[artifact.id]).toBeDefined();
-        vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
+        vi.mocked(Modal.confirm).mockClear().mockResolvedValue(true);
         await act(async () => { await menu.props.onSecondaryAction('delete'); });
         await flushHookEffects();
+        expect(Modal.confirm).toHaveBeenCalledTimes(1);
         expect(served.requests.find(request => request.method === 'DELETE')?.path)
             .toBe('/v1/artifacts/document/revision/1/2');
         expect(getStorage().getState().artifacts[artifact.id]).toBeUndefined();
@@ -205,18 +208,23 @@ describe('Artifacts browser row operations', () => {
     it('opens a policy-required delete approval without claiming or executing deletion', async () => {
         const artifact = artifactFixture('approval-document');
         const persisted = createArtifactStoreBoundary({ ownerAccountId: () => 'owner', encryptionMode: 'plain' });
-        const served = await serveActionHomes({ homes: [{ key: 'owner', serverUrl: 'https://artifact-row-approval.test', accountId: 'owner' }],
-            route: request => request.path === `/v1/artifacts/${artifact.id}` && request.method === 'GET'
-                ? Response.json({ ...artifact, ownerAccountId: 'owner', encryptionMode: 'plain', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
-                    header: encodePlainArtifactStoredContent(artifact.header), body: encodePlainArtifactStoredContent({ body: artifact.body }) })
-                : persisted.handle(request.path, { method: request.method, body: JSON.stringify(request.body) }) ?? undefined });
+        // The full inventory and exact read must describe the same persisted document.
+        persisted.replaceStoredRow({ id: artifact.id, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
+            dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, header: encodePlainArtifactStoredContent(artifact.header),
+            body: encodePlainArtifactStoredContent({ body: artifact.body }), headerVersion: artifact.headerVersion,
+            bodyVersion: artifact.bodyVersion, seq: artifact.seq, createdAt: artifact.createdAt, updatedAt: artifact.updatedAt });
+        const actionsSettingsV1 = ActionsSettingsV1Schema.parse({ v: 1, actions: {
+            'artifact.delete': { approvalRequiredSurfaces: ['ui'] },
+        } });
+        const served = await serveActionHomes({ homes: [{ key: 'owner', serverUrl: 'https://artifact-row-approval.test',
+            accountId: 'owner', settings: { actionsSettingsV1 } }],
+            route: request => persisted.handle(request.path, { method: request.method, body: JSON.stringify(request.body) }) ?? undefined });
         disposeHome = served.dispose;
         getStorage().getState().addArtifact(artifact);
-        getStorage().setState(state => ({ settings: { ...state.settings,
-            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'artifact.delete': { approvalRequiredSurfaces: ['ui'] } } }) } }));
         const screen = await renderRows([artifact]);
-        vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
+        vi.mocked(Modal.confirm).mockClear().mockResolvedValueOnce(true);
         await act(async () => { await rowMenu(screen, artifact.id).props.onSecondaryAction('delete'); });
+        expect(Modal.confirm).toHaveBeenCalledTimes(1);
         const approval = persisted.list().find(row => row.id !== artifact.id);
         expect(approval).toBeDefined();
         expect(ApprovalRequestSchema.parse(JSON.parse(persisted.readPlainBody(approval!.id)!)))
@@ -229,6 +237,68 @@ describe('Artifacts browser row operations', () => {
 });
 
 describe('Artifacts browser recovery', () => {
+    it('demands attribution while mounted, refreshes newer background revisions and releases the read on unmount', async () => {
+        const id = '11111111-1111-4111-8111-111111111111';
+        const persisted = createArtifactStoreBoundary({ ownerAccountId: () => 'owner', encryptionMode: 'plain' });
+        const version = async (revision: number) => ({ id, ownerAccountId: 'owner', access: 'owner' as const,
+            encryptionMode: 'plain' as const, dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            header: encodePlainArtifactStoredContent({ title: 'Attributed document', kind: 'markdown' }),
+            body: encodePlainArtifactStoredContent({ body: 'Unopened content' }), headerVersion: revision, bodyVersion: revision,
+            provenance: await sealArtifactPrivateRevisionMetadata({ mode: 'plain', artifactId: id, bodyVersion: revision,
+                provenance: { savedBy: { kind: 'agent', accountId: 'owner', sessionId: `author-${revision}` } } }),
+            seq: revision, createdAt: 1, updatedAt: revision });
+        persisted.replaceStoredRow(await version(1));
+        const served = await serveActionHomes({ homes: [{ key: 'owner', serverUrl: 'https://artifact-demand.test', accountId: 'owner' }],
+            route: request => persisted.handle(request.path + request.url.search, { method: request.method,
+                headers: request.headers, body: request.method === 'GET' ? undefined : JSON.stringify(request.body) }) ?? undefined });
+        disposeHome = served.dispose;
+        const disconnect = await served.restoreActiveConnection();
+        const { sync } = await import('@/sync/sync');
+        try {
+            await sync.fetchArtifactsList();
+            expect(getStorage().getState().artifacts[id]?.provenance).toBeUndefined();
+            const screen = await renderScreen(<AppPaneProvider><ArtifactsBrowserScreen /></AppPaneProvider>);
+            try {
+                await vi.waitFor(() => expect(getStorage().getState().artifacts[id]?.provenance?.savedBy)
+                    .toMatchObject({ sessionId: 'author-1' }));
+                persisted.replaceStoredRow(await version(2));
+                await act(async () => { await sync.fetchArtifactsList(); });
+                expect(getStorage().getState().artifacts[id]?.provenance?.savedBy).toMatchObject({ sessionId: 'author-2' });
+            } finally { await screen.unmount(); }
+            persisted.replaceStoredRow(await version(3));
+            await sync.fetchArtifactsList();
+            expect(getStorage().getState().artifacts[id]).toMatchObject({ bodyVersion: 3 });
+            expect(getStorage().getState().artifacts[id]?.provenance).toBeUndefined();
+            expect(served.requests.some(request => request.path === '/v1/artifacts/read')).toBe(false);
+        } finally { await disconnect(); }
+    });
+    it.each(['phone', 'panes-disabled'] as const)('retains selected details on %s and routes fresh opens', async transition => {
+        const dimensions = vi.spyOn(ReactNative, 'useWindowDimensions')
+            .mockReturnValue({ width: 1440, height: 1000, scale: 1, fontScale: 1 });
+        getStorage().setState(state => ({ localSettings: { ...state.localSettings, uiMultiPanePanelsEnabled: true } }));
+        const artifacts = [artifactFixture('retained-view'), artifactFixture('fresh-view')];
+        const element = () => <AppPaneProvider><ArtifactsBrowser artifacts={artifacts} initialOpenId="retained-view"
+            loaded loadFailed={false} onRetry={() => {}} usage={null} /></AppPaneProvider>;
+        const screen = await renderScreen(element());
+        const viewer = screen.root.findByType(ArtifactView);
+        if (transition === 'phone') dimensions.mockReturnValue({ width: 390, height: 844, scale: 1, fontScale: 1 });
+        else await act(async () => getStorage().setState(state => ({ localSettings: { ...state.localSettings, uiMultiPanePanelsEnabled: false } })));
+        await screen.update(element());
+        expect(screen.root.findAllByType(ArtifactView)).toEqual([viewer]);
+        expect(viewer.props.artifactId).toBe('retained-view');
+        // A new selection still follows the phone/disabled-pane route contract.
+        await act(async () => { invokeTestInstanceHandler(screen.findHostByTestId('artifacts:collection:stage'), 'onLayout', {
+            nativeEvent: { layout: { x: 0, y: 0, width: 1200, height: 800 } },
+        }); });
+        await act(async () => { invokeTestInstanceHandler(rowMenu(screen, 'fresh-view'), 'onSecondaryAction', 'open'); });
+        expect(router.push).toHaveBeenLastCalledWith('/artifacts/fresh-view');
+        expect(screen.root.findAllByType(ArtifactView)).toEqual([viewer]);
+        dimensions.mockReturnValue({ width: 1440, height: 1000, scale: 1, fontScale: 1 });
+        await act(async () => getStorage().setState(state => ({ localSettings: { ...state.localSettings, uiMultiPanePanelsEnabled: true } })));
+        await screen.update(element());
+        expect(screen.root.findAllByType(ArtifactView)).toEqual([viewer]);
+    });
+
     it('names a code document by its language, as its own page does, rather than as a plain document', async () => {
         const screen = await renderRows([artifactFixture('code-1', { title: 'relayHandshake.ts', header: { title: 'relayHandshake.ts' }, body: 'export const retries = 5;' })]);
         expect(screen.findAll(node => node.props.accessibilityLabel === 'relayHandshake.ts, TypeScript').length).toBeGreaterThan(0);

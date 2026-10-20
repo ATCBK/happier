@@ -4,7 +4,7 @@ import { SESSION_ORGANIZATION_CURRENT_PROJECTION_VERSION, SESSION_ORGANIZATION_L
 import { CreateOrUpdateSessionOrganizationFolderRequestSchema, CreateOrUpdateSessionOrganizationFolderResponseSchema, CreateOrUpdateSessionOrganizationTagRequestSchema, CreateOrUpdateSessionOrganizationTagResponseSchema, DeleteSessionOrganizationLabelRequestSchema, DeleteSessionOrganizationLabelResponseSchema, DeleteSessionOrganizationFolderRequestSchema, DeleteSessionOrganizationFolderResponseSchema, DeleteSessionOrganizationTagRequestSchema, DeleteSessionOrganizationTagResponseSchema, ImportLegacySessionOrganizationRequestSchema, ImportLegacySessionOrganizationResponseSchema, MoveSessionFolderAssignmentsRequestSchema, MoveSessionFolderAssignmentsResponseSchema, ReorderSessionOrganizationRequestSchema, ReorderSessionOrganizationResponseSchema, SetSessionFolderAssignmentRequestSchema, SetSessionFolderAssignmentResponseSchema, SetSessionPinRequestSchema, SetSessionPinResponseSchema, SetSessionTagAssignmentsRequestSchema, SetSessionTagAssignmentsResponseSchema, UpsertSessionOrganizationLabelRequestSchema, UpsertSessionOrganizationLabelResponseSchema } from '@happier-dev/protocol/sessions/organization/mutations';
 import { SessionOrganizationSnapshotRequestSchema, SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
 import { SetSessionAttentionStandingRequestSchema, SetSessionAttentionStandingResponseSchema } from '@happier-dev/protocol/sessions/organization/standings';
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { enforceCurrentAccountStoredContentCompatibilityForHttpRequest } from "@/app/clientCompatibility/accountStoredContentCompatibility";
 import { createServerFeatureGatedRouteApp } from "@/app/features/catalog/serverFeatureGate";
@@ -34,15 +34,15 @@ import { type Fastify } from "../../types";
 const SESSION_FOLDERS_FEATURE_ID: FeatureId = "sessions.folders";
 
 const sessionIdParamsSchema = z.object({
-    sessionId: z.string().min(1),
+    sessionId: z.string().check(z.minLength(1)),
 });
 
 const folderIdParamsSchema = z.object({
-    folderId: z.string().min(1),
+    folderId: z.string().check(z.minLength(1)),
 });
 
 const tagIdParamsSchema = z.object({
-    tagId: z.string().min(1),
+    tagId: z.string().check(z.minLength(1)),
 });
 
 function parseOptionalBoolean(value: unknown): boolean | undefined {
@@ -158,6 +158,8 @@ export function registerSessionOrganizationRoutes(app: Fastify) {
 
     app.put("/v2/session-organization/pins/:sessionId", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.organization.pin.set',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: {
             params: sessionIdParamsSchema,
             body: SetSessionPinRequestSchema,
@@ -208,6 +210,8 @@ export function registerSessionOrganizationRoutes(app: Fastify) {
 
     app.put("/v2/session-organization/attention-standings/:sessionId", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.attention.set',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: {
             params: sessionIdParamsSchema,
             body: SetSessionAttentionStandingRequestSchema,
@@ -384,6 +388,8 @@ export function registerSessionOrganizationRoutes(app: Fastify) {
 
     folderRoutes.put("/v2/session-organization/folder-assignments/:sessionId", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.folder.set',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: {
             params: sessionIdParamsSchema,
             body: SetSessionFolderAssignmentRequestSchema,
@@ -594,6 +600,8 @@ export function registerSessionOrganizationRoutes(app: Fastify) {
 
     app.put("/v2/session-organization/tag-assignments/:sessionId", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.tags.set',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: {
             params: sessionIdParamsSchema,
             body: SetSessionTagAssignmentsRequestSchema,

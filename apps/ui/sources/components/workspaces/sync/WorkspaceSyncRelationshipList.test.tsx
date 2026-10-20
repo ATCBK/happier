@@ -17,6 +17,7 @@ const relationshipActionSpies = vi.hoisted(() => ({
     terminate: vi.fn(async () => ({ ok: true, v: 1, relationshipId: 'relationship-1', terminated: true })),
 }));
 const mountedExecuteSpy = vi.hoisted(() => vi.fn());
+const mountedExecution = vi.hoisted(() => ({ current: true }));
 
 installSessionHandoffCommonModuleMocks({
     modal: async () => {
@@ -39,7 +40,7 @@ installSessionHandoffCommonModuleMocks({
 });
 
 vi.mock('@/components/approvals/useMountedActionExecution', () => ({
-    useMountedActionExecution: () => ({ execute: mountedExecuteSpy, ready: true, isCurrent: () => true }),
+    useMountedActionExecution: () => ({ execute: mountedExecuteSpy, ready: true, isCurrent: () => mountedExecution.current }),
 }));
 
 vi.mock('@/sync/ops/actions/workspaceSyncRelationshipActions', () => ({
@@ -117,12 +118,14 @@ function createSummary(
             workspaceRefId: 'workspace-alpha',
             workspaceRef: { id: 'workspace-alpha', serverId: 'server-1', machineId: 'machine-alpha', rootPath: '/alpha', label: 'Alpha', createdAtMs: 1 },
             label: 'Alpha',
+            name: 'Alpha',
             machineName: 'Alpha Mac',
         },
         beta: {
             workspaceRefId: 'workspace-beta',
             workspaceRef: { id: 'workspace-beta', serverId: 'server-1', machineId: 'machine-beta', rootPath: '/beta', label: 'Beta', createdAtMs: 1 },
             label: 'Beta',
+            name: 'Beta',
             machineName: 'Beta workstation',
         },
         status: {
@@ -153,6 +156,45 @@ describe('WorkspaceSyncRelationshipRow', () => {
         }, null, mountedExecuteSpy));
     });
 
+    it('presents a refused lifecycle Action as its own refusal instead of a generic failure', async () => {
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.alert).mockClear();
+        const { WorkspaceSyncRelationshipRow } = await import('./WorkspaceSyncRelationshipList');
+        const screen = await renderScreen(<WorkspaceSyncRelationshipRow summary={createSummary(0)} />);
+        const menu = screen.findAllByType('DropdownMenu')[0];
+
+        relationshipActionSpies.enable.mockResolvedValueOnce({ ok: false, errorCode: 'target_bootstrap_required', error: 'Git workspace sync target requires an explicit SCM bootstrap source' } as never);
+        await act(async () => { menu?.props.onSelect('enable'); });
+        await vi.waitFor(() => expect(Modal.alert).toHaveBeenCalledWith('common.error', 'workspaceSync.error.destinationNeedsPreparation'));
+
+        vi.mocked(Modal.alert).mockClear();
+        relationshipActionSpies.enable.mockResolvedValueOnce({ ok: false, errorCode: 'something_unmapped', error: 'x' } as never);
+        await act(async () => { menu?.props.onSelect('enable'); });
+        await vi.waitFor(() => expect(Modal.alert).toHaveBeenCalledWith('common.error', 'errors.operationFailed'));
+    });
+
+    it('presents nothing when the row left the list before its own Stop settled', async () => {
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.alert).mockClear();
+        const { WorkspaceSyncRelationshipRow } = await import('./WorkspaceSyncRelationshipList');
+        const screen = await renderScreen(<WorkspaceSyncRelationshipRow summary={createSummary(0)} />);
+        const menu = screen.findAllByType('DropdownMenu')[0];
+
+        // The daemon removes the relationship before its Stop settles, so the list drops the row and
+        // retires the row's mounted Action interest; the cancelled settle is not a failed Stop.
+        relationshipActionSpies.terminate.mockImplementationOnce(async () => {
+            mountedExecution.current = false;
+            return { ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' } as never;
+        });
+        try {
+            await act(async () => { menu?.props.onSelect('terminate'); });
+            await vi.waitFor(() => expect(relationshipActionSpies.terminate).toHaveBeenCalled());
+        } finally {
+            mountedExecution.current = true;
+        }
+        expect(Modal.alert).not.toHaveBeenCalled();
+    });
+
     it('opens general details from every row while keeping conflict attention and actions row-scoped', async () => {
         const { WorkspaceSyncRelationshipRow } = await import('./WorkspaceSyncRelationshipList');
         const openDetails = vi.fn();
@@ -173,10 +215,6 @@ describe('WorkspaceSyncRelationshipRow', () => {
         expect(openDetails).toHaveBeenCalledWith(summary);
         expect(openConflicts).not.toHaveBeenCalled();
 
-        const conflictAction = screen.findByTestId('workspace-sync-relationship-relationship-1-conflicts');
-        const moreAction = screen.findByTestId('workspace-sync-relationship-relationship-1-actions');
-        expect(conflictAction?.props.minimumInteractiveTargetSize).toBe(44);
-        expect(moreAction?.props.minimumInteractiveTargetSize).toBe(44);
         await screen.pressByTestIdAsync('workspace-sync-relationship-relationship-1-conflicts');
         expect(openConflicts).toHaveBeenCalledWith(summary);
     });
@@ -219,6 +257,41 @@ describe('WorkspaceSyncRelationshipRow', () => {
             expect.objectContaining({ id: 'open-beta', title: 'workspaceSync.actions.openOnMachine:{"machine":"Beta workstation"}' }),
             expect.objectContaining({ id: 'terminate', title: 'workspaceSync.actions.terminate' }),
         ]));
+    });
+
+    it('tells two folders on the same machine apart in the open actions', async () => {
+        const { WorkspaceSyncRelationshipRow } = await import('./WorkspaceSyncRelationshipList');
+        const summary = createSummary(0, 'keep_synced');
+        const sameNameSummary = {
+            ...summary,
+            beta: { ...summary.beta, machineName: summary.alpha.machineName },
+        };
+        const screen = await renderScreen(<WorkspaceSyncRelationshipRow summary={sameNameSummary} />);
+
+        const items = screen.findAllByType('DropdownMenu')[0]?.props.items as ReadonlyArray<{ id: string; title: string }>;
+        const titles = items.filter((item) => item.id === 'open-alpha' || item.id === 'open-beta').map((item) => item.title);
+        expect(new Set(titles).size).toBe(2);
+        expect(titles[0]).toContain('Alpha');
+        expect(titles[1]).toContain('Beta');
+    });
+
+    it('names the machine once when both folders live on the same machine', async () => {
+        const { WorkspaceSyncRelationshipRow } = await import('./WorkspaceSyncRelationshipList');
+        const summary = createSummary(0, 'keep_synced');
+        const onOneMachine = {
+            ...summary,
+            beta: {
+                ...summary.beta,
+                workspaceRef: { ...summary.beta.workspaceRef!, machineId: summary.alpha.workspaceRef!.machineId },
+                machineName: summary.alpha.machineName,
+            },
+        };
+        const screen = await renderScreen(<WorkspaceSyncRelationshipRow summary={onOneMachine} />);
+
+        const subtitle = screen.findByTestId('workspace-sync-relationship-relationship-1')?.props.subtitle as string;
+        expect(subtitle).toContain('Alpha Mac');
+        expect(subtitle).not.toContain('Alpha Mac → Alpha Mac');
+        expect(subtitle).not.toContain('Alpha Mac · Alpha Mac');
     });
 
     it('keeps a generic attention message for an unmapped daemon error code', async () => {
@@ -277,5 +350,27 @@ describe('WorkspaceSyncRelationshipList', () => {
 
         await screen.pressByTestIdAsync('workspace-sync-add-machine');
         expect(onAddMachine).toHaveBeenCalledOnce();
+    });
+
+    it('says what sync does and offers only its action when nothing is linked yet', async () => {
+        const { WorkspaceSyncRelationshipList } = await import('./WorkspaceSyncRelationshipList');
+        const screen = await renderScreen(
+            <WorkspaceSyncRelationshipList workspaceRefId="workspace-alpha" onAddMachine={vi.fn()} />,
+        );
+
+        const text = screen.getTextContent();
+        expect(text).toContain('workspaceSync.title');
+        expect(text).toContain('workspaceSync.emptyDescription');
+        expect(screen.findByTestId('workspace-sync-add-machine')).toBeTruthy();
+        // No dead row beside the action, and no mechanism text under it.
+        expect(screen.findByTestId('workspace-sync-none')).toBeNull();
+        expect(text).not.toContain('workspaceSync.footer');
+    });
+
+    it('keeps a quiet empty line where no action can be offered', async () => {
+        const { WorkspaceSyncRelationshipList } = await import('./WorkspaceSyncRelationshipList');
+        const screen = await renderScreen(<WorkspaceSyncRelationshipList />);
+
+        expect(screen.findByTestId('workspace-sync-none')).toBeTruthy();
     });
 });

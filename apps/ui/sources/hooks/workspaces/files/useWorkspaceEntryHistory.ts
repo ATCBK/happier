@@ -41,7 +41,9 @@ export function useWorkspaceEntryHistory(input: Readonly<{
         if (paths.length === 0) return;
         const controller = new AbortController();
         const previousForScope = (previous: typeof state) => previous?.scopeKey === scopeKey ? previous.value : EMPTY;
-        setState(previous => ({ scopeKey, repoRootPath, value: { ...previousForScope(previous), status: 'pending', stale: previousForScope(previous).entries.size > 0 } }));
+        // Reading again (more rows came into view, Retry) is not the checkout changing: staleness stays what it was.
+        // A changed HEAD or root is marked below, from the witness itself.
+        setState(previous => ({ scopeKey, repoRootPath, value: { ...previousForScope(previous), status: 'pending' } }));
         const unavailable = (reason: string) => {
             if (controller.signal.aborted) return;
             setState(previous => {

@@ -1,3 +1,4 @@
+import { EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
 import {
   resolveExecutionRunIntentProfile,
   resolveExecutionRunIntentProfileFromCatalog,
@@ -14,6 +15,7 @@ import { ReviewPublicationEvidenceSchema } from '@happier-dev/protocol/reviews/r
 import { ScmDiffSummaryResultErrorCodeSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
 import { readReviewNarration } from '@/agent/executionRuns/profiles/review/reviewWalkthroughTurn';
 import { readScmDiffSummaryIntent } from './kinds/scmDiffSummary/publishSavedScmDiffSummaryTurn';
+import { buildExecutionRunProfileStartParams } from './profileStart';
 
 /** One host publisher for retained structured turns, independent of input transport. */
 export async function publishExecutionRunTurn(args: Readonly<{
@@ -44,7 +46,7 @@ export async function publishExecutionRunTurn(args: Readonly<{
     ? resolveExecutionRunIntentProfileFromCatalog(args.profileCatalog, run.intent, run.profileId, run.profileSourceCustody)
     : resolveExecutionRunIntentProfile(run.intent);
   const params = {
-    start: run,
+    start: { ...run, ...buildExecutionRunProfileStartParams(run) },
     turnId: args.turnId,
     rawText: args.rawText,
     finishedAtMs: args.finishedAtMs,
@@ -63,6 +65,7 @@ export async function publishExecutionRunTurn(args: Readonly<{
       || completion.structuredMeta?.kind === 'review_findings.v2' || completion.structuredMeta?.kind === 'review_findings.v1'),
     reviewComments: args.reviewComments,
     workflowRunId: args.controller.workflowRunId ?? args.controller.workflowObservation?.workflowRunId,
+    workflowScope: args.controller.workflowScope,
   });
   if (!current()) return false;
   completion = { ...completion, toolResultOutput: projected.toolResult.output,
@@ -100,14 +103,14 @@ export async function publishExecutionRunTurn(args: Readonly<{
   if (!latest || latest.status !== 'running' || !current()) return false;
   const hasPublicationNotice = completion.toolResultMeta?.scmResultUpdate !== undefined;
   const publicationRefusal = ScmDiffSummaryResultErrorCodeSchema.safeParse(
-    completion.structuredMeta?.kind === 'scm_diff_summary.v1'
+    completion.structuredMeta?.kind === EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary
       ? readScmDiffSummaryIntent(completion.toolResultMeta?.scmResultUpdate).status : undefined,
   );
   const successfulCurrentPublication = !args.started && !args.admittedInputId
     && completion.structuredMeta !== undefined && !hasPublicationNotice
     && (!projected.materialization || projected.materialization.status === 'materialized');
   const clearPreviousOperationError = successfulCurrentPublication && (latest.error?.code === 'execution_run_send_outcome_unknown'
-    || (completion.status === 'succeeded' && completion.structuredMeta?.kind === 'scm_diff_summary.v1'
+    || (completion.status === 'succeeded' && completion.structuredMeta?.kind === EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary
       && !args.diagnostic && ScmDiffSummaryResultErrorCodeSchema.safeParse(latest.error?.code).success));
   const updated = {
     ...latest,

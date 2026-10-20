@@ -42,4 +42,32 @@ describe('CapabilityMachineTruth', () => {
         expect(screen.findByTestId('mt:machine:win:note')).not.toBeNull();
         expect(screen.getTextContent()).toContain('last known Oct 9');
     });
+
+    it('lists every machine at once in list form, and opens one row into its own detail', async () => {
+        const opened: Array<string | null> = [];
+        const rows = ROWS.map((row) => ({ ...row, detail: <React.Fragment>{`setup for ${row.machineName}`}</React.Fragment> }));
+        const Host = () => {
+            const [open, setOpen] = React.useState<string | null>(null);
+            return (
+                <CapabilityMachineTruth
+                    testID="mt"
+                    presentation="list"
+                    rows={rows}
+                    summary=""
+                    expandedMachineId={open}
+                    onExpandedMachineChange={(machineId) => { opened.push(machineId); setOpen(machineId); }}
+                />
+            );
+        };
+        const screen = await renderScreen(<Host />);
+        expect(screen.findAllByTestId('mt:summary')).toHaveLength(0);
+        expect(screen.findAllByTestId('mt:machine:win').length).toBeGreaterThan(0);
+        expect(screen.getTextContent()).not.toContain('setup for nl2');
+
+        await pressTestInstanceAsync(screen.findByTestId('mt:machine:nl2'), 'nl2 row');
+
+        expect(opened).toEqual(['nl2']);
+        expect(screen.getTextContent()).toContain('setup for nl2');
+        expect(screen.getTextContent()).not.toContain('setup for MacBook Pro');
+    });
 });

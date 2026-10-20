@@ -2,8 +2,10 @@ import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
 import { ExecutionRunTurnStreamStartV2RequestSchema, ExecutionRunUserTranscriptCommitRequestSchema } from '@happier-dev/protocol/execution/runs/streaming';
 import { SessionExecutionRunBrokerAuthorityRequestV1Schema, SessionExecutionRunBrokerAuthorityResponseV1Schema } from '@happier-dev/protocol/daemon/executionRuns';
-import type { ExecutionRunPublicState, SessionTranscriptObservationProvenanceV1, ActionExecutorDeps, ReviewCommentPrincipalHeaderV1 } from '@happier-dev/protocol';
+import type { ExecutionRunPublicState, SessionTranscriptObservationProvenanceV1, ActionExecutorDeps, ReviewCommentPrincipalHeaderV1, ActionId } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { ExecutionRunFollowFrontierRequestSchema, ExecutionRunFollowFrontierResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { readRetainedExecutionRunRecord } from '@/daemon/executionRunRegistry';
 
 import { ExecutionRunHostBridge } from '@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge';
 import type { ExecutionRunTranscriptPublisher } from '@/agent/runtime/bridges/executionRun/executionRunTranscriptPublisher';
@@ -14,6 +16,7 @@ import type {
 import { resolveExecutionRunPolicy } from '@/agent/executionRuns/policy/executionRunPolicy';
 import { acquireExecutionRunRuntimeSnapshot } from './acquireExecutionRunRuntimeSnapshot';
 import type { ExecutionBudgetRegistry } from '@/daemon/executionBudget/ExecutionBudgetRegistry';
+import { createExecutionBudgetRegistry } from '@/daemon/executionBudget/createExecutionBudgetRegistry';
 import type { BrowserDaemonControlRoutes } from '@/daemon/browser/control/routes';
 import type { BrowserContextRoutes } from '@/daemon/browser/context/routes';
 import type { BrowserAutomationRoutes } from '@/daemon/browser/automation/routes';
@@ -43,13 +46,14 @@ import {
 } from './dispatchExecutionRunRpcAction';
 import {
   createReviewCommentHostActionMaterializer,
-  resolveReviewCommentHostPluginAuthority,
 } from '@/agent/executionRuns/profiles/review/hostActionMaterializer';
+import { readCurrentReviewHostPluginAuthority } from '@/agent/executionRuns/profiles/review/pluginAuthority';
 import { resolveWorkspaceRefForMachineRoot } from '@/workspaces/workspaceRefsV1';
 import { readProjectAccountRows } from '@/workspaces/projectAccountRows';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { admitDaemonExecutionRunStart, checkExecutionRunConnectedServicesGenerationCurrent } from '@/daemon/controlClient';
-import type { NativeAgentSessionInteractionHostBinding } from '@/agent/runtime/registry/engineRegistryTypes';
+import type { NativeAgentSessionInteractionHostBinding, ExecutionRunProjectLaunchContext } from '@/agent/runtime/registry/engineRegistryTypes';
+import type { RpcActionExecutorContext } from '../_actionDispatchAdapter';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
@@ -58,6 +62,7 @@ import { createReviewRunCommentService } from '@/agent/executionRuns/profiles/re
 import { resolveCliVoicePromptPreparation } from '@/agent/prompts/library/resolveCliVoicePromptStackBlocks';
 
 export type ExecutionRunRpcHandlerContext = Readonly<{
+  attachActionOperationOwner?: import('@/daemon/actionOperations/createHostActionOperationRuntime').HostActionOperationRuntime['attachOwner'];
   /** Fixed handler scope: a concrete Session or the daemon-owned detached scope. */
   sessionId: string | null;
   cwd: string;
@@ -72,6 +77,8 @@ export type ExecutionRunRpcHandlerContext = Readonly<{
   sessionList?: ActionExecutorDeps['sessionList'];
   resolveAgentStartContext?: ActionExecutorDeps['resolveAgentStartContext'];
   readPromptCredentials?: () => Promise<import('@/persistence').StoredCredentials | null>;
+  /** Host-private Account read; callers cannot inject this policy in a Run request. */
+  resolveRunReportPolicy?: (signal?: AbortSignal) => Promise<import('@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1').FollowPolicyV1>;
   grantAttachedRunTeamVisibility?: GrantAttachedRunTeamVisibility;
   serverUrl?: string;
   parentProvider: ACPProvider;
@@ -137,7 +144,7 @@ export type ExecutionRunRpcHandlerContext = Readonly<{
   prepareRunTeamCredentialProviderBinding?: ExecutionRunTeamCredentialProviderBindingPreparer;
   onExecutionRunPublicStateUpdated?: (run: ExecutionRunPublicState) => void;
   onExecutionRunVoiceAgentWelcomed?: (run: ExecutionRunPublicState, welcomedEpoch: number) => void | Promise<void>;
-  resolveAccountSettings?: () => Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
+  resolveAccountSettings?: (actionId?: ActionId) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
   /** Settings snapshot bound to the runtime owner's Account/Home, never ambient active state. */
   resolveAccountSettingsSnapshot?: ConstructorParameters<typeof ExecutionRunHostBridge>[0]['resolveAccountSettingsSnapshot'];
   resolveManagedPurposeBindingIntent?: ConstructorParameters<typeof ExecutionRunHostBridge>[0]['resolveManagedPurposeBindingIntent'];
@@ -147,6 +154,8 @@ export type ExecutionRunRpcHandlerContext = Readonly<{
   savedSecretOperationContext?: SavedSecretOperationContextV1;
   executionRunProfileCatalog?: ExecutionRunProfileContributionCatalog;
   resolveExecutionRunProfileCatalog?: ConstructorParameters<typeof ExecutionRunHostBridge>[0]['resolveExecutionRunProfileCatalog'];
+  /** Captures actual admitted ingress for this start; never selects ambient daemon credentials. */
+  resolveProjectLaunchContext?: (context: RpcActionExecutorContext) => Promise<ExecutionRunProjectLaunchContext | null>;
   actionExecutor?: RpcActionExecutor;
   /** Host-owned runtime Action policy; restricted runtimes must not fall back to ambient env/Account state. */
   actionsSettingsProvider?: RuntimeActionSettingsProvider;
@@ -162,6 +171,7 @@ function invalidParams(): Readonly<{ ok: false; error: string; errorCode: string
 function createExecutionRunRpcRegistrarExecutor(params: Readonly<{
   executor: RpcActionExecutor;
   defaultSessionId: string | null;
+  machineId?: string;
   serverId?: string;
   runtimeAccountId?: string;
 }>): RpcActionExecutor {
@@ -171,6 +181,7 @@ function createExecutionRunRpcRegistrarExecutor(params: Readonly<{
       const result = await params.executor.execute(actionId, input, {
         ...context,
         ...(defaultSessionId ? { defaultSessionId } : {}),
+        ...(params.machineId ? { defaultSessionMachineId: params.machineId } : {}),
         ...(params.serverId ? { serverId: params.serverId } : {}),
         ...(params.runtimeAccountId ? { runtimeAccountId: params.runtimeAccountId } : {}),
         sessionListAccess: defaultSessionId && params.runtimeAccountId
@@ -187,10 +198,15 @@ function createExecutionRunRpcRegistrarExecutor(params: Readonly<{
   };
 }
 
+export type ExecutionRunRpcHandlerRegistration = Readonly<{
+  /** Release this registration's Action Operations attachment. */
+  dispose(): void;
+}>;
+
 export function registerExecutionRunRpcHandlers(
   rpc: RpcHandlerRegistrar,
   ctx: ExecutionRunRpcHandlerContext,
-): void {
+): ExecutionRunRpcHandlerRegistration {
   const policy = resolveExecutionRunPolicy({
     defaults: {
       // Centralized configuration is the only source of truth for execution-run defaults.
@@ -235,22 +251,9 @@ export function registerExecutionRunRpcHandlers(
       const materialize = createReviewCommentHostActionMaterializer({
         cwd: ctx.cwd,
         readCurrentCandidate,
-        readCurrentPluginAuthority: async (pluginId) => {
-          let runtimeRegistryLease: Awaited<ReturnType<typeof acquireAuthoritativePluginRuntimeRegistryLease>> | null = null;
-          try {
-            runtimeRegistryLease = await acquireAuthoritativePluginRuntimeRegistryLease();
-            return resolveReviewCommentHostPluginAuthority({
-              pluginId,
-              current: runtimeRegistryLease.registry
-                .pluginFinalPolicyCurrentRuntimesById
-                ?.get(pluginId) ?? null,
-              sourceCustody: runtimeRegistryLease.registry.readPluginSourceCustody?.(pluginId) ?? null,
-            });
-          } catch {
-            return null;
-          } finally {
-            await runtimeRegistryLease?.release();
-          }
+        readCurrentPluginAuthority: async pluginId => {
+          const current = await (ctx.actionApprovalDeps?.resolveReviewHostPluginAuthority ?? readCurrentReviewHostPluginAuthority)(pluginId);
+          return current ? { sourceCustody: current.sourceCustody } : null;
         },
         resolveWorkspace: async () => {
           const machineId = typeof ctx.machineId === 'string' ? ctx.machineId.trim() : '';
@@ -284,6 +287,7 @@ export function registerExecutionRunRpcHandlers(
     }
     : undefined;
 
+  const budgetRegistry = ctx.budgetRegistry ?? createExecutionBudgetRegistry(policy.maxConcurrentRuns);
   const manager = new ExecutionRunHostBridge({
     resolveVoicePromptPreparation: async ({ sessionId, signal, workingDirectory }) => {
       const credentials = await ctx.readPromptCredentials?.();
@@ -301,7 +305,7 @@ export function registerExecutionRunRpcHandlers(
     onVoiceAgentWelcomed: ctx.onExecutionRunVoiceAgentWelcomed,
     boundedTimeoutMs: policy.boundedTimeoutMs ?? undefined,
     maxTurns: policy.maxTurns ?? undefined,
-    budgetRegistry: ctx.budgetRegistry,
+    budgetRegistry,
     getPermissionRequestStore: ctx.getPermissionRequestStore,
     parentSessionStateTarget: ctx.parentSessionStateTarget ?? null,
     ...(ctx.sessionInteractionHost
@@ -311,6 +315,7 @@ export function registerExecutionRunRpcHandlers(
       ? { prepareRunTeamCredentialProviderBinding: ctx.prepareRunTeamCredentialProviderBinding }
       : {}),
     resolveAccountSettings: ctx.resolveAccountSettings,
+    ...(ctx.resolveRunReportPolicy ? { resolveRunReportPolicy: ctx.resolveRunReportPolicy } : {}),
     ...(ctx.resolveAccountSettingsSnapshot
       ? { resolveAccountSettingsSnapshot: ctx.resolveAccountSettingsSnapshot }
       : {}),
@@ -346,7 +351,7 @@ export function registerExecutionRunRpcHandlers(
 
   const actionExecutor = ctx.actionExecutor ?? createExecutionRunRpcActionExecutor({
     manager,
-    context: ctx,
+    context: { ...ctx, budgetRegistry },
     policy,
     isExecutionRunsEnabled,
     ...(ctx.actionsSettingsProvider
@@ -355,6 +360,22 @@ export function registerExecutionRunRpcHandlers(
     approvalDeps: ctx.actionApprovalDeps,
   });
   canonicalActionExecutor = actionExecutor;
+
+  // This content-free source read belongs to the daemon's retained owner, not
+  // the live Session handler or detached Run GET. The Home checks source grants
+  // and exact Machine placement before forwarding this read.
+  if (ctx.sessionId === null) rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_FOLLOW_FRONTIER,
+    async (request: unknown) => {
+      if (!isExecutionRunsEnabled()) return { ok: false, error: 'Execution runs disabled', errorCode: 'execution_run_not_allowed' };
+      const parsed = ExecutionRunFollowFrontierRequestSchema.safeParse(request);
+      if (!parsed.success) return invalidParams();
+      const retained = await readRetainedExecutionRunRecord(parsed.data.runId);
+      const run = retained?.state;
+      if (!run || run.sessionId !== parsed.data.sessionId || run.status !== 'running' && !run.terminalOccurrenceId)
+        return { ok: false, error: 'Execution run not found', errorCode: 'execution_run_not_found' };
+      return ExecutionRunFollowFrontierResponseSchema.parse({ sessionId: parsed.data.sessionId, runId: run.runId,
+        status: run.status, terminalEventId: run.status === 'running' ? null : run.terminalOccurrenceId });
+    });
 
   rpc.registerHandler(
     SESSION_RPC_METHODS.EXECUTION_RUN_BROKER_AUTHORITY_RESOLVE_V1,
@@ -372,6 +393,7 @@ export function registerExecutionRunRpcHandlers(
     actionExecutor: createExecutionRunRpcRegistrarExecutor({
       executor: actionExecutor,
       defaultSessionId: ctx.sessionId,
+      ...(ctx.machineId ? { machineId: ctx.machineId } : {}),
       ...(ctx.serverId ? { serverId: ctx.serverId } : {}),
       ...(ctx.runtimeAccountId ? { runtimeAccountId: ctx.runtimeAccountId } : {}),
     }),
@@ -435,4 +457,7 @@ export function registerExecutionRunRpcHandlers(
       });
     },
   );
+
+  const detachActionOperationOwner = ctx.attachActionOperationOwner?.(manager.projectSetupOperations);
+  return { dispose() { detachActionOperationOwner?.(); } };
 }

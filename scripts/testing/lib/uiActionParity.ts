@@ -78,7 +78,8 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
   };
   const resolutionCache = ts.createModuleResolutionCache(root, path => path, options);
   const modules = new Map<string, { source: ts.SourceFile; values: Map<string, ts.Expression>;
-    types: Map<string, ts.TypeNode>; imports: Map<string, { path: string; name: string }>; exports: string[] }>();
+    types: Map<string, ts.TypeNode>; imports: Map<string, { path: string; name: string }>; exports: string[];
+    actionArguments: Map<string, number> }>();
   function module(path: string) {
     path = relativePath(path);
     const cached = modules.get(path);
@@ -87,9 +88,22 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
     if (content === undefined) return undefined;
     const source = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, true);
     const result = { source, values: new Map<string, ts.Expression>(),
-      types: new Map<string, ts.TypeNode>(), imports: new Map<string, { path: string; name: string }>(), exports: [] as string[] };
+      types: new Map<string, ts.TypeNode>(), imports: new Map<string, { path: string; name: string }>(), exports: [] as string[],
+      actionArguments: new Map<string, number>() };
     modules.set(path, result);
     for (const statement of source.statements) {
+      if (ts.isFunctionDeclaration(statement) && statement.name && /^(execute|invoke|dispatch)/.test(statement.name.text)) {
+        // Resource adapters put the Action after their scope/input. Follow the
+        // authored family type, including a generic constrained to that family.
+        const actionType = (type: ts.TypeNode | undefined) => !!type && ts.isTypeReferenceNode(type)
+          && ts.isIdentifier(type.typeName) && /ActionId$/.test(type.typeName.text);
+        const index = statement.parameters.findIndex(parameter => {
+          const type = parameter.type;
+          return actionType(type) || type && ts.isTypeReferenceNode(type) && statement.typeParameters?.some(generic =>
+            generic.name.text === type.typeName.getText() && actionType(generic.constraint));
+        });
+        if (index >= 0) result.actionArguments.set(statement.name.text, index);
+      }
       if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) {
         if (ts.isIdentifier(declaration.name) && declaration.initializer) result.values.set(declaration.name.text, declaration.initializer);
         if (ts.isIdentifier(declaration.name) && declaration.type) result.types.set(declaration.name.text, declaration.type);
@@ -114,6 +128,21 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
       }
     }
     return result;
+  }
+  function actionArgument(path: string, name: string, seen = new Set<string>()): number | undefined {
+    const key = `${path}:${name}`;
+    if (seen.has(key)) return undefined;
+    seen.add(key);
+    const owner = module(path);
+    const local = owner?.actionArguments.get(name);
+    if (local !== undefined) return local;
+    const imported = owner?.imports.get(name);
+    if (imported) return actionArgument(imported.path, imported.name, seen);
+    for (const path of owner?.exports ?? []) {
+      const index = actionArgument(path, name, seen);
+      if (index !== undefined) return index;
+    }
+    return undefined;
   }
   function symbol(path: string, name: string, kind: 'values' | 'types', seen = new Set<string>()): ts.Expression | ts.TypeNode | undefined {
     const key = `${path}:${name}:${kind}`;
@@ -636,7 +665,9 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
       }
       if (ts.isCallExpression(node)) {
         const called = name(node.expression);
-        const first = node.arguments[/^executeOn(Machine|Session|Source)$/.test(called) ? 1 : 0];
+        const adapterArgument = ts.isIdentifier(node.expression) && !lookup(node.expression, node.expression.text)
+          ? actionArgument(file.filePath, node.expression.text) : undefined;
+        const first = node.arguments[adapterArgument ?? (/^executeOn(Machine|Session|Source)$/.test(called) ? 1 : 0)];
         const callable = ts.isIdentifier(node.expression) ? lookup(node.expression, node.expression.text)
           : ts.isPropertyAccessExpression(node.expression) && ts.isIdentifier(node.expression.expression)
             ? lookup(node.expression, node.expression.expression.text) : undefined;
@@ -655,7 +686,7 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
           // Literal ids also find thin family clients whose method is simply named `run`.
           const conventional = /^(execute|executeAction|invoke|dispatch|executeOnMachine|executeOnSession|executeOnSource|useAction)$/.test(called);
           const receiver = ts.isPropertyAccessExpression(node.expression) ? node.expression.expression.getText(source) : '';
-          const isDispatch = callable?.dispatch || called === 'useAction' || /^executeOn(Machine|Session|Source)$/.test(called)
+          const isDispatch = adapterArgument !== undefined || callable?.dispatch || called === 'useAction' || /^executeOn(Machine|Session|Source)$/.test(called)
             || ts.isCallExpression(node.expression) && /^(createFrontDoorActionExecute|createFrontDoorUiActionExecutor)$/.test(name(node.expression.expression))
             || (conventional && /(?:[Aa]ction|executor|^actions$)/.test(receiver));
           const candidates = strings(first, new Set(), !!isDispatch || conventional);

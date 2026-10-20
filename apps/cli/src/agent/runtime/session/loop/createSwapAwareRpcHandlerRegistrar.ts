@@ -1,12 +1,12 @@
-import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
+import type { RpcHandler, RpcHandlerManagerLike, RpcHandlerRegistrar } from '@/api/rpc/types';
 
 export type SwapAwareRpcHandlerRegistrar = Readonly<{
-  registrar: RpcHandlerRegistrar;
+  registrar: RpcHandlerManagerLike;
   rebindTo: (nextRegistrar: RpcHandlerRegistrar) => void;
 }>;
 
 export function createSwapAwareRpcHandlerRegistrar(
-  getRegistrar: () => RpcHandlerRegistrar,
+  getRegistrar: () => RpcHandlerManagerLike,
 ): SwapAwareRpcHandlerRegistrar {
   const registeredHandlers = new Map<string, RpcHandler>();
 
@@ -19,6 +19,9 @@ export function createSwapAwareRpcHandlerRegistrar(
       registerHandler(method, handler) {
         registeredHandlers.set(method, handler);
         registerOn(getRegistrar(), method, handler);
+      },
+      invokeLocal(method, params, options) {
+        return getRegistrar().invokeLocal(method, params, options);
       },
     },
     rebindTo(nextRegistrar) {

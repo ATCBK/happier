@@ -120,13 +120,13 @@ describe('accountProfilePersistence', () => {
         expect(mod, 'account profile persistence module should exist').not.toBeNull();
         if (!mod) return;
 
-        mod.saveAccountProfile(scopeA, { ...profileDefaults, id: 'account-a', email: 'a@example.test' });
-        mod.saveAccountProfile(sameAccountDifferentServer, { ...profileDefaults, id: 'account-a-remote', email: 'remote@example.test' });
-        mod.saveAccountProfile(sameServerDifferentAccount, { ...profileDefaults, id: 'account-b', email: 'b@example.test' });
+        mod.saveAccountProfile(scopeA, { ...profileDefaults, id: 'account-a', name: 'Account A' });
+        mod.saveAccountProfile(sameAccountDifferentServer, { ...profileDefaults, id: 'account-a-remote', name: 'Remote Account A' });
+        mod.saveAccountProfile(sameServerDifferentAccount, { ...profileDefaults, id: 'account-b', name: 'Account B' });
 
-        expect(mod.loadAccountProfile(scopeA)).toMatchObject({ id: 'account-a', email: 'a@example.test' });
-        expect(mod.loadAccountProfile(sameAccountDifferentServer)).toMatchObject({ id: 'account-a-remote', email: 'remote@example.test' });
-        expect(mod.loadAccountProfile(sameServerDifferentAccount)).toMatchObject({ id: 'account-b', email: 'b@example.test' });
+        expect(mod.loadAccountProfile(scopeA)).toMatchObject({ id: 'account-a', name: 'Account A' });
+        expect(mod.loadAccountProfile(sameAccountDifferentServer)).toMatchObject({ id: 'account-a-remote', name: 'Remote Account A' });
+        expect(mod.loadAccountProfile(sameServerDifferentAccount)).toMatchObject({ id: 'account-b', name: 'Account B' });
     });
 
     it('persists purchases separately for each server/account scope', async () => {

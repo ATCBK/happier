@@ -43,7 +43,7 @@ vi.mock('expo-router', async () => {
                 : screen.props.options;
             boundary.options[screen.props.name] = options as { presentation?: string };
         }
-        const options = boundary.options['external/browse'];
+        const options: DrawerProps['options'] & { presentation?: string } | undefined = boundary.options['external/browse'];
         if (boundary.platform === 'web' && options?.presentation === 'transparentModal' && boundary.Drawer) {
             return <boundary.Drawer routeKey="history-route" options={options}
                 renderScreen={boundary.renderScreen} onDismiss={() => { boundary.dismissed += 1; }} />;

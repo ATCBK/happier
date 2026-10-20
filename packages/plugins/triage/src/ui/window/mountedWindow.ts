@@ -1,5 +1,5 @@
 import type { JsonValue, PluginCancellationOptions } from '@happier-dev/plugin-sdk';
-import type { PluginUiEphemeralSharedScope } from '@happier-dev/plugin-ui';
+import type { PluginUiEphemeralSharedScope, PluginUiHostReadiness } from '@happier-dev/plugin-ui';
 
 import {
   TRIAGE_LIST_ENTRIES_ACTION_LOCAL_ID_V1,
@@ -64,8 +64,19 @@ const TRIAGE_LIST_WINDOW_SHARED_KEY_V1 = 'triage.list-window.v1';
 
 type SharedMountedWindow = Readonly<{
   store: TriageListWindowStoreV1;
-  registerClient(host: TriageListWindowHostV1): () => void;
+  registerClient(host: TriageListWindowHostV1, readiness: PluginUiHostReadiness): () => void;
+  setClientReadiness(host: TriageListWindowHostV1, readiness: PluginUiHostReadiness): void;
+  readState(): TriageMountedWindowReadState;
+  subscribeReadiness(listener: () => void): () => void;
 }>;
+
+export type TriageMountedWindowReadState = Readonly<{
+  snapshot: TriageListWindowSnapshotV1;
+  /** No transport client has committed before the first acquisition. */
+  readiness: PluginUiHostReadiness | null;
+}>;
+
+const UNSPECIFIED_READINESS: PluginUiHostReadiness = Object.freeze({ pending: false, revision: 0 });
 
 function mountedFor(
   host: TriageListWindowHostV1,
@@ -91,6 +102,9 @@ const UNMOUNTED_SNAPSHOT: TriageListWindowSnapshotV1 = Object.freeze({
   pending: 'idle',
   passes: 0,
   configuredSources: Object.freeze([]),
+});
+const UNMOUNTED_READ_STATE: TriageMountedWindowReadState = Object.freeze({
+  snapshot: UNMOUNTED_SNAPSHOT, readiness: null,
 });
 
 async function readEntriesThrough(
@@ -119,6 +133,7 @@ async function readEntriesThrough(
 export function acquireTriageListWindow(
   host: TriageListWindowHostV1,
   scope: PluginUiEphemeralSharedScope | null,
+  readiness: PluginUiHostReadiness = UNSPECIFIED_READINESS,
 ): TriageListWindowLeaseV1 {
   if (scope === null) return Object.freeze({ release() {} });
   const byScope = mountedByHost.get(host);
@@ -129,7 +144,19 @@ export function acquireTriageListWindow(
     const sharedLease = scope?.acquire<SharedMountedWindow>(
       TRIAGE_LIST_WINDOW_SHARED_KEY_V1,
       () => {
-        const clients = new Map<TriageListWindowHostV1, number>();
+        const clients = new Map<TriageListWindowHostV1, { leases: number; readiness: PluginUiHostReadiness }>();
+        const readinessListeners = new Set<() => void>();
+        let activeReadiness = readiness;
+        let readState = UNMOUNTED_READ_STATE;
+        const publishReadiness = () => {
+          // Follow the exact first client the transport below uses. These are
+          // shared-owner facts, not another readiness decision. Retiring the
+          // final client supplies no new host observation.
+          const next = clients.values().next().value?.readiness;
+          if (next === undefined || next === activeReadiness) return;
+          activeReadiness = next;
+          for (const listener of [...readinessListeners]) listener();
+        };
         let executionOriginEpoch = 0;
         const store = createTriageListWindowStore({
           readEntries: async (input, options) => {
@@ -166,15 +193,35 @@ export function acquireTriageListWindow(
         });
         const value: SharedMountedWindow = Object.freeze({
           store,
-          registerClient(client) {
-            clients.set(client, (clients.get(client) ?? 0) + 1);
+          readState() {
+            const snapshot = store.getSnapshot();
+            if (readState.snapshot !== snapshot || readState.readiness !== activeReadiness) {
+              readState = Object.freeze({ snapshot, readiness: activeReadiness });
+            }
+            return readState;
+          },
+          subscribeReadiness(listener) {
+            readinessListeners.add(listener);
+            return () => { readinessListeners.delete(listener); };
+          },
+          setClientReadiness(client, next) {
+            const current = clients.get(client);
+            if (!current || current.readiness === next) return;
+            current.readiness = next;
+            publishReadiness();
+          },
+          registerClient(client, next) {
+            clients.set(client, { leases: (clients.get(client)?.leases ?? 0) + 1, readiness: next });
+            publishReadiness();
             let registered = true;
             return () => {
               if (!registered) return;
               registered = false;
-              const remaining = (clients.get(client) ?? 1) - 1;
-              if (remaining > 0) clients.set(client, remaining);
+              const current = clients.get(client);
+              const remaining = (current?.leases ?? 1) - 1;
+              if (remaining > 0 && current) current.leases = remaining;
               else clients.delete(client);
+              publishReadiness();
             };
           },
         });
@@ -193,6 +240,7 @@ export function acquireTriageListWindow(
           },
           dispose() {
             clients.clear();
+            readinessListeners.clear();
             store.dispose();
           },
         });
@@ -204,7 +252,7 @@ export function acquireTriageListWindow(
     mounted = {
       shared: sharedLease.value,
       sharedLease,
-      unregisterClient: sharedLease.value.registerClient(host),
+      unregisterClient: sharedLease.value.registerClient(host, readiness),
       leases: 0,
     };
   }
@@ -237,9 +285,21 @@ export function subscribeToTriageListWindow(
   listener: () => void,
   scope: PluginUiEphemeralSharedScope | null,
 ): () => void {
-  const store = mountedFor(host, scope)?.shared.store;
-  if (store === undefined) return () => {};
-  return store.subscribe(listener);
+  const shared = mountedFor(host, scope)?.shared;
+  if (shared === undefined) return () => {};
+  const unsubscribe = shared.store.subscribe(listener);
+  const unsubscribeReadiness = shared.subscribeReadiness(listener);
+  return () => { unsubscribe(); unsubscribeReadiness(); };
+}
+
+export function setTriageListWindowReadiness(host: TriageListWindowHostV1,
+  scope: PluginUiEphemeralSharedScope | null, readiness: PluginUiHostReadiness): void {
+  mountedFor(host, scope)?.shared.setClientReadiness(host, readiness);
+}
+
+export function readTriageMountedWindowReadState(host: TriageListWindowHostV1,
+  scope: PluginUiEphemeralSharedScope | null): TriageMountedWindowReadState {
+  return mountedFor(host, scope)?.shared.readState() ?? UNMOUNTED_READ_STATE;
 }
 
 export function readTriageListWindowSnapshot(

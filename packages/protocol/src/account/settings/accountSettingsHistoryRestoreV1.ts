@@ -215,7 +215,16 @@ export function applyAccountSettingsHistoryRestoreV1(
     if (definition.classification === 'legacy' || definition.classification === 'transferring') {
       continue;
     }
-    const parsed = definition.parseMutationValue(historicalValue);
+    // History is persisted input: apply the catalog's stored projection first
+    // (for example retired Machine targets or a retained Replay budget), then
+    // require its result to satisfy current write admission below.
+    // Policy input remains strict: a forgiving display reader must never turn
+    // malformed historical authority into a newly granted default.
+    const stored = definition.classification === 'policy'
+      ? definition.parseMutationValue(historicalValue)
+      : definition.parseStoredValue(historicalValue);
+    if (!stored.success) return invalid(stored.reason);
+    const parsed = definition.parseMutationValue(stored.data);
     if (!parsed.success) return invalid(parsed.reason);
     next[key] = parsed.data;
   }

@@ -8,7 +8,6 @@ import { PushNotificationPermissionPrimingRuntime } from '@/activity/notificatio
 import { DesktopActivityOverlayRuntime } from '@/activity/adapters/desktop/runtime/DesktopActivityOverlayRuntime';
 import { ReleaseNotesAutoShowMount } from '@/changelog/releaseNotes';
 import { OnboardingShowcaseAutoShowMount } from '@/onboarding/showcase';
-import { CompanionNoDragRegionProvider } from '@/components/companion/interaction/CompanionNoDragRegion';
 import { tryRenderWebPortal } from '@/components/ui/popover/portal';
 import { DesktopPetOverlayRuntimeMount } from '@/components/pets/runtime/DesktopPetOverlayRuntimeMount';
 import { PetAppShellCompanionMount } from '@/components/pets/runtime/PetAppShellCompanionMount';
@@ -93,10 +92,10 @@ export const AuthenticatedAppRuntimeMounts = React.memo(function AuthenticatedAp
     // active. Global floating companions must render outside that hidden DOM branch;
     // the existing web portal preserves their React context and runtime ownership.
     const floatingCompanions = (
-        <CompanionNoDragRegionProvider>
+        <>
             <PetAppShellCompanionMount />
             <VoicePresenceAppShellMount />
-        </CompanionNoDragRegionProvider>
+        </>
     );
     return (
         <>
@@ -115,9 +114,8 @@ export const AuthenticatedAppRuntimeMounts = React.memo(function AuthenticatedAp
             {props.isAuthenticated ? <EntityDragRealmPreview /> : null}
             <DesktopPetOverlayRuntimeMount />
             {/*
-              * One no-drag registry for every floating companion in the app shell. The pet and the
-              * Voice orb both start drags from measured rects, and a provider per companion would
-              * mean each one only sees its own subtree's regions.
+              * The app root's one no-drag registry covers routed viewers as well as these
+              * floating companions. Portaling preserves that same React context.
               */}
             {tryRenderWebPortal({
                 shouldPortalWeb: Platform.OS === 'web',

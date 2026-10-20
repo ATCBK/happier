@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
 
 import type {
     ExternalSessionOperationProgressV1,
@@ -63,6 +65,7 @@ export function useExternalSessionOperationOwnerHydration(params: Readonly<{
     serverId: string | null;
     sessionId: string;
 }>) {
+    const presentationActive = useLayoutPresentationActive();
     const {
         isExactOwner,
         machineId,
@@ -76,7 +79,7 @@ export function useExternalSessionOperationOwnerHydration(params: Readonly<{
         && machineId !== null
         && ownerScopeKey !== null
         && serverId !== null;
-    const readEligible = authorized && machineOnline;
+    const readEligible = authorized && machineOnline && presentationActive;
     const currentKey = authorized && presentation
         ? createOperationKey({
             machineId,
@@ -117,6 +120,7 @@ export function useExternalSessionOperationOwnerHydration(params: Readonly<{
         readEligible: false,
     });
     const requestSequenceRef = React.useRef(0);
+    const requestControllerRef = React.useRef<AbortController | null>(null);
     const latestRequestRef = React.useRef<Readonly<{
         key: string;
         sequence: number;
@@ -135,8 +139,12 @@ export function useExternalSessionOperationOwnerHydration(params: Readonly<{
         mountedRef.current = true;
         return () => {
             mountedRef.current = false;
+            requestControllerRef.current?.abort();
         };
     }, []);
+    React.useEffect(() => () => {
+        requestControllerRef.current?.abort();
+    }, [currentKey, readEligible]);
 
     const loadCurrent = React.useCallback(async (
         snapshot: Readonly<{
@@ -146,6 +154,10 @@ export function useExternalSessionOperationOwnerHydration(params: Readonly<{
             serverId: string;
         }>,
     ): Promise<'ready' | 'unavailable' | 'superseded'> => {
+        requestControllerRef.current?.abort();
+        const controller = new AbortController();
+        requestControllerRef.current = controller;
+        const retirement = captureActiveServerAccountScopeCurrentness().onRetire(() => controller.abort());
         const sequence = requestSequenceRef.current + 1;
         requestSequenceRef.current = sequence;
         latestRequestRef.current = {
@@ -158,7 +170,7 @@ export function useExternalSessionOperationOwnerHydration(params: Readonly<{
                 sessionId,
                 operationId: snapshot.presentation.operationId,
                 revision: snapshot.presentation.revision,
-            }, { serverId: snapshot.serverId });
+            }, { serverId: snapshot.serverId, signal: controller.signal });
             const current = currentRef.current;
             if (!mountedRef.current) return 'superseded';
             if (
@@ -204,6 +216,9 @@ export function useExternalSessionOperationOwnerHydration(params: Readonly<{
                 }
             }
             return 'superseded';
+        } finally {
+            retirement.dispose();
+            if (requestControllerRef.current === controller) requestControllerRef.current = null;
         }
     }, [commitRead, sessionId]);
 
@@ -290,7 +305,8 @@ export function useExternalSessionOperationOwnerHydration(params: Readonly<{
     const checkAgain = React.useCallback(async (): Promise<boolean> => {
         const current = currentRef.current;
         if (
-            !current.authorized
+            !presentationActive
+            || !current.authorized
             || !current.key
             || !current.machineId
             || !current.presentation
@@ -309,7 +325,7 @@ export function useExternalSessionOperationOwnerHydration(params: Readonly<{
             readEpisodeRef.current = { key: current.key, readEligible: true };
         }
         return outcome === 'ready';
-    }, [loadCurrent]);
+    }, [loadCurrent, presentationActive]);
 
     const currentRead = currentKey !== null && hydrated?.key === currentKey
         ? hydrated

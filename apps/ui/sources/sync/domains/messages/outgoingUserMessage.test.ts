@@ -118,6 +118,17 @@ describe('outgoing user message projection', () => {
         expect(storage.getState().sessionPending['session-created-before-hydration']?.messages ?? []).toEqual([]);
     });
 
+    it('protects the sender Account check-in choice on the originating human input', async () => {
+        const { buildOutgoingUserTextRecord } = await import('./outgoingUserMessage');
+        const message = buildOutgoingUserTextRecord({
+            text: 'Start an exchange', agentId: null, permissionMode: 'default',
+            settings: { coordinationAutonomousCheckIn: { afterTurns: 17 } }, session: null,
+        });
+        expect((message.meta as Record<string, unknown>).happierInputRequestV1).toMatchObject({
+            autonomousCheckIn: { afterTurns: 17 },
+        });
+    });
+
     it('carries a provider model literally named default without leaking it to released native-only readers', async () => {
         const { buildOutgoingUserTextRecord } = await import('./outgoingUserMessage');
 

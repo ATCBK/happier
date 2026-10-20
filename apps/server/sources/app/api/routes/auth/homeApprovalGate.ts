@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { HOME_LOGIN_APPROVALS_HTTP_PATH_V1, HOME_LOGIN_APPROVAL_DECISION_HTTP_PATH_V1, HomeDeviceApprovalDecisionRequestV1Schema, HomeDeviceApprovalDecisionResponseV1Schema, HomeDeviceApprovalListV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
 import { resolveHomeDeviceApprovalRequiredFromEnv } from "@happier-dev/cli-common/firstPartyRuntime/personalHome/configuration";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { assertAccountActive, InactiveAccountError } from "@/app/auth/accountStatus";
@@ -151,8 +151,8 @@ export function createHomeApprovalGate(env: NodeJS.ProcessEnv = process.env): Ho
     };
 }
 
-const ApprovalIdParamsSchema = z.object({ approvalId: z.string().trim().min(1).max(256) }).strict();
-const ApprovalNotFoundResponseSchema = z.object({ error: z.literal("not_found") }).strict();
+const ApprovalIdParamsSchema = z.strictObject({ approvalId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)) });
+const ApprovalNotFoundResponseSchema = z.strictObject({ error: z.literal("not_found") });
 /** Authenticated Home-owner approval handlers for the existing pairing owner. */
 export function registerHomeLoginApprovalRoutes(app: Fastify): void {
     app.get(HOME_LOGIN_APPROVALS_HTTP_PATH_V1, {
@@ -207,7 +207,7 @@ export function registerHomeLoginApprovalRoutes(app: Fastify): void {
         const status = request.body.decision === "approve" ? "approved" : "rejected";
         const outcome = await inTx(async (tx) => {
             try {
-                await acquireAccountSessionOwnerMetadataFenceInTx(tx, request.userId);
+                await acquireAccountSessionOwnerMetadataFenceInTx(tx, request.userId, "content");
             } catch (error) {
                 if (error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError) throw new InactiveAccountError();
                 throw error;

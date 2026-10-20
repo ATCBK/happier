@@ -443,7 +443,7 @@ describe('bundleWorkspacePackageWithRuntimeDependencies', () => {
     const nativePath = 'native/happier-iroh-native-lifecycle.linux-x64.node';
     writePackage(sourceDir, {
       name: '@happier-dev/iroh-native', version: '0.0.0', type: 'module',
-      exports: { '.': './dist/index.js' }, files: ['dist', 'native'],
+      exports: { '.': './dist/index.js' }, files: ['dist', 'native/*.node'],
     }, { 'dist/index.js': 'export const generation = "current";\n' });
     writePackage(destinationDir, {
       name: '@happier-dev/iroh-native', version: '0.0.0', type: 'module',
@@ -460,20 +460,48 @@ describe('bundleWorkspacePackageWithRuntimeDependencies', () => {
       },
     });
 
-    expect(publish).toThrow("Bundled workspace package declared file is missing: 'native'");
+    expect(publish).toThrow();
     expect(readFileSync(join(destinationDir, 'dist/index.js'), 'utf8')).toContain('last-green');
     expect(readFileSync(join(destinationDir, nativePath), 'utf8')).toBe('last-green native fixture bytes');
 
     // Opaque byte-copy fixture, never loaded as or represented as a real addon.
     mkdirSync(join(sourceDir, 'native'));
     writeFileSync(join(sourceDir, nativePath), 'prepared native fixture bytes');
+    mkdirSync(join(sourceDir, 'native/.private-staging'));
+    writeFileSync(join(sourceDir, 'native/.private-staging/in-progress.node'), 'private native bytes');
+    symlinkSync(root, join(sourceDir, 'native/.private-staging/escaping'), process.platform === 'win32' ? 'junction' : 'dir');
     publish();
     expect(readFileSync(join(destinationDir, nativePath), 'utf8')).toBe('prepared native fixture bytes');
+    expect(existsSync(join(destinationDir, 'native/.private-staging'))).toBe(false);
     expect(readFileSync(join(destinationDir, 'dist/index.js'), 'utf8')).toContain('current');
   });
 });
 
 describe('materializePrepublicationWorkspacePackageRoots', () => {
+  it('materializes reachable public author dependencies using the shared prepublication rule', () => {
+    const root = createTempRoot('workspace-public-author-closure-');
+    const destinationRoot = join(root, 'author');
+    const bundle = createPrepublicationBundleWriter({ sourceRoot: join(root, 'packages'), destinationRoot });
+    const sdk = bundle('@happier-dev/plugin-sdk', 'sdk');
+    const ui = bundle('@happier-dev/plugin-ui', 'ui', {
+      peerDependencies: { '@happier-dev/plugin-sdk': '>=0.0.0 <1.0.0' },
+    });
+    const sources = bundle('@happier-dev/triage-sources', 'sources', {
+      dependencies: { '@happier-dev/plugin-ui': '0.0.0' },
+      optionalDependencies: { '@happier-dev/channels-protocol': '^1.0.0' },
+    });
+    const unused = bundle('@happier-dev/channels-protocol', 'channels');
+    materializePrepublicationWorkspacePackageRoots({
+      bundles: [sources, ui, sdk, unused],
+      rootPackageNames: ['@happier-dev/triage-sources'],
+    });
+
+    expect(existsSync(join(ui.destDir, 'dist/index.js'))).toBe(true);
+    expect(existsSync(join(sdk.destDir, 'dist/index.js'))).toBe(true);
+    expect(existsSync(unused.destDir)).toBe(false);
+    expect(readPackageJson(sources.destDir).dependencies).toMatchObject({ '@happier-dev/plugin-ui': '0.0.0' });
+  });
+
   it('materializes only requested packages carrying the canonical public author classification', () => {
     const root = createTempRoot('cli-common-public-author-roots-');
     const writePublicPackage = createPrepublicationBundleWriter({

@@ -8,7 +8,10 @@ import {
   type ReviewCommentClaimPublicationDispatchResponseV1,
   type ReviewCommentPublicationResultV1,
 } from '@happier-dev/plugin-sdk/reviews';
-import type { TriageSourceFailureV1 } from '@happier-dev/triage-protocol/v1';
+import {
+  TriageSourceCredentialInputsV1,
+  type TriageSourceFailureV1, type TriageTaskFieldsV1, type TriageTaskWriteResultV1,
+} from '@happier-dev/triage-protocol/v1';
 import { GITHUB_PLUGIN_ID } from '../observations/githubProviderContracts.js';
 
 
@@ -46,6 +49,8 @@ import {
   addGithubIssueAssignees,
   addGithubIssueLabels,
   closeGithubIssue,
+  createGithubIssue,
+  editGithubIssue,
   publishGithubIssueComment,
   removeGithubIssueAssignees,
   removeGithubIssueLabel,
@@ -65,6 +70,65 @@ import {
   requestGithubPullRequestReviewers,
 } from './mutations/reviewers.js';
 import { setGithubReviewThreadResolution } from './mutations/reviewThread.js';
+import { openGithubTriageClient, resolveGithubTriageInstance } from './operations.js';
+import { parseGithubRoutingToken } from './locator.js';
+import { GITHUB_TRIAGE_SOURCE_DESCRIPTOR_V1 } from './contribution.js';
+
+function taskFieldsSupported(fields: TriageTaskFieldsV1, create: boolean): boolean {
+  const capabilities = GITHUB_TRIAGE_SOURCE_DESCRIPTOR_V1.kinds.find((kind) => kind.id === 'issue')?.taskCapabilities;
+  const allowed = (create ? capabilities?.createFields : capabilities?.editFields) ?? [];
+  return Object.keys(fields).every((field) => allowed.some((supported) => supported === field));
+}
+
+function taskStateResult(result: Awaited<ReturnType<typeof closeGithubIssue>>): TriageTaskWriteResultV1 {
+  if (result.kind === 'applied') return { kind: 'applied', observation: result.observation };
+  if (result.kind === 'refused') return { kind: 'refused', reason: result.reason };
+  return result;
+}
+
+/** Native Actions and optional Tasks roles bind these same configured-source handlers. */
+export async function createGithubIssueAction(input: unknown, context: PluginInvocationContext): Promise<TriageTaskWriteResultV1> {
+  const parsed = TriageSourceCredentialInputsV1.create.safeParse(input);
+  if (!parsed.success) return failed(INVALID_INPUT_FAILURE);
+  const request = parsed.data;
+  if (request.kindId !== 'issue') return { kind: 'refused', reason: 'unsupported_kind' };
+  if (!taskFieldsSupported(request.fields, true)) return { kind: 'refused', reason: 'unsupported_field' };
+  const resolved = resolveGithubTriageInstance(request.instance);
+  if (!resolved.ok) return failed(resolved.failure);
+  const route = parseGithubRoutingToken(request.fields.scopeId
+    ?? (resolved.configuration.scope.kind === 'repository' ? resolved.configuration.scope.repositoryKey : undefined));
+  if (route === null) return { kind: 'refused', reason: 'scope_required' };
+  const opened = await openGithubTriageClient(request.instance, context);
+  if (!opened.ok) return failed(opened.failure);
+  return createGithubIssue({ route, fields: request.fields }, { client: opened.client, now: Date.now, signal: context.signal });
+}
+
+export async function editGithubIssueAction(input: unknown, context: PluginInvocationContext): Promise<TriageTaskWriteResultV1> {
+  const parsed = TriageSourceCredentialInputsV1.edit.safeParse(input);
+  if (!parsed.success) return failed(INVALID_INPUT_FAILURE);
+  const request = parsed.data;
+  if (!taskFieldsSupported(request.fields, false)) return { kind: 'refused', reason: 'unsupported_field' };
+  const admitted = await admitGithubEntryInvocation({ instance: request.instance, localRef: request.localRef,
+    routingToken: request.lastKnownLocator?.routingToken ?? '', admissibleKinds: ['issue'] }, context);
+  if (!admitted.ok) return failed(admitted.failure);
+  return editGithubIssue({ localRef: admitted.localRef, route: admitted.route, fields: request.fields },
+    { client: admitted.client, now: Date.now, signal: admitted.signal });
+}
+
+export async function transitionGithubIssueAction(input: unknown, context: PluginInvocationContext): Promise<TriageTaskWriteResultV1> {
+  const parsed = TriageSourceCredentialInputsV1.transition.safeParse(input);
+  if (!parsed.success) return failed(INVALID_INPUT_FAILURE);
+  const request = parsed.data;
+  if (!['open', 'completed', 'not_planned'].includes(request.transitionId)) return { kind: 'refused', reason: 'unsupported_transition' };
+  const admitted = await admitGithubEntryInvocation({ instance: request.instance, localRef: request.localRef,
+    routingToken: request.lastKnownLocator?.routingToken ?? '', admissibleKinds: ['issue'] }, context);
+  if (!admitted.ok) return failed(admitted.failure);
+  const target = { localRef: admitted.localRef, route: admitted.route };
+  const dependencies = { client: admitted.client, now: Date.now, signal: admitted.signal };
+  return taskStateResult(request.transitionId === 'open'
+    ? await reopenGithubIssue(target, dependencies)
+    : await closeGithubIssue({ ...target, stateReason: request.transitionId === 'completed' ? 'completed' : 'not_planned' }, dependencies));
+}
 
 function publicationPlanTargetsRequest(
   request: Pick<GithubPullRequestReviewPublicationInputV1, 'instance' | 'localRef'>,

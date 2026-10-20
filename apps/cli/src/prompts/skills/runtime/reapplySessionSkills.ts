@@ -1,4 +1,4 @@
-import type { AgentSessionRuntime, AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agent-runtime';
+import type { AgentSessionRuntime, AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agents/runtime';
 import { createRunnerSkillsCurrentnessCheck, resolveRunnerSkills, type ResolveRunnerSkillsInput, type RunnerSkillsResult, type RunnerSkillsTransports } from './resolveRunnerSkills';
 import { resolveAgentSkillsCapability } from '@/agent/skills/resolveAgentSkillsCapability';
 

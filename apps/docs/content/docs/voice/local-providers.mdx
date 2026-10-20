@@ -15,7 +15,10 @@ Open **Settings → Voice → Voice conversations → Local voice** to configure
 
 The pipeline and settings layout described here target 0.3 development source.
 Conversation controls require the Voice feature; a dedicated Voice agent also needs
-the Voice agent feature. Dictation has independent settings and remains available
+the Voice agent feature and Subagents. In 0.3 development, the Voice agent and
+Machine speech preferences default on and are independent of Experiments;
+stored choices are preserved. Subagents remains an experimental opt-in under
+**Settings → Features**. Dictation has independent settings and remains available
 with the conversation service Off. Opening these pages does not start recording.
 
 ## Where "local" actually runs
@@ -29,7 +32,7 @@ which before you choose one.
 | **Device STT (experimental)** / **Device TTS (experimental)** | The browser or operating system speech service. Depending on the platform and the configured service, that can be off-device. |
 | **OpenAI-compatible endpoint** | Whatever endpoint you configured — your own server, or a remote one. |
 | Google Gemini STT / Google Cloud TTS | Google, reached through the selected execution machine using that machine's Google credential. |
-| **Local neural (beta)** | On web, the daemon, which needs the **Voice daemon inference** feature. On native, downloadable on-device model packs. |
+| **Local neural (beta)** | On web, the daemon, which needs the **Machine speech** feature. On native, downloadable on-device model packs. |
 
 Happier shows the exact processing disclosure for whatever you have selected under
 **Settings → Voice → Privacy & data**. Genuinely on-device speech means a native build
@@ -294,6 +297,12 @@ These settings control when a spoken turn should be considered finished.
 Supported Happier speech-model capture uses the same timing owner. Engines without
 that capture capability explain why the controls are unavailable.
 
+In 0.3 development, leave the microphone unmuted through the silence timeout to
+finish a hands-free turn. For an explicit turn, open the live Voice controls and
+choose **Send** after speaking. **Mute** pauses microphone input without sending;
+you can still send the buffered turn explicitly. **End** discards input you have
+not submitted and ends the conversation. Previously submitted messages remain.
+
 ### Device TTS (experimental)
 
 This uses the browser's or the operating system's speech synthesizer. It is the easiest
@@ -379,20 +388,22 @@ on the platform, and the two paths do not offer the same controls.
 ### On web and desktop web
 
 There is no browser Kokoro runtime. On web, local-neural speech runs on the daemon,
-which means it needs **Settings → Features → Voice daemon inference** — an experimental
-toggle that is off by default — and a reachable machine. Without it, selecting the
-provider fails rather than falling back.
+which means it needs **Settings → Features → Machine speech** and a reachable
+machine. In 0.3 development this preference defaults on; its switch lets you turn it
+off. It also needs Voice agent and its Subagents prerequisite. Without the required
+features, selecting the provider fails rather than falling back.
 
 In 0.3 development, the daemon permits Machine speech by default. An operator can
 disable it by setting `HAPPIER_FEATURE_VOICE_DAEMON_INFERENCE__ENABLED=false` (or `0`)
-in the daemon environment. The client toggle above remains a separate opt-in.
+in the daemon environment. The Account preference above is separate from this
+daemon policy, and both honor explicit opt-outs.
 Starting the daemon does not download speech models or start an inference process;
 models are installed explicitly and loaded when used.
 
 You can configure:
 
-- **Execution** (daemon; device is not selectable on web)
-- **Model pack** (the daemon-side pack)
+- **Execution** (Machine; device is not selectable on web)
+- **Model pack** (the pack on your machine)
 - **Voice**
 - **Speed**
 
@@ -430,8 +441,16 @@ build these download to the device, where you can configure:
 
 That is Local voice's genuinely on-device speech-to-text option: no external server, and
 no audio leaving the device. On web the same provider runs on the daemon instead, under
-the **Voice daemon inference** feature, and only offers an execution choice and a
+the **Machine speech** feature, and only offers an execution choice and a
 daemon-side model pack.
+
+In 0.3 development, the default Machine speech-to-text pack is the June 2023
+English Zipformer (chunk-16/left-128, int8), about 72.7 MB including notices.
+It supports both streaming Voice conversations and batch dictation. Models download
+only when you choose to install them. Existing explicit model selections, including
+the smaller February 2023 20M pack, stay selected; changing the default does not
+replace an installed model. Parakeet packs remain optional catalog entries, rather
+than the default, and require a published pack and runtime support before use.
 
 ## Model downloads, updates, and storage
 
@@ -444,6 +463,12 @@ From settings, users can:
 - stop an in-progress download
 - check whether a newer model-pack build is available
 - remove downloaded assets to free storage
+
+In 0.3 development builds, native downloads show transferred bytes and verified
+file counts. Stopping or interrupting a download keeps resumable files; retry to
+continue, or use the remove action to discard the unfinished download and free
+storage. Updates reuse unchanged files after verifying them and keep the
+installed pack in place while downloading.
 
 Native model packs are stored on the device. Web has no browser-side model cache, because local-neural speech runs on the daemon there.
 
@@ -509,7 +534,7 @@ Check:
 
 Check:
 
-- on web, that **Voice daemon inference** is enabled and a machine is reachable — there
+- on web, that **Machine speech** is enabled and a machine is reachable — there
   is no browser Kokoro runtime to fall back to
 - on native, that the model pack downloaded successfully
 - that the selected Kokoro pack is ready
@@ -519,7 +544,7 @@ Check:
 Check:
 
 - on native, that the Sherpa model pack has been downloaded
-- on web, that **Voice daemon inference** is enabled and a machine is reachable
+- on web, that **Machine speech** is enabled and a machine is reachable
 - that the selected language or pack matches your use case
 
 ### Nothing is written into the target session

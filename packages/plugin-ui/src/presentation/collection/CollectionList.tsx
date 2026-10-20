@@ -23,7 +23,7 @@ import {
  * text, scroller, search field and theme-bound styles through {@link HappierCollectionListHost}, the
  * way core rows keep their Unistyles entries; nothing here reads a theme.
  */
-export type HappierCollectionListTextRole = 'title' | 'count' | 'groupTitle' | 'groupHeading' | 'groupCount';
+export type HappierCollectionListTextRole = 'title' | 'count' | 'subtitle' | 'groupTitle' | 'groupHeading' | 'groupCount';
 
 export type HappierCollectionListHost = Readonly<{
   /** One line of text in an anatomy role. */
@@ -72,6 +72,11 @@ export type HappierCollectionListProps = Readonly<{
   count?: number | null;
   /** The add control ("+", or a menu when there is more than one way to add). */
   headerAction?: ReactNode;
+  /**
+   * One quiet line under the title saying whose list this is and who sees it (a Home's Discussions:
+   * "Acme · Only people you invite"), led by an optional 14px glyph.
+   */
+  subtitle?: Readonly<{ text: string; leading?: ReactNode; testID?: string }> | null;
   /** Present only when the list is long enough to need it. */
   search?: HappierCollectionListSearch | null;
   filters?: HappierCollectionListFilters | null;
@@ -148,9 +153,11 @@ function collectionTextStep(role: HappierTypeRole, emphasis?: HappierTypeEmphasi
  * The list anatomy's type steps (sizes, line heights, weights). Core binds them to its own families
  * and plugin columns take the host's faces for the same weights, so the two draw one type rhythm.
  */
-export const HAPPIER_COLLECTION_LIST_TEXT: Readonly<Record<HappierCollectionListTextRole | 'rowTitle' | 'rowTitleSelected', HappierPageTextStep>> = Object.freeze({
+export const HAPPIER_COLLECTION_LIST_TEXT: Readonly<Record<HappierCollectionListTextRole | 'rowTitle' | 'rowTitleSelected' | 'listRowTitle', HappierPageTextStep>> = Object.freeze({
   title: collectionTextStep('heading'),
   count: collectionTextStep('body'),
+  // The line under the title (whose list, who sees it): the quiet body step.
+  subtitle: collectionTextStep('body'),
   groupTitle: collectionTextStep('meta', 'semiBold'),
   // A group label inside a page section's sheet is a sub-heading between the section title and its
   // rows (the event a set of triggers answers): a step above the rows' description, in the text tone,
@@ -160,6 +167,9 @@ export const HAPPIER_COLLECTION_LIST_TEXT: Readonly<Record<HappierCollectionList
   // A navigation row's title: the compact list step, heavier while it is the open row.
   rowTitle: collectionTextStep('body'),
   rowTitleSelected: collectionTextStep('body', 'semiBold'),
+  // A Collection's two-line list row title: the row label, a weight up, because it is the row's one anchor over
+  // its quiet facts line (lab `.br .x`). The table's single-line title keeps the plain label among its columns.
+  listRowTitle: collectionTextStep('label', 'semiBold'),
 });
 
 /** A row's content inset (its own horizontal padding inside the gutter), plus a disclosure indent. */
@@ -184,11 +194,23 @@ export function useHappierCollectionListRow(): boolean {
  * bleed with a hairline under it, the pointer's hover fill and the open row's fill with its leading
  * edge across the whole row (accessory included), so selection never reads as a floating chip and
  * stays distinct from the keyboard focus ring. None of it takes layout: the row keeps the exact
- * height the Collection planned.
+ * height the Collection planned. A resting list (a phone, a narrow page) separates its rows by air instead
+ * (`hairline: false`); the fills and edge stay.
  */
-export const HappierCollectionTableRowContext = createContext(false);
+export type HappierCollectionTableRowFacts = Readonly<{ hairline: boolean }>;
+export const HappierCollectionTableRowContext = createContext<HappierCollectionTableRowFacts | null>(null);
 
-export function useHappierCollectionTableRow(): boolean {
+/**
+ * How a Collection's resting list (no detail beside it) parts its rows. `air` (default): the page's own edges,
+ * rows apart by space, for a phone or a page. `ruled`: the table's own insets and the row hairline, as the list
+ * beside an open detail, for a host whose list fills a dialog and keeps one rhythm at rest and beside the detail.
+ * `ruled-page`: the same ruled rows with their ends on the page gutter, for that dialog as a phone's full-screen page.
+ * Host-provided; an author's Collection takes whatever its host presents.
+ */
+export type HappierCollectionRestingRows = 'air' | 'ruled' | 'ruled-page';
+export const HappierCollectionRestingRowsContext = createContext<HappierCollectionRestingRows>('air');
+
+export function useHappierCollectionTableRow(): HappierCollectionTableRowFacts | null {
   return useContext(HappierCollectionTableRowContext);
 }
 
@@ -241,6 +263,17 @@ const headerStyle: ViewStyle = {
   marginBottom: M.headerGap,
 };
 const headingStyle: ViewStyle = { flexDirection: 'row', alignItems: 'baseline', gap: 8, flexShrink: 1 };
+// The subtitle shares the title's text edge and closes the header's own gap, so search and the first group
+// keep their distance from the header block, not from the title row.
+const headerWithSubtitleStyle: ViewStyle = { marginBottom: 0 };
+const subtitleStyle: ViewStyle = {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 6,
+  paddingLeft: M.contentInset,
+  paddingRight: M.rowInset,
+  marginBottom: M.headerGap,
+};
 const searchStyle: HappierPortableStyle = { marginHorizontal: M.rowInset, marginBottom: M.headerGap };
 const untitledSearchStyle: HappierPortableStyle = { ...searchStyle, marginTop: M.headerPaddingTop };
 const filtersStyle: ViewStyle = { marginHorizontal: M.rowInset, marginBottom: M.headerGap };
@@ -275,7 +308,7 @@ const markStyle: ViewStyle = {
 const dimmedStyle: ViewStyle = { opacity: HAPPIER_COLLECTION_LIST_METRICS.dimmedOpacity };
 
 /** A row pressable's gutter and soft rounded selection, for the host row's `pressableStyle`. */
-export const HAPPIER_COLLECTION_LIST_ROW_STYLE: ViewStyle = Object.freeze({
+export const HAPPIER_COLLECTION_LIST_ROW_STYLE: HappierPortableStyle = Object.freeze({
   marginHorizontal: HAPPIER_COLLECTION_LIST_METRICS.rowInset,
   borderRadius: HAPPIER_COLLECTION_LIST_METRICS.rowRadius,
 });
@@ -289,7 +322,7 @@ function HappierCollectionListImpl(props: HappierCollectionListProps): ReactElem
     <HappierCollectionListRowContext.Provider value>
     <View testID={props.testID} style={[railStyle, host.surfaceStyle]}>
       {showHeader ? (
-        <View style={headerStyle}>
+        <View style={props.subtitle ? [headerStyle, headerWithSubtitleStyle] : headerStyle}>
           <View style={headingStyle}>
             {props.title !== undefined ? <Text role="title" accessibilityRole="header">{props.title}</Text> : null}
             {props.count !== undefined && props.count !== null ? (
@@ -297,6 +330,12 @@ function HappierCollectionListImpl(props: HappierCollectionListProps): ReactElem
             ) : null}
           </View>
           {props.headerAction}
+        </View>
+      ) : null}
+      {showHeader && props.subtitle ? (
+        <View style={subtitleStyle} {...(props.subtitle.testID === undefined ? {} : { testID: props.subtitle.testID })}>
+          {props.subtitle.leading ?? null}
+          <Text role="subtitle" numberOfLines={1}>{props.subtitle.text}</Text>
         </View>
       ) : null}
       {props.search ? (

@@ -1,16 +1,16 @@
 import { dirname, join } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { normalizeStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { parseStoredInstalledVoiceModelPackMetadataV1 } from '@/daemon/voiceInference/publicModelPacks/state';
 import { canonicalAbsolutePathsEqual } from '@/utils/path/expandHomeDirPath';
 import { readStoragePathIdentity, removeStoragePath } from '../trash/removeStoragePath';
-import { check, entries, inUse, isInUse, item, unavailableDirectory } from './filesystem';
+import { check, entries, inUse, isInUse, item, unavailableDirectory, opaqueItemTitle } from './filesystem';
 import { StorageCategoryAdapterError } from './types';
 import type { StorageCategoryDefinition, StorageCategoryContext, StorageCategoryVerdict, StorageCategoryCatalogDeps, StorageCategoryAdapter } from './types';
 
-const OwnerDataSchema = z.object({ key: z.string().min(1), metadata: z.unknown() }).strict();
+const OwnerDataSchema = z.strictObject({ key: z.string().check(z.minLength(1)), metadata: z.unknown() });
 const StoredOwnerDataSchema = createStoredReadSchema(OwnerDataSchema);
 function adapter(data: JsonValue, deps: StorageCategoryCatalogDeps): StorageCategoryAdapter {
     const parsed = StoredOwnerDataSchema.safeParse(data);
@@ -59,7 +59,8 @@ export const modelPacks: StorageCategoryDefinition = {
         for (const root of modelPacks.roots(context)) for (const path of await entries(root, unavailableDirectory(context, 'modelPacks'))) {
             const pack = owned.get(path);
             result.push(item('modelPacks', path, isInUse(path, context) ? inUse : pack ? modelPackCanGo(pack.lastUsedAt, context) : check,
-                { evidence: [pack ? 'voice_model_pack_install_record' : 'model_pack_facts_unavailable'],
+                { title: opaqueItemTitle(path, 'Model pack'),
+                    evidence: [pack ? 'voice_model_pack_install_record' : 'model_pack_facts_unavailable'],
                     ...(pack?.lastUsedAt !== undefined ? { lastUsedAt: pack.lastUsedAt } : {}) }));
         }
         return result;

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import assert from 'node:assert/strict';
 
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol/connect/build-connected-service-credential-record';
@@ -17,6 +18,7 @@ import { openPromptLibraryContentV1 } from '@happier-dev/protocol/prompts/librar
 import { openAcpCatalogContentV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { openRemoteHostCatalogContentV1 } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
 import { openNotificationChannelCatalogContentV1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
+import { DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1 } from '@happier-dev/protocol/account/settings/notificationChannels';
 import { openConnectedPresentationContentV1, openConnectedAcknowledgementsContentV1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
 import { connectedAccountCatalogCipherKindV1, openConnectedAccountCatalogContentV1,
   type ConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
@@ -62,7 +64,7 @@ const D10_CATALOGS = [
   }] }, open: openRemoteHostCatalogContentV1, collection: 'hosts' },
   { field: 'notificationChannels', kind: 'account_notification_channels', record: { v: 1, channels: [{
     v: 1, id: 'channel-a', kind: 'webhook', enabled: true, url: 'https://hooks.example.test', signingSecretRef: null,
-    topics: { ready: true, permissionRequest: false, userActionRequest: true, connectedServiceAccountSwitch: false,
+    topics: { ...DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1, ready: true, permissionRequest: false, userActionRequest: true, connectedServiceAccountSwitch: false,
       connectedServiceQuotaBlocked: false, connectedServiceQuotaRecovered: true, connectedServiceUsage: false },
     readyIncludeMessageText: false, requestIncludeMessageText: false,
   }] }, open: openNotificationChannelCatalogContentV1, collection: 'channels' },
@@ -183,7 +185,7 @@ describe('buildAccountEncryptionMigrateToE2eeRequest', () => {
         continue;
       }
       assertObject(directive.content, 'catalog content');
-      expect(directive.content.t).toBe('encrypted');
+      assert(directive.content.t === 'encrypted');
       assertString(directive.content.c, 'catalog ciphertext');
       expect(openAccountScopedBlobCiphertext({ kind,
         material: resolveAccountScopedCryptoMaterialFromCredentials(credentials), ciphertext: directive.content.c })?.value).toEqual(record);
@@ -210,7 +212,7 @@ describe('buildAccountEncryptionMigrateToE2eeRequest', () => {
     if (openedAcp.status !== 'opened') throw new Error('expected complete ACP migration source');
     const records = Array.from({ length: 257 }, (_, index) => ({ revision: index + 1, record: {
       v: 1 as const, id: `profile-${index}`, definition: { kind: 'artifact' as const, artifactId: `artifact-${index}` },
-      enabled: index % 2 === 0, promptStack: [], secretBindings: {},
+      enabled: index % 2 === 0, promptStack: [], secretBindings: {}, skillSeeds: [],
     } }));
     const control = { v: 1 as const, phase: 'prepared' as const, sourceSettingsVersion: 7, migratedLogicalRevision: 519,
       inventory: records.map(({ record, revision }) => ({ kind: 'account_row' as const, id: record.id, revision })),

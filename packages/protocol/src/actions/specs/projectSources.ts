@@ -1,4 +1,4 @@
-import type { PreNormalizedActionSpec } from '../actionSpecs.js';
+import type { ActionSpecProjectionMetadata, PreNormalizedActionSpec } from '../actionSpecs.js';
 import {
   ProjectSourcesListInputV1Schema, ProjectSourcesListOutputV1Schema,
   ProjectSourcesReadInputV1Schema, ProjectSourcesReadOutputV1Schema,
@@ -17,7 +17,20 @@ const common = {
   surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
 } as const;
 
-export const PROJECT_SOURCE_ACTION_SPECS_V1 = [
+type ProjectSourceActionSchemas = {
+  'projects.sources.list': { inputSchema: typeof ProjectSourcesListInputV1Schema; outputSchema: typeof ProjectSourcesListOutputV1Schema };
+  'projects.sources.read': { inputSchema: typeof ProjectSourcesReadInputV1Schema; outputSchema: typeof ProjectSourcesReadOutputV1Schema };
+  'projects.sources.create': { inputSchema: typeof ProjectSourcesCreateInputV1Schema; outputSchema: typeof ProjectSourcesCreateOutputV1Schema };
+  'projects.sources.update': { inputSchema: typeof ProjectSourcesUpdateInputV1Schema; outputSchema: typeof ProjectSourcesUpdateOutputV1Schema };
+  'projects.sources.delete': { inputSchema: typeof ProjectSourcesDeleteInputV1Schema; outputSchema: typeof ProjectSourcesDeleteOutputV1Schema };
+};
+type ProjectSourceActionSpec = {
+  [Id in keyof ProjectSourceActionSchemas]: ActionSpecProjectionMetadata & typeof common & Readonly<ProjectSourceActionSchemas[Id]> & Readonly<{
+    id: Id;
+    approval: { result: 'required' };
+  }>;
+}[keyof ProjectSourceActionSchemas];
+export const PROJECT_SOURCE_ACTION_SPECS_V1: readonly ProjectSourceActionSpec[] = [
   {
     ...common, id: 'projects.sources.list', approval: {result: 'required'}, title: 'List repository sources',
     description: 'Search authorized personal and Team repository metadata on the selected Home. Coverage describes the returned catalog page.',

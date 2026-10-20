@@ -6,9 +6,25 @@ import { describe, expect, it } from 'vitest';
 import {
   createPluginFileSystemService,
   isCanonicalPathAuthorizedByPluginFileSystemScopes,
+  resolvePluginPathWithinRoots,
 } from './filesystem';
 
 describe('plugin invocation filesystem service', () => {
+  it.each([
+    ['COM¹', false], ['CONIN$', false], ['CONOUT$', false], ['CLOCK$', false], ['LPT².txt', false],
+    ['report?.txt', false], ['a<b.txt', false], ['report\u007f.txt', false],
+    ['COM1-not-device.txt', true], ['CONIN-report.txt', true], ['report.txt', true], ['a-b.txt', true],
+    ['cafe\u0301.txt', true],
+  ])('uses portable name admission without requiring NFC for workspace filename %s', (name, accepted) => {
+    const root = tmpdir();
+    const resolvePath = () => resolvePluginPathWithinRoots(
+      { pluginData: root, workspace: root, projects: new Map() },
+      { root: 'workspace', relativePath: name },
+    );
+    if (accepted) expect(resolvePath()).toBe(join(root, name));
+    else expect(resolvePath).toThrow(expect.objectContaining({ code: 'plugin_fs_path_denied' }));
+  });
+
   it('is the sole plugin filesystem service owner', async () => {
     const predecessorExists = await stat(
       new URL('../../context/fs.ts', import.meta.url),
@@ -157,23 +173,33 @@ describe('plugin invocation filesystem service', () => {
     )).rejects.toMatchObject({ code: 'plugin_fs_invalid_limit' });
   });
 
-  it('treats NFC and NFD spellings as the same portable path without weakening case checks', async () => {
+  it.each(['NFC', 'NFD'] as const)('resolves existing %s names through either Unicode spelling for all filesystem operations', async (normalization) => {
     const root = await mkdtemp(join(tmpdir(), 'happier-svc07-unicode-'));
-    await mkdir(join(root, 'allowed'), { recursive: true });
+    const directoryName = 'r\u00e9sum\u00e9'.normalize(normalization);
+    await mkdir(join(root, directoryName), { recursive: true });
     const nfcName = 'caf\u00e9.txt';
-    const nfdName = nfcName.normalize('NFD');
-    await writeFile(join(root, 'allowed', nfcName), 'normalized');
+    const diskName = nfcName.normalize(normalization);
+    const requestName = nfcName.normalize(normalization === 'NFC' ? 'NFD' : 'NFC');
+    const requestDirectory = directoryName.normalize(normalization === 'NFC' ? 'NFD' : 'NFC');
+    await writeFile(join(root, directoryName, diskName), 'normalized');
     const service = createPluginFileSystemService({
       roots: { pluginData: root, workspace: root, projects: new Map() },
-      scopes: [{ root: 'workspace', pathPrefix: 'allowed', access: ['read'] }],
+      scopes: [{ root: 'workspace', access: ['read', 'write', 'delete'] }],
       signal: new AbortController().signal,
       isOccurrenceCurrent: () => true,
     });
-
-    await expect(service.readFile({
-      root: 'workspace',
-      relativePath: `allowed/${nfdName}`,
-    })).resolves.toEqual(new TextEncoder().encode('normalized'));
+    const path = { root: 'workspace' as const, relativePath: `${requestDirectory}/${requestName}` };
+    await expect(service.readFile(path)).resolves.toEqual(new TextEncoder().encode('normalized'));
+    await expect(service.stat(path)).resolves.toMatchObject({ kind: 'file' });
+    await expect(service.list({ root: 'workspace', relativePath: requestDirectory }))
+      .resolves.toMatchObject({ items: [{ name: diskName, kind: 'file' }] });
+    await service.writeFile(path, new TextEncoder().encode('updated'));
+    await expect(readdir(join(root, directoryName))).resolves.toEqual([diskName]);
+    await expect(readFile(join(root, directoryName, diskName), 'utf8')).resolves.toBe('updated');
+    await service.writeFile({ root: 'workspace', relativePath: `${requestDirectory}/nested/new.txt` }, new Uint8Array([1]));
+    await expect(readFile(join(root, directoryName, 'nested', 'new.txt'))).resolves.toEqual(Buffer.from([1]));
+    await service.remove(path);
+    await expect(readdir(join(root, directoryName))).resolves.toEqual(['nested']);
   });
 
   it('lists an authorized root with a bounded scope-bound opaque cursor', async () => {

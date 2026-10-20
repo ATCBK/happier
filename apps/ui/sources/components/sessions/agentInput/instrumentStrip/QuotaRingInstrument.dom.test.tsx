@@ -27,7 +27,7 @@ const VIEW_MODEL = {
     remainingPct: 60,
     usedPct: 40,
     primaryValueSemantics: 'remaining',
-    valueLabel: '60%',
+    valueLabel: '60% left',
     ringValueLabel: '60',
     badgeLabel: '60% left',
     scopePrefix: null,
@@ -77,6 +77,18 @@ describe('QuotaRingInstrument', () => {
         vi.restoreAllMocks();
     });
 
+    it('says what is left beside the ring at every width, so a compact strip never shows a bare number', async () => {
+        const text = (testID: string) => container.querySelector(`[data-testid="${testID}"]`)?.textContent ?? null;
+
+        await renderRing({ showProviderGlyph: true });
+        // A bare number in a ring beside the context gauge's "0%" reads as another percentage used.
+        expect(text('session-instrument-quota-ring-value')).toBe('60% left');
+
+        // Live 2026-10-16 (PLUGVIS r2l): under 360 px a bare "9" in a red ring explained nothing.
+        await renderRing({ showProviderGlyph: false });
+        expect(text('session-instrument-quota-ring-value')).toBe('60% left');
+    });
+
     it('shows one remaining-first ring and names each pinned extra ring', async () => {
         const pinnedViewModel: ViewModel = {
             ...VIEW_MODEL,
@@ -88,13 +100,13 @@ describe('QuotaRingInstrument', () => {
         const text = (testID: string) => container.querySelector(`[data-testid="${testID}"]`)?.textContent ?? null;
 
         await renderRing({ showProviderGlyph: true });
-        expect(text('session-instrument-quota-ring-value')).toBe('60');
+        expect(text('session-instrument-quota-ring-value')).toBe('60% left');
         expect(container.querySelector('[data-testid^="session-instrument-quota-ring-value:"]')).toBeNull();
         expect(container.textContent).toContain('Claude');
 
         await renderRing({ viewModel: pinnedViewModel, showProviderGlyph: true });
-        expect(text('session-instrument-quota-ring-value')).toBe('60');
-        expect(text('session-instrument-quota-ring-value:seven_day')).toBe('10');
+        expect(text('session-instrument-quota-ring-value')).toBe('60% left');
+        expect(text('session-instrument-quota-ring-value:seven_day')).toBe('10% left');
         expect(container.querySelector('[data-testid="session-instrument-quota-ring"]')!.getAttribute('aria-label'))
             .toContain('Weekly 10% left');
         expect(text('session-instrument-quota-meter-label')).toBe('5-hour');

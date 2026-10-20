@@ -112,8 +112,18 @@ describe('the project registry read', () => {
         expect(read.status === 'read' ? read.projects[0]?.forge : 'unread').toBeUndefined();
     });
 
+    it.each(['custom', 'unknown'])('preserves the canonical %s forge kind', async (kind) => {
+        const forge = { ...ROW.forge, kind };
+        const read = await readTriageProjectRegistryV1(hostReturning({
+            items: [{ ...ROW, forge }],
+            truncated: false,
+        }));
+
+        expect(read.status === 'read' ? read.projects[0]?.forge : 'unread').toEqual(forge);
+    });
+
     it.each([
-        ['a non-triage provider kind', { ...ROW.forge, kind: 'custom' }],
+        ['an unsupported provider kind', { ...ROW.forge, kind: 'invented-forge' }],
         ['an open object shape', { ...ROW.forge, providerOwnedExtra: true }],
     ])('projects no forge for %s', async (_label, forge) => {
         const read = await readTriageProjectRegistryV1(hostReturning({

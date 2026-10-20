@@ -137,7 +137,11 @@ describe('apiVoice', () => {
                 const providerId = 'happier.voice.elevenlabs/realtime-elevenlabs';
                 const preparation = createElevenLabsSessionPreparationService({
                     providerId,
-                    projectVoiceSettings: host.host.projectVoiceSettings,
+                    projectVoiceSettings(settings, id) {
+                        const projection = host.host.projectVoiceSettings(settings, id);
+                        // The public ElevenLabs runtime projects no independent assistant language.
+                        return projection ? { ...projection, assistantLanguage: null } : null;
+                    },
                     alert: () => { throw new Error('Unexpected hosted admission alert'); },
                 });
                 const prepared = await preparation.prepare({

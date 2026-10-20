@@ -2,6 +2,7 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
 import { TurnIdSchema } from './idsV1.js';
+import { FollowEventV1Schema } from './follow/sessionFollowPolicyV1.js';
 
 export const SessionUserActionRequiredRequestKindV1Schema = lazyZodSchema(() => z.enum([
   'permission',
@@ -17,7 +18,14 @@ export const SessionUserActionRequiredOccurrenceV1Schema = lazyZodSchema(() => z
   sourceTurnId: TurnIdSchema,
   requestKind: SessionUserActionRequiredRequestKindV1Schema,
   occurredAt: z.number().check(z.int(), z.nonnegative()),
-}));
+  /** Non-content operational intent projected by the request owner. */
+  followEvent: z.optional(FollowEventV1Schema),
+}).check(z.superRefine((value, context) => {
+  if (value.followEvent && (value.followEvent.kind !== 'needs_you'
+    || value.requestKind === 'permission' && value.followEvent.type !== 'approval')) {
+    context.addIssue({ code: 'custom', path: ['followEvent'], message: 'Request delivery intent must match its source kind.' });
+  }
+})));
 export type SessionUserActionRequiredOccurrenceV1 = z.infer<
   typeof SessionUserActionRequiredOccurrenceV1Schema
 >;

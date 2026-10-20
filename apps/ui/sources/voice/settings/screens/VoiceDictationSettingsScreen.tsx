@@ -18,7 +18,6 @@ import { VoiceExecutionMachineSection } from '@/voice/settings/panels/VoiceExecu
 import { DaemonVoiceModelCatalogProvider } from '@/voice/settings/panels/modelCatalog/DaemonVoiceModelCatalogContext';
 import { useDaemonVoiceModelCatalogState } from '@/voice/settings/panels/modelCatalog/useDaemonVoiceModelCatalogState';
 import { useVoiceSettingsMutable } from '@/voice/settings/useVoiceSettingsMutable';
-import { VoiceSettingsSearchPrerequisite } from '@/voice/settings/VoiceSettingsSearchPrerequisite';
 import {
   resolveVoiceSettingsRecoveryFocus,
   resolveVoiceSettingsRouteFocus,
@@ -150,7 +149,6 @@ export function VoiceDictationSettingsScreen() {
               onRecoveryAction={focusRecovery}
             />
           </View>
-          <VoiceSettingsSearchPrerequisite intent="dictation" voice={voice} />
         </ItemList>
       </DaemonVoiceModelCatalogProvider>
     </View>

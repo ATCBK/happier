@@ -57,6 +57,7 @@ export type { ComposerRefV1 } from './composerRef.js';
 
 export const ComposerScopeKindV1Schema = lazyZodSchema(() => z.enum([
   'session',
+  'discussion',
   'newSession',
   'pendingMessage',
   'participantMessage',

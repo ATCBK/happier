@@ -5,7 +5,10 @@ import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactSt
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { installPromptLibrarySettingsCommonModuleMocks, promptLibrarySettingsRouterPushSpy } from '../promptLibrarySettingsTestHelpers';
 
 const modalConfirm = vi.hoisted(() => vi.fn(async () => true));
@@ -58,6 +61,7 @@ describe('prompt entry action failure and cancellation', () => {
         expect(fixture.boundary.read('doc-1')).not.toBeNull();
         expect(catalog.read('folders')).toEqual(originalFolders);
         expect(catalog.requests).toEqual([]);
+        expect(modalConfirm).toHaveBeenCalledTimes(1);
         expect(modalAlert).toHaveBeenCalled();
     });
 
@@ -81,5 +85,28 @@ describe('prompt entry action failure and cancellation', () => {
         expect(fixture.boundary.list().map(row => row.id)).toEqual(['doc-1']);
         expect(catalog.requests).toEqual([]);
         expect(modalAlert).not.toHaveBeenCalled();
+    });
+
+    it('retains the prompt while an explicit Ask-first delete awaits approval', async () => {
+        const { fixture, catalog } = await createFailureFixture('DELETE');
+        const { getStorage } = await import('@/sync/domains/state/storage');
+        getStorage().setState(state => ({ settings: { ...state.settings,
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
+                'artifact.delete': { approvalRequiredSurfaces: ['ui'] },
+            } }),
+        } }));
+        const hook = await renderHook(() => usePromptLibraryEntryActions());
+        let result: Promise<boolean> | undefined;
+        await act(async () => { result = hook.getCurrent().remove('doc-1'); });
+        await waitForHomeGovernance(() => expect(fixture.boundary.list()).toHaveLength(2));
+        const approval = fixture.boundary.list().find(row => row.id !== 'doc-1')!;
+        expect(ApprovalRequestV2Schema.parse(JSON.parse(fixture.boundary.readPlainBody(approval.id)!)))
+            .toMatchObject({ actionId: 'artifact.delete', status: 'open' });
+        expect(modalConfirm).not.toHaveBeenCalled();
+        expect(fixture.boundary.read('doc-1')).not.toBeNull();
+        expect(fixture.requests.some(request => request.method === 'DELETE')).toBe(false);
+        expect(catalog.requests).toEqual([]);
+        await hook.unmount();
+        await result;
     });
 });

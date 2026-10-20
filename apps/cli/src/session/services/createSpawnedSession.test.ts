@@ -10,7 +10,7 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 
 import type { Credentials } from '@/persistence';
-import { createCurrentSessionProjectionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createCurrentSessionProjectionRecordFixture, createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
@@ -109,6 +109,8 @@ import { buildSessionSpawnInitialInputAdmissionForLocalIdV1 } from './sessionInp
 import { createProductionFreshWorkflowSessionConversation } from '@/daemon/workflows/sessionStepExecutor';
 import { readSessionWorkspaceWritesV1, type ResolvedRoleV1 } from '@happier-dev/protocol';
 import { SpawnDaemonSessionRequestSchema } from '@/rpc/handlers/spawnSessionOptionsContract';
+import { buildCommittedLaunchMetadata } from '@/agent/runtime/createSessionMetadata';
+import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
 import { registerPrivateSpawnSessionRpcHandlers } from '@/rpc/handlers/sessionLifecycle';
 import { createSpawnNewSessionLifecycleActionHandler } from '@/session/actions/lifecycle/createSpawnNewSessionLifecycleActionHandler';
 import type { RpcHandler } from '@/api/rpc/types';
@@ -121,6 +123,19 @@ import { WORKFLOW_ATTENTION_INVOCATION_LIFECYCLES_V1 } from '@happier-dev/protoc
 const initialAccess: SessionInitialAccessDraftV1 = {
   grants: [{ subject: { kind: 'team', teamId: 'team-1' }, accessLevel: 'edit', canApprovePermissions: false }],
 };
+
+function createLaunchedSessionProjection(sessionId: string, options: SpawnSessionOptions) {
+  const metadata = buildCommittedLaunchMetadata({ options, directory: options.directory ?? '/repo' });
+  const owner = createSessionOwnerMetadataV1({ metadata });
+  if (!owner.ok) throw new Error('Launched Session metadata must satisfy its persisted owner contract');
+  return createCurrentSessionProjectionRecordFixture({
+    id: sessionId, encryptionMode: 'plain', metadataLayoutVersion: 1, share: null,
+    metadata: JSON.stringify({ v: 1 }),
+    ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(owner.ownerMetadata),
+    effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
+      capabilities: projectSessionAccessCapabilitiesV1({ owner: true, grants: [] }) },
+  });
+}
 
 describe('createSpawnedSession settlement', () => {
   const credentials: Credentials = {
@@ -208,7 +223,11 @@ describe('createSpawnedSession settlement', () => {
         dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 })) };
       throw new Error(`Unexpected inheritance read: ${url}`);
     });
-    const spawn = vi.fn(async (_request: unknown) => ({ type: 'success', sessionId: 'context-worker', sessionCreationOutcome: creationOutcome }));
+    const spawn = vi.fn(async (request: SpawnSessionOptions) => {
+      fetchSessionById.mockImplementation(async ({ sessionId }: { sessionId: string }) =>
+        sessionId === 'context-worker' ? createLaunchedSessionProjection(sessionId, request) : lead);
+      return { type: 'success', sessionId: 'context-worker', sessionCreationOutcome: creationOutcome };
+    });
     const sessionCreationTag = deriveSessionCreationTagV1({ callerCreationNamespace: 'user', creationKey: 'context-worker' });
     const sessionCreationCorrespondence = SessionCreationCorrespondenceV1Schema.parse({ v: 1, sessionCreationTag, recipe: {
       execution: { machineId: 'machine-1', directory: { kind: 'path', path: '/worker' } },
@@ -261,7 +280,7 @@ describe('createSpawnedSession settlement', () => {
         originKind, originSessionId: 'context-lead', ...(path === 'explicit_off' ? { memoryEnabled: false } : {}),
         ...(hasCreationRecipe ? { sessionCreationTag, sessionCreationCorrespondence } : {}),
         ...(path === 'role_snapshot' ? { initialSessionRolesV1: snapshotSessionRolesAtSpawnV1({ leadSessionId: 'context-lead', notes: '', roles: {} }) }
-          : originKind === 'session' ? { reportsTo: { sessionId: 'context-lead' } } : { originRunId: 'workflow-run' }),
+          : originKind === 'session' ? { manager: { sessionId: 'context-lead' } } : { originRunId: 'workflow-run' }),
         directTransport: { spawn: hasCreationRecipe ? request => lifecycle(request) : spawn,
           resolveSpawnSessionByNonce: async () => ({ status: 'unsupported' }) } });
       if (path === 'recipient') {
@@ -324,16 +343,21 @@ describe('createSpawnedSession settlement', () => {
     },
   );
 
-  it.each([undefined, { sessionSpawn: { protocolVersions: [1] } }])(
+  it.each([
+    { operationProtocolCapabilities: undefined, policy: { allowedTools: ['mcp__wilson-intake__*'], unlistedTools: 'deny' as const } },
+    { operationProtocolCapabilities: { sessionSpawn: { protocolVersions: [1] } }, policy: { allowedTools: ['mcp__wilson-intake__*'], unlistedTools: 'deny' as const } },
+    { operationProtocolCapabilities: undefined, policy: { workspaceWrites: 'deny' as const } },
+  ])(
     'refuses a confined remote spawn when its daemon can strip the policy (%j)',
-    async (operationProtocolCapabilities) => {
+    async ({ operationProtocolCapabilities, policy }) => {
       const machineRead = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { machine: {
         id: 'machine-1', revokedAt: null, replacedByMachineId: null, operationProtocolCapabilitiesRevision: 1,
         ...(operationProtocolCapabilities ? { operationProtocolCapabilities } : {}),
       } } });
       callMachineRpc.mockResolvedValue({ success: true, sessionId: 'unsafe-legacy-spawn', sessionCreationOutcome: creationOutcome });
       fetchSessionById.mockResolvedValue(createCurrentSessionProjectionRecordFixture({
-        id: 'unsafe-legacy-spawn', encryptionMode: 'plain', metadata: JSON.stringify({ path: '/repo', host: 'host' }),
+        id: 'unsafe-legacy-spawn', effectiveAccess: createSessionNotificationContextFixture('unsafe-legacy-spawn').effectiveAccess,
+        encryptionMode: 'plain', metadata: JSON.stringify({ path: '/repo', host: 'host' }),
         ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(SessionOwnerMetadataV1Schema.parse({
           v: 1, workspace: { path: '/repo', host: 'host' },
         })),
@@ -341,7 +365,7 @@ describe('createSpawnedSession settlement', () => {
       try {
         await expect(createSpawnedSession({ credentials, machineId: 'machine-1', directory: '/repo',
           backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
-          allowedTools: ['mcp__wilson-intake__*'], unlistedTools: 'deny',
+          ...policy,
         })).rejects.toMatchObject({ code: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
           details: { kind: 'update_required', operation: 'session.spawn_new', component: 'daemon',
             reason: 'session_tool_policy_update_required' } });
@@ -527,6 +551,7 @@ describe('createSpawnedSession settlement', () => {
       spawnLifecycleHandler: createSpawnNewSessionLifecycleActionHandler({
         spawnSession: async options => {
           launches.push(options);
+          fetchSessionById.mockResolvedValue(createLaunchedSessionProjection('r19-agent-session', options));
           return { type: 'success', sessionId: 'r19-agent-session', sessionCreationOutcome: creationOutcome };
         },
       }),
@@ -623,7 +648,7 @@ describe('createSpawnedSession settlement', () => {
           buildActionContext: () => ({ surface: 'cli', authority: 'account_automation' }) },
       },
     });
-    const claimClient = { heartbeatRun: async () => {}, failRun: vi.fn(async () => {}) };
+    const claimClient = { heartbeatRun: async (request: { leaseDurationMs: number }) => Date.now() + request.leaseDurationMs, failRun: vi.fn(async () => {}) };
     try {
       await executeClaimedRun({ machineId, claimClient, coordinateWorkflowRun: coordinate,
         heartbeatMs: 60_000, leaseDurationMs: 120_000,
@@ -721,7 +746,10 @@ describe('createSpawnedSession settlement', () => {
       id: 'machine-1', revokedAt: null, replacedByMachineId: null, operationProtocolCapabilitiesRevision: 1,
       operationProtocolCapabilities: { sessionSpawn: { protocolVersions: [1, 2] } },
     } } });
-    callMachineRpc.mockResolvedValue({ success: true, sessionId: 'frozen-step', sessionCreationOutcome: creationOutcome });
+    callMachineRpc.mockImplementation(async ({ request }: { request: SpawnSessionOptions }) => {
+      fetchSessionById.mockResolvedValue(createLaunchedSessionProjection('frozen-step', request));
+      return { success: true, sessionId: 'frozen-step', sessionCreationOutcome: creationOutcome };
+    });
     fetchSessionById.mockResolvedValue({ id: 'frozen-step', createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
       pendingCount: 0, metadataVersion: 1, metadata: { path: directory, host: 'host' } });
     const role: ResolvedRoleV1 = { ...BUILT_IN_ROLES_V1.reviewer, roleId: 'reviewer',
@@ -822,7 +850,7 @@ describe('createSpawnedSession settlement', () => {
     );
   });
 
-  it('returns archived same-key Session identity, persisted attested birth facts and current organization placement when legacy metadata-label persistence fails', async () => {
+  it('returns same-key Session identity, persisted attested birth facts and current organization placement when legacy metadata-label persistence fails', async () => {
     const attestedContext = { externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<original@example.test>' };
     const sessionCreationTag = deriveSessionCreationTagV1({
       callerCreationNamespace: 'plugin:acme.plugin',
@@ -859,7 +887,7 @@ describe('createSpawnedSession settlement', () => {
         createdAt: 1,
         updatedAt: 1,
         active: false,
-        archivedAt: 123,
+        archivedAt: null,
         activeAt: 1,
         pendingCount: 0,
         metadataVersion: 1,
@@ -1993,8 +2021,8 @@ describe('createSpawnedSession settlement', () => {
     expect(error).toMatchObject({
       code: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
       message: 'Provider-bound session creation is unavailable because the selected machine does not support this request',
+      details: { incompatibleTarget: { reason: 'spawn_rpc_unavailable' } },
     });
-    expect(error).not.toHaveProperty('details');
     expect(error).not.toHaveProperty('rpcErrorCode');
     expect(JSON.stringify(error)).not.toContain('provider-action-2');
     expect(callMachineRpc).toHaveBeenCalledTimes(1);
@@ -2178,6 +2206,7 @@ describe('createSpawnedSession settlement', () => {
     expect(requestSessionStop).toHaveBeenCalledWith({
       credentials,
       idOrPrefix: 'session-abandoned',
+      stopIntent: 'lifecycle_control',
     });
     expect(requestSessionStop).toHaveBeenCalledOnce();
     expect(cleanupOrder).toEqual(['stop', 'archive']);
@@ -2377,7 +2406,7 @@ describe('createSpawnedSession replay-seeded creation', () => {
       memoryEnabled,
       primaryTeamId: 'team-1',
       profileId: profileId ?? undefined,
-      ...(roleWorker ? { initialSessionRolesV1 } : { reportsTo: { sessionId: 'lead-1' } }),
+      ...(roleWorker ? { initialSessionRolesV1 } : { manager: { sessionId: 'lead-1' } }),
       replaySeededCreation: { tag: 'replay:parent-session:12:attempt', flavor: 'codex',
         metadata: { ...replayMetadata, profileId: 'lead-profile', work: { promptStack: [{ id: 'lead-context', enabled: true, placement: 'system_append', ref: { kind: 'doc', artifactId: 'lead-doc' } }],
           disabledInheritedEntryIds: ['account.context'], memoryEnabled: !expectedMemory,

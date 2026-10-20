@@ -212,16 +212,21 @@ function CheckoutsBody(props: Props): React.ReactElement {
         [refs, checkout.id, checkout.serverId, checkout.machineId, checkout.rootPath, checkout.projectKey]);
     const facts = useProjectsTreeCheckoutFacts(projectRefs);
     const machineOf = (machineId: string) => machines.find(machine => machine.id === machineId) ?? null;
-    const machineName = (machineId: string) => getMachineDisplayName(machineOf(machineId)) ?? machineId;
+    // Named like the picker names it (same-named machines tell themselves apart); a machine the inventory does not list is
+    // "unlisted", never its raw id.
+    const machineName = (machineId: string) => getMachineDisplayName(machineOf(machineId) ?? { id: machineId, absence: 'unlisted' }, machines);
     const refAt = (machineId: string, rootPath: string) => projectRefs.find(ref => ref.machineId === machineId
         && normalizeWorkspaceRootPath(ref.rootPath) === normalizeWorkspaceRootPath(rootPath)) ?? null;
     const status = (ref: WorkspaceRefV1 | null) => (ref
         ? facts.get(projectsTreeCheckoutKey({ refId: ref.id, workspaceAddress: workspaceAddressFromRefV1(ref) })) ?? null : null);
+    // An offline machine's checkout stays listed and says so (lab p-projects: dimmed, last-known).
+    const isOffline = (machineId: string) => {
+        const machine = machineOf(machineId);
+        return machine != null && !isMachineReachable(accountScope, machine, presenceNowMs);
+    };
     const fact = (machineId: string, ref: WorkspaceRefV1 | null) => {
         const attention = status(ref)?.attention ?? null;
-        // An offline machine's checkout stays listed and says so (lab p-projects: dimmed, last-known).
-        const machine = machineOf(machineId);
-        const offline = machine != null && !isMachineReachable(accountScope, machine, presenceNowMs);
+        const offline = isOffline(machineId);
         return {
             fact: [machineName(machineId), offline ? t('projects.checkouts.offline') : attention === 'needs-you' ? t('projects.checkouts.needsYou')
                 : attention === 'working' ? t('projects.checkouts.working') : null].filter(Boolean).join(' · '),
@@ -234,7 +239,7 @@ function CheckoutsBody(props: Props): React.ReactElement {
     const listed = new Set([here, ...worktrees.map(worktree => refAt(scope.machineId, worktree.path))]);
     const others = projectRefs.filter(ref => !listed.has(ref));
     return <View testID={props.testID}>
-        <WidgetGlanceRow testID={`${props.testID}.here`} mark="desktop" tag={t('projects.checkouts.here')}
+        <WidgetGlanceRow testID={`${props.testID}.here`} mark="desktop" {...(isOffline(scope.machineId) ? {} : { tag: t('projects.checkouts.here') })}
             title={snapshot?.branch.head ?? status(here)?.branch ?? resolveWorkspaceRefDisplayName(checkout)}
             {...fact(scope.machineId, here)} />
         {worktrees.map(worktree => <WidgetGlanceRow key={worktree.path} testID={`${props.testID}.worktree:${worktree.id ?? worktree.path}`} mark="desktop"

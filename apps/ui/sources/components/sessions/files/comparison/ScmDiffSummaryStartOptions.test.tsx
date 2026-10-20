@@ -16,10 +16,25 @@ vi.mock('@/text', async () => {
     return createTextModuleMock({ translate: key => key });
 });
 
-const { ScmDiffSummaryStartOptions, useSummaryModelChoice } = await import('./ScmDiffSummaryStartOptions');
+const { ScmDiffSummaryStartOptions, useSummaryModelChoice, scmDiffSummaryPrerequisiteOf } = await import('./ScmDiffSummaryStartOptions');
 const { SPECIMEN_START_FAILURES } = await import('@/components/dev/changes/walkthroughSpecimenFixture');
 
 describe('ScmDiffSummaryStartOptions', () => {
+    it('names the one cause a start cannot run, instead of one sentence for every cause', () => {
+        const ready = { machineReachability: 'reachable', modelAvailable: true, canSend: true, launch: { canLaunchExecutionRuns: true, launchUnavailableReason: null } } as const;
+        expect(scmDiffSummaryPrerequisiteOf(ready)).toBeNull();
+        const causes = [
+            scmDiffSummaryPrerequisiteOf({ ...ready, machineReachability: 'unreachable', launch: { canLaunchExecutionRuns: false, launchUnavailableReason: 'machineOffline' } }),
+            scmDiffSummaryPrerequisiteOf({ ...ready, launch: { canLaunchExecutionRuns: false, launchUnavailableReason: 'sessionInactive' } }),
+            scmDiffSummaryPrerequisiteOf({ ...ready, modelAvailable: false }),
+        ];
+        expect(causes).toEqual(['walkthroughStart.machineOffline', 'sessionAgentActivity.roster.unavailable.sessionInactive', 'walkthroughStart.chooseModel']);
+        // The Machine being away outranks what the Session or model would need once it is back.
+        expect(scmDiffSummaryPrerequisiteOf({ ...ready, machineReachability: 'unreachable', modelAvailable: false })).toBe('walkthroughStart.machineOffline');
+        expect(scmDiffSummaryPrerequisiteOf({ ...ready, machineReachability: 'unknown',
+            canSend: false, launch: { canLaunchExecutionRuns: false, launchUnavailableReason: 'machineOffline' } })).toBe('walkthroughStart.unavailable');
+    });
+
     it('says one localized sentence and the next step for a refusal, never its code', async () => {
         const screen = await renderScreen(<ScmDiffSummaryStartOptions testID="start-options" failure={SPECIMEN_START_FAILURES.outdated} message="invalid_action_output" />);
         const text = screen.getTextContent();
@@ -51,6 +66,12 @@ describe('ScmDiffSummaryStartOptions', () => {
         await hook.unmount();
     });
 
+    it('keeps native diagnostic strings out of the typed failure sentence', async () => {
+        const generic = { reason: 'generationFailed', messageKey: 'walkthrough.notice.failedGeneric', nextAction: 'retry', nextActionKey: 'walkthrough.notice.tryAgain',
+            message: 'CLI_START_FAILED: the runner could not start' } as const;
+        const screen = await renderScreen(<ScmDiffSummaryStartOptions testID="start-options" failure={generic} message={null} />);
+        expect(screen.getTextContent()).toBe('walkthrough.notice.failedGeneric');
+    });
 
     it('keeps the refusal room when nothing was refused, so a refusal never moves the state', async () => {
         const screen = await renderScreen(<ScmDiffSummaryStartOptions testID="start-options" failure={null} message={null} />);

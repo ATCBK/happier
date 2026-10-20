@@ -1359,3 +1359,62 @@ describe('stable plugin MCP host', () => {
         await secondHostDispose;
     });
 });
+
+describe('public MCP DTO schema representation and parse contracts', () => {
+    it('uses native Mini host containers and the exact supplier field validators', async () => {
+        const z = await import('zod/mini');
+        const sdk = await import('@modelcontextprotocol/sdk/types.js');
+        const schemas = await import('./mcpPublicDtoSchemas');
+        for (const schema of Object.values(schemas)) expect(schema).toBeInstanceOf(z.ZodMiniObject);
+        const items = schemas.publicMcpResourcePageSchema.shape.items;
+        expect(items).toBeInstanceOf(z.ZodMiniArray);
+        const resource = items._zod.def.element;
+        expect(resource).toBeInstanceOf(z.ZodMiniObject);
+        expect(resource.shape.name).toBe(sdk.ResourceSchema.shape.name);
+        expect(resource.shape.uri).toBe(sdk.ResourceSchema.shape.uri);
+        expect(resource.shape.annotations).toBeInstanceOf(z.ZodMiniOptional);
+        expect(resource.shape.annotations._zod.def.innerType).toBeInstanceOf(z.ZodMiniObject);
+        expect(schemas.publicMcpResourceUpdatedEventSchema.shape.uri).toBe(sdk.ResourceUpdatedNotificationParamsSchema.shape.uri);
+    });
+
+    it('preserves curated DTO parse contracts, optional omission and issue codes and paths', async () => {
+        const schemas = await import('./mcpPublicDtoSchemas');
+        const valid: readonly [keyof typeof schemas, unknown][] = [
+            ['publicMcpResourcePageSchema', { items: [{ uri: 'file:///guide', name: 'Guide',
+                annotations: { audience: ['user'], priority: 2, lastModified: 'recently' },
+                _meta: { nested: ['kept', 7] } }], nextCursor: 'cursor', _meta: 'page-meta' }],
+            ['publicMcpResourcePageSchema', { items: [] }],
+            ['publicMcpResourceTemplatePageSchema', { items: [{ name: 'Template', uriTemplate: 'file:///{path}' }] }],
+            ['publicMcpReadResourceResultSchema', { contents: [{ uri: 'file:///guide', text: 'Guide' },
+                { uri: 'file:///blob', blob: 'opaque-not-base64' }], _meta: null }],
+            ['publicMcpPromptPageSchema', { items: [{ name: 'review', arguments: [{ name: 'scope' }] }] }],
+            ['publicMcpGetPromptResultSchema', { messages: [
+                { role: 'assistant', content: { type: 'text', text: 'Review', annotations: { priority: -1 }, _meta: false } },
+                { role: 'user', content: { type: 'image', data: 'opaque-not-base64', mimeType: 'image/png' } },
+                { role: 'assistant', content: { type: 'audio', data: 'opaque-not-base64', mimeType: 'audio/wav' } },
+                { role: 'user', content: { type: 'resource', resource: { uri: 'file:///guide', text: 'Guide' } } },
+                { role: 'assistant', content: { type: 'resource_link', uri: 'file:///guide', name: 'Guide' } },
+            ] }],
+            ['publicMcpResourceUpdatedEventSchema', { uri: 'file:///guide' }],
+        ];
+        for (const [name, input] of valid) expect(schemas[name].parse(input)).toStrictEqual(input);
+        const invalid: readonly [keyof typeof schemas, unknown, readonly Readonly<{ code: string; path: readonly (string | number)[] }>[]][] = [
+            ['publicMcpResourcePageSchema', { items: [], extra: true }, [{ code: 'unrecognized_keys', path: [] }]],
+            ['publicMcpResourcePageSchema', { items: [{ uri: 'file:///guide', name: 7, annotations: { priority: Infinity } }] },
+                [{ code: 'invalid_type', path: ['items', 0, 'name'] }, { code: 'custom', path: ['items', 0, 'annotations', 'priority'] }]],
+            ['publicMcpResourcePageSchema', { items: [{ uri: 'file:///guide', name: 'Guide', annotations: { audience: ['system'] } }] },
+                [{ code: 'invalid_value', path: ['items', 0, 'annotations', 'audience', 0] }]],
+            ['publicMcpResourceUpdatedEventSchema', { uri: 'file:///guide', _meta: {} }, [{ code: 'unrecognized_keys', path: [] }]],
+            ['publicMcpPromptPageSchema', { items: [{ name: 'review', arguments: [{ name: 'scope', required: 'yes' }] }] },
+                [{ code: 'invalid_type', path: ['items', 0, 'arguments', 0, 'required'] }]],
+            ['publicMcpReadResourceResultSchema', { contents: [{ uri: 'file:///guide', blob: 7 }] },
+                [{ code: 'invalid_union', path: ['contents', 0] }]],
+        ];
+        for (const [name, input, issues] of invalid) {
+            const result = schemas[name].safeParse(input);
+            expect(result.success).toBe(false);
+            if (result.success) throw new Error('Malformed public MCP DTO was accepted');
+            expect(result.error.issues.map(({ code, path }) => ({ code, path }))).toEqual(issues);
+        }
+    });
+});

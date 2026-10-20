@@ -52,7 +52,7 @@ describe('native source Machine RPC with real capture custody', () => {
         retirementSignal: lifetime.signal, isCurrent: () => !lifetime.signal.aborted,
         createInvocationExec: async () => createUnavailablePluginServices().exec,
       });
-      const boundary = { externalSessions: bounded, occurrenceId: 'occurrence', retirementSignal: lifetime.signal,
+      const boundary = { catalogEntry: agents.find(agent => agent.id === 'pi')?.catalogEntry ?? null, externalSessions: bounded, occurrenceId: 'occurrence', retirementSignal: lifetime.signal,
         isCurrent: () => !lifetime.signal.aborted };
       const authority = { serverId: 'home', accountId: 'owner', machineId: 'machine' };
       const storage = await readOrCreateDeviceLocalSecretStorage({ path: join(directory, 'device.key') });

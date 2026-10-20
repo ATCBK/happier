@@ -17,6 +17,9 @@ vi.mock('@happier-dev/ssh-native', async importOriginal => ({
 vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
+// Load the app graph once after its transport boundaries, before timing the
+// Account/SDK lifecycle exercised by these cases.
+await loadSyncSingletonForTests();
 
 function createLease(status: NativeSshTunnelLease['status'] = 'ready'): NativeSshTunnelLease {
     return {

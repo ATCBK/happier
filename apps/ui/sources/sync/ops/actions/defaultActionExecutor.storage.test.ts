@@ -41,7 +41,7 @@ describe('Storage receipt through the captured UI Action Home', () => {
         const ref = { itemId: 'cache', path: '/cache', identity: { dev: '1', ino: '2', kind: 'directory' as const },
             collectedAt: 1, collectedBy: { accountId: 'owner', kind: 'person' as const } };
         expect(await moveMachineStorageToTrashViaAction({ serverId, expectedAccountId: 'owner', machineId: 'machine',
-            signal: controller.signal, confirmedByPerson: true, items: [{ ref, expect: 'checked', claimedVerdict: 'safe' }] }))
+            signal: controller.signal, items: [{ ref, expect: 'checked', claimedVerdict: 'safe' }] }))
             .toEqual({ ok: true, value: receipt });
     });
     it('waits for the accepted cleanup beyond the read deadline, retains the batch and restores it with Undo', async () => {

@@ -24,6 +24,7 @@ import {
     createAgentSessionRunnerFactoryBinding,
 } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 import { resolvePluginStorePaths } from '@/plugins/store/paths';
+import { verifyRunnerAgentBindingAgainstGeneration } from '@/plugins/runtime/runner/loadRetainedAgentRuntimeLeaf';
 import {
     createImmutablePluginGenerationRecordFromSource,
     persistInstallationStateRevision,
@@ -636,8 +637,7 @@ describe('runner managed-server supervision authorization', () => {
         });
         try {
             await expect(authorizeRunnerManagedServiceSupervision({
-                paths: fixture.paths,
-                binding: fixture.binding,
+                attested: await verifyRunnerAgentBindingAgainstGeneration({ paths: fixture.paths, binding: fixture.binding }),
                 request: fixture.request,
                 processEnv: fixture.processEnv,
             })).resolves.toMatchObject({
@@ -647,8 +647,7 @@ describe('runner managed-server supervision authorization', () => {
                 },
             });
             await expect(authorizeRunnerManagedServiceSupervision({
-                paths: fixture.paths,
-                binding: fixture.binding,
+                attested: await verifyRunnerAgentBindingAgainstGeneration({ paths: fixture.paths, binding: fixture.binding }),
                 request: {
                     ...fixture.request,
                     sourceCustody: {

@@ -47,7 +47,7 @@ export const SessionCapabilitiesGetOutputV1Schema = lazyZodSchema(() => z.union(
     pendingApply: z.strictObject({ mcp: z.boolean(), skills: z.boolean(), reason: z.optional(z.string()), restartBy: z.optional(z.enum(['user', 'terminal'])) }),
     applyTiming: CapabilityApplyTimingPairV1Schema,
   }),
-  z.strictObject({ ok: z.literal(false), code: z.enum(['not_found', 'session_unavailable']) }),
+  z.strictObject({ ok: z.literal(false), code: z.enum(['not_found', 'session_unavailable', 'preview_timeout']) }),
 ]));
 export type SessionCapabilitiesGetOutputV1 = z.infer<typeof SessionCapabilitiesGetOutputV1Schema>;
 export const SessionCapabilitiesSetInputV1Schema = lazyZodSchema(() => z.strictObject({
@@ -83,6 +83,7 @@ export const SESSION_CAPABILITIES_ACTION_SPECS_V1 = [
         { path: 'agentId', aliases: ['--agent'] }, { path: 'projectKey', aliases: ['--project'] }] },
   },
   { ...common, id: 'session.capabilities.get', title: 'List session capabilities', safety: 'safe', sideEffectClass: 'read', executionPlacement: 'account',
+    contextualDefaults: { sessionId: 'current_session' },
     bindings: { mcpToolName: 'session_capabilities_get', rpcMethod: 'session.capabilities.get' },
     inputSchema: SessionCapabilitiesGetInputV1Schema, outputSchema: SessionCapabilitiesGetOutputV1Schema,
     inputHints: { fields: [{ path: 'sessionId', title: 'Session', widget: 'text', required: true }] },
@@ -90,7 +91,9 @@ export const SESSION_CAPABILITIES_ACTION_SPECS_V1 = [
       { path: ['session', 'capabilities', 'list'], positionalsBeforeLastSegment: ['sessionId'], visibility: 'canonical' }] },
   },
   { ...common, id: 'session.capabilities.set', title: 'Change session capabilities', safety: 'danger', sideEffectClass: 'write', executionPlacement: 'account',
+    contextualDefaults: { sessionId: 'current_session' },
     approval: { result: 'required', flow: 'deferred' },
+    approvalPolicy: { uiConfirmation: 'direct' },
     bindings: { mcpToolName: 'session_capabilities_set', rpcMethod: 'session.capabilities.set' },
     inputSchema: SessionCapabilitiesSetInputV1Schema, outputSchema: SessionCapabilitiesSetOutputV1Schema,
     inputHints: { fields: [{ path: 'sessionId', title: 'Session', widget: 'text', required: true },

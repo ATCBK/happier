@@ -8,12 +8,14 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { resolveWorkspaceWriteActionAdmissionV1 } from '@happier-dev/protocol/actions/decisionAuthority';
 import { assertResolvedHomeTargetIdentity, HomeTargetResolutionError, type ResolvedHomeTarget } from '@happier-dev/cli-common/homeTarget';
 import { observeServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
+import { realpathWithAbsentSuffix } from '@/utils/path/physicalAncestorPath';
 import { resolveCliHomeTarget } from '@/server/homeTarget';
 import { configuration } from '@/configuration';
 import { readManagedMachine } from '@/machines/managed/readManagedMachine';
 import { ManagedInspectOutputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { isManagedDevcontainerChildProjectionCurrentV1 } from '@happier-dev/protocol/machines/managed/devcontainerV1';
 import { isDeepStrictEqual } from 'node:util';
+import { createRpcCallError } from '@happier-dev/protocol/rpcErrors';
 import { callExactMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { StoredCredentials } from '@/persistence';
@@ -32,7 +34,7 @@ import type { RpcHandlerContext } from '@/api/rpc/types';
 import type { MachineInstallationPublicIdentityV1 } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import { assertWorkspaceSyncRequesterBootstrapSupported } from './workspaceSyncBootstrapAdmission';
 import { lstat, readdir, realpath, mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { basename, dirname, join, normalize, resolve } from 'node:path';
+import { join, normalize, resolve } from 'node:path';
 import { createServer, type Server, type Socket } from 'node:net';
 
 import {
@@ -821,6 +823,16 @@ export function createWorkspaceSyncTargetAuthority(
   };
   const bootstrap = dependencies.bootstrap ?? null;
   const assertStateAvailable = dependencies.assertLegacyStateAvailable ?? (() => undefined);
+  const callMachineRpc: WorkspaceSyncTargetAuthorityDependencies['callMachineRpc'] = async request => {
+    const result = await dependencies.callMachineRpc(request);
+    // A handler refusal is carried inside a successful transport ACK. Admit it
+    // before parsing an operation's success schema so its typed reason survives.
+    if (result && typeof result === 'object' && 'error' in result && typeof result.error === 'string') {
+      throw createRpcCallError({ error: result.error,
+        errorCode: 'errorCode' in result && typeof result.errorCode === 'string' ? result.errorCode : undefined });
+    }
+    return result;
+  };
 
   // The receipt names the chosen execution namespace. Only the canonical native
   // mapper can bind it to this owner's physical filesystem; it never restamps it.
@@ -1118,7 +1130,7 @@ export function createWorkspaceSyncTargetAuthority(
       await (phase === 'inspect' ? authority.inspectCommittedCopyHere : authority.removeCommittedCopyHere)(request);
       return;
     }
-    const result = await dependencies.callMachineRpc({ machineId: workspace.machineId.trim(),
+    const result = await callMachineRpc({ machineId: workspace.machineId.trim(),
       method: phase === 'inspect' ? RPC_METHODS.DAEMON_WORKSPACE_SYNC_COMMITTED_COPY_INSPECT : RPC_METHODS.DAEMON_WORKSPACE_SYNC_COMMITTED_COPY_REMOVE,
       request: parsed, ...(request.signal ? { signal: request.signal } : {}),
     });
@@ -2057,7 +2069,7 @@ export function createWorkspaceSyncTargetAuthority(
       const resolved = await refreshCommittedCopyPreview(request);
       const { parsed, workspace } = resolved;
       if (workspace.machineId.trim() === localMachineId) return await inspectCommittedCopyPreviewHere(request, resolved);
-      const raw = await dependencies.callMachineRpc({ machineId: workspace.machineId.trim(),
+      const raw = await callMachineRpc({ machineId: workspace.machineId.trim(),
         method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_COMMITTED_COPY_INSPECT, request: parsed,
         ...(request.signal ? { signal: request.signal } : {}),
       });
@@ -2236,8 +2248,7 @@ export function createWorkspaceSyncTargetAuthority(
       }
       const canonicalRoot = before
         ? await realpath(requested)
-        : await realpath(dirname(requested))
-          .then((parent) => normalize(join(parent, basename(requested))))
+        : await realpathWithAbsentSuffix(requested)
           .catch(() => null);
       if (!canonicalRoot || canonicalRoot === resolve('/')) {
         throw authorityError('workspace_root_unsafe', 'Handoff target parent is unavailable');
@@ -2371,7 +2382,7 @@ export function createWorkspaceSyncTargetAuthority(
       if (target.machineId === localMachineId) {
         return await authority.preflightHandoffTargetReplacementHere(wireRequest, request.signal);
       }
-      return HandoffTargetReplacementPreflightResultV1Schema.parse(await dependencies.callMachineRpc({
+      return HandoffTargetReplacementPreflightResultV1Schema.parse(await callMachineRpc({
         machineId: target.machineId,
         method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_REPLACEMENT_PREFLIGHT,
         request: wireRequest,
@@ -2409,7 +2420,7 @@ export function createWorkspaceSyncTargetAuthority(
         await stageConflictResolutionHere(parsed, request.signal);
         return;
       }
-      const response = await dependencies.callMachineRpc({
+      const response = await callMachineRpc({
         machineId: workspace.machineId,
         method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_CONFLICT_STAGE,
         request: parsed,
@@ -2427,7 +2438,7 @@ export function createWorkspaceSyncTargetAuthority(
       if (workspace.machineId === localMachineId) {
         return await applyStagedConflictResolutionHere(parsed, request.signal);
       }
-      return WorkspaceSyncTargetConflictApplyResultV1Schema.parse(await dependencies.callMachineRpc({
+      return WorkspaceSyncTargetConflictApplyResultV1Schema.parse(await callMachineRpc({
         machineId: workspace.machineId,
         method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_CONFLICT_APPLY,
         request: parsed,
@@ -2440,7 +2451,7 @@ export function createWorkspaceSyncTargetAuthority(
         await discardStagedConflictResolutionHere(parsed, request.signal);
         return;
       }
-      const response = await dependencies.callMachineRpc({
+      const response = await callMachineRpc({
         machineId: parsed.targetMachineId,
         method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_CONFLICT_STAGE_DISCARD,
         request: parsed,
@@ -2454,7 +2465,7 @@ export function createWorkspaceSyncTargetAuthority(
         await releaseConflictResolutionCaptureHere(parsed);
         return;
       }
-      const response = await dependencies.callMachineRpc({
+      const response = await callMachineRpc({
         machineId: parsed.sourceMachineId,
         method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICT_CAPTURE_RELEASE,
         request: parsed,
@@ -2473,7 +2484,7 @@ export function createWorkspaceSyncTargetAuthority(
         return await recoverConflictResolutionHere(parsed, request.signal);
       }
       await transientAccess?.assertCurrentAuthority();
-      return WorkspaceSyncTargetConflictRecoverResultV1Schema.parse(await dependencies.callMachineRpc({
+      return WorkspaceSyncTargetConflictRecoverResultV1Schema.parse(await callMachineRpc({
         machineId: workspace.machineId,
         method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_CONFLICT_RECOVER,
         request: parsed,
@@ -2494,7 +2505,7 @@ export function createWorkspaceSyncTargetAuthority(
       if (workspace.machineId.trim() === localMachineId) {
         return await readFileHere(targetRequest, request.signal);
       }
-      return ReadWorkspaceSyncFileResultV1Schema.parse(await dependencies.callMachineRpc({
+      return ReadWorkspaceSyncFileResultV1Schema.parse(await callMachineRpc({
         machineId: workspace.machineId.trim(),
         method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_FILE_READ,
         request: targetRequest,
@@ -2513,7 +2524,7 @@ export function createWorkspaceSyncTargetAuthority(
       if (workspace.machineId.trim() === localMachineId) {
         return await observeEntryHere(targetRequest, request.signal);
       }
-      return WorkspaceSyncEntryExpectationV1Schema.parse(await dependencies.callMachineRpc({
+      return WorkspaceSyncEntryExpectationV1Schema.parse(await callMachineRpc({
         machineId: workspace.machineId.trim(),
         method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_ENTRY_OBSERVE,
         request: targetRequest,
@@ -3019,7 +3030,7 @@ export function createWorkspaceSyncTargetAuthority(
       if (context?.callerInputAuthorization) {
         throw authorityError('workspace_sync_update_required', 'The original requester target transport is unavailable');
       }
-      return WorkspaceSyncTargetBootstrapPrepareResultV1Schema.parse(await dependencies.callMachineRpc({
+      return WorkspaceSyncTargetBootstrapPrepareResultV1Schema.parse(await callMachineRpc({
         machineId: admittedMachineId,
         method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_BOOTSTRAP_PREPARE,
         request: wireRequest,
@@ -3065,7 +3076,7 @@ export function createWorkspaceSyncTargetAuthority(
       if (admittedMachineId === localMachineId) {
         return await authority.releaseBootstrapHere(wireRequest, request.signal);
       }
-      const result: unknown = await dependencies.callMachineRpc({
+      const result: unknown = await callMachineRpc({
         machineId: admittedMachineId,
         method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_BOOTSTRAP_RELEASE,
         request: wireRequest,

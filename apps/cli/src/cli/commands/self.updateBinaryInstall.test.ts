@@ -7,6 +7,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { captureStdout } from '@/testkit/logger/captureOutput';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 
+// Scheduled Task enumeration is a Windows OS boundary, unavailable on this
+// Linux-hosted platform simulation. No installed service needs preserving.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, spawnSync: (...args: Parameters<typeof actual.spawnSync>) => (
+    args[0] === 'powershell.exe'
+      ? { pid: 123, output: [], stdout: '[]', stderr: '', status: 0, signal: null }
+      : actual.spawnSync(...args)
+  ) };
+});
+
 /**
  * `self update` runs the one CLI update transaction (`runManagedCliUpdate`, plan R13 f) for real
  * against a temporary Happier home. Only system boundaries are replaced: the GitHub release lookup
@@ -91,8 +102,10 @@ async function runSelf(params: Readonly<{ invokedPath: string; rawArgv: string[]
     throw new Error(`process.exit(${exitCode})`);
   }) as typeof process.exit);
   try {
-    process.argv[1] = params.invokedPath;
+    // Runtime assets are loaded from this source checkout before the test
+    // substitutes the installed invocation identity used by discovery.
     const { handleSelfCliCommand } = await import('./self');
+    process.argv[1] = params.invokedPath;
     await handleSelfCliCommand({
       args: params.rawArgv.slice(1),
       rawArgv: params.rawArgv,
@@ -139,7 +152,7 @@ describe.skipIf(process.platform === 'win32')('happier self update for binary in
     })).currentVersionId;
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     homeDir = mkdtempSync(join(tmpdir(), 'happier-self-update-'));
     releaseState.scratchDir = mkdtempSync(join(tmpdir(), 'happier-self-update-release-'));
     releaseState.version = '9.9.10';
@@ -152,6 +165,9 @@ describe.skipIf(process.platform === 'win32')('happier self update for binary in
       HAPPIER_RELEASE_CHANNEL: undefined,
       HAPPIER_CLI_UPDATE_CHECK: '0',
     });
+    // Load physical source assets before a case simulates a compiled binary's
+    // execPath/platform. Discovery still observes that simulated invocation.
+    await import('./self');
   });
 
   afterEach(() => {
@@ -177,7 +193,7 @@ describe.skipIf(process.platform === 'win32')('happier self update for binary in
       stdout.restore();
     }
 
-    expect(result.exitCode).toBeNull();
+    expect(result.exitCode, result.errors).toBeNull();
     expect(result.logs).toContain('Updated happier to 9.9.10');
     expect(await currentVersion()).toBe('9.9.10');
     expect(releaseState.prepared).toEqual([{ channel: 'stable' }]);
@@ -197,7 +213,7 @@ describe.skipIf(process.platform === 'win32')('happier self update for binary in
     const result = await runSelf({ invokedPath: 'C:\\Users\\me\\.happier\\bin\\happier.exe', rawArgv: ['happier', 'self', 'update'] });
 
     expect(result.errors).not.toContain('Unsupported platform');
-    expect(result.exitCode).toBeNull();
+    expect(result.exitCode, result.errors).toBeNull();
     expect(releaseState.prepared).toEqual([{ channel: 'stable' }]);
     expect(quiesceInstalledCliWindowsPayloadOwnersMock).toHaveBeenCalledWith(expect.objectContaining({ channel: 'stable' }));
     expect(await currentVersion()).toBe('9.9.10');

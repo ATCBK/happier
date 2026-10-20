@@ -10,6 +10,9 @@ import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarne
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 
+vi.mock('socket.io-client', async (importOriginal) =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 // Sync imports persistence, which instantiates MMKV. Mock it for deterministic tests.
 const kvStore = vi.hoisted(() => new Map<string, string>());
 vi.mock('react-native-mmkv', () => {
@@ -147,6 +150,8 @@ import { normalizeRawMessages } from "@happier-dev/session-core/raw";
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { readPluginAccountAvailability } from '@/sync/domains/plugins/availability/projection';
 import type { InvalidateSync } from '@/utils/sessions/sync';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 
 class MemoryWebStorage implements Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> {
   readonly values = new Map<string, string>();
@@ -444,6 +449,65 @@ describe('sync socket offline tracking', () => {
     vi.unstubAllGlobals();
   });
 
+  it.each(['session', 'share'] as const)('retires an offscreen Session after a content-free %s change proves exact absence', async (kind) => {
+    const serverId = getActiveServerSnapshot().serverId;
+    const sessionId = 'offscreen-access-withdrawn';
+    const session = createSessionFixture({ id: sessionId, serverId });
+    storage.getState().applySessions([session]);
+    storage.getState().applyServerScopedSessionListRows(serverId, [buildSessionListRenderableFromSession(session)], { source: 'ordinary', mode: 'append' });
+    fetchChangesMock.mockResolvedValueOnce(changesResponse({ status: 'ok', nextCursor: '1',
+      changes: [{ cursor: 1, kind, entityId: sessionId, changedAt: 1 }] }));
+    const fallback = apiSocketRequestMock.getMockImplementation()!;
+    apiSocketRequestMock.mockImplementation(async (path, init) => new URL(path, 'http://localhost').pathname === `/v2/sessions/${sessionId}`
+      ? Response.json({ error: 'Session not found' }, { status: 404 }) : fallback(path, init));
+    const resume = Reflect.get(sync, 'resumeViaChanges') as (opts: { accountId: string; allowOfflineSnapshotRefresh: boolean }) => Promise<unknown>;
+    await resume.call(sync, { accountId: 'test', allowOfflineSnapshotRefresh: false });
+    expect(storage.getState().sessions[sessionId]).toBeUndefined();
+    expect(storage.getState().sessionListRowsByServerId[serverId]?.[sessionId]).toBeUndefined();
+    expect(Reflect.get(sync, 'changesCursor')).toBe('1');
+    expect(apiSocketRequestMock.mock.calls.some(([path]) => new URL(path, 'http://localhost').pathname === `/v2/sessions/${sessionId}`)).toBe(true);
+  });
+
+  it('refreshes an accessible offscreen changed Session only as a list projection', async () => {
+    const serverId = getActiveServerSnapshot().serverId;
+    const sessionId = 'offscreen-access-current';
+    const session = createSessionFixture({ id: sessionId, serverId });
+    storage.getState().applyServerScopedSessionListRows(serverId, [buildSessionListRenderableFromSession(session)], { source: 'ordinary', mode: 'append' });
+    fetchChangesMock.mockResolvedValueOnce(changesResponse({ status: 'ok', nextCursor: '1',
+      changes: [{ cursor: 1, kind: 'session', entityId: sessionId, changedAt: 1 }] }));
+    const fallback = apiSocketRequestMock.getMockImplementation()!;
+    apiSocketRequestMock.mockImplementation(async (path, init) => new URL(path, 'http://localhost').pathname === `/v2/sessions/${sessionId}`
+      ? Response.json({ session: currentOwnerSessionWireRow({ id: sessionId, seq: 9, createdAt: 1, updatedAt: 9,
+          active: true, activeAt: 9, encryptionMode: 'plain', dataEncryptionKey: null,
+          metadataLayoutVersion: 0, metadata: JSON.stringify({ name: 'Current title' }), metadataVersion: 2,
+          agentState: JSON.stringify({ controlledByUser: true }), agentStateVersion: 2, share: null,
+          pendingPermissionRequestCount: 2, pendingUserActionRequestCount: 0 }) }) : fallback(path, init));
+    const resume = Reflect.get(sync, 'resumeViaChanges') as (opts: { accountId: string; allowOfflineSnapshotRefresh: boolean }) => Promise<unknown>;
+    await resume.call(sync, { accountId: 'test', allowOfflineSnapshotRefresh: false });
+    expect(storage.getState().sessionListRowsByServerId[serverId]?.[sessionId]).toMatchObject({
+      seq: 9, hasPendingPermissionRequests: true, metadata: { name: 'Current title' },
+    });
+    expect(storage.getState().sessions[sessionId]).toBeUndefined();
+    expect(Reflect.get(sync, 'changesCursor')).toBe('1');
+  });
+
+  it('holds the change cursor when an offscreen exact projection cannot be read', async () => {
+    const serverId = getActiveServerSnapshot().serverId;
+    const sessionId = 'offscreen-access-offline';
+    const session = createSessionFixture({ id: sessionId, serverId });
+    storage.getState().applyServerScopedSessionListRows(serverId, [buildSessionListRenderableFromSession(session)], { source: 'ordinary', mode: 'append' });
+    fetchChangesMock.mockResolvedValueOnce(changesResponse({ status: 'ok', nextCursor: '1',
+      changes: [{ cursor: 1, kind: 'session', entityId: sessionId, changedAt: 1 }] }));
+    const fallback = apiSocketRequestMock.getMockImplementation()!;
+    apiSocketRequestMock.mockImplementation(async (path, init) => new URL(path, 'http://localhost').pathname === `/v2/sessions/${sessionId}`
+      ? Response.json({ error: 'unavailable' }, { status: 503 }) : fallback(path, init));
+    const resume = Reflect.get(sync, 'resumeViaChanges') as (opts: { accountId: string; allowOfflineSnapshotRefresh: boolean }) => Promise<unknown>;
+    await resume.call(sync, { accountId: 'test', allowOfflineSnapshotRefresh: false });
+    expect(Reflect.get(sync, 'changesCursor')).not.toBe('1');
+    expect(storage.getState().sessionListRowsByServerId[serverId]?.[sessionId]).toBeDefined();
+    expect(storage.getState().sessions[sessionId]).toBeUndefined();
+  });
+
   it('clears lastSocketDisconnectedAtMs when socket becomes connected again', async () => {
     expect(storage.getState().isDataReady).toBe(true);
     const lifetime = captureActiveServerAccountScopeLifetime();
@@ -650,7 +714,7 @@ describe('sync socket offline tracking', () => {
       if (pathname === '/v2/sessions/s_reconnect_consumed') return Response.json({ session: sessionRow });
       return responder(path, init);
     });
-    onTestFinished(() => apiSocketRequestMock.mockImplementation(responder));
+    onTestFinished(() => { apiSocketRequestMock.mockImplementation(responder); });
     await materializeLoadedTranscript('s_reconnect_consumed', 20);
     markSessionSurfaceVisible('s_reconnect_consumed');
     (sync as any).sessionMaterializedMaxSeqById = { s_reconnect_consumed: 20 };
@@ -703,7 +767,7 @@ describe('sync socket offline tracking', () => {
       if (pathname === '/v2/sessions/s_reconnect_duplicate_connected') return Response.json({ session: sessionRow });
       return responder(path, init);
     });
-    onTestFinished(() => apiSocketRequestMock.mockImplementation(responder));
+    onTestFinished(() => { apiSocketRequestMock.mockImplementation(responder); });
     await materializeLoadedTranscript('s_reconnect_duplicate_connected', 20);
     markSessionSurfaceVisible('s_reconnect_duplicate_connected');
     (sync as any).sessionMaterializedMaxSeqById = { s_reconnect_duplicate_connected: 20 };
@@ -1215,7 +1279,7 @@ describe('sync socket offline tracking', () => {
     expect(Object.values(storage.getState().sessionListRowsByServerId).map((rows) => rows[sessionId]).find(Boolean)).toBeUndefined();
   });
 
-  it('fetches and hydrates cold hidden Voice attention rows when session-list attention placement is off', async () => {
+  it('keeps cold hidden Voice attention rows as list projections until demanded when attention placement is off', async () => {
     storage.setState((state) => ({
       ...state,
       settings: {
@@ -1311,23 +1375,15 @@ describe('sync socket offline tracking', () => {
       .map((call) => String(call[0]))
       .find((url) => url.includes('/v2/sessions?'));
     expect(initialSessionsRequest).toContain('includeAttention=true');
-    await expect.poll(() => Object.keys(storage.getState().sessions).filter((sessionId) => (
+    expect(Object.keys(storage.getState().sessions).filter((sessionId) => (
       sessionId.startsWith('cold-hidden-voice-')
-    )).sort()).toEqual([
-      'cold-hidden-voice-late-result',
-      'cold-hidden-voice-permission',
-    ]);
-    expect(storage.getState().sessions['cold-hidden-voice-permission']).toMatchObject({
-      agentState: {
-        requests: {
-          approve: {
-            kind: 'permission',
-            tool: 'Bash',
-          },
-        },
-      },
+    )).sort()).toEqual([]);
+    const rows = storage.getState().sessionListRowsByServerId[getActiveServerSnapshot().serverId];
+    expect(rows['cold-hidden-voice-permission']).toMatchObject({
+      hasPendingPermissionRequests: true,
+      metadata: { hiddenSystemSession: true },
     });
-    expect(storage.getState().sessions['cold-hidden-voice-late-result']).toMatchObject({
+    expect(rows['cold-hidden-voice-late-result']).toMatchObject({
       latestReadyEventSeq: 4,
       lastViewedSessionSeq: 2,
     });
@@ -1378,10 +1434,10 @@ describe('sync socket offline tracking', () => {
         }
         attentionCursors.push(attentionCursor);
         const page = Number(attentionCursor.split('-')[1]);
-        const terminal = page === 101;
+        const terminal = page === 2;
         return new Response(JSON.stringify({
           sessions: terminal ? [{
-            id: 'attention-page-101',
+            id: 'attention-page-2',
             seq: 1,
             createdAt: 1,
             updatedAt: 101,
@@ -1408,18 +1464,22 @@ describe('sync socket offline tracking', () => {
 
     await (sync as any).fetchSessions();
 
-    expect(attentionCursors).toHaveLength(100);
-    expect(attentionCursors[0]).toBe('attention-1');
-    expect(attentionCursors.at(-1)).toBe('attention-100');
+    expect(attentionCursors).toEqual([]);
+    expect(sync.readOrdinarySessionListLifecycle().frontier).toMatchObject({ attentionNextCursor: 'attention-1', attentionHasNext: true });
     expect(sync.readOrdinarySessionListCoverage().coverage).toBe('incomplete');
     expect(storage.getState().concurrentSessionListCacheByServerId[getActiveServerSnapshot().serverId!]?.listObservation?.phase)
       .not.toBe('ready');
 
     await sync.fetchMoreSessions();
 
-    expect(attentionCursors).toHaveLength(101);
-    expect(attentionCursors.at(-1)).toBe('attention-101');
-    expect(storage.getState().sessionListRowsByServerId[getActiveServerSnapshot().serverId!]?.['attention-page-101'])
+    expect(attentionCursors).toEqual(['attention-1']);
+    expect(sync.readOrdinarySessionListLifecycle().frontier).toMatchObject({ attentionNextCursor: 'attention-2', attentionHasNext: true });
+    expect(sync.readOrdinarySessionListCoverage().coverage).toBe('incomplete');
+
+    await sync.fetchMoreSessions();
+
+    expect(attentionCursors).toEqual(['attention-1', 'attention-2']);
+    expect(storage.getState().sessionListRowsByServerId[getActiveServerSnapshot().serverId!]?.['attention-page-2'])
       .toBeDefined();
     expect(sync.readOrdinarySessionListCoverage().coverage).toBe('complete');
   });
@@ -1947,6 +2007,7 @@ describe('sync socket offline tracking', () => {
     expect(storage.getState().machineListStatusByServerId[activeServerId]).toBe('error');
     await expect(sync.refreshMachines()).resolves.toBeUndefined();
     expect(storage.getState().machineListByServerId[activeServerId]).toEqual([]);
+    expect(storage.getState().machineListStatusByServerId[activeServerId]).toBe('idle');
   }, 60_000);
 
   it.each(['transport', 'http'] as const)('reports a failed native update %s read to its retry owner and preserves the last known status', async (kind) => {
@@ -1986,9 +2047,9 @@ describe('sync socket offline tracking', () => {
     });
     if (cached) storage.setState({ sessionOrganizationSnapshotVersionByServerId: { [serverId]: 0 } });
 
-    await expect(sync.fetchSessions()).rejects.toBe(failure);
+    await expect(sync.refreshSessions({ awaitSessionListHydration: true })).rejects.toBe(failure);
     expect(storage.getState().sessionOrganizationErrorByServerId[serverId]).toBeTruthy();
-    await expect(sync.fetchSessions()).resolves.toBeDefined();
+    await expect(sync.refreshSessions({ awaitSessionListHydration: true })).resolves.toBeDefined();
     expect(storage.getState().sessionOrganizationErrorByServerId[serverId]).toBeNull();
   }, 60_000);
 

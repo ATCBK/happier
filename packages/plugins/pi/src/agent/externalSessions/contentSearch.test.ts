@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 // Initialize the real Workflow schema before SDK imports while its Mini migration
 // has an order-dependent cycle; no domain logic is mocked.
 import '@happier-dev/protocol/workflows/workflowV1';
@@ -12,12 +12,16 @@ import { createPiExternalSessionsContribution } from './contribution.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...actual, open: vi.fn(actual.open) };
+  return { ...actual, open: vi.fn(actual.open), opendir: vi.fn(actual.opendir), stat: vi.fn(actual.stat) };
 });
 
 const roots: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  vi.mocked(fileSystem.open).mockReset().mockImplementation(actual.open);
+  vi.mocked(fileSystem.opendir).mockReset().mockImplementation(actual.opendir);
+  vi.mocked(fileSystem.stat).mockReset().mockImplementation(actual.stat);
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -51,9 +55,12 @@ async function fixture() {
 
 describe('pi direct conversation content search', () => {
   it('advances native branch pages across identical slow budgets and continues beyond the file', async () => {
-    const { ExternalSessionCandidateMatchV1Schema } = await import('@happier-dev/protocol/sessions/external/daemonRpcV1');
+    const { ExternalSessionCandidateV1Schema, ExternalSessionCandidateMatchV1Schema, ExternalSessionsCandidatesListResponseSchema } = await import('@happier-dev/protocol/sessions/external/daemonRpcV1');
     const agentDir = await mkdtemp(join(tmpdir(), 'happier-pi-progress-'));
     roots.push(agentDir);
+    await mkdir(join(agentDir, 'sessions', '-empty'), { recursive: true });
+    await mkdir(join(agentDir, 'sessions', '-irrelevant'), { recursive: true });
+    await writeFile(join(agentDir, 'sessions', '-irrelevant', 'notes.txt'), 'not a native transcript');
     const directory = join(agentDir, 'sessions', '-repo');
     await mkdir(directory, { recursive: true });
     const assistant = (text: string): AssistantMessage => ({
@@ -77,9 +84,20 @@ describe('pi direct conversation content search', () => {
     let clock = Date.now();
     vi.spyOn(Date, 'now').mockImplementation(() => clock);
     const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    vi.mocked(fileSystem.stat).mockImplementation(async (...args) => {
+      const metadata = await actual.stat(...args);
+      clock += 15_000;
+      return metadata;
+    });
+    vi.mocked(fileSystem.opendir).mockImplementation(async (...args) => {
+      const directory = await actual.opendir(...args);
+      clock += 15_000;
+      return directory;
+    });
     vi.mocked(fileSystem.open).mockImplementation(async (...args) => {
       const handle = await actual.open(...args);
-      clock += 1000;
+      // Native candidate header/tail preparation alone exceeds the scan budget.
+      clock += 6000;
       return handle;
     });
     const contribution = createPiExternalSessionsContribution({ env: {} });
@@ -91,7 +109,7 @@ describe('pi direct conversation content search', () => {
     } };
     const request = () => ({
       source: { kind: 'piAgentDir', agentDir }, signal: new AbortController().signal,
-      deadlineAtMs: clock + 120_000, scanDeadlineAtMs: clock + 15_000,
+      deadlineAtMs: clock + 1_000_000, scanDeadlineAtMs: clock + 15_000,
       maxItems: 2, maxSerializedBytes: 4096, searchTarget: 'content' as const, searchTerm: 'native progress needle', ripgrep,
     });
     const hits = [];
@@ -103,9 +121,10 @@ describe('pi direct conversation content search', () => {
         ...(cursor ? { cursor } : {}),
       });
       if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+      ExternalSessionsCandidatesListResponseSchema.parse({ ok: true, ...result.value });
       for (const candidate of result.value.candidates) {
         expect(ExternalSessionCandidateMatchV1Schema.safeParse(candidate.match).success).toBe(true);
-        hits.push(candidate);
+        hits.push(ExternalSessionCandidateV1Schema.parse(candidate));
       }
       const previousCursor = cursor;
       cursor = result.value.nextCursor;
@@ -115,7 +134,10 @@ describe('pi direct conversation content search', () => {
       }
       partialPages += 1;
       expect(result.value.contentCoverage).toBe('partial');
-      if (previousCursor) expect(cursor).not.toBe(previousCursor);
+      if (previousCursor) expect(cursor, JSON.stringify({ page,
+        previous: JSON.parse(Buffer.from(previousCursor, 'base64url').toString('utf8')),
+        current: JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')),
+      })).not.toBe(previousCursor);
     }
     expect(partialPages).toBeGreaterThan(1);
     expect(cursor).toBeNull();
@@ -169,6 +191,9 @@ describe('pi direct conversation content search', () => {
     native.appendMessage({ role: 'user', content: 'new native branch tail', timestamp: Date.now() });
     await expect(contribution.listCandidates({ ...request(), cursor: changedCursor }))
       .resolves.toMatchObject({ ok: false, code: 'source_invalid' });
+    await expect(contribution.listCandidates({ ...request(), deadlineAtMs: clock + 1500,
+      ripgrep: { run: async () => ({ exitCode: 0, stdout: native.getSessionFile() + '\0', stderr: '' }) } }))
+      .resolves.toMatchObject({ ok: false, code: 'timeout' });
   });
 
   it.each(['body-only phrase', 'body-only phrase with "quotes"\n東京', '東京 café'])('finds decoded active-branch body %s with its transcript locator', async (query) => {
@@ -181,6 +206,8 @@ describe('pi direct conversation content search', () => {
     if (!result.ok) return;
     const page = await contribution.pageTranscript({ ...request, source: { ...request.source, sessionFile: join(request.source.agentDir, 'sessions', '-repo', '2026-07-23T10-00-00-000Z_session.jsonl') }, remoteSessionId: 'session', direction: 'older' });
     expect(page.ok && page.value.items[1]?.id).toBe(result.value.candidates[0]?.match?.sourceItemId);
+    if (!page.ok) throw new Error('Expected the native transcript used by search');
+    expect(result.value.candidates[0]).toMatchObject({ cwd: '/repo', messageCount: page.value.items.length });
     expect(body).toContain(query);
   });
 
@@ -189,6 +216,13 @@ describe('pi direct conversation content search', () => {
     await expect(contribution.listCandidates({ ...request, searchTerm })).resolves.toMatchObject({
       ok: true, value: { candidates: [], contentCoverage: 'complete' },
     });
+  });
+
+  it('keeps a native interrupted-write tail partial instead of claiming a complete conversation search', async () => {
+    const { contribution, request } = await fixture();
+    await appendFile(join(request.source.agentDir, 'sessions', '-repo', '2026-07-23T10-00-00-000Z_session.jsonl'), '{"type":"message"');
+    await expect(contribution.listCandidates({ ...request, searchTerm: '東京 café' }))
+      .resolves.toMatchObject({ ok: true, value: { contentCoverage: 'partial' } });
   });
 
   it('keeps the full projected message ordinal when native transcript pages are small', async () => {
@@ -215,7 +249,7 @@ describe('pi direct conversation content search', () => {
       clock = scanDeadlineAtMs;
       return { exitCode: 0, stdout: 'hit\0', stderr: '', stdoutTruncated: false };
     });
-    const first = await contribution.listCandidates({ ...request, scanDeadlineAtMs, searchTerm: 'body-only' });
+    const first = await contribution.listCandidates({ ...request, maxItems: 1, scanDeadlineAtMs, searchTerm: 'body-only' });
     expect(first).toMatchObject({ ok: true, value: { contentCoverage: 'partial', searchIncomplete: true, nextCursor: expect.any(String) } });
     if (!first.ok || !first.value.nextCursor) return;
     await expect(contribution.listCandidates({ ...request, deadlineAtMs: clock, scanDeadlineAtMs: clock + 1000, searchTerm: 'body-only' })).resolves.toMatchObject({ ok: false, code: 'timeout' });

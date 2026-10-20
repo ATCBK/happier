@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { SessionCreationTagV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
 
 import {
   SPAWN_SESSION_ERROR_CODES,
@@ -16,6 +17,11 @@ export function createStableSpawnNonce(namespace: string, identity: unknown): st
     throw new Error('Spawn nonce namespace is required');
   }
   return `${normalizedNamespace}:${hashStableJsonIdentity(identity)}`;
+}
+
+/** Transport settlement identity for the canonical immutable Session birth. */
+export function createSessionCreationSpawnNonce(sessionCreationTag: SessionCreationTagV1): string {
+  return createStableSpawnNonce('session.spawn_new.creation', { sessionCreationTag });
 }
 
 export function createRandomSpawnNonce(namespace: string): string {

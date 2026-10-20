@@ -1,4 +1,5 @@
 import { createSharedSubscriptionStore } from '@/sync/runtime/subscriptions/sharedSubscriptionStore';
+import { MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@happier-dev/protocol/rpcErrors';
 import {
     type LocalServiceInventorySnapshotClientInput,
     type LocalServiceInventorySnapshotClientResult,
@@ -52,12 +53,13 @@ function normalizeInput(input: LocalServiceInventoryStoreKeyInput): NormalizedLo
     return {
         machineId: input.machineId,
         serverId: input.serverId ?? null,
-        sessionId: input.sessionId ?? null,
+        // Inventory RPCs are Machine-wide; Session surfaces share the same scan and watch.
+        sessionId: null,
     };
 }
 
 function storeKey(input: LocalServiceInventoryStoreKeyInput): string {
-    return `${input.serverId ?? ''}::${input.machineId}::${input.sessionId ?? ''}`;
+    return `${input.serverId ?? ''}::${input.machineId}`;
 }
 
 const store = createSharedSubscriptionStore<
@@ -92,6 +94,7 @@ const store = createSharedSubscriptionStore<
     ),
     applySnapshot: applyLocalServiceInventorySnapshot,
     defaultWatchClient,
+    watchAfterRefresh: true,
     // Freshness comes from the daemon: one parked watch per subscribed machine, re-armed on each
     // answer. `sinceGeneratedAt` closes the window between this store's snapshot read and its
     // first watch so a service that starts in between is not missed.
@@ -104,6 +107,10 @@ const store = createSharedSubscriptionStore<
             ...(signal ? { signal } : {}),
         });
         if (!result.ok) {
+            // A watch can spend its existing RPC budget waiting for a cold scan before
+            // parking. Keep observation alive after that deadline, with the same cursor;
+            // immediate refusals and invalid responses still retire instead of spinning.
+            if (result.reasonCode === MACHINE_RPC_TIMEOUT_ERROR_CODE) return { status: 'retry' };
             return { status: 'unavailable' };
         }
         return result.changed

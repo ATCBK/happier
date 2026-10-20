@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 
-import type { Tx } from "@/storage/inTx";
-import { withTeamSessionAccessEffectsInTx, type TeamSessionAccessImpacts } from "./sessionAccessEffects";
+import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
+import { acquireTeamMutationAccountAdmissionInTx, withTeamSessionAccessEffectsInTx, type TeamSessionAccessImpacts } from "./sessionAccessEffects";
+import type { SessionAccessMembershipChange } from "@/app/session/access/sessionAccessMembershipImpact";
 import {
     AccountStatus,
     type SessionHistoryAccess,
@@ -34,6 +35,33 @@ export type TeamMemberAdmissionResult =
     }>
     | Readonly<{ ok: false; error: TeamMemberAdmissionError }>;
 
+/** Discover current membership Account identities, then admit the complete
+ * actor/target batch before callers reread current authority or mutate resources. */
+export async function acquireTeamMembershipAccountAdmissionInTx(
+    tx: Tx,
+    input: Readonly<{ teamId: string; accountIds: readonly string[]; membershipIds: readonly string[]; membershipChange?: SessionAccessMembershipChange }>,
+): Promise<() => Promise<void>> {
+    const memberships = input.membershipIds.length === 0 ? [] : await tx.teamMembership.findMany({
+        where: { id: { in: [...input.membershipIds] } },
+        select: { id: true, accountId: true },
+    });
+    const accountIds = [...input.accountIds, ...memberships.map(member => member.accountId)];
+    const recheck = await acquireTeamMutationAccountAdmissionInTx(tx, {
+        teamId: input.teamId, accountIds, membershipChange: input.membershipChange, affectedAccountIds: accountIds,
+    });
+    if (memberships.length > 0) {
+        const current = await tx.teamMembership.findMany({
+            where: { id: { in: memberships.map(member => member.id) } },
+            select: { id: true, accountId: true },
+        });
+        const admitted = new Map(memberships.map(member => [member.id, member.accountId]));
+        if (current.some(member => admitted.get(member.id) !== member.accountId)) {
+            throw new TransactionReplayRequiredError("transaction-account-audience-changed");
+        }
+    }
+    return recheck;
+}
+
 /**
  * Admit one Account to a Team, minting its membership lifetime and history horizon.
  *
@@ -64,6 +92,8 @@ export async function admitTeamMemberInTx(
         env?: NodeJS.ProcessEnv;
     }>,
 ): Promise<TeamMemberAdmissionResult> {
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: params.teamId, accountIds: [params.accountId],
+        affectedAccountIds: [params.accountId], membershipChange: { kind: "teamMembership", teamId: params.teamId } });
     // This membership leaf is the effect-time feature boundary shared by native,
     // invitation, directory, OAuth, and mTLS admission. Callers may also use the
     // same function below as a cheap preflight before starting an external flow,
@@ -104,7 +134,7 @@ export async function admitTeamMemberInTx(
     const sessionAccessStartsAt = mintSessionAccessStartsAt(historyAccess, activationNow);
 
     return withTeamSessionAccessEffectsInTx(tx, {
-        teamId: params.teamId, accountIds: [params.accountId], origin: "relationship_change", sessionAccessImpacts: params.sessionAccessImpacts,
+        teamId: params.teamId, accountIds: [params.accountId], sessionAccessImpacts: params.sessionAccessImpacts,
     }, async () => {
         // Upsert is the provider-safe conditional create. In particular, it
         // never catches a PostgreSQL uniqueness error and then tries to keep
@@ -173,10 +203,11 @@ export async function setTeamMembershipStatusInTx(
         sessionAccessImpacts?: TeamSessionAccessImpacts;
     }>,
 ): Promise<void> {
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: params.teamId, accountIds: [params.accountId],
+        affectedAccountIds: [params.accountId], membershipChange: { kind: "teamMembership", teamId: params.teamId } });
     await withTeamSessionAccessEffectsInTx(tx, {
         teamId: params.teamId,
         accountIds: [params.accountId],
-        origin: "retained_lifecycle",
         change: { kind: "teamMembership", teamId: params.teamId },
         sessionAccessImpacts: params.sessionAccessImpacts,
     }, async () => {

@@ -94,7 +94,8 @@ export const RegistryShelf = React.memo(function RegistryShelf(
         ? { action: <SectionActionButton testID={`${testID}.browseAll`} title={props.browseAll.label} icon="magnifying-glass" onPress={props.browseAll.onPress} /> }
         : {})}
     >
-      <View onLayout={onLayout}>
+      {/* The card grid draws its own gutter inside the section's content: the shelf pulls that gutter back out so the cards stand on the page's sheet edge, the legend's (lab hm-A2). */}
+      <View onLayout={onLayout} style={{ marginHorizontal: -gutter }}>
         <CoreCollectionScope renderPageScroller={passThroughScroller}>
           <Collection<RegistryShelfCard>
             testID={testID}

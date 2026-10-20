@@ -269,6 +269,25 @@ export function createCodexAppServerAssistantReasoningProjector(params: Readonly
             commitPendingRawAssistantFinals({ includeFallbackRawFinals: false });
         },
 
+        supersedeUnfinishedAssistantMessages(context: CodexAppServerAssistantReasoningProjectionContext): void {
+            commitPendingRawAssistantFinals({ includeFallbackRawFinals: false });
+            const prefix = `${context.streamScopeId}:`;
+            for (const itemKey of assistantTextByItemId.keys()) {
+                if (!itemKey.startsWith(prefix)) continue;
+                const itemId = itemKey.slice(prefix.length);
+                assistantTextByItemId.delete(itemKey);
+                deletePendingRawAssistantFinalForNormalizedItem(context.streamScopeId, itemId);
+                normalizedAssistantFinalItemKeys.add(itemKey);
+                // A native retry supersedes its unfinished attempt, not earlier
+                // completed messages or the host turn. Reconcile the same row.
+                params.bridge.overrideAssistantText({
+                    text: '',
+                    streamKey: buildAssistantItemStreamKey(context.streamScopeId, itemId),
+                    sidechainId: context.sidechainId,
+                });
+            }
+        },
+
         async flush(reason: 'turn-end' | 'abort'): Promise<void> {
             if (reason === 'turn-end') {
                 commitPendingRawAssistantFinals();

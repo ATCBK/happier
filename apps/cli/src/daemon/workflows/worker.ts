@@ -14,6 +14,8 @@ import type { LiveWorkProducerV1 } from '../lifecycle/managedActivity';
 export type WorkflowClaimForCoordination = Readonly<{
   runId: string;
   automationId?: string;
+  /** Automation origin only: the Automation's own name, the Run's name when its source carries none. */
+  automationName?: string;
   attempt: number;
   /** Claimed parent revision used by the one pre-root accepted-snapshot CAS. */
   expectedRevision: number;

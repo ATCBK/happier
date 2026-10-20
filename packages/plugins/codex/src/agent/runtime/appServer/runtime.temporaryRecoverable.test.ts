@@ -54,6 +54,7 @@ const clientState = vi.hoisted(() => {
   let deferNextRateLimitsRead = false;
   let accountReadResult: unknown = { account: null };
   let threadReadResult: unknown = { thread: { id: 'thread-1', turns: [] } };
+  let readGoal: () => unknown = () => ({ goal: null });
   let threadTurnsListResults: unknown[] = [];
   let collaborationModesResult: unknown;
   let rejectNextThreadResume: Error | null = null;
@@ -121,6 +122,7 @@ const clientState = vi.hoisted(() => {
       deferNextRateLimitsRead = false;
       accountReadResult = { account: null };
       threadReadResult = { thread: { id: 'thread-1', turns: [] } };
+      readGoal = () => ({ goal: null });
       threadTurnsListResults = [];
       collaborationModesResult = {
         data: [{
@@ -138,6 +140,9 @@ const clientState = vi.hoisted(() => {
       deferNextLoginStart = false;
       rejectNextLoginStart = null;
       deferredLoginStart = null;
+    },
+    setGoalRead(read: () => unknown) {
+      readGoal = read;
     },
     failNextSteer() {
       failNextSteer = true;
@@ -234,6 +239,7 @@ const clientState = vi.hoisted(() => {
       options?: Readonly<{ timeoutMs?: number | null }>,
     ): Promise<unknown> {
       requests.push({ method, params, ...(options ? { options } : {}) });
+      if (method === 'thread/goal/get') return readGoal();
       if (method === 'account/rateLimits/read') {
         if (deferNextRateLimitsRead) {
           deferNextRateLimitsRead = false;
@@ -404,6 +410,7 @@ vi.mock('./client.js', () => ({
 }));
 
 import {
+  buildCodexAppServerSafeErrorIdentity,
   createCodexAppServerRuntime,
   startCodexAppServerRuntime,
   type CodexAppServerRuntimeHost,
@@ -1917,7 +1924,7 @@ describe('Codex app-server temporary recoverable turn failures', () => {
     await runtime.dispose();
   });
 
-  it('does not publish experimental raw response function calls into the typed tool transcript', async () => {
+  it('publishes raw-only native function calls and their results into the tool transcript', async () => {
     const runtime = createRuntime();
     const events: CodexAppServerEvent[] = [];
     runtime.events.subscribe((event) => {
@@ -1947,19 +1954,87 @@ describe('Codex app-server temporary recoverable turn failures', () => {
       },
     });
 
-    expect(events).not.toContainEqual(expect.objectContaining({
+    expect(events).toContainEqual(expect.objectContaining({
       kind: 'tool-call',
       turnId: 'codex-turn-1',
       toolCallId: 'call-1',
     }));
-    expect(events).not.toContainEqual(expect.objectContaining({
+    expect(events).toContainEqual(expect.objectContaining({
       kind: 'tool-result',
       turnId: 'codex-turn-1',
       toolCallId: 'call-1',
     }));
+    emitNotification('item/started', { threadId: 'thread-1', turnId: 'turn-1',
+      item: { type: 'commandExecution', id: 'call-1', command: 'pwd' } });
+    emitNotification('item/completed', { threadId: 'thread-1', turnId: 'turn-1',
+      item: { type: 'commandExecution', id: 'call-1', command: 'pwd', output: '/workspace\n', exitCode: 0 } });
+    expect(events.filter((event) => event.kind === 'tool-call')).toHaveLength(1);
+    expect(events.filter((event) => event.kind === 'tool-result')).toHaveLength(1);
+    await runtime.dispose();
   });
 
-  it('does not publish an orphan raw function-call output without its matching raw call', async () => {
+  it('accepts a correlated raw-only late tool result without reviving the settled turn', async () => {
+    const runtime = createRuntime();
+    const events: CodexAppServerEvent[] = [];
+    runtime.events.subscribe(event => events.push(event));
+    await runtime.send({ text: 'inspect with a raw native tool' }, { turnId: 'host-turn-1' });
+    emitNotification('rawResponseItem/completed', { threadId: 'thread-1', turnId: 'turn-1', item: {
+      type: 'function_call', call_id: 'late-raw-call', name: 'exec_command', arguments: '{"cmd":"pwd"}',
+    } });
+    emitNotification('turn/completed', completedTurn('turn-1'));
+    await waitForCodexAppServerRuntimeTurnCompletion(runtime);
+    const late = { threadId: 'thread-1', turnId: 'turn-1', item: {
+      type: 'function_call_output', call_id: 'late-raw-call', output: '{"stdout":"/workspace"}',
+    } };
+    emitNotification('rawResponseItem/completed', { ...late, threadId: 'foreign-thread' });
+    emitNotification('rawResponseItem/completed', { ...late, item: { ...late.item, call_id: 'unknown-call' } });
+    emitNotification('rawResponseItem/completed', late);
+    emitNotification('rawResponseItem/completed', late);
+    expect(events.filter(event => event.kind === 'tool-result')).toEqual([
+      expect.objectContaining({ turnId: 'host-turn-1', toolCallId: 'late-raw-call', output: { stdout: '/workspace' } }),
+    ]);
+    expect(events.filter(event => event.kind === 'turn-start')).toHaveLength(1);
+    expect(events.filter(event => event.kind === 'turn-complete')).toHaveLength(1);
+    expect(runtime.isTurnInFlight()).toBe(false);
+    await runtime.dispose();
+  });
+
+  it('publishes the captured Codex 0.162.1 code-mode exec call and error result exactly once', async () => {
+    const runtime = createRuntime();
+    const events: CodexAppServerEvent[] = [];
+    runtime.events.subscribe((event) => events.push(event));
+    await runtime.send({ v: 1, text: 'execute pwd' }, { turnId: 'codex-turn-1' });
+    // nl1 native capture: plain-native-stream.json, thread 01a14c10-f1e9-7610-85e3-7ccb4b15de8a.
+    // Correlation ids alone are rebound to this transport fixture's admitted turn.
+    const callId = 'call_05549126603d410aa7c87203edded7aa';
+    const item = {
+      type: 'custom_tool_call', id: 'ctc_0c52db4d85e61039016ad3fc2889ec81918f3a156ec4635a81',
+      status: 'completed', call_id: callId, name: 'exec',
+      input: 'const r = await tools.exec_command({cmd:"pwd", max_output_tokens:1000});\ntext(JSON.stringify(r));\n',
+      internal_chat_message_metadata_passthrough: { turn_id: 'turn-1', create_time: 1792277544.5442138 },
+    };
+    const output = [
+      { type: 'input_text', text: 'Script completed\nWall time 0.1 seconds\nOutput:\n' },
+      { type: 'input_text', text: '{"chunk_id":"34b657","wall_time_seconds":0,"exit_code":101,"original_token_count":74,"output":"\\nthread \'main\' (1453173) panicked at linux-sandbox/src/launcher.rs:60:13:\\nbubblewrap is unavailable: no system bwrap was found on PATH and no bundled codex-resources/bwrap binary was found next to the Codex executable\\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\\n"}' },
+    ];
+    const result = { type: 'custom_tool_call_output', id: 'ctco_01a14c10-ff7f-78b1-82ba-7f0e8c706b09',
+      call_id: callId, output,
+      internal_chat_message_metadata_passthrough: { turn_id: 'turn-1', create_time: 1792277544.831558 } };
+    for (const value of [item, result, item, result]) emitNotification('rawResponseItem/completed', {
+      threadId: 'thread-1', turnId: 'turn-1', item: value,
+    });
+    emitNotification('turn/completed', completedTurn('turn-1'));
+    await waitForCodexAppServerRuntimeTurnCompletion(runtime);
+    expect(events.filter((event) => event.kind === 'tool-call')).toEqual([
+      expect.objectContaining({ kind: 'tool-call', turnId: 'codex-turn-1', toolCallId: callId, toolName: 'exec', toolInput: item.input }),
+    ]);
+    expect(events.filter((event) => event.kind === 'tool-result')).toEqual([
+      expect.objectContaining({ kind: 'tool-result', turnId: 'codex-turn-1', toolCallId: callId, output }),
+    ]);
+    await runtime.dispose();
+  });
+
+  it('does not publish orphan output or output from a hidden raw call', async () => {
     const runtime = createRuntime();
     const events: CodexAppServerEvent[] = [];
     runtime.events.subscribe((event) => {
@@ -1967,6 +2042,14 @@ describe('Codex app-server temporary recoverable turn failures', () => {
     });
 
     await runtime.send({ v: 1, text: 'inspect without leaking internal outputs' }, { turnId: 'codex-turn-1' });
+    emitNotification('rawResponseItem/completed', {
+      threadId: 'thread-1', turnId: 'turn-1',
+      item: { type: 'function_call', call_id: 'hidden-call-1', name: 'update_plan', arguments: '{}' },
+    });
+    emitNotification('rawResponseItem/completed', {
+      threadId: 'thread-1', turnId: 'turn-1',
+      item: { type: 'function_call_output', call_id: 'hidden-call-1', output: '{"status":"internal-only"}' },
+    });
     emitNotification('rawResponseItem/completed', {
       threadId: 'thread-1',
       turnId: 'turn-1',
@@ -1983,9 +2066,11 @@ describe('Codex app-server temporary recoverable turn failures', () => {
       turnId: 'codex-turn-1',
       toolCallId: 'orphan-call-1',
     }));
+    expect(events.filter((event) => event.kind === 'tool-call' || event.kind === 'tool-result')).toEqual([]);
+    await runtime.dispose();
   });
 
-  it('does not expose experimental raw response tool wrappers carried in Codex metadata passthrough', async () => {
+  it('publishes raw-only namespaced MCP calls correlated through native metadata', async () => {
     const runtime = createRuntime();
     const events: CodexAppServerEvent[] = [];
     runtime.events.subscribe((event) => {
@@ -2017,16 +2102,18 @@ describe('Codex app-server temporary recoverable turn failures', () => {
       },
     });
 
-    expect(events).not.toContainEqual(expect.objectContaining({
+    expect(events).toContainEqual(expect.objectContaining({
       kind: 'tool-call',
       turnId: 'codex-turn-1',
       toolCallId: 'call-1',
+      toolName: 'mcp__node_repl__js',
     }));
-    expect(events).not.toContainEqual(expect.objectContaining({
+    expect(events).toContainEqual(expect.objectContaining({
       kind: 'tool-result',
       turnId: 'codex-turn-1',
       toolCallId: 'call-1',
     }));
+    await runtime.dispose();
   });
 
   it('publishes completed app-server function-call items as canonical runtime tool events', async () => {
@@ -2130,13 +2217,18 @@ describe('Codex app-server temporary recoverable turn failures', () => {
     }));
   });
 
-  it('writes app-server thread name updates through the canonical display title field', async () => {
+  it('keeps native attachment bookkeeping out of the display title while accepting real thread names', async () => {
     const fixture = createCodexTestContextFixture({ sessionId: 'session-1' });
     const runtime = createRuntime({
       ctx: { writeStateField: fixture.context.writeStateField },
     });
 
     await startCodexAppServerRuntime(runtime);
+    emitNotification('thread/name/updated', {
+      threadId: 'thread-1',
+      threadName: 'Happier session session-1',
+    });
+    expect(fixture.records.sessionStateFieldWrites).toEqual([]);
     emitNotification('thread/name/updated', {
       threadId: 'thread-1',
       threadName: 'Inspect repository',
@@ -2180,7 +2272,7 @@ describe('Codex app-server temporary recoverable turn failures', () => {
     });
   });
 
-  it('does not let experimental raw response wrappers drive Happier title state', async () => {
+  it('mirrors a successful raw-only Happier title call through the same native title owner', async () => {
     const runtime = createRuntime();
 
     await runtime.send({ v: 1, text: 'set a title from raw rollout events' }, { turnId: 'codex-turn-1' });
@@ -2209,7 +2301,10 @@ describe('Codex app-server temporary recoverable turn failures', () => {
       },
     });
 
-    expect(clientState.requests.some((request) => request.method === 'thread/name/set')).toBe(false);
+    expect(clientState.requests).toContainEqual({
+      method: 'thread/name/set', params: { threadId: 'thread-1', name: 'Inspect repository' },
+    });
+    await runtime.dispose();
   });
 
   it('does not mirror failed Happier title tool results back to the Codex native thread name', async () => {
@@ -2482,6 +2577,25 @@ describe('Codex app-server temporary recoverable turn failures', () => {
       diagnostic: { code: 'codex_rollback_outcome_unknown', severity: 'error' },
     });
     expect(clientState.requests.filter(({ method }) => method === 'thread/rollback')).toHaveLength(rollbackCallCount);
+  });
+
+  it('enforces each detached input permission intent at the native turn boundary', async () => {
+    const runtime = createRuntime({ executionRunId: 'run-policy' });
+    await runtime.updateConfig?.({ permissionMode: 'yolo' });
+    const native = createCodexNativeAppServerExecutionRunConversationRuntime(runtime, 'run-policy');
+    try {
+      for (const [index, intent] of (['plan', 'read-only'] as const).entries()) {
+        await expect(native.send({ inputIds: [`policy-input-${index}`], input: { text: 'inspect only' },
+          delivery: { kind: 'newTurn', turnId: `policy-turn-${index}` },
+        }, { permissionIntent: intent })).resolves.toMatchObject({ status: 'admitted' });
+        expect(clientState.requests.filter(request => request.method === 'turn/start').at(-1)).toMatchObject(
+          intent === 'read-only' ? { params: { permissions: ':read-only' } }
+            : { params: { approvalPolicy: 'untrusted' } },
+        );
+        emitNotification('turn/completed', completedTurn(`turn-${index + 1}`));
+        await waitForCodexAppServerRuntimeTurnCompletion(runtime);
+      }
+    } finally { await native.dispose(); }
   });
 
   it.each(['session', 'execution_run'] as const)('publishes canonical $0 capacity evidence without a competing recovery report or prompt replay', async (scope) => {
@@ -2811,6 +2925,36 @@ describe('Codex app-server temporary recoverable turn failures', () => {
     await runtime.send({ v: 1, text: 'continue working' });
     await expect(runtime.updateConfig?.({ workspaceWrites: 'deny' })).rejects.toMatchObject({ code: 'role_policy_restart_required' });
   });
+  it('installs a deny ceiling during an already read-only turn and retains it for later permission intents', async () => {
+    const runtime = createRuntime();
+    await runtime.updateConfig?.({ permissionMode: 'read-only' });
+    await runtime.send({ v: 1, text: 'inspect the workspace' });
+    expect(clientState.requests.find(request => request.method === 'turn/start')?.params)
+      .toMatchObject({ permissions: ':read-only' });
+
+    await expect(runtime.updateConfig?.({ workspaceWrites: 'deny' })).resolves.toBeUndefined();
+    expect(runtime.isTurnInFlight()).toBe(true);
+    await runtime.updateConfig?.({ permissionMode: 'yolo' });
+    emitNotification('turn/completed', completedTurn('turn-1'));
+    await waitForCodexAppServerRuntimeTurnCompletion(runtime);
+    await runtime.send({ v: 1, text: 'keep inspecting under the role ceiling' });
+
+    const turnStarts = clientState.requests.filter(request => request.method === 'turn/start');
+    expect(turnStarts).toHaveLength(2);
+    expect(turnStarts[1]?.params).toMatchObject({ permissions: ':read-only' });
+    expect(clientState.requests.some(request => request.method === 'turn/interrupt')).toBe(false);
+  });
+  it('keeps the admitted writable sandbox authoritative when a read-only intent is queued for the next turn', async () => {
+    const runtime = createRuntime();
+    await runtime.updateConfig?.({ permissionMode: 'default' });
+    await runtime.send({ v: 1, text: 'continue working in the admitted writable sandbox' });
+    expect(clientState.requests.find(request => request.method === 'turn/start')?.params)
+      .toMatchObject({ approvalPolicy: 'untrusted' });
+    await runtime.updateConfig?.({ permissionMode: 'read-only' });
+
+    await expect(runtime.updateConfig?.({ workspaceWrites: 'deny' })).rejects.toMatchObject({ code: 'role_policy_restart_required' });
+    expect(runtime.isTurnInFlight()).toBe(true);
+  });
   it('emits native automatic context compaction without ending the active turn', async () => {
     const runtime = createCodexNativeAppServerSessionRuntime(createRuntime(), 'session-1');
     const observed: AgentSessionRuntimeEvent[] = [];
@@ -2880,12 +3024,57 @@ describe('Codex app-server temporary recoverable turn failures', () => {
       goal: { id: 'goal-1', objective: 'Ship it', status: 'active', updatedAt: 2 },
     });
     emitNotification('thread/goal/cleared', { threadId: 'thread-1' });
-    await Promise.resolve();
-
-    expect(observations).toEqual([
+    await vi.waitFor(() => expect(observations).toEqual([
       { kind: 'present', goal: { id: 'goal-1', objective: 'Ship it', status: 'active', updatedAt: 2 } },
       { kind: 'absent' },
-    ]);
+    ]));
+  });
+
+  it.each(['absent', 'malformed', 'unavailable'] as const)(
+    'reconciles initial Goal absence with the %s native read and retains later clears', async outcome => {
+      const observations: unknown[] = [];
+      let firstRead = true;
+      clientState.setGoalRead(() => {
+        if (firstRead) {
+          firstRead = false;
+          emitNotification('thread/goal/cleared', { threadId: 'thread-existing' });
+        }
+        if (outcome === 'unavailable') throw new Error('Native read unavailable');
+        return outcome === 'absent' ? { goal: null } : {};
+      });
+      const runtime = createRuntime({ observeGoal: observation => { observations.push(observation); } });
+      try {
+        await startCodexAppServerRuntime(runtime, { resumeId: 'thread-existing' });
+        expect(observations).toEqual(outcome === 'absent' ? [{ kind: 'absent' }] : []);
+        emitNotification('thread/goal/cleared', { threadId: 'thread-existing' });
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(observations).toEqual(outcome === 'absent' ? [{ kind: 'absent' }, { kind: 'absent' }] : []);
+        clientState.setGoalRead(() => ({ goal: null }));
+        emitNotification('thread/goal/cleared', { threadId: 'thread-existing' });
+        await vi.waitFor(() => expect(observations).toHaveLength(outcome === 'absent' ? 3 : 1));
+      } finally { await runtime.dispose(); }
+    },
+  );
+
+  it('accepts a genuine native clear while the initial Goal publication awaits the host', async () => {
+    const goal = { threadId: 'thread-existing', objective: 'Retained B', status: 'paused', updatedAt: 2 };
+    clientState.setGoalRead(() => ({ goal }));
+    const observations: unknown[] = [];
+    let release!: () => void;
+    let entered!: () => void;
+    const pendingPublication = new Promise<void>(resolve => { release = resolve; });
+    const publishing = new Promise<void>(resolve => { entered = resolve; });
+    const runtime = createRuntime({ observeGoal: async observation => {
+      observations.push(observation);
+      if (observations.length === 1) { entered(); await pendingPublication; }
+    } });
+    const starting = startCodexAppServerRuntime(runtime, { resumeId: 'thread-existing' });
+    try {
+      await publishing;
+      clientState.setGoalRead(() => ({ goal: null }));
+      emitNotification('thread/goal/cleared', { threadId: 'thread-existing' });
+      await vi.waitFor(() => expect(observations).toEqual([{ kind: 'present', goal }, { kind: 'absent' }]));
+    } finally { release(); await starting; await runtime.dispose(); }
   });
 
   it('keeps a provider-bound non-reasoning model authoritative over later reasoning requests', async () => {
@@ -4057,6 +4246,21 @@ describe('Codex app-server temporary recoverable turn failures', () => {
       await runtime?.dispose();
       await rm(codexHome, { recursive: true, force: true });
     }
+  });
+
+  it('keeps only known Connected Account unsupported subreasons in safe error diagnostics', () => {
+    for (const reason of ['refresh_bridge_unavailable', 'provider_account_identity_unavailable', 'experimental_api_unavailable',
+      'workspace_incompatible', 'credential_family_mismatch', 'live_hot_auth_failed']) {
+      expect(buildCodexAppServerSafeErrorIdentity(Object.assign(new Error('private message'), {
+        code: 'codex_refresh_free_auth_unsupported', reason,
+      }))).toEqual({ errorName: 'Error', errorCode: 'codex_refresh_free_auth_unsupported', errorReason: reason });
+    }
+    expect(buildCodexAppServerSafeErrorIdentity(Object.assign(new Error('private message'), {
+      code: 'codex_refresh_free_auth_unsupported', reason: 'private_credential_value',
+    }))).toEqual({ errorName: 'Error', errorCode: 'codex_refresh_free_auth_unsupported' });
+    expect(buildCodexAppServerSafeErrorIdentity(Object.assign(new Error('private message'), {
+      code: 'different_error', reason: 'refresh_bridge_unavailable',
+    }))).toEqual({ errorName: 'Error', errorCode: 'different_error' });
   });
 
   it('declines initial and hot Connected Account auth when the host has no refresh callback', async () => {

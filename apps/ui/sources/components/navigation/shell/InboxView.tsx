@@ -8,7 +8,7 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { InboxContent, type InboxView as InboxContentView } from '@/components/inbox/InboxContent';
 import { createInboxItemRoute, resolveInboxItemPageRoute, type InboxItemFocus } from '@/components/inbox/inboxItemFocus';
 import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback';
-import { countInboxNeedsYou, countInboxUpdates } from '@/components/inbox/inboxCounts';
+import { countInboxMentions, countInboxNeedsYou, countInboxUpdates } from '@/components/inbox/inboxCounts';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { Header } from '@/components/navigation/Header';
 import { NavigationTitleChromeProvider, PageHeader } from '@/components/ui/layout/PageHeader';
@@ -19,6 +19,10 @@ import {
 } from '@/hooks/inbox/useInboxModel';
 import { t } from '@/text';
 import { useIsTablet } from '@/utils/platform/responsive';
+import { useInboxItemNavigation } from '@/hooks/inbox/useInboxItemNavigation';
+import { InboxKeyHints } from '@/components/inbox/InboxKeyHints';
+import { selectInboxItemsForView } from '@/components/inbox/inboxItems';
+import { useDestinationFocus, useDestinationVisibility } from '@/components/appShell/workspace/DestinationInstanceHost';
 
 const styles = StyleSheet.create((theme) => ({
     container: {
@@ -33,7 +37,7 @@ const styles = StyleSheet.create((theme) => ({
 
 // The detail draws a session, a run page or an approval page: loaded when something is selected, so
 // the Inbox list (and a phone, which never shows the pane) does not carry those screens.
-const InboxItemDetail = retryableLazy(() => import('@/components/inbox/detail/InboxItemDetail')
+const InboxItemDetail = retryableLazy<React.ComponentProps<typeof import('@/components/inbox/detail/InboxItemDetail')['InboxItemDetail']>>(() => import('@/components/inbox/detail/InboxItemDetail')
     .then((module) => ({ default: module.InboxItemDetail })));
 
 /**
@@ -49,6 +53,9 @@ const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ 
     const { theme } = useUnistyles();
     const materialColor = useHappierMaterialColorResolver();
     const model = useInboxModel();
+    const router = useRouter();
+    const destinationFocused = useDestinationFocus();
+    const destinationVisible = useDestinationVisibility();
     // Lab `phone-P4`: on a phone the page carries the Inbox's large title itself (the Home hub's hero
     // step), with the view control under it and no purpose line; the tabs and groups say what it holds.
     // Wide layouts have no navigation title either: the page header carries it beside the control.
@@ -57,12 +64,36 @@ const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ 
     // the whole page, the item's own page opens instead (`OpenFocusedItemPage`).
     const focusedItem = props.focusedItem ?? null;
     const [view, setView] = React.useState<InboxContentView>('needs_you');
+    const selected = focusedItem ? model.items.find(item => createInboxItemRoute(item.focus).params.item === createInboxItemRoute(focusedItem).params.item) : undefined;
+    const selectionRouteKey = focusedItem ? createInboxItemRoute(focusedItem).params.item : null;
+    const observedSelection = React.useRef<Readonly<{ key: string | null; classified: boolean }>>({ key: null, classified: false });
     React.useEffect(() => {
-        if (focusedItem) setView('needs_you');
-    }, [focusedItem]);
+        const previous = observedSelection.current;
+        // A new route chooses a view. Resolving an already-open request must not move the user into Updates and read it unseen.
+        if (selectionRouteKey && (previous.key !== selectionRouteKey || (!previous.classified && selected))) {
+            setView(selected?.view ?? 'needs_you');
+        }
+        observedSelection.current = { key: selectionRouteKey, classified: selected !== undefined };
+    }, [selectionRouteKey, selected?.view]);
+    const select = React.useCallback((focus: InboxItemFocus) => { router.replace(createInboxItemRoute(focus) as never); }, [router]);
+    const close = React.useCallback(() => { router.replace('/inbox' as never); }, [router]);
+    const open = React.useCallback((route: string) => { router.push(route as never); }, [router]);
+    useInboxItemNavigation({ items: model.items, focus: focusedItem, view, enabled: destinationFocused && destinationVisible,
+        select, close, open, markOpened: model.markItemOpened });
     const needsYouCount = countInboxNeedsYou(model);
     const updatesCount = countInboxUpdates(model);
-    // Lab `inbox-I1`/`phone-P4`: what needs you, and what finished, as two views of one Inbox.
+    const mentionsCount = countInboxMentions(model);
+    // Lab P4: Needs you says what waits, by kind ("2 approvals and 1 decision need you").
+    const needsYouSummary = React.useMemo(() => {
+        const counts = { approvals: 0, decisions: 0, blocked: 0 };
+        for (const item of selectInboxItemsForView(model.items, 'needs_you')) {
+            if (item.type === 'approval') counts.approvals += 1;
+            else if (item.type === 'decision') counts.decisions += 1;
+            else if (item.type === 'blocked') counts.blocked += 1;
+        }
+        return counts.approvals + counts.decisions + counts.blocked > 0 ? t('inbox.work.needsYouSummary', counts) : null;
+    }, [model.items]);
+    // Lab P4: what needs you, what changed and who mentioned you, as three views of one Inbox.
     const tabs = (
         <SegmentedTabBar
             testIDPrefix="inbox.view"
@@ -73,6 +104,7 @@ const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ 
             tabs={[
                 { id: 'needs_you' as const, label: t('inbox.work.tabs.needsYou'), ...(needsYouCount > 0 ? { count: String(needsYouCount) } : {}) },
                 { id: 'updates' as const, label: t('inbox.work.tabs.updates'), ...(updatesCount > 0 ? { count: String(updatesCount) } : {}) },
+                { id: 'mentions' as const, label: t('inbox.work.tabs.mentions'), ...(mentionsCount > 0 ? { count: String(mentionsCount) } : {}) },
             ]}
             activeTabId={view}
             onSelectTab={setView}
@@ -86,12 +118,13 @@ const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ 
                 <PageHeader
                     title={t('tabs.inbox')}
                     titleProminence={phone ? 'hero' : 'page'}
-                    description={phone ? undefined : t('inbox.work.pageDescription')}
+                    description={phone ? undefined : view === 'needs_you' && needsYouSummary ? needsYouSummary : t('inbox.work.pageDescription')}
                     actions={phone ? undefined : tabs}
                 />
                 {phone ? <View style={styles.phoneTabs}>{tabs}</View> : null}
                 <InboxContent model={model} presentation="screen" view={view} focusedItem={focusedItem} onSelectItem={onSelectItem} />
             </ItemList>
+            {phone ? null : <InboxKeyHints itemOpen={focusedItem !== null && onSelectItem !== undefined} advancesOnAnswer={view === 'needs_you'} />}
         </NavigationTitleChromeProvider>
     );
 
@@ -112,7 +145,7 @@ const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ 
                     {renderList(undefined)}
                     {focusedItem ? <OpenFocusedItemPage focus={focusedItem} /> : null}
                 </>
-            ) : <InboxListDetail focusedItem={focusedItem} renderList={renderList} />}
+            ) : <InboxListDetail focusedItem={focusedItem} renderList={renderList} select={select} close={close} />}
         </View>
     );
 });
@@ -124,10 +157,14 @@ const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ 
  */
 function OpenFocusedItemPage(props: Readonly<{ focus: InboxItemFocus }>) {
     const router = useRouter();
-    const href = resolveInboxItemPageRoute(props.focus);
+    const model = useInboxModel();
+    const notice = props.focus.kind === 'notice' ? model.accountNotices.find(entry => entry.artifact.id === props.focus.id)?.header
+        ?? model.openUsageNotices.find(entry => entry.artifact.id === props.focus.id)?.header : null;
+    const href = resolveInboxItemPageRoute(props.focus, { notice });
     React.useEffect(() => {
+        if (props.focus.kind === 'notice' && !notice && model.isLoading) return;
         router.replace(href as never);
-    }, [href, router]);
+    }, [href, router, props.focus.kind, notice, model.isLoading]);
     return null;
 }
 
@@ -142,18 +179,13 @@ function OpenFocusedItemPage(props: Readonly<{ focus: InboxItemFocus }>) {
  */
 const InboxListDetail = React.memo(function InboxListDetail(props: Readonly<{
     focusedItem: InboxItemFocus | null;
+    select: (focus: InboxItemFocus) => void;
+    close: () => void;
     renderList: (onSelectItem: ((focus: InboxItemFocus) => void) | undefined) => React.ReactNode;
 }>) {
-    const router = useRouter();
     const { theme } = useUnistyles();
     const { fontScale } = useWindowDimensions();
     const scale = Math.max(1, fontScale);
-    const select = React.useCallback((focus: InboxItemFocus) => {
-        router.replace(createInboxItemRoute(focus) as never);
-    }, [router]);
-    const close = React.useCallback(() => {
-        router.replace('/inbox' as never);
-    }, [router]);
     return (
         <HappierListDetailLayout
             testID="inbox.layout"
@@ -167,13 +199,13 @@ const InboxListDetail = React.memo(function InboxListDetail(props: Readonly<{
             listStyle={props.focusedItem ? { borderRightWidth: 1, borderRightColor: theme.colors.border.default } : undefined}
             list={(layout) => (
                 <>
-                    {props.renderList(layout?.mode === 'split' ? select : undefined)}
+                    {props.renderList(layout?.mode === 'split' ? props.select : undefined)}
                     {layout?.mode === 'stacked' && props.focusedItem ? <OpenFocusedItemPage focus={props.focusedItem} /> : null}
                 </>
             )}
             detail={props.focusedItem ? (
                 <React.Suspense fallback={<PaneLoadingFallback />}>
-                    <InboxItemDetail focus={props.focusedItem} onClose={close} />
+                    <InboxItemDetail focus={props.focusedItem} onClose={props.close} />
                 </React.Suspense>
             ) : null}
         />

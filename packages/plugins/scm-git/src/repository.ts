@@ -74,19 +74,27 @@ export async function detectGitRepo(input: { cwd: string; includeRetainedWorktre
     const gitRepoCheck = await runScmCommand({
         bin: 'git',
         cwd: input.cwd,
-        args: ['rev-parse', '--is-inside-work-tree'],
+        // Resolve both facts during the same discovery. Per-file RPCs already carry this
+        // detection into their backend context; a second process only repeats setup.
+        args: ['rev-parse', '--is-inside-work-tree', '--show-toplevel'],
         timeoutMs: 5000,
         env: { LC_ALL: 'C', LANGUAGE: 'C' },
     });
+    if (gitRepoCheck.workingDirectoryMissing === true) {
+        throw Object.assign(new Error('The workspace folder no longer exists on this machine'), {
+            errorCode: SCM_OPERATION_ERROR_CODES.ROOT_NOT_FOUND,
+        });
+    }
     if (gitRepoCheck.executableMissing === true) {
         throw Object.assign(new Error(gitRepoCheck.stderr || 'Git is not installed'), {
             errorCode: SCM_OPERATION_ERROR_CODES.BACKEND_NOT_INSTALLED,
         });
     }
-    if (!gitRepoCheck.success || gitRepoCheck.exitCode !== 0) {
-        if (commandProducedNoAnswer(gitRepoCheck)) {
-            throw detectionUnavailable(gitRepoCheck.stderr.trim() || 'the repository probe did not complete');
-        }
+    if (commandProducedNoAnswer(gitRepoCheck)) {
+        throw detectionUnavailable(gitRepoCheck.stderr.trim() || 'the repository probe did not complete');
+    }
+    const discoveryAnswer = /^(true|false)\r?\n/.exec(gitRepoCheck.stdout);
+    if ((!gitRepoCheck.success || gitRepoCheck.exitCode !== 0) && !discoveryAnswer) {
 
         // Git's setup.c distinguishes exhausted discovery from ownership, access and format
         // refusals. A working `git --version` cannot turn those refusals into repository absence.
@@ -100,16 +108,13 @@ export async function detectGitRepo(input: { cwd: string; includeRetainedWorktre
         throw detectionUnavailable(diagnostic || 'the repository probe was refused');
     }
 
-    const rootResult = await runScmCommand({
-        bin: 'git',
-        cwd: input.cwd,
-        args: ['rev-parse', '--show-toplevel'],
-        timeoutMs: 5000,
-    });
-
     return {
         isRepo: true,
-        rootPath: rootResult.success ? rootResult.stdout.trim() : null,
+        // Bare repositories answer false before --show-toplevel fails. Preserve their
+        // existing repository detection without inventing a worktree root.
+        rootPath: gitRepoCheck.success && discoveryAnswer
+            ? gitRepoCheck.stdout.slice(discoveryAnswer[0].length).trim() || null
+            : null,
         mode: '.git',
     };
 }

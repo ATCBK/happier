@@ -52,7 +52,7 @@ describe('AgentInput local sample conversation', () => {
             const pending = source.usePendingRequests();
             const interaction = source.useInteraction();
             const metadata = source.useMetadata();
-            return <AgentInput value="A follow-up" onChangeText={() => undefined} onSend={() => undefined}
+            return <AgentInput value="A follow-up" placeholder="Message" onChangeText={() => undefined} onSend={() => undefined}
                 autocompleteKinds={[]} autocompleteSuggestions={async () => []}
                 permissionRequests={pending.permissionRequests} canApprovePermissions={interaction.canApprovePermissions}
                 metadata={metadata ?? undefined}
@@ -79,7 +79,7 @@ describe('AgentInput local sample conversation', () => {
 
     it.each(['absent', 'readOnly'] as const)('keeps new-session context with %s non-interactive source', async (kind) => {
         const { AgentInput } = await import('./AgentInput');
-        const input = <AgentInput value="A new chat" onChangeText={() => undefined} onSend={() => undefined}
+        const input = <AgentInput value="A new chat" placeholder="Message" onChangeText={() => undefined} onSend={() => undefined}
             autocompleteKinds={[]} autocompleteSuggestions={async () => []} voiceAffordance="none" engineControls="none" />;
         const source = createReadOnlySessionTranscriptSource({
             sessionId: 'read-only-dataset', messages: [], reducerState: null, metadata: null, agentState: null,

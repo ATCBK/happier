@@ -164,7 +164,10 @@ afterEach(() => {
 describe('useUpdates (OTA runtime)', () => {
     it('exposes current OTA operations through Actions and retires them with their last mounted app owner', async () => {
         stubFeatureResponse(true);
-        const executor = createActionExecutor(createActionExecutorBoundaryFixture({ appUpdateAction: executeAppUpdateAction }));
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+            appUpdateAction: executeAppUpdateAction,
+            presentUserActionConfirmation: async () => true,
+        }));
         const context = { surface: 'ui' as const, authority: 'present_user' as const };
         await expect(executor.execute('app.updates.get', {}, context)).resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
         const summary = await renderHook(() => useAppUpdateStatus());

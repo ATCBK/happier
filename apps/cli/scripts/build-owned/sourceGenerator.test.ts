@@ -1,10 +1,12 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { createPackageLayoutSandbox, writeBundledPluginSourceInputs, writeCliBundledHostPackage } from '../__tests__/testkit/packageLayoutSandbox';
+import { renderCliBundledAgentRegistrationBindingsTs } from './bundledPlugins/registry';
+import { PLUGIN_MANIFEST as CUSTOM_ACP_MANIFEST } from '../../../../packages/plugins/custom-acp/src/manifest';
 
 describe('bundled generator preparation process boundary', () => {
   it('publishes and checks semantic projections from authored dependencies without internal dist', async () => {
@@ -49,12 +51,33 @@ describe('bundled generator preparation process boundary', () => {
       writeFileSync(join(happyCliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli', type: 'module', bundledDependencies: ['@happier-dev/plugins-selected'],
       }));
-      // The fixture host declares no Agents; copied source must not retain the
-      // real host's unrelated executable registrations during scoped publication.
-      unlinkSync(join(happyCliDir, 'src/plugins/projection/registry/sources/generatedBundledPlugins.ts'));
       const packageRoot = writeBundledPluginSourceInputs({ repoRoot, pluginId: 'selected' });
-      const manifest = { schemaVersion: 2, id: 'happier.selected', version: '0.0.0', displayName: 'Selected',
-        engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 }, hostAccess: { required: [], optional: [] }, contributes: {} };
+      const manifest = {
+        ...CUSTOM_ACP_MANIFEST,
+        id: 'happier.selected', displayName: 'Selected',
+      };
+      // Full semantic publication inspects the authored public entry and its
+      // declared Resources, not only the membership manifest/Agent facts.
+      writeFileSync(join(packageRoot, 'src/index.ts'),
+        [
+          "import type { PluginApi } from '@happier-dev/plugin-sdk';",
+          "import { createCustomAcpAgentRuntime } from './agent/runtime/factory.js';",
+          "export { PLUGIN_MANIFEST as manifest } from './manifest.js';",
+          'export function activate(api: PluginApi) {',
+          "  api.agents.register('custom-acp', createCustomAcpAgentRuntime, {",
+          "    sessionRunnerFactory: { module: './agent/runtime/factory', export: 'createCustomAcpAgentRuntime', runtimeApiVersion: 1 },",
+          '  });',
+          '}',
+        ].join('\n'));
+      mkdirSync(join(packageRoot, 'assets'), { recursive: true });
+      cpSync(join(sourceRoot, 'packages/plugins/custom-acp/assets/brand.png'), join(packageRoot, 'assets/brand.png'));
+      // Retained host registrations must agree with this synthetic host's real
+      // Agent declaration; never retain the copied checkout's unrelated Agents.
+      writeFileSync(join(happyCliDir, 'src/plugins/projection/registry/sources/generatedBundledPlugins.ts'),
+        renderCliBundledAgentRegistrationBindingsTs([{
+          pluginId: manifest.id, localId: 'custom-acp', implementationOwnerId: 'custom-acp', registrationFamily: 'agents',
+        }]));
+      cpSync(join(sourceRoot, 'packages/plugins/custom-acp/src/agent'), join(packageRoot, 'src/agent'), { recursive: true });
       writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name: '@happier-dev/plugins-selected', version: '0.0.0', type: 'module' }));
       // Prior npm packaging can leave a nearer private workspace copy. It must
       // not become the authority for this authored-source generation.
@@ -73,7 +96,8 @@ describe('bundled generator preparation process boundary', () => {
       ].join('\n'));
       const unrelatedRoot = writeBundledPluginSourceInputs({ repoRoot, pluginId: 'unrelated' });
       writeFileSync(join(unrelatedRoot, 'package.json'), JSON.stringify({ name: '@happier-dev/plugins-unrelated', version: '0.0.0', type: 'module' }));
-      writeFileSync(join(unrelatedRoot, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify({ ...manifest, id: 'happier.unrelated' })};`);
+      const { brand: _brand, resources: _resources, ...unrelatedManifest } = manifest;
+      writeFileSync(join(unrelatedRoot, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify({ ...unrelatedManifest, id: 'happier.unrelated', contributes: {} })};`);
       const generator = join(happyCliDir, 'scripts/build-owned/generateBundledPluginEntries.ts');
       const run = (mode: 'write' | 'check') => promisify(execFile)(process.execPath,
         ['--conditions=happier-source', '--import', sourceOnlyLoader, '--experimental-strip-types', generator, '--root', repoRoot,

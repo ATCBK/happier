@@ -1,4 +1,5 @@
 import { storage } from '@/sync/domains/state/storage';
+import { readStoredSessionMessages } from '@happier-dev/session-core/messages';
 import type { VoiceAssistantAction } from '@happier-dev/protocol';
 import {
     attachVoiceAgentActionEffectId,
@@ -123,12 +124,12 @@ export function createVoiceTurnStreaming(args: Readonly<{
 
         const sendWithHandle = async (displayUserText: string) => {
             const handle = await args.getVoiceAgentHandle(sessionId).catch((error: unknown) => {
-                // Selection refusal happens before this input reaches the turn
-                // transport. Preserve that positive no-effect fact for Pending.
-                if (error instanceof Error && 'code' in error && error.code === 'VOICE_AGENT_SELECTION_UNAVAILABLE') {
-                    throw createVoiceTextTurnRejectedBeforeEffectError(error, 'provider_unavailable_before_acceptance');
-                }
-                throw error;
+                // A recovery can follow a prior dispatch; do not infer its outcome
+                // from the later failure to reacquire a handle.
+                if (lastHandle) throw error;
+                // Initial acquisition has not received this input: no transcript
+                // commit or turn dispatch can have happened for it.
+                throw createVoiceTextTurnRejectedBeforeEffectError(error, 'provider_unavailable_before_acceptance');
             });
             lastHandle = handle;
             const nextUserText = preparePayloadText();
@@ -172,13 +173,17 @@ export function createVoiceTurnStreaming(args: Readonly<{
                     ? response.actions ?? []
                     : withClientTurnEffectIdentity(handle, response.actions ?? []),
             };
-            if (
-                normalizedResponse.assistantText.trim().length === 0
-            ) {
-                const recoveredAssistantTexts = collectAssistantTextMessagesSinceBaseline(
+            const submittedUserLocalId = options?.userTranscript?.localId;
+            if (normalizedResponse.assistantText.trim().length === 0 && submittedUserLocalId) {
+                const messages = readStoredSessionMessages(storage.getState(), handle.rpcSessionId);
+                const submittedUserIndex = messages.findIndex((message) =>
+                    message.kind === 'user-text' && message.localId === submittedUserLocalId);
+                // History can hydrate after baseline capture. Recover only after
+                // the admitted input, using the same boundary as the direct waiter.
+                const recoveredAssistantTexts = submittedUserIndex < 0 ? [] : collectAssistantTextMessagesSinceBaseline(
                     handle.rpcSessionId,
                     transcriptBaseline.baselineIds,
-                    transcriptBaseline.baselineCount,
+                    submittedUserIndex + 1,
                 );
                 const recoveredAssistantText = recoveredAssistantTexts.at(-1)?.trim() ?? '';
                 if (recoveredAssistantText) {

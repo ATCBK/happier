@@ -1,4 +1,5 @@
 import type { PendingDeliveryBlockedReason } from '@happier-dev/protocol';
+import { readRpcErrorCode } from '@/sync/runtime/rpcErrors';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import type { VoiceConversationInUseVoice } from '@happier-dev/protocol/actions/voiceConversationActionFamily';
 import type {
@@ -95,7 +96,7 @@ export type VoiceAdapterController = Readonly<{
     initialContext?: string;
     textOnly?: boolean;
   }>): Promise<void>;
-  stop(input: Readonly<{ sessionId: string; reason?: 'continued_elsewhere' }>): Promise<void>;
+  stop(input: Readonly<{ sessionId: string; reason?: 'continued_elsewhere'; signal?: AbortSignal }>): Promise<void>;
   toggle(input: Readonly<{ sessionId: string }>): Promise<void>;
   /** Routes a recovery through the exact active attempt without replacing it. */
   retry?(input: Readonly<{
@@ -132,6 +133,7 @@ export type VoiceAdapterController = Readonly<{
     controlSessionId: string;
     requestedTargetSessionAddress: SessionAddress | null;
     settings: unknown;
+    signal?: AbortSignal;
   }>): Promise<VoiceAdapterConversationBinding | null>;
   resolveBindingTranscriptMode?(settings: unknown): VoiceAdapterTranscriptMode | null;
   resolveSurfaceCapabilities?(voiceSettings: unknown): VoiceAdapterSurfaceCapabilities | null;
@@ -162,18 +164,25 @@ export type VoiceTextTurnRejectedBeforeEffectReason = Extract<
 export type VoiceTextTurnRejectedBeforeEffectError = Error & Readonly<{
   code: typeof VOICE_TEXT_TURN_REJECTED_BEFORE_EFFECT;
   pendingDeliveryBlockedReason: VoiceTextTurnRejectedBeforeEffectReason;
+  cause: unknown;
 }>;
 
 export function createVoiceTextTurnRejectedBeforeEffectError(
   error: unknown,
   pendingDeliveryBlockedReason: VoiceTextTurnRejectedBeforeEffectReason,
 ): VoiceTextTurnRejectedBeforeEffectError {
-  const rejection = error instanceof Error
-    ? error
-    : new Error(typeof error === 'string' && error.trim() ? error : 'voice_text_turn_rejected_before_effect');
+  const rejection = new Error(
+    error instanceof Error ? error.message
+      : typeof error === 'string' && error.trim() ? error : 'voice_text_turn_rejected_before_effect',
+    { cause: error },
+  );
+  if (error instanceof Error) rejection.name = error.name;
+  const rpcErrorCode = readRpcErrorCode(error);
   return Object.assign(rejection, {
     code: VOICE_TEXT_TURN_REJECTED_BEFORE_EFFECT,
     pendingDeliveryBlockedReason,
+    cause: error,
+    ...(rpcErrorCode ? { rpcErrorCode } : {}),
   });
 }
 

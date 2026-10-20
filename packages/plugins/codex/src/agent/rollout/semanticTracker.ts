@@ -31,6 +31,9 @@ export function createCodexRolloutSemanticTracker(state?: CodexRolloutSemanticSt
     let lastEmittedAssistantText = state?.lastEmittedAssistantText ?? null;
 
     return {
+        breakAssistantEcho(): void {
+            lastEmittedAssistantText = null;
+        },
         snapshot(): CodexRolloutSemanticState {
             return { pendingSpawnByCallId: [...pendingSpawnByCallId], startedThreadIds: [...startedThreadIds],
                 completedThreadIds: [...completedThreadIds], lastEmittedAssistantText };

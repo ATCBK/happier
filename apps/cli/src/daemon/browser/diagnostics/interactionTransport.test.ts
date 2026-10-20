@@ -133,6 +133,21 @@ function deferred<T>() {
 }
 
 describe('browser diagnostics interaction transport (DIAG-INTERACTION)', () => {
+  it('refuses injected-page eval at the CDP-only engine without executing a Machine effect', async () => {
+    const harness = createHarness({ responses: {
+      'Runtime.evaluate': { result: { type: 'number', value: 2 } },
+    } });
+    const transport = createBrowserDiagnosticsInteractionTransport({ contextCapture: harness.contextCapture });
+    harness.bindView();
+    try {
+      const result = BrowserDiagnosticsEvalResultV1Schema.parse(await transport.dispatch(
+        'browser.diagnostics.eval', evalRequest({ tier: 'injectedPage' }),
+      ));
+      expect(result).toMatchObject({ status: 'blocked', errorCode: 'adapter_unavailable', tier: 'injectedPage' });
+      expect(harness.dispatchPageCommand).not.toHaveBeenCalled();
+    } finally { await transport.dispose(); }
+  });
+
   it('drains a queued debugger mutation and refuses further held debugger input', async () => {
     const control = createSurfaceInputControl();
     const entered = deferred<void>();

@@ -71,7 +71,7 @@ export const SyncedSessionAuthoringFieldIdV2Schema = z.enum(
   SYNCED_SESSION_AUTHORING_FIELD_IDS_V2 as [SyncedSessionAuthoringFieldIdV2, ...SyncedSessionAuthoringFieldIdV2[]],
 );
 export const SyncedSessionAuthoringValueV2Schema = SESSION_AUTHORING_FIELD_ARTIFACTS.syncedValueSchema;
-export type SyncedSessionAuthoringValueV2 = typeof SyncedSessionAuthoringValueV2Schema['_output'];
+export type SyncedSessionAuthoringValueV2 = z.output<typeof SyncedSessionAuthoringValueV2Schema>;
 
 export {
   SYNCED_SESSION_AUTHORING_FIELD_IDS_V1,
@@ -82,10 +82,10 @@ export type {
   SyncedSessionAuthoringFieldIdV1,
   SyncedSessionAuthoringValueV1,
 } from './syncedSessionAuthoringV1.js';
-export type SessionAuthoringValueV1 = typeof SessionAuthoringValueV1Schema['_output'];
-export type SessionAuthoringAutomationV1 = typeof SessionAuthoringAutomationV1Schema['_output'];
-export type SessionAuthoringCheckoutCreationDraftV1 = typeof SessionAuthoringCheckoutCreationDraftV1Schema['_output'];
-export type SessionAuthoringTerminalV1 = typeof SessionAuthoringTerminalV1Schema['_output'];
+export type SessionAuthoringValueV1 = z.output<typeof SessionAuthoringValueV1Schema>;
+export type SessionAuthoringAutomationV1 = z.output<typeof SessionAuthoringAutomationV1Schema>;
+export type SessionAuthoringCheckoutCreationDraftV1 = z.output<typeof SessionAuthoringCheckoutCreationDraftV1Schema>;
+export type SessionAuthoringTerminalV1 = z.output<typeof SessionAuthoringTerminalV1Schema>;
 
 if (SESSION_AUTHORING_CONTEXT_KINDS.length < 1 || SESSION_AUTHORING_FIELD_IDS.length < 1) {
   throw new Error('sessionAuthoring catalogs must not be empty');

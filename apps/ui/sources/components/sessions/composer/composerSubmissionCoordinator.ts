@@ -236,6 +236,7 @@ function sameExecutionTarget(left: SessionExecutionTargetV1, right: SessionExecu
 async function isStagedMediaAdmissionAvailable(
     handles: readonly ComposerContentHandleV1[],
     route: ComposerSubmissionRoute,
+    signal?: AbortSignal,
 ): Promise<boolean> {
     const executionTarget = readCurrentExecutionTarget(route);
     if (!executionTarget || handles.some((handle) => !sameExecutionTarget(handle.executionTarget, executionTarget))) {
@@ -243,11 +244,11 @@ async function isStagedMediaAdmissionAvailable(
     }
 
     try {
-        const availability = await getComposerMediaContentAvailability({ executionTarget });
+        const availability = await getComposerMediaContentAvailability({ executionTarget, ...(signal ? { signal } : {}) });
         // Re-read the route-owned target after the asynchronous boundary. A
         // target change cannot reuse this probe or a handle staged elsewhere.
         const currentExecutionTarget = readCurrentExecutionTarget(route);
-        return availability.available
+        return !signal?.aborted && availability.available
             && currentExecutionTarget !== null
             && sameExecutionTarget(executionTarget, currentExecutionTarget);
     } catch {
@@ -261,13 +262,14 @@ async function isStagedMediaAdmissionAvailable(
 export async function submitComposerSnapshot(input: Readonly<{
     snapshot: ComposerSnapshotV1 | null;
     route: ComposerSubmissionRoute;
+    signal?: AbortSignal;
     /** Sendable bytes owned by this mounted composer but staged outside the portable document. */
     additionalSendableContent?: boolean;
     /** Clears through the owner token associated with the exact captured snapshot. */
     clearAcceptedSnapshot: (capturedSnapshot: ComposerSnapshotV1) => boolean;
 }>): Promise<ComposerSubmissionResult> {
     const capturedSnapshot = input.snapshot;
-    if (!capturedSnapshot || !capturedSnapshot.capabilities.submit || !capturedSnapshot.state.submittable) {
+    if (input.signal?.aborted || !capturedSnapshot || !capturedSnapshot.capabilities.submit || !capturedSnapshot.state.submittable) {
         return { status: 'unavailable' };
     }
 
@@ -286,7 +288,8 @@ export async function submitComposerSnapshot(input: Readonly<{
     if (stagedMedia.status === 'invalid') {
         return { status: 'blocked', reason: 'mediaContentUnavailable', snapshot };
     }
-    if (stagedMedia.status === 'ready' && !await isStagedMediaAdmissionAvailable(stagedMedia.handles, input.route)) {
+    if (stagedMedia.status === 'ready' && !await isStagedMediaAdmissionAvailable(stagedMedia.handles, input.route, input.signal)) {
+        if (input.signal?.aborted) return { status: 'unavailable' };
         return { status: 'blocked', reason: 'mediaContentUnavailable', snapshot };
     }
 

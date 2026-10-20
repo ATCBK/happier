@@ -109,8 +109,8 @@ function directSendOutcome(
     if (result.type !== 'opened' && result.type !== 'openPending' && result.type !== 'linked') {
         return 'notRequested';
     }
-    if (result.delivery === 'accepted' || result.delivery === 'alreadyAccepted') return 'applied';
-    if (result.delivery === 'outcomeUnknown') return 'uncertain';
+    if (result.delivery === 'accepted' || result.delivery === 'alreadyAccepted' || result.delivery === 'replied') return 'applied';
+    if (result.delivery === 'outcomeUnknown' || result.delivery === 'held') return 'uncertain';
     if (result.delivery === 'rejected' || result.delivery === 'failed'
         || result.delivery === 'cancelled' || result.delivery === 'none') return 'refused';
     return 'notRequested';

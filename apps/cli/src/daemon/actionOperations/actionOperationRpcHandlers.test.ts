@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import axios, { AxiosHeaders } from 'axios';
 import tweetnacl from 'tweetnacl';
+import { createServer } from 'node:http';
 
 import { ACTION_OPERATION_RPC_METHODS_V1, ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
 import { createActionOperationRpcHandlers, registerActionOperationRpcHandlers } from './actionOperationRpcHandlers';
@@ -13,8 +14,94 @@ import { createProjectWorkerAdmission } from '@/workspaces/execution/projectWork
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { ActionOperationListV1ResponseSchema as PredecessorListSchema,
   ActionOperationGetV1ResponseSchema as PredecessorGetSchema } from './testFixtures/predecessorActionOperationV1';
+import { ProjectServiceRelocateInputV1Schema } from '@happier-dev/protocol/workspaces/projectServiceRelocationV1';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 describe('action operation observation RPC handlers', () => {
+  it('claims one exact Move Start only in its live phase and refuses a requested cancellation before settlement', async () => {
+    const scope = { accountId: 'requester', machineId: 'source' };
+    const workspace = { serverId: 'home', refId: 'workspace' };
+    const destination = { kind: 'workers' as const, destination: { kind: 'machine' as const, machineId: 'worker' } };
+    const input = ProjectServiceRelocateInputV1Schema.parse({ workspace, serviceName: 'web', requestId: 'move',
+      currentTarget: { kind: 'managed_service', machineId: 'source', managedServiceId: 'native-old',
+        workspaceId: 'workspace', cwd: '/project', declaration: { workspaceRefId: 'workspace', selection: { kind: 'manifest', name: 'web' } } },
+      destination, selectedTarget: { machineId: 'worker' }, desiredPlacement: { workspace, serviceName: 'web',
+        expectedRevision: 'absent', expected: { kind: 'absent' }, value: { runsOn: destination, unavailable: 'fail' } } });
+    const store = createActionOperationStore();
+    const spec = getActionSpec('projects.service.relocate');
+    const runner = createActionOperationRunner({ store, generateOperationId: () => 'move-operation',
+      resolveAction: () => ({ actionId: spec.id, title: spec.title, operation: spec.operation }) });
+    let progress!: Parameters<Parameters<typeof runner.observe>[0]['execute']>[0]['updateProgress'];
+    let finish!: () => void;
+    const completed = new Promise<void>(resolve => { finish = resolve; });
+    await runner.observe({ actionId: spec.id, scope, input, requestId: 'root-request', cancellation: 'supported', execute: async context => {
+      progress = context.updateProgress;
+      progress({ phase: 'stopping', label: 'Stopping service' });
+      await completed;
+      return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
+    } });
+    const handlers = createActionOperationRpcHandlers({ store, runner, machineId: 'source', resolveAccountId: async () => 'custodian' });
+    const context = { machineAdmission: { actorAccountId: 'requester', custodianAccountId: 'custodian', machineId: 'source',
+      installationId: 'source-installation', role: 'use' as const, encryptionMode: 'plain' as const }, verifyMachineAdmissionCurrent: async () => true };
+    const request = { requestId: 'root-request', installationId: 'source-installation', input };
+    const refused = { kind: 'refused', reasonCode: 'service_move_not_starting' };
+    try {
+      expect(await handlers.claimServiceMoveStart(request, context)).toEqual(refused);
+      progress({ phase: 'starting', label: 'Starting service' });
+      expect(await handlers.claimServiceMoveStart({ ...request, installationId: 'replaced' }, context)).toEqual(refused);
+      expect(await handlers.claimServiceMoveStart({ ...request, input: { ...input, selectedTarget: { machineId: 'other' } } }, context)).toEqual(refused);
+      expect(await handlers.claimServiceMoveStart(request, { ...context,
+        machineAdmission: { ...context.machineAdmission, actorAccountId: 'stranger' } })).toEqual(refused);
+      expect(await Promise.all([handlers.claimServiceMoveStart(request, context), handlers.claimServiceMoveStart(request, context)]))
+        .toEqual([{ kind: 'claimed' }, { kind: 'refused', reasonCode: 'service_move_start_already_claimed' }]);
+      expect(runner.cancel(scope, 'move-operation')).toEqual({ kind: 'requested' });
+      expect(store.get(scope, 'move-operation')?.state).toBe('running');
+      expect(await handlers.claimServiceMoveStart(request, context)).toEqual(refused);
+    } finally { finish(); await runner.waitForTerminal(scope, 'move-operation'); }
+    expect(await handlers.claimServiceMoveStart(request, context)).toEqual(refused);
+  });
+  it('keeps a guest operation read alive past the former Home phase cutoff within its RPC lifetime', async () => {
+    const store = createActionOperationStore();
+    store.create({ operationId: 'guest-operation', actionId: 'projects.script.run', title: 'Run',
+      scope: { accountId: 'requester', machineId: 'guest' }, cancellation: 'unsupported', inputIdentity: '{}' });
+    const handlers = createActionOperationRpcHandlers({ store,
+      runner: createActionOperationRunner({ store, resolveAction: () => null }),
+      machineId: 'guest', resolveAccountId: async () => 'custodian' });
+    let requests = 0;
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    // Real HTTP is the Home boundary. The second verification is the read's
+    // disclosure check; it remains valid after the old 15s phase-local cutoff.
+    const home = createServer((_request, response) => {
+      const answer = () => { response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ v: 1, ok: true })); };
+      if (++requests === 2) {
+        const timer = setTimeout(() => { timers.delete(timer); answer(); }, 16_000);
+        timers.add(timer);
+      } else answer();
+    });
+    await new Promise<void>(resolve => home.listen(0, '127.0.0.1', resolve));
+    const address = home.address();
+    if (!address || typeof address === 'string') throw new Error('HTTP Home did not bind');
+    const keys = tweetnacl.sign.keyPair();
+    const rpc = new RpcHandlerManager({ scopePrefix: 'guest', encryptionMode: 'plain',
+      authorizeRequest: request => authorizeMachineRpcRequest(request, {
+        machineId: 'guest', resolveInstallationId: () => 'installation', resolveCustodianAccountId: async () => 'custodian',
+        verifyMachineAdmission: input => verifyMachineRpcAdmissionCurrent({ ...input,
+          privateKey: keys.secretKey, daemonToken: 'test-daemon', serverHttpBaseUrl: `http://127.0.0.1:${address.port}` }),
+      }),
+    });
+    registerActionOperationRpcHandlers(rpc, handlers);
+    try {
+      const result = await rpc.handleRequest({ method: `guest:${ACTION_OPERATION_RPC_METHODS_V2.list}`, params: {},
+        timeoutMs: 30_000, machineAdmission: { actorAccountId: 'requester', custodianAccountId: 'custodian',
+          machineId: 'guest', installationId: 'installation', role: 'use', encryptionMode: 'plain' } });
+      expect(result).toMatchObject({ items: [{ operationId: 'guest-operation', scope: { accountId: 'requester' } }] });
+    } finally {
+      for (const timer of timers) clearTimeout(timer);
+      home.closeAllConnections();
+      await new Promise<void>((resolve, reject) => home.close(error => error ? reject(error) : resolve()));
+    }
+  }, 40_000);
   it('keeps setup terminal output on the exact guest and current operation reader', async () => {
     const store = createActionOperationStore({ now: () => 10 });
     const scope = { accountId: 'account', machineId: 'guest' };
@@ -210,7 +297,7 @@ describe('action operation observation RPC handlers', () => {
     const accepted = new Promise<void>(resolve => { accept = resolve; });
     const admission = createProjectWorkerAdmission({ machineId: 'machine-1',
       admissionDrain: createDaemonAdmissionDrain(),
-      readPolicy: async () => ({ status: 'ready', source: 'stored', policy: { accepting: true, runAtMost: 1 } }),
+      readPolicy: async () => ({ status: 'ready', source: 'stored', metadataVersion: 1, policy: { accepting: true, runAtMost: 1 } }),
       // OS memory is the system boundary; queue and operation observation remain real.
       readMemory: () => ({ totalBytes: 100, availableBytes }),
     });
@@ -328,15 +415,16 @@ describe('action operation observation RPC handlers', () => {
     await expect(joined).resolves.toMatchObject({ kind: 'found', operation: { state: 'failed',
       error: { errorCode: 'process_exit_nonzero' } } });
   });
-  it('registers observation and cancellation only, with no execution ingress', () => {
+  it('registers observation, cancellation and the Move Start claim, with no execution ingress', () => {
     const registered = new Map<string, unknown>();
     const handlers = {
-      list: vi.fn(), get: vi.fn(), cancel: vi.fn(), listV2: vi.fn(), getV2: vi.fn(),
+      list: vi.fn(), get: vi.fn(), cancel: vi.fn(), listV2: vi.fn(), getV2: vi.fn(), claimServiceMoveStart: vi.fn(),
     };
     registerActionOperationRpcHandlers({
       registerHandler: (method, handler) => registered.set(method, handler),
     }, handlers);
-    expect([...registered.keys()]).toEqual([...Object.values(ACTION_OPERATION_RPC_METHODS_V1), ...Object.values(ACTION_OPERATION_RPC_METHODS_V2)]);
+    expect([...registered.keys()]).toEqual([...Object.values(ACTION_OPERATION_RPC_METHODS_V1), ...Object.values(ACTION_OPERATION_RPC_METHODS_V2),
+      RPC_METHODS.DAEMON_SERVICE_MOVE_START_CLAIM]);
     expect(registered.has('actionOperation.start.v1')).toBe(false);
     expect(registered.has('actionOperation.wait.v1')).toBe(false);
   });

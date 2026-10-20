@@ -102,6 +102,9 @@ describe('the private neutral-schema bridge for Mini parents', () => {
     if (!parsed.success) expect(parsed.error.issues).toEqual([
       { code: 'custom', path: ['payload'], message: 'Value does not satisfy the protocol string constraint' },
     ]);
+    const reported = parent.safeParse({ payload: { value: 7 } }, { reportInput: true });
+    if (reported.success) throw new Error('The reported input remains invalid');
+    expect(reported.error.issues[0]).toMatchObject({ input: { value: 7 } });
     expect(parent.safeParse({ payload: { value: 'accepted', extra: true } }).success).toBe(false);
     // Persistence parsing must not acquire an optional host-global dependency.
     vi.stubGlobal('structuredClone', undefined);
@@ -115,17 +118,30 @@ describe('the private neutral-schema bridge for Mini parents', () => {
     expect(createStoredReadSchema(parent).safeParse({ payload: {} }).success).toBe(false);
   });
 
-  it('exposes the original rejected input when a parent refinement explicitly opts in', () => {
-    const parent = asProtocolZod(defineProtocolString({ minLength: 2 })).check(mini.refine(
-      value => value !== 'x',
+  it('exposes the original rejected input when a parent refinement explicitly opts in', async () => {
+    const observed: unknown[] = [];
+    const adapter = asProtocolZod(defineProtocolString({ minLength: 2 }));
+    const ordinaryRefinement = vi.fn(() => false);
+    expect(adapter.check(mini.refine(ordinaryRefinement)).safeParse('x').success).toBe(false);
+    expect(ordinaryRefinement).not.toHaveBeenCalled();
+    const parent = adapter.check(mini.refine(
+      value => { observed.push(value); return value !== 'x'; },
       { when: () => true, message: 'Parent rejected the original input' },
     ));
     const parsed = parent.safeParse('x');
+    expect(observed).toEqual(['x']);
     expect(parsed.success).toBe(false);
     if (!parsed.success) expect(parsed.error.issues).toEqual([
       { code: 'custom', path: [], message: 'Value does not satisfy the protocol string constraint' },
       { code: 'custom', path: [], message: 'Parent rejected the original input' },
     ]);
+    observed.length = 0;
+    const asyncParsed = await parent.safeParseAsync('x');
+    expect(asyncParsed.success).toBe(false);
+    expect(observed).toEqual(['x']);
+    if (!asyncParsed.success) expect(asyncParsed.error.issues).toEqual(parsed.success ? [] : parsed.error.issues);
+    // An opted-in parent cannot turn failed canonical admission into success.
+    expect(adapter.check(mini.refine(() => true, { when: () => true })).safeParse('x').success).toBe(false);
   });
 
   it('projects stored extras inside declared maps without discarding their data', () => {
@@ -148,6 +164,8 @@ describe('the private neutral-schema bridge for Mini parents', () => {
     });
     const validate = compileActionInputJsonSchema(json);
     for (const input of [
+      {},
+      { payload: { value: 'accepted' } },
       { payload: { value: 'accepted' }, second: { value: 'other' } },
       { payload: { value: '' }, second: { value: 'other' } },
       { payload: { value: 'accepted', extra: true }, second: { value: 'other' } },
@@ -157,5 +175,54 @@ describe('the private neutral-schema bridge for Mini parents', () => {
     }
     expect(canonical.jsonSchema).toMatchObject({ $schema: 'http://json-schema.org/draft-07/schema#' });
     expect(Object.getOwnPropertyDescriptor(json, '~standard')).toBeUndefined();
+  });
+
+  it('projects the canonical stored-read schema through Mini parents without replacing the parent dialect', () => {
+    const canonical = defineProtocolObject({ value: defineProtocolString({ minLength: 1 }) }, { policy: 'closed' });
+    const adapter = asProtocolZod(canonical);
+    const freshParent = mini.strictObject({ payload: adapter });
+    const storedAdapter = createStoredReadSchema(adapter);
+    const retained = { payload: { value: 'kept', retired: true } };
+
+    expect(freshParent.safeParse(retained).success).toBe(false);
+    const freshJson = zodSchemaToJsonSchemaObject(freshParent);
+    expect(freshJson).toMatchObject({ properties: { payload: {
+      type: 'object', properties: { value: { type: 'string', minLength: 1 } },
+    } } });
+    expect(compileActionInputJsonSchema(freshJson)(retained)).toBe(false);
+    for (const parent of [mini.strictObject({ payload: storedAdapter }), createStoredReadSchema(freshParent)]) {
+      expect(parent.parse(retained)).toEqual({ payload: { value: 'kept' } });
+      const json = zodSchemaToJsonSchemaObject(parent);
+      expect(json).toMatchObject({ properties: { payload: {
+        type: 'object', additionalProperties: true,
+        properties: { value: { type: 'string', minLength: 1 } }, required: ['value'],
+      } } });
+      const validate = compileActionInputJsonSchema(json);
+      expect(validate(retained)).toBe(true);
+      expect(validate({ payload: { value: '', retired: true } })).toBe(false);
+    }
+  });
+
+  it('keeps typed map data and union bounds in the stored-read JSON projection', () => {
+    const row = defineProtocolObject({ id: defineProtocolString({ minLength: 2 }) }, { policy: 'closed' });
+    const canonical = defineProtocolObject({
+      selection: defineProtocolUnion([row, defineProtocolObject({ note: defineProtocolString({ minLength: 3 }) }, { policy: 'closed' })]),
+      typed: defineProtocolObject({}, { policy: 'additive-open/preserve', additionalProperties: row }),
+    }, { policy: 'closed' });
+    const read = createStoredReadSchema(asProtocolZod(canonical));
+    const retained = { selection: { id: 'ab', retired: true }, typed: { first: { id: 'cd', retired: true } }, retired: true };
+    expect(read.parse(retained)).toEqual({ selection: { id: 'ab' }, typed: { first: { id: 'cd' } } });
+    expect(read.safeParse({ selection: { id: 'x' }, typed: {} }).success).toBe(false);
+    const json = zodSchemaToJsonSchemaObject(mini.strictObject({ payload: read }));
+    expect(json).toMatchObject({ properties: { payload: {
+      additionalProperties: true,
+      properties: {
+        selection: { anyOf: [{ additionalProperties: true }, { additionalProperties: true }] },
+        typed: { additionalProperties: { additionalProperties: true, properties: { id: { minLength: 2 } } } },
+      },
+    } } });
+    const validate = compileActionInputJsonSchema(json);
+    expect(validate({ payload: retained })).toBe(true);
+    expect(validate({ payload: { selection: { id: 'x' }, typed: {} } })).toBe(false);
   });
 });

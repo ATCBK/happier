@@ -133,6 +133,11 @@ export async function classifyProcessByPid(pid: number): Promise<ProcessByPidCla
   return happy ? { kind: 'happy', process: happy } : { kind: 'not_happy' };
 }
 
+export async function findHappyProcessByPid(pid: number): Promise<HappyProcessInfo | null> {
+  const classified = await classifyProcessByPid(pid);
+  return classified.kind === 'happy' ? classified.process : null;
+}
+
 /**
  * Classify whether a PID can own the daemon lifecycle without collapsing a verified unrelated
  * process into the same result as an unreadable process. Lifecycle callers may replace the former

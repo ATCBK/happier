@@ -11,10 +11,13 @@ import { getActionSpec, ExecutionRunStartRequestSchema, ExecutionRunScmDiffSumma
     createActionExecutor, accountSettingsParse,
     type ActionExecuteResult, type BackendTargetRefV2, type ScmDiffSummaryGenerateInput } from '@happier-dev/protocol';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { buildTrustedHostSessionInputAdmissionV1, SessionInputAdmissionReceiptV1Schema,
+    settleSessionInputRequestV1, settleSessionInputRequestV2, withSessionInputAuthority,
+} from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { ScmComparisonCaptureOutputSchema, ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
 
-import { createLocalScmRepositoryFixture, runScmExecutable } from '@/scm/contracts/scmBackendContractFixtures';
+import { createLocalScmRepositoryFixture, runScmExecutable } from '@/testkit/scm/scmBackendContractFixtures';
 import { gitCheckpointAdapter, resolveGitCheckpointBackendContext } from '@/scm/checkpoints/gitCheckpointAdapter';
 import { buildRepositoryCheckpointRefs } from '@/scm/checkpoints/refs';
 import { retainRepositoryCheckpointTurnEvidence } from '@/scm/checkpoints/sessionEvidence';
@@ -50,7 +53,7 @@ import { CLAUDE_PLUGIN } from '@happier-dev/plugins-claude/manifest';
 import { createExecutionRunHostBackendFromConversationRuntime,
     type AgentRuntime, type AgentExecutionRunConversationEventV1, type AgentSessionSendRequest } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { ExecutionRunHostBridge } from '@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge';
-import { createMutableApiSessionClientFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createMutableApiSessionClientFixture, createSessionRecordFixture, type MutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import type { ExecutionRunAdmittedPendingInputV1 } from '@/api/session/client/transport/sessionClientInteractionApi';
 import { UserMessageSchema } from '@/api/types';
 import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -221,7 +224,13 @@ describe('SCM generation through real host admission', () => {
             if (!modelId) throw new Error('Native structured model fixture is unavailable');
             let manager: ExecutionRunHostBridge | undefined;
             let observedModel: string | undefined;
+            let forbidParentSelectionReads = false;
+            let forbiddenParentSelectionReads = 0;
             const observedPrompts: string[] = [];
+            const reservedPromptEchoes: string[] = [];
+            const promptEchoReservedBeforeAcceptance: boolean[] = [];
+            let notifyNativePromptReservationStarted!: () => void;
+            const nativePromptReservationStarted = new Promise<void>(resolve => { notifyNativePromptReservationStarted = resolve; });
             const observedPermissions: Array<{ read: string; write: string }> = [];
             const observedSnapshots: Array<{ directory: string; before: string | null; after: string | null }> = [];
             let checkPermissions: (() => Promise<void>) | undefined;
@@ -280,7 +289,7 @@ describe('SCM generation through real host admission', () => {
                         } } } };
                     } },
                 }));
-                const machine = createEncryptedRpcTestClient({ scopePrefix: machineId, callerAuthority: 'machine_custodian',
+                const machine = createEncryptedRpcTestClient({ scopePrefix: machineId, callerAuthority: 'account_automation',
                     registerHandlers: rpc => registerScmHandlers(rpc, fixture.rootPath, { machineId,
                         accessPolicy: { kind: 'restrictedRoots', roots: [fixture.rootPath] }, actionExecutor: machineExecutor }) });
                 const capturedResponse = await machine.call('scm.diffSummary.capture', {
@@ -288,7 +297,7 @@ describe('SCM generation through real host admission', () => {
                 });
                 expect(capturedResponse).toMatchObject({ success: true });
                 const capture = ScmComparisonCaptureOutputSchema.parse(capturedResponse);
-                if (!capture.success) throw new Error('Machine-custodian capture refused the Session scope');
+                if (!capture.success) throw new Error('Authenticated Machine capture refused the Session scope');
                 await writeFile(join(fixture.rootPath, 'surrounding.txt'), 'Later live content\n');
                 const captured = { comparison: capture.comparison };
                 const aliases = captured.comparison.inventory.files.flatMap(file => file.occurrences.map(change => change.alias));
@@ -297,13 +306,20 @@ describe('SCM generation through real host admission', () => {
                     const emit = (event: AgentExecutionRunConversationEventV1) => {
                         for (const listener of listeners) listener(event);
                     };
+                    const accepted = new Set<string>();
+                    const accept = (input: AgentSessionSendRequest) => {
+                        if (accepted.has(input.inputIds[0]!)) return;
+                        accepted.add(input.inputIds[0]!);
+                        emit({ kind: 'input-accepted', inputIds: input.inputIds, delivery: input.delivery });
+                    };
                     return {
+                        accept,
                         watch(listener: (event: AgentExecutionRunConversationEventV1) => void) {
                             listeners.add(listener); emit({ kind: 'provider-session-id', providerSessionId: 'native-model-fixture' });
                             return { dispose() { listeners.delete(listener); } }; },
                         async send(input: AgentSessionSendRequest) {
                             const turnId = input.delivery.turnId;
-                            emit({ kind: 'input-accepted', inputIds: input.inputIds, delivery: input.delivery });
+                            accept(input);
                             emit({ kind: 'turn-start', turnId, startedBy: 'host' });
                             await checkPermissions?.();
                             emit({ kind: 'message-delta', turnId, channel: 'assistant', text: JSON.stringify({
@@ -339,6 +355,27 @@ describe('SCM generation through real host admission', () => {
                         const conversation = createNativeConversation();
                         let sequence = 0;
                         return { ...conversation,
+                            async send(input) {
+                                notifyNativePromptReservationStarted();
+                                // The real Claude SDK reserves its content-free native
+                                // user echo before provider transport can accept input.
+                                // Keep that host service in this composed production path.
+                                let forcedAcceptance = false;
+                                // The Session transport here commits synchronously. If
+                                // the host waits for provider acceptance, release that
+                                // external boundary next cycle so RED can clean up.
+                                const release = setImmediate(() => { forcedAcceptance = true; conversation.accept(input); });
+                                try {
+                                    const reserved = await context.session.services.transcripts.markSourceFactConsumed?.({
+                                        localId: `claude-jsonl:main:user:${input.inputIds[0]}`,
+                                        reason: 'host_prompt_echo',
+                                    });
+                                    expect(reserved).toEqual({ status: 'custodied' });
+                                    reservedPromptEchoes.push(...input.inputIds);
+                                    promptEchoReservedBeforeAcceptance.push(!forcedAcceptance);
+                                } finally { clearImmediate(release); }
+                                return await conversation.send(input);
+                            },
                             async updateConfiguration() { throw new Error('Generation must retain its admitted model configuration'); },
                             watch(listener) {
                                 return conversation.watch(event => listener({ ...event, sequence: ++sequence,
@@ -355,13 +392,21 @@ describe('SCM generation through real host admission', () => {
                 const durableAcceptance = new Map<string, DurableProviderInputAcceptanceV1>();
                 // Pending custody is the parent Session's network/persistence boundary.
                 // Its real retained consumer, delivery, native codec and publisher run below.
-                const session = createMutableApiSessionClientFixture({ sessionId, overrides: {
+                const session: MutableApiSessionClientFixture = createMutableApiSessionClientFixture({ sessionId, overrides: {
                     enqueueSessionUserMessageWithDisposition: async input => {
                         if (input.recipient?.kind !== 'execution_run') throw new Error('Expected exact Run recipient');
                         observedPrompts.push(input.text);
                         const inputs = pendingInputs.get(input.recipient.runId) ?? [];
-                        inputs.push({ ...UserMessageSchema.parse({ role: 'user', content: { type: 'text', text: input.text }, localId: input.localId }),
-                            authorAccountId: null, inputAdmissionReceipt: null, pendingProviderAction: 'send' });
+                        // Mirror authenticated Pending settlement at the persistence
+                        // boundary; native tool admission consumes its stored authority.
+                        const admission = input.inputAdmission ?? buildTrustedHostSessionInputAdmissionV1('ui');
+                        const receipt = SessionInputAdmissionReceiptV1Schema.parse({ v: 1, issuer: 'authenticatedMachine' });
+                        const authority = admission.request.v === 2
+                            ? settleSessionInputRequestV2({ request: admission.request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt: receipt })
+                            : settleSessionInputRequestV1({ request: admission.request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt: receipt });
+                        inputs.push({ ...UserMessageSchema.parse({ role: 'user', content: { type: 'text', text: input.text }, localId: input.localId,
+                            meta: withSessionInputAuthority(input.meta, authority) }),
+                            authorAccountId: null, inputAdmissionReceipt: receipt, pendingProviderAction: 'send' });
                         pendingInputs.set(input.recipient.runId, inputs);
                         session.updateMetadata(previous => previous);
                         return { status: 'accepted', localId: input.localId };
@@ -398,6 +443,10 @@ describe('SCM generation through real host admission', () => {
                             // The parent Agent model is a native boundary fact;
                             // its route comes from the real scoped daemon reader.
                             readAppliedChildSelection: async () => {
+                                if (forbidParentSelectionReads) {
+                                    forbiddenParentSelectionReads += 1;
+                                    throw new Error('Complete explicit SCM choices must never read parent startup');
+                                }
                                 const connected = await readAppliedParentConnectedServices({ runnerPid: process.pid,
                                     sessionId, agentId: 'claude' });
                                 return connected.status === 'applied' ? { status: 'applied', backendTarget,
@@ -471,6 +520,15 @@ describe('SCM generation through real host admission', () => {
                         expect(ExecutionRunListResponseSchema.parse(await client.call('execution.run.list', {})).runs).toEqual([]);
                         admissionDrain.beginTemporaryDrain();
                         try {
+                            forbidParentSelectionReads = true;
+                            try {
+                                const explicitDrained = await client.call<unknown, unknown>(method, { ...startRequest,
+                                    modelSelection: { agentTargetKey: buildBackendTargetKeyV2(backendTarget),
+                                        providerConnectionId: null, modelId },
+                                });
+                                expect(explicitDrained).toMatchObject({ ok: false, error: 'daemon_draining',
+                                    details: { executionRunStart: { runCreation: 'noRunCreated' } } });
+                            } finally { forbidParentSelectionReads = false; }
                             const drained = await client.call<unknown, unknown>(method, startRequest);
                             expect(drained).toMatchObject({ ok: false, errorCode: 'execution_run_failed', error: 'daemon_draining',
                                 details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } });
@@ -516,6 +574,7 @@ describe('SCM generation through real host admission', () => {
                         settings: { 'scm.diffSummary.outputLanguage': 'fr',
                             'scm.diffSummary.investigateSurroundingFiles': investigateSurroundingFiles },
                     });
+                    expect(forbiddenParentSelectionReads).toBe(0);
                     if (automaticModel && !parentAvailable) {
                         expect(generationResponse.ok).toBe(false);
                         const refused = ScmDiffSummaryGenerateOutputSchema.parse(
@@ -538,6 +597,13 @@ describe('SCM generation through real host admission', () => {
                     if (!output.success || !output.runId || !output.inputId || !output.resultId || !manager) {
                         throw new Error('Generation did not return exact retained Run input custody');
                     }
+                    const retainedManager = manager;
+                    const { runId, inputId, resultId } = output;
+                    await nativePromptReservationStarted;
+                    await vi.waitFor(() => expect(reservedPromptEchoes, JSON.stringify({
+                        run: retainedManager.getPublic(runId), promptEchoReservedBeforeAcceptance,
+                    })).toContain(inputId));
+                    expect(promptEchoReservedBeforeAcceptance).toEqual([true]);
                     const turn = await manager.waitForInputTurn(output.runId, output.inputId);
                     expect(turn, JSON.stringify({ run: manager.getPublic(output.runId), observedModel })).toMatchObject({ turn: { state: 'completed' } });
                     expect(observedPermissions).toEqual([{ read: investigateSurroundingFiles ? 'approved' : 'declined', write: 'declined' }]);
@@ -550,11 +616,13 @@ describe('SCM generation through real host admission', () => {
                     }
                     // Exact input completion precedes the host's asynchronous saved-result publication.
                     await vi.waitFor(async () => expect(await scmDiffSummaryResultStore.read({ cwd: fixture.rootPath, sessionId,
-                        resultId: output.resultId })).toMatchObject({ success: true, result: { output: { outputs: {
+                        resultId })).toMatchObject({ success: true, result: { output: { outputs: {
                             walkthrough: { state: 'complete' }, commitPlan: { state: 'complete' },
                         } } } }));
                     expect(observedModel).toBe(modelId);
-                    expect(manager.getPublic(output.runId).resolvedSelection?.source).toBe(
+                    const retainedRun = manager.getPublic(output.runId);
+                    if (!retainedRun) throw new Error('Missing retained generation Run');
+                    expect(retainedRun.resolvedSelection?.source).toBe(
                         automaticModel ? 'inherited' : parentAvailable ? 'explicit' : 'independent');
                     expect(observedPrompts.join('\n')).toContain('Prose language: fr');
                     expect(observedPrompts.join('\n')).toContain('Editorial guidance:');
@@ -617,7 +685,7 @@ describe('SCM generation through real host admission', () => {
                 resumeSupported: true,
                 onProvisionRuntime: async () => { if (failProvision) throw new Error('Native model provisioning failed'); },
                 onSendPrompt: async () => {
-                    deliveredModels.set(options.runId!, options.start?.modelId);
+                    deliveredModels.set(options.runId!, options.modelId);
                     delivered.add(options.runId!);
                     await modelGate;
                     const input = ExecutionRunScmDiffSummaryInputV1Schema.parse(options.start?.intentInput);

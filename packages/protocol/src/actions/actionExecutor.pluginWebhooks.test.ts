@@ -90,7 +90,6 @@ describe('createActionExecutor (plugin webhook endpoints)', () => {
     const observeActionExecution = vi.fn();
     const executor = createActionExecutor({
       pluginWebhookAction, observeActionExecution,
-      isActionApprovalRequired: () => false,
       isApprovalExecutionOriginCurrent: async () => true,
       approvalsCreate: async ({ request }) => {
         stored = request; persisted.push(request); return { artifactId: 'webhook-approval' };
@@ -100,13 +99,17 @@ describe('createActionExecutor (plugin webhook endpoints)', () => {
         stored = request; persisted.push(request); return { ok: true as const };
       },
     } as ActionExecutorDeps);
-    const requested = await executor.execute('plugin.webhook.endpoint.ensure', ensureInput, {
+    const requester = {
       surface, authority: 'account_automation', actionCaller: { kind: 'host' },
       serverId: 'home-1', runtimeAccountId: 'account-1', actionRequestId: 'webhook-ensure-1',
+    } as const;
+    expect(await executor.execute('plugin.webhook.endpoint.ensure', ensureInput, { ...requester,
       actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: {
         'plugin.webhook.endpoint.ensure': [surface],
       } }),
-    });
+    })).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(stored).toBeNull();
+    const requested = await executor.execute('plugin.webhook.endpoint.ensure', ensureInput, requester);
     expect(requested).toMatchObject({ ok: true, result: {
       kind: 'approval_request_created', artifactId: 'webhook-approval',
     } });
@@ -207,7 +210,6 @@ describe('createActionExecutor (plugin webhook endpoints)', () => {
       const pluginWebhookAction = vi.fn(async () => ({}));
       const executor = createActionExecutor({
         pluginWebhookAction,
-        isActionApprovalRequired: () => false,
       } as ActionExecutorDeps);
 
       await expect(executor.execute('plugin.webhook.endpoint.read', {
@@ -250,7 +252,6 @@ describe('createActionExecutor (plugin webhook endpoints)', () => {
       const executor = createActionExecutor({
         pluginWebhookAction,
         approvalsCreate: async () => ({ artifactId: 'endpoint-approval' }),
-        isActionApprovalRequired: () => false,
       } as ActionExecutorDeps);
 
       await expect(executor.execute('plugin.webhook.endpoint.read', {

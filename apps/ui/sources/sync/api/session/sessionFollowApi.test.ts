@@ -1,11 +1,15 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { switchConnectionToActiveServer } from '@/sync/runtime/orchestration/connectionManager';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { resetRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { act } from 'react-test-renderer';
+import { renderHook } from '@/dev/testkit';
 
-beforeAll(loadSyncSingletonForTests);
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
 
 afterEach(() => {
     vi.unstubAllEnvs();
@@ -13,9 +17,10 @@ afterEach(() => {
     resetRuntimeFetch();
 });
 
-async function setup() {
+async function setup(secret?: string) {
     vi.stubEnv('EXPO_PUBLIC_HAPPY_STORAGE_SCOPE', `follow-${crypto.randomUUID()}`);
     const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+    const { switchConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
     const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
     const active = await upsertAndActivateServer({ serverUrl: 'https://active.example', name: 'Active' });
     // A selected profile alone is not a published Home lifetime. Apply the
@@ -29,17 +34,225 @@ async function setup() {
     // Persistent credentials and the network are the only replaced boundaries.
     const credentials = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async (url) => ({
         token: token(url === 'https://target.example' ? 'target-account' : 'active-account'),
+        ...(url === 'https://target.example' && secret ? { secret } : {}),
     }));
-    const request = vi.fn(async (_url: string, _init?: RequestInit): Promise<Response> => new Response(JSON.stringify({ sources: [] }), { status: 200 }));
+    const request = vi.fn(async (url: string, _init?: RequestInit): Promise<Response> => Response.json(
+        url.endsWith('/session-follow-rules') ? { rules: [] } : url.endsWith('/session-follows') ? { follows: [] } : { sources: [] },
+    ));
+    const accountEncryption = { mode: 'plain' as 'plain' | 'e2ee', contentKeyFingerprint: null as string | null };
     const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
     setRuntimeFetch(async (url, init) => {
         if (new URL(String(url)).pathname === '/v1/auth/ping') return new Response('{}', { status: 200 });
+        if (new URL(String(url)).pathname === '/v1/account/encryption') return Response.json({ mode: accountEncryption.mode, updatedAt: 1 });
+        if (new URL(String(url)).pathname === '/v1/account/encryption/currentness') return Response.json({ mode: accountEncryption.mode, version: 1,
+            signingKeyFingerprint: accountEncryption.mode === 'plain' ? null : 'signing-fingerprint',
+            contentKeyFingerprint: accountEncryption.contentKeyFingerprint, updatedAt: 1 });
         return request(String(url), init);
     });
-    return { target, request, credentials, token, storage, active, TokenStorage };
+    return { target, request, credentials, token, storage, active, TokenStorage, accountEncryption };
 }
 
 describe('Follow exact Home Action transport', () => {
+    it('preserves source continuation and emits private rules once across following pages', async () => {
+        const env = await setup();
+        const { executeSessionFollowAction } = await import('./sessionFollowApi');
+        const receiver = { kind: 'account' as const };
+        const definition = { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1(), policy: { preset: 'quiet' as const } };
+        const rule = { ruleId: 'rule', receiver, version: 0, content: { t: 'plain' as const, v: definition } };
+        env.request.mockImplementation(async url => {
+            const parsed = new URL(url);
+            if (parsed.pathname.endsWith('/session-follow-rules')) return Response.json({ rules: [rule] });
+            expect(parsed.pathname).toBe('/v2/account/session-follows');
+            expect(parsed.searchParams.get('limit')).toBe('1');
+            return Response.json(parsed.searchParams.has('cursor') ? { follows: [] } : { follows: [], continuation: 'next-source-page' });
+        });
+        expect(await executeSessionFollowAction('follow.list', { direction: 'following', receiver, limit: 1 }, env.target.id))
+            .toMatchObject({ kind: 'ok', value: { rules: [{ ruleId: 'rule', definition }], coverage: 'partial', continuation: 'next-source-page' } });
+        expect(await executeSessionFollowAction('follow.list', { direction: 'following', receiver, limit: 1, cursor: 'next-source-page' }, env.target.id))
+            .toEqual({ kind: 'ok', value: { follows: [], sources: [], rules: [], coverage: 'complete' } });
+    });
+    it('reads source followers on the captured Home without opening private rule census', async () => {
+        const env = await setup();
+        const { executeSessionFollowAction } = await import('./sessionFollowApi');
+        const payload = { follows: [], sources: [{ sourceSessionId: 'source', destinationSessionId: 'receiver', relation: 'follower',
+            policy: { preset: 'quiet' }, deliveryState: 'eligible', hasPendingUpdates: false }], rules: [], coverage: 'complete', peopleCount: 3 };
+        env.request.mockImplementation(async url => {
+            expect(url).toBe('https://target.example/v2/sessions/source/follows/followers');
+            return Response.json(payload);
+        });
+        const input = { direction: 'followers' as const, source: { kind: 'session' as const, sessionId: 'source' } };
+        expect(await executeSessionFollowAction('follow.list', input, env.target.id)).toEqual({ kind: 'ok', value: payload });
+        env.request.mockResolvedValue(Response.json({ error: 'session_not_found' }, { status: 404 }));
+        expect(await executeSessionFollowAction('follow.list', input, env.target.id)).toEqual({ kind: 'failed', error: 'session_not_found' });
+    });
+
+    it('binds People follower data to its exact Account lifetime and withdraws it on source denial', async () => {
+        const env = await setup();
+        const { useSessionFollowers } = await import('@/components/sessions/follow/useSessionFollowers');
+        const payload = { follows: [], sources: [{ sourceSessionId: 'source', destinationSessionId: 'receiver', relation: 'follower',
+            policy: { preset: 'quiet' }, deliveryState: 'eligible', hasPendingUpdates: false }], rules: [], coverage: 'complete', peopleCount: 3 };
+        env.request.mockResolvedValue(Response.json(payload));
+        const address = { serverId: env.target.id, sessionId: 'source' };
+        const hook = await renderHook(() => useSessionFollowers(address, true));
+        try {
+            await act(async () => { await vi.waitFor(() => expect(hook.getCurrent().projection?.peopleCount).toBe(3)); });
+            env.request.mockResolvedValue(Response.json({ error: 'service_unavailable' }, { status: 503 }));
+            await act(async () => { hook.getCurrent().refresh(); });
+            await act(async () => { await vi.waitFor(() => expect(hook.getCurrent().error).toBe('unavailable')); });
+            expect(hook.getCurrent().projection?.peopleCount).toBe(3);
+            env.request.mockResolvedValue(Response.json({ error: 'session_not_found' }, { status: 404 }));
+            await act(async () => { hook.getCurrent().refresh(); });
+            await act(async () => { await vi.waitFor(() => expect(hook.getCurrent().error).toBe('session_not_found')); });
+            expect(hook.getCurrent().projection).toBeNull();
+        } finally { await hook.unmount(); }
+    });
+    it('reads Account delivery mutes only for the captured Home and Account, with no unavailable fallback', async () => {
+        const env = await setup();
+        const { readAccountSessionDeliveryMutedScopes } = await import('./sessionFollowApi');
+        const scope = { serverId: env.target.id, accountId: 'target-account' };
+        const scopes = [{ kind: 'source', source: { kind: 'session', sessionId: 'same' } }];
+        env.request.mockImplementation(async (url, init) => {
+            expect(new URL(url).origin).toBe('https://target.example');
+            expect(new URL(url).pathname).toBe('/v2/account/session-delivery-mutes');
+            expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${env.token('target-account')}`);
+            return Response.json({ scopes });
+        });
+        expect(await readAccountSessionDeliveryMutedScopes(scope)).toEqual(scopes);
+        env.request.mockClear();
+        expect(await readAccountSessionDeliveryMutedScopes({ ...scope, accountId: 'active-account' })).toBeNull();
+        expect(await readAccountSessionDeliveryMutedScopes({ ...scope, serverId: '' })).toBeNull();
+        expect(await readAccountSessionDeliveryMutedScopes({ serverId: 'unknown-home', accountId: 'active-account' })).toBeNull();
+        expect(env.request).not.toHaveBeenCalled();
+        env.request.mockResolvedValue(Response.json({ scopes: null }));
+        expect(await readAccountSessionDeliveryMutedScopes(scope)).toBeNull();
+        env.request.mockResolvedValue(Response.json({ error: 'mute_state_unavailable' }, { status: 503 }));
+        expect(await readAccountSessionDeliveryMutedScopes(scope)).toBeNull();
+        env.credentials.mockResolvedValue(null);
+        expect(await readAccountSessionDeliveryMutedScopes(scope)).toBeNull();
+        env.credentials.mockResolvedValue({ token: env.token('target-account') });
+        env.request.mockImplementation(async () => {
+            await env.TokenStorage.setCredentialsForServerUrl('https://target.example', { serverId: env.target.id },
+                { token: env.token('replacement-account') });
+            return Response.json({ scopes });
+        });
+        expect(await readAccountSessionDeliveryMutedScopes(scope)).toBeNull();
+    });
+
+    it('seals a private rule on its captured Home, opens Action results, and refuses a different receiver', async () => {
+        const env = await setup();
+        const { executeSessionFollowAction } = await import('./sessionFollowApi');
+        const receiver = { kind: 'account' as const };
+        const ruleDefinition = { v: 1 as const, enabled: true,
+            filter: normalizeSessionListFilterV1({ scope: 'all_accessible', homeServerIds: [env.target.id] }) };
+        const policy = { preset: 'important' as const };
+        const rule = { ruleId: 'rule-a', receiver, version: 0, content: { t: 'plain' as const, v: { ...ruleDefinition, policy } } };
+        env.request.mockImplementation(async (url, init) => {
+            expect(new URL(url).origin).toBe('https://target.example');
+            const path = new URL(url).pathname;
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+            expect(path).toBe('/v2/account/session-follow-rules/rule-a');
+            if (init?.method === 'PUT') {
+                const body = JSON.parse(String(init.body));
+                expect(body).toEqual({ receiver, expectedVersion: -1, content: rule.content });
+            }
+            return Response.json({ rule });
+        });
+        expect(await executeSessionFollowAction('follow.set', { receiver, source: { kind: 'rule', ruleId: 'rule-a' },
+            ruleDefinition, policy, expectedVersion: -1 }, env.target.id)).toMatchObject({ kind: 'ok', value: { rule: {
+                ruleId: 'rule-a', receiver, version: 0, definition: { ...ruleDefinition, policy },
+            } } });
+        const mismatch = await executeSessionFollowAction('follow.get', {
+            receiver: { kind: 'session', sessionId: 'other' }, source: { kind: 'rule', ruleId: 'rule-a' },
+        }, env.target.id);
+        expect(mismatch.kind).toBe('failed');
+    });
+
+    it('loads personal defaults with the same captured Account rule census', async () => {
+        const env = await setup();
+        const { readSessionFollowRules } = await import('./sessionFollowRulesApi');
+        const preferences = { assigned: false, direct: false, team: true, group: false };
+        env.request.mockImplementation(async url => {
+            expect(new URL(url).origin).toBe('https://target.example');
+            if (new URL(url).pathname === '/v2/account/session-follow-preferences') return Response.json(preferences);
+            expect(new URL(url).pathname).toBe('/v2/account/session-follow-rules');
+            return Response.json({ rules: [] });
+        });
+        expect(await readSessionFollowRules(env.target.id)).toMatchObject({ status: 'ready', accountId: 'target-account',
+            rules: [], defaultPreferences: preferences });
+    });
+
+    it('joins only the requested receiver rules to Following and refuses an unreadable private census', async () => {
+        const env = await setup();
+        const { executeSessionFollowAction } = await import('./sessionFollowApi');
+        const definition = { v: 1 as const, enabled: true, policy: { preset: 'important' as const },
+            filter: normalizeSessionListFilterV1({ homeServerIds: [env.target.id], scope: 'all_accessible' }) };
+        const rule = { ruleId: 'own', receiver: { kind: 'account' as const }, version: 4,
+            content: { t: 'plain' as const, v: definition } };
+        let unreadable = false;
+        env.request.mockImplementation(async url => {
+            expect(new URL(url).origin).toBe('https://target.example');
+            if (new URL(url).pathname === '/v2/account/session-follows') return Response.json({ follows: [] });
+            expect(new URL(url).pathname).toBe('/v2/account/session-follow-rules');
+            return Response.json({ rules: [rule, { ...rule, ruleId: 'other', receiver: { kind: 'session', sessionId: 'other' },
+                ...(unreadable ? { content: { t: 'encrypted', c: 'wrong-mode' } } : {}) }] });
+        });
+        expect(await executeSessionFollowAction('follow.list', { direction: 'following', receiver: { kind: 'account' } }, env.target.id))
+            .toEqual({ kind: 'ok', value: { follows: [], sources: [], rules: [{
+                ruleId: rule.ruleId, receiver: rule.receiver, version: rule.version, definition,
+            }], coverage: 'complete' } });
+        unreadable = true;
+        expect(await executeSessionFollowAction('follow.list', { direction: 'following', receiver: { kind: 'account' } }, env.target.id))
+            .toEqual({ kind: 'failed', error: 'unavailable' });
+    });
+
+    it('seals and opens E2EE rule Actions with the captured Account material and rejects a mode change', async () => {
+        const secret = Buffer.alloc(32, 11).toString('base64url');
+        const env = await setup(secret);
+        const { executeSessionFollowAction } = await import('./sessionFollowApi');
+        const { createAccountScopedCryptoMaterialSnapshotV1 } = await import('@happier-dev/protocol/crypto/accountScopedCipher');
+        const { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } = await import('@happier-dev/protocol/account/encryptionKeyFingerprintV1');
+        const { resolveAccountScopedCryptoMaterialFromCredentials } = await import('@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials');
+        const { openSessionFollowRuleContentV1 } = await import('@happier-dev/protocol/sessions/follow/sessionFollowRuleContentCodecV1');
+        const material = resolveAccountScopedCryptoMaterialFromCredentials({ token: env.token('target-account'), secret });
+        env.accountEncryption.mode = 'e2ee';
+        env.accountEncryption.contentKeyFingerprint = convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(
+            createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material }).contentPublicKeyFingerprint,
+        );
+        const input = { receiver: { kind: 'account' as const }, source: { kind: 'rule' as const, ruleId: 'encrypted' },
+            expectedVersion: -1, policy: { preset: 'important' as const }, ruleDefinition: { v: 1 as const, enabled: true,
+                filter: normalizeSessionListFilterV1({ homeServerIds: [env.target.id], scope: 'all_accessible' }) } };
+        let changeMode = false;
+        env.request.mockImplementation(async (url, init) => {
+            expect(new URL(url).origin).toBe('https://target.example');
+            const body = JSON.parse(String(init?.body));
+            expect(body.content.t).toBe('encrypted');
+            expect(openSessionFollowRuleContentV1({ ruleId: input.source.ruleId, receiver: input.receiver,
+                content: body.content, mode: 'e2ee', material })).toEqual({ status: 'opened',
+                definition: { ...input.ruleDefinition, policy: input.policy } });
+            if (changeMode) { env.accountEncryption.mode = 'plain'; env.accountEncryption.contentKeyFingerprint = null; }
+            return Response.json({ rule: { ruleId: input.source.ruleId, receiver: input.receiver, version: 0, content: body.content } });
+        });
+        expect(await executeSessionFollowAction('follow.set', input, env.target.id)).toMatchObject({ kind: 'ok', value: { rule: {
+            definition: { ...input.ruleDefinition, policy: input.policy },
+        } } });
+        changeMode = true;
+        expect(await executeSessionFollowAction('follow.set', input, env.target.id)).toEqual({ kind: 'failed', error: 'unavailable' });
+    });
+    it.each([
+        { actionId: 'follow.get', input: { receiver: { kind: 'account' }, source: { kind: 'session', sessionId: 'same' } } },
+        { actionId: 'follow.list', input: { direction: 'following', receiver: { kind: 'session', sessionId: 'same' } } },
+    ] as const)('classifies the strict scope refusal for $actionId', async ({ actionId, input }) => {
+        const env = await setup();
+        const { sessionFollowAction } = await import('./sessionFollowApi');
+        env.request.mockResolvedValue(Response.json({ error: 'credential_scope_denied' }, { status: 403 }));
+        await expect(sessionFollowAction({ actionId, input, serverId: env.target.id, context: {} }))
+            .resolves.toEqual({ ok: false, errorCode: 'credential_scope_denied', error: 'credential_scope_denied' });
+        env.request.mockResolvedValue(Response.json({ error: 'credential_scope_denied', details: {} }, { status: 403 }));
+        await expect(sessionFollowAction({ actionId, input, serverId: env.target.id, context: {} }))
+            .resolves.toEqual({ ok: false, errorCode: 'network_error', error: 'unavailable' });
+    });
+
     it('edits declared auto-follow defaults on the captured Home without Account or device writes', async () => {
         const env = await setup();
         const { createActionExecutor } = await import('@happier-dev/protocol/actions/actionExecutor');
@@ -65,7 +278,7 @@ describe('Follow exact Home Action transport', () => {
             ) },
         });
         executor = createActionExecutor({ settingsDeclarationAction, sessionFollowAction,
-            isActionApprovalRequired: id => requireApproval && id === 'session.follow.preferences.set',
+            isActionApprovalRequired: id => requireApproval && id === 'follow.preferences.set',
             executionRunStart: unused, executionRunList: unused, executionRunGet: unused, detachedExecutionRunSend: unused,
             executionRunStop: unused, executionRunAction: unused, executionRunWait: unused, sessionOpen: unused,
             sessionFork: unused, sessionRollback: unused, sessionSpawnNew: unused, pathsListRecent: unused,
@@ -82,34 +295,64 @@ describe('Follow exact Home Action transport', () => {
             if (init?.method === 'PUT') preferences = JSON.parse(String(init.body));
             return Response.json(preferences);
         });
-        const listing = await executor.execute('settings.list', { pageId: 'notifications' }, context);
+        const listing = await executor.execute('settings.list', { pageId: 'coordination' }, context);
         expect(listing).toMatchObject({ ok: true, result: { items: expect.arrayContaining(
-            ['Assigned', 'Direct', 'Team', 'Group'].map(field => expect.objectContaining({ anchor: `notifications.autoFollow${field}`, readable: true, writable: true })),
+            ['Assigned', 'Direct', 'Team', 'Group'].map(field => expect.objectContaining({ anchor: `coordination.autoFollow${field}`, readable: true, writable: true })),
         ) } });
         // The focused Home and caller-supplied scope cannot redirect the captured owner.
-        expect(await executor.execute('settings.get', { anchor: 'notifications.autoFollowAssigned' }, {
+        expect(await executor.execute('settings.get', { anchor: 'coordination.autoFollowAssigned' }, {
             ...context, serverId: env.active.id, runtimeAccountId: 'active-account', expectedAccountId: 'active-account',
         }))
-            .toEqual({ ok: true, result: { anchor: 'notifications.autoFollowAssigned', value: false } });
-        expect(await executor.execute('settings.set', { anchor: 'notifications.autoFollowAssigned', value: true }, context))
-            .toEqual({ ok: true, result: { anchor: 'notifications.autoFollowAssigned', value: true } });
+            .toEqual({ ok: true, result: { anchor: 'coordination.autoFollowAssigned', value: false } });
+        expect(await executor.execute('settings.set', { anchor: 'coordination.autoFollowAssigned', value: true }, context))
+            .toEqual({ ok: true, result: { anchor: 'coordination.autoFollowAssigned', value: true } });
         expect(preferences).toEqual({ assigned: true, direct: true, team: false, group: true });
         requireApproval = true;
-        expect(await executor.execute('settings.set', { anchor: 'notifications.autoFollowTeam', value: true }, { ...context, bypassApprovals: true }))
+        expect(await executor.execute('settings.set', { anchor: 'coordination.autoFollowTeam', value: true }, { ...context, bypassApprovals: true }))
             .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
         expect(preferences.team).toBe(false);
         current = false;
-        expect(await executor.execute('settings.get', { anchor: 'notifications.autoFollowGroup' }, context)).toMatchObject({ ok: false, errorCode: 'setting_not_bound' });
+        expect(await executor.execute('settings.get', { anchor: 'coordination.autoFollowGroup' }, context)).toMatchObject({ ok: false, errorCode: 'setting_not_bound' });
     });
 
     it('lists sources on the requested Home with its credential even while another Home is focused', async () => {
         const env = await setup();
         const { listSessionFollowSources } = await import('./sessionFollowSourcesApi');
         const result = await listSessionFollowSources({ serverId: env.target.id, sessionId: 'same/id' });
-        expect(result).toEqual({ kind: 'ok', value: { sources: [] } });
+        expect(result).toEqual({ kind: 'ok', value: { sources: [], rules: [], coverage: 'complete' } });
         const call = env.request.mock.calls.find(([url]) => url.includes('/follows/sessions'));
         expect(call?.[0]).toBe('https://target.example/v2/sessions/same%2Fid/follows/sessions');
         expect(new Headers(call?.[1]?.headers).get('Authorization')).toBe(`Bearer ${env.token('target-account')}`);
+    });
+
+    it('retains a rule-only census in the reusable Following projection', async () => {
+        const env = await setup();
+        const { useSessionFollowing } = await import('@/components/sessions/follow/useSessionFollowing');
+        const receiver = { kind: 'session' as const, sessionId: 'coordinator' };
+        const definition = { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1(), policy: { preset: 'important' as const } };
+        const rule = { ruleId: 'payments', receiver, version: 4, content: { t: 'plain' as const, v: definition } };
+        env.request.mockImplementation(async url => Response.json(url.endsWith('/session-follow-rules')
+            ? { rules: [rule, { ...rule, ruleId: 'other', receiver: { kind: 'session', sessionId: 'other' } }] }
+            : { sources: [] }));
+        const address = { serverId: env.target.id, sessionId: receiver.sessionId };
+        const hook = await renderHook(() => useSessionFollowing(address, true));
+        try {
+            await act(async () => { await vi.waitFor(() => expect(hook.getCurrent().projection).not.toBeNull()); });
+            expect(hook.getCurrent().projection).toEqual({ sources: [], coverage: 'complete', rules: [{
+                ruleId: rule.ruleId, receiver, version: rule.version, definition,
+            }] });
+            expect(hook.getCurrent().loading).toBe(false);
+            expect(hook.getCurrent().error).toBeNull();
+            const committed = hook.getCurrent().projection;
+            env.request.mockResolvedValue(Response.json({ error: 'service_unavailable' }, { status: 503 }));
+            await act(async () => { await hook.getCurrent().refresh(); });
+            expect(hook.getCurrent().projection).toBe(committed);
+            expect(hook.getCurrent().error).toBe('unavailable');
+            env.request.mockResolvedValue(Response.json({ error: 'session_not_found' }, { status: 404 }));
+            await act(async () => { await hook.getCurrent().refresh(); });
+            expect(hook.getCurrent().projection).toBeNull();
+            expect(hook.getCurrent().error).toBe('session_not_found');
+        } finally { await hook.unmount(); }
     });
 
     it('executes Account preferences and source mutations through their strict domain resources', async () => {
@@ -119,7 +362,7 @@ describe('Follow exact Home Action transport', () => {
         const address = { serverId: env.target.id, sessionId: 'same/id' } satisfies SessionAddress;
         const preferences = { assigned: false, direct: true, team: false, group: true };
         const follow = { sessionId: address.sessionId, following: true, notificationLevel: 'none', includeInVoice: true };
-        const source = { sourceSessionId: 'source/id', destinationSessionId: address.sessionId, mode: 'next_turn', deliveryState: 'eligible', hasPendingUpdates: false };
+        const source = { sourceSessionId: 'source/id', destinationSessionId: address.sessionId, policy: { preset: 'important' }, deliveryState: 'eligible', hasPendingUpdates: false };
         env.request.mockImplementation(async (url, init) => {
             const value = url.endsWith('session-follow-preferences') ? preferences
                 : init?.method === 'DELETE' ? { changed: false }
@@ -129,21 +372,21 @@ describe('Follow exact Home Action transport', () => {
             return new Response(JSON.stringify(value), { status: 200 });
         });
         await expect(api.sessionFollowGet(address)).resolves.toEqual({ kind: 'ok', value: { follow: null, isSessionOwner: false, capabilities: { manageFollow: true }, voiceInitialSnapshotPending: false } });
-        await expect(api.sessionFollowSet(address, { notificationLevel: 'none', includeInVoice: true })).resolves.toEqual({ kind: 'ok', value: { changed: true, follow, voiceInitialSnapshotPending: true } });
+        await expect(api.sessionFollowSet(address, { policy: { preset: 'quiet', voice: true } })).resolves.toEqual({ kind: 'ok', value: { changed: true, follow, voiceInitialSnapshotPending: true } });
         await expect(api.sessionFollowRemove(address)).resolves.toEqual({ kind: 'ok', value: { changed: false } });
         await expect(api.sessionAutoFollowPreferencesGet(env.target.id)).resolves.toEqual({ kind: 'ok', value: preferences });
         await expect(api.sessionAutoFollowPreferencesSet(env.target.id, preferences)).resolves.toEqual({ kind: 'ok', value: preferences });
         const pair = { serverId: env.target.id, destinationSessionId: address.sessionId, sourceSessionId: 'source/id' };
-        await expect(sources.setSessionFollowSource(pair)).resolves.toEqual({ kind: 'ok', value: { changed: true, source } });
+        await expect(sources.setSessionFollowSource({ ...pair, policy: { preset: 'important' } })).resolves.toEqual({ kind: 'ok', value: { changed: true, source } });
         await expect(sources.removeSessionFollowSource(pair)).resolves.toEqual({ kind: 'ok', value: { changed: false } });
         const requests = env.request.mock.calls.filter(([url]) => url.includes('follow'));
         expect(requests.map(([url, init]) => [new URL(url).origin, init?.method, init?.body ? JSON.parse(String(init.body)) : null])).toEqual([
             ['https://target.example', 'GET', null],
-            ['https://target.example', 'PUT', { notificationLevel: 'none', includeInVoice: true }],
+            ['https://target.example', 'PUT', { policy: { preset: 'quiet', voice: true } }],
             ['https://target.example', 'DELETE', null],
             ['https://target.example', 'GET', null],
             ['https://target.example', 'PUT', preferences],
-            ['https://target.example', 'PUT', {}],
+            ['https://target.example', 'PUT', { policy: { preset: 'important' } }],
             ['https://target.example', 'DELETE', null],
         ]);
     });
@@ -165,7 +408,7 @@ describe('Follow exact Home Action transport', () => {
         const api = await import('./sessionFollowApi');
         const address = { serverId: env.target.id, sessionId: 'same' };
         env.request.mockImplementation(async () => new Response(JSON.stringify({ error: 'session_archived' }), { status: 409 }));
-        await expect(api.sessionFollowSet(address, { notificationLevel: 'important', includeInVoice: false })).resolves.toEqual({ kind: 'failed', error: 'session_archived' });
+        await expect(api.sessionFollowSet(address, { policy: { preset: 'important', voice: false } })).resolves.toEqual({ kind: 'failed', error: 'session_archived' });
         env.request.mockImplementation(async () => new Response(JSON.stringify({ changed: true, frontier: 'private' }), { status: 200 }));
         await expect(api.sessionFollowRemove(address)).resolves.toEqual({ kind: 'failed', error: 'unavailable' });
         env.request.mockImplementation(async () => new Response(JSON.stringify({ error: 'session_follow_source_forbidden' }), { status: 403 }));
@@ -208,8 +451,46 @@ describe('Follow exact Home Action transport', () => {
             sessionId: 'other', following: true, notificationLevel: 'none', includeInVoice: true,
         } }), { status: 200 }));
         await expect(api.sessionFollowSet({ serverId: env.target.id, sessionId: 'same' }, {
-            notificationLevel: 'none', includeInVoice: true,
+            policy: { preset: 'quiet', voice: true },
         })).resolves.toEqual({ kind: 'failed', error: 'unavailable' });
+    });
+
+    it('edits the other rule with a visible Project exclusion and CAS Undo without overwriting a later edit', async () => {
+        const env = await setup();
+        const { normalizeSessionListFilterV1 } = await import('@happier-dev/protocol/sessions/listFilter/sessionListFilterV1');
+        const { SessionFollowRuleDefinitionV1Schema } = await import('@happier-dev/protocol/sessions/follow/sessionFollowRuleV1');
+        const { leaveProjectToFollowRule, undoFollowRuleProjectExclusion } = await import('./sessionFollowRuleEdits');
+        const original = { ruleId: 'daily', receiver: { kind: 'session' as const, sessionId: 'daily-coordinator' }, version: 0,
+            definition: { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1({ homeServerIds: [env.target.id] }), policy: { preset: 'important' as const } } };
+        let version = 0;
+        let definition = SessionFollowRuleDefinitionV1Schema.parse(original.definition);
+        env.request.mockImplementation(async (url, init) => {
+            const path = new URL(url).pathname;
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+            expect(path).toBe('/v2/account/session-follow-rules/daily');
+            const body = JSON.parse(String(init?.body));
+            if (body.expectedVersion !== version) return Response.json({ error: 'version_conflict' }, { status: 409 });
+            expect(body.receiver).toEqual(original.receiver);
+            expect(body.content.t).toBe('plain');
+            definition = SessionFollowRuleDefinitionV1Schema.parse(body.content.v);
+            version += 1;
+            return Response.json({ rule: { ruleId: original.ruleId, receiver: original.receiver, version, content: { t: 'plain', v: definition } } });
+        });
+        const project = { serverId: env.target.id, projectKey: 'payments' };
+        const edit = await leaveProjectToFollowRule({ serverId: env.target.id, rule: original, project });
+        expect(edit.kind).toBe('ok');
+        expect(original.definition.filter.projects).toBeUndefined();
+        expect(definition.filter.projects?.exclude).toEqual([project]);
+        if (edit.kind !== 'ok') throw new Error('Expected exclusion receipt');
+        expect((await undoFollowRuleProjectExclusion(edit.value.undo)).kind).toBe('ok');
+        expect(definition).toEqual(original.definition);
+        const second = await leaveProjectToFollowRule({ serverId: env.target.id, rule: { ...original, version }, project });
+        if (second.kind !== 'ok') throw new Error('Expected second exclusion receipt');
+        version += 1; // A different device committed a newer edit before Undo.
+        expect(await undoFollowRuleProjectExclusion(second.value.undo)).toEqual({ kind: 'failed', error: 'version_conflict' });
+        expect(definition.filter.projects?.exclude).toEqual([project]);
     });
 
     it('executes the public Account Action through the real family adapter and preserves its result envelope', async () => {
@@ -220,7 +501,7 @@ describe('Follow exact Home Action transport', () => {
         env.request.mockImplementation(async () => new Response(JSON.stringify(preferences), { status: 200 }));
         // Unrelated required ports are never reached by this Account Action.
         const executor = createActionExecutor({ sessionFollowAction } as unknown as import('@happier-dev/protocol').ActionExecutorDeps);
-        await expect(executor.execute('session.follow.preferences.get', {}, {
+        await expect(executor.execute('follow.preferences.get', {}, {
             surface: 'ui', authority: 'present_user', serverId: env.target.id, actionCaller: { kind: 'host' },
         })).resolves.toEqual({ ok: true, result: preferences });
     });

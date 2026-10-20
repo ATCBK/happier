@@ -6,11 +6,12 @@ import { useUnistyles } from 'react-native-unistyles';
 import { AgentsAcpBackendsDeleteOutputV1Schema, AgentsAcpBackendsUpsertOutputV1Schema, applyAcpBackendUpsertV1, suggestAcpBackendIdV1, type AcpBackendUpsertResultV1 } from '@happier-dev/protocol/acp/catalog/catalogMutationsV1';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import type { AcpBackendDefinitionV1, AcpCatalogAuthSupportV1, AcpCatalogSupportHintV1 } from '@happier-dev/protocol/acp/catalog/settingsV1';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { createCustomAcpAgentSettingsRoute } from '@/agents/catalog/agentSettingsRoutes';
 import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalog';
 import { useAgentAuthoringEntry } from '@/components/settings/agents/authoring/useAgentAuthoringEntry';
-import { publishCustomAcpDraftTitle } from '@/components/settings/agents/collection/customAcpDraftTitle';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import {
     useAgentsAdministrationTargetSelection,
     useAgentsMachineScope,
@@ -207,10 +208,11 @@ export const AcpBackendEditorScreen = React.memo(function AcpBackendEditorScreen
         : { ...draft, id: derivedId, name: derivedId }), [derivedId, draft]);
 
     // The collection's draft row shows the name as it is typed.
+    const { publish: publishCustomAcpDraftTitle } = useCollectionDraftTitle();
     React.useEffect(() => {
         if (isNew) publishCustomAcpDraftTitle(draft.title);
-    }, [draft.title, isNew]);
-    React.useEffect(() => (isNew ? () => publishCustomAcpDraftTitle('') : undefined), [isNew]);
+    }, [draft.title, isNew, publishCustomAcpDraftTitle]);
+    React.useEffect(() => (isNew ? () => publishCustomAcpDraftTitle('') : undefined), [isNew, publishCustomAcpDraftTitle]);
 
     const update = React.useCallback((field: FieldKey | null, updater: (current: Draft) => Draft) => {
         setState((current) => {
@@ -269,6 +271,7 @@ export const AcpBackendEditorScreen = React.memo(function AcpBackendEditorScreen
             const execution = await executeAction('agents.acp.backends.upsert', { backend: candidate, ...authority });
             if (!execution.ok) throw new Error(execution.errorCode);
             const receipt = AgentsAcpBackendsUpsertOutputV1Schema.parse(execution.result);
+            if ('dryRun' in receipt) throw new Error('acp_backend_write_not_acknowledged');
             saved = receipt.backend;
             acknowledgedAuthority = { expectedRevision: receipt.revision };
         }
@@ -303,15 +306,9 @@ export const AcpBackendEditorScreen = React.memo(function AcpBackendEditorScreen
 
     const remove = React.useCallback(async () => {
         if (!existing || !authority || !capturedScope || !settingsLoaded || !isEditorCurrent()) return;
-        const confirmed = await Modal.confirm(
-            t('settingsAgents.customAcp.deleteTitle'),
-            t('settingsAgents.customAcp.deleteConfirm', { name: existing.title || existing.name }),
-            { destructive: true, cancelText: t('common.cancel'), confirmText: t('common.delete') },
-        );
-        if (!confirmed || !isEditorCurrent()) return;
         try {
-            const execution = await executeAction('agents.acp.backends.delete', { backendId: existing.id, ...authority },
-                { presentUserConfirmation: { actionId: 'agents.acp.backends.delete' } });
+            const execution = await executeAction('agents.acp.backends.delete', { backendId: existing.id, ...authority });
+            if (!execution.ok && isActionApprovalDeclinedErrorCode(execution.errorCode)) return;
             if (!execution.ok) throw new Error(execution.errorCode);
             AgentsAcpBackendsDeleteOutputV1Schema.parse(execution.result);
         }

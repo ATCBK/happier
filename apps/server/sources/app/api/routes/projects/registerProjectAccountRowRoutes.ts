@@ -1,5 +1,5 @@
 import type { Fastify } from '@/app/api/types';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import {
     PROJECT_ACCOUNT_ROWS_ROUTE_V1,
     ProjectAccountRowReadRequestV1Schema, ProjectAccountRowReadResponseV1Schema,
@@ -14,7 +14,7 @@ import { inTx } from '@/storage/inTx';
 /** All private rows use the authenticated Account, never a caller-supplied owner. */
 export function registerProjectAccountRowRoutes(app: Fastify): void {
     const config = { rateLimit: resolveApiHotEndpointRateLimit(process.env, 'account.settings') };
-    const errors = { 400: z.object({ error: z.literal('invalid-params') }).strict(), 500: z.object({ error: z.literal('internal') }).strict() };
+    const errors = { 400: z.strictObject({ error: z.literal('invalid-params') }), 500: z.strictObject({ error: z.literal('internal') }) };
     app.post(`${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/read`, {
         preHandler: app.authenticate, config,
         schema: { body: asServerProtocolZod(ProjectAccountRowReadRequestV1Schema), response: { 200: asServerProtocolZod(ProjectAccountRowReadResponseV1Schema), ...errors } },

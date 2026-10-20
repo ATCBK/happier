@@ -2,26 +2,27 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WorkflowRunStartRequestV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
+import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { ExternalActionRequestEnvelopeV1 } from '@happier-dev/protocol/actions/externalActionApi';
 
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { renderHook as renderHostHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 
 import type { WorkflowRunNowRequest } from './useWorkflowRunNowController';
+import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
 
 const executeMock = vi.hoisted(() => vi.fn<(
-    request: Parameters<typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc').machineRpcWithServerScope>[0],
+    request: Readonly<{ actionId: 'workflow.run.start'; input: unknown;
+        target: NonNullable<ExternalActionRequestEnvelopeV1['target']> }>,
 ) => Promise<unknown>>());
-
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
-    const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
-    return createServerScopedMachineRpcBoundaryMock(executeMock);
-});
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 // Keep admission-error presentation real below the Radix DOM boundary.
@@ -34,7 +35,9 @@ vi.mock('@/text', async () => {
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
 const { ModalProvider, useModal } = await import('@/modal/ModalProvider');
+const { Modal } = await import('@/modal');
 let modals: ReturnType<typeof useModal>['state']['modals'] = [];
 function ObserveModals() { modals = useModal().state.modals; return null; }
 function ModalHost({ children }: React.PropsWithChildren) {
@@ -51,9 +54,10 @@ const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles
 const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
 let homeA: string;
 let homeB: string;
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 
 function startInput(index = 0) {
-    return WorkflowRunStartRequestV1Schema.parse(executeMock.mock.calls[index]?.[0].payload);
+    return WorkflowRunStartRequestV1Schema.parse(executeMock.mock.calls[index]?.[0].input);
 }
 
 function setAccountScope(scope: { serverId: string; accountId: string } | null): void {
@@ -83,6 +87,18 @@ function admitted(admission: 'created' | 'existing') {
 }
 
 describe('useWorkflowRunNowController', () => {
+    it('preserves the committed Discussion origin at the shared start boundary', async () => {
+        executeMock.mockResolvedValueOnce(admitted('created'));
+        const { useWorkflowRunNowController } = await import('./useWorkflowRunNowController');
+        const hook = await renderHook(() => useWorkflowRunNowController());
+        const origin = { kind: 'discussion' as const,
+            discussion: { serverId: homeA, discussionId: 'discussion-1' },
+            addressingMessageId: 'question-1' };
+        await act(async () => {
+            await hook.getCurrent().runNow({ runId: RUN_ID, source, origin });
+        });
+        expect(executeMock.mock.calls[0]?.[0].input).toMatchObject({ origin });
+    });
     it('admits the reviewed role overrides rather than silently using the Account roles', async () => {
         executeMock.mockResolvedValueOnce(admitted('created'));
         const { useWorkflowRunNowController } = await import('./useWorkflowRunNowController');
@@ -91,19 +107,32 @@ describe('useWorkflowRunNowController', () => {
         await act(async () => {
             await hook.getCurrent().runNow({ runId: RUN_ID, source, roleOverrides });
         });
-        expect(executeMock.mock.calls[0]?.[0].payload).toMatchObject({ roleOverrides });
+        expect(executeMock.mock.calls[0]?.[0].input).toMatchObject({ roleOverrides });
     });
     beforeEach(async () => {
         modals = [];
-        homeA = await homes.addHome({ name: 'A', serverUrl: 'https://workflow-a.test', accountId: 'account-a', currentAccount: true });
+        // Confirmation is the presentation boundary; admission and settlement stay real.
+        vi.spyOn(Modal, 'confirm').mockResolvedValue(true);
+        homeA = await homes.addHome({ name: 'A', serverUrl: 'https://workflow-a.test', serverIdentityId: 'srv_workflow_a', accountId: 'account-a', currentAccount: true });
         homeB = await homes.addHome({ name: 'B', serverUrl: 'https://workflow-b.test', accountId: 'account-b', currentAccount: true, active: false });
         homes.answer(homeA, '/v1/features', { body: createRootLayoutFeaturesResponse({ features: { workflows: { enabled: true } } }) });
+        const actions = await createExternalActionAccountHttpBoundary({ serverUrl: 'https://workflow-a.test', serverIdentityId: 'srv_workflow_a',
+            accountId: 'account-a', machineId: 'machine-1', actionId: 'workflow.run.start', tokenEpoch: 0,
+            execute: (input, { target }) => executeMock({ actionId: 'workflow.run.start', input, target }),
+            failure: result => { const parsed = ActionExecuteFailureSchema.safeParse(result); return parsed.success ? parsed.data : null; } });
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://workflow-a.test', accountId: 'account-a', serverIdentityId: 'srv_workflow_a',
+            credentials: { token: createAccountTokenForTests('account-a', { currentAccount: true }) },
+            request: async (url, init) => await actions.handle(new URL(String(url)), init) ?? homes.request(url, init) });
         setAccountScope({ serverId: 'server-a', accountId: 'account-a' });
-        storage.setState({ workflowRunsById: {}, machines: { 'machine-1': createMachineFixture({ activeAt: 0 }) } });
+        const machine = createMachineFixture({ id: 'machine-1', activeAt: Date.now() });
+        storage.setState({ workflowRunsById: {}, machines: { [machine.id]: machine }, machineListByServerId: { [homeA]: [machine] } });
     });
 
     afterEach(async () => {
         vi.useRealTimers();
+        vi.mocked(Modal.confirm).mockRestore();
+        await connection?.dispose();
+        connection = undefined;
         executeMock.mockReset();
         setAccountScope(null);
         storage.setState({ workflowRunsById: {} });
@@ -124,13 +153,13 @@ describe('useWorkflowRunNowController', () => {
 
         expect(outcome!?.run.id).toBe(RUN_ID);
         expect(outcome!?.admission).toBe('created');
-        expect(executeMock.mock.calls[0]?.[0].method).toBe('workflow.run.start');
+        expect(executeMock.mock.calls[0]?.[0].actionId).toBe('workflow.run.start');
         expect(startInput().runId).toBe(RUN_ID);
-        expect(executeMock.mock.calls[0]?.[0].payload).toMatchObject({ metadata: { title: 'Frozen title' } });
+        expect(executeMock.mock.calls[0]?.[0].input).toMatchObject({ metadata: { title: 'Frozen title' } });
         // The admitted Run reaches the one Account-scoped row map keyed by runId,
         // so the exact route can open it without any list being loaded.
-        expect(storage.getState().workflowRunsById[RUN_ID]?.summary?.id).toBe(RUN_ID);
-        expect(storage.getState().workflowRunsById[RUN_ID]?.metadata)
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey(RUN_ID)]?.summary?.id).toBe(RUN_ID);
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey(RUN_ID)]?.metadata)
             .toEqual({ kind: 'available', value: { title: 'Frozen title' } });
         // An acknowledgement is command state, not a Run state.
         expect(hook.getCurrent().stateFor(RUN_ID)).toBe('acknowledged');
@@ -142,8 +171,8 @@ describe('useWorkflowRunNowController', () => {
 
     it('owns an ordinary start identity until admission settles, then permits a new explicit start', async () => {
         const reply = createDeferred<unknown>();
-        executeMock.mockImplementation(async ({ payload }) =>
-            WorkflowRunStartRequestV1Schema.parse(payload).runId === RUN_ID ? admitted('created') : reply.promise);
+        executeMock.mockImplementation(async ({ input }) =>
+            WorkflowRunStartRequestV1Schema.parse(input).runId === RUN_ID ? admitted('created') : reply.promise);
         const { useWorkflowRunNowController } = await import('./useWorkflowRunNowController');
         const hook = await renderHook(() => useWorkflowRunNowController());
         let first!: Promise<unknown>;
@@ -158,8 +187,8 @@ describe('useWorkflowRunNowController', () => {
             await first;
         });
         expect(hook.getCurrent().pendingRunId).toBeNull();
-        executeMock.mockImplementation(async ({ payload }) => ({
-            admission: 'created', run: createWorkflowRunSummaryFixture({ id: WorkflowRunStartRequestV1Schema.parse(payload).runId, ownerAccountId: 'account-a', origin: { kind: 'direct' } }) }));
+        executeMock.mockImplementation(async ({ input }) => ({
+            admission: 'created', run: createWorkflowRunSummaryFixture({ id: WorkflowRunStartRequestV1Schema.parse(input).runId, ownerAccountId: 'account-a', origin: { kind: 'direct' } }) }));
         await act(async () => { await hook.getCurrent().runNow({ source }); });
         expect(startInput(1).runId).not.toBe(firstId);
     });
@@ -191,11 +220,7 @@ describe('useWorkflowRunNowController', () => {
     });
 
     it('settles a proved unsent setup failure as a typed refusal without waiting for a missing Run', async () => {
-        const { markRpcRequestDisposition } = await import('@happier-dev/sync-client');
-        executeMock.mockRejectedValueOnce(markRpcRequestDisposition(
-            Object.assign(new Error('Machine setup failed'), { code: 'MACHINE_RPC_TIMEOUT' }),
-            'notSent',
-        ));
+        executeMock.mockResolvedValueOnce({ ok: false, errorCode: 'target_unavailable', error: 'Machine setup failed' });
         const { useWorkflowRunNowController } = await import('./useWorkflowRunNowController');
         const hook = await renderHook(() => useWorkflowRunNowController());
         await act(async () => {
@@ -227,9 +252,8 @@ describe('useWorkflowRunNowController', () => {
             await hook.getCurrent().runNow({ runId: RUN_ID, source, project });
         });
 
-        expect(executeMock.mock.calls[0]?.[0].payload).toEqual({
-            v: 1, kind: 'targeted_action_rpc',
-            input: { runId: RUN_ID, source }, target: {
+        expect(executeMock.mock.calls[0]?.[0]).toEqual({
+            actionId: 'workflow.run.start', input: { runId: RUN_ID, source }, target: {
                 kind: 'machine', machineId: project.machineId,
                 project: {
                     machineId: project.machineId,
@@ -271,7 +295,7 @@ describe('useWorkflowRunNowController', () => {
         expect(executeMock).toHaveBeenCalledTimes(1);
         expect(observations()).toHaveLength(1);
         expect(modals.filter(entry => entry.type === 'alert')).toEqual([]);
-        expect(storage.getState().workflowRunsById[runId]).toBeUndefined();
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey(runId, { serverId: homeA, accountId: 'account-a' })]).toBeUndefined();
     });
 
     it('does not dispatch twice while one admission is still in flight', async () => {
@@ -297,6 +321,25 @@ describe('useWorkflowRunNowController', () => {
         });
     });
 
+    it('owns asynchronous preparation once and refuses to dispatch after its captured Account retires', async () => {
+        const prepared = createDeferred<{ source: WorkflowRunNowRequest['source'] }>();
+        const { useWorkflowRunNowController } = await import('./useWorkflowRunNowController');
+        const hook = await renderHook(() => useWorkflowRunNowController());
+        let pending!: Promise<unknown>;
+        let preparations = 0;
+        const request = { prepareRequest: async () => { preparations++; return prepared.promise; } };
+        await act(async () => { pending = hook.getCurrent().runNow(request); });
+        const id = hook.getCurrent().pendingRunId;
+        expect(id).not.toBeNull();
+        expect(hook.getCurrent().stateFor(id!)).toBe('submitting');
+        await act(async () => { expect(await hook.getCurrent().runNow(request)).toBeNull(); });
+        expect(preparations).toBe(1);
+        expect(executeMock).not.toHaveBeenCalled();
+        await act(async () => { setAccountScope({ serverId: 'server-b', accountId: 'account-b' }); });
+        await act(async () => { prepared.resolve({ source }); expect(await pending).toBeNull(); });
+        expect(executeMock).not.toHaveBeenCalled();
+    });
+
     it('retires a result whose Account scope changed between dispatch and response', async () => {
         const request = createDeferred<unknown>();
         executeMock.mockReturnValueOnce(request.promise);
@@ -319,7 +362,7 @@ describe('useWorkflowRunNowController', () => {
         // No navigation handle and no row: another Account's session must not be
         // shown this Run, and no error is surfaced for a retired command.
         expect(outcome).toBeNull();
-        expect(storage.getState().workflowRunsById[RUN_ID]).toBeUndefined();
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey(RUN_ID, { serverId: homeA, accountId: 'account-a' })]).toBeUndefined();
         expect(modals.filter(entry => entry.type === 'alert')).toEqual([]);
         await act(async () => {
             setAccountScope({ serverId: 'server-a', accountId: 'account-a' });
@@ -342,7 +385,7 @@ describe('useWorkflowRunNowController', () => {
         });
 
         expect(outcome).toBeNull();
-        expect(storage.getState().workflowRunsById[RUN_ID]).toBeUndefined();
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey(RUN_ID)]).toBeUndefined();
         expect(hook.getCurrent().stateFor(RUN_ID)).toBe('idle');
         expect(modals).toHaveLength(1);
         expect(modals[0]).toMatchObject({ type: 'alert', visible: true });
@@ -363,7 +406,7 @@ describe('useWorkflowRunNowController', () => {
             });
         });
 
-        expect(executeMock.mock.calls[0]?.[0].payload).toEqual({
+        expect(executeMock.mock.calls[0]?.[0].input).toEqual({
             runId: RUN_ID,
             source,
             inputs: { branch: 'main' },
@@ -391,12 +434,12 @@ describe('useWorkflowRunNowController', () => {
             });
         });
 
-        expect(executeMock.mock.calls[0]?.[0].payload).toEqual({
+        expect(executeMock.mock.calls[0]?.[0].input).toEqual({
             runId: RUN_ID,
             source,
             executionTarget: { kind: 'detached_run' },
         });
-        expect(executeMock.mock.calls[1]?.[0].payload).not.toHaveProperty('executionTarget');
+        expect(executeMock.mock.calls[1]?.[0].input).not.toHaveProperty('executionTarget');
     });
 
     it('does not dispatch without an active Account', async () => {

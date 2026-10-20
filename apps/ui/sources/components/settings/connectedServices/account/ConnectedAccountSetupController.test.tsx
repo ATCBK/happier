@@ -6,6 +6,7 @@ import { indexedDB, IDBKeyRange } from 'fake-indexeddb';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import {
@@ -39,6 +40,7 @@ import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machine
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import type { MachineAdministrationTargetSelectionV1 } from '@/sync/domains/machines/administration/useTargetSelection';
+import { resolveFreshMachineAdministrationExecutionTarget } from '@/sync/domains/machines/administration/useTargetSelection';
 import {
     ConnectedAccountAuthenticationCommandRequestSchema,
     ConnectedAccountControlCommandRequestSchema,
@@ -70,6 +72,10 @@ import { CONNECTED_PRESENTATION_ROWS_ROUTE_V1, CONNECTED_ACKNOWLEDGEMENTS_ROWS_R
 import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, ConnectedAccountCatalogRowMutationV1Schema,
     type ConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { ANTHROPIC_API_KEY_INPUT_SCHEMA } from '../../../../../../../packages/plugins/claude/src/connectedAccounts/anthropicRuntime';
+import { BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS } from '@/agents/registry/generatedBundledPluginEntries';
+import { ConnectedServiceSetupPanel, type ConnectedServiceSetupCatalogEntry, type ConnectedServiceSetupTarget } from '../setup/ConnectedServiceSetupPanel';
+import { ConnectedServicesConnectMore } from '../setup/ConnectedServicesConnectMore';
+import { buildConnectedServicesIndexModel } from '../model/buildConnectedServicesIndexModel';
 
 const platform = vi.hoisted(() => ({
     params: {} as Record<string, string | undefined>,
@@ -209,6 +215,16 @@ describe('ConnectedAccountSetupController real ownership', () => {
         return renderScreen(<InjectedAuthProvider credentials={withAccountCredentials ? account.credentials : null}><ConnectedAccountServiceView /></InjectedAuthProvider>);
     }
 
+    function leaveMachineChoiceUnselected() {
+        // A sole online candidate is selected by the real administration owner.
+        // Two current candidates model an Account whose user has made no choice.
+        const other = createMachineFixture({ id: 'machine-other', activeAt: Date.now() });
+        machineRows.push(createPlainMachineRowFixture({ id: other.id, accountId: 'account-a' }));
+        storage.getState().applyMachines([...Object.values(storage.getState().machines), other], true,
+            { sourceServerId: getActiveServerSnapshot().serverId });
+        storage.getState().applySettingsLocal({ machineAdministrationTargetsLocalV1: {} });
+    }
+
     function waiveConfigurationConfirmation() {
         // These cases exercise native configuration settlement/recovery. The
         // real policy owner must admit their effect; no caller bypass is used.
@@ -216,6 +232,30 @@ describe('ConnectedAccountSetupController real ownership', () => {
             actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
                 approvalWaivedSurfaces: { 'connectedServices.configuration.replace': ['ui'] } }),
         }, 2);
+    }
+
+    function installApprovalBoundary() {
+        const approvals: ApprovalRequestV2[] = [];
+        handleHttp = async (rawUrl, init) => {
+            const url = new URL(String(rawUrl));
+            if (url.pathname === '/v1/features' || url.pathname === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
+            if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (url.pathname === '/v1/artifacts' && init?.method === 'POST') {
+                // The real executor and Artifact owner produce the request; HTTP is the boundary.
+                const create = JSON.parse(String(init.body)) as ArtifactCreateRequest;
+                const content = decodePlainArtifactStoredContent(create.body);
+                if (!content || typeof content !== 'object' || !('body' in content) || typeof content.body !== 'string') throw new Error('Missing approval Artifact body');
+                const request = StoredApprovalRequestSchema.parse(JSON.parse(content.body));
+                if (request.v !== 2) throw new Error('Missing current approval authority');
+                approvals.push(request);
+                return Response.json({ ...create, ownerAccountId: 'account-a', access: 'owner', encryptionMode: 'plain',
+                    headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+            }
+            if (url.pathname === '/v1/artifacts') return Response.json([]);
+            return Response.json({ error: 'not_found' }, { status: 404 });
+        };
+        return approvals;
     }
 
     function installAccountLabelBoundary(targetAccount: QualifiedConnectedAccountProfileV4, beforeWrite?: () => Promise<void>) {
@@ -374,9 +414,11 @@ describe('ConnectedAccountSetupController real ownership', () => {
         expect(account.home.serverIdentityId).toBe('srv_connected_account_setup');
         const target = { serverIdentityId: account.home.serverIdentityId!, machineId: machine.id };
         storage.getState().applyProfile({ ...profileDefaults, id: 'account-a' });
-        storage.getState().applySettings({ ...settingsDefaults,
+        // Seed a fresh Account snapshot; the versioned echo writer correctly
+        // refuses version 1 after a preceding case persisted a later revision.
+        storage.setState({ settings: { ...settingsDefaults,
             machineAdministrationTargetsLocalV1: { [MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.connectedAccounts]: target },
-        }, 1);
+        }, settingsVersion: 1 });
         storage.getState().applyMachines([machine], true, { sourceServerId: active.serverId });
         storage.setState({ isDataReady: true });
         const candidate = {
@@ -450,6 +492,46 @@ describe('ConnectedAccountSetupController real ownership', () => {
             { operation: 'submitManual', attemptId: 'attempt-1', fields: { token: 'secret-token' } },
             { operation: 'cancel', attemptId: 'attempt-1' },
         ]);
+        expect(platform.confirm).not.toHaveBeenCalled();
+    });
+
+    it('keeps one explicit Ask for credentials pending without repeating the connect intent, then cancels on close', async () => {
+        storage.getState().applySettings({ ...storage.getState().settings,
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
+                'connectedServices.authentication.submitManual': { approvalRequiredSurfaces: ['ui'] },
+            } }),
+        }, 2);
+        const approvals = installApprovalBoundary();
+        const screen = await manualScreen();
+        await act(async () => screen.changeTextByTestId('connected-account-manual:token', 'secret-token'));
+        const submission = screen.pressByTestIdAsync('connected-account-manual:submit');
+        await vi.waitFor(() => expect(approvals).toHaveLength(1));
+        expect(approvals[0]).toMatchObject({ actionId: 'connectedServices.authentication.submitManual', status: 'open' });
+        expect(authenticationCommands).toEqual([{ operation: 'beginConnect', service, modeId: 'manual' }]);
+        expect(platform.confirm).not.toHaveBeenCalled();
+        await screen.unmount();
+        await submission;
+        expect(authenticationCommands.filter(command => command.operation === 'submitManual')).toEqual([]);
+        expect(onConnected).not.toHaveBeenCalled();
+    });
+
+    it('retains one initial explicit Ask across setup rerenders without beginning an unapproved attempt', async () => {
+        storage.getState().applySettings({ ...storage.getState().settings,
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
+                'connectedServices.authentication.beginConnect': { approvalRequiredSurfaces: ['ui'] },
+            } }),
+        }, 2);
+        const approvals = installApprovalBoundary();
+        const screen = await renderScreen(element());
+        await vi.waitFor(() => expect(approvals).toHaveLength(1));
+        await screen.update(element());
+        expect(approvals).toHaveLength(1);
+        expect(approvals[0]).toMatchObject({ actionId: 'connectedServices.authentication.beginConnect', status: 'open' });
+        expect(authenticationCommands).toEqual([]);
+        expect(platform.confirm).not.toHaveBeenCalled();
+        await screen.unmount();
+        expect(authenticationCommands).toEqual([]);
+        expect(onConnected).not.toHaveBeenCalled();
     });
 
     it('submits a declared native import source choice through the qualified selected-machine attempt', async () => {
@@ -533,9 +615,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
             revisionSemantics: 'revisioned', credentialRevision, configurationReady: true, configurationRevision: null, scopes: [],
         };
         const boundary = installAccountLabelBoundary(targetAccount);
-        if (machineState === 'unselected') storage.getState().applySettings({ ...storage.getState().settings,
-            machineAdministrationTargetsLocalV1: {},
-        }, 2);
+        if (machineState === 'unselected') leaveMachineChoiceUnselected();
         else if (machineState === 'offline') {
             const machine = createMachineFixture({ id: selection.selectedTarget!.machineId, active: false, activeAt: 0 });
             const serverId = getActiveServerSnapshot().serverId;
@@ -588,7 +668,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
             configurationReady: false, configurationRevision: null, scopes: [],
         });
         const boundary = installAccountLabelBoundary(targetAccount);
-        storage.getState().applySettings({ ...storage.getState().settings, machineAdministrationTargetsLocalV1: {} }, 2);
+        leaveMachineChoiceUnselected();
         const screen = await focusedScreen(true);
         expect(screen.findHostByTestId('qualified-account-detail')).not.toBeNull();
         await screen.pressByTestIdAsync('qualified-account-detail:action:edit-label');
@@ -672,7 +752,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
 
     it('does not promote a persisted machine choice with no fresh inventory into execution authority', async () => {
         // A warm row remains cached while this Home has not returned its current inventory.
-        storage.setState({ isDataReady: false });
+        storage.setState({ isDataReady: false, machines: {}, machineListByServerId: {}, machineListStatusByServerId: {} });
         const screen = await focusedScreen();
         // One quiet machine line (the canonical machine section) and no second chooser in the header.
         expect(screen.findHostByTestId('connected-account-target.state'), JSON.stringify(screen.tree.toJSON())).not.toBeNull();
@@ -1067,6 +1147,198 @@ describe('ConnectedAccountSetupController real ownership', () => {
             expectedRevision: 'config-1', values: { endpoint: 'https://new.example' }, secretValues: {} });
     });
 
+    it.each(['add', 'reconnect'] as const)('keeps an account configuration draft while the same selected machine is temporarily unresolved (%s)', async (intent) => {
+        waiveConfigurationConfirmation();
+        const mode: PluginConnectedAccountAuthenticationModeV2 = {
+            ...authentication.modes[0]!, configuration: configuredMode.configuration,
+        };
+        const ref = { service, accountId: 'account-1' };
+        installDescription({ ...described, accounts: intent === 'reconnect' ? [{ ref, status: 'needs_reauth', authenticationModeId: mode.id,
+            revisionSemantics: 'revisioned', credentialRevision, configurationReady: false, configurationRevision: 'config-1', scopes: [] }] : [], descriptor: { ...described.descriptor,
+            authentication: { defaultModeId: mode.id, modes: [mode] } } });
+        const target = intent === 'reconnect' ? { kind: 'account' as const, account: ref, modeId: mode.id }
+            : { ...configurationTarget, modeId: mode.id };
+        const reply = { ...configurationReply, target, mode };
+        handleControl = command => command.operation === 'listPendingAttempts'
+            ? { status: 'pendingAttempts', attempts: [] }
+            : command.operation === 'readConfiguration' ? reply
+                : command.operation === 'replaceConfiguration' ? { ...reply, status: 'configurationCommitted',
+                    configuration: { ...reply.configuration, status: 'ready', revision: 'config-2' } }
+                    : description;
+        handleAuthentication = command => command.operation === 'continueConnect'
+            ? { status: 'awaitingManual', attemptId: 'attempt-1' }
+            : { status: 'configurationRequired', attemptId: 'attempt-1', target, missingFieldIds: [] };
+        const selected = { ...selection, resolveExecutionTarget: () => resolveFreshMachineAdministrationExecutionTarget(selection.selectedTarget) };
+        const setup = () => <InjectedAuthProvider credentials={null}>
+            <ConnectedAccountSetupController service={service} targetSelection={selected}
+                panel={{ intent: intent === 'reconnect' ? { kind: 'reconnect', accountId: ref.accountId } : { kind: 'add' }, onConnected, onCancel }} />
+        </InjectedAuthProvider>;
+        const screen = await renderScreen(setup());
+        await vi.waitFor(() => expect(screen.findHostByTestId('connected-account-configuration:endpoint')).not.toBeNull());
+        await act(async () => screen.changeTextByTestId('connected-account-configuration:endpoint', 'https://unsaved.example'));
+        const state = storage.getState();
+        const inventory = { isDataReady: state.isDataReady, machines: state.machines,
+            machineListByServerId: state.machineListByServerId, machineListStatusByServerId: state.machineListStatusByServerId };
+        await act(async () => storage.setState({ isDataReady: false, machines: {}, machineListByServerId: {}, machineListStatusByServerId: {} }));
+        expect(selected.resolveExecutionTarget()).toBeNull();
+        await screen.update(setup());
+        expect(screen.findHostByTestId('connected-account-configuration:endpoint')?.props.value).toBe('https://unsaved.example');
+        // No fresh execution target: retaining a form cannot authorize a write.
+        await screen.pressByTestIdAsync('connected-account-configuration:save');
+        expect(controlCommands.some(command => command.operation === 'replaceConfiguration')).toBe(false);
+        await act(async () => storage.setState(inventory));
+        await screen.update(setup());
+        expect(screen.findHostByTestId('connected-account-configuration:endpoint')?.props.value).toBe('https://unsaved.example');
+        await screen.pressByTestIdAsync('connected-account-configuration:save');
+        await vi.waitFor(() => expect(screen.findHostByTestId('connected-account-manual:token')).not.toBeNull());
+        expect(controlCommands).toContainEqual({ operation: 'replaceConfiguration', target: intent === 'reconnect'
+            ? { kind: 'account', account: ref } : { kind: 'attempt', attemptId: 'attempt-1' },
+            expectedRevision: 'config-1', values: { endpoint: 'https://unsaved.example' }, secretValues: {} });
+        expect(authenticationCommands).toEqual([
+            intent === 'reconnect' ? { operation: 'beginReconnect', account: ref }
+                : { operation: 'beginConnect', service, modeId: mode.id },
+            { operation: 'continueConnect', attemptId: 'attempt-1', expectedConfigurationRevision: 'config-2' },
+        ]);
+    });
+
+    it.each(['controller', 'page', 'inline', 'inline-offer'] as const)('retains the email-shaped draft through a choice, target loss and options refresh at the real setup owner (%s)', async (host) => {
+        waiveConfigurationConfirmation();
+        if (host === 'inline' || host === 'inline-offer') {
+            // Window geometry is the native boundary; the actual inline host,
+            // catalog projection, setup panel and controller all remain real.
+            const native = await import('react-native');
+            vi.spyOn(native, 'useWindowDimensions').mockReturnValue({ width: 1440, height: 900, scale: 1, fontScale: 1 });
+        }
+        // Use the real published descriptor, under the external-plugin fixture's
+        // identity: the host must not special-case the bundled email plugin.
+        const mode = BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS['happier.channel.email/email-imap-smtp']!
+            .descriptor.authentication.modes.find(candidate => candidate.id === 'password')!;
+        installDescription({ ...described, descriptor: { ...described.descriptor,
+            authentication: { defaultModeId: mode.id, modes: [mode] } } });
+        const target = { ...configurationTarget, modeId: mode.id };
+        let readMode = mode;
+        let describeUnavailable = false;
+        const replacement = deferredReply();
+        const reply = () => ({ ...configurationReply, target, mode: readMode,
+            configuration: { ...configurationReply.configuration, values: {}, configuredSecretFieldIds: [] } });
+        handleControl = command => command.operation === 'listPendingAttempts'
+            ? { status: 'pendingAttempts', attempts: [] }
+            : command.operation === 'readConfiguration' ? reply()
+                : command.operation === 'replaceConfiguration' ? replacement.promise
+                    : describeUnavailable ? { status: 'unavailable', code: 'temporarily_unavailable' } : description;
+        handleAuthentication = command => command.operation === 'continueConnect'
+            ? { status: 'awaitingManual', attemptId: 'attempt-1' }
+            : { status: 'configurationRequired', attemptId: 'attempt-1', target, missingFieldIds: [] };
+        let misbound = false;
+        const selected = { ...selection, resolveExecutionTarget: () => {
+            const fresh = resolveFreshMachineAdministrationExecutionTarget(selection.selectedTarget);
+            return fresh && misbound ? { ...fresh, target: { ...fresh.target, machineId: 'wrong-machine' } } : fresh;
+        } };
+        let catalog: readonly ConnectedServiceSetupCatalogEntry[] = [{
+            serviceKey: `${service.pluginId}/${service.localId}`, service, entry: null, legacyServiceId: null,
+            label: 'Email', usedBy: [], usedByAgentIds: [], connectedCount: 0, section: 'tools', canAdd: true,
+        }];
+        let requestedTarget: ConnectedServiceSetupTarget = { kind: 'service', serviceKey: `${service.pluginId}/${service.localId}` };
+        const handled = () => {};
+        const inline = () => <InjectedAuthProvider credentials={null}>
+            <ConnectedServicesConnectMore layout="section" request={requestedTarget} onRequestHandled={handled} onConnected={onConnected}
+                targetSelection={selected} model={buildConnectedServicesIndexModel({ transport: 'advertised-v4',
+                    entries: catalog.map(() => ({ serviceId: 'acme-work', service, executable: true,
+                        connectCommand: 'happier connect acme-work', supportsOauth: false, projectedTitle: 'Email' })),
+                    qualifiedAccounts: [], qualifiedGroups: [], legacyServices: [], defaultAccountByServiceKey: {},
+                    resolveLabel: entry => String(entry?.projectedTitle ?? ''), resolveFallbackEntry: () => null,
+                    presentDiagnostics: () => ({ primary: null, supportDetails: null }), loadingLabel: 'Loading',
+                    agentUses: host === 'inline-offer' ? [{ title: 'Acme Agent', services: [service], defaults: [] }] : [] })} />
+        </InjectedAuthProvider>;
+        const setup = () => host === 'controller' ? element(selected) : host === 'inline' || host === 'inline-offer' ? inline() : <InjectedAuthProvider credentials={null}>
+            <ConnectedServiceSetupPanel chrome="page" target={requestedTarget}
+                catalog={catalog} targetSelection={selected} onTargetChange={() => {}} onClose={onCancel} />
+        </InjectedAuthProvider>;
+        const screen = await renderScreen(setup());
+        await vi.waitFor(() => expect(screen.findHostByTestId('connected-account-configuration:mailbox')).not.toBeNull());
+        const entered = { imapHost: 'imap.example.test', imapPort: '39753', mailbox: 'wilson@example.test',
+            sentFolder: 'My Sent', smtpHost: 'smtp.example.test', smtpPort: '37419', username: 'wilson-login', inboxFolder: 'Inbox/custom' };
+        for (const [id, value] of Object.entries(entered)) {
+            await act(async () => screen.changeTextByTestId(`connected-account-configuration:${id}`, value));
+        }
+        const securityChoice = () => screen.tree.findAllByType(DropdownMenu)
+            .find(node => node.props.testID === 'connected-account-configuration:smtpSecurity')!;
+        const assertDraft = () => {
+            for (const [id, value] of Object.entries(entered)) {
+                expect(screen.findHostByTestId(`connected-account-configuration:${id}`)?.props.value, id).toBe(value);
+            }
+            expect(securityChoice().props.selectedId).toBe(JSON.stringify('starttls'));
+        };
+        await act(async () => securityChoice().props.onSelect(JSON.stringify('starttls')));
+        assertDraft();
+        const state = storage.getState();
+        const inventory = { isDataReady: state.isDataReady, machines: state.machines,
+            machineListByServerId: state.machineListByServerId, machineListStatusByServerId: state.machineListStatusByServerId };
+        await act(async () => storage.setState({ isDataReady: false, machines: {}, machineListByServerId: {}, machineListStatusByServerId: {} }));
+        await screen.update(setup());
+        expect(selected.resolveExecutionTarget()).toBeNull();
+        assertDraft();
+        describeUnavailable = true;
+        await act(async () => storage.setState(inventory));
+        await screen.update(setup());
+        await vi.waitFor(() => expect(screen.findHostByTestId('connected-account:error:retry')).not.toBeNull());
+        describeUnavailable = false;
+        readMode = { ...mode, configuration: { ...mode.configuration!, fields: mode.configuration!.fields.map(field =>
+            field.id === 'smtpSecurity' ? { ...field, presentation: { ...field.presentation,
+                options: [...field.presentation!.options!].reverse() } } : field) } };
+        // Retry goes through the real Action/read/strict-schema path and returns
+        // new options for the SAME target and configuration revision.
+        await screen.pressByTestIdAsync('connected-account:error:retry');
+        await vi.waitFor(() => expect(authenticationCommands).toContainEqual({ operation: 'read', attemptId: 'attempt-1' }));
+        assertDraft();
+        // Mis-wiring negative: retaining values never lends authority to a
+        // resolver that returns another Machine. Recovery uses the same draft.
+        misbound = true;
+        await screen.update(setup());
+        await screen.pressByTestIdAsync('connected-account-configuration:save');
+        expect(controlCommands.some(command => command.operation === 'replaceConfiguration')).toBe(false);
+        assertDraft();
+        misbound = false;
+        await screen.update(setup());
+        await screen.pressByTestIdAsync('connected-account-configuration:save');
+        await vi.waitFor(() => expect(controlCommands.some(command => command.operation === 'replaceConfiguration')).toBe(true));
+        // Catalog discovery can refresh while Replace/approval is in flight.
+        // The chosen service and attempt still own this ongoing setup journey.
+        catalog = [];
+        await screen.update(setup());
+        assertDraft();
+        await act(async () => replacement.resolve({ ...reply(), status: 'configurationCommitted',
+            configuration: { ...reply().configuration, status: 'ready', revision: 'config-2' } }));
+        await vi.waitFor(() => expect(screen.findHostByTestId('connected-account-manual:password')).not.toBeNull());
+        expect(authenticationCommands.filter(command => command.operation === 'beginConnect')).toHaveLength(1);
+        expect(authenticationCommands).toContainEqual({ operation: 'continueConnect', attemptId: 'attempt-1', expectedConfigurationRevision: 'config-2' });
+        expect(controlCommands).toContainEqual({ operation: 'replaceConfiguration', target: { kind: 'attempt', attemptId: 'attempt-1' },
+            expectedRevision: 'config-1', values: { ...entered, imapPort: 39753, smtpPort: 37419, smtpSecurity: 'starttls' }, secretValues: {} });
+        if (host !== 'controller') {
+            // Retention follows the continuing user intent. Returning to the
+            // catalog must still retire the old attempt and its secret form.
+            requestedTarget = { kind: 'catalog' };
+            await screen.update(setup());
+            expect(screen.findHostByTestId('connected-account-manual:password')).toBeNull();
+        }
+    });
+
+    it.each(['machine', 'home'] as const)('refuses a setup resolver mis-bound to another %s', async (mismatch) => {
+        const fresh = selection.resolveExecutionTarget()!;
+        const misbound = { ...selection, resolveExecutionTarget: () => ({ ...fresh,
+            target: { ...fresh.target, ...(mismatch === 'machine' ? { machineId: 'machine-other' } : { serverIdentityId: 'srv_other' }) },
+            ...(mismatch === 'machine' ? { machine: createMachineFixture({ id: 'machine-other', activeAt: Date.now() }) } : {}),
+        }) };
+        const screen = await renderScreen(element(misbound));
+        expect(screen.findHostByTestId('connected-account-manual:token')).toBeNull();
+        expect(authenticationCommands).toEqual([]);
+        expect(controlCommands).toEqual([]);
+        // Restore the binding: the same controller can now reach the real manual form.
+        await screen.update(element());
+        await vi.waitFor(() => expect(screen.findHostByTestId('connected-account-manual:token')).not.toBeNull());
+        expect(authenticationCommands).toEqual([{ operation: 'beginConnect', service, modeId: 'manual' }]);
+    });
+
     it.each(['account'] as const)('edits established %s configuration without inferring reconnect or revealing configured secrets', async (scope) => {
         waiveConfigurationConfirmation();
         const ref = { service, accountId: 'account-1' };
@@ -1252,34 +1524,17 @@ describe('ConnectedAccountSetupController real ownership', () => {
         expect(controlCommands.filter((command) => command.operation === 'revokeAccount')).toEqual([]);
     });
 
-    it('retains connected-account custody until the canonical default Ask is approved', async () => {
+    it('retains connected-account custody until the configured Ask is approved', async () => {
         const targetAccount: QualifiedConnectedAccountProfileV4 = {
             ref: { service, accountId: 'account-1' }, status: 'connected', authenticationModeId: 'manual',
             revisionSemantics: 'revisioned', credentialRevision, configurationReady: true, configurationRevision: null, scopes: [],
         };
+        storage.getState().applySettingsLocal({ actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
+            actions: { 'connectedServices.accounts.revoke': { approvalRequiredSurfaces: ['ui'] } },
+        }) });
         const bindings = await seedPurposeDefaults({ kind: 'account', account: targetAccount.ref });
         installDescription({ ...described, accounts: [targetAccount] });
-        const approvals: ApprovalRequestV2[] = [];
-        handleHttp = async (rawUrl, init) => {
-            const url = new URL(String(rawUrl));
-            if (url.pathname === '/v1/features' || url.pathname === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
-            if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
-            if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
-            if (url.pathname === '/v1/artifacts' && init?.method === 'POST') {
-                // The persisted approval is produced by the real executor and
-                // Artifact owner; only their HTTP boundary is replaced.
-                const create = JSON.parse(String(init.body)) as ArtifactCreateRequest;
-                const content = decodePlainArtifactStoredContent(create.body);
-                if (!content || typeof content !== 'object' || !('body' in content) || typeof content.body !== 'string') throw new Error('Missing approval Artifact body');
-                const request = StoredApprovalRequestSchema.parse(JSON.parse(content.body));
-                if (request.v !== 2) throw new Error('Missing current approval authority');
-                approvals.push(request);
-                return Response.json({ ...create, ownerAccountId: 'account-a', access: 'owner', encryptionMode: 'plain',
-                    headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
-            }
-            if (url.pathname === '/v1/artifacts') return Response.json([]);
-            return Response.json({ error: 'not_found' }, { status: 404 });
-        };
+        const approvals = installApprovalBoundary();
         handleControl = command => command.operation === 'revokeAccount'
             ? { status: 'revoked', account: targetAccount.ref, remoteStatus: 'remoteUnsupported' }
             : command.operation === 'listPendingAttempts' ? { status: 'pendingAttempts', attempts: [] } : description;
@@ -1503,6 +1758,69 @@ describe('ConnectedAccountSetupController real ownership', () => {
         expect(controlCommands).toEqual([]);
     });
 
+    it.each([
+        ['default', 'row'], ['ask', 'row'], ['default', 'selection'], ['ask', 'selection'],
+    ] as const)('uses only Action policy for pool member removal (%s, %s)', async (mode, entry) => {
+        let group = QualifiedConnectedAccountGroupV4Schema.parse({ v: 1,
+            ref: { service, groupId: 'work-pool' }, incarnation: 'pool-life', displayName: 'Work pool',
+            policy: {}, activeConnectedAccountId: null, generation: 1, runtimeStateRevision: 0,
+            state: {}, createdAt: 0, updatedAt: 0,
+            members: [{ v: 1, connectedAccountId: 'account-1', priority: 0, enabled: true, state: {}, createdAt: 0, updatedAt: 0 }],
+        });
+        if (mode === 'ask') storage.getState().applySettings({ ...storage.getState().settings,
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
+                'connectedServices.pools.members.remove': { approvalRequiredSurfaces: ['ui'] },
+            } }),
+        }, 3);
+        const approvals = installApprovalBoundary();
+        const approvalHttp = handleHttp;
+        const removed: URL[] = [];
+        handleHttp = async (url, init) => {
+            const request = new URL(String(url));
+            if (request.pathname === '/v4/connect/qualified/groups') return Response.json({ groups: [group] });
+            if (request.pathname === '/v4/connect/qualified/group/member' && init?.method === 'DELETE') {
+                removed.push(request);
+                group = { ...group, members: [], generation: group.generation + 1 };
+                return Response.json({ group });
+            }
+            if (request.pathname === '/v4/connect/qualified/group') return Response.json({ group });
+            return approvalHttp(url, init);
+        };
+        resetServerFeaturesClientForTests();
+        primeServerFeaturesSnapshot({ snapshot: { status: 'ready', features: createRootLayoutFeaturesResponse({
+            features: { connectedServices: { enabled: true, accountGroups: { enabled: true } } },
+            capabilities: { connectedServices: { qualifiedAccounts: { protocolVersion: 4 }, credentialDelete: { revisionGuard: false } } },
+        }) } });
+        platform.params = { ...service, groupId: group.ref.groupId };
+        platform.confirm.mockResolvedValue(false);
+        const screen = await renderScreen(<InjectedAuthProvider credentials={account.credentials}><ConnectedAccountServiceView /></InjectedAuthProvider>);
+        await vi.waitFor(() => expect(screen.findByTestId('connected-services-pool-detail:member:account-1')).not.toBeNull());
+        if (entry === 'row') {
+            const row = screen.tree.root.findAll(node => node.props.testID === 'connected-services-pool-detail:member:account-1'
+                && Array.isArray(node.props.actions))[0];
+            const action = (row?.props.actions as ItemAction[]).find(candidate => candidate.id.endsWith(':remove'));
+            expect(action?.onPress).toBeTypeOf('function');
+            await act(async () => { action!.onPress!(); });
+        } else {
+            const selection = screen.tree.root.findAll(node => node.props.testID === 'connected-services-pool-detail:members-select'
+                && Array.isArray(node.props.selectedIds) && typeof node.props.onCommit === 'function')[0];
+            expect(selection).toBeDefined();
+            await act(async () => { await selection!.props.onCommit([]); });
+        }
+        if (mode === 'default') {
+            await vi.waitFor(() => expect(removed).toHaveLength(1));
+            expect(group.members).toEqual([]);
+            expect(approvals).toEqual([]);
+        } else {
+            await vi.waitFor(() => expect(approvals).toHaveLength(1));
+            expect(approvals[0]).toMatchObject({ actionId: 'connectedServices.pools.members.remove', status: 'open' });
+            expect(removed).toEqual([]);
+            expect(group.members).toHaveLength(1);
+        }
+        expect(platform.confirm).not.toHaveBeenCalled();
+        await screen.unmount();
+    });
+
     it.each(['cancelled', 'deleted', 'failed'] as const)('clears exact pool purpose defaults only after confirmed successful deletion (%s)', async (outcome) => {
         const group = QualifiedConnectedAccountGroupV4Schema.parse({ v: 1,
             ref: { service, groupId: 'work-pool' }, incarnation: 'pool-life', displayName: 'Work pool',
@@ -1552,7 +1870,10 @@ describe('ConnectedAccountSetupController real ownership', () => {
         if (outcome === 'failed') await vi.waitFor(() => expect(screen.findHostByTestId('connected-services-pool-detail:error')).not.toBeNull());
         await vi.waitFor(() => expect(purposeBoundary!.readBindings())
             .toEqual(outcome === 'deleted' ? bindings.slice(2) : bindings));
-        if (outcome === 'cancelled') expect(deletedRequests).toEqual([]);
+        if (outcome === 'cancelled') {
+            expect(deletedRequests).toEqual([]);
+            expect(screen.findHostByTestId('connected-services-pool-detail:error')).toBeNull();
+        }
     });
 
     it('reads the exact account quota even when V4 pools are disabled and their transport fails', async () => {

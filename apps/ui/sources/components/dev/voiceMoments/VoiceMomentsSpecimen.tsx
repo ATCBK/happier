@@ -51,7 +51,7 @@ export function VoiceMomentsSpecimen(props: Readonly<{ frame: string }>): React.
     const model = React.useMemo((): VoiceSurfaceViewModel => {
         if (props.frame === 'N1') {
             const base = buildVoicePresenceSurfaceFixture('needs_you');
-            return { ...base, delegatedWork: null, attemptControl: { ...base.attemptControl, openConversationSessionId: address.sessionId, openConversationSessionAddress: address } };
+            return { ...base, delegatedWork: null, attemptControl: { ...base.attemptControl, openConversationSessionId: address.sessionId, openConversationSessionAddress: address, pendingRequestSessionAddress: address } };
         }
         const base = buildVoicePresenceSurfaceFixture('ended');
         if (props.frame === 'END') return base;

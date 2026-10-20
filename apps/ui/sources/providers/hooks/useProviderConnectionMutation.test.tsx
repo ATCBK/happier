@@ -1,4 +1,5 @@
 import { act } from 'react-test-renderer';
+import * as React from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProviderErrorV1 } from '@happier-dev/protocol';
 import { DaemonProviderConnectionMutationResponseV1Schema, RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -47,6 +48,33 @@ const machineEnable = () => ({ action: 'setEnabled' as const, scope: 'machine' a
 
 beforeAll(loadSyncSingletonForTests);
 describe('useProviderConnectionMutation', () => {
+    it('settles a non-replying machine write after target selection changes and permits the new target request', async () => {
+        await account.publishMachines(serverId, ['machine-a', 'machine-b'].map(id => createMachineFixture({ id, active: true, activeAt: Date.now() })));
+        let requests = 0;
+        providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_CONNECTION_MUTATE, async (_request, next) => {
+            if (++requests === 1) return await new Promise<never>(() => {});
+            return await next();
+        });
+        const refresh = async () => {};
+        const hook = await renderHook((props: { machineId: string }) => {
+            const target = React.useCallback(() => ({ machineId: props.machineId, serverId }), [props.machineId]);
+            return { ...useProviderConnectionMutation({ resolveTarget: target, serverId, refresh }),
+                ready: useProviderActionClient(serverId).ready };
+        }, { initialProps: { machineId: 'machine-a' } });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().ready).toBe(true));
+        let settled = false;
+        let pending: Promise<unknown> | undefined;
+        await act(async () => { pending = hook.getCurrent().run(machineEnable()).finally(() => { settled = true; }); });
+        await waitForHomeGovernance(() => expect(requests).toBe(1));
+        await hook.rerender({ machineId: 'machine-b' });
+        await act(async () => {});
+        expect(settled).toBe(true);
+        await pending;
+        await act(async () => { await hook.getCurrent().run({ ...machineEnable(), machineId: 'machine-b' }); });
+        expect(requests).toBe(2);
+        expect(hook.getCurrent().isPending('setEnabled:pc_a')).toBe(false);
+    });
+
     afterEach(async () => { await standardCleanup(); await account.reset(); });
     beforeEach(async () => {
         providerHarness.reset();
@@ -256,7 +284,7 @@ describe('useProviderConnectionMutation', () => {
             expect(observed).toEqual([[true, true], [true, true], [true, true], [false, true], [false, false]]);
         } finally { await act(async () => { gates.forEach(gate => gate.resolve()); await Promise.all(executions); }); }
         expect(refreshA).not.toHaveBeenCalled();
-        expect(refreshB).not.toHaveBeenCalled();
+        expect(refreshB).toHaveBeenCalledWith('account');
         expect(account.catalogMutations).toHaveLength(4);
         expect(account.readCatalogRow()?.revision).toBe(2);
         expect(persistedCatalog().connections.map(row => row.id)).toEqual(['pc_a', 'pc_first', 'pc_second', 'pc_other']);

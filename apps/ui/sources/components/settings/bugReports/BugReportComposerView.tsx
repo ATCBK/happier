@@ -145,7 +145,7 @@ export const BugReportComposerView = React.memo(function BugReportComposerView()
             <Text variant="body" style={{ flex: 1, minWidth: 0, color: model.submitHint === 'problem' ? theme.colors.state.danger.foreground : theme.colors.text.secondary }}>
               {model.submitHint === 'required'
                 ? t('bugReports.composer.submit.requiredFieldsHint')
-                : model.submitHint === 'problem'
+                : model.submitHint === 'problem' && model.validation.code !== 'ok'
                   ? model.validation.message
                   : null}
             </Text>

@@ -36,6 +36,25 @@ const workspace = {
 };
 
 describe('Project command approval facts', () => {
+  it.each(['projects.script.run', 'projects.prepare'] as const)('renders distinct checkout identities for %s on the same Machine', async actionId => {
+    const read = (selected: typeof workspace) => readProjectCommandApproval({ actionId,
+      actionArgs: actionId === 'projects.prepare' ? { workspace: selected, phase: 'setup' }
+        : { workspace: selected, selection: { kind: 'named', name: 'test' },
+          choice: { kind: 'workers', destination: { kind: 'machine', machineId: 'shared-worker' } } },
+    });
+    const other = { ...workspace, workspaceId: 'second-checkout', rootPath: '/src/happier-next' };
+    expect(read(workspace)).toMatchObject({ workspace });
+    expect(read(other)).toMatchObject({ workspace: other });
+    expect(read(workspace)).not.toEqual(read(other));
+    for (const selected of [workspace, other]) {
+      const presentation = read(selected);
+      if (!presentation) throw new Error('Expected a valid Project approval');
+      const screen = await renderScreen(<ProjectCommandApprovalFacts presentation={presentation} testID="facts" />);
+      expect(screen.findHostByTestId('facts.checkout')?.props.children).toBe(selected.rootPath);
+      await screen.unmount();
+    }
+  });
+
   it('names the requested pool from its current Home-scoped definition', async () => {
     const poolId = '11111111-1111-4111-8111-111111111111';
     const pool = MachinePoolViewV1Schema.parse({
@@ -61,7 +80,7 @@ describe('Project command approval facts', () => {
     const expected = '"C:\\\\Program Files\\\\tool.exe" "" "a b" "say \\"hello\\"" tail';
     const presentation = readProjectCommandApproval({
       actionId: 'projects.compute.exec',
-      actionArgs: { workspace, executable, argv, cwd: '/src/happier' } as never,
+      actionArgs: { workspace, executable, argv, cwd: '/src/happier/packages/app' } as never,
     });
     expect(presentation).toMatchObject({ kind: 'exec', command: expected });
     expect(readProjectServiceEffectApproval({ serverId: 'home', sourceMachineId: 'devbox',
@@ -69,6 +88,7 @@ describe('Project command approval facts', () => {
     })).toMatchObject({ kind: 'service', command: expected });
     const screen = await renderScreen(<ProjectCommandApprovalFacts presentation={presentation!} testID="facts" />);
     expect(screen.getTextContent()).toContain(`$ ${expected}`);
+    expect(screen.findHostByTestId('facts.checkout')?.props.children).toBe(workspace.rootPath);
     await screen.unmount();
   });
 

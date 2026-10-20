@@ -28,6 +28,16 @@ export type SessionModelProjectionGroup = Extract<
     { status: 'success' }
 >['groups'][number];
 
+/** One configured vendor slot a Gateway model is served through; display facts, never credential authority. */
+export type SessionModelGatewaySlot = NonNullable<SessionModelProjectionGroup['rows'][number]['gatewaySlots']>[number];
+
+const gatewaySlotSectionIdPrefix = (connectionId: string) => `connection:${connectionId}:slot:`;
+
+/** A section that names a vendor slot, so its heading says something the scope bar does not. */
+export function isSessionModelGatewaySlotSection(section: Pick<SessionModelPickerSection, 'id'>): boolean {
+    return section.id.startsWith('connection:') && section.id.includes(':slot:');
+}
+
 export type SessionNativeModelOption = Readonly<{
     value: string;
     label: string;
@@ -165,6 +175,12 @@ export function buildSessionModelPickerSections(input: Readonly<{
      * only that source, so a selection elsewhere is simply not in view, not missing.
      */
     recoverMissingSelection?: boolean;
+    /**
+     * Browsing one Gateway: names the subscription behind a vendor slot ("ChatGPT · Codex pool") so its
+     * models group under it, in the order the producer lists them. A model served through several slots
+     * sits under the first one it can name; a model with no nameable slot stays under the source.
+     */
+    gatewaySlotTitle?: (slot: SessionModelGatewaySlot) => string | null;
 }>): readonly SessionModelPickerSection[] {
     const nativeSource = { label: input.nativeSourceLabel || t('settingsProviders.models.builtIn'), native: true };
     const shouldShowDescriptions = input.nativeModels.some((model) => (
@@ -202,17 +218,18 @@ export function buildSessionModelPickerSections(input: Readonly<{
             return [{
                 value,
                 label: presentation.label,
+                searchText: model.value,
                 description: presentation.description,
                 disabled: true,
                 source: nativeSource,
             }];
         }
-        return [{ value, label: model.label, description: model.description, source: nativeSource }];
+        return [{ value, label: model.label, searchText: model.value, description: model.description, source: nativeSource }];
     });
 
     const providerSections = input.providerGroups.flatMap((group): SessionModelPickerSection[] => {
         const source = { label: sessionModelConnectionTitle(group), native: false };
-        const options = group.rows.flatMap((row): SessionModelPickerOption[] => {
+        const entries = group.rows.flatMap((row): { row: typeof row; option: SessionModelPickerOption }[] => {
             const hiddenCurrentSelection = row.visibility === 'hidden_current_selection';
             if (row.visibility !== 'visible' && !hiddenCurrentSelection) return [];
             const presentation = presentProviderModelRow({
@@ -227,9 +244,10 @@ export function buildSessionModelPickerSections(input: Readonly<{
                 loadState: row.loadState,
                 visibility: hiddenCurrentSelection ? 'hidden_current_selection' : 'visible',
             });
-            return [{
+            return [{ row, option: {
                 value: row.ref,
                 label: presentation.label,
+                searchText: row.ref.modelId,
                 description: presentation.description,
                 source,
                 disabled: presentation.selectionDisabled
@@ -238,11 +256,25 @@ export function buildSessionModelPickerSections(input: Readonly<{
                         && row.loadState === 'unloaded'
                     ),
                 accessibilityLabel: `${source.label}, ${presentation.label}`,
-            }];
+            } }];
         });
-        return options.length > 0
-            ? [{ id: `connection:${group.connectionId}`, title: source.label, options }]
-            : [];
+        const bySlot = new Map<string, SessionModelPickerOption[]>();
+        const unclassified: SessionModelPickerOption[] = [];
+        for (const { row, option } of entries) {
+            const slotTitle = input.gatewaySlotTitle
+                ? row.gatewaySlots?.map(input.gatewaySlotTitle).find((title): title is string => Boolean(title))
+                : undefined;
+            if (!slotTitle) { unclassified.push(option); continue; }
+            const grouped = bySlot.get(slotTitle);
+            if (grouped) grouped.push(option); else bySlot.set(slotTitle, [option]);
+        }
+        const sections: SessionModelPickerSection[] = [...bySlot].map(([title, options]) => ({
+            id: `${gatewaySlotSectionIdPrefix(group.connectionId)}${title}`, title, options,
+        }));
+        if (unclassified.length > 0) {
+            sections.push({ id: `connection:${group.connectionId}`, title: source.label, options: unclassified });
+        }
+        return sections;
     });
 
     const teamSections = (input.teamCredentialResources ?? []).flatMap((resource): SessionModelPickerSection[] => {
@@ -273,6 +305,7 @@ export function buildSessionModelPickerSections(input: Readonly<{
             return [{
                 value: row.selection,
                 label: row.descriptor.name || row.selection.modelId,
+                searchText: row.selection.modelId,
                 source: { label: resource.displayName, native: false },
                 description: [resource.displayName, delivery, unavailableReason, recovery]
                     .filter((value): value is string => Boolean(value))
@@ -371,11 +404,14 @@ export function buildSessionModelPickerSections(input: Readonly<{
             options: [{
                 value: selectedValue,
                 label,
+                searchText: selectedValue.modelId,
                 description: recovery
                     ? t(presentProviderError(recovery.error).descriptionKey)
                     : isTeamCredentialProviderModelPickerValue(selectedValue)
                         ? teamDescription ?? t('teams.credentials.detail.notFound')
-                        : t('settingsProviders.detail.deletedDescription'),
+                        : selectedValue.providerConnectionId === null
+                            ? t('agentInput.model.unavailable')
+                            : t('settingsProviders.detail.deletedDescription'),
                 ...(accessibilityLabel ? { accessibilityLabel } : {}),
                 disabled: !(teamResource && input.onRecoverTeamCredentialResource),
                 ...(teamResource && input.onRecoverTeamCredentialResource
@@ -436,7 +472,12 @@ export function buildSessionModelSelectedTriggerPresentation(input: Readonly<{
         sessionModelSelectionKey(option.value) === selectedKey
     ));
     if (!selectedSection || !selectedOption) {
-        return { subtitle: input.fallbackLabel };
+        // Provider discovery is demanded by the open picker. Until it has an
+        // authoritative row, the saved exact id still names the selection;
+        // absence of a demanded projection is not a failed machine catalog.
+        return { subtitle: selected.providerConnectionId !== null && !input.providerProjectionAuthoritative
+            ? selected.modelId
+            : input.fallbackLabel };
     }
     if (selectedSection.id === 'native') {
         return { subtitle: selectedOption.label };

@@ -3,6 +3,7 @@ import { AccessibilityInfo, Animated, Easing, Platform, StyleSheet, View, type L
 
 import { useHappierNativeMinimumInteractiveTargetSize } from '../../environment/interactiveTarget.js';
 import { HappierSearchFieldBox } from '../form/FieldBox.js';
+import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
 import { HappierPressable } from '../interaction/Pressable.js';
 import { HAPPIER_MOTION_V1 } from '../interaction/motion.js';
 import { HAPPIER_PRESS_FEEDBACK_V1 } from '../interaction/pressFeedback.js';
@@ -194,7 +195,7 @@ export type HappierFindBarProps = Readonly<{
 /** The capsule's measures (Find lab `.fd-bar`). */
 export const HAPPIER_FIND_BAR_METRICS = Object.freeze({
   inline: Object.freeze({
-    heightPx: 36,
+    heightPx: HAPPIER_PAGE_METRICS.collectionToolbarHeightPx,
     radiusPx: 10,
     paddingRightPx: 4,
     fieldWidthPx: 176,

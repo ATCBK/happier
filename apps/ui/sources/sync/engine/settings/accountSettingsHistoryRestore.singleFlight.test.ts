@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createDeferred } from '@/dev/testkit';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { encodeBase64 } from '@/encryption/base64';
 import { normalizeAccountSettingsHistoryAfterTransfer } from './accountSettingsHistoryRestore';
@@ -23,13 +24,14 @@ describe('Account Settings history maintenance requests', () => {
         let recoveryRevision = 1;
         const home = await serveAccountHomes({
             homes: [{ key: 'home', serverUrl: 'https://history-maintenance.test', accountId: 'alice', accountMode,
-                credentials: { token: 'replaced-by-home-harness', secret: encodeBase64(new Uint8Array(32).fill(7), 'base64url') } }],
-            route: async request => {
-                if (request.path === '/v1/account/encryption/currentness') return Response.json({
+                credentials: { token: createAccountTokenForTests('alice'), secret: encodeBase64(new Uint8Array(32).fill(7), 'base64url') },
+                encryptionCurrentness: () => ({
                     mode: accountMode, version: accountVersion, settingsVersion,
                     signingKeyFingerprint: accountMode === 'plain' ? null : 'signing',
                     contentKeyFingerprint: accountMode === 'plain' ? null : 'content', updatedAt: 1,
-                });
+                }),
+            }],
+            route: async request => {
                 if (request.path === '/v1/account/entity-rows/profiles/transfer') return Response.json(transferRevision === null
                     ? { status: 'absent' } : { status: 'deleted', revision: transferRevision });
                 if (request.path === '/v1/account/entity-rows/mcp') return Response.json(privateRevision === null

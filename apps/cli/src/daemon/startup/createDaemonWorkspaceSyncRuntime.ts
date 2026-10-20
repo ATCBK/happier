@@ -11,6 +11,7 @@ import {
 import type { PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 import type { WorkspaceSyncCopyOnceV1, WorkspaceSyncRelationshipV1, WorkspaceSyncRuntimeReadinessV1, WorkspaceSyncStatusV1 } from '@happier-dev/protocol';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 
 import {
   getActiveProjectAccountRowsSnapshot,
@@ -231,7 +232,7 @@ export function createDaemonWorkspaceSyncRuntime(
       : {}),
   });
   const adapter = createWorkspaceSyncMutagenAdapter({
-    send: async (command, signal) => await lifecycle.command(command, signal),
+    send: async (command, signal, operationId) => await lifecycle.command(command, signal, operationId),
     resolveWorkspaceRef: dependencies.resolveWorkspaceRef,
   });
   const openRootedAgent: WorkspaceSyncLocalAgentStreamOpen = async (input) => {
@@ -291,6 +292,7 @@ export function createDaemonWorkspaceSyncRuntime(
   let projectTail: Promise<void> = Promise.resolve();
   let projectQueueRevision = 0;
   let reconciledSnapshot: ActiveProjectAccountRowsSnapshot | null = null;
+  let reconciliationRequired = true;
   const projectQueueWaiters = new Set<() => void>();
   let startPromise: Promise<void> | null = null;
   let stopPromise: Promise<void> | null = null;
@@ -304,14 +306,30 @@ export function createDaemonWorkspaceSyncRuntime(
     return snapshot.relationships;
   };
 
-  const applySnapshot = (snapshot: ActiveProjectAccountRowsSnapshot | null): Promise<void> => {
+  const applySnapshot = (snapshot: ActiveProjectAccountRowsSnapshot | null, force = false): Promise<void> => {
     const next = projectTail.catch(() => undefined).then(async () => {
+      // Account refreshes also contain other controllers' relationships. Only
+      // an empty local controller can settle equal inputs without native work;
+      // installed relationships still need their bootstrap/custody lifecycle.
+      if (!force && !reconciliationRequired && snapshot && reconciledSnapshot
+        && snapshot.relationships.every(relationship => relationship.controllerMachineId !== dependencies.localMachineId)
+        && snapshot.scopeKey === reconciledSnapshot.scopeKey
+        && isDeepStrictEqual(snapshot.workspaceRefs, reconciledSnapshot.workspaceRefs)
+        && isDeepStrictEqual(snapshot.relationships, reconciledSnapshot.relationships)) {
+        const activity = await controller.activity.read();
+        if (activity.coverage === 'complete' && activity.items.length === 0) {
+          reconciledSnapshot = snapshot;
+          return;
+        }
+      }
+      // Withdrawal, failures and partial recovery must remain retryable, even
+      // when the next observation has the same desired inputs.
+      reconciliationRequired = true;
       const relationships = readRelationships(snapshot);
       acceptedRelationships = relationships;
-      await lifecycle.runReconciliation(async () => {
-        await controller.rehydrateFromSettings(relationships);
-      });
+      const statuses = await lifecycle.runReconciliation(async () => await controller.rehydrateFromSettings(relationships));
       reconciledSnapshot = snapshot;
+      reconciliationRequired = statuses.some(status => status.state === 'error' || status.errorCode !== undefined);
     });
     projectTail = next;
     projectQueueRevision += 1;
@@ -320,7 +338,7 @@ export function createDaemonWorkspaceSyncRuntime(
     void next.catch(() => undefined);
     return next;
   };
-  reconcileAfterSidecarRestart = async () => await applySnapshot(getSnapshot());
+  reconcileAfterSidecarRestart = async () => await applySnapshot(getSnapshot(), true);
 
   const start = (): Promise<void> => {
     if (started) return Promise.resolve();

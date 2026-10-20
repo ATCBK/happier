@@ -4,6 +4,27 @@ import { describe, expect, it } from 'vitest';
 import { resolveRenderedAgentInputControls } from './resolveRenderedAgentInputControls';
 
 describe('resolveRenderedAgentInputControls', () => {
+    it('keeps only the contained controls on one rail and drops every other chip (a compact composer)', () => {
+        const node = (key: string) => <React.Fragment key={key}>{key}</React.Fragment>;
+        const keys = (nodes: readonly React.ReactNode[]) => nodes.map((chip) => (chip as React.ReactElement).key);
+        for (const layout of ['scroll', 'wrap', 'collapsed'] as const) {
+            const controls = resolveRenderedAgentInputControls({
+                layout,
+                singleRow: true,
+                containedControlIds: ['engine', 'machine'],
+                coreControlNodesById: {
+                    engine: [node('engine')], permission: [node('permission')], actionMenu: [node('actionMenu')],
+                    machine: [node('machine')], path: [node('path')], resume: [node('resume')],
+                },
+                extraControlNodesById: { automation: [node('automate')], checkout: [node('worktree')], connectedServices: [node('sign-in')] },
+                extraChips: [node('unregistered')],
+            });
+            expect(keys(controls.chips)).toEqual(['engine', 'machine']);
+            expect(controls.secondaryLeadingControls).toEqual([]);
+            expect(controls.secondaryTrailingControls).toEqual([]);
+            expect(controls.hasPermissionControl).toBe(false);
+        }
+    });
     it('keeps setup controls on the first rail and the machine on the location rail, whatever the collapsed bar names', () => {
         const node = (key: string) => <React.Fragment key={key}>{key}</React.Fragment>;
         const controls = resolveRenderedAgentInputControls({

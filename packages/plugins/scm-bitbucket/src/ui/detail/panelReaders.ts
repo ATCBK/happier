@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useExecutePluginAction, useTabPanelActivity } from '@happier-dev/plugin-ui';
+import { useTriageDetailRequest } from '@happier-dev/triage-sources/ui';
 import type {
   TriageDetailSurfaceInputV1,
   TriageSourceFailureV1,
@@ -64,19 +65,15 @@ function dispatchFailure(status: string, code: string): TriageSourceFailureV1 {
 
 type ExecuteResult = Readonly<{ status: string; result?: unknown; code?: string }>;
 
-/**
- * The entry the mounted surface is about, as the three fields every source Action addresses it by.
- *
- * Exported because the writes address the same entry the reads do. A second derivation beside this
- * one is how a mutation could end up addressing a different pull request than the panel showing it.
- */
-export function useBitbucketEntryLocalRef(input: TriageDetailSurfaceInputV1) {
-  const { entryRef } = input.observation;
+/** Provider routing changes independently of the canonical request authority. */
+function useBitbucketLocator(input: TriageDetailSurfaceInputV1) {
+  const { webUrl, displayPath, routingToken } = input.observation.locator;
   return useMemo(() => ({
-    kindId: entryRef.kindId,
-    collisionScope: entryRef.collisionScope,
-    entryId: entryRef.entryId,
-  }), [entryRef.collisionScope, entryRef.entryId, entryRef.kindId]);
+    v: 1 as const,
+    ...(webUrl === undefined ? {} : { webUrl }),
+    ...(displayPath === undefined ? {} : { displayPath }),
+    ...(routingToken === undefined ? {} : { routingToken }),
+  }), [webUrl, displayPath, routingToken]);
 }
 
 export type BitbucketPagedControllerV1<TRow> = Readonly<{
@@ -240,8 +237,8 @@ export function useBitbucketActivity(
     [],
   );
   const { execute } = useExecutePluginAction(action);
-  const localRef = useBitbucketEntryLocalRef(input);
-  const { instance } = input;
+  const { instance, localRef } = useTriageDetailRequest(input);
+  const lastKnownLocator = useBitbucketLocator(input);
 
   const readPage: PageReader<BitbucketProjectedActivityRowV1> = useCallback(async (
     continuation,
@@ -251,7 +248,7 @@ export function useBitbucketActivity(
       v: 1,
       instance,
       localRef,
-      lastKnownLocator: input.observation.locator,
+      lastKnownLocator,
       ...(continuation === null ? {} : { continuation }),
     }, { signal }) as ExecuteResult;
     if (execution.status !== 'success') {
@@ -266,7 +263,7 @@ export function useBitbucketActivity(
       return { kind: 'failed' as const, failure: parsed.data.failure };
     }
     return { kind: 'page' as const, page: toPage(parsed.data) };
-  }, [execute, input.observation.locator, instance, localRef]);
+  }, [execute, lastKnownLocator, instance, localRef]);
 
   return useBitbucketPagedWalk(readPage);
 }
@@ -302,8 +299,8 @@ export function useBitbucketBuilds(
     [],
   );
   const { execute } = useExecutePluginAction(action);
-  const localRef = useBitbucketEntryLocalRef(input);
-  const { instance } = input;
+  const { instance, localRef } = useTriageDetailRequest(input);
+  const lastKnownLocator = useBitbucketLocator(input);
   const [rollup, setRollup] = useState<BitbucketBuildRollupViewV1>({});
 
   const readPage: PageReader<BitbucketProjectedStatusRowV1> = useCallback(async (
@@ -314,7 +311,7 @@ export function useBitbucketBuilds(
       v: 1,
       instance,
       localRef,
-      lastKnownLocator: input.observation.locator,
+      lastKnownLocator,
       ...(continuation === null ? {} : { continuation }),
     }, { signal }) as ExecuteResult;
     if (execution.status !== 'success') {
@@ -338,7 +335,7 @@ export function useBitbucketBuilds(
       });
     }
     return { kind: 'page' as const, page: toPage(page) };
-  }, [execute, input.observation.locator, instance, localRef]);
+  }, [execute, lastKnownLocator, instance, localRef]);
 
   const controller = useBitbucketPagedWalk(readPage);
   return useMemo(() => ({ ...controller, rollup }), [controller, rollup]);
@@ -357,8 +354,8 @@ export function useBitbucketComments(
     [],
   );
   const { execute } = useExecutePluginAction(action);
-  const localRef = useBitbucketEntryLocalRef(input);
-  const { instance } = input;
+  const { instance, localRef } = useTriageDetailRequest(input);
+  const lastKnownLocator = useBitbucketLocator(input);
 
   const readPage: PageReader<BitbucketProjectedCommentRowV1> = useCallback(async (
     continuation,
@@ -368,7 +365,7 @@ export function useBitbucketComments(
       v: 1,
       instance,
       localRef,
-      lastKnownLocator: input.observation.locator,
+      lastKnownLocator,
       ...(continuation === null ? {} : { continuation }),
     }, { signal }) as ExecuteResult;
     if (execution.status !== 'success') {
@@ -383,7 +380,7 @@ export function useBitbucketComments(
       return { kind: 'failed' as const, failure: parsed.data.failure };
     }
     return { kind: 'page' as const, page: toPage(parsed.data) };
-  }, [execute, input.observation.locator, instance, localRef]);
+  }, [execute, lastKnownLocator, instance, localRef]);
 
   return useBitbucketPagedWalk(readPage);
 }
@@ -405,8 +402,8 @@ export function useBitbucketOverview(
     localId: BITBUCKET_TRIAGE_DETAIL_ACTION_IDS.readOverview,
   }), []);
   const { execute } = useExecutePluginAction(action);
-  const localRef = useBitbucketEntryLocalRef(input);
-  const { instance } = input;
+  const { instance, localRef } = useTriageDetailRequest(input);
+  const lastKnownLocator = useBitbucketLocator(input);
   const { active, activeSignal } = useTabPanelActivity();
   const [result, setResult] = useState<ReturnType<typeof BitbucketOverviewResultV1Schema.parse> | null>(null);
   const [failure, setFailure] = useState<TriageSourceFailureV1 | null>(null);
@@ -416,8 +413,8 @@ export function useBitbucketOverview(
     v: 1,
     instance,
     localRef,
-    lastKnownLocator: input.observation.locator,
-  }), [input.observation.locator, instance, localRef]);
+    lastKnownLocator,
+  }), [lastKnownLocator, instance, localRef]);
   const settledRequest = useRef<typeof request | null>(null);
   const lastRefresh = useRef(refreshKey);
 
@@ -473,8 +470,8 @@ export function useBitbucketDiff(
     localId: BITBUCKET_TRIAGE_DETAIL_ACTION_IDS.readDiff,
   }), []);
   const { execute } = useExecutePluginAction(action);
-  const localRef = useBitbucketEntryLocalRef(input);
-  const { instance } = input;
+  const { instance, localRef } = useTriageDetailRequest(input);
+  const lastKnownLocator = useBitbucketLocator(input);
   const [raw, setRaw] = useState<BitbucketDiffControllerV1['raw']>(null);
   const readPage: PageReader<BitbucketProjectedDiffstatRowV1> = useCallback(async (
     continuation,
@@ -484,7 +481,7 @@ export function useBitbucketDiff(
       v: 1,
       instance,
       localRef,
-      lastKnownLocator: input.observation.locator,
+      lastKnownLocator,
       ...(continuation === null ? {} : { continuation }),
     }, { signal }) as ExecuteResult;
     if (execution.status !== 'success') {
@@ -506,7 +503,7 @@ export function useBitbucketDiff(
       ...(parsed.data.incomplete === undefined ? {} : { incomplete: parsed.data.incomplete }),
       ...(parsed.data.continuation === undefined ? {} : { continuation: parsed.data.continuation }),
     }) };
-  }, [execute, input.observation.locator, instance, localRef]);
+  }, [execute, lastKnownLocator, instance, localRef]);
   const controller = useBitbucketPagedWalk(
     readPage,
     BITBUCKET_DETAIL_TABS_V1.find((tab) => tab.id === 'diff')?.retention,

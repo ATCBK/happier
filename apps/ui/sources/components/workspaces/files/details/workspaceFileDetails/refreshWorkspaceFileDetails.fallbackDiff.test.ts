@@ -30,7 +30,7 @@ vi.mock('@/sync/domains/transfers/runtime/transferRuntime', () => ({
 }));
 
 vi.mock('@/config', () => ({
-    config: { filesPreviewMaxBytes: 1024 * 1024, filesPreviewReadTimeoutMs: 25 },
+    config: { filesPreviewMaxBytes: 1024 * 1024 },
 }));
 
 installWorkspaceFileDetailsCommonModuleMocks();
@@ -93,40 +93,5 @@ describe('refreshWorkspaceFileDetails (fallback diff)', () => {
 
         expect(result.status).toBe('ready');
         expect(result.fileContent?.contentHash).toBe(createHash('sha256').update('hello\nworld\n').digest('hex'));
-    });
-
-    it('returns a renderable diff when file preview download stalls', async () => {
-        vi.useFakeTimers();
-        machineScmDiffFileSpy.mockResolvedValueOnce({
-            success: true,
-            diff: [
-                'diff --git a/src/changed.txt b/src/changed.txt',
-                '--- a/src/changed.txt',
-                '+++ b/src/changed.txt',
-                '@@ -1 +1 @@',
-                '-old',
-                '+new',
-                '',
-            ].join('\n'),
-        });
-        workspaceFileDetailsActionBoundary.read.mockImplementationOnce(() => new Promise(() => {}));
-
-        const { refreshWorkspaceFileDetails } = await import('./refreshWorkspaceFileDetails');
-        const resultPromise = refreshWorkspaceFileDetails({
-            scope: { serverId, machineId: 'm1', rootPath: '/repo' },
-            filePath: 'src/changed.txt',
-            diffMode: 'pending',
-            fileEntryKind: 'modified',
-        });
-
-        await vi.advanceTimersByTimeAsync(25);
-
-        await expect(resultPromise).resolves.toMatchObject({
-            status: 'ready',
-            error: 'files.fileReadFailed',
-            fileContent: null,
-            fileWriteSupported: false,
-        });
-        await expect(resultPromise).resolves.toHaveProperty('diffContent', expect.stringContaining('+new'));
     });
 });

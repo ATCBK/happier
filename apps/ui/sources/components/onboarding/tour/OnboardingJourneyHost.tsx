@@ -11,7 +11,7 @@ import type { WizardStepId } from '@/components/onboarding/state/wizardTypes';
 import { MachineAddForm } from '@/components/machines/add/MachineAddForm';
 import { MachineAgentsSection } from '@/components/machines/agents/MachineAgentsSection';
 import { useMachine } from '@/sync/domains/state/storage';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { usePendingSetupIntent } from '@/components/onboarding/state/usePendingSetupIntent';
 import { Text } from '@/components/ui/text/Text';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
@@ -351,7 +351,7 @@ function SetupJourneyControllerBridge(props: Readonly<{
         <MachineAgentsSection
             serverId={props.arrivedMachine.serverId}
             machineId={props.arrivedMachine.machineId}
-            machineName={getMachineDisplayName(machine ?? { absence: 'unlisted' })}
+            machineName={getMachineSentenceName(machine ?? { absence: 'unlisted' })}
         />
     ) : null;
     return props.render({

@@ -1,19 +1,56 @@
-import { appendFile, mkdir, mkdtemp, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
 import {
+    applyClaudeTitleRecord,
+    resolveClaudeTitle,
     readClaudeJsonlSessionTitle,
     readClaudeJsonlSessionTitleWithIndex,
 } from './metadata.js';
+import { buildHappierBaseSystemPromptV1 } from '@happier-dev/protocol/prompts/systemPromptBaseV1';
+import { renderSessionInputContextPromptV1, renderSessionInputContextBlockV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
 
 function jsonlLine(value: unknown): string {
     return `${JSON.stringify(value)}\n`;
 }
 
 describe('Claude external-session metadata', () => {
+    it('re-derives an unchanged native title when the stored fallback still contains an injected-only first turn', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happier-claude-old-title-'));
+        try {
+            const filePath = join(root, 'native-1.jsonl');
+            const prefix = buildHappierBaseSystemPromptV1();
+            await writeFile(filePath, [
+                { type: 'user', message: { content: prefix } },
+                { type: 'user', message: { content: 'Review the release branch' } },
+            ].map(jsonlLine).join(''));
+            const current = await readClaudeJsonlSessionTitleWithIndex({ filePath, remoteSessionId: 'native-1' });
+            // The previous reader normalized the first user record verbatim into this
+            // opaque v1 checkpoint; its physical source/EOF evidence is still current.
+            const previousState = { ...current.indexState, fallbackTitle: prefix.replace(/\s+/g, ' ').trim() };
+            expect((await readClaudeJsonlSessionTitleWithIndex({ filePath, remoteSessionId: 'native-1', previousState })).title)
+                .toBe('Review the release branch');
+        } finally {
+            await rm(root, { recursive: true, force: true });
+        }
+    });
+    it('derives a real user title from a native prompt echo and retains native title precedence', () => {
+        const content = `${buildHappierBaseSystemPromptV1()}\n\nStabilise CI on the release branch`;
+        const variable = renderSessionInputContextPromptV1({
+            provenanceBlock: renderSessionInputContextBlockV1({ provenance: { v: 1, kind: 'legacyUnknown' } }),
+            transformedUserText: `${buildHappierBaseSystemPromptV1()}\n\nStabilise CI on the release branch`,
+        });
+        expect(resolveClaudeTitle(applyClaudeTitleRecord({ customTitle: null, aiTitle: null, fallbackTitle: null },
+            { type: 'user', message: { content: variable } }, 'native-variable'))).toContain('happier_input_context');
+        const fallback = applyClaudeTitleRecord({ customTitle: null, aiTitle: null, fallbackTitle: null },
+            { type: 'user', message: { content } }, 'native-1');
+        expect(resolveClaudeTitle(fallback)).toBe('Stabilise CI on the release branch');
+        expect(resolveClaudeTitle(applyClaudeTitleRecord(fallback,
+            { type: 'custom-title', sessionId: 'native-1', customTitle: 'My explicit title' }, 'native-1'))).toBe('My explicit title');
+    });
     it('scans past non-title-bearing leading records until it finds meaningful user text', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happier-claude-title-'));
         const projectDir = join(root, 'projects', 'proj-one');

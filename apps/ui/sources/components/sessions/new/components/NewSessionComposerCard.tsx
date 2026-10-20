@@ -16,6 +16,7 @@ import {
 } from '@/components/sessions/keyboardAvoidance';
 import { computeNewSessionComposerPanelMaxHeight } from '@/components/sessions/agentInput/inputMaxHeight';
 import { NewSessionProviderLaunchError } from '@/components/sessions/new/components/NewSessionProviderLaunchError';
+import { NewSessionLaunchApprovalNotice } from '@/components/sessions/new/components/NewSessionLaunchApprovalNotice';
 import { useNewSessionPromptValue } from '@/components/sessions/new/hooks/screenModel/newSessionPromptStore';
 import type { NewSessionSimplePanelProps } from '@/components/sessions/new/components/NewSessionSimplePanel';
 import { useNewSessionWorkflowStart } from '../hooks/useNewSessionWorkflowStart';
@@ -37,6 +38,8 @@ export function NewSessionComposerCard(input: Readonly<{
     voiceAffordance?: 'auto' | 'none';
     /** The host already resolved whether this card floats or sits in the working sheet. */
     surfaceGroup?: GlassSurfaceGroup;
+    /** `compact`: the composer keeps only machine and model (an embedding page's ask box). */
+    controlPreset?: 'full' | 'compact';
 }>): React.ReactElement {
     const props = input.panelProps;
     const embedded = input.layout === 'embedded';
@@ -135,9 +138,13 @@ export function NewSessionComposerCard(input: Readonly<{
                         error={props.providerLaunchError}
                         retry={props.retryProviderLaunch}
                     />
+                    <NewSessionLaunchApprovalNotice approval={props.launchApproval} />
                     <PluginContextualResourceStoreProvider>
                         {props.composerDocument?.beforeComposer}
                         {props.composerTopContent}
+                        {/* The atmosphere's band and hero follow the composer itself, so what a
+                            host stacks above it (a New bot title) stays on the page ground. */}
+                        <View testID="new-session-composer-band" ref={atmosphereBoundary?.ref} onLayout={atmosphereBoundary?.onLayout}>
                         {workflowStart.composer ?? <AgentInput
                         surfaceGroup={input.surfaceGroup}
                         value={sessionPrompt}
@@ -157,6 +164,7 @@ export function NewSessionComposerCard(input: Readonly<{
                         composerInputLock={props.composerDocument?.composerInputLock ?? null}
                         onSend={handleSend}
                         {...(input.voiceAffordance === 'none' ? { voiceAffordance: 'none' as const } : {})}
+                        {...(input.controlPreset ? { controlPreset: input.controlPreset } : {})}
                         isSendDisabled={!props.canCreate || (props.composerDocument?.composerInputLock ?? null) !== null}
                         disabled={props.composerDocument?.composerInputLock?.mode === 'editAndSubmit'}
                         isSending={props.isCreating}
@@ -230,6 +238,7 @@ export function NewSessionComposerCard(input: Readonly<{
                             }
                             : {})}
                         />}
+                        </View>
                         {props.composerBottomContent}
                         {props.composerDocument?.afterComposer}
                     </PluginContextualResourceStoreProvider>

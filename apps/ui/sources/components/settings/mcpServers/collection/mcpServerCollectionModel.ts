@@ -2,7 +2,6 @@ import type { McpServerRuleV1, McpServerCatalogEntryV1, McpServersSettingsV1 } f
 
 import { t } from '@/text';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
-import { createHappierCollectionDraftTitleStore } from '@happier-dev/plugin-ui/presentation';
 
 /** The collection's own route; its detail routes resolve beneath it. */
 export const MCP_COLLECTION_ROUTE = SETTINGS_ROUTES.mcp;
@@ -49,6 +48,3 @@ export function buildMcpServerCollection(settings: McpServersSettingsV1, query: 
             || row.server.name.toLocaleLowerCase().includes(normalizedQuery))
         .sort((a, b) => a.title.localeCompare(b.title));
 }
-
-/** The name typed into a new server's editor, shown on the collection's draft row. */
-export const mcpServerDraftTitle = createHappierCollectionDraftTitleStore();

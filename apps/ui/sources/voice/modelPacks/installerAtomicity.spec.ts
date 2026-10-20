@@ -9,12 +9,118 @@ import {
   removeModelPack,
 } from '@/voice/modelPacks/installer.native';
 import { createMemFs, createMemNativeDownload } from '@/voice/modelPacks/installerTestFs';
+import { createExpoModelPackInstallerHost, reconcileExpoModelPackPromotion } from '@/voice/modelPacks/installer/host.native';
+import { deriveModelPackStagingPlan } from '@happier-dev/voice-modelpacks';
+import type { ModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
 
 function sha256Hex(bytes: Uint8Array): string {
   return createHash('sha256').update(Buffer.from(bytes)).digest('hex');
 }
 
 describe('modelPacks installer (native) atomicity', () => {
+  it('rejects a failed stale-backup deletion before writing a new promotion intent', async () => {
+    const { fs, files, root } = createMemFs();
+    const packId = 'stale-backup-delete';
+    const live = new Uint8Array([1]);
+    const stale = new Uint8Array([9]);
+    const next = new Uint8Array([2]);
+    files.set(`${root}/${packId}/model.bin`, live);
+    files.set(`${root}/.${packId}.backup/model.bin`, stale);
+    const backupError = new Error('EACCES_stale_backup_delete');
+    const BaseDirectory = fs.Directory;
+    class BackupDirectory extends BaseDirectory {
+      constructor(...args: unknown[]) {
+        super(...args);
+        const deleteDirectory = this.delete?.bind(this);
+        this.delete = () => {
+          if (this.uri === `${root}/.${packId}.backup`) throw backupError;
+          deleteDirectory?.();
+        };
+      }
+    }
+    const host = createExpoModelPackInstallerHost({ fs: { ...fs, Directory: BackupDirectory }, invalidatePackRuntime: async () => {} });
+    const manifest = { packId, kind: 'tts_sherpa', model: 'kokoro', version: 'v2',
+      files: [{ path: 'model.bin', url: 'https://example.com/model.bin', sha256: sha256Hex(next), sizeBytes: 1 }] } satisfies ModelPackManifest;
+    const staging = await host.beginStaging(packId, deriveModelPackStagingPlan(manifest));
+    try {
+      await staging.appendDownloadedChunk('model.bin', next);
+      await staging.writeManifest(manifest);
+      await expect(staging.promote({ scopeKey: 'fixture', identityKey: packId })).rejects.toBe(backupError);
+      expect(files.get(`${root}/${packId}/model.bin`)).toEqual(live);
+      expect(files.get(`${root}/.${packId}.backup/model.bin`)).toEqual(stale);
+      expect(files.has(`${root}/.${packId}.promote-intent`)).toBe(false);
+    } finally { await staging.cleanup(); }
+  });
+
+  it.each(['first install', 'update'] as const)('rejects failed commit intent deletion during %s and retains recoverable prior state', async (mode) => {
+    const { fs, files, root } = createMemFs();
+    const packId = 'intent-delete';
+    const before = new Uint8Array([1]);
+    const after = new Uint8Array([2]);
+    const prior = { packId, kind: 'tts_sherpa', model: 'kokoro', version: 'v1',
+      files: [{ path: 'model.bin', url: 'https://example.com/v1/model.bin', sha256: sha256Hex(before), sizeBytes: 1 }] };
+    if (mode === 'update') {
+      files.set(`${root}/${packId}/model.bin`, before);
+      files.set(`${root}/${packId}/pack.json`, new TextEncoder().encode(JSON.stringify({ manifest: prior })));
+    }
+    const remote = { ...prior, version: 'v2', files: [{ path: 'model.bin', url: 'https://example.com/v2/model.bin', sha256: sha256Hex(after), sizeBytes: 1 }] };
+    const deleteError = new Error('EACCES_intent_delete');
+    let failDelete = true;
+    const BaseFile = fs.File;
+    class IntentFile extends BaseFile {
+      override delete() {
+        if (failDelete && this.uri.endsWith('.promote-intent')) throw deleteError;
+        super.delete();
+      }
+    }
+    const boundary = { ...fs, File: IntentFile };
+    const fetchImpl: typeof fetch = async (input) => String(input).includes('manifest.json')
+      ? Response.json(remote) : new Response(after);
+    await expect(ensureModelPackInstalled({ packId, mode: 'download_if_missing', updatePolicy: 'manual_update_if_available',
+      manifestUrl: 'https://example.com/manifest.json', timeoutMs: null, signal: new AbortController().signal },
+      { fs: boundary, fetch: fetchImpl, download: createMemNativeDownload(boundary, fetchImpl), invalidatePackRuntime: async () => {} })).rejects.toBe(deleteError);
+
+    expect(files.get(`${root}/${packId}/model.bin`)).toEqual(mode === 'update' ? before : undefined);
+    expect(files.has(`${root}/.${packId}.promote-intent`)).toBe(true);
+    failDelete = false;
+    await reconcileExpoModelPackPromotion({ fs: boundary, packId, outcome: 'rollback', invalidatePackRuntime: async () => {} });
+    const summary = await getModelPackInstallSummary({ packId }, { fs: boundary });
+    expect(summary.installed).toBe(mode === 'update');
+    expect(summary.manifest?.version).toBe(mode === 'update' ? 'v1' : undefined);
+    expect(files.get(`${root}/${packId}/model.bin`)).toEqual(mode === 'update' ? before : undefined);
+    expect(files.has(`${root}/.${packId}.promote-intent`)).toBe(false);
+  });
+
+  it('rejects a failed resume-plan removal before promotion leaves the installed pack untouched', async () => {
+    const { fs, files, root } = createMemFs();
+    const packId = 'resume-plan-delete';
+    const before = new Uint8Array([1]);
+    const after = new Uint8Array([2]);
+    const prior = { packId, kind: 'tts_sherpa', model: 'kokoro', version: 'v1',
+      files: [{ path: 'model.bin', url: 'https://example.com/v1/model.bin', sha256: sha256Hex(before), sizeBytes: 1 }] };
+    files.set(`${root}/${packId}/model.bin`, before);
+    files.set(`${root}/${packId}/pack.json`, new TextEncoder().encode(JSON.stringify({ manifest: prior })));
+    const remote = { ...prior, version: 'v2', files: [{ path: 'model.bin', url: 'https://example.com/v2/model.bin', sha256: sha256Hex(after), sizeBytes: 1 }] };
+    const deleteError = new Error('EACCES_resume_plan_delete');
+    const BaseFile = fs.File;
+    class ResumePlanFile extends BaseFile {
+      override delete() {
+        if (this.uri.endsWith('/.resume-plan.json')) throw deleteError;
+        super.delete();
+      }
+    }
+    const boundary = { ...fs, File: ResumePlanFile };
+    const fetchImpl: typeof fetch = async (input) => String(input).includes('manifest.json')
+      ? Response.json(remote) : new Response(after);
+    await expect(ensureModelPackInstalled({ packId, mode: 'download_if_missing', updatePolicy: 'manual_update_if_available',
+      manifestUrl: 'https://example.com/manifest.json', timeoutMs: null, signal: new AbortController().signal },
+      { fs: boundary, fetch: fetchImpl, download: createMemNativeDownload(boundary, fetchImpl), invalidatePackRuntime: async () => {} })).rejects.toBe(deleteError);
+    expect(files.get(`${root}/${packId}/model.bin`)).toEqual(before);
+    expect((await getModelPackInstallSummary({ packId }, { fs: boundary })).manifest?.version).toBe('v1');
+    expect(files.has(`${root}/.${packId}.promote-intent`)).toBe(false);
+    expect(files.get(`${root}/.${packId}.scratch/model.bin`)).toEqual(after);
+  });
+
   it('reconciles a missing-live crash topology before removing every pack artifact', async () => {
     const { fs, files } = createMemFs();
     const packId = 'remove-crash';
@@ -113,12 +219,12 @@ describe('modelPacks installer (native) atomicity', () => {
     const OriginalDirectory = fs.Directory;
     let failOnce = true;
     class FailingDeleteDirectory extends (OriginalDirectory as any) {
-      delete(options?: { idempotent?: boolean }) {
+      delete() {
         if (this.uri === liveRoot && failOnce) {
           failOnce = false;
           throw new Error('remove_failed');
         }
-        return super.delete(options);
+        return super.delete();
       }
     }
     (fs as any).Directory = FailingDeleteDirectory;
@@ -481,12 +587,12 @@ describe('modelPacks installer (native) atomicity', () => {
         return super.move(destination);
       }
 
-      delete(options?: { idempotent?: boolean }) {
+      delete() {
         if (this.uri === liveRoot) {
           invalidationCountsAtCreator.push(invalidationCount);
           liveCreator = { source: 'remove', bytes: sha256Hex(v2) };
         }
-        return super.delete(options);
+        return super.delete();
       }
     }
     (fs as any).Directory = CreatorRaceDirectory;

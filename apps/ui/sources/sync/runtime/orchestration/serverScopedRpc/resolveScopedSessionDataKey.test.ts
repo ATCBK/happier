@@ -45,6 +45,28 @@ describe('resolveScopedSessionDataKey', () => {
     }
   });
 
+  it('retires one caller-owned Session key read without cancelling another reader', async () => {
+    const requests: Array<{ signal: AbortSignal | null | undefined; resolve: (response: Response) => void }> = [];
+    runtimeFetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).includes('/v2/sessions/')) return Response.json({});
+      return await new Promise<Response>((resolve, reject) => {
+        requests.push({ signal: init?.signal, resolve });
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      });
+    });
+    const first = new AbortController();
+    const second = new AbortController();
+    const params = { serverId: 's-id', serverUrl: 'https://server.example.test', token: 'token', sessionId: 'session-1' };
+    const cancelled = resolveScopedSessionCryptoContext({ ...params, signal: first.signal });
+    const retained = resolveScopedSessionCryptoContext({ ...params, signal: second.signal });
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    first.abort();
+    await expect(cancelled).resolves.toMatchObject({ encryptionMode: 'unknown' });
+    expect(requests[1]?.signal?.aborted).toBe(false);
+    requests[1]!.resolve(Response.json({ session: { ...validSessionById, encryptionMode: 'plain', dataEncryptionKey: null } }));
+    await expect(retained).resolves.toEqual({ encryptionMode: 'plain', sessionDataKey: null });
+  });
+
   it.each(['absent', 'empty', 'malformed', 'wrong_recipient'] as const)(
     'keeps %s envelopes unavailable and opens a later valid envelope through the canonical reader',
     async (initialEnvelope) => {

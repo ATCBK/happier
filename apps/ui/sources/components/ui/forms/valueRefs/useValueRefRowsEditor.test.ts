@@ -61,13 +61,33 @@ describe('useValueRefRowsEditor', () => {
         expect(onChangeEntries).toHaveBeenCalledWith({ KEY: { t: 'savedSecret', secretId: 'personal-key' } });
     });
 
+    it('clears a saved-secret selection until a replacement is chosen without writing the cleared value', async () => {
+        const onChangeEntries = vi.fn();
+        const hook = await renderHook(() => useValueRefRowsEditor({
+            kind: 'env', entries: { API_KEY: { t: 'savedSecret', secretId: 'original-key' } }, onChangeEntries,
+        }));
+        await act(async () => { hook.getCurrent().beginEdit('API_KEY'); });
+        expect(hook.getCurrent().canSubmit).toBe(true);
+        await act(async () => { hook.getCurrent().setDraftSecretId(null); });
+        expect(hook.getCurrent().draft?.secretId).toBe('');
+        expect(hook.getCurrent().valueRef).toEqual({ t: 'savedSecret', secretId: '' });
+        expect(hook.getCurrent().canSubmit).toBe(false);
+        expect(hook.getCurrent().submitDraft()).toEqual({ ok: false, error: 'invalid_value' });
+        expect(onChangeEntries).not.toHaveBeenCalled();
+        await act(async () => { hook.getCurrent().setDraftSecretId('replacement-key'); });
+        expect(hook.getCurrent().canSubmit).toBe(true);
+        await act(async () => { expect(hook.getCurrent().submitDraft()).toEqual({ ok: true }); });
+        expect(onChangeEntries).toHaveBeenCalledWith({ API_KEY: { t: 'savedSecret', secretId: 'replacement-key' } });
+    });
+
     it('uses current entries for delayed submissions and rejects duplicate renames without overwriting', async () => {
         const first = { t: 'literal', v: 'one' } as const;
         const second = { t: 'literal', v: 'two' } as const;
+        const entries: Record<string, ValueRefV1> = { First: first };
         const onChangeEntries = vi.fn();
         const hook = await renderHook((entries: Record<string, ValueRefV1>) => useValueRefRowsEditor({
             kind: 'header', entries, onChangeEntries,
-        }), { initialProps: { First: first } });
+        }), { initialProps: entries });
         const delayedSubmit = hook.getCurrent().submitEntry;
         const firstRow = hook.getCurrent().rows[0];
         await hook.rerender({ First: first, Second: second });

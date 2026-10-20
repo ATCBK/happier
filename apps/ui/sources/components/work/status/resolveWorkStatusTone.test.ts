@@ -12,6 +12,28 @@ import { t } from '@/text';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 
 describe('resolveWorkStatusTone', () => {
+    it('classifies an unlinked task by its tracker category and linked work by the shared Session status', () => {
+        const task = (category: 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled' | null) =>
+            resolveWorkStatusTone({ kind: 'task', facts: { category, word: 'Tracker state', linkedStatuses: [] } });
+        expect(task('backlog').bucket).toBe('idle');
+        expect(task('unstarted').bucket).toBe('idle');
+        expect(task('started').bucket).toBe('working');
+        expect(task('completed').bucket).toBe('finished');
+        expect(task('canceled').bucket).toBe('finished');
+        expect(task(null).bucket).toBe('idle');
+        expect(resolveWorkStatusTone({ kind: 'task', facts: { category: 'started', linkedStatuses: [] } }))
+            .toMatchObject({ bucket: 'working', word: 'workStatus.buckets.working' });
+        const needsYou = { bucket: 'needs_you', tone: 'attention', word: 'Permission required' } as const;
+        expect(resolveWorkStatusTone({ kind: 'task', facts: {
+            category: 'backlog', word: 'Backlog', linkedStatuses: [needsYou],
+        } })).toEqual(needsYou);
+        expect(resolveWorkStatusTone({ kind: 'task', facts: {
+            category: 'completed', word: 'Completed', linkedStatuses: [
+                { bucket: 'working', tone: 'neutral', word: 'Working' }, needsYou,
+            ],
+        } })).toEqual(needsYou);
+    });
+
     it('uses retained native power for the exact enrolled Machine instead of equating disconnection with Offline', () => {
         const managed: ManagedMachineV1 = { id: 'managed-a', homeId: 'home-a', custodianAccountId: 'owner',
             launch: { provider: { pluginId: 'custom.native', localId: 'vm' }, schemaVersion: 1, name: 'Build box', choices: {} },
@@ -61,6 +83,8 @@ describe('resolveWorkStatusTone', () => {
         const status = (update: Parameters<typeof describeWorkerUpdateState>[0]) => resolveWorkStatusTone({ kind: 'worker_update', facts: { update } });
         expect(status({ ...base, workerKind: 'execution_run', workerId: 'run_1', ownerState: 'failed', wake: 'finished' }))
             .toEqual({ bucket: 'finished', tone: 'danger', word: t('sessionWork.workerUpdate.state.failed') });
+        expect(status({ ...base, workerKind: 'execution_run', workerId: 'run_1', ownerState: 'failed', wake: 'needs_you' }))
+            .toEqual({ bucket: 'finished', tone: 'danger', word: t('sessionWork.workerUpdate.state.failed') });
         expect(status({ ...base, workerKind: 'execution_run', workerId: 'run_1', ownerState: 'timeout', wake: 'finished' }))
             .toEqual({ bucket: 'finished', tone: 'attention', word: t('sessionWork.workerUpdate.state.timedOut') });
         expect(status({ ...base, workerKind: 'session', workerId: 'worker', ownerState: 'settled', wake: 'finished' }))
@@ -70,6 +94,13 @@ describe('resolveWorkStatusTone', () => {
             .toEqual({ bucket: 'needs_you', tone: 'attention', word: t('sessionWork.workerUpdate.state.needsYou') });
         expect(status({ ...base, workerKind: 'workflow_run', workerId: 'workflow', ownerState: 'running', wake: 'needs_you' }))
             .toEqual({ bucket: 'needs_you', tone: 'attention', word: t('sessionWork.workerUpdate.state.needsYou') });
+        // An earlier notice the transcript has moved past is told in the past tense and stops asking, but a failure stays one.
+        const earlier = (update: Parameters<typeof describeWorkerUpdateState>[0]) => resolveWorkStatusTone({ kind: 'worker_update', facts: { update, earlier: true } });
+        expect(earlier({ ...base, workerKind: 'session', workerId: 'worker', ownerState: 'needs_input', wake: 'needs_you' }))
+            .toEqual({ bucket: 'finished', tone: 'neutral', word: t('sessionWork.workerUpdate.state.neededYou') });
+        expect(earlier({ ...base, workerKind: 'session', workerId: 'worker', ownerState: 'failed', wake: 'needs_you' }).tone).toBe('danger');
+        expect(earlier({ ...base, workerKind: 'session', workerId: 'worker', ownerState: 'settled', wake: 'finished' }).word)
+            .toBe(t('sessionWork.workerUpdate.state.settled'));
         expect(status({ ...base, workerKind: 'session', workerId: 'worker', ownerState: 'stalled', wake: 'stalled' }))
             .toEqual({ bucket: 'offline', tone: 'neutral', word: t('sessionWork.workerUpdate.state.stalled') });
         expect(status({ ...base, workerKind: 'session', workerId: 'worker', ownerState: 'stalled', wake: 'finished' }))

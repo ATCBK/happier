@@ -10,6 +10,7 @@ import {
     PLUGIN_UI_HOST_API_WIRE_VERSION_V1,
     PLUGIN_UI_HOST_SUBSCRIPTION_METHODS_V1,
     PluginUiExecuteActionRequestV1Schema,
+    PluginUiActionAdmissionResultV1Schema,
     PluginUiEphemeralInputSettlementV1Schema,
     PluginUiAcquireComposerInputLockRequestV1Schema,
     PluginUiActiveComposerResultV1Schema,
@@ -156,15 +157,17 @@ type PluginReactNativeHostRequestTransport = Readonly<{
 function createHostApiError(
     code: PluginUiHostApiErrorCodeV1,
     diagnostics: readonly string[] = [],
+    message?: string,
 ): PluginError {
-    return new PluginError(createPluginSurfaceHostApiPluginErrorData(code, diagnostics));
+    return new PluginError(createPluginSurfaceHostApiPluginErrorData(code, diagnostics, message));
 }
 
 function throwHostApiError(
     code: PluginUiHostApiErrorCodeV1,
     diagnostics: readonly string[] = [],
+    message?: string,
 ): never {
-    throw createHostApiError(code, diagnostics);
+    throw createHostApiError(code, diagnostics, message);
 }
 
 function createRequestEnvelope(input: Readonly<{
@@ -318,7 +321,7 @@ function createPluginReactNativeHostRequestTransport(params: Readonly<{
             throwHostApiError('stale_surface');
         }
         if (response.kind === 'error') {
-            throwHostApiError(response.payload.code, response.payload.diagnostics);
+            throwHostApiError(response.payload.code, response.payload.diagnostics, response.payload.message);
         }
         return response.payload;
     }
@@ -864,16 +867,27 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
 
     function assertInstalled(method: PluginUiHostMethodV1): void {
         if (resolveNegotiatedMethods().includes(method)) return;
-        // This adapter deliberately outlives a daemon reconnect, so its method
-        // set is a CURRENT availability fact. A method the mount structurally
-        // installs is re-advertised on recovery; reporting it as
-        // `unsupported_method` hands the caller a permanent capability verdict
-        // it will never revisit, which is how an outage at mount time turns
-        // into a session-long loss of live Resources.
-        if (resolveStructuralMethods().includes(method)) {
-            throwHostApiError('unavailable', [`host_api_method_unavailable:${method}`]);
-        }
+        // The bound host owns temporary availability and its target-specific
+        // refusal. A structurally admitted call must reach that owner rather
+        // than lose its reason to an adapter-local unavailable error.
+        if (resolveStructuralMethods().includes(method)) return;
         throwHostApiError('unsupported_method', [`host_api_method_not_installed:${method}`]);
+    }
+
+    function assertComposerScopeSupported(ref: Parameters<PluginUiHostApi['readComposer']>[0]): void {
+        if (ref.kind === 'discussion') assertInstalled('readDiscussionComposer');
+    }
+
+    async function readComposer(ref: Parameters<PluginUiHostApi['readComposer']>[0], options?: PluginCancellationOptions) {
+        assertActive(options?.signal);
+        const payload = PluginUiReadComposerRequestV1Schema.safeParse({ ref });
+        if (!payload.success) throwHostApiError('invalid_payload');
+        assertComposerScopeSupported(payload.data.ref);
+        const method = payload.data.ref.kind === 'discussion' ? 'readDiscussionComposer' : 'readComposer';
+        assertInstalled(method);
+        return readCanonicalComposer(await transport.request(
+            method, payload.data, options?.signal ? { signal: options.signal } : undefined,
+        ));
     }
 
     /**
@@ -1238,23 +1252,17 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
             );
             return readCanonicalActiveComposer(result);
         },
-        readComposer: async (ref, options) => {
-            assertActive(options?.signal);
-            assertInstalled('readComposer');
-            const payload = PluginUiReadComposerRequestV1Schema.safeParse({ ref });
-            if (!payload.success) throwHostApiError('invalid_payload');
-            const result = await transport.request(
-                'readComposer',
-                payload.data,
-                options?.signal ? { signal: options.signal } : undefined,
-            );
-            return readCanonicalComposer(result);
+        readComposer,
+        readDiscussionComposer: async (ref, options) => {
+            if (ref.kind !== 'discussion') throwHostApiError('invalid_payload');
+            return readComposer(ref, options);
         },
         watchComposer: async (ref, listener, options) => {
             assertActive(options?.signal);
             assertInstalled('watchComposer');
             const payload = PluginUiWatchComposerRequestV1Schema.safeParse({ ref });
             if (!payload.success) throwHostApiError('invalid_payload');
+            assertComposerScopeSupported(payload.data.ref);
             subscriptionSequence += 1;
             const subscription = await transport.watchComposer({
                 subscriptionId: `${params.requestIdPrefix}:composer:${subscriptionSequence}`,
@@ -1271,6 +1279,7 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
             assertInstalled('applyComposer');
             const payload = PluginUiApplyComposerRequestV1Schema.safeParse({ ref, transaction });
             if (!payload.success) throwHostApiError('invalid_payload');
+            assertComposerScopeSupported(payload.data.ref);
             return readCanonicalComposerTransaction(await transport.request(
                 'applyComposer',
                 PluginUiJsonValueV1Schema.parse(payload.data),
@@ -1282,6 +1291,7 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
             assertInstalled('focusComposer');
             const payload = PluginUiFocusComposerRequestV1Schema.safeParse({ ref });
             if (!payload.success) throwHostApiError('invalid_payload');
+            assertComposerScopeSupported(payload.data.ref);
             return readCanonicalComposerFocus(await transport.request(
                 'focusComposer',
                 payload.data,
@@ -1293,6 +1303,7 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
             assertInstalled('setComposerDecorations');
             const payload = PluginUiSetComposerDecorationsRequestV1Schema.safeParse({ ref, key, decorations });
             if (!payload.success) throwHostApiError('invalid_payload');
+            assertComposerScopeSupported(payload.data.ref);
             return readCanonicalComposerDecorations(await transport.request(
                 'setComposerDecorations',
                 payload.data,
@@ -1307,6 +1318,7 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
                 request: lockRequest,
             });
             if (!payload.success) throwHostApiError('invalid_payload');
+            assertComposerScopeSupported(payload.data.ref);
             subscriptionSequence += 1;
             const subscription = await transport.acquireComposerInputLock({
                 subscriptionId: `${params.requestIdPrefix}:composer-lock:${subscriptionSequence}`,
@@ -1326,6 +1338,7 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
                 request: mediaRequest,
             });
             if (!payload.success) throwHostApiError('invalid_payload');
+            assertComposerScopeSupported(payload.data.ref);
             const result = await transport.request(
                 'pickComposerMedia',
                 payload.data,
@@ -1406,6 +1419,17 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
             ));
             if (!settled.success) throwHostApiError('invalid_payload', ['page_location_result_invalid']);
             return Object.freeze(settled.data);
+        },
+        admitAction: async (action, input, options) => {
+            assertActive(options?.signal);
+            assertInstalled('admitAction');
+            const payload = PluginUiExecuteActionRequestV1Schema.safeParse({ action, ...(input === undefined ? {} : { input }) });
+            if (!payload.success) throwHostApiError('invalid_payload');
+            const result = await transport.request('admitAction', payload.data, options?.signal ? { signal: options.signal } : undefined);
+            assertActive(options?.signal);
+            const parsed = PluginUiActionAdmissionResultV1Schema.safeParse(result);
+            if (!parsed.success) throwHostApiError('invalid_payload');
+            return parsed.data.admitted;
         },
         notify: async (message, options) => {
             assertActive(options?.signal);

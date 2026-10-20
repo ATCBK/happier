@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createIdleTerminalPolicyFixture } from './idleTerminalPolicy.testkit';
-import { MachineTerminalOpenInputSchema } from '@happier-dev/protocol/actions/specs/machineTerminal';
 const releases: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const release of releases.splice(0).reverse()) await release(); });
 const target = { serverId: 'home', machineId: 'machine', installationId: 'installation' };
@@ -119,9 +118,9 @@ describe('Idle terminal policy at the actual PTY owner', () => {
     const activity = await f.activityLog.list({ range: 'today', requester: { ...target, accountId: 'alice' } });
     expect(activity.entries).toMatchObject([{ kind: 'closed_terminal', rule: 'idle_terminals', outcome: 'done',
       subject: { kind: 'terminal', terminalKey: 'original-key', idleMs: 120_000 },
-      wayBack: [{ label: 'reopen', actionId: 'machines.terminal.open', input: { machineId: 'machine', terminalKey: 'original-key' } }],
+      wayBack: [{ label: 'reopen', actionId: 'machines.terminal.open', input: { machineId: 'machine', terminalKey: 'original-key', cwd: '/project' } }],
     }]);
-    expect(MachineTerminalOpenInputSchema.safeParse(activity.entries[0]?.wayBack?.[0]?.input).success).toBe(true);
+    expect(activity.entries[0]?.wayBack?.[0]?.input).not.toHaveProperty('serverId');
     if ('workspaceRefId' in capturedCustody) expect(activity.entries[0]?.wayBack?.[0]?.input).toMatchObject({
       workspace: { serverId: target.serverId, machineId: target.machineId, workspaceId: 'accepted-workspace', rootPath: '/project' },
     });

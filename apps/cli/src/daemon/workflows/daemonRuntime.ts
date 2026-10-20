@@ -2,23 +2,20 @@ import type {
   ActionExecutorContext,
   AccountApiTokensListActionOutputV1,
   WorkflowAcceptedAuthorizationV1,
+  WorkflowAcceptedOriginV1,
 } from '@happier-dev/protocol';
+import { materializeActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 import type { WorkflowConversationUnavailableDetailsV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
-import { resolveSessionRuntimeSnapshot } from '@/daemon/sessions/runtimeSnapshot/resolveSessionRuntimeSnapshot';
-import { resolveSessionConfigOptionOverridesFromMetadataSnapshot } from '@/agent/runtime/sessionConfigOptionOverrideSync';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import type { PluginSourceCustodyV1 } from '@happier-dev/protocol';
-import { WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS, WorkflowSessionAuthoringSelectionSchema } from '@happier-dev/protocol/workflows/workflowV1';
-import { SessionOwnerMetadataV1Schema, readSessionModesMetadata } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { SessionInputCancelExactTurnResultV1Schema } from '@happier-dev/protocol/sessions/control/exactTurnCancellationV1';
-import { ActionDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
+import { readCompleteActionSpecV1 } from '@happier-dev/protocol/actions/actionCatalog';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
-import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { ActionOperationListV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
 import { admitAgentStartV1 } from '@happier-dev/protocol/account/settings/admitAgentStartV1';
 import { formatWorkflowDefinitionRefV1 } from '@happier-dev/protocol/workflows/workflowDefinitionRefV1';
 import { readWorkflowRunLeafStartRequestV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
-import { readAppliedSessionCapabilitySelectionFromMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { freezeActionCompletionContractV1, readActionCompletionRunObservationV1 } from '@happier-dev/protocol/actions/actionCompletion';
 import type { ActionCompletionOperation } from '@happier-dev/protocol/actions/actionCompletion';
@@ -30,6 +27,7 @@ import {
   ConversationPermissionMediationSourceCurrentnessResultV1Schema,
 } from '@happier-dev/channels-protocol/v1';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
 import { resolveAutomationWorkerAccountEncryption } from '@/daemon/automation/automationWorker';
 import {
@@ -38,14 +36,12 @@ import {
 } from '@/plugins/runtime/reload/runtimeLease';
 import { executeContributedAction } from '@/plugins/runtime/invocation/actions/executeContributedAction';
 import { createCommittedContributedActionDefinitionLister, createCommittedContributedActionInvoker } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
-import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
-import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { createCredentialedTargetActionCurrentIntent } from '@/session/actions/approvals/credentialedTargetActionCurrentIntent';
-import { createCredentialedWorkflowMaterializationHostV1 } from '@/session/actions/workflowMaterializationHost';
+import { createCredentialedWorkflowMaterializationHostV1, projectWorkflowConversationRoleSelection } from '@/session/actions/workflowMaterializationHost';
 import type { sendSessionMessage } from '@/session/services/sendSessionMessage';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
-import { callExactMachineRpc, callMachineRpc } from '@/session/transport/rpc/machineRpc';
+import { callExactMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { readProjectAccountRows } from '@/workspaces/projectAccountRows';
 import type { StoredCredentials } from '@/persistence';
@@ -61,10 +57,12 @@ import {
 import {
   createWorkflowRunRecoveryReader,
 } from './recovery';
-import { createWorkflowInvocationRecoveryObserver, resolveWorkflowAuthorizedSession } from './invocationRecoveryObserver';
+import { createWorkflowInvocationRecoveryObserver, resolveWorkflowAuthorizedSession, resolveWorkflowSessionConversation } from './invocationRecoveryObserver';
 import { createWorkflowRunStorageClient } from './workflowRunStorageClient';
 import { createWorkflowRunReviewEntryNotificationHandler } from '@/notifications/activity/dispatchWorkflowRunUpdateNotification';
-import { WorkflowSessionCompositionError, type WorkflowSessionConversation } from './sessionStepExecutor';
+import { WorkflowSessionCompositionError } from './sessionStepExecutor';
+import { deriveWorkflowSessionCreationTag } from './workflowSessionStartup';
+import { lookupSessionsByTags } from '@/session/transport/http/sessionsHttp';
 
 type MachineAdmissionTransport = NonNullable<Parameters<typeof sendSessionMessage>[0]['machineAdmissionTransport']>;
 
@@ -72,6 +70,7 @@ type MachineAdmissionTransport = NonNullable<Parameters<typeof sendSessionMessag
 export function buildWorkflowActionContext(execution: Readonly<{
   runId: string;
   authorization: WorkflowAcceptedAuthorizationV1;
+  origin?: WorkflowAcceptedOriginV1;
   workspace?: Readonly<{ machineId: string }>;
   signal?: AbortSignal;
 }>, requesterWorkAttributionV1?: RequesterWorkAttributionV1): ActionExecutorContext {
@@ -84,6 +83,9 @@ export function buildWorkflowActionContext(execution: Readonly<{
       authorization: execution.authorization,
     },
     executionRunWorkflowRunId: execution.runId,
+    ...(execution.origin?.actionRequestAttributionV1 ? {
+      actionRequestAttributionV1: materializeActionRequestAttributionV1(execution.origin.actionRequestAttributionV1),
+    } : {}),
     ...(requesterWorkAttributionV1 ? { requesterWorkAttributionV1 } : {}),
     ...(execution.workspace ? { executionRunTargetMachineId: execution.workspace.machineId } : {}),
     callerPermissionMode: execution.authorization.admittedPermissionCeiling,
@@ -147,79 +149,7 @@ export async function cancelDispatchedWorkflowOriginSessionInput(params: Readonl
   }
 }
 
-/** Authorized owner metadata supplies identity and applied Session state, never list presentation. */
-export async function resolveWorkflowSessionConversation(params: Readonly<{
-  credentials: StoredCredentials;
-  sessionId: string;
-  machineId: string;
-  signal?: AbortSignal;
-  onUnavailable?: (details: WorkflowConversationUnavailableDetailsV1) => void;
-}>): Promise<WorkflowSessionConversation | null> {
-  const authorized = await resolveWorkflowAuthorizedSession(params);
-  if (!authorized) return null;
-  const { target, metadata } = authorized;
-  if (typeof metadata.path !== 'string' || !metadata.path.trim()) {
-    params.onUnavailable?.({ code: 'workflow_conversation_unavailable', reason: 'workspace_unavailable',
-      expected: { kind: 'object' }, observed: { kind: 'unset' } });
-    return null;
-  }
-  const backend = resolveBackendTargetFromSessionMetadata(metadata);
-  const contribution = backend ? readAgentCatalogSnapshot().agentDefinitionsById.get(backend.backendId) : null;
-  const agentTarget = contribution?.identity ? { kind: 'agent' as const, identity: contribution.identity } : undefined;
-  const selection: Record<string, unknown> = {};
-  // Reuse the portable selection schema and field inventory. Metadata-only
-  // fields and secrets never become a Workflow witness.
-  for (const field of WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS) {
-    if (metadata[field] === undefined) continue;
-    const parsed = createStoredReadSchema(WorkflowSessionAuthoringSelectionSchema.shape[field]).safeParse(metadata[field]);
-    if (parsed.success) selection[field] = parsed.data;
-  }
-  if (agentTarget) selection.agentTarget = agentTarget;
-  const stateFields = SessionOwnerMetadataV1Schema.shape.runtime.unwrap().shape;
-  const modes = readSessionModesMetadata(metadata);
-  if (modes?.currentModeId && modes.agentId === backend?.backendId) {
-    selection.acpSessionModeId = modes.currentModeId;
-  } else {
-    delete selection.acpSessionModeId;
-  }
-  const config = createStoredReadSchema(stateFields.sessionConfigOptionsV1).safeParse(metadata.sessionConfigOptionsV1 ?? metadata.acpConfigOptionsV1);
-  // Reuse compares the retained launch configuration that Session Pending will
-  // carry into the next input. Native Agents may publish models without an ACP
-  // config catalog; absence of that optional catalog must not erase this intent.
-  const configIntent = resolveSessionConfigOptionOverridesFromMetadataSnapshot({ metadata });
-  if (configIntent.length > 0) {
-    selection.sessionConfigOptionOverrides = {
-      v: 1, updatedAt: Math.max(...configIntent.map(option => option.updatedAt)),
-      overrides: Object.fromEntries(configIntent.map(option => [option.configId, {
-        updatedAt: option.updatedAt, value: option.valueId,
-      }])),
-    };
-  }
-  if (config.success && config.data && config.data.agentId === backend?.backendId) {
-    selection.sessionConfigOptionOverrides = {
-      v: 1, updatedAt: config.data.updatedAt,
-      overrides: Object.fromEntries(config.data.configOptions.map((option) => [option.id, {
-        updatedAt: config.data!.updatedAt, value: option.currentValue,
-      }])),
-    };
-  }
-  // Pending capability intent is not applied runtime state; its existing owner retains
-  // the exact applied selection when a restart is required.
-  selection.capabilitySelection = readAppliedSessionCapabilitySelectionFromMetadataV1(metadata);
-  const { permissionMode, modelSelection } = resolveSessionRuntimeSnapshot({
-    incomingOptions: { existingSessionId: target.sessionId, directory: metadata.path },
-    persistedMetadata: metadata,
-  }).snapshot;
-  return {
-    sessionId: target.sessionId, machineId: params.machineId, directory: metadata.path,
-    ...(target.rawSession.origin ? { origin: target.rawSession.origin } : {}),
-    ...(target.rawSession.workDepth === undefined ? {} : { workDepth: target.rawSession.workDepth }),
-    ...(agentTarget ? { agentTarget } : {}),
-    runtimeSelection: WorkflowSessionAuthoringSelectionSchema.parse(selection),
-    ...(modes && modes.agentId === backend?.backendId ? { sessionModes: modes } : {}),
-    runtimeSnapshot: { permissionMode, modelSelection },
-  };
-}
+export { resolveWorkflowSessionConversation } from './invocationRecoveryObserver';
 
 async function resolveAvailableEncryption(credentials: StoredCredentials, signal?: AbortSignal) {
   const resolved = await resolveAutomationWorkerAccountEncryption({
@@ -285,37 +215,20 @@ export function createWorkflowAcceptedAuthorizationCurrentness(params: Readonly<
   };
 }
 
-/**
- * Process-lifetime production composition for the one Workflow coordinator and
- * its lifecycle-indexed recovery reader. The Automation worker remains the
- * claim owner; this factory only binds incumbent Session/Action/storage owners.
- */
-export function createProductionDaemonWorkflowRuntime(params: Readonly<{
-  admissionDrain?: DaemonAdmissionDrain;
+/** Source-backed accepted-authority reader owned by the assigned Run executor. */
+export function createCredentialedWorkflowAcceptedAuthorizationCurrentness(params: Readonly<{
   credentials: StoredCredentials;
   accountId: string;
   serverId?: string;
+  serverHttpBaseUrl?: string;
 }>) {
   const serverId = params.serverId ?? configuration.activeServerId;
-  const admissionDrain = params.admissionDrain;
-  const operationRpc = async (operation: ActionCompletionOperation, kind: 'get' | 'cancel' | 'wait', signal?: AbortSignal,
-    includeSetupReview?: true) => {
-    // Retained observation cannot select another Home's credentials or custody.
-    if (operation.serverId !== serverId) throw new Error('action_operation_home_mismatch');
-    return await callExactMachineRpc({ credentials: params.credentials, machineId: operation.machineId,
-      serverUrl: configuration.apiServerUrl, authorityCeiling: 'account_automation',
-      method: kind === 'cancel' ? ACTION_OPERATION_RPC_METHODS_V1.cancel : ACTION_OPERATION_RPC_METHODS_V2.get,
-      request: { operationId: operation.operationId, ...(kind === 'wait' ? { waitForTerminal: true,
-        ...(includeSetupReview ? { includeSetupReview } : {}) } : {}) },
-      ...(kind === 'wait' ? { timeoutMs: null } : {}), ...(signal ? { signal } : {}),
-    });
-  };
   const accountServerActionDeps = createAccountServerActionDeps({
     token: params.credentials.token,
     serverId,
-    serverHttpBaseUrl: configuration.apiServerUrl,
+    serverHttpBaseUrl: params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl(),
   });
-  const isAcceptedAuthorizationCurrent = createWorkflowAcceptedAuthorizationCurrentness({
+  return createWorkflowAcceptedAuthorizationCurrentness({
     accountId: params.accountId,
     listAccountApiTokens: async (signal) => {
       const list = accountServerActionDeps.accountApiTokensListAction;
@@ -365,14 +278,43 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
       }
     },
   });
+}
+
+/** Production composition; the Automation worker remains the claim owner. */
+export function createProductionDaemonWorkflowRuntime(params: Readonly<{
+  admissionDrain?: DaemonAdmissionDrain;
+  credentials: StoredCredentials;
+  accountId: string;
+  serverId?: string;
+}>) {
+  const serverId = params.serverId ?? configuration.activeServerId;
+  const admissionDrain = params.admissionDrain;
+  const operationRpc = async (operation: ActionCompletionOperation, kind: 'get' | 'cancel' | 'wait', signal?: AbortSignal,
+    includeSetupReview?: true) => {
+    if (operation.serverId !== serverId) throw new Error('action_operation_home_mismatch');
+    return await callExactMachineRpc({ credentials: params.credentials, machineId: operation.machineId,
+      serverUrl: resolveServerHttpBaseUrl(), authorityCeiling: 'account_automation',
+      method: kind === 'cancel' ? ACTION_OPERATION_RPC_METHODS_V1.cancel : ACTION_OPERATION_RPC_METHODS_V2.get,
+      request: { operationId: operation.operationId, ...(kind === 'wait' ? { waitForTerminal: true,
+        ...(includeSetupReview ? { includeSetupReview } : {}) } : {}) },
+      ...(kind === 'wait' ? { timeoutMs: null } : {}), ...(signal ? { signal } : {}),
+    });
+  };
+  const accountServerActionDeps = createAccountServerActionDeps({ token: params.credentials.token, serverId,
+    serverHttpBaseUrl: resolveServerHttpBaseUrl() });
+  const isAcceptedAuthorizationCurrent = createCredentialedWorkflowAcceptedAuthorizationCurrentness(params);
   return {
     isAcceptedAuthorizationCurrent,
     createCoordinatorForMachine(input: Readonly<{
       machineId: string;
+      sessionStartup?: import('./sessionStepExecutor').WorkflowSessionStartup;
       requesterWorkAttributionV1?: RequesterWorkAttributionV1;
       machineAdmissionTransport: MachineAdmissionTransport;
       machineActionDirectTargetTransport: import('@/session/actions/createCliActionDeps').MachineActionDirectTargetTransport;
       managedMachineAction?: import('@happier-dev/protocol').ActionExecutorDeps['managedMachineAction'];
+      sessionActionRpcTransport?: import('@/session/actions/createCliActionDeps').SessionActionRpcTransport;
+      installationIdentity?: Readonly<{ installationId: string; privateKey: import('@/api/externalActionExecutionAuthorization').ExternalActionMachineRequestSigningKey }>;
+      serverIdentityId?: string;
     }>) {
       const parsedStamp = RequesterWorkAttributionV1Schema.safeParse(input.requesterWorkAttributionV1);
       const stamp = parsedStamp.success ? Object.freeze(parsedStamp.data) : undefined;
@@ -387,9 +329,15 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
         : undefined;
       const actionExecutor = createCliActionExecutorFromCredentials({
         credentials: params.credentials,
+        serverId,
+        serverApiUrl: resolveServerHttpBaseUrl(),
         machineId: input.machineId,
         machineAdmissionTransport: input.machineAdmissionTransport,
         machineActionDirectTargetTransport: input.machineActionDirectTargetTransport,
+        ...(input.sessionActionRpcTransport ? { sessionActionRpcTransport: input.sessionActionRpcTransport } : {}),
+        ...(input.installationIdentity ? { externalActionMachineInstallationId: input.installationIdentity.installationId,
+          externalActionMachineRequestPrivateKey: input.installationIdentity.privateKey } : {}),
+        ...(input.serverIdentityId ? { serverIdentityId: input.serverIdentityId } : {}),
         ...(input.managedMachineAction ? { managedMachineAction: input.managedMachineAction } : {}),
         workflowAcceptedAuthorizationCurrentness: isAcceptedAuthorizationCurrent,
         pluginActionExecutionOwner: 'current_process',
@@ -401,8 +349,14 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
       });
       const resolveMaterializer = createCredentialedWorkflowMaterializationHostV1({
         credentials: params.credentials, accountId: params.accountId,
+        serverId, serverIdentityId: input.serverIdentityId,
         callMachineAction: async (request) => {
-          if (request.machineId !== input.machineId) throw new Error('target_unavailable');
+          if (request.machineId !== input.machineId) {
+            return await callExactMachineRpc({ credentials: params.credentials, machineId: request.machineId,
+              serverUrl: resolveServerHttpBaseUrl(), authorityCeiling: 'account_automation',
+              method: request.method, request: request.request,
+              ...(request.signal ? { signal: request.signal } : {}) });
+          }
           return await input.machineActionDirectTargetTransport.invoke(request.method, request.request,
             request.signal ? { signal: request.signal } : undefined);
         },
@@ -414,26 +368,38 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
         },
         readHostActionContract: async (actionId, target) => {
           if (target.machineId !== input.machineId) return null;
-          const result = await actionExecutor.execute('action.spec.get', { id: actionId }, {
-            surface: 'cli', authority: 'account_automation',
-            externalActionTarget: { kind: 'machine', machineId: target.machineId, project: { machineId: target.machineId, directory: target.directory } },
-            ...(target.signal ? { signal: target.signal } : {}),
+          const spec = await readCompleteActionSpecV1({ actionId, ...(target.signal ? { signal: target.signal } : {}),
+            read: async input => {
+              const result = await actionExecutor.execute('action.spec.get', input, {
+                surface: 'cli', authority: 'account_automation',
+                externalActionTarget: { kind: 'machine', machineId: target.machineId, project: { machineId: target.machineId, directory: target.directory } },
+                ...(target.signal ? { signal: target.signal } : {}),
+              });
+              if (!result.ok) throw new Error('action_contract_unavailable');
+              return result.result;
+            },
           });
-          if (!result.ok || !result.result || typeof result.result !== 'object' || !('actionSpec' in result.result)) return null;
-          const spec = ActionDefinitionV1Schema.safeParse(result.result.actionSpec);
-          if (!spec.success || spec.data.id !== actionId || spec.data.outputSchema === undefined) return null;
+          if (spec.outputSchema === undefined) return null;
           const id = ActionIdSchema.safeParse(actionId);
           // This is the exact run machine's host catalog. Executable completion
           // functions stay host-private; only their frozen schema is sealed.
           const declaration = id.success ? getActionSpec(id.data).completion : undefined;
           const completion = declaration ? freezeActionCompletionContractV1(declaration) : undefined;
-          return { inputSchema: StrictJsonValueSchema.parse(spec.data.inputSchema),
-            outputSchema: StrictJsonValueSchema.parse(completion?.terminalOutputSchema ?? spec.data.outputSchema),
+          return { inputSchema: StrictJsonValueSchema.parse(spec.inputSchema),
+            outputSchema: StrictJsonValueSchema.parse(completion?.terminalOutputSchema ?? spec.outputSchema),
             ...(completion ? { completion } : {}) };
         },
       });
       const resolveMaterializationHost: NonNullable<Parameters<typeof createProductionWorkflowRunCoordinator>[0]['resolveMaterializationHost']> = async (claim) => {
+        const origin = claim.originSessionId ? await resolveWorkflowSessionConversation({
+          credentials: params.credentials, sessionId: claim.originSessionId, machineId: input.machineId,
+          ...(claim.signal ? { signal: claim.signal } : {}),
+        }) : null;
+        if (claim.originSessionId && !origin) {
+          throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
+        }
         const materialization = await resolveMaterializer({ machineId: input.machineId, directory: claim.directory,
+          ...(origin ? { roleSelection: projectWorkflowConversationRoleSelection(origin) } : {}),
           ...(claim.signal ? { signal: claim.signal } : {}) });
         const current = materialization.agentStartPolicySnapshot;
         return { ...materialization, admitLeaf: async (leaf, facts) => admitAgentStartV1(current.policy,
@@ -452,6 +418,7 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
         workspace: Readonly<{ machineId: string; directory: string }>;
         workDepth: number;
         originSessionId?: string;
+        origin?: WorkflowAcceptedOriginV1;
         role?: import('@happier-dev/protocol').WorkflowMaterializedLeafV1['role'];
         signal?: AbortSignal;
       }>) => {
@@ -459,6 +426,7 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
           directory: execution.workspace.directory, ...(execution.signal ? { signal: execution.signal } : {}) });
         const current = materialization.agentStartPolicySnapshot;
         return { ...buildWorkflowActionContext(execution, requesterWorkAttributionV1), defaultSessionId: execution.originSessionId ?? null,
+          workspaceWrites: execution.role?.workspaceWrites ?? 'allow',
           externalActionTarget: { kind: 'machine' as const, machineId: execution.workspace.machineId,
             project: { machineId: execution.workspace.machineId, directory: execution.workspace.directory } },
           sessionAgentSpawnPolicyV1: current.policy,
@@ -475,11 +443,6 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
         signal?: AbortSignal;
         onUnavailable?: (details: WorkflowConversationUnavailableDetailsV1) => void;
       }>) => {
-        if (machineId !== input.machineId) {
-          onUnavailable?.({ code: 'workflow_conversation_unavailable', reason: 'machine_mismatch',
-            expected: { kind: 'string', ids: [machineId] }, observed: { kind: 'string', ids: [input.machineId] } });
-          return null;
-        }
         return await resolveWorkflowSessionConversation({
           credentials: params.credentials,
           sessionId, machineId,
@@ -499,6 +462,7 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
         resolveControllerContext: async ({ runId, accepted, signal }) => await resolveWorkflowActionContext({
           runId, authorization: accepted.authorization, workspace: accepted.workspaceTarget.project,
           workDepth: accepted.workDepth,
+          ...(accepted.origin ? { origin: accepted.origin } : {}),
           ...(accepted.origin?.originSessionId ? { originSessionId: accepted.origin.originSessionId } : {}),
           ...(signal ? { signal } : {}),
         }),
@@ -506,6 +470,7 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
         resolveCurrentWorkspaceRefs: async (signal) => {
           const snapshot = await readProjectAccountRows({
             credentials: params.credentials,
+            publication: 'installed',
             serverId: configuration.activeServerId,
             ...(signal ? { signal } : {}),
           });
@@ -540,6 +505,8 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
           },
           credentials: params.credentials,
           serverId,
+          ...(input.serverIdentityId ? { serverIdentityId: input.serverIdentityId } : {}),
+          ...(input.sessionStartup ? { sessionStartup: input.sessionStartup } : {}),
           machineAdmissionTransport: input.machineAdmissionTransport,
           ...(resolveTeamCredentialResourceCatalog ? { resolveTeamCredentialResourceCatalog } : {}),
           resolveExistingSessionConversation: resolveConversation,
@@ -565,12 +532,14 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
     createRecoveryForMachine(input: Readonly<{
       machineId: string;
       machineAdmissionTransport: MachineAdmissionTransport;
+      machineActionDirectTargetTransport: import('@/session/actions/createCliActionDeps').MachineActionDirectTargetTransport;
     }>) {
       const storage = createWorkflowRunStorageClient({ token: params.credentials.token, machineId: input.machineId });
       const actionExecutor = createCliActionExecutorFromCredentials({
         credentials: params.credentials,
         machineId: input.machineId,
         machineAdmissionTransport: input.machineAdmissionTransport,
+        machineActionDirectTargetTransport: input.machineActionDirectTargetTransport,
       });
       return createWorkflowRunRecoveryReader({
         accountId: params.accountId,
@@ -585,27 +554,53 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
           machineId: input.machineId,
           actionExecutor,
           nativeActionOperations: {
+            findStartup: async (creationKey, signal) => {
+              if (input.machineActionDirectTargetTransport.machineId !== input.machineId) return null;
+              let cursor: string | undefined;
+              do {
+                const page = ActionOperationListV1ResponseSchema.parse(await input.machineActionDirectTargetTransport.invoke(
+                  ACTION_OPERATION_RPC_METHODS_V2.list, { ...(cursor ? { cursor } : {}) }, signal ? { signal } : undefined));
+                if (page.items.some(operation => operation.scope.accountId !== params.accountId
+                  || operation.scope.machineId !== input.machineId)) return null;
+                const operation = page.items.find(operation => operation.actionId === 'session.spawn_new'
+                  && operation.requestId === creationKey && operation.scope.accountId === params.accountId
+                  && operation.scope.machineId === input.machineId);
+                if (operation) return { kind: 'found', operation, target: { key: 'startup', serverId, machineId: input.machineId,
+                  operationId: operation.operationId } };
+                if (page.nextCursor === cursor) throw new Error('action_operation_cursor_not_progressing');
+                cursor = page.nextCursor ?? undefined;
+              } while (cursor && !signal?.aborted);
+              signal?.throwIfAborted();
+              return { kind: 'absent' };
+            },
+            findSession: async ({ runId, creationKey, signal }) => {
+              const tag = deriveWorkflowSessionCreationTag(serverId, runId, creationKey);
+              const found = await lookupSessionsByTags({ token: params.credentials.token, tags: [tag],
+                ...(signal ? { signal } : {}) });
+              if (found.state !== 'available' || found.sessions.length > 1) throw new Error('workflow_startup_discovery_unavailable');
+              const session = found.sessions[0];
+              if (!session) return null;
+              const authorized = await resolveWorkflowAuthorizedSession({ credentials: params.credentials,
+                sessionId: session.id, machineId: input.machineId, sessionCreationTag: tag,
+                ...(signal ? { signal } : {}) });
+              if (!authorized) throw new Error('workflow_startup_discovery_unavailable');
+              return session.id;
+            },
             get: async (operation, signal) => await operationRpc(operation, 'get', signal),
             cancel: async (operation, signal) => await operationRpc(operation, 'cancel', signal),
             wait: async (operation, signal) => await operationRpc(operation, 'wait', signal),
           },
           nativeActionRuns: {
-            get: async (runId, signal) => await callMachineRpc({ credentials: params.credentials, machineId: input.machineId,
-              method: SESSION_RPC_METHODS.EXECUTION_RUN_GET, request: { runId, includeStructured: true }, ...(signal ? { signal } : {}) }),
-            stop: async (runId, signal) => await callMachineRpc({ credentials: params.credentials, machineId: input.machineId,
-              method: SESSION_RPC_METHODS.EXECUTION_RUN_STOP, request: { runId }, ...(signal ? { signal } : {}) }),
+            get: async (runId, signal) => await input.machineActionDirectTargetTransport.invoke(
+              SESSION_RPC_METHODS.EXECUTION_RUN_GET, { runId, includeStructured: true }, signal ? { signal } : undefined),
+            stop: async (runId, signal) => await input.machineActionDirectTargetTransport.invoke(
+              SESSION_RPC_METHODS.EXECUTION_RUN_STOP, { runId }, signal ? { signal } : undefined),
             wait: async (runId, signal, observation) => {
-              if (observation) return await callMachineRpc({
-                credentials: params.credentials, machineId: input.machineId,
-                method: SESSION_RPC_METHODS.EXECUTION_RUN_GET,
-                request: { runId, includeStructured: true, waitForOutput: observation }, timeoutMs: null,
-                ...(signal ? { signal } : {}),
-              });
-              const waited = ExecutionRunWaitResultSchema.safeParse(await callMachineRpc({
-                credentials: params.credentials, machineId: input.machineId,
-                method: SESSION_RPC_METHODS.EXECUTION_RUN_WAIT, request: { runId }, timeoutMs: null,
-                ...(signal ? { signal } : {}),
-              }));
+              if (observation) return await input.machineActionDirectTargetTransport.invoke(
+                SESSION_RPC_METHODS.EXECUTION_RUN_GET, { runId, includeStructured: true, waitForOutput: observation },
+                signal ? { signal } : undefined);
+              const waited = ExecutionRunWaitResultSchema.safeParse(await input.machineActionDirectTargetTransport.invoke(
+                SESSION_RPC_METHODS.EXECUTION_RUN_WAIT, { runId }, signal ? { signal } : undefined));
               if (!waited.success || !waited.data.ok || waited.data.status === 'running'
                 || waited.data.result.run.runId !== runId) throw new Error('execution_run_terminal_observation_unavailable');
               return waited.data.result;

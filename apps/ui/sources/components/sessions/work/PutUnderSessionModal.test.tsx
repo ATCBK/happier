@@ -2,6 +2,9 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
 import { SelectionList } from '@/components/ui/selectionList/SelectionList';
 import { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -52,15 +55,15 @@ describe('PutUnderSessionModal captured scope', () => {
             if (path === '/v1/account/profile') return Response.json({ ...profileDefaults, id: 'account_a' });
             if (path === AUTHORING_MEMORY_ROUTE_V1) return Response.json({ rows: [] });
             if (path === '/v1/artifacts') return Response.json([]);
-            if (path.endsWith('/reports-to/options')) {
+            if (path.endsWith('/manager/options')) {
                 const input = JSON.parse(String(init?.body)) as { candidateSessionIds: string[] };
-                return Response.json({ sessionId: 'self', currentLeadSessionId: 'lead', candidates: input.candidateSessionIds.map(sessionId => ({ sessionId, allowed: true })) });
+                return Response.json({ sessionId: 'self', currentManagerSessionId: 'lead', candidates: input.candidateSessionIds.map(sessionId => ({ sessionId, allowed: true })) });
             }
-            if (path.endsWith('/reports-to')) relationWrites.push(path);
+            if (path.endsWith('/manager')) relationWrites.push(path);
             return Response.json({});
         } });
         getStorage().setState({ profileScope: { serverId: account.home.id, accountId: 'account_a' }, sessions: {
-            self: createSessionFixture({ id: 'self', serverId: account.home.id, reportsTo: { sessionId: 'lead' } }),
+            self: createSessionFixture({ id: 'self', serverId: account.home.id, manager: { sessionId: 'lead' } }),
             lead: createSessionFixture({ id: 'lead', serverId: account.home.id }),
         } });
     });

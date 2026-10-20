@@ -2,11 +2,11 @@ import { OpenProjectInputV1Schema, type OpenProjectInputV1 } from '@happier-dev/
 import type { ProjectSourceV1 } from '@happier-dev/protocol/projects/sources/projectSourceV1';
 import type { OpenProjectDraftSelectionV1 } from '@happier-dev/protocol/projects/openProjectDraftV1';
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-const sourceSeedSchema = z.object({ serverId: OpenProjectInputV1Schema.shape.serverId,
+const sourceSeedSchema = z.strictObject({ serverId: OpenProjectInputV1Schema.shape.serverId,
     source: OpenProjectInputV1Schema.shape.source, ref: OpenProjectInputV1Schema.shape.ref,
-    subdir: OpenProjectInputV1Schema.shape.subdir }).strict();
+    subdir: OpenProjectInputV1Schema.shape.subdir });
 
 /** An exact checkout seeds Open elsewhere; execution placement remains the person's choice. */
 export function buildProjectCheckoutOpenRoute(workspace: Pick<WorkspaceAddressV1, 'serverId' | 'workspaceId'>, ref?: string | null) {

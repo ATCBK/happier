@@ -45,12 +45,15 @@ import { SkillsList } from './SkillsRail';
 import {
   SKILLS_COLLECTION_ROUTE,
   buildSkillsReach,
+  skillDisplayName,
   skillHref,
   SKILLS_NEW_ROUTE,
   skillSource,
   type SkillsPresent,
   type SkillsReach,
   foldReachMachines,
+  skillsReachLegendCount,
+  hasOwnSkills,
 } from './skillsCollectionModel';
 import { usePreviewedSkill } from './skillsPreviewStore';
 import { arrivedReachDots } from './skillsReachTravel';
@@ -64,6 +67,7 @@ import { SKILLS_FOUND_ROUTE } from './found/foundSkillsModel';
 import type { SkillNeedsALookEntry } from './status/skillStatus';
 import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { useFoundSkillsCount } from '@/sync/domains/skills/useFoundSkills';
+import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 
 /**
  * The reach map's box beside its legend (lab hs-A: a 284 × 264 scene around a 42 px planet). The orbits
@@ -133,6 +137,7 @@ const SkillsHomepageBody = React.memo(function SkillsHomepageBody(
   props: Readonly<{ library: SkillsLibrary; phone: boolean }>,
 ) {
   const { library } = props;
+  const { pluginUiProjection } = useAppShellPluginUiProjection();
   const open = useOpen();
   const openAdd = useOpenSkillAddModal();
   useSkillAddRouteParams();
@@ -179,7 +184,8 @@ const SkillsHomepageBody = React.memo(function SkillsHomepageBody(
   const loading = library.status === 'loading' && library.items.length === 0;
   const unavailable =
     library.status === 'unavailable' && library.items.length === 0;
-  const empty = library.status === 'ready' && library.items.length === 0;
+  // Only the person's own skills count: the built-in one is always listed (P6 §4.1).
+  const empty = library.status === 'ready' && !hasOwnSkills(library.items);
 
   // A returning visit is titled by the page itself; the present lives in the sentence (lab hs A2/A3).
   // A brand-new library keeps the page's anatomy (lab hs A4): the map shows where a skill will ride.
@@ -242,7 +248,7 @@ const SkillsHomepageBody = React.memo(function SkillsHomepageBody(
         />
       )}
       {loading || unavailable ? null : (
-        <PresentSentence present={present} />
+        <PresentSentence present={present} agentName={names.agentName} />
       )}
       {firstVisit && !empty ? (
         <View style={styles.acts}>
@@ -286,15 +292,6 @@ const SkillsHomepageBody = React.memo(function SkillsHomepageBody(
         </View>
       ) : null}
       </View>
-      {(firstVisit || empty) && !props.phone ? (
-        <ItemGroup
-          title={t('capabilities.skills.home.whereTitle')}
-          description={t('capabilities.skills.home.whereBody')}
-          surface="none"
-        >
-          {null}
-        </ItemGroup>
-      ) : null}
       {needs.length > 0 ? (
         <ItemGroup
           title={t('capabilities.skills.home.needsLook')}
@@ -309,6 +306,7 @@ const SkillsHomepageBody = React.memo(function SkillsHomepageBody(
               key={`${entry.kind}:${entry.key}`}
               entry={entry}
               names={names}
+              installedPlugins={pluginUiProjection?.installedPackagesById}
               onOpen={() => {
                 // Unreadable: read the library again. Masked: Compare lives on Found. Updates: the
                 // Updates page; a dropped source: the skill itself.
@@ -318,6 +316,16 @@ const SkillsHomepageBody = React.memo(function SkillsHomepageBody(
               }}
             />
           ))}
+        </ItemGroup>
+      ) : null}
+      {/* P6 §4.2 order: what needs the person comes before the standing rule. */}
+      {(firstVisit || empty) && !props.phone ? (
+        <ItemGroup
+          title={t('capabilities.skills.home.whereTitle')}
+          description={t('capabilities.skills.home.whereBody')}
+          surface="none"
+        >
+          {null}
         </ItemGroup>
       ) : null}
       {loading || unavailable ? null : (
@@ -336,6 +344,7 @@ function NeedsALookRow(
   props: Readonly<{
     entry: SkillNeedsALookEntry;
     names: ReturnType<typeof useWhereItsOnNames>['names'];
+    installedPlugins: Parameters<typeof skillSource>[2];
     onOpen: () => void;
   }>,
 ) {
@@ -345,9 +354,9 @@ function NeedsALookRow(
     return (
       <CapabilityRow
         testID={`skills.home.needs.${entry.key}`}
-        title={entry.unavailable.title ?? entry.key}
+        title={skillDisplayName(entry.unavailable.title, entry.key)}
+        // The description says what is wrong; the shared error chip ("Couldn't start") would say a second, wrong thing.
         description={t('capabilities.skills.home.unreadable')}
-        status={{ kind: 'error' }}
         action={
           <RoundButton size="small" display="secondary" title={t('common.retry')} onPress={props.onOpen} />
         }
@@ -377,14 +386,11 @@ function NeedsALookRow(
       whereSummary={shortWhereItsOn(item.rules, props.names)}
       facts={{
         presentation: 'row',
-        source: skillSource(item, props.names.machineName),
+        source: skillSource(item, props.names.machineName, props.installedPlugins),
         trust: item.trust,
       }}
-      status={
-        entry.kind === 'masked'
-          ? { kind: 'masked', machineName: entry.machineName }
-          : pickMostBlockingCapabilityStatus(skillStatus(item), 'row')
-      }
+      // A masked row says it once, in its description; the chip would repeat it.
+      status={entry.kind === 'masked' ? undefined : pickMostBlockingCapabilityStatus(skillStatus(item), 'row')}
       action={<RoundButton size="small" display="secondary" title={fix} onPress={props.onOpen} />}
       onPress={props.onOpen}
     />
@@ -480,7 +486,7 @@ const ReachBlock = React.memo(function ReachBlock(
         noSkillAgents:
           row.machine.agentIds.length > 0 && row.supportedAgentIds.length === 0,
         inventoryUnknown: row.machine.agentInventoryComplete === false,
-        count: row.machine.agentInventoryComplete === false ? null : props.firstVisit ? 0 : row.skillIds.length,
+        count: skillsReachLegendCount(row, props.firstVisit),
       })),
     [props.firstVisit, folded.shown],
   );
@@ -549,16 +555,17 @@ function useReachTravel(
 }
 
 /** One quiet line of the present: what reaches whom, what needs a look, who catches up later. */
-function PresentSentence(props: Readonly<{ present: SkillsPresent }>) {
-  const { present } = props;
+function PresentSentence(props: Readonly<{ present: SkillsPresent; agentName: (agentId: string) => string }>) {
+  const { present, agentName } = props;
   const named = present.kind === 'reach'
     ? present.agentIds
     : present.kind === 'unsupported'
       ? present.agentIds
       : NO_AGENTS;
   const unsupported = present.kind === 'reach' ? present.unsupportedAgentIds : NO_AGENTS;
-  const agents = useAgentTitles(named);
-  const unsupportedNames = useAgentTitles(unsupported);
+  // The names the legend and Where it's on show, from the page's own places: an Agent instance reads by title, never by its runtime id.
+  const agents = React.useMemo(() => named.map(agentName), [named, agentName]);
+  const unsupportedNames = React.useMemo(() => unsupported.map(agentName), [unsupported, agentName]);
   let text: string;
   // The part of the sentence that needs the person (amber, as the lab's "2 need a look").
   let attention = '';
@@ -637,16 +644,6 @@ function withEmphasizedCounts(text: string, key: string): React.ReactNode[] {
     ),
   );
 }
-
-function useAgentTitles(agentIds: readonly string[]): string[] {
-  const { names } = useWhereItsOnNames({
-    agentIds,
-    machines: NO_MACHINES,
-  });
-  return React.useMemo(() => agentIds.map(names.agentName), [agentIds, names]);
-}
-const NO_MACHINES: readonly Readonly<{ machineId: string; name: string }>[] =
-  Object.freeze([]);
 
 const styles = StyleSheet.create((theme) => ({
   inset: { paddingHorizontal: resolveItemGroupContentHorizontalInsetPx() },

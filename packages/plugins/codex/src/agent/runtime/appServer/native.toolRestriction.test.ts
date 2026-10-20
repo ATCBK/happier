@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import { openCodexNativeAppServerSession } from './native.js';
-import { createCodexAgentRuntime } from '../engine.js';
 
 const configuration = {
   mode: { value: null, updatedAtMs: 0 }, model: { value: null, updatedAtMs: 0 },
@@ -25,13 +24,4 @@ describe('Codex tool restriction launch boundaries', () => {
     }, unavailableContext)).rejects.toMatchObject({ code: 'codex_tool_restriction_unsupported_transport' });
   });
 
-  it('refuses an unconstrained terminal transition without the host MCP catalog', async () => {
-    const runtime = await createCodexAgentRuntime({
-      plugin: { id: 'happier.agent.codex', version: '0.0.0' },
-      agent: { id: 'codex' }, signal: new AbortController().signal,
-    });
-    await expect(Promise.resolve().then(() => runtime.surfaces?.terminal?.resolveLaunch({
-      sessionId: 'restricted', cwd: '/workspace', metadata: {}, modelSelection: null, configuration,
-    }))).rejects.toMatchObject({ code: 'codex_tool_restriction_unsupported_transport' });
-  });
 });

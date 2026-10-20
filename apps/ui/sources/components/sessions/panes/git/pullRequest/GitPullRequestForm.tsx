@@ -20,6 +20,7 @@ import { sessionScmBranchList, sessionScmPullRequestOpenCompose } from '@/sync/o
 import type { SessionScmPullRequestDraftV1 } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import { t } from '@/text';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 
 import { createSessionGitPullRequest } from './createSessionGitPullRequest';
 import { GitPullRequestProviderMark, resolveGitPullRequestProvider } from './GitPullRequestProviderMark';
@@ -94,6 +95,8 @@ export const GitPullRequestForm = React.memo(function GitPullRequestForm(props: 
             try {
                 if (!inAppCreate) {
                     const response = await sessionScmPullRequestOpenCompose(props.sessionId, { base, head }, props.serverId);
+                    // Declined, or waiting on an approval: nothing ran and nothing failed.
+                    if (isScmActionNotRun(response)) return;
                     if (response.success && response.nextAction.kind === 'openUrl') {
                         const safe = validateScmFollowupOpenUrl(response.nextAction);
                         if (safe.ok) {

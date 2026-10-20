@@ -13,7 +13,8 @@ export type TokenUsageRingProps = Readonly<{
     used: number;
     limit: number | null | undefined;
     label: string;
-    value: string;
+    /** Drawn inside the ring; omit it when the value is written beside the ring. */
+    value?: string;
     tone?: TokenUsageTone;
     size?: number;
     strokeWidth?: number;
@@ -96,7 +97,7 @@ export function TokenUsageRing(props: TokenUsageRingProps) {
                     transform={`rotate(-90 ${size / 2} ${size / 2})`}
                 />
             </Svg>
-            <View pointerEvents="none" style={styles.labelOverlay}>
+            {props.value ? <View pointerEvents="none" style={styles.labelOverlay}>
                 <Text
                     testID={props.valueTestID}
                     style={[
@@ -111,7 +112,7 @@ export function TokenUsageRing(props: TokenUsageRingProps) {
                 >
                     {props.value}
                 </Text>
-            </View>
+            </View> : null}
         </View>
     );
 }

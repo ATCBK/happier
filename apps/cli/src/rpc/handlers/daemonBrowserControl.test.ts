@@ -186,7 +186,7 @@ describe('daemon Browser control UI seam', () => {
             const send = createBrowserDaemonControlCommandSender(scope);
             const events: BrowserEventV1[] = [];
             expect(await send({ kind: 'openView', commandId: 'open', browserSessionId: BROWSER_SESSION_ID,
-                viewId: VIEW_ID, platform: 'web', target: { kind: 'externalUrl', targetId: 'external',
+                viewId: VIEW_ID, platform: 'web', focus: true, target: { kind: 'externalUrl', targetId: 'external',
                     url: 'https://browser.example.test/' } }, incoming => events.push(...incoming)))
                 .toMatchObject({ ok: true, result: { status: 'dispatched', adapterKind: 'chromiumSidecar' } });
             expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ viewId: VIEW_ID,
@@ -226,7 +226,34 @@ describe('daemon Browser control UI seam', () => {
             registerDaemonBrowserControlHandler(unavailable, { browserControl: null });
             await expect(unavailable.invokeLocal(RPC_METHODS.DAEMON_BROWSER_CONTROL_DISPATCH,
                 { machineId: MACHINE_ID, command: { kind: 'reload', commandId: 'reload',
-                    browserSessionId: BROWSER_SESSION_ID, viewId: VIEW_ID } })).rejects.toThrow('Browser control runtime is unavailable');
+                    browserSessionId: BROWSER_SESSION_ID, viewId: VIEW_ID } })).rejects.toMatchObject({
+                        rpcErrorCode: 'managed_package_missing',
+                    });
+            await expect(unavailable.invokeLocal(RPC_METHODS.DAEMON_BROWSER_VIEW_LIST,
+                { machineId: MACHINE_ID, browserSessionId: BROWSER_SESSION_ID })).rejects.toMatchObject({
+                    rpcErrorCode: 'managed_package_missing',
+                });
         } finally { runtime.adapter.dispose(); }
+    });
+
+    it('preserves the missing managed-browser prerequisite through real UI discovery and control', async () => {
+        // The CLI harness owns a fresh per-worker home, so the real managed source has no install.
+        const rpc = new RpcHandlerManager({ scopePrefix: MACHINE_ID, encryptionMode: 'plain', logger: () => {} });
+        registerDaemonBrowserControlHandler(rpc);
+        activeRpc = rpc;
+        const machine = createPlainMachineRowFixture({ id: MACHINE_ID, accountId: 'browser-account' });
+        const homes = await serveAccountHomes({ homes: [{ key: 'browser', serverUrl: 'https://browser-control.example.test',
+            accountId: 'browser-account' }], route: request => request.path === `/v1/machines/${MACHINE_ID}`
+                ? Response.json({ machine }) : undefined });
+        try {
+            const scope = { machineId: MACHINE_ID, serverId: homes.homes.browser.id };
+            expect(await listBrowserDaemonViewsViaMachineRpc({ ...scope, browserSessionId: BROWSER_SESSION_ID }))
+                .toEqual({ ok: false, reason: 'managed_package_missing' });
+            expect(await createBrowserDaemonControlCommandSender(scope)({ kind: 'reload', commandId: 'reload',
+                browserSessionId: BROWSER_SESSION_ID, viewId: VIEW_ID }))
+                .toEqual({ ok: false, reason: 'managed_package_missing' });
+        } finally {
+            try { await serverScopedRpcSocketPool.stopAll(); } finally { await homes.dispose(); }
+        }
     });
 });

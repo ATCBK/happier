@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { resolvePendingActivationBanner } from './resolvePendingActivationBanner';
 import { deriveManagedWakeProjection } from '@/sync/domains/pending/managedWakeProjection';
+import { PendingActivationAuthorizationV1Schema } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
 
 const waiting = { requestId: 'p2', requestedAt: 200, status: 'waiting' as const };
 const failed = { requestId: 'p2', requestedAt: 200, status: 'failed' as const, failureCode: 'runtime_start_failed' as const };
@@ -11,6 +12,40 @@ const rows = [
 ];
 
 describe('resolvePendingActivationBanner', () => {
+    it.each(['runtime_start_failed', 'managed_start_denied'] as const)('rearms the same failed stopped wake and gives current power refusal precedence (%s)', failureCode => {
+        const authorization = PendingActivationAuthorizationV1Schema.parse({ ...failed, failureCode });
+        const managed = {
+            id: 'managed-a', homeId: 'home-a', creationState: 'active' as const, allocation: 'bound' as const,
+            wakeOnAcceptedMessage: true,
+            enrolledMachineId: 'guest-a', controller: { machineId: 'controller-a', installationId: 'installation-a' },
+            observation: { observedAt: 10, availability: 'present' as const, power: 'stopped' as const, storage: 'unknown' as const, daemon: 'disconnected' as const },
+        };
+        const row = { ...rows[1], source: 'server_pending' as const };
+        const managedWakeProjection = deriveManagedWakeProjection({ managed, activation: authorization, pending: row, runtimeResuming: false });
+        expect(managedWakeProjection).toMatchObject({ failureCode, canRequestWake: true });
+        const input = { authorization, activeAt: 100, active: false, machineReachable: false,
+            canWrite: true, pendingMessages: [row], managedWakeProjection };
+        expect(resolvePendingActivationBanner(input)).toMatchObject({ kind: 'failed', row: { localId: 'p2' },
+            primaryAction: 'process_when_online' });
+        expect(resolvePendingActivationBanner({ ...input, pendingMessages: [{ ...row, pendingActivationHoldReason: 'resume_not_requested' }] }))
+            .toMatchObject({ primaryAction: 'process_when_online', row: { localId: 'p2' } });
+        expect(resolvePendingActivationBanner({ ...input, pendingMessages: [{ ...row, pendingActivationHoldReason: 'managed_power_required' }] }))
+            .toMatchObject({ titleKey: 'managedWake.refused', primaryAction: null, holdReason: 'managed_power_required' });
+        expect(resolvePendingActivationBanner({ ...input, pendingMessages: [{ ...row, pendingDeliveryStatus: 'server_delivering' }] }))
+            .toMatchObject({ primaryAction: null, row: null });
+    });
+    it('lets observed awake compute retire an older power hold after Agent startup fails', () => {
+        const managedWakeProjection = deriveManagedWakeProjection({
+            managed: { id: 'managed-a', homeId: 'home-a', creationState: 'active', allocation: 'bound', enrolledMachineId: 'guest-a',
+                wakeOnAcceptedMessage: true,
+                controller: { machineId: 'controller-a', installationId: 'installation-a' },
+                observation: { observedAt: 20, availability: 'present', power: 'running', storage: 'retained', daemon: 'connected' } },
+            activation: failed, pending: { source: 'server_pending', pendingDeliveryStatus: 'server_queued' }, runtimeResuming: false,
+        });
+        expect(resolvePendingActivationBanner({ authorization: failed, activeAt: 100, active: false, machineReachable: false,
+            canWrite: true, pendingMessages: [{ ...rows[1], pendingActivationHoldReason: 'managed_power_required' }], managedWakeProjection,
+        })).toMatchObject({ kind: 'failed', primaryAction: 'retry', managedWakeProjection: { kind: 'agentStartFailed', canRequestWake: false } });
+    });
     it('uses a current authorization and its exact request row', () => {
         expect(resolvePendingActivationBanner({ authorization: waiting, activeAt: 100, active: false, machineReachable: false, canWrite: true, pendingMessages: rows })).toMatchObject({ kind: 'waiting_offline', row: { localId: 'p2' } });
         expect(resolvePendingActivationBanner({ authorization: waiting, activeAt: 200, active: false, machineReachable: false, canWrite: true, pendingMessages: rows })).toMatchObject({ kind: 'queued_offline', row: { localId: 'p1' }, primaryAction: 'process_when_online' });
@@ -54,6 +89,7 @@ describe('resolvePendingActivationBanner', () => {
     it('does not offer Agent retry before native prerequisites or label ambiguous delivery as safely queued', () => {
         const managed = {
             id: 'managed-a', homeId: 'home-a', creationState: 'active' as const, allocation: 'bound' as const,
+            wakeOnAcceptedMessage: true,
             enrolledMachineId: 'guest-a', controller: { machineId: 'controller-a', installationId: 'installation-a' },
             observation: { observedAt: 10, availability: 'present' as const, power: 'stopped' as const, storage: 'retained' as const, daemon: 'disconnected' as const },
         };
@@ -63,7 +99,7 @@ describe('resolvePendingActivationBanner', () => {
         expect(resolvePendingActivationBanner({
             authorization: failed, activeAt: 100, active: false, machineReachable: false, canWrite: true, pendingMessages: rows,
             ...{ managedWakeProjection },
-        })).toMatchObject({ kind: 'failed', primaryAction: null, managedWakeProjection: { kind: 'agentStartFailed' } });
+        })).toMatchObject({ kind: 'failed', primaryAction: 'process_when_online', managedWakeProjection: { kind: 'agentStartFailed' } });
         const unknown = deriveManagedWakeProjection({
             managed, activation: failed, pending: { ...rows[1], source: 'server_pending', pendingDeliveryStatus: 'server_delivering' }, runtimeResuming: false,
         });
@@ -76,7 +112,7 @@ describe('resolvePendingActivationBanner', () => {
         for (const kind of ['resuming', 'storageLost', 'resourceAbsent', 'unknown', 'unavailable'] as const) {
             expect(resolvePendingActivationBanner({ authorization: waiting, activeAt: 100, active: false, machineReachable: true,
                 canWrite: true, resumingAt: 300, pendingMessages: rows,
-                managedWakeProjection: { kind, inputCustody: 'queued', canWithdraw: true, canRetryAgentStart: false, canResumeRuntime: false },
+                managedWakeProjection: { kind, inputCustody: 'queued', canWithdraw: true, canRetryAgentStart: false, canRequestWake: false, canResumeRuntime: false },
             })).toMatchObject({ managedWakeProjection: { kind }, primaryAction: null });
         }
     });

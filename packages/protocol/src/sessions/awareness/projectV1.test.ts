@@ -27,6 +27,27 @@ function input(
 }
 
 describe('projectSessionAwarenessV1 — operational semantics', () => {
+  it('keeps a yielded question waiting without private request counts or a ready signal', () => {
+    const projection = projectSessionAwarenessV1(input({
+      lifecycle: { latestTurnStatus: 'waiting', latestReadyEventSeq: 9 },
+      runtime: { presence: 'online', active: true, thinking: true, thinkingAtMs: NOW },
+      currentness: { lifecycle: 'observed', runtime: 'observed', pending: 'unavailable' },
+      content: { mode: 'e2ee', keyState: 'missing' },
+    }));
+    expect(projection).toMatchObject({ lifecycle: 'active', runtime: 'waiting',
+      operational: { primary: 'action_required', reasons: ['action_required', 'content_locked'] } });
+    expect(projectSessionAwarenessV1(input({ lifecycle: { latestTurnStatus: 'in_progress' } })))
+      .toMatchObject({ runtime: 'working', operational: { primary: 'working' } });
+  });
+  it('carries an explanation only with readable content without changing operational facts', () => {
+    const baseline = input();
+    const ordinary = projectSessionAwarenessV1(baseline);
+    expect(projectSessionAwarenessV1({ ...baseline, statusReason: 'Waiting for the build' }))
+      .toEqual({ ...ordinary, statusReason: 'Waiting for the build' });
+    const locked = { ...baseline, content: { mode: 'e2ee' as const, keyState: 'missing' as const } };
+    expect(projectSessionAwarenessV1({ ...locked, statusReason: 'Private explanation' }))
+      .toEqual(projectSessionAwarenessV1(locked));
+  });
   it('preserves server-visible origin independently of private fork lineage', () => {
     const origin = { kind: 'run_step' as const, runId: 'workflow-run' };
     const projection = projectSessionAwarenessV1(input({
@@ -51,17 +72,17 @@ describe('projectSessionAwarenessV1 — operational semantics', () => {
     }
   });
   it('preserves authorized relation ids and counts even when encrypted content is locked', () => {
-    const reportsTo = { sessionId: 'lead' };
-    const reports = { total: 3, working: 1, needsYou: 1, stalled: 1 };
+    const manager = { sessionId: 'lead' };
+    const managedSessions = { total: 3, working: 1, needsYou: 1, stalled: 1 };
     const projection = projectSessionAwarenessV1(input({
       content: { mode: 'e2ee', keyState: 'missing' },
-      reportsTo,
-      reports,
+      manager,
+      managedSessions,
     }));
-    expect(projection).toMatchObject({ reportsTo, reports });
+    expect(projection).toMatchObject({ manager, managedSessions });
     expect(SessionAwarenessProjectionV1Schema.safeParse(projection).success).toBe(true);
-    expect(SessionAwarenessProjectionV1Schema.safeParse({ ...projection, reports: { ...reports, total: -1 } }).success).toBe(false);
-    expect(SessionAwarenessProjectionV1Schema.safeParse({ ...projection, reportsTo: { ...reportsTo, permission: 'admin' } }).success).toBe(false);
+    expect(SessionAwarenessProjectionV1Schema.safeParse({ ...projection, managedSessions: { ...managedSessions, total: -1 } }).success).toBe(false);
+    expect(SessionAwarenessProjectionV1Schema.safeParse({ ...projection, manager: { ...manager, permission: 'admin' } }).success).toBe(false);
   });
   it('keeps a terminal turn projection authoritative over stale thinking', () => {
     const projection = projectSessionAwarenessV1(input({

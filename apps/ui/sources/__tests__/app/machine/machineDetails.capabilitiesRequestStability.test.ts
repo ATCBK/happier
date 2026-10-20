@@ -55,12 +55,23 @@ describe('MachineDetailScreen capabilities request', () => {
             machines: [createMachineFixture({ activeAt: Date.now() })],
         });
         const target = await network.addHome('https://machine-capabilities-requested.example.test', 'machine-viewer');
+        home.storage.getState().applyMachines(
+            [createMachineFixture({ activeAt: Date.now() })],
+            true,
+            { sourceServerId: target.id, sourceAccountId: target.accountId },
+        );
         route.params = { id: 'machine-1', serverId: target.id, page: 'terminal' };
         network.respond(RPC_METHODS.CAPABILITIES_DETECT, { protocolVersion: 1, results: {} });
         const screen = await home.render(MachineDetailScreen);
         await flushHookEffects({ cycles: 6, turns: 3 });
         expect(detailsRequests().length).toBeGreaterThan(0);
-        expect(detailsRequests().every(request => request.serverUrl === target.serverUrl && request.token === target.token)).toBe(true);
+        expect(detailsRequests().map(request => ({
+            requestedHome: request.serverUrl === target.serverUrl,
+            requestedPrincipal: request.token === target.token,
+        }))).toEqual(detailsRequests().map(() => ({
+            requestedHome: true,
+            requestedPrincipal: true,
+        })));
         expect(screen.findAllByProps({ testID: 'machine-sub-page-header-terminal' }).length).toBeGreaterThan(0);
     });
 

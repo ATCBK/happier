@@ -2,12 +2,12 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { CapacityBar } from '@happier-dev/plugin-ui/presentation';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 
 import { MeterBar, type MeterTone } from '@/components/ui/lists/MeterBar';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { formatResetCountdown } from '@/sync/domains/connectedServices/formatResetCountdown';
+import { formatResetCountdown, formatResetCountdownPhrase } from '@/sync/domains/connectedServices/formatResetCountdown';
 import { t } from '@/text';
 import { formatResetAtTime } from '@/utils/time/formatResetAtTime';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
@@ -82,7 +82,7 @@ export type UsageMeterRowProps = Readonly<{
  */
 export const UsageMeterRow = React.memo(function UsageMeterRow(props: UsageMeterRowProps) {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const styles = stylesheet;
     const known = props.remainingPct !== null && Number.isFinite(props.remainingPct);
     const remaining = known ? Math.max(0, Math.min(100, Math.round(props.remainingPct!))) : null;
@@ -97,11 +97,10 @@ export const UsageMeterRow = React.memo(function UsageMeterRow(props: UsageMeter
         ? t('common.unavailable')
         : props.estimated ? t('connectedServicesCollection.meterEstimated', { value: left }) : left;
     const countdown = formatResetCountdown(props.now, props.resetsAt, ACCOUNT_BLOCK_GAUGE_LABEL_FORMATTER);
-    const relative = countdown === null
-        ? null
-        : props.resetPrefix === 'next'
-            ? t('connectedServicesCollection.meterNextResetIn', { time: countdown })
-            : t('connectedServicesCollection.meterResetsIn', { time: countdown });
+    const relative = formatResetCountdownPhrase(props.now, props.resetsAt, ACCOUNT_BLOCK_GAUGE_LABEL_FORMATTER, (time) =>
+        props.resetPrefix === 'next'
+            ? t('connectedServicesCollection.meterNextResetIn', { time })
+            : t('connectedServicesCollection.meterResetsIn', { time }));
     const resetAt = props.resetText
         ?? (relative === null
             ? ''

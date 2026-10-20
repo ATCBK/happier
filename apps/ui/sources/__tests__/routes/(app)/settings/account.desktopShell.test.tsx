@@ -1,5 +1,8 @@
 import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import 'fake-indexeddb/auto';
 import { AccountProfileSchema } from '@happier-dev/protocol';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
@@ -10,7 +13,7 @@ import { createSecretSettingsTestHarness } from '@/components/settings/secrets/s
 import { installAccountSettingsRouteModuleMocks } from './accountSettingsRouteTestHelpers';
 import { createAccountFeaturesResponse } from './account.testHelpers';
 
-installAccountSettingsRouteModuleMocks({ storageModule: (importOriginal) => importOriginal() });
+installAccountSettingsRouteModuleMocks();
 installDisconnectedServerSocketBoundary();
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
     useWindowDimensions: () => ({ width: 1440, height: 900, scale: 2, fontScale: 1 }),
@@ -75,6 +78,7 @@ describe('Settings → Account desktop shell', () => {
         expect(text).not.toContain('connectedServices.serviceNames.openaiCodex');
         expect(text).not.toContain('connectedServices.serviceNames.anthropic');
         expect(text).not.toContain('connectedServices.serviceNames.gemini');
-        expect(text).toContain('settings.connectedServices');
+        expect(screen.findAllByTestId('settings-sidebar.item.connectedServices')
+            .some(node => node.props.href === '/settings/connected-services')).toBe(true);
     });
 });

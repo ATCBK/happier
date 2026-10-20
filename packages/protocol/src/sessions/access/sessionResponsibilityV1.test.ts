@@ -61,7 +61,7 @@ describe('SetSessionResponsibilityResponseSchema', () => {
     expect(SetSessionResponsibilityResponseSchema.parse({ changed: false, responsibleAccountId: null, responsibleAccount: null, autoFollowed: false }))
       .toEqual({ changed: false, responsibleAccountId: null, responsibleAccount: null, autoFollowed: false });
     expect(SetSessionResponsibilityResponseSchema.parse({ changed: true, responsibleAccountId: 'account-1', responsibleAccount: aliceSummary, autoFollowed: true }))
-      .toEqual({ changed: true, responsibleAccountId: 'account-1', responsibleAccount: aliceSummary, autoFollowed: true });
+      .toEqual({ changed: true, responsibleAccountId: 'account-1', responsibleAccount: { ...aliceSummary, name: 'Alice Martin' }, autoFollowed: true });
     expect(SetSessionResponsibilityResponseSchema.safeParse({
       responsibleAccountId: 'account-1', changed: true, responsibleAccount: aliceSummary, autoFollowed: true, assignedByAccountId: 'account-2',
     }).success).toBe(false);
@@ -225,7 +225,7 @@ describe('V2SessionRecordSchema responsibility projection', () => {
 
     const assigned = V2SessionRecordSchema.parse({ ...baseRecord, responsibleAccountId: 'account-1', responsibleAccount: aliceSummary });
     expect(assigned.responsibleAccountId).toBe('account-1');
-    expect(assigned.responsibleAccount).toEqual(aliceSummary);
+    expect(assigned.responsibleAccount).toEqual({ ...aliceSummary, name: 'Alice' });
   });
 
   it('rejects a mismatched summary and an unassigned id with a non-null summary', () => {

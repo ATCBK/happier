@@ -20,6 +20,12 @@ import { stopExecutionRun } from './executionRunStop';
 import { sendBackendLongLivedRun } from './send/backendLongLivedPrompt';
 import type { ExecutionRunState } from './executionRunTypes';
 import { createTestExecutionRunHostRuntime } from './testkit';
+import { ExecutionRunConnectedServicesError } from './runtime/connectedServicesEnv';
+import { observeWorkflowDetachedExecutionRunInput } from '@/daemon/workflows/stepExecution';
+import { projectExecutionRunPublicState } from './publicState';
+import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { createExecutionRunOccurrenceWitnessRegistry, projectExecutionRunInputTurns } from './runOccurrenceWitness';
+import { materializeActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 
 // Retained lifecycle and marker publication exercise real isolated filesystem custody.
 let directory: string;
@@ -35,6 +41,63 @@ afterEach(() => {
 });
 
 describe('execution run start transcript custody', () => {
+  it.each(['bob', 'carol', null])('retains requester %s and the exact detached initial input before native admission', async accountId => {
+    const attribution = materializeActionRequestAttributionV1({ requestRef: 'workflow-initial',
+      requester: accountId ? { serverId: 'home', accountId } : null,
+      persona: { serverId: 'home', sessionId: 'bot-session' }, origin: null });
+    const runs = new Map<string, ExecutionRunState>();
+    const controllers = new Map<string, ExecutionRunController>();
+    const occurrences = createExecutionRunOccurrenceWitnessRegistry(controllers);
+    let firstFailureObservation: ReturnType<typeof observeWorkflowDetachedExecutionRunInput> | undefined;
+    const runtime = {
+      ...createTestExecutionRunHostRuntime(),
+      readResumeSupport: async () => { throw new ExecutionRunConnectedServicesError(
+        'Execution-run connected services runner identity is not current',
+        'connected_service_run_materialization_blocked',
+      ); },
+    };
+    const voiceAgentManager = new VoiceAgentManager({ createRuntime: () => runtime });
+    const createRuntime = vi.fn<Parameters<typeof startExecutionRun>[0]['createRuntime']>(() => runtime);
+    try {
+      const started = await startExecutionRun({
+        params: { sessionId: null, intent: 'agent', backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+          instructions: 'Background work', localInputId: 'workflow-initial', resultContract: { kind: 'text' }, actionRequestAttributionV1: attribution,
+          permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'request_response' },
+        parentProvider: 'daemon.executionRuns', sendAcp: async () => {}, streamedTranscriptSession: null,
+        createRuntime, getNowMs: () => 100, budgetRegistry: null, runs, controllers,
+        registerRunOccurrence: ({ runId, sidechainId, controller }) => occurrences.register({ runId, sidechainId, controller,
+          runtimeLifetimeSignal: runtime.getRuntimeLifetimeSignal(), readActiveTurnAdmissionWitness: () => null }).dispose,
+        enqueueMarkerWrite: async (_id, write) => { await write(); }, writeActivityMarker: async () => {},
+        finishRun: async (runId, next, toolResult) => { await finishExecutionRun({ runId, next, toolResult,
+          runs, controllers, budgetRegistry: null, parentProvider: 'daemon.executionRuns', sendAcp: async () => {},
+          enqueueMarkerWrite: async (_id, write) => { await write(); }, terminalMarkerWritePromises: new Map() });
+          const failed = runs.get(runId);
+          if (!failed) throw new Error('Missing refused Run');
+          const inputTurns = projectExecutionRunInputTurns({ runId, retained: failed.inputTurns,
+            controller: controllers.get(runId), reader: occurrences.reader });
+          firstFailureObservation = observeWorkflowDetachedExecutionRunInput({ runId, localInputId: 'workflow-initial',
+            get: async () => ({ run: projectExecutionRunPublicState({ ...failed, inputTurns }) }) });
+        },
+        executeBoundedRun: async () => {}, send: async () => { throw new Error('Refused launch must not send'); },
+        voiceAgentManager,
+      });
+      const controller = controllers.get(started.runId);
+      if (controller?.kind === 'backend') await controller.provisioningPromise;
+      expect(createRuntime.mock.calls[0]?.[0]).toMatchObject({
+        causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'read-only' },
+        actionRequestAttributionV1: attribution,
+      });
+      expect(await firstFailureObservation).toEqual({ kind: 'failed', code: 'connected_service_run_materialization_blocked',
+        message: 'Execution-run connected services runner identity is not current' });
+      const run = runs.get(started.runId);
+      if (!run) throw new Error('Missing admitted Run');
+      const response = ExecutionRunGetResponseSchema.parse({ run: projectExecutionRunPublicState(run) });
+      expect(response.run.error?.code).toBe('connected_service_run_materialization_blocked');
+      expect(await observeWorkflowDetachedExecutionRunInput({ runId: started.runId, localInputId: 'workflow-initial',
+        get: async () => response })).toEqual({ kind: 'failed', code: 'connected_service_run_materialization_blocked',
+          message: 'Execution-run connected services runner identity is not current' });
+    } finally { await voiceAgentManager.dispose(); }
+  });
   it.each(['terminal', 'terminal_or_needs_attention'] as const)(
     'holds an initial %s match behind real terminal transcript custody and re-reads publication failure', async (condition) => {
       const run: ExecutionRunState = {
@@ -328,7 +391,7 @@ describe('execution run start transcript custody', () => {
     expect(rejectedRunId).toBeTruthy();
     expect(runs.get(rejectedRunId!)).toMatchObject({
       status: 'failed',
-      error: { code: 'execution_run_failed' },
+      error: { code: 'session_input_unauthorized' },
     });
     expect(controllers.has(rejectedRunId!)).toBe(false);
 

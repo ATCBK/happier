@@ -20,6 +20,8 @@ import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
 import { AgentInput } from '@/components/sessions/agentInput';
 import { withPopoverWebGlobals } from '@/dev/testkit';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
+import { reportPopoverContentLayout } from '@/dev/testkit/harness/popoverHarness';
 import { KeyboardShortcutProvider, useKeyboardCommand, type KeyboardCommandId } from '@/keyboard';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { getVitestNodeBuiltin } from '@/dev/vitestNodeBuiltins';
@@ -44,7 +46,7 @@ function readAnnouncements() {
         .filter((value): value is string => typeof value === 'string' && value.length > 0);
 }
 const promptFocus = vi.fn();
-const bindingBoundaries: Array<() => void> = [];
+const bindingBoundaries: Array<() => Promise<void>> = [];
 const retireEditorContents: Array<() => Promise<void>> = [];
 let executeWorkflowCommand: (commandId: KeyboardCommandId) => boolean = () => false;
 let restoreKeyboardWindow: (() => void) | undefined;
@@ -89,6 +91,15 @@ async function renderScreen(element: React.ReactElement, options?: Parameters<ty
     const screen = await renderTestScreen(element, { ...options, wrapper, createNodeMock: nativeElement => {
         const supplied = options?.createNodeMock?.(nativeElement);
         if (supplied !== null && supplied !== undefined) return supplied;
+        // Test Renderer supplies no host geometry. Real Popovers need the same
+        // anchor measurements the browser supplies before their controls are usable.
+        if (nativeElement.type === 'View' || nativeElement.type === 'Pressable') return {
+            addEventListener() {},
+            removeEventListener() {},
+            getBoundingClientRect: () => ({ left: 100, top: 100, width: Math.min(600, windowDimensions.width), height: 40 }),
+            measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) =>
+                callback(100, 100, Math.min(600, windowDimensions.width), 40),
+        };
         // Native text refs are an OS boundary. The real AgentInput and
         // MultiTextInput own focus requests, restored selection and edits.
         if (nativeElement.type !== 'TextInput') return null;
@@ -105,7 +116,16 @@ async function renderScreen(element: React.ReactElement, options?: Parameters<ty
         await screen.update(<></>);
     };
     retireEditorContents.push(retireContent);
+    const settlePopoverLayout = async () => {
+        await act(async () => { reportPopoverContentLayout(screen, { width: Math.min(360, windowDimensions.width), height: 320 }); });
+        await flushHookEffects({ cycles: 2, frames: 1 });
+    };
     return { ...screen, visibleModals: () => modalEntries.filter(entry => 'visible' in entry && entry.visible === true), retireContent,
+        pressByTestIdAsync: async (testID: string) => {
+            await settlePopoverLayout();
+            await screen.pressByTestIdAsync(testID);
+            await settlePopoverLayout();
+        },
         unmount: async () => { await retireContent(); await screen.unmount(); } };
 }
 
@@ -149,8 +169,6 @@ vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key, params) => (params ? `${key}:${JSON.stringify(params)}` : key) });
 });
-vi.mock('@/components/ui/popover/Popover', async (importOriginal) =>
-    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 // Native recycling is the boundary; the real SelectionList owns its rows and selection.
 vi.mock('@legendapp/list/react-native', async (importOriginal) =>
     (await import('@/dev/testkit/mocks/legendList')).createCapturingLegendListMock({
@@ -197,7 +215,7 @@ beforeAll(async () => {
 afterEach(async () => {
     for (const retire of retireEditorContents.splice(0)) await retire();
     await standardCleanup();
-    for (const dispose of bindingBoundaries.splice(0)) dispose();
+    for (const dispose of bindingBoundaries.splice(0)) await dispose();
     restoreKeyboardWindow?.();
     announcementDocument?.window.close();
     announcementDocument = undefined;
@@ -343,30 +361,6 @@ function flattenTestStyle(style: unknown, state: Readonly<Record<string, boolean
     return {};
 }
 
-function isInspectorModalConfig(value: unknown): value is Readonly<{
-    chrome: Readonly<{ kind: string; bodyScroll: string }>;
-    focusReturnRef: Readonly<{ current: Readonly<{ focus(): void }> }>;
-    props: Readonly<{
-        inspector: Readonly<{
-            subject: Readonly<{ kind: string; blockId?: string }>;
-            draft: WorkflowEditorDraft;
-            onChange(next: WorkflowEditorDraft): void;
-        }>;
-    }>;
-}> {
-    if (typeof value !== 'object' || value === null) return false;
-    if (!('chrome' in value) || !('focusReturnRef' in value) || !('props' in value)) return false;
-    const chrome = value.chrome;
-    const focusReturnRef = value.focusReturnRef;
-    const props = value.props;
-    return typeof chrome === 'object' && chrome !== null
-        && typeof focusReturnRef === 'object' && focusReturnRef !== null
-        && typeof props === 'object' && props !== null
-        && 'inspector' in props && typeof props.inspector === 'object' && props.inspector !== null
-        && 'subject' in props.inspector && 'draft' in props.inspector && 'onChange' in props.inspector
-        && typeof props.inspector.onChange === 'function';
-}
-
 describe('workflow editor body', () => {
     it('keeps the authoring Session in the one Settings/Agent details pane and retires its hidden renderer', async () => {
         const harness = await loadHarness();
@@ -479,6 +473,25 @@ describe('workflow editor body', () => {
         expect(next.blocks[0].document.text).toBe('Analyze the repository');
     });
 
+    it('authors a canonical participant input or ordered list through the existing type field', async () => {
+        const { WorkflowInputsEditor } = await import('@/components/workflows/editor/WorkflowInputsEditor');
+        const onChange = vi.fn();
+        const inputs: WorkflowEditorDraft['inputs'] = [{ name: 'reviewer', valueType: 'json', required: true,
+            inputType: { hostType: 'session' }, defaultFrom: 'origin_session' }];
+        const screen = await renderScreen(<WorkflowInputsEditor inputs={inputs} onChange={onChange} testIDPrefix="workflow-editor" />);
+        const type = dropdownField(screen, 'workflow-editor-input-0-type');
+        await act(async () => { type.props.onSelect('agentParticipant'); });
+        expect(onChange).toHaveBeenLastCalledWith([{
+            name: 'reviewer', valueType: 'json', required: true, inputType: { hostType: 'agentParticipant' },
+        }]);
+        await act(async () => { type.props.onSelect('agentParticipantList'); });
+        expect(onChange).toHaveBeenLastCalledWith([{
+            name: 'reviewer', valueType: 'json', required: true, inputType: { hostType: 'agentParticipant' }, multiple: true,
+        }]);
+        await act(async () => { type.props.onSelect('string'); });
+        expect(onChange).toHaveBeenLastCalledWith([{ name: 'reviewer', valueType: 'string', required: true }]);
+    });
+
     it('labels parallel branches by localized position without authoring a schema field', async () => {
         const harness = await loadHarness();
         const changed = vi.fn();
@@ -518,6 +531,58 @@ describe('workflow editor body', () => {
         expect(screen.findByTestId('workflow-editor-inspector')).not.toBeNull();
         await screen.pressByTestIdAsync('workflow-editor-inspector-done');
         expect(screen.findByTestId('workflow-editor-inspector-options')).toBeNull();
+    });
+
+    it('places Step options against the step card while focus returns to the control that opened it', async () => {
+        const harness = await loadHarness();
+        const { Popover } = await import('@/components/ui/popover/Popover');
+        const screen = await renderBody(harness, { selectedBlockId: 'analyze' });
+        await screen.pressByTestIdAsync('workflow-editor-step-analyze-customize');
+        const popover = screen.root.findAllByType(Popover).find((node) => node.props.open);
+        expect(popover).toBeDefined();
+        // The card is what the panel avoids; the chip is where focus comes back to.
+        expect(popover!.props.anchorRef).not.toBe(popover!.props.focusReturnRef);
+        expect(popover!.props.placement).toBe('auto-vertical');
+    });
+
+    it('keeps the open inspector anchored to the remounted step card across responsive layouts', async () => {
+        const harness = await loadHarness();
+        const { Popover } = await import('@/components/ui/popover/Popover');
+        const cardNodes: object[] = [];
+        const element = <harness.WorkflowEditorBody draft={buildDraft(harness)} onChange={() => {}}
+            machineName="Mac Studio" composerScope={MACHINE_COMPOSER_SCOPE} selectedBlockId="analyze" onSelectBlock={() => {}}
+            onCustomizeBlock={() => {}} view="steps" onChangeView={() => {}} onRunNow={() => {}} />;
+        const screen = await renderScreen(element, { createNodeMock: node => {
+            // The placement ref is on the outer listitem, not the inner step editor's testID.
+            if (node.props.role !== 'listitem') return undefined;
+            // A real remount receives a new platform node; the inspector must measure that node.
+            const card = { measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(100, 100, 600, 160) };
+            cardNodes.push(card);
+            return card;
+        } });
+        const currentAnchor = () => screen.findAllByType(Popover).find(node => node.props.open)?.props.anchorRef.current;
+        await screen.pressByTestIdAsync('workflow-editor-step-analyze-customize');
+        expect(currentAnchor() === cardNodes.at(-1)).toBe(true);
+        const firstCard = currentAnchor();
+        windowDimensions = { width: 390, height: 844 };
+        await screen.update(React.cloneElement(element));
+        windowDimensions = { width: 1440, height: 1000 };
+        await screen.update(React.cloneElement(element));
+        expect(cardNodes.at(-1)).not.toBe(firstCard);
+        expect(currentAnchor() === cardNodes.at(-1)).toBe(true);
+        expect(screen.findHostByTestId('workflow-editor-inspector-done')).not.toBeNull();
+    });
+
+    it('keeps the Step options header outside the page that scrolls', async () => {
+        const harness = await loadHarness();
+        const screen = await renderBody(harness, { selectedBlockId: 'analyze' });
+        await screen.pressByTestIdAsync('workflow-editor-step-analyze-customize');
+        const page = screen.findByTestId('workflow-editor-inspector-options-page');
+        expect(page).not.toBeNull();
+        const idsIn = (root: NonNullable<typeof page>) => root.findAll((node) => typeof node.props.testID === 'string').map((node) => node.props.testID as string);
+        expect(idsIn(page!)).not.toContain('workflow-editor-inspector-done');
+        expect(idsIn(page!)).toContain('workflow-editor-inspector-review');
+        expect(screen.findByTestId('workflow-editor-inspector-done')).not.toBeNull();
     });
 
     it('offers only the engine picker and Permissions in workflow Agent and model settings', async () => {
@@ -599,7 +664,7 @@ describe('workflow editor body', () => {
         expect(screen.findByTestId('workflow-editor-defaults')).not.toBeNull();
     });
 
-    it('opens the same controlled step options in the canonical modal on a phone', async () => {
+    it('opens the same controlled step options as the canonical phone sheet', async () => {
         windowDimensions = { width: 390, height: 844 };
         paneState.detailsAvailable = false;
         const harness = await loadHarness();
@@ -609,21 +674,16 @@ describe('workflow editor body', () => {
         expect(screen.findByTestId('workflow-editor-inspector')).toBeNull();
         await screen.pressByTestIdAsync('workflow-editor-step-analyze-customize');
 
-        expect(screen.visibleModals()).toHaveLength(1);
-        const config = screen.visibleModals()[0];
-        expect(isInspectorModalConfig(config)).toBe(true);
-        if (!isInspectorModalConfig(config)) throw new Error('Expected the Workflow inspector modal configuration');
-        expect(config.chrome).toMatchObject({ kind: 'card', bodyScroll: 'auto' });
-        expect(config.focusReturnRef).toBeDefined();
-        expect(config.props.inspector.subject).toEqual({ kind: 'block', blockId: 'analyze' });
-        await act(async () => {
-            config.props.inspector.onChange({ ...config.props.inspector.draft, name: 'Changed through inspector' });
-        });
-        expect(changed).toHaveBeenCalledTimes(1);
-        config.focusReturnRef.current.focus();
-        expect(promptFocus).toHaveBeenCalledTimes(1);
-        await screen.retireContent();
+        // One presentation owner: the anchored popover, which a phone shows as the shared sheet
+        // (no centred card modal beside it).
         expect(screen.visibleModals()).toEqual([]);
+        const sheets = screen.root.findAll((node) => node.props?.open === true && node.props?.phonePresentation === 'sheet'
+            && node.props?.accessibilityLabel === 'workflows.page.inspector.stepOptions');
+        expect(sheets.length).toBeGreaterThan(0);
+        expect(screen.findByTestId('workflow-editor-inspector-options')).not.toBeNull();
+        expect(changed).not.toHaveBeenCalled();
+        await screen.pressByTestIdAsync('workflow-editor-inspector-done');
+        expect(screen.findByTestId('workflow-editor-inspector-options')).toBeNull();
     });
 
     /**
@@ -1571,8 +1631,10 @@ describe('workflow editor body', () => {
         expect(draft.blocks[0]).not.toHaveProperty('pauseForReview');
 
         await screen.pressByTestIdAsync('workflow-editor-inspector-result');
-        await screen.pressByTestIdAsync('workflow-editor-inspector-result-kind:json');
-        expect(draft.blocks[0]).toMatchObject({ result: { kind: 'json' } });
+        await screen.pressByTestIdAsync('workflow-editor-inspector-result-kind:fields');
+        expect(draft.blocks[0]).toMatchObject({ result: { kind: 'json', schema: {
+            type: 'object', properties: { field: { type: 'string' } }, required: ['field'], additionalProperties: false,
+        } } });
         await screen.pressByTestIdAsync('workflow-editor-inspector-back');
 
         await screen.pressByTestIdAsync('workflow-editor-inspector-only-when');

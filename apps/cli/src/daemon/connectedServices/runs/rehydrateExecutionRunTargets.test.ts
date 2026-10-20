@@ -108,7 +108,7 @@ describe('reattestRunningExecutionRunConnectedServices', () => {
 });
 
 describe('rehydrateLiveExecutionRunTargets', () => {
-  it('retries terminal cleanup from the bounded receipt without reconstructing run authority', async () => {
+  it.each(['session-1', null])('retries terminal cleanup from the bounded receipt without reconstructing run authority (Session=%s)', async (sessionId) => {
     const cleanupTerminal = vi.fn(async () => true);
     const clearTerminalCleanupReceipt = vi.fn(async () => undefined);
     const proveRunnerLive = vi.fn(async () => true);
@@ -123,7 +123,7 @@ describe('rehydrateLiveExecutionRunTargets', () => {
     const result = await rehydrateLiveExecutionRunTargets({
       markers: [{
         runId: receipt.runKey,
-        happySessionId: 'session-1',
+        happySessionId: sessionId,
         pid: 4321,
         status: 'succeeded',
         finishedAtMs: 20,
@@ -139,7 +139,7 @@ describe('rehydrateLiveExecutionRunTargets', () => {
     expect(cleanupTerminal).toHaveBeenCalledWith({
       runId: receipt.runKey,
       runnerPid: 4321,
-      sessionId: 'session-1',
+      sessionId,
       receipt,
     });
     expect(clearTerminalCleanupReceipt).toHaveBeenCalledWith(receipt.runKey);

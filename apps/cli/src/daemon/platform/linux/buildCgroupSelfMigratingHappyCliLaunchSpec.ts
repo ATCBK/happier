@@ -132,16 +132,19 @@ export function buildCgroupProcessLaunchSpec(params: Readonly<{
   const unit = params.unit ?? `happier-session-${randomUUID().replaceAll('-', '')}.scope`;
   const targetSpec = params.sessionExitCapture
     ? buildSessionScopeExitLaunchSpec({ launchSpec: baseLaunchSpec, unit, capture: params.sessionExitCapture }) : baseLaunchSpec;
+  const requiresScope = params.memoryHighBytes !== undefined && params.memoryHighBytes !== null;
   return {
     filePath: '/bin/sh',
     linuxLaunchUnit: unit,
     args: [
       '-c',
-      'target_dir="$HAPPIER_DAEMON_SESSION_CGROUP_BASE_DIR/$HAPPIER_DAEMON_PROCESS_CGROUP_UNIT"; mkdir -p "$target_dir" 2>/dev/null || true; '
-        + (params.memoryHighBytes === undefined || params.memoryHighBytes === null ? ''
-          : 'printf "%s\\n" "$HAPPIER_DAEMON_SESSION_MEMORY_HIGH_BYTES" > "$target_dir/memory.high" || exit; ')
+      'target_dir="$HAPPIER_DAEMON_SESSION_CGROUP_BASE_DIR/$HAPPIER_DAEMON_PROCESS_CGROUP_UNIT"; if mkdir -p "$target_dir"'
+        + (requiresScope ? '' : ' 2>/dev/null') + '; then '
+        + (requiresScope ? 'printf "%s\\n" "$HAPPIER_DAEMON_SESSION_MEMORY_HIGH_BYTES" > "$target_dir/memory.high" || exit; ' : '')
         + 'printf "%s\\n" "$$" > "$target_dir/cgroup.procs" 2>/dev/null || '
-        + (params.memoryHighBytes === undefined || params.memoryHighBytes === null ? 'true' : 'exit') + '; exec "$@"',
+        + (requiresScope ? 'exit' : 'true')
+        + '; ' + (requiresScope ? 'else exit; ' : '')
+        + 'fi; exec "$@"',
       'sh', targetSpec.filePath, ...targetSpec.args,
     ],
     env: {
@@ -149,8 +152,7 @@ export function buildCgroupProcessLaunchSpec(params: Readonly<{
       HAPPIER_DAEMON_SESSION_CGROUP_BASE_DIR: params.scope.baseDir,
       HAPPIER_DAEMON_PROCESS_CGROUP_UNIT: unit,
       HAPPIER_DAEMON_SPAWN_SELF_MIGRATE_CGROUP: '',
-      ...(params.memoryHighBytes === undefined || params.memoryHighBytes === null ? {}
-        : { HAPPIER_DAEMON_SESSION_MEMORY_HIGH_BYTES: String(params.memoryHighBytes) }),
+      ...(requiresScope ? { HAPPIER_DAEMON_SESSION_MEMORY_HIGH_BYTES: String(params.memoryHighBytes) } : {}),
     },
   };
 }

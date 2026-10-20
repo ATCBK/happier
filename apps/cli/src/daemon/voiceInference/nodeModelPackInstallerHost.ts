@@ -28,8 +28,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { createReadStream } from 'node:fs';
-import { appendFile, mkdir, readFile, readdir, rename, rm, stat, statfs, writeFile } from 'node:fs/promises';
+import { appendFile, copyFile, mkdir, readFile, readdir, rename, rm, stat, statfs, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import { logger } from '../../ui/logger';
 
 import { filePathParts } from '@happier-dev/protocol/voice/modelPacks/pathSafety';
 import type {
@@ -428,11 +429,25 @@ export function createNodeModelPackInstallerHost(opts: {
       }
 
       return {
+        copyInstalledFile: async (filePath) => {
+          const target = scratchPath(filePath);
+          await mkdir(dirname(target), { recursive: true });
+          try {
+            await copyFile(join(liveDir, ...filePathParts(filePath)), target);
+            return true;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') return false;
+            throw error;
+          }
+        },
         partialByteLength: async (filePath) => {
           try {
             const info = await stat(scratchPath(filePath));
             return info.isFile() ? info.size : 0;
-          } catch {
+          } catch (error) {
+            if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+              logger.warnLocalFile('model_pack_partial_stat_failed', error);
+            }
             return 0;
           }
         },
@@ -455,7 +470,7 @@ export function createNodeModelPackInstallerHost(opts: {
           }
         },
         resetPartial: async (filePath) => {
-          await rm(scratchPath(filePath), { force: true }).catch(() => undefined);
+          await rm(scratchPath(filePath), { force: true });
         },
         appendDownloadedChunk: async (filePath, chunk) => {
           const target = scratchPath(filePath);
@@ -482,7 +497,7 @@ export function createNodeModelPackInstallerHost(opts: {
             recovery: null,
           };
           if ((await pathExists(liveDir)) && (await pathExists(backupDir)) && !(await pathExists(intentFile))) {
-            await rm(backupDir, { recursive: true, force: true }).catch(() => undefined);
+            await rm(backupDir, { recursive: true, force: true });
           }
           // Host-owned scratch metadata is never part of the installed pack.
           await rm(resumePlanFile, { force: true });
@@ -541,11 +556,13 @@ export function createNodeModelPackInstallerHost(opts: {
             },
             commit: async () => {
               if (promotionSettled) return;
-              promotionSettled = true;
               // Clearing intent is the commit linearization point. If cleanup
               // crashes afterwards, startup sees an orphan backup and drops it.
-              await rm(intentFile, { force: true }).catch(() => undefined);
-              await rm(backupDir, { recursive: true, force: true }).catch(() => undefined);
+              await rm(intentFile, { force: true });
+              promotionSettled = true;
+              await rm(backupDir, { recursive: true, force: true }).catch((error: unknown) => {
+                logger.warnLocalFile('model_pack_backup_cleanup_failed', error);
+              });
             },
             rollback: async () => {
               if (promotionSettled) return;
@@ -570,7 +587,9 @@ export function createNodeModelPackInstallerHost(opts: {
           // successful promote consumes it (scratch was renamed into live). Nothing
           // to clean here — the stable scratch is intentionally retained.
           if (promoted) {
-            await rm(scratchDir, { recursive: true, force: true }).catch(() => undefined);
+            await rm(scratchDir, { recursive: true, force: true }).catch((error) => {
+              logger.warnLocalFile('model_pack_staging_cleanup_failed', error);
+            });
           }
           release();
         },

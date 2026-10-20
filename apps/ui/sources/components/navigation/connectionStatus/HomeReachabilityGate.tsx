@@ -39,6 +39,51 @@ export function useActiveHomeUnavailable(): boolean {
     return resolveHomeConnectionSummary({ healthKind: health.kind }).kind === 'unavailable';
 }
 
+/** The canonical connection summary of the applied Home, read without subscribing to its machines. */
+function readAppliedHomeSummaryKind() {
+    if (!isAppliedActiveServerRuntimeAvailable()) return null;
+    const state = storage.getState();
+    const serverId = getAppliedActiveServerSnapshot().serverId;
+    const syncError = selectSyncErrorForServer(state.syncError, serverId);
+    const statuses = state.machineListStatusByServerId;
+    const keys = resolveServerScopedMachineInventoryKeys({ serverId, machineListByServerId: statuses });
+    const status = keys.map(key => statuses[key]).find(value => value !== undefined) ?? 'idle';
+    // Machine counts refine connected-state labels but cannot make a Home
+    // unavailable. Its list's error/sign-in state still enters the same classifier.
+    const health = resolveConnectionHealth({ socketStatus: state.socketStatus,
+        endpointStatus: state.endpointStatus, endpointReason: state.endpointReason,
+        hasSyncError: Boolean(syncError), syncErrorKind: syncError?.kind,
+        machineGroups: [{ machineCount: null, onlineCount: null, status }] });
+    return resolveHomeConnectionSummary({ healthKind: health.kind }).kind;
+}
+
+function subscribeAppliedHomeSummary(listener: () => void): () => void {
+    const unsubscribe = storage.subscribe(listener);
+    const unsubscribeApplied = subscribeAppliedActiveServer(listener);
+    const unsubscribeAvailability = subscribeAppliedActiveServerRuntimeAvailability(listener);
+    return () => { unsubscribe(); unsubscribeApplied(); unsubscribeAvailability(); };
+}
+
+/**
+ * Whether the Home this device uses is still being reached (its connection summary reads "reconnecting"):
+ * right after sign-in, a restart or a network change. A read that fails in that gap has not settled
+ * into a failure; it reads as loading and is read again once the Home answers or is declared unreachable.
+ */
+export function useSettlingHomeServerId(): string | null {
+    // Until the connection manager has applied the Home, the connection health owner reads it as connecting too.
+    const settling = React.useSyncExternalStore(subscribeAppliedHomeSummary,
+        () => !isAppliedActiveServerRuntimeAvailable() || readAppliedHomeSummaryKind() === 'reconnecting', () => false);
+    const reportedServerId = useReportedHomeServerId();
+    return settling ? reportedServerId : null;
+}
+
+export function useActiveHomeSettling(homeServerId?: string): boolean {
+    const settlingServerId = useSettlingHomeServerId();
+    // Only the Home this device uses has a connection summary; another Home's reads settle on their own.
+    return settlingServerId !== null && (homeServerId === undefined
+        || areServerProfileIdentifiersEquivalent(homeServerId, settlingServerId));
+}
+
 /**
  * Whether a failed read that needed only these Homes is explained by the Home this device uses being
  * unreachable: every one of them is that Home, and the canonical connection summary says it is
@@ -49,29 +94,8 @@ export function useFailureExplainedByUnreachableHome(homeServerIds: readonly str
     // A closed or non-pending caller observes no health. Pending callers select only
     // the Home's unavailable bit, never its machine inventory or display details.
     const enabled = homeServerIds.length > 0;
-    const readUnavailable = React.useCallback(() => {
-        if (!enabled || !isAppliedActiveServerRuntimeAvailable()) return false;
-        const state = storage.getState();
-        const serverId = getAppliedActiveServerSnapshot().serverId;
-        const syncError = selectSyncErrorForServer(state.syncError, serverId);
-        const statuses = state.machineListStatusByServerId;
-        const keys = resolveServerScopedMachineInventoryKeys({ serverId, machineListByServerId: statuses });
-        const status = keys.map(key => statuses[key]).find(value => value !== undefined) ?? 'idle';
-        // Machine counts refine connected-state labels but cannot make a Home
-        // unavailable. Its list's error/sign-in state still enters the same classifier.
-        const health = resolveConnectionHealth({ socketStatus: state.socketStatus,
-            endpointStatus: state.endpointStatus, endpointReason: state.endpointReason,
-            hasSyncError: Boolean(syncError), syncErrorKind: syncError?.kind,
-            machineGroups: [{ machineCount: null, onlineCount: null, status }] });
-        return resolveHomeConnectionSummary({ healthKind: health.kind }).kind === 'unavailable';
-    }, [enabled]);
-    const subscribeUnavailable = React.useCallback((listener: () => void) => {
-        if (!enabled) return () => {};
-        const unsubscribe = storage.subscribe(listener);
-        const unsubscribeApplied = subscribeAppliedActiveServer(listener);
-        const unsubscribeAvailability = subscribeAppliedActiveServerRuntimeAvailability(listener);
-        return () => { unsubscribe(); unsubscribeApplied(); unsubscribeAvailability(); };
-    }, [enabled]);
+    const readUnavailable = React.useCallback(() => enabled && readAppliedHomeSummaryKind() === 'unavailable', [enabled]);
+    const subscribeUnavailable = React.useCallback((listener: () => void) => enabled ? subscribeAppliedHomeSummary(listener) : () => {}, [enabled]);
     const unavailable = React.useSyncExternalStore(subscribeUnavailable, readUnavailable, readUnavailable);
     const reportedServerId = useReportedHomeServerId();
     return unavailable

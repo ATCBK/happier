@@ -27,7 +27,6 @@ function createPostSendReactionPort(metadataOverrides?: Partial<Metadata>): Read
     port: {
       sessionId: 'session-1',
       updateMetadata,
-      updateAgentState: vi.fn(),
       getMetadataSnapshot: () => metadata,
       usageObservationPublisher: { publish },
     },

@@ -229,6 +229,7 @@ async function waitForActionDelay(delayMs, signal) {
 const issueDogfoodPlugin = definePlugin({
   id: 'acme.composer.issue-dogfood',
   version: '0.0.0',
+  entrypoints: { daemon: './dist/daemon.mjs' },
   settings: {
     'action-preferences': {
       title: 'External Action preferences',
@@ -313,6 +314,17 @@ const issueDogfoodPlugin = definePlugin({
         'inspectComposerContent',
         'releaseComposerContent',
       ],
+    }, {
+      id: 'discussion-surface',
+      kind: 'reactNative',
+      artifact: ISSUE_SURFACE_ARTIFACT_ID,
+      requiredHostMethods: [
+        'readDiscussionComposer',
+        'watchComposer',
+        'applyComposer',
+        'focusComposer',
+        'acquireComposerInputLock',
+      ],
     }],
   },
   resources: {
@@ -373,6 +385,17 @@ const issueDogfoodPlugin = definePlugin({
       }),
     },
     controls: {
+      'discussion-helper': defineComposerControl({
+        label: 'Discussion helper',
+        icon: 'preview',
+        scopes: ['discussion'],
+        interaction: {
+          kind: 'surface',
+          renderer: 'discussion-surface',
+          presentation: 'popover',
+          layout: 'content',
+        },
+      }),
       'issue-control': defineComposerControl({
         label: 'Issue',
         icon: 'error',

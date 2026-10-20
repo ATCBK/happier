@@ -8,9 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   FeatureDecision,
   FeatureId,
-  RuntimeActionExecute,
   ActionOperationSnapshotV1,
 } from '@happier-dev/protocol';
+import type { FrontDoorRuntimeActionExecute as RuntimeActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { createProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -290,7 +290,7 @@ describe('LocalServicesSurfaceHost', () => {
           prepareApprovalOutcome = { artifactId: prepareApprovalId };
           return { kind: 'approval_request_created', actionId: request.actionId, artifactId: prepareApprovalId };
         }
-        // A decided retry (This time) runs a new setup; the first ask is the held one.
+        // The decided retry returns the same held setup after consent clears.
         return { operation: requests.filter(value => value.actionId === 'projects.prepare').length > 1 ? running : held };
       }
       const serviceStarts = requests.filter(value => value.actionId === 'localServices.launcher.start');
@@ -344,12 +344,12 @@ describe('LocalServicesSurfaceHost', () => {
           JSON.stringify({ rpc: rpc.mock.calls.map(([request]) => ({ method: request.method, payload: request.payload })),
             paths: home.requests.map(value => value.path) })).toHaveLength(decision === 'accept' ? 1 : 0);
         await flushHookEffects();
-        // This time runs setup once through the Scripts path; remembering resumes the held setup instead.
+        // This time explicitly resumes the held setup; remembering wakes its existing wait.
         expect(requests.map(value => value.actionId)).toEqual(decision === 'accept'
           ? ['localServices.launcher.start', 'projects.prepare']
           : ['localServices.launcher.start', 'projects.prepare', 'projects.prepare']);
         if (decision === 'acceptOnce') expect(requests[2]?.input).toEqual({ workspace, phase: 'setup',
-          expectedEffectDigest: consent.reviewedEffectDigest, consentScope: 'thisTime' });
+          expectedEffectDigest: consent.reviewedEffectDigest, consentScope: 'thisTime', heldOperationId: held.operationId });
         const afterDecision = requests.length;
         act(() => actionOperationStore.mergeSnapshots({ serverId, snapshots: [{ ...running, revision: 3,
           observation: { kind: 'outcome_uncertain', code: 'setup_ack_unknown' } }] }));
@@ -1077,6 +1077,7 @@ describe('LocalServicesSurfaceHost', () => {
       snapshot: inventorySnapshotAt(1_000, []),
     }));
     let launcherReads = 0;
+    let serviceStarted = false;
     const launcherSnapshotClient = vi.fn(async () => {
       launcherReads += 1;
       return {
@@ -1087,7 +1088,7 @@ describe('LocalServicesSurfaceHost', () => {
           sessionId: 'session-a',
           updatedAt: 3_000 + launcherReads,
           // The daemon only knows about the new service from the scan that just ran.
-          targets: launcherReads > 1 ? [startedTarget] : [],
+          targets: serviceStarted ? [startedTarget] : [],
         },
       };
     });
@@ -1123,6 +1124,7 @@ describe('LocalServicesSurfaceHost', () => {
 
     // The dev server starts; the daemon answers the parked watch with the newer snapshot.
     await act(async () => {
+      serviceStarted = true;
       answerWatch?.({
         ok: true,
         changed: true,

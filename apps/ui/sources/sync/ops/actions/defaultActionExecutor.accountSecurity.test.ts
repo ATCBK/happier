@@ -24,18 +24,24 @@ import { resetRuntimeFetch, setRuntimeFetch, type RuntimeFetch } from '@/utils/s
 import { invalidateAccountEncryptionModeCache } from '@/sync/api/account/apiAccountEncryptionMode';
 
 import { createDefaultActionExecutor } from './defaultActionExecutor';
+import { captureLazyActionAccountContext } from './actionAccountContext';
 import { createAccountSecurityActionClient } from '@/components/settings/account/accountSecurityActionClient';
 import { describeEmailPasswordFailure } from '@/components/account/auth/emailPassword/emailPasswordFormModel';
 import { AuthProvider, getCurrentAuth } from '@/auth/context/AuthContext';
 import { AccountEmailPasswordSection } from '@/components/settings/account/AccountEmailPasswordSection';
 import { resetAccountSecurityProjectionStoreForTests } from '@/components/settings/account/accountSecurityProjectionStore';
-import { renderScreen } from '@/dev/testkit';
+import { createDeferred, renderScreen } from '@/dev/testkit';
+import { createDesktopSecureStorageBoundary } from '@/dev/testkit/mocks/desktopSecureStorage';
+import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { nativePasswordTranslations } from '@/text/translations/nativePasswordTranslations';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { disposeIrohHomeTunnelRuntime, getIrohHomeTunnelRuntime } from '@/sync/runtime/nativeIrohTunnels/runtime';
 
 vi.mock('socket.io-client', async importOriginal => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+// Desktop's native vault is read through the SDK on every admission. Mobile's
+// credential cache would otherwise bypass the held/faulting OS reads below.
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 installDisconnectedServerSocketBoundary();
 const initialState = getStorage().getState();
 const tokenWithPayload = (payload: object) => `e30.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.signature`;
@@ -51,9 +57,35 @@ describe('default Account Security Action transport', () => {
     let previousAuth: ReturnType<typeof getCurrentAuth>;
     let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
     let securityRequest: RuntimeFetch;
+    let authorityCredentialWrite: Awaited<ReturnType<typeof TokenStorage.setCredentialsForServerUrlWithRollback>> = null;
+    let baseCredentialWrite: Awaited<ReturnType<typeof TokenStorage.setCredentialsForServerUrlWithRollback>> = null;
+    let webLocks: ReturnType<typeof installWebLockManagerMock>;
+    let restoreDesktopBridge: () => void;
+    let credentialReadGate: (() => Promise<void>) | null = null;
+    let releaseCredentialRead: (() => void) | null = null;
     const requests: Array<{ path: string; method: string; body: unknown }> = [];
 
     beforeEach(async () => {
+        webLocks = installWebLockManagerMock();
+        const vault = createDesktopSecureStorageBoundary();
+        const credentialKeys = new Set<string>();
+        const previousBridge = Object.getOwnPropertyDescriptor(globalThis, '__TAURI_INTERNALS__');
+        // Keep this OS bridge alive through Account rollback, even if global
+        // test cleanup has already removed globals installed with vi.stubGlobal.
+        Object.defineProperty(globalThis, '__TAURI_INTERNALS__', { configurable: true, value: {
+            invoke: async (command: string, args?: Readonly<Record<string, unknown>>) => {
+                if (command === 'desktop_secure_storage_read' && typeof args?.key === 'string' && credentialKeys.has(args.key)) {
+                    await credentialReadGate?.();
+                }
+                return await vault.invoke(command, args);
+            },
+        } });
+        restoreDesktopBridge = () => {
+            if (previousBridge) Object.defineProperty(globalThis, '__TAURI_INTERNALS__', previousBridge);
+            else Reflect.deleteProperty(globalThis, '__TAURI_INTERNALS__');
+        };
+        credentialReadGate = null;
+        releaseCredentialRead = null;
         previousAuth = getCurrentAuth();
         setCurrentAuth(null);
         await loadSyncSingletonForTests();
@@ -66,7 +98,11 @@ describe('default Account Security Action transport', () => {
         serverId = profile.id;
         securityResponseOverride = null;
         getStorage().getState().activateProfileScope({ serverId, accountId: 'account-a' });
-        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: createAccountTokenForTests('account-a') });
+        baseCredentialWrite = await TokenStorage.setCredentialsForServerUrlWithRollback(profile.serverUrl,
+            { serverId: resolveServerProfileScopeIdForIdentifier(serverId) }, { token: createAccountTokenForTests('account-a') });
+        if (!baseCredentialWrite) throw new Error('Device storage refused base credential fixture');
+        for (const key of vault.values.keys()) credentialKeys.add(key);
+        expect(credentialKeys.size).toBeGreaterThan(0);
         requests.length = 0;
         securityRequest = async (input, init) => {
             const path = new URL(String(input)).pathname;
@@ -89,9 +125,16 @@ describe('default Account Security Action transport', () => {
     });
 
     afterEach(async () => {
+        releaseCredentialRead?.();
+        releaseCredentialRead = null;
+        credentialReadGate = null;
         await screen?.unmount();
+        await authorityCredentialWrite?.rollback();
+        authorityCredentialWrite = null;
         await connection?.dispose();
         connection = undefined;
+        await baseCredentialWrite?.rollback();
+        baseCredentialWrite = null;
         setCurrentAuth(previousAuth);
         await disposeIrohHomeTunnelRuntime();
         screen = null;
@@ -100,6 +143,8 @@ describe('default Account Security Action transport', () => {
         vi.restoreAllMocks();
         getStorage().setState(initialState, true);
         invalidateAccountEncryptionModeCache();
+        restoreDesktopBridge();
+        webLocks.restore();
     });
 
     it('projects closed installed credential kinds without promoting terminals or malformed bearers', async () => {
@@ -125,7 +170,7 @@ describe('default Account Security Action transport', () => {
         }
     });
 
-    it('refuses automation surfaces even when the caller supplies present-user authority', async () => {
+    it('refuses unsupported automation surfaces even when the caller supplies present-user authority', async () => {
         const executor = createDefaultActionExecutor();
         for (const surface of ['voice', 'plugin'] as const) {
             const result = await executor.execute('approval.request.decide', { artifactId: 'missing', decision: 'approve' }, {
@@ -136,15 +181,29 @@ describe('default Account Security Action transport', () => {
         expect(requests.some(({ path }) => path.startsWith('/v1/artifacts'))).toBe(false);
     });
 
-    it('refuses a terminal bearer on the UI even when the caller supplies present-user authority', async () => {
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockResolvedValue({ token: tokenWithPayload({
-            sub: 'account-a', provenance: { v: 1, kind: 'terminal', authority: 'account_automation' },
-        }) });
-        await expect(createDefaultActionExecutor().execute('approval.request.decide', {
-            artifactId: 'missing', decision: 'approve',
-        }, { serverId, surface: 'ui', authority: 'present_user', bypassApprovals: true })).resolves.toMatchObject({
+    it.each([
+        { credential: 'terminal', authority: 'present_user' },
+        { credential: 'account', authority: 'account_automation' },
+    ] as const)('refuses a $credential UI password write with requested $authority authority', async ({ credential, authority }) => {
+        // The deciding security vectors replace the real stored credential
+        // through the same native vault as every other case in this suite.
+        authorityCredentialWrite = await TokenStorage.setCredentialsForServerUrlWithRollback('https://security-actions.test',
+            { serverId: resolveServerProfileScopeIdForIdentifier(serverId) }, { token: credential === 'account'
+            ? createAccountTokenForTests('account-a') : tokenWithPayload({
+                sub: 'account-a', provenance: { v: 1, kind: 'terminal', authority: 'account_automation' },
+            }) });
+        if (!authorityCredentialWrite) throw new Error('Device storage refused authority credential fixture');
+        const captured = await captureLazyActionAccountContext(serverId);
+        try {
+            expect({ accountId: captured.accountId, credential: captured.credentialAuthorityKind })
+                .toEqual({ accountId: 'account-a', credential });
+        } finally { captured.dispose(); }
+        await expect(createDefaultActionExecutor().execute('account.password.remove', {
+            v: 1, kind: 'plain', expectedCredentialRevision: 4, currentPassword: 'a sufficiently long password',
+        }, { serverId, surface: 'ui', authority, bypassApprovals: true })).resolves.toMatchObject({
             ok: false, errorCode: 'present_user_required',
         });
+        expect(requests.some(({ path }) => path === '/v1/account/password/remove')).toBe(false);
     });
 
     it('admits account UI authority on the captured Home', async () => {
@@ -182,14 +241,23 @@ describe('default Account Security Action transport', () => {
 
     it('allows mounted cancellation during Action credential admission without issuing a password write', async () => {
         const view = await openPasswordForm();
-        let release!: (value: { token: string }) => void;
-        const credentials = new Promise<{ token: string }>((resolve) => { release = resolve; });
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockReturnValueOnce(credentials);
-        act(() => { view.pressByTestId('settings-account-change-password-submit'); });
-        await act(async () => { await Promise.resolve(); });
-        await view.pressByTestIdAsync('settings-account-password-form-cancel');
-        release({ token: createAccountTokenForTests('account-a') });
-        await act(async () => { await credentials; });
+        const readReached = createDeferred<void>();
+        const readReleased = createDeferred<void>();
+        releaseCredentialRead = () => readReleased.resolve();
+        credentialReadGate = async () => {
+            credentialReadGate = null;
+            readReached.resolve();
+            await readReleased.promise;
+        };
+        try {
+            act(() => { view.pressByTestId('settings-account-change-password-submit'); });
+            await act(async () => { await readReached.promise; });
+            await view.pressByTestIdAsync('settings-account-password-form-cancel');
+        } finally {
+            await act(async () => { readReleased.resolve(); });
+            releaseCredentialRead = null;
+            credentialReadGate = null;
+        }
         expect(requests.some(({ path }) => path === '/v1/account/password/change')).toBe(false);
         await view.pressByTestIdAsync('settings-account-password');
         await vi.waitFor(() => expect(view.findByTestId('settings-account-new-password')?.props.editable).toBe(true));
@@ -291,7 +359,11 @@ describe('default Account Security Action transport', () => {
     }, 180_000);
 
     it('keeps credential preflight failure determinate before a password write', async () => {
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockRejectedValueOnce(new TypeError('credential store unavailable'));
+        let readReached = false;
+        credentialReadGate = async () => {
+            readReached = true;
+            throw new TypeError('credential store unavailable');
+        };
         const client = createAccountSecurityActionClient({ resolveServerId: () => serverId });
         let failure: unknown;
         try {
@@ -301,6 +373,8 @@ describe('default Account Security Action transport', () => {
                 newPassword: 'replacement password',
             });
         } catch (error) { failure = error; }
+        finally { credentialReadGate = null; }
+        expect(readReached).toBe(true);
         expect(failure).toBeInstanceOf(Error);
         expect(requests.some(({ path }) => path === '/v1/account/password/change')).toBe(false);
         expect(describeEmailPasswordFailure(failure).messageKey).toBe('settingsAccount.nativePassword.offline');

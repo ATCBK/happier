@@ -4,7 +4,7 @@ import { accountSettingsParse } from '@happier-dev/protocol/account/settings/acc
 import { RemoteHostRecordV1Schema, RemoteHostCatalogRowMutationV1Schema } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createCliRemoteHostStoreForOperation } from './remoteHostStore';
 import { createCliRemoteHostActionExecuteV1 } from '@/session/actions/cliActionDeps/createCliRemoteHostActionDeps';

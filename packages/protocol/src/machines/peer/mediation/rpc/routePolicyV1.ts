@@ -1,7 +1,7 @@
 import { EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1 } from '../../../../actions/externalActionApi.js';
 import { ACTION_OPERATION_RPC_METHODS_V1, ACTION_OPERATION_RPC_METHODS_V2 } from '../../../../actions/operations/v1.js';
-import { HOST_PRIVATE_PLUGIN_INSTALL_DECISION_RPC_METHOD } from '../../../../marketplace/pluginInstallDecisionV1.js';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '../../../../rpc/methods.js';
+import { resolveSocketRpcSessionAuthorization } from '../../../../rpc/socket.js';
 import { MachineLiveStreamRelayCapsV1Schema, type MachineLiveStreamRelayCaps } from '../stream/v1.js';
 import { resolveMachineRpcGovernance, type MachineRpcGovernanceClassification } from './governanceV1.js';
 import { MANAGED_ACTIVITY_READ_RPC_METHOD, MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD } from '../../../managed/managedIntentV1.js';
@@ -218,17 +218,6 @@ function actionSpecServerRequired(
   };
 }
 
-const HOST_PRIVATE_PLUGIN_INSTALL_DECISION_ROUTE_POLICY: MachineRpcRoutePolicyV1 = Object.freeze({
-  method: HOST_PRIVATE_PLUGIN_INSTALL_DECISION_RPC_METHOD,
-  routeClass: 'direct_medium_risk_receipted',
-  rationale: 'Present-user plugin installation approval mutates daemon-owned trust and installation state through a host-private exact-machine command; direct routing requires command receipt coverage.',
-  ownerPacket: 'PMS-5',
-  rpcClassification: 'internal_only',
-  commandReceiptRequired: true,
-  sharedMachineAccess: 'manage',
-  scope: DIRECT_EPHEMERAL_SCOPE,
-});
-
 /**
  * The Home relays one protected public Action to the exact selected Machine.
  * It stays server-required (the Home mints and binds the invocation authority)
@@ -368,7 +357,6 @@ const DIRECT_MEDIUM_RISK_RECEIPTED_POLICIES = Object.freeze([
   directMediumRiskReceipted(RPC_METHODS.DAEMON_PLUGIN_COLLECTION_CANDIDATE_PREPARATION_EXECUTE, 'Daemon-owned Collection candidate preparation invokes only exact trusted target callbacks and writes bounded non-authoritative Account Data stages; direct routing requires command receipt coverage.'),
   directMediumRiskReceipted(RPC_METHODS.DAEMON_PLUGIN_SECRET_SET, 'Daemon-local declared plugin-secret creation or replacement mutates the selected machine custody through its current generation-bound service; direct routing requires command receipt coverage.'),
   directMediumRiskReceipted(RPC_METHODS.DAEMON_PLUGIN_SECRET_DELETE, 'Daemon-local declared plugin-secret deletion mutates the selected machine custody through its current generation-bound service; direct routing requires command receipt coverage.'),
-  HOST_PRIVATE_PLUGIN_INSTALL_DECISION_ROUTE_POLICY,
   { ...serverRequired(RPC_METHODS.MACHINES_WORK_SUMMARY_GET, 'sharing',
     'Content-free Machine work summary requires current custodian or Manage admission at the Home.'), sharedMachineAccess: 'manage' },
   ...USAGE_SOURCE_ACTION_IDS.filter(id => id !== 'usage.sources.dismiss').map((method): MachineRpcRoutePolicyV1 => ({
@@ -436,6 +424,7 @@ const DAEMON_VOICE_AUDIO_DIRECT_POLICIES = Object.freeze(
 );
 
 const SESSION_DURABLE_METHODS = [
+  RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT,
   RPC_METHODS.SPAWN_HAPPY_SESSION, RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE, RPC_METHODS.SESSION_SPAWN_NEW, RPC_METHODS.DAEMON_SESSION_CREATION_PREPARE, RPC_METHODS.DAEMON_SPAWN_SESSION_ABANDON, RPC_METHODS.SESSION_CONTINUE_WITH_REPLAY, RPC_METHODS.SESSION_FORK, RPC_METHODS.SESSION_FORK_PROVIDER_SAFE,
   RPC_METHODS.SESSION_PERMISSION_RESPOND, RPC_METHODS.SESSION_USER_ACTION_ANSWER, RPC_METHODS.SESSION_PERMISSION_MODE_SET,
   RPC_METHODS.DAEMON_SESSION_CONNECTED_SERVICE_AUTH_SWITCH,
@@ -804,7 +793,6 @@ const MACHINE_MANAGEMENT_METHODS = new Set<string>([
   RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_LICENSE_ACCEPT,
   RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_REMOVE,
   RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_ALL,
-  HOST_PRIVATE_PLUGIN_INSTALL_DECISION_RPC_METHOD,
 ]);
 
 const MACHINE_CUSTODIAN_ONLY_METHODS = new Set<string>([
@@ -851,11 +839,16 @@ function withSharedMachineAccess(policy: MachineRpcRoutePolicyV1): MachineRpcRou
   const requesterTerminal = MACHINE_REQUESTER_TERMINAL_METHODS.has(policy.method);
   const handoffRead = policy.method === RPC_METHODS.DAEMON_SESSION_HANDOFF_EXISTING_STATE_CHECK_V3
     || policy.method === RPC_METHODS.DAEMON_SESSION_HANDOFF_CAPABILITY_V3_GET;
-  const custodianOnly = MACHINE_CUSTODIAN_ONLY_METHODS.has(policy.method)
+  // The daemon's detached Run manager is custodian-scoped, not partitioned by
+  // Machine requester. Attached Runs keep their separate exact Session access.
+  const custodianOnly = resolveSocketRpcSessionAuthorization(policy.method)?.machineScope === true
+    || MACHINE_CUSTODIAN_ONLY_METHODS.has(policy.method)
     || policy.method.startsWith('daemon.workspaceSync.')
     || policy.method.startsWith('daemon.terminal.') && !requesterTerminal
     || policy.method.startsWith('daemon.spawnSession.')
-    || policy.method.startsWith('daemon.sessionCreation.')
+    // The separate read-only method is absent on old guests. Never relax the
+    // existing materializing method: old guests do not enforce a read-only shape.
+    || policy.method.startsWith('daemon.sessionCreation.') && policy.method !== RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT
     || policy.method.startsWith('daemon.sessionHandoff.') && !handoffRead
     || policy.method.startsWith('daemon.externalSessions.')
     || policy.method.startsWith('daemon.directSessions.');
@@ -881,6 +874,7 @@ export const MACHINE_RPC_ROUTE_POLICIES = Object.freeze([
     ACTION_OPERATION_RPC_METHODS_V2.list, ACTION_OPERATION_RPC_METHODS_V2.get,
   ], 'auth', 'Operation observation requires current exact-Machine admission and reads only the verified requester Account scope; V1 and V2 share the same custody owner.'),
   serverRequired(ACTION_OPERATION_RPC_METHODS_V1.cancel, 'auth', 'Operation cancellation requires current exact-Machine admission; the existing operation owner admits Stop only within the verified requester Account scope.'),
+  serverRequired(RPC_METHODS.DAEMON_SERVICE_MOVE_START_CLAIM, 'auth', 'The SOURCE operation runner admits the exact requester-owned Move Start once, only while its coordinator is executing the Start phase.'),
   ...MANAGED_MACHINE_ACTION_IDS_V1.map((method): MachineRpcRoutePolicyV1 => ({
     method, routeClass: 'server_required', rationale: 'Managed-resource Actions require current Manage, exact installation and row admission before reviewed native effects.',
     ownerPacket: 'PMS-5', rpcClassification: 'action_spec_bound', actionSpecId: method,
@@ -949,6 +943,14 @@ export const MACHINE_RPC_ROUTE_POLICIES = Object.freeze([
   serverRequired(SESSION_RPC_METHODS.SESSION_GUARD_NOTICE, 'durable_session_write', 'Guard notices commit Session metadata and transcript receipts through the current owner on the authenticated exact-Session route.', SESSION_SERVER_REQUIRED_SCOPE),
   serverRequired(SESSION_RPC_METHODS.SESSION_AGENT_TOOL_CALL_V1, 'auth', 'Native Agent tool calls execute inside the live Session authority boundary and stay on the authenticated Session route.', SESSION_SERVER_REQUIRED_SCOPE),
   {
+    ...actionSpecServerRequired(SESSION_RPC_METHODS.SESSION_MESSAGE_REPLY, 'durable_session_write', 'Explicit replies publish through the exact admitted receiving Session and its current publisher.', 'session.message.reply', SESSION_SERVER_REQUIRED_SCOPE),
+    sharedMachineAccess: 'custodian_only',
+  } satisfies MachineRpcRoutePolicyV1,
+  serverRequired(SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1, 'auth', 'Discussion Agent posts retain the current authenticated Session publisher and original Discussion custody.', SESSION_SERVER_REQUIRED_SCOPE),
+  serverRequired(SESSION_RPC_METHODS.SESSION_MESSAGE_REPLY_OBSERVE_V1, 'auth', 'Reply observation changes only the original request through the authenticated source Session publisher.', SESSION_SERVER_REQUIRED_SCOPE),
+  actionSpecServerRequired(SESSION_RPC_METHODS.SESSION_NEEDS_YOU_RAISE, 'durable_session_write', 'Questions are raised by the admitted Session through its canonical request owner.', 'session.needs_you.raise', SESSION_SERVER_REQUIRED_SCOPE),
+  actionSpecServerRequired(SESSION_RPC_METHODS.SESSION_STRUCTURED_QUESTION_RESPOND_V1, 'durable_session_write', 'Structured question responses retain the authenticated responder and canonical question decision owner.', 'session.user_action.answer', SESSION_SERVER_REQUIRED_SCOPE),
+  {
     ...serverRequired(SESSION_RPC_METHODS.SESSION_PLUGIN_CATALOG_INVALIDATE_V1, 'auth', 'Daemon catalog invalidation is an exact Session-owner freshness signal; it grants no executable admission and stays on the authenticated Session route.', SESSION_SERVER_REQUIRED_SCOPE),
     sharedMachineAccess: 'custodian_only',
   } satisfies MachineRpcRoutePolicyV1,
@@ -989,7 +991,9 @@ export const MACHINE_RPC_ROUTE_POLICIES = Object.freeze([
   serverRequired(RPC_METHODS.SESSION_AGENT_TRANSITION_BRIEF_PREVIEW, 'ambiguous', 'Rebuilding the handoff a transcript divider stands for reads decrypted owner Session metadata and transcript rows and grants no authority; it is classified with the continuation READ it mirrors, not with the transition mutation it describes, and stays server-routed because its answer depends on server-authoritative session access.', SESSION_SERVER_REQUIRED_SCOPE),
   serverRequired(RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART, 'durable_session_write', 'Per-session runner restart depends on server-authoritative session write access and stays server-routed.', SESSION_SERVER_REQUIRED_SCOPE),
   serverRequired(RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2, 'durable_session_write', 'Process-attested Provider recovery restart depends on server-authoritative session write access and stays server-routed.', SESSION_SERVER_REQUIRED_SCOPE),
-  ...serverRequiredRows(SESSION_DURABLE_METHODS, 'durable_session_write', 'Session and execution-run lifecycle/state methods remain server-required because they can assign sequence, write durable session state, or fan out across devices.', SESSION_SERVER_REQUIRED_SCOPE),
+  ...SESSION_DURABLE_METHODS.map(method => serverRequired(method, 'durable_session_write',
+    'Session and execution-run lifecycle/state methods remain server-required; detached Runs use exact Machine admission while attached Runs retain Session authority.',
+    resolveSocketRpcSessionAuthorization(method)?.machineScope === true ? SERVER_REQUIRED_SCOPE : SESSION_SERVER_REQUIRED_SCOPE)),
   serverRequired(RPC_METHODS.STOP_SESSION, 'durable_session_write', 'Session stop is a durable session lifecycle write; a restricted Runner reaches it with the stop authority its own Session principal carries.', SESSION_SERVER_REQUIRED_SCOPE, 'stopSession'),
   ...serverRequiredRows(TRANSFER_CONTROL_METHODS, 'server_persistence', 'Transfer control-plane RPC remains server-required; PMS bounded-transfer flows own direct byte movement and durable token/control reconciliation.'),
   ...serverRequiredRows(TRANSFER_CONTROL_INBOUND_METHODS, 'server_persistence', 'Transfer control-plane RPC remains server-required; PMS bounded-transfer flows own direct byte movement and durable token/control reconciliation.', undefined, 'submitAgentInput'),
@@ -1029,7 +1033,6 @@ function collectRegisteredMachineRpcMethods(): readonly string[] {
   return Object.freeze([
     ...Object.values(RPC_METHODS),
     ...Object.values(SESSION_RPC_METHODS),
-    HOST_PRIVATE_PLUGIN_INSTALL_DECISION_RPC_METHOD,
     EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1,
     ...Object.values(ACTION_OPERATION_RPC_METHODS_V1), ...Object.values(ACTION_OPERATION_RPC_METHODS_V2),
     MANAGED_ACTIVITY_READ_RPC_METHOD, MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD, ...MANAGED_MACHINE_ACTION_IDS_V1,
@@ -1054,6 +1057,11 @@ export function resolveMachineRpcRoutePolicy(method: string): MachineRpcRoutePol
 export function resolveMachineRpcExternalActionEffectV1(method: string,
   binding?: ExternalActionExecutionAuthorizationV1['binding'],
   selectedTarget?: Readonly<{ machineId: string; installationId: string }>): string | null {
+  if (method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN) {
+    return binding && (binding.actionId === 'projects.script.run' || binding.actionId === 'projects.compute.exec'
+      || binding.actionId === 'projects.service.relocate')
+      && binding.target.kind === 'machine' && binding.target.machineId === binding.machineId ? binding.actionId : null;
+  }
   if (binding?.actionId === 'session.agent.transition') {
     // Only installed transition stop/activation packets use this composite root.
     // The decrypted receiver still admits resume semantics, not fresh spawn.

@@ -17,13 +17,20 @@ async function bundleFixture() {
         import { useState } from 'react';
         import { createRoot } from 'react-dom/client';
         import { Pressable, Text, TextInput, View } from 'react-native';
-        import { HappierFieldTextBox } from './src/presentation/form/FieldBox.tsx';
+        import { HappierFieldTextBox, resolveHappierFieldTextInputMetrics } from './src/presentation/form/FieldBox.tsx';
+        import { scaleTextStyleMetrics } from './src/presentation/text/textStyleScale.ts';
         const colors = { borderColor: '#999', backgroundColor: '#fff' };
         function Form() {
           const [port, setPort] = useState('587');
           return <>
             <div id="normal" style={{ width: 320 }}>
               <HappierFieldTextBox colors={colors}><TextInput testID="normal-field" value="Draft" /></HappierFieldTextBox>
+            </div>
+            <div id="large" style={{ width: 320 }}>
+              <HappierFieldTextBox colors={colors}>
+                <TextInput testID="large-field" value="lorem ipsum dolor sit amet"
+                  style={scaleTextStyleMetrics(resolveHappierFieldTextInputMetrics({ nativeMinimumTargetSize: 48 }), 2.5)} />
+              </HappierFieldTextBox>
             </div>
             <div id="paired" style={{ width: 320 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -51,10 +58,22 @@ async function bundleFixture() {
             const normal = document.querySelector('[data-testid="normal-field"]').parentElement.parentElement;
             if (Math.abs(normal.getBoundingClientRect().width - width) > 1) throw new Error('Ordinary stacked field no longer spans its slot');
           }
-          return { pairedControlVisible: true, normalFieldSpansSlot: true };
+          const large = document.querySelector('[data-testid="large-field"]');
+          const style = getComputedStyle(large);
+          const availableHeight = large.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+          const context = document.createElement('canvas').getContext('2d');
+          context.font = style.fontWeight + ' ' + style.fontSize + ' ' + style.fontFamily;
+          const font = context.measureText(large.value);
+          const fontHeight = font.fontBoundingBoxAscent + font.fontBoundingBoxDescent;
+          if (parseFloat(style.fontSize) <= 30 || availableHeight < fontHeight) {
+            throw new Error('Enlarged field text is clipped: font size ' + style.fontSize + ', font height ' + fontHeight + ', available height ' + availableHeight);
+          }
+          return { pairedControlVisible: true, normalFieldSpansSlot: true, enlargedTextFits: true };
         };
       `,
     },
+    // Match the app's web platform resolution (for example react-native-svg).
+    resolveExtensions: ['.web.tsx', '.web.ts', '.web.jsx', '.web.js', '.tsx', '.ts', '.jsx', '.js', '.css', '.json'],
     bundle: true,
     write: false,
     jsx: 'automatic',
@@ -83,7 +102,7 @@ if (process.argv.includes('--bundle-only')) {
       await page.addScriptTag({ content });
       await page.getByTestId('port').waitFor();
       assert.deepEqual(await page.evaluate(() => window.checkFieldBoxes()), {
-        pairedControlVisible: true, normalFieldSpansSlot: true,
+        pairedControlVisible: true, normalFieldSpansSlot: true, enlargedTextFits: true,
       });
     } finally {
       await browser.close();

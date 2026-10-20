@@ -11,6 +11,7 @@ import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
+import type { ProjectSetupDecision } from './projectSetupConsentDecision';
 
 import { describeProjectCommandSource } from './projectScriptPresentation';
 import {
@@ -19,7 +20,7 @@ import {
   type ProjectSetupReviewPresentation,
 } from './projectSetupEffectPresentation';
 
-export type ProjectSetupScope = 'thisTime' | 'untilChanged';
+export type ProjectSetupScope = ProjectSetupDecision;
 
 /** The one-time choice is the default everywhere a setup review is decided; remembering is opt-in. */
 export const DEFAULT_PROJECT_SETUP_SCOPE: ProjectSetupScope = 'thisTime';
@@ -247,7 +248,7 @@ export const ProjectSetupReviewFacts = React.memo(function ProjectSetupReviewFac
               osUser: props.sharedRunAs,
               machine: props.machineName,
             })}
-            {' '}{t('machines.terminals.sharedOsDetail')}
+            {' '}{t('machines.terminals.sharedOsDetail', { machine: props.machineName })}
           </Text>
         </View>
       ) : null}
@@ -255,7 +256,7 @@ export const ProjectSetupReviewFacts = React.memo(function ProjectSetupReviewFac
   );
 });
 
-/** This time | Until it changes, with the consequence of the current choice (lab `s-scripts` SETUP). */
+/** One setup decision control, with the consequence of the current choice (lab `s-scripts` SETUP). */
 export const ProjectSetupScopeChoice = React.memo(function ProjectSetupScopeChoice(
   props: Readonly<{ testID: string; scope: ProjectSetupScope; onChange: (scope: ProjectSetupScope) => void }>,
 ) {
@@ -263,6 +264,7 @@ export const ProjectSetupScopeChoice = React.memo(function ProjectSetupScopeChoi
   const tabs = React.useMemo(() => [
     { id: 'thisTime' as const, label: t('projects.scripts.setup.thisTime') },
     { id: 'untilChanged' as const, label: t('projects.scripts.setup.untilChanged') },
+    { id: 'skip' as const, label: t('common.skip') },
   ], []);
   return (
     <View style={styles.scope}>
@@ -281,7 +283,8 @@ export const ProjectSetupScopeChoice = React.memo(function ProjectSetupScopeChoi
       >
         {props.scope === 'thisTime'
           ? t('projects.scripts.setup.consequenceThisTime')
-          : t('projects.scripts.setup.consequenceUntilChanged')}
+          : props.scope === 'untilChanged' ? t('projects.scripts.setup.consequenceUntilChanged')
+          : t('projects.scripts.setup.consequenceSkip')}
       </Text>
     </View>
   );
@@ -321,7 +324,7 @@ export const ProjectSetupReview = React.memo(function ProjectSetupReview(
         />
         <RoundButton
           size="small"
-          title={projectSetupRunLabel(props.machineName, props.sharedRunAs)}
+          title={scope === 'skip' ? t('common.skip') : projectSetupRunLabel(props.machineName, props.sharedRunAs)}
           testID={`${props.testID}.run`}
           loading={props.pending}
           disabled={props.pending}

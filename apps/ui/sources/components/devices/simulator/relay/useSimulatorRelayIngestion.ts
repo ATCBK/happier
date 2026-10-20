@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { Platform } from 'react-native';
 import { MACHINE_LIVE_STREAM_SOCKET_EVENT, MachineLiveStreamDecodedEnvelopeV1Schema as MachineLiveStreamRelayEnvelopeV1Schema, type MachineLiveStreamCapsV1, type MachineLiveStreamRelayEnvelopeV1, type MachineLiveStreamFrameV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
 import type { MachineLiveStreamCodecIdV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/codecsV1';
@@ -119,7 +120,8 @@ function resolveDefaultViewerCapabilities(): LiveStreamViewerCapabilities {
 export function useSimulatorRelayIngestion(
     input: UseSimulatorRelayIngestionInput,
 ): UseSimulatorRelayIngestionResult {
-    const enabled = (input.enabled ?? true) && input.transport !== null;
+    const presented = useLayoutPresentationActive();
+    const enabled = (input.enabled ?? true) && input.transport !== null && presented;
     const [attempt, retry] = React.useReducer((value: number) => value + 1, 0);
     const [state, dispatch] = React.useReducer(
         reduceSimulatorRelayStreamState,
@@ -135,7 +137,15 @@ export function useSimulatorRelayIngestion(
     const viewerCapabilitiesRef = React.useRef(viewerCapabilities);
     viewerCapabilitiesRef.current = viewerCapabilities;
 
-    const openedStreamIdentityKeyRef = React.useRef<string | null>(null);
+    const openedStreamRef = React.useRef<Readonly<{
+        identityKey: string;
+        sourceIdentityKey: string;
+        transport: SimulatorRelayTransport;
+        viewerSocketId: string;
+    }> | null>(null);
+    // One mounted subscriber may reuse its daemon stream id after hide/show or retry.
+    // A late successful start still owes Stop; finish it before activating that id again.
+    const previousOpenRef = React.useRef<Promise<void> | null>(null);
 
     const {
         transport,
@@ -148,10 +158,25 @@ export function useSimulatorRelayIngestion(
         sourceId,
         sourceOccurrenceId,
     } = input;
+    const streamIdentityKey = createStreamIdentityKey({ serverId, simulatorId, sourceMachineId, targetMachineId, streamId, streamFamily, sourceId, sourceOccurrenceId });
+    const sourceIdentityKey = createStreamIdentityKey({ serverId, simulatorId, sourceMachineId, targetMachineId, streamId: '', streamFamily, sourceId, sourceOccurrenceId });
+    const viewerSocketId = input.viewerSocketId ?? '';
+    const openedStream = openedStreamRef.current;
+    // A physical reconnect replaces the socket-bound admission id, not the picture's
+    // source. A new logical transport (including a new Account) must start afresh.
+    const replacingSocket = Boolean(openedStream?.viewerSocketId
+        && openedStream.transport === transport
+        && openedStream.sourceIdentityKey === sourceIdentityKey
+        && openedStream.viewerSocketId !== viewerSocketId);
+    const retainPicture = (openedStream?.transport === transport && openedStream.identityKey === streamIdentityKey) || replacingSocket;
 
     React.useEffect(() => {
-        if (!enabled || !transport) return;
+        if (!enabled || !transport) {
+            if (replacingSocket && !viewerSocketId) dispatch({ type: 'reconnecting', reasonCode: 'socket_disconnected' });
+            return;
+        }
         let disposed = false;
+        const requestController = new AbortController();
         let ended = false;
         let openSettled = false;
         let renewalTimer: ReturnType<typeof setTimeout> | undefined;
@@ -160,30 +185,20 @@ export function useSimulatorRelayIngestion(
             renewalTimer = undefined;
         };
 
-        const streamIdentityKey = createStreamIdentityKey({
-            serverId,
-            simulatorId,
-            sourceMachineId,
-            targetMachineId,
-            streamId,
-            streamFamily,
-            sourceId,
-            sourceOccurrenceId,
-        });
         const openEvent: SimulatorRelayIngestionEvent = {
             type: 'open',
             sourceCodecs: latestRef.current.sourceCodecs,
             capabilities: viewerCapabilitiesRef.current,
             ...(latestRef.current.preferredCodec ? { preferredCodec: latestRef.current.preferredCodec } : {}),
         };
-        if (openedStreamIdentityKeyRef.current === streamIdentityKey) {
+        if (retainPicture) {
             // Socket re-established: freeze the last-known-good frame and let the next
             // inbound frame transition back to `playing` (never reset the decoder).
-            dispatch({ type: 'reconnecting', reasonCode: 'stream_reopening' });
+            dispatch({ type: 'reconnecting', streamId, reasonCode: 'stream_reopening' });
         } else {
             dispatch({ ...openEvent, type: 'reset_open', streamId });
-            openedStreamIdentityKeyRef.current = streamIdentityKey;
         }
+        openedStreamRef.current = { identityKey: streamIdentityKey, sourceIdentityKey, transport, viewerSocketId };
         const codec = resolveMachineLiveStreamCodecPreference({
             sourceCodecs: latestRef.current.sourceCodecs,
             viewerCodecs: viewerCapabilitiesRef.current.supportedCodecs,
@@ -191,7 +206,6 @@ export function useSimulatorRelayIngestion(
         });
         if (!codec.ok) return;
 
-        const viewerSocketId = latestRef.current.viewerSocketId ?? '';
         const controlEnvelope = (
             control: Extract<MachineLiveStreamRelayEnvelopeV1['message'], { kind: 'control' }>['control'],
         ): MachineLiveStreamRelayEnvelopeV1 => ({
@@ -206,6 +220,7 @@ export function useSimulatorRelayIngestion(
         }));
         const clientInput: MachineLiveStreamRelayClientInput = {
             serverId, sourceMachineId, targetMachineId, streamId, streamFamily,
+            signal: requestController.signal,
             ...(sourceId ? { sourceId } : {}),
             ...(sourceOccurrenceId ? { sourceOccurrenceId } : {}),
             ...(viewerSocketId ? { viewerSocketId } : {}),
@@ -246,7 +261,8 @@ export function useSimulatorRelayIngestion(
             }, remainingMs / 2);
         };
 
-        const unsubscribe = transport.onEnvelope((raw) => {
+        let unsubscribe = () => {};
+        const subscribe = () => transport.onEnvelope((raw) => {
             if (disposed || ended) return;
             const parsed = MachineLiveStreamRelayEnvelopeV1Schema.safeParse(raw);
             if (!parsed.success) return;
@@ -292,13 +308,21 @@ export function useSimulatorRelayIngestion(
             }
         });
 
-        void openMachineLiveStreamRelayClient({
+        const previousOpen = previousOpenRef.current;
+        const open = () => openMachineLiveStreamRelayClient({
             ...clientInput,
             onAuthorized: (request) => {
                 if (request.authorization) scheduleRenewal(request.authorization.payload.exp);
             },
-        })
+        });
+        const completion = (async () => {
+            if (previousOpen) await previousOpen;
+            if (disposed) return;
+            unsubscribe = subscribe();
+            return await open();
+        })()
             .then((result) => {
+                if (!result) return;
                 // Cleanup can precede registration at the source. Stop the exact
                 // viewer again when a late successful start becomes reachable.
                 if (disposed) { if (result.ok) stop(); return; }
@@ -314,9 +338,11 @@ export function useSimulatorRelayIngestion(
                 openSettled = true;
                 if (disposed) unsubscribe();
             });
+        previousOpenRef.current = completion;
 
         return () => {
             disposed = true;
+            requestController.abort();
             clearRenewal();
             stop();
             // A late accepted capture needs its own final Stop before the carrier retires.
@@ -325,13 +351,12 @@ export function useSimulatorRelayIngestion(
     }, [attempt, enabled, transport, serverId, simulatorId, sourceMachineId, targetMachineId, streamId, streamFamily, sourceId, sourceOccurrenceId]);
 
     const onFrameDecoded = React.useCallback(() => dispatch({ type: 'frame_decoded', streamId }), [streamId]);
-    const streamIdentityKey = createStreamIdentityKey({ serverId, simulatorId, sourceMachineId, targetMachineId, streamId, streamFamily, sourceId, sourceOccurrenceId });
     const playerStatesBySimulatorId = React.useMemo<UseSimulatorRelayIngestionResult['playerStatesBySimulatorId']>(() => {
         // A suspended subscriber retains its exact stream's last frame. Never
         // project that frame under a different source while the surface is hidden.
-        if (openedStreamIdentityKeyRef.current !== streamIdentityKey) return EMPTY_PLAYER_STATES;
+        if (!retainPicture) return EMPTY_PLAYER_STATES;
         return { [simulatorId]: { ...toSimulatorPreviewStreamState(state), onFrameDecoded } };
-    }, [streamIdentityKey, simulatorId, state, onFrameDecoded]);
+    }, [retainPicture, streamIdentityKey, simulatorId, state, onFrameDecoded]);
 
     return React.useMemo(() => ({ playerStatesBySimulatorId, retry }), [playerStatesBySimulatorId, retry]);
 }

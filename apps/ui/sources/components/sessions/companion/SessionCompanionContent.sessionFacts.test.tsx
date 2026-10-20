@@ -27,7 +27,7 @@ function RailFacts() {
 
 describe('Companion rail real Session facts', () => {
     it('renders live status, the oldest permission, context metrics and the current Plan without a Board read', async () => {
-        const session = createSessionFixture({ id: 's1', serverId: runtime.serverId, active: true, activeAt: Date.now(),
+        const { todos, latestUsage, ...session } = createSessionFixture({ id: 's1', serverId: runtime.serverId, active: true, activeAt: Date.now(),
             thinking: true, thinkingAt: Date.now(), presence: 'online',
             agentState: { controlledByUser: false, requests: { ask: { tool: 'Bash', arguments: { command: 'pwd' }, createdAt: 1 } } },
             todos: [{ id: 'first', content: 'Read the owner', status: 'completed', priority: 'high' },
@@ -38,6 +38,14 @@ describe('Companion rail real Session facts', () => {
                     isAutoCompactEnabled: null, categories: null, observedAtMs: Date.now(), source: 'provider_turn' } },
         });
         storage.getState().applySessions([session]);
+        // Plan and usage are transcript projections; feed their real reducer producer.
+        storage.getState().applyMessages('s1', [{
+            id: 'companion-facts', localId: null, seq: 1, createdAt: Date.now(), role: 'agent', isSidechain: false,
+            content: [{ type: 'tool-call', id: 'companion-plan', name: 'TodoWrite', input: { todos },
+                description: null, uuid: 'companion-plan', parentUUID: null }],
+            usage: { input_tokens: latestUsage!.inputTokens, output_tokens: latestUsage!.outputTokens,
+                contextSnapshot: latestUsage!.contextSnapshot ?? undefined },
+        }]);
         const screen = await renderScreen(<runtime.Wrapper><RailFacts /></runtime.Wrapper>);
         try {
             await act(async () => { controller.show(SESSION_SUMMARY_COMPANION_ITEM); });

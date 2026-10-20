@@ -5,9 +5,9 @@ import type { HappierUiTheme } from '../../environment/types.js';
 import { useHappierNativeMinimumInteractiveTargetSize } from '../../environment/interactiveTarget.js';
 import { HappierPressable } from '../interaction/Pressable.js';
 import { HappierScrollArea } from '../layout/Layout.js';
-import type { HappierFocusable } from '../portableTypes.js';
+import type { HappierFocusable, HappierLayoutChangeEvent } from '../portableTypes.js';
 import { HappierText } from '../text/Text.js';
-import { useHappierDataTextStyles } from './dataText.js';
+import { HAPPIER_DATA_METRICS, useHappierDataTextStyles } from './dataText.js';
 import { formatHappierDataValue } from './dataModel.js';
 
 export type HappierGridAxis = Readonly<{ id: string; label: string }>;
@@ -34,9 +34,30 @@ export type HeatmapProps = Readonly<{
   testID?: string;
 }>;
 
+const AXIS_LABEL_BOX_PX = 80;
+const AXIS_LABEL_MIN_GAP_PX = 4;
+
 /** Only geometry: callers own dates, accounting, labels and missing-data decisions. */
 export function resolveFirstFullyVisibleColumn(visibleLeft: number, stride: number): number {
   return stride <= 0 || visibleLeft <= 0 ? 0 : Math.ceil(visibleLeft / stride);
+}
+
+/**
+ * Which labelled columns of an axis keep their label. A label is one line centred on its column and may
+ * overflow the slot, but never lands on its neighbour: when columns are closer than the labels are wide,
+ * the axis thins to every n-th labelled column. An unknown stride (before layout) keeps every label.
+ */
+export function resolveVisibleAxisLabels(input: Readonly<{ labels: readonly string[]; stride: number; characterWidth: number }>): ReadonlySet<number> {
+  const visible = new Set<number>();
+  let previous: { index: number; width: number } | null = null;
+  for (const [index, label] of input.labels.entries()) {
+    if (!label) continue;
+    const width = label.length * input.characterWidth;
+    const clear = previous === null || input.stride <= 0
+      || (index - previous.index) * input.stride >= (previous.width + width) / 2 + AXIS_LABEL_MIN_GAP_PX;
+    if (clear) { visible.add(index); previous = { index, width }; }
+  }
+  return visible;
 }
 
 export function Heatmap(props: HeatmapProps) {
@@ -48,6 +69,7 @@ export function HappierDataGrid(props: HeatmapProps & { variant: 'heatmap' | 'do
   const text = useHappierDataTextStyles(props.theme);
   const nativeTargetSize = useHappierNativeMinimumInteractiveTargetSize();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [axisWidth, setAxisWidth] = useState<number | null>(null);
   const controls = useRef(new Map<string, HappierFocusable>());
   const selected = props.cells.find((cell) => cell.id === selectedId);
   const unknown = props.unknownLabel ?? '—';
@@ -107,6 +129,10 @@ export function HappierDataGrid(props: HeatmapProps & { variant: 'heatmap' | 'do
         return true;
       }}>{visual}</HappierPressable>;
   };
+  // Axis labels sit centred on their column on one line; a narrow axis thins them rather than wrapping.
+  const axisStride = nativeTargets ? stride : axisWidth !== null && props.columns.length > 0 ? (axisWidth + gap) / props.columns.length : 0;
+  const visibleAxisLabels = resolveVisibleAxisLabels({ labels: props.columns.map((column) => column.label), stride: axisStride,
+    characterWidth: 11 * HAPPIER_DATA_METRICS.averageCharacterEm });
   const content = (visibleLeft: number) => <View style={{ width: nativeTargets ? contentWidth : undefined, gap: dots || strip ? 4 : rowMajor ? gap : 8 }}>
     {!dots && !strip && props.columns.some((column) => column.label) ? <View style={{ height: 14, flexDirection: 'row', gap }}>
       {props.columns.map((column, index) => <View key={column.id} style={{ width: slotSize, position: 'relative' }}>
@@ -119,11 +145,16 @@ export function HappierDataGrid(props: HeatmapProps & { variant: 'heatmap' | 'do
     </View>) : <View style={{ flexDirection: 'row', gap }}>{props.columns.map((column) => <View key={column.id} style={{ gap }}>{props.rows.map((row) => renderCell(row, column))}</View>)}</View>}
     {(dots || strip) && props.columns.some((column) => column.label) ? <View style={{ flexDirection: 'row', gap: dots ? 8 : 0 }}>
       {dots ? <View style={{ width: rowLabelWidth }} /> : null}
-      {dots ? <View style={{ flex: nativeTargets ? undefined : 1, flexDirection: 'row', gap }}>{props.columns.map((column) => <View key={column.id} testID={props.testID ? `${props.testID}-axis-${column.id}` : undefined}
-        style={{ ...(nativeTargets ? { width: slotSize } : { flex: 1, minWidth: 0 }), height: 14 }}>
-        {column.label ? <HappierText style={{ ...text.caption, position: 'absolute', left: -20, right: -20, fontSize: 11, lineHeight: 14, textAlign: 'center' }}>{column.label}</HappierText> : null}
-      </View>)}</View>
-      : <View style={{ flex: 1, flexDirection: 'row', gap }}>{props.columns.map((column) => <View key={column.id} style={{ flex: 1, minWidth: 0 }}><HappierText style={{ ...text.caption, fontSize: 11, lineHeight: 14, textAlign: 'center' }}>{column.label}</HappierText></View>)}</View>}
+      <View style={{ flex: nativeTargets ? undefined : 1, flexDirection: 'row', gap }}
+        onLayout={nativeTargets ? undefined : (event: HappierLayoutChangeEvent) => setAxisWidth(event.nativeEvent.layout.width)}>
+        {props.columns.map((column, index) => <View key={column.id} testID={props.testID ? `${props.testID}-axis-${column.id}` : undefined}
+          style={{ ...(nativeTargets ? { width: slotSize } : { flex: 1, minWidth: 0 }), height: 14 }}>
+          {column.label && visibleAxisLabels.has(index) ? <View pointerEvents="none"
+            style={{ position: 'absolute', left: '50%', width: AXIS_LABEL_BOX_PX, marginLeft: -AXIS_LABEL_BOX_PX / 2, alignItems: 'center' }}>
+            <HappierText numberOfLines={1} style={{ ...text.caption, fontSize: 11, lineHeight: 14, textAlign: 'center' }}>{column.label}</HappierText>
+          </View> : null}
+        </View>)}
+      </View>
     </View> : null}
   </View>;
   return <View testID={props.testID} accessibilityLabel={props.decorative ? undefined : props.label} aria-hidden={props.decorative} importantForAccessibility={props.decorative ? 'no-hide-descendants' : 'auto'}>

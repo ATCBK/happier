@@ -1,20 +1,21 @@
-import type { AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agent-runtime';
+import type { AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { SessionSkillPlanV1 } from '@happier-dev/protocol/prompts/library/skills/resolveSessionSkillPlanV1';
-import type { SkillLibraryItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
+import { isPluginSkillIdV1, type SkillLibraryItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import type { ReachContextV1 } from '@happier-dev/protocol/reach/resolveReachV1';
 import type { SkillRuleV1 } from '@happier-dev/protocol/reach/reachRuleV1';
 import type { StoredCredentials } from '@/persistence';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { SkillArtifactStore } from '../library/readSkillLibraryContent';
 import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
-import { resolveAgentSkillsCapability } from '@/agent/skills/resolveAgentSkillsCapability';
+import { resolveAgentSkillsCapability, resolveAgentNativeSkillDirectories } from '@/agent/skills/resolveAgentSkillsCapability';
 import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { resolveSessionCapabilitiesV1 } from '@happier-dev/protocol/reach/resolveSessionCapabilitiesV1';
 import { readSessionCapabilitySelectionFromMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 import { resolveSkillPlanKindV1 } from '@happier-dev/protocol/prompts/library/skills/resolveSessionSkillPlanV1';
-import { FIRST_PARTY_SKILLS_V1 } from '@happier-dev/protocol/prompts/library/skills/firstPartySkillsV1';
-import { readSkillLibraryInventory } from '../library/readSkillLibraryContent';
+import { FIRST_PARTY_SKILLS_V1, type ReadOnlySkillV1 } from '@happier-dev/protocol/prompts/library/skills/firstPartySkillsV1';
 import { prepareSessionSkillPlan } from './prepareSessionSkillPlan';
+import { readAccountPluginSkills } from '../library/readAccountPluginSkills';
 import { ensureSkillSessionDirHttp } from '@/daemon/controlClient';
 import { SkillOwnerKeySchema } from '../store/skillStore';
 import { SkillSessionStartupIdentitySchema } from '../store/controlRoutes';
@@ -28,12 +29,14 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { projectPromptBundleActionEntriesV1 } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
 import { prepareSessionStackSkillMigration } from '@/agent/runtime/startupMetadataUpdate';
 import { resolveSessionStackSkillSelectionForMigration } from '@/agent/runtime/mergeSessionMetadataForStartup';
+import { traceSkillPreparationPhase } from './traceSkillPreparationPhase';
 
 export type ResolveRunnerSkillsInput = Readonly<{
   ownerKey: string; agentId: string; machineId: string; directory: string;
   sessionMetadata: unknown; credentials: StoredCredentials | null;
   accountSnapshot: ActiveAccountSettingsSnapshot | null;
   contributes?: Parameters<typeof resolveAgentSkillsCapability>[1];
+  pluginSkills?: readonly ReadOnlySkillV1[];
   agentHasActionChannel: boolean;
   reachContext?: ReachContextV1;
   home?: string;
@@ -77,7 +80,8 @@ export async function resolveRunnerSkills(input: ResolveRunnerSkillsInput, trans
 }
 
 async function resolveRunnerSkillsForHome(input: ResolveRunnerSkillsInput, transports: RunnerSkillsTransports): Promise<RunnerSkillsResult> {
-  if (!input.credentials) return { plan: { plan: 'none', items: [], nativeDisables: [], diagnostics: [] }, indexItems: [] };
+  const credentials = input.credentials;
+  if (!credentials) return { plan: { plan: 'none', items: [], nativeDisables: [], diagnostics: [] }, indexItems: [] };
   const agentSkills = resolveAgentSkillsCapability(input.agentId, input.contributes);
   const kind = resolveSkillPlanKindV1({ agentSkills, agentHasActionChannel: input.agentHasActionChannel });
   const emptyPlan: SessionSkillPlanV1 = { plan: kind, items: [], nativeDisables: [], diagnostics: [] };
@@ -92,8 +96,8 @@ async function resolveRunnerSkillsForHome(input: ResolveRunnerSkillsInput, trans
     let snapshot = input.accountSnapshot;
     // Project legacy context is a current producer of rules, including for a first Session with no Project rule yet.
     // Keep identity, shared/personal context and the migration receipt on that single preparation path.
-    const project = await resolveSessionProjectPromptStack({ credentials: input.credentials, metadata: input.sessionMetadata,
-      machineId: input.machineId, directory: input.directory, operationContext: input.operationContext });
+    const project = await traceSkillPreparationPhase('project_context', () => resolveSessionProjectPromptStack({ credentials, metadata: input.sessionMetadata,
+      machineId: input.machineId, directory: input.directory, operationContext: input.operationContext }));
     await current();
     if (project.skillMigration.status !== 'ready') return { plan: emptyPlan, indexItems: [], unavailable: true,
       unavailableReason: 'project_skill_migration_unavailable' };
@@ -103,8 +107,8 @@ async function resolveRunnerSkillsForHome(input: ResolveRunnerSkillsInput, trans
     // Loading is outstanding demand, not a completed unavailable rules read.
     if ((!snapshot?.promptLibraryCatalog || snapshot.promptLibraryCatalog.status === 'loading') && scopeKey) {
       unavailableReason = 'skill_rules_unavailable';
-      await prepareActivePromptLibraryRecord({ credentials: input.credentials, key: 'skill-rules', scopeKey,
-        lifetimeToken: lifetime, ...(input.operationContext ? { operationContext: input.operationContext } : {}) });
+      await traceSkillPreparationPhase('skill_rules', () => prepareActivePromptLibraryRecord({ credentials, key: 'skill-rules', scopeKey,
+        lifetimeToken: lifetime, ...(input.operationContext ? { operationContext: input.operationContext } : {}) }));
       await current(); snapshot = input.operationContext ? input.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
     }
     if (!snapshot?.promptLibraryCatalog) return { plan: emptyPlan, indexItems: [], unavailable: true, unavailableReason: 'catalog-unobserved' };
@@ -114,8 +118,8 @@ async function resolveRunnerSkillsForHome(input: ResolveRunnerSkillsInput, trans
       unavailableReason: rulesRead.status === 'unavailable' ? rulesRead.reason : 'invalid-stored-content' };
     const rules = rulesRead.record.value.rules;
     unavailableReason = 'session_skill_selection_unavailable';
-    const retained = await prepareSessionStackSkillMigration(input.sessionMetadata, { credentials: input.credentials,
-      accountSnapshot: snapshot, operationContext: input.operationContext, projectEntries: project.entries });
+    const retained = await traceSkillPreparationPhase('session_selection', () => prepareSessionStackSkillMigration(input.sessionMetadata, { credentials,
+      accountSnapshot: snapshot, operationContext: input.operationContext, projectEntries: project.entries }));
     await current();
     if (retained.status !== 'ready') return { plan: emptyPlan, indexItems: [], unavailable: true, unavailableReason };
     let selection = readSessionCapabilitySelectionFromMetadataV1(input.sessionMetadata);
@@ -124,24 +128,36 @@ async function resolveRunnerSkillsForHome(input: ResolveRunnerSkillsInput, trans
       if (migrated.status === 'unavailable') return { plan: emptyPlan, indexItems: [], unavailable: true, unavailableReason };
       if (migrated.status === 'updated') selection = { ...selection, skills: migrated.selection };
     }
-    const artifacts = transports.artifacts ?? createCredentialedAccountArtifactStore(input.credentials);
-    unavailableReason = 'skill_library_unavailable';
-    const inventory = await readSkillLibraryInventory(artifacts);
-    await current();
+    const artifacts = transports.artifacts ?? createCredentialedAccountArtifactStore(credentials);
     const normalizePath = createRealpathNormalizer();
     let context: ReachContextV1 = input.reachContext ?? {
       machineId: input.machineId, machinePlatform: process.platform === 'win32' ? 'win32' : 'posix',
       directory: normalizePath(input.directory), projectKey: null, agentId: input.agentId,
     };
     if (!input.reachContext) context = { ...context, projectKey: project.projectKey };
-    const initial = inventory.map(artifact => ({ skillId: artifact.artifactId, name: String(artifact.header.title) }));
+    const normalizedRules = realpathReachRules(rules, normalizePath);
+    // Reach and Session overrides name every possible delivery candidate.
+    // Full Account inventory belongs to library/preview reads, not launch.
+    const candidates = [...new Set([...rules.map(rule => rule.skillId),
+      ...(selection.skills?.forceIncludeSkillIds ?? []), ...(selection.skills?.forceExcludeSkillIds ?? []),
+      ...FIRST_PARTY_SKILLS_V1.map(skill => skill.skillId)])];
     const selected = resolveSessionCapabilitiesV1({ context, mcp: null,
-      skills: { items: [...initial, ...FIRST_PARTY_SKILLS_V1], rules: realpathReachRules(rules, normalizePath) },
+      skills: { items: candidates.map(skillId => ({ skillId, name: skillId })), rules: normalizedRules },
       selection, agentAcceptsUserMcp: false }).skills;
+    const requiredPluginIds = selected.items.filter(item => item.selected && isPluginSkillIdV1(item.id)).map(item => item.id);
+    const settings = snapshot.settings;
+    const pluginSkills = input.pluginSkills?.filter(skill => requiredPluginIds.includes(skill.skillId)) ?? await traceSkillPreparationPhase('plugin_content', () => readAccountPluginSkills({ credentials,
+      settings, skillIds: requiredPluginIds, serverHttpBaseUrl: input.operationContext?.serverHttpBaseUrl,
+      isCurrent: async () => { await current(); return true; } }));
+    await current();
     reach = { context, rules };
     unavailableReason = 'skill_plan_unavailable';
-    const { plan, contents, nativeSkills } = await prepareSessionSkillPlan({ inventory, artifacts, selected, agentSkills,
-      agentHasActionChannel: input.agentHasActionChannel, directory: input.directory, home: input.home, assertCurrent: current });
+    const additionalProjectDirectories = await resolveAgentNativeSkillDirectories(input.agentId, {
+      catalog: input.contributes, sessionMetadata: input.sessionMetadata,
+    });
+    await current();
+    const { plan, contents, nativeSkills } = await traceSkillPreparationPhase('plan', () => prepareSessionSkillPlan({ artifacts, selected, agentSkills, pluginSkills,
+      agentHasActionChannel: input.agentHasActionChannel, directory: input.directory, additionalProjectDirectories, home: input.home, assertCurrent: current }));
     // Startup can deliver readable items, but a failed live read cannot withdraw the retained folder's content.
     if (input.lifecycle === 'reapply' && plan.items.some(item => item.reason === 'content_unreadable')) {
       return { reach, plan, indexItems: [], unavailable: true, unavailableReason: 'content_unreadable' };
@@ -152,7 +168,7 @@ async function resolveRunnerSkillsForHome(input: ResolveRunnerSkillsInput, trans
     if (nativeSkills.status === 'failed') return { reach, plan, indexItems: [], unavailable: true, unavailableReason: 'native_scan_failed' };
     const nativeDisables = plan.nativeDisables.filter(item => item.state === 'applied').map(({ name, path }) => ({ name, path }));
     try {
-      const result = await (transports.ensureSessionDir ?? (content => {
+      const result = await traceSkillPreparationPhase('materialization', () => (transports.ensureSessionDir ?? (content => {
         const isRun = SkillOwnerKeySchema.parse(content.ownerKey).includes('/');
         const metadata = input.sessionMetadata;
         const identity = SkillSessionStartupIdentitySchema.safeParse({
@@ -163,7 +179,7 @@ async function resolveRunnerSkillsForHome(input: ResolveRunnerSkillsInput, trans
         return ensureSkillSessionDirHttp(content, {}, identity.data);
       }))({ ownerKey: input.ownerKey,
         items: delivered().map(item => ({ skillId: item.skillId, name: item.name, digest: item.digest,
-          files: projectPromptBundleActionEntriesV1(contents.get(item.skillId)!.body.entries) })), nativeDisables });
+          files: projectPromptBundleActionEntriesV1(contents.get(item.skillId)!.body.entries) })), nativeDisables }));
       await current();
       const failures = new Set(result.failed.map(item => item.skillId));
       for (const item of plan.items) if (failures.has(item.skillId)) { item.state = 'unavailable'; item.reason = 'materialize_failed'; }
@@ -177,6 +193,9 @@ async function resolveRunnerSkillsForHome(input: ResolveRunnerSkillsInput, trans
       return { reach, plan, indexItems: [], unavailable: true, unavailableReason: 'materialize_failed', ...(failureDetails ? { failureDetails } : {}) };
     }
   } catch (error) {
+    // Required Project context shares prompt preparation's failure and recovery
+    // owner; an unavailable optional skill plan cannot replace that disposition.
+    if (error instanceof PromptStackPreparationError) throw error;
     return { ...(reach ? { reach } : {}), plan: emptyPlan, indexItems: [], unavailable: true,
       unavailableReason: error instanceof Error && error.message === 'scope-retired' ? 'scope-retired' : unavailableReason };
   }

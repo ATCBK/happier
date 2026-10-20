@@ -49,6 +49,34 @@ transaction minimum). The retry budget permits two complete attempts plus the
 first backoff. Explicit transaction environment overrides still take priority.
 No database schema, migration, content format or client wire contract changes.
 
+## PostgreSQL transaction deadlines (0.3 development)
+
+For an explicitly configured Prisma pool with at least two connections, `inTx`
+admits at most the pool size minus one interactive transactions at a time.
+Read snapshots and writes share this process-local admission through the existing
+`AsyncLock`. Excess attempts queue before acquiring a connection, leaving capacity
+for direct Machine validation, RPC availability and presence queries. Queueing
+consumes the existing acquisition budget and respects the request deadline;
+retry backoff starts after the attempt releases its admission permit. This does
+not change pool size, Account lock ordering or isolation. An implicit pool size,
+a single-connection pool and other database providers keep their existing paths.
+Direct queries can still contend with one another; this reservation prevents
+interactive transactions alone from occupying the entire configured pool.
+
+`inTx` charges SQL operations to the existing transaction-attempt budget. Each
+PostgreSQL statement runs under `SET LOCAL statement_timeout` set to the budget
+that remains (never above a stricter configured timeout), so the database itself
+ends a lock wait when the budget expires and an expired transaction never keeps
+waiting for or holding a lock. A statement the budget cancels (SQLSTATE `57014`)
+and a transaction Prisma expired (found by a query, batch query or commit) are
+known rollbacks. When the guard expires inside the callback, that attempt rolls back
+and may replay under the existing retry/backoff policy. This is distinct from
+the containing request's deadline: retries never extend that deadline. Exhausted
+known rollbacks remain retryable storage refusals; an earlier indeterminate
+commit remains an unknown outcome. After-commit effects run only for the
+successful attempt. Domain consumers such as Pending reuse this owner rather
+than adding their own transaction retry loop.
+
 ## Managed Home owner provisioning boundary (0.3 development)
 
 The current repository has no managed-host producer that creates a Home's first Account.
@@ -111,6 +139,27 @@ console plan §3.5):
 3. **S3-compatible storage**
    - Used for avatars and other uploaded assets.
    - Configure via `S3_HOST`, `S3_PORT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`, `S3_PUBLIC_URL`, `S3_USE_SSL`.
+
+## Shared-database QA servers (0.3 development)
+
+Stack's shared-database preset points consumer servers at a privately provisioned
+source-stack environment on their server host. `applySharedDatabaseSourceEnv`
+projects that authority at launch: database, server at-rest secret, file storage,
+and socket clustering. Consumers skip migrations against the shared database.
+
+When the source selects `HAPPIER_SOCKET_ADAPTER=redis-streams` with a nonempty
+`REDIS_URL`, consumers use the same adapter and Redis endpoint. Otherwise both
+projected settings are cleared, including stale consumer values. Remote server
+hosts need the current private source projection and authenticated network access
+to that endpoint. Keep connection secrets in the private environment file; never
+put them in command arguments or diagnostics. Reload consumers through Stack
+after provisioning changes so running processes consume the new settings.
+
+Sharing a database alone does not share Socket.IO fanout: in-memory adapters keep
+Machine activity/presence ephemerals and updates inside each server process.
+Servers connected to the shared Redis Streams cluster fan those events out to
+clients on other servers. `SERVER_ROLE=all` continues to flush presence to the
+database locally; selecting the adapter does not turn it into an API/worker split.
 
 ## Environment variables
 **Required for the full Postgres/S3 recipe**
@@ -199,6 +248,8 @@ console plan §3.5):
     deployment fails closed instead of appearing to work.
   - Changing either value changes the WorkOS runtime fingerprint, which invalidates
     already-started OAuth attempts bound to the previous runtime.
+- Logging format (development source): `HAPPIER_SERVER_LOG_FORMAT=json` opts Node into structured stdout through the server configuration registry and post-Home-overlay logger initialization; unset or invalid values retain pretty output.
+- Sentry native CPU profiling (development source): `SENTRY_PROFILE_SESSION_SAMPLE_RATE` defaults to `0`. A positive rate enables the native integration on Node. Bun-based servers cannot load the V8 profiler; they emit a `profiling-unavailable` warning and retain Sentry error capture. Native profiling is not available in Bun-compiled server binaries.
 - Debug logging: `DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING` (enables file logging + dev log endpoint).
 
 ## Happier Cloud as the default Account Service (0.3)
@@ -294,6 +345,7 @@ Build targets:
 Key notes:
 - The server defaults to port `3005` (set `PORT` explicitly in container environments).
 - The image includes FFmpeg and Python for media processing.
+- In development source, `server`, `server-worker`, and `server-stress` share the existing production dependency projection. Redis validation tools stay development-only; generated Prisma clients and native runtime dependencies remain in the images.
 - The server entrypoint (`apps/server/scripts/run-server.sh`) runs `prisma migrate deploy` on startup by default (set `RUN_MIGRATIONS=0` to disable). On Postgres, it retries on advisory-lock contention.
 - Health-managed Postgres deployments use one pre-deploy Job running the prebuilt image's `/opt/happier/server/happier-server-migrate`, then start API and worker replicas with `RUN_MIGRATIONS=0`. The Job is independent of API probe deadlines. Source-built images use their provider migration script. Development 0.3 irreversible-migration admission remains owned by `apps/server/sources/app/runtime/updaterMigrationAdmission.ts`; a Kubernetes Job must not fabricate its updater capability or bypass refusal.
 - Before a MySQL deployment first applies
@@ -459,6 +511,12 @@ In an isolated environment matching the target Redis version and ACL:
 against the selected Redis URL. It is an ordinary-fanout smoke check, not a probe
 of deployed API nodes or certification of Pub/Sub/restart recovery. Use isolated
 Redis: the script uses the same fixed Stream/channel names as the application.
+
+From a development checkout, run `yarn --cwd apps/server validate:redis-adapter`. Set
+`REDIS_URL` to use an existing isolated Redis instance, or let the development
+dependency acquire and start a temporary local instance. Root package configuration
+defers acquisition until validation runs, so ordinary dependency installation does
+not require Redis build tools.
 
 ### Prospective predecessor compatibility
 

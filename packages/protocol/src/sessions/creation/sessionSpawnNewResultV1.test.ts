@@ -52,9 +52,32 @@ describe('Session creation Agent preconditions', () => {
     expect(SessionSpawnNewResultV1Schema.safeParse({ ...result, code: 'spawn_failed' }).success).toBe(false);
     expect(SessionSpawnNewResultV1Schema.safeParse({ ...result, retryable: true }).success).toBe(false);
   });
+
+  it('accepts signed-out recovery detail without changing the precondition or accepting another cause', () => {
+    const result = { type: 'error', code: 'agent_signed_out', agentId: 'custom-agent', retryable: false,
+      launchError: { kind: 'launch_error', code: 'agent_signed_out', message: 'Choose your sign-in method.' } };
+    expect(SessionSpawnNewResultV1Schema.safeParse(result)).toMatchObject({ success: true, data: result });
+    expect(SessionSpawnNewResultV1Schema.safeParse({ ...result,
+      launchError: { ...result.launchError, code: 'SPAWN_FAILED' },
+    }).success).toBe(false);
+    expect(SessionSpawnNewResultV1Schema.safeParse({ ...result,
+      launchError: { ...result.launchError, auth: 'private' },
+    }).success).toBe(false);
+  });
 });
 
 describe('Session creation Provider recovery', () => {
+  it('keeps a bounded incompatibility predicate only on a nonretryable incompatible target', () => {
+    const result = { type: 'error', code: 'incompatible_target', retryable: false,
+      incompatibleTarget: { reason: 'target_preparation_invalid_result' } };
+    expect(SessionSpawnNewResultV1Schema.safeParse(result)).toMatchObject({ success: true, data: result });
+    expect(SessionSpawnNewResultV1Schema.safeParse({ ...result, code: 'spawn_failed' }).success).toBe(false);
+    expect(SessionSpawnNewResultV1Schema.safeParse({ ...result, retryable: true }).success).toBe(false);
+    expect(SessionSpawnNewResultV1Schema.safeParse({ ...result,
+      incompatibleTarget: { reason: 'unbounded_exception_message' } }).success).toBe(false);
+    expect(SessionSpawnNewResultV1Schema.safeParse({ ...result,
+      incompatibleTarget: { reason: 'target_preparation_invalid_result', response: 'private' } }).success).toBe(false);
+  });
   it('retains terminal-host setup recovery only for nonretryable incompatible targets', () => {
     const terminalHostError = { kind: 'terminal_host_unavailable', host: 'herdr', reason: 'installation_unavailable' };
     const result = { type: 'error', code: 'incompatible_target', retryable: false, terminalHostError };

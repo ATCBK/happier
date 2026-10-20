@@ -5,6 +5,7 @@ import { SharedSavedSecretCreateInputV1Schema, SavedSecretCatalogReferenceCensus
 import { formatSharedSavedSecretRefV1 } from '../account/settings/savedSecretReferenceV1.js';
 import { RelayAccessConfigV1Schema } from '../system/tasks/relayAccessConfigV1.js';
 import { SystemTaskResultSchema } from '../system/tasks/spec.js';
+import { NativeSshTunnelSnapshotSchema } from '../ssh/tunnels.js';
 
 import type { RemoteHostActionIdV1 } from './remoteHostActionIdsV1.js';
 export { REMOTE_HOST_ACTION_IDS_V1, isRemoteHostActionIdV1, type RemoteHostActionIdV1 } from './remoteHostActionIdsV1.js';
@@ -64,6 +65,7 @@ export const REMOTE_HOST_ACTION_INPUT_SCHEMAS_V1 = {
   'remote_hosts.credential.change': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(Address, { credential: RemoteHostCredentialSelectionV1Schema }))),
   'remote_hosts.personal_home.erase': Address,
   'remote_hosts.trusted_keys.list': Empty,
+  'remote_hosts.tunnel.list': Empty,
   'remote_hosts.trusted_keys.remove': lazyZodSchema(() => z.strictObject({ key: TrustedKey })),
   'remote_hosts.trusted_keys.clear': lazyZodSchema(() => z.strictObject({ keys: z.array(TrustedKey) })),
   'remote_hosts.tunnel.stop': lazyZodSchema(() => z.strictObject({ target: z.discriminatedUnion('kind', [
@@ -120,6 +122,8 @@ export const REMOTE_HOST_ACTION_OUTPUT_SCHEMAS_V1 = {
   'remote_hosts.trusted_keys.clear': lazyZodSchema(() => z.union([Refusal, z.strictObject({ status: z.literal('removed') })])),
   'remote_hosts.tunnel.stop': lazyZodSchema(() => z.union([TaskResult,
     z.strictObject({ status: z.literal('released') })])),
+  'remote_hosts.tunnel.list': lazyZodSchema(() => z.union([TaskResult,
+    z.strictObject({ status: z.literal('listed'), native: NativeSshTunnelSnapshotSchema })])),
 } as const;
 export type RemoteHostActionInputByIdV1 = {
   readonly [Id in RemoteHostActionIdV1]: z.output<(typeof REMOTE_HOST_ACTION_INPUT_SCHEMAS_V1)[Id]>;
@@ -145,6 +149,7 @@ export function changeRemoteHostCredentialForActionV1(host: RemoteHostRecordV1,
 }
 export function parseRemoteHostActionRequestV1(actionId: RemoteHostActionIdV1, input: unknown): RemoteHostActionRequestV1 {
   switch (actionId) {
+    case 'remote_hosts.tunnel.list': return { actionId, input: REMOTE_HOST_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input) };
     case 'remote_hosts.trusted_keys.list': return { actionId, input: REMOTE_HOST_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input) };
     case 'remote_hosts.trusted_keys.remove': return { actionId, input: REMOTE_HOST_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input) };
     case 'remote_hosts.trusted_keys.clear': return { actionId, input: REMOTE_HOST_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input) };

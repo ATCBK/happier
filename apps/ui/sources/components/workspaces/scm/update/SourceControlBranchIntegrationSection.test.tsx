@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createDeferred, createThemeFixture, renderScreen } from '@/dev/testkit';
+import { createThemeFixture, renderScreen } from '@/dev/testkit';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 
 import { SourceControlBranchIntegrationSection } from './SourceControlBranchIntegrationSection';
@@ -85,68 +85,8 @@ describe('SourceControlBranchIntegrationSection', () => {
         modalState.alert.mockReset();
     });
 
-    it('confirms abort destructively and re-checks abort preflight before invoking the abort callback', async () => {
-        const confirmDeferred = createDeferred<boolean>();
-        modalState.confirm.mockReturnValue(confirmDeferred.promise);
+    it('aborts through the mutation owner without a dialog of its own, because the Action owns the confirmation', async () => {
         const onAbort = vi.fn(async () => ({ success: true }));
-
-        const screen = await renderScreen(
-            <SourceControlBranchIntegrationSection
-                theme={theme}
-                snapshot={createSnapshot()}
-                rootPath="/repo"
-                writeEnabled
-                onMerge={vi.fn(async () => ({ success: true }))}
-                onRebase={vi.fn(async () => ({ success: true }))}
-                onContinue={vi.fn(async () => ({ success: true }))}
-                onAbort={onAbort}
-            />,
-        );
-
-        await screen.pressByTestIdAsync('scm-update-branch-operation-abort');
-        expect(modalState.confirm).toHaveBeenCalledWith(
-            'Abort',
-            'merge in progress from origin/main',
-            expect.objectContaining({
-                confirmText: 'Abort',
-                cancelText: 'Cancel',
-                destructive: true,
-            }),
-        );
-
-        await screen.update(
-            <SourceControlBranchIntegrationSection
-                theme={theme}
-                snapshot={createSnapshot({
-                    operationState: {
-                        kind: 'merge',
-                        sourceRef: 'origin/main',
-                        canContinue: true,
-                        canAbort: false,
-                    },
-                })}
-                rootPath="/repo"
-                writeEnabled
-                onMerge={vi.fn(async () => ({ success: true }))}
-                onRebase={vi.fn(async () => ({ success: true }))}
-                onContinue={vi.fn(async () => ({ success: true }))}
-                onAbort={onAbort}
-            />,
-        );
-
-        await act(async () => {
-            confirmDeferred.resolve(true);
-            await confirmDeferred.promise;
-        });
-
-        expect(onAbort).not.toHaveBeenCalled();
-        expect(modalState.alert).toHaveBeenCalledWith('Error', 'This operation cannot be aborted.');
-    });
-
-    it('waits for destructive confirmation before invoking the mutation owner', async () => {
-        modalState.confirm.mockResolvedValue(true);
-        const onAbort = vi.fn(async () => ({ success: true }));
-
         const screen = await renderScreen(
             <SourceControlBranchIntegrationSection
                 theme={theme}
@@ -162,6 +102,7 @@ describe('SourceControlBranchIntegrationSection', () => {
 
         await screen.pressByTestIdAsync('scm-update-branch-operation-abort');
 
+        expect(modalState.confirm).not.toHaveBeenCalled();
         expect(onAbort).toHaveBeenCalledWith('merge');
     });
 
@@ -178,5 +119,22 @@ describe('SourceControlBranchIntegrationSection', () => {
         await screen.pressByTestIdAsync('scm-update-branch-merge');
         expect(onMerge).toHaveBeenCalledOnce();
         expect(modalState.alert).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ['a declined confirmation stays quiet', true],
+        ['a plain failure still reports', false],
+    ] as const)('%s', async (_name, declined) => {
+        const { normalizeUiScmFacadeResult } = await import('@/sync/ops/scm/scmActionInvocation');
+        const failure = declined
+            ? normalizeUiScmFacadeResult<{ success: boolean }>({ success: false, errorCode: 'approval_canceled', error: 'approval_canceled' })
+            : { success: false, error: 'merge failed' };
+        const screen = await renderScreen(<SourceControlBranchIntegrationSection
+            theme={theme} snapshot={createSnapshot({ operationState: null })} rootPath="/repo" writeEnabled
+            onMerge={async () => failure} onRebase={async () => ({ success: true })}
+            onContinue={async () => ({ success: true })} onAbort={async () => ({ success: true })} />);
+        await act(async () => { screen.changeTextByTestId('scm-update-branch-source-picker', 'feature'); });
+        await screen.pressByTestIdAsync('scm-update-branch-merge');
+        expect(modalState.alert).toHaveBeenCalledTimes(declined ? 0 : 1);
     });
 });

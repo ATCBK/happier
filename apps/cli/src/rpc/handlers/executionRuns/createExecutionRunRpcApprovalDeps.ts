@@ -7,15 +7,11 @@ import type { ReviewCommentPrincipalHeaderV1 } from '@happier-dev/protocol';
 import { createCliReviewCommentActionExecutorFromCredentials } from '@/agent/reviews/comments/executor';
 import { createExecutionRunHostActionCurrentIntentAdapter } from '@/session/actions/approvals/executionRunHostActionCurrentIntent';
 import { requestReviewCommentDirectWriteGrant } from '@/agent/executionRuns/profiles/review/directWriteGrantRequester';
-import type { PluginMachineMaterializationRefV1 } from '@happier-dev/protocol';
-import {
-  readAuthoritativePluginSlotOccurrence,
-  tryAcquireAuthoritativePluginRuntimeRegistryLease,
-} from '@/plugins/runtime/reload/runtimeLease';
 
 import type { ExecutionRunRpcApprovalDeps } from './dispatchExecutionRunRpcAction';
 import { observeAccountChanges } from '@/api/observeAccountChanges';
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { readCurrentReviewHostPluginAuthority, type ReviewHostPluginAuthorityReader } from '@/agent/executionRuns/profiles/review/pluginAuthority';
 
 function staleReviewHostActionError(): Error & { code: string } {
   return Object.assign(new Error('execution_run_host_action_stale'), {
@@ -23,12 +19,13 @@ function staleReviewHostActionError(): Error & { code: string } {
   });
 }
 
-function assertReviewCommentPrincipalCurrent(
+async function assertReviewCommentPrincipalCurrent(
   principal: ReviewCommentPrincipalHeaderV1,
-): void {
+  readCurrentAuthority: ReviewHostPluginAuthorityReader,
+): Promise<void> {
   const currentIntent = principal.currentIntent;
   if (!currentIntent || currentIntent.kind !== 'execution_run_host_action') return;
-  const sourceCustody = readAuthoritativePluginSlotOccurrence(currentIntent.pluginId)?.sourceCustody ?? null;
+  const sourceCustody = (await readCurrentAuthority(currentIntent.pluginId))?.sourceCustody ?? null;
   if (
     !sourceCustody
     || !pluginSourceCustodyV1Equal(sourceCustody, currentIntent.sourceCustody)
@@ -40,8 +37,10 @@ function assertReviewCommentPrincipalCurrent(
 export function createExecutionRunRpcApprovalDeps(params: Readonly<{
   readCredentials: () => Promise<StoredCredentials | null>;
   isApprovalExecutionOriginCurrent?: ExecutionRunRpcApprovalDeps['isApprovalExecutionOriginCurrent'];
+  resolveReviewHostPluginAuthority?: ReviewHostPluginAuthorityReader;
 }>): ExecutionRunRpcApprovalDeps {
   const coordinator = getSharedBlockingApprovalCoordinator();
+  const resolveReviewHostPluginAuthority = params.resolveReviewHostPluginAuthority ?? readCurrentReviewHostPluginAuthority;
 
   const resolveStore = async () => {
     const credentials = await params.readCredentials();
@@ -50,6 +49,7 @@ export function createExecutionRunRpcApprovalDeps(params: Readonly<{
   };
 
   return {
+    resolveReviewHostPluginAuthority,
     ...(params.isApprovalExecutionOriginCurrent
       ? { isApprovalExecutionOriginCurrent: params.isApprovalExecutionOriginCurrent }
       : {}),
@@ -77,26 +77,19 @@ export function createExecutionRunRpcApprovalDeps(params: Readonly<{
       if (!credentials) throw new Error('review_comment_credentials_unavailable');
       const execute = createCliReviewCommentActionExecutorFromCredentials({
         credentials,
-        assertPrincipalCurrent: assertReviewCommentPrincipalCurrent,
+        assertPrincipalCurrent: principal => assertReviewCommentPrincipalCurrent(principal, resolveReviewHostPluginAuthority),
       });
       return await execute(actionId, input, {
         ...(reviewCommentPrincipal ? { principal: reviewCommentPrincipal } : {}),
       });
     },
-    pluginPermissionGrantRequest: async ({ serverId: _serverId, ...input }) => {
+    pluginPermissionGrantRequest: async ({ serverId: _serverId, caller: _caller, ...input }) => {
       const credentials = await params.readCredentials();
       if (!credentials) throw new Error('plugin_permission_grant_credentials_unavailable');
       // The exact current materialization provenance is host-resolved here so
       // the server can bind the grant request to the proven caller; a
       // caller-string alone is never admitted.
-      let caller: PluginMachineMaterializationRefV1 | undefined;
-      const lease = tryAcquireAuthoritativePluginRuntimeRegistryLease();
-      try {
-        const ref = lease?.registry.resolveCurrentPluginMaterializationRef?.(input.pluginId) ?? null;
-        if (ref && ref.pluginId === input.pluginId) caller = ref;
-      } finally {
-        void lease?.release();
-      }
+      const caller = (await resolveReviewHostPluginAuthority(input.pluginId))?.caller;
       return await requestReviewCommentDirectWriteGrant({ credentials, input: { ...input, ...(caller ? { caller } : {}) } });
     },
     approvalsList: async (args) => {

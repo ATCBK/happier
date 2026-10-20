@@ -74,6 +74,31 @@ describe('SessionListSearchChrome', () => {
         expect(firstByTestId(screen.root, 'session-list-search-trigger')).toBeDefined();
     });
 
+    it('shows an active facet as a chip under the title that turns off only that facet', async () => {
+        const { SessionListSearchChrome } = await import('./SessionListSearchChrome');
+        const { buildSessionListActiveFilterChips } = await import('./SessionListFilterControl');
+        const { createSessionListViewFilterDefaults } = await import('./sessionListViewFilters');
+        const filters = createSessionListViewFilterDefaults({ scope: 'following', coordinator: 'coordinator', homeServerIds: ['home-a'] });
+        const updateFilters = vi.fn();
+        const chips = (current: typeof filters) => buildSessionListActiveFilterChips({ filters: current, updateFilters }, null);
+        expect(chips({ ...filters, coordinator: undefined })).toEqual([]);
+
+        const screen = await renderScreen(
+            <SessionListSearchChrome
+                filterControl={<Text testID="filter-control">Following</Text>}
+                filterChips={chips(filters)}
+                searchQuery=""
+                onSearchQueryChange={vi.fn()}
+            />,
+        );
+        const chip = firstByTestId(screen.root, 'session-list-filter-chip-coordinator');
+        await invokeTestInstanceHandler(chip, 'onPress');
+        const update = updateFilters.mock.calls[0]?.[0] as (current: typeof filters) => typeof filters;
+        const next = update(filters);
+        expect(next.coordinator).toBeUndefined();
+        expect(next).toMatchObject({ scope: 'following', homeServerIds: ['home-a'] });
+    });
+
     it('renders the query from its single owner without a second local echo state', async () => {
         const { SessionListSearchChrome } = await import('./SessionListSearchChrome');
         const onSearchQueryChange = vi.fn();
@@ -319,7 +344,7 @@ describe('SessionListSearchChrome', () => {
         const inputBeforePublication = inputOf(screen.root);
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <SessionListSearchChrome
                     {...baseProps}
                     searchTrailingAccessory={React.createElement('ActivityIndicator')}

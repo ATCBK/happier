@@ -11,6 +11,7 @@ import type { LocalServiceLauncherRunTarget } from './runTargets';
 import type { NormalizedLocalServiceInventoryEntry } from '../inventory/scanner';
 import { isWorkspacePathWithin } from '../inventory/provenance';
 import { resolveLocalServiceActionEligibility } from '../actions/policy';
+import { selectLocalServicePreviewForInventoryEntry } from '../preview/registry';
 
 /** Bound display text without changing the source/declaration used for admission. */
 export function formatLocalServiceLauncherTitle(value: string): string {
@@ -106,19 +107,6 @@ function declarationTitleForEntry(
     // A shared port/command is not enough to choose between two declarations.
     const [match] = matches;
     return matches.length === 1 && match && 'declaration' in match ? formatLocalServiceLauncherTitle(match.title) : undefined;
-}
-
-function previewMatchesEntry(
-    preview: LocalServicePreviewResourceV1,
-    entry: NormalizedLocalServiceInventoryEntry,
-): boolean {
-    if (preview.machineId !== entry.machineId) return false;
-    if (preview.target.port !== entry.port) return false;
-    const host = preview.target.host.toLowerCase();
-    const entryHost = entry.address.host.toLowerCase().replace(/^\[|\]$/gu, '');
-    return host === entryHost
-        || (entry.address.kind === 'wildcard' && (host === '127.0.0.1' || host === 'localhost' || host === '::1'))
-        || (entry.address.kind === 'loopback' && host === 'localhost');
 }
 
 function hostMatchesCandidate(host: string, candidateHost: string): boolean {
@@ -371,7 +359,7 @@ export function buildLocalServiceLauncherSnapshot(
     const availableInventoryEntries = inventoryEntries.filter((entry) => entry.state === 'listening');
     const unavailableInventoryEntries = inventoryEntries.filter((entry) => entry.state !== 'listening');
     const previewByEntry = new Map(inventoryEntries.map(entry => [entry.id,
-        previews.find(candidate => previewMatchesEntry(candidate, entry))]));
+        selectLocalServicePreviewForInventoryEntry(previews, entry)]));
     const joinedPreviewIds = new Set(availableInventoryEntries.flatMap(entry => {
         const preview = previewByEntry.get(entry.id);
         return preview ? [preview.previewId] : [];

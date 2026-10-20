@@ -1,8 +1,9 @@
 import { ACTION_ID_FAMILIES_V1 } from '@happier-dev/protocol/actions/actionIds';
 import { createUnavailableRuntimeActionExecutor, resolveRuntimeActionExecutionFamily } from '@happier-dev/protocol/actions/executor/dispatch';
-import { BrowserCommandV1Schema } from '@happier-dev/protocol/browser/control/v1';
+import { BrowserCommandV1Schema, BrowserOpenViewInProgressV1Schema } from '@happier-dev/protocol/browser/control/v1';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { getActionRequiredServerFeatureId } from '@happier-dev/protocol/actions/actionRequiredServerFeature';
+import { MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS } from '@happier-dev/protocol/browser/automation/reverseDispatchV1';
 import type { ActionExecuteResult, RuntimeActionExecute, RuntimeActionExecuteArgs, RuntimeActionIdV1 } from '@happier-dev/protocol';
 
 import type { BrowserDaemonControlRoutes } from '../control/routes';
@@ -21,11 +22,6 @@ export type BrowserDaemonRuntimeActionDisabledReason =
   | 'browser_action_unbacked'
   | 'browser_automation_route_unavailable'
   | 'browser_ui_automation_unavailable'
-  // The managed browser runtime is being fetched right now because this dispatch asked for it.
-  // A ~150MB download behind an action that looks like it did nothing is the silent-stall class
-  // this program is closing, so it gets its own typed outcome the UI can render.
-  | 'browser_automation_runtime_provisioning'
-  | 'browser_automation_runtime_provisioning_failed'
   | 'browser_context_route_unavailable'
   | 'browser_control_route_unavailable'
   | 'browser_diagnostics_route_unavailable'
@@ -41,25 +37,27 @@ export type BrowserRecordingAttachToComposerExecutor = (
 /**
  * What a provisioning attempt says about the managed browser runtime.
  *
- * - `provisioning` — an install is now in flight (single-flighted by the provisioning owner, so
- *   concurrent dispatches join the same one rather than starting a second download).
+ * - `ready` — installation and the canonical route refresh have completed.
  * - `failed` — an install was attempted and did not succeed.
  * - `unavailable` — nothing can be provisioned on this host at all (unsupported platform, or a
  *   pinned asset with no verifiable digest). This is the pre-existing honest answer and keeps the
  *   pre-existing reason code.
  */
 export type BrowserAutomationRuntimeProvisionOutcome =
-  | 'provisioning'
+  | 'ready'
   | 'failed'
   | 'unavailable';
 
 export type ProvisionBrowserAutomationRuntime =
-  () => Promise<BrowserAutomationRuntimeProvisionOutcome>;
+  (options?: Readonly<{ onProvisioning?: () => void }>) => Promise<BrowserAutomationRuntimeProvisionOutcome>;
 
 export type CreateBrowserDaemonRuntimeActionExecutorInput = Readonly<{
   control?: BrowserDaemonControlRoutes;
+  /** Re-read the same route owner after provisioning replaces its routes. */
+  resolveControl?: () => BrowserDaemonControlRoutes | null | undefined;
   context?: BrowserContextRoutes;
   automation?: BrowserAutomationRoutes;
+  resolveAutomation?: () => BrowserAutomationRoutes | null | undefined;
   /** Physical ownership is read from the existing daemon control broker. */
   ownsAutomationView?: (view: Readonly<{ browserSessionId: string; viewId: string }>) => boolean;
   uiAutomation?: RuntimeActionExecute;
@@ -127,8 +125,7 @@ function parseRuntimeActionInput(args: RuntimeActionExecuteArgs): Readonly<
 
 async function executeBrowserControlAction(
   args: RuntimeActionExecuteArgs,
-  control: BrowserDaemonControlRoutes | undefined,
-  provisionAutomationRuntime: ProvisionBrowserAutomationRuntime | undefined,
+  input: CreateBrowserDaemonRuntimeActionExecutorInput,
 ): Promise<unknown> {
   const parsed = parseRuntimeActionInput(args);
   if (!parsed.ok) return parsed.result;
@@ -138,14 +135,27 @@ async function executeBrowserControlAction(
     return invalidParametersResult;
   }
 
+  let control = input.control ?? input.resolveControl?.();
   if (!control) {
-    if (command.data.kind === 'openView' && provisionAutomationRuntime) {
-      const outcome = await provisionAutomationRuntime();
-      return browserRuntimeActionDisabledResult(outcome === 'unavailable'
-        ? 'browser_control_route_unavailable'
-        : PROVISION_OUTCOME_REASONS[outcome]);
+    if (command.data.kind === 'openView' && input.provisionAutomationRuntime) {
+      const open = command.data;
+      const outcome = await input.provisionAutomationRuntime({ onProvisioning: () => {
+        args.context.operationOwnerUpdate?.update({ state: 'running',
+          progress: { phase: 'browser_runtime_provisioning' } });
+        const acceptance = args.context.operationAcceptance;
+        if (acceptance?.actionId === args.actionId) {
+          acceptance.accept(BrowserOpenViewInProgressV1Schema.parse({ v: 1, status: 'in_progress',
+            phase: 'browser_runtime_provisioning', commandId: open.commandId,
+            browserSessionId: open.browserSessionId, viewId: open.viewId, operationId: acceptance.operationId }));
+        }
+      } });
+      if (outcome === 'failed') return provisioningFailure();
+      if (outcome === 'ready') {
+        await input.featureGate.refresh();
+        if (input.featureGate.isEnabled('browser.sidecar')) control = input.resolveControl?.();
+      }
     }
-    return browserRuntimeActionDisabledResult('browser_control_route_unavailable');
+    if (!control) return browserRuntimeActionDisabledResult('browser_control_route_unavailable');
   }
 
   return await control.dispatchCommand(command.data, args.context);
@@ -161,32 +171,30 @@ async function executeBrowserContextAction(
   return await context.dispatch(args.actionId, args.input);
 }
 
-const PROVISION_OUTCOME_REASONS = {
-  provisioning: 'browser_automation_runtime_provisioning',
-  failed: 'browser_automation_runtime_provisioning_failed',
-  unavailable: 'browser_automation_route_unavailable',
-} as const satisfies Record<
-  BrowserAutomationRuntimeProvisionOutcome,
-  BrowserDaemonRuntimeActionDisabledReason
->;
+function provisioningFailure(): BrowserDaemonRuntimeActionFailure {
+  return { ok: false, errorCode: 'browser_runtime_provisioning_failed',
+    error: 'Could not prepare the browser. Check the machine’s internet connection and free disk space, then try opening the page again.' };
+}
 
 async function executeBrowserAutomationAction(
   args: RuntimeActionExecuteArgs,
-  automation: BrowserAutomationRoutes | undefined,
-  provisionAutomationRuntime: ProvisionBrowserAutomationRuntime | undefined,
+  input: CreateBrowserDaemonRuntimeActionExecutorInput,
 ): Promise<unknown> {
+  let automation = input.automation ?? input.resolveAutomation?.();
   if (!automation) {
     // No route means the sidecar adapter failed closed at startup, and on an unprovisioned host
     // that is `managed_package_missing`. Asking for automation is what authorizes the fetch, so
-    // this is where it starts. The dispatch does not wait for a 150MB download: it returns a typed
-    // in-flight outcome, and the next dispatch finds the route (route owners are re-resolved per
-    // dispatch, so no restart is needed).
-    if (!provisionAutomationRuntime) {
+    // this is where it starts. Retain this invocation through installation and route refresh.
+    if (!input.provisionAutomationRuntime) {
       return browserRuntimeActionDisabledResult('browser_automation_route_unavailable');
     }
-    return browserRuntimeActionDisabledResult(
-      PROVISION_OUTCOME_REASONS[await provisionAutomationRuntime()],
-    );
+    const outcome = await input.provisionAutomationRuntime();
+    if (outcome === 'failed') return provisioningFailure();
+    if (outcome === 'ready') {
+      await input.featureGate.refresh();
+      if (input.featureGate.isEnabled('browser.automation')) automation = input.resolveAutomation?.();
+    }
+    if (!automation) return browserRuntimeActionDisabledResult('browser_automation_route_unavailable');
   }
   return await automation.dispatch(args.actionId, args.input, args.context);
 }
@@ -258,11 +266,20 @@ export function createBrowserDaemonRuntimeActionExecutor(
           : browserRuntimeActionDisabledResult('browser_ui_automation_unavailable');
       }
       if (sessionBrowserMismatch) return invalidParametersResult;
-      return await executeBrowserAutomationAction(args, input.automation, input.provisionAutomationRuntime);
+      return await executeBrowserAutomationAction(args, input);
     }
     if (BROWSER_CONTROL_ACTION_IDS.has(args.actionId)) {
       if (!featureGate.isEnabled('browser.sidecar')) {
         return browserRuntimeActionDisabledResult('browser_control_route_unavailable');
+      }
+      // External opening belongs to the exact answering client's mounted page,
+      // not to the Machine's BrowserCommand broker or its system browser.
+      if (args.actionId === 'browser.view.openExternal') {
+        const parsed = parseRuntimeActionInput(args);
+        if (!parsed.ok) return parsed.result;
+        return input.uiAutomation
+          ? await input.uiAutomation({ ...args, input: parsed.input })
+          : browserRuntimeActionDisabledResult('browser_ui_automation_unavailable');
       }
       if (args.actionId === 'browser.control.takeControl' || args.actionId === 'browser.control.handBack') {
         const parsed = parseRuntimeActionInput(args);
@@ -275,18 +292,28 @@ export function createBrowserDaemonRuntimeActionExecutor(
         }
       }
       if (sessionBrowserMismatch) return invalidParametersResult;
-      return await executeBrowserControlAction(args, input.control, input.provisionAutomationRuntime);
+      return await executeBrowserControlAction(args, input);
     }
-    if (sessionBrowserMismatch) return invalidParametersResult;
     if (BROWSER_DIAGNOSTICS_ACTION_IDS.has(args.actionId)) {
       if (!featureGate.isEnabled('browser.diagnostics')) {
         return browserRuntimeActionDisabledResult('browser_diagnostics_route_unavailable');
       }
+      if ((MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS as readonly string[]).includes(args.actionId)) {
+        const parsed = parseRuntimeActionInput(args);
+        if (!parsed.ok) return parsed.result;
+        const view = parsed.input as Readonly<{ browserSessionId: string; viewId: string }>;
+        if (input.ownsAutomationView && !input.ownsAutomationView(view)) {
+          return input.uiAutomation ? await input.uiAutomation({ ...args, input: parsed.input })
+            : browserRuntimeActionDisabledResult('browser_ui_automation_unavailable');
+        }
+      }
+      if (sessionBrowserMismatch) return invalidParametersResult;
       if (!input.diagnostics) {
         return browserRuntimeActionDisabledResult('browser_diagnostics_route_unavailable');
       }
       return await input.diagnostics.dispatch(args.actionId, args.input);
     }
+    if (sessionBrowserMismatch) return invalidParametersResult;
     if (BROWSER_CONTEXT_ACTION_IDS.has(args.actionId)) {
       if (!featureGate.isEnabled('browser.context')) {
         return browserRuntimeActionDisabledResult('browser_context_route_unavailable');

@@ -46,11 +46,14 @@ type ProviderContributionUnavailableReason =
   | 'persistedProviderMissing'
   | 'persistedProviderAmbiguous';
 
+/** A successful selection/snapshot proves non-current authority, unlike a failed read. */
+export class ConversationProviderContributionNotCurrentError extends PluginError {}
+
 function unavailableProviderContribution(
   reason: ProviderContributionUnavailableReason,
   message: string,
-): PluginError {
-  return new PluginError({
+): ConversationProviderContributionNotCurrentError {
+  return new ConversationProviderContributionNotCurrentError({
     code: reason === 'persistedProviderAmbiguous'
       ? 'channels_provider_contribution_ambiguous'
       : 'channels_provider_contribution_unavailable',

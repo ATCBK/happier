@@ -100,6 +100,13 @@ function cleanupSpec<const Id extends MachineStorageActionId>([id, title, descri
   readonly [Id, string, string, string, 'read' | 'write' | 'danger', 'safe' | 'danger', z.input<(typeof MACHINE_STORAGE_ACTION_INPUT_SCHEMAS)[Id]>?]): MachineStorageActionSpec<Id> {
   return {
     ...base, id, approval: { result: 'required' }, title, description, safety, sideEffectClass,
+    ...(id === 'machines.storage.trash.move' ? { approvalPolicy: {
+      uiConfirmation: 'direct' as const,
+      uiConfirmationForInput: (input: unknown) => {
+        const parsed = MachineStorageTrashMoveInputV1Schema.safeParse(input);
+        return !parsed.success || parsed.data.emptyAfter === true;
+      },
+    } } : {}),
     ...(id === 'machines.storage.protected.remove' ? { approvalPolicy: { agentDefault: 'authority' as const } } : {}),
     toolExposure: { agent: id === 'machines.storage.suggestions.list' ? 'direct' as const : 'discoverable_only' as const },
     prompting: { agentGuidance: `${storageReferenceGuidance} ${sideEffectClass === 'read'

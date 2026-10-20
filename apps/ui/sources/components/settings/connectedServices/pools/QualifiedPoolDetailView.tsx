@@ -33,7 +33,6 @@ import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import { buildSummaryMeters } from '@/sync/domains/connectedServices/connectedServiceQuotaBadges';
 import type { ConnectedAccountIdentityPresenter } from '@/hooks/ui/useConnectedAccountIdentityPrivacy';
 import type { UseQualifiedConnectedAccountGroupsResult } from '@/hooks/server/connectedServices/useQualifiedConnectedAccountGroups';
-import { Modal } from '@/modal';
 import { formatResetCountdown } from '@/sync/domains/connectedServices/formatResetCountdown';
 import { resolveQuotaMeterTone } from '@/sync/domains/connectedServices/resolveQuotaTone';
 import { getPoolStrategyPresentation, isPoolUsageLimitSwitchEnabled } from '@/sync/domains/connectedServices/connectedServicePoolPolicy';
@@ -437,18 +436,8 @@ export const QualifiedPoolDetailView = React.memo(function QualifiedPoolDetailVi
     }, [group, mutations]);
 
     const removeMember = React.useCallback(async (account: QualifiedConnectedAccountRef) => {
-        const ok = await Modal.confirm(
-            t('connectedServices.detail.groupActions.removeMemberConfirmTitle'),
-            t('connectedServices.detail.groupActions.removeMemberConfirmBody', { profileId: identityOf(account.accountId).name }),
-            {
-                confirmText: t('connectedServices.detail.groupActions.removeMember'),
-                cancelText: t('common.cancel'),
-                destructive: true,
-            },
-        );
-        if (!ok) return;
         await mutations.removeMember({ group, account });
-    }, [group, identityOf, mutations]);
+    }, [group, mutations]);
 
     const membershipCandidates = React.useMemo<ReadonlyArray<PoolMembershipCandidate>>(
         () => accounts.map((account) => {
@@ -485,18 +474,8 @@ export const QualifiedPoolDetailView = React.memo(function QualifiedPoolDetailVi
     }, [accounts, group, memberAccountIds, mutations]);
 
     const deletePool = React.useCallback(async () => {
-        const ok = await Modal.confirm(
-            t('connectedServices.pools.delete.confirmTitle'),
-            t('connectedServices.pools.delete.confirmMessage', { name: label }),
-            {
-                confirmText: t('connectedServices.pools.delete.title'),
-                cancelText: t('common.cancel'),
-                destructive: true,
-            },
-        );
-        if (!ok) return;
         await mutations.delete(group);
-    }, [group, label, mutations]);
+    }, [group, mutations]);
 
     const enabledMembers = group.members.filter((member) => member.enabled);
     const enabledCount = enabledMembers.length;

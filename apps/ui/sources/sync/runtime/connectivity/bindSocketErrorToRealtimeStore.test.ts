@@ -31,7 +31,7 @@ describe('primary socket error recovery', () => {
             expect(state.socketLastError).toBeNull();
             expect(state.syncError).toBeNull();
             expect(resolveConnectionHealth({ socketStatus: 'connected', endpointStatus: 'online',
-                hasSyncError: !!state.syncError, machineGroups: [{ machineCount: 1, onlineCount: 1, readyCount: 1 }] }).kind)
+                hasSyncError: !!state.syncError, machineGroups: [{ machineCount: 1, onlineCount: 1, readyCount: 1, status: 'idle' }] }).kind)
                 .toBe('healthy');
         } finally { channel.detach(); }
     });

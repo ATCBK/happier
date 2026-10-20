@@ -148,10 +148,16 @@ function buildDiagnosticsFidelityByFamily(
         : primaryEngine === 'desktopWebView' && input.desktopWebViewSupport?.pageInfoDiagnostics === true
             ? { pageInfo: 'nativeCallback' as const }
         : {};
+    const captureFidelity = input.adapterKind === 'chromiumSidecar' && primaryEngine === 'streamedSurface'
+        ? { screenshot: 'cdp' as const }
+        : primaryEngine === 'desktopWebView' && input.desktopWebViewSupport?.capture === true
+            ? { screenshot: 'nativeCallback' as const }
+            : {};
 
     if (input.adapterKind === 'localPreview') {
         return {
             ...pageInfoFidelity,
+            ...captureFidelity,
             network: 'previewProxy',
             proxyTunnel: 'previewProxy',
             ...(primaryEngine === 'nativeWebView'
@@ -176,7 +182,7 @@ function buildDiagnosticsFidelityByFamily(
         };
     }
 
-    return pageInfoFidelity;
+    return { ...pageInfoFidelity, ...captureFidelity };
 }
 
 function buildBrowserAutomationActions(
@@ -318,6 +324,10 @@ export function buildBrowserAdapterCapabilities(
     const desktopWebViewNavigation = primaryEngine === 'desktopWebView'
         ? input.desktopWebViewSupport
         : null;
+    // A relay preview's documents carry the cooperative navigation reporter, so its web iframe has
+    // history and stop truth. Any other framed page is cross-origin and uncontrollable beyond reload.
+    const relayPreviewNavigation = primaryEngine === 'webIframe' && input.adapterKind === 'localPreview';
+    const diagnosticsFidelityByFamily = buildDiagnosticsFidelityByFamily(input, primaryEngine);
     return BrowserAdapterCapabilitiesV1Schema.parse({
         adapterKind: input.adapterKind,
         supportedTargetKinds: input.supportedTargetKinds,
@@ -331,11 +341,13 @@ export function buildBrowserAdapterCapabilities(
             ),
             canGoBack: !simulatorPreview && (
                 daemonNavigation
+                || relayPreviewNavigation
                 || primaryEngine === 'nativeWebView'
                 || desktopWebViewNavigation?.goBackForward === true
             ),
             canGoForward: !simulatorPreview && (
                 daemonNavigation
+                || relayPreviewNavigation
                 || primaryEngine === 'nativeWebView'
                 || desktopWebViewNavigation?.goBackForward === true
             ),
@@ -347,13 +359,18 @@ export function buildBrowserAdapterCapabilities(
             ),
             canStop: !simulatorPreview && (
                 daemonNavigation
+                || relayPreviewNavigation
                 || primaryEngine === 'nativeWebView'
                 || desktopWebViewNavigation?.stop === true
             ),
         },
-        diagnosticsFidelityByFamily: buildDiagnosticsFidelityByFamily(input, primaryEngine),
+        diagnosticsFidelityByFamily,
         automationActions: buildBrowserAutomationActions(input, primaryEngine),
-        contextKinds: ['browserPageReference'],
+        // Structural capture support and live provider admission are separate: the annotation
+        // controller still requires its bound producer before it can start or obtain pixels.
+        contextKinds: diagnosticsFidelityByFamily.screenshot
+            ? ['browserPageReference', 'browserScreenshot', 'browserAnnotation']
+            : ['browserPageReference'],
         inputRouting: simulatorPreview || daemonNavigation
             ? 'pmsControlSideband'
             : primaryEngine === 'nativeWebView' || primaryEngine === 'desktopWebView' ? 'native' : 'none',

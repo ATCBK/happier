@@ -531,14 +531,14 @@ describe('executable plugin runtime Connected Accounts integration', () => {
                 signal: new AbortController().signal,
             })).resolves.toMatchObject({
                 observedAtMs: expect.any(Number),
-                limits: expect.arrayContaining([expectedLimit]),
+                limits: expect.arrayContaining([expect.objectContaining(expectedLimit)]),
             });
-            expect(network.openPinnedStream).toHaveBeenCalledOnce();
-            expect(network.observed[0]).toMatchObject({
+            const usageRequests = network.observed.filter((request) => request.url === usageUrl);
+            expect(usageRequests).toEqual([expect.objectContaining({
                 url: usageUrl,
                 method: 'GET',
                 validatedAddresses: [FIXTURE_VALIDATED_ADDRESS],
-            });
+            })]);
         } finally {
             await runtime?.dispose();
         }

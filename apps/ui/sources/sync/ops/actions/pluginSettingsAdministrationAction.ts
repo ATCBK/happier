@@ -118,7 +118,8 @@ async function executeScopedPluginSettingsAdministrationActionCore(
         }
         if (isSecret && (field?.secretCustody !== 'account' || 'canonicalOrigin' in input && input.canonicalOrigin !== undefined))
             return fail('invalid_arguments');
-        const readInput = { pluginId: input.pluginId, scope, target: params.target, fields };
+        const readInput = { pluginId: input.pluginId, scope, target: params.target, fields,
+            ...(params.context.signal ? { signal: params.context.signal } : {}) };
         const before = await adapter.read(readInput);
         params.context.signal?.throwIfAborted();
         assertCurrent();
@@ -199,11 +200,13 @@ export function createUiPluginSettingsAdministrationAction(
     account: LazyActionAccountContext,
 ): NonNullable<ActionExecutorDeps['pluginSettingsAdministrationAction']> {
     const resolveScope = async (request: AdministrationRequest): Promise<AdministrationDeclarationScope | null> => {
+        let assertDeclarationCurrent = () => {};
         const assertCurrent = () => {
             request.context.signal?.throwIfAborted();
             account.assertCurrent();
             if (request.context.isPluginSettingsIntentCurrent && !request.context.isPluginSettingsIntentCurrent())
                 throw new Error('plugin_settings_target_not_current');
+            assertDeclarationCurrent();
         };
         assertCurrent();
         const input = PluginSettingsAdministrationActionInputSchemasV1[request.actionId].parse(request.input);
@@ -216,7 +219,7 @@ export function createUiPluginSettingsAdministrationAction(
             target = { ...selected, serverId: account.serverId };
             const { loadDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
             const projection = await loadDaemonMergedProjectionInputs({ machineId: selected.machineId, serverId: account.serverId,
-                accountLifetime: account.accountLifetime });
+                accountLifetime: account.accountLifetime, signal: request.context.signal });
             assertCurrent();
             if (!projection) return null;
             groups = projection.pluginProjectionById[input.pluginId]?.editableSettingsGroups ?? [];
@@ -226,13 +229,57 @@ export function createUiPluginSettingsAdministrationAction(
             const active = captureActiveServerAccountScopeLifetime();
             if (!active?.isCurrent() || !areServerAccountScopesEqual(active.scope, account.accountLifetime.scope)) return null;
             const { readPluginAccountAvailability } = await import('@/sync/domains/plugins/availability/projection');
-            const declaration = readPluginAccountAvailability({ serverId: account.serverId, accountId: account.accountId })
-                .readCurrentSettingsDeclaration({ pluginId: input.pluginId });
-            if (declaration.kind !== 'available') return null;
-            const { projectPluginSettingsContributionV2 } = await import('@happier-dev/protocol/daemon/contributionRegistryProjection');
-            const { mapV2EditableSettingsGroup } = await import('@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters');
-            groups = (declaration.declaration.contributes.settings ?? []).map(definition => mapV2EditableSettingsGroup(
-                projectPluginSettingsContributionV2({ pluginId: input.pluginId, definition })));
+            const reader = readPluginAccountAvailability({ serverId: account.serverId, accountId: account.accountId });
+            const { readCurrentAppShellPluginUiProjection } = await import('@/components/appShell/plugins/committedPluginUiProjection');
+            const { readPluginUiExecutionOriginCandidates } = await import('@/sync/domains/plugins/ui/projectionUnion');
+            const { resolveFreshPluginMachineExecutionOrigin } = await import('@/sync/domains/machines/administration/usePluginExecutionOriginSelection');
+            const { readCurrentPluginMachineExecutionTargetPreference } = await import('@/sync/domains/machines/administration/selectionPreferences');
+            const { arePluginMachineExecutionOriginsEqual } = await import('@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1');
+            const readSelected = () => resolveFreshPluginMachineExecutionOrigin({ pluginId: input.pluginId,
+                origin: null, storedTarget: readCurrentPluginMachineExecutionTargetPreference(input.pluginId),
+                reader, classifyRelease: reader.classifyRelease,
+                ...readPluginUiExecutionOriginCandidates({ pluginId: input.pluginId, projection: readCurrentAppShellPluginUiProjection() }) });
+            const selectedSource = readSelected();
+            if (selectedSource?.source) {
+                // A live source declaration stays with its current daemon. It
+                // declares Account fields without becoming their storage target.
+                const source = selectedSource.source;
+                if (selectedSource.origin.serverIdentityId !== account.serverIdentityId) return null;
+                assertDeclarationCurrent = () => {
+                    const current = readSelected();
+                    if (!current?.source || !arePluginMachineExecutionOriginsEqual(current.origin, selectedSource.origin)
+                        || current.source.occurrenceId !== source.occurrenceId || current.source.generation !== source.generation)
+                        throw new Error('plugin_settings_target_not_current');
+                };
+                const { loadDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+                const projection = await loadDaemonMergedProjectionInputs({ machineId: source.origin.sourceRef.machineId,
+                    serverId: source.serverId, accountLifetime: account.accountLifetime });
+                assertCurrent();
+                const declaration = projection?.pluginProjectionById[input.pluginId];
+                if (!declaration?.installedPackage?.executionOrigin || declaration.occurrenceId !== source.occurrenceId
+                    || declaration.generation !== source.generation
+                    || !arePluginMachineExecutionOriginsEqual(declaration.installedPackage.executionOrigin, selectedSource.origin)) return null;
+                groups = declaration.editableSettingsGroups;
+            } else {
+                const declaration = reader.readCurrentSettingsDeclaration({ pluginId: input.pluginId });
+                if (declaration.kind === 'available') {
+                    const { projectPluginSettingsContributionV2 } = await import('@happier-dev/protocol/daemon/contributionRegistryProjection');
+                    const { mapV2EditableSettingsGroup } = await import('@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters');
+                    groups = (declaration.declaration.contributes.settings ?? []).map(definition => mapV2EditableSettingsGroup(
+                        projectPluginSettingsContributionV2({ pluginId: input.pluginId, definition })));
+                } else {
+                    // A selected release or ambiguous Account claim cannot be
+                    // reinterpreted as the app's bundled Agent declaration.
+                    const inventory = reader.readMaterializations();
+                    if (declaration.code === 'account_availability_scope_mismatch'
+                        || declaration.code === 'artifact_slot_ambiguous'
+                        || inventory.kind === 'available' && inventory.intentReads.some(entry =>
+                            entry.pluginId === input.pluginId && entry.response.intent?.desiredVersion != null)) return null;
+                    const { projectBundledAgentAccountSettingsGroups } = await import('@/sync/domains/plugins/settings/accountDeclaredPluginSettings');
+                    groups = projectBundledAgentAccountSettingsGroups({ pluginId: input.pluginId });
+                    if (groups.length === 0) return null;
+                }
+            }
         }
         assertCurrent();
         return { target, groups, assertCurrent };

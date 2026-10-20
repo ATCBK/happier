@@ -1,40 +1,44 @@
 import * as React from 'react';
 import type { WidgetDefinitionRefV1, WidgetDefinitionV1, WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
-import { useActiveServerAccountScope, useArtifact } from '@/sync/domains/state/storage';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { useActiveServerAccountScopeLifetime, useArtifact } from '@/sync/domains/state/storage';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import { readWidgetDefinitionForInstanceV1 } from './widgetDefinitionRead';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { readWidgetDefinitionArtifactV1 } from '@happier-dev/protocol/widgets/widgetDefinitionArtifactV1';
+import { useArtifactBody } from '@/components/artifacts/useArtifactBody';
 
-/** Existing per-Artifact invalidation feeds the canonical Action read, never a second byte store. */
+/** Existing per-Artifact invalidation feeds the canonical exact Artifact reader, never a second byte store. */
 export type MountedWidgetDefinitionV1 = Readonly<{ definition: WidgetDefinitionV1 | null; state: 'loading' | 'available' | 'unavailable'; reasonCode?: string }>;
 export function useWidgetDefinition(scope: WidgetSurfaceRefV1, reference: WidgetDefinitionRefV1, enabled = true, admittedViewer?: ServerAccountScope): MountedWidgetDefinitionV1 {
-    const viewer = useActiveServerAccountScope();
+    const lifetime = useActiveServerAccountScopeLifetime();
+    const viewer = lifetime?.scope ?? null;
     const artifactId = reference.kind === 'artifact' ? reference.artifactId : '';
     const artifact = useArtifact(artifactId);
-    const lifetime = React.useMemo(() => captureActiveServerAccountScopeLifetime(), [viewer?.serverId, viewer?.accountId]);
-    const [opened, setOpened] = React.useState<Readonly<{ artifactId: string; definition: WidgetDefinitionV1 | null; cached: boolean; reasonCode?: string }> | null>(null);
     const current = enabled && !!lifetime?.isCurrent() && !!viewer && areServerProfileIdentifiersEquivalent(viewer.serverId, scope.serverId)
         && (viewer.accountId === scope.accountId || reference.kind === 'inline' && areServerAccountScopesEqual(viewer, admittedViewer));
-    React.useEffect(() => {
-        if (!current || !artifactId || !lifetime) { setOpened(null); return; }
-        const controller = new AbortController();
-        const retirement = lifetime.onRetire(() => controller.abort());
-        if (!artifact) setOpened(null);
-        void import('@/sync/ops/actions/defaultActionExecutor').then(({ createDefaultActionExecutor }) =>
-            readWidgetDefinitionForInstanceV1(createDefaultActionExecutor(), scope, { kind: 'artifact', artifactId }, controller.signal),
-        ).then(definition => {
-            if (!controller.signal.aborted && lifetime.isCurrent()) setOpened({ artifactId, definition, cached: !!artifact,
-                ...(!definition ? { reasonCode: 'widget_definition_not_found' } : {}) });
-        }).catch((error: unknown) => {
-            const reasonCode = error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : 'widget_definition_unavailable';
-            if (!controller.signal.aborted && lifetime.isCurrent()) setOpened({ artifactId, definition: null, cached: false, reasonCode });
-        });
-        return () => { retirement.dispose(); controller.abort(); };
-    }, [current, lifetime, scope.serverId, scope.accountId, artifactId, artifact?.headerVersion, artifact?.bodyVersion, artifact?.seq, !!artifact]);
+    // One body hydration/publication owner serves Documents and exact saved definitions.
+    // Its publication acknowledgement prevents our own row from restarting its read.
+    const body = useArtifactBody(artifactId, current && artifactId ? artifact ?? null : null,
+        { readMissing: current && !!artifactId });
+    const opened = React.useMemo<MountedWidgetDefinitionV1>(() => {
+        if (!artifact) return { definition: null, state: body.state === 'failed' ? 'unavailable' : 'loading',
+            ...(body.state === 'failed' ? { reasonCode: 'widget_definition_not_found' } : {}) };
+        if (!artifact.ownerAccountId || artifact.access === undefined) return { definition: null, state: body.state === 'failed' ? 'unavailable' : 'loading',
+            ...(body.state === 'failed' ? { reasonCode: 'widget_definition_unavailable' } : {}) };
+        if (artifact.id !== artifactId || artifact.ownerAccountId !== scope.accountId)
+            return { definition: null, state: 'unavailable', reasonCode: 'widget_definition_account_mismatch' };
+        if (!artifact.isDecrypted || !artifact.rawHeader || artifact.body === null
+            || artifact.body !== undefined && typeof artifact.body !== 'string')
+            return { definition: null, state: 'unavailable', reasonCode: 'widget_definition_unavailable' };
+        if (artifact.body === undefined) return { definition: null, state: body.state === 'failed' ? 'unavailable' : 'loading',
+            ...(body.state === 'failed' ? { reasonCode: 'widget_definition_unavailable' } : {}) };
+        try {
+            return { definition: readWidgetDefinitionArtifactV1({ artifactId, header: artifact.rawHeader, body: artifact.body }), state: 'available' };
+        } catch {
+            return { definition: null, state: 'unavailable', reasonCode: 'widget_definition_unavailable' };
+        }
+    }, [artifact, artifactId, scope.accountId, body.state]);
     if (!current) return { definition: null, state: 'unavailable', reasonCode: 'widget_scope_unavailable' };
     if (reference.kind === 'inline') return { definition: reference.definition, state: 'available' };
-    if (opened?.artifactId !== artifactId || opened.cached && !artifact) return { definition: null, state: 'loading' };
-    return { definition: opened.definition, state: opened.definition ? 'available' : 'unavailable', reasonCode: opened.reasonCode };
+    return opened;
 }

@@ -1,6 +1,6 @@
 import { ComposerInstanceIdProtocolSchema } from '../../runtime/input/composerInstanceId.js';
 import { PendingLocalIdProtocolSchema } from '../../sessions/pending/pendingLocalId.js';
-import { SessionIdSchema } from '../../sessions/idsV1.js';
+import { DiscussionIdSchema, SessionIdSchema } from '../../sessions/idsV1.js';
 import { WorkflowBlockIdProtocolSchema } from '../../workflows/workflowBlockIdProtocol.js';
 import {
   defineProtocolLiteral,
@@ -31,6 +31,10 @@ export const ComposerRefV1Schema = defineProtocolUnion([
   defineProtocolObject({
     kind: defineProtocolLiteral('session'),
     sessionId: SessionIdSchema,
+  }, { policy: 'closed' }),
+  defineProtocolObject({
+    kind: defineProtocolLiteral('discussion'),
+    discussionId: DiscussionIdSchema,
   }, { policy: 'closed' }),
   defineProtocolObject({
     kind: defineProtocolLiteral('newSession'),
@@ -74,6 +78,8 @@ export function composerRefV1Key(ref: ComposerRefV1): string {
   switch (ref.kind) {
     case 'session':
       return JSON.stringify([ref.kind, ref.sessionId]);
+    case 'discussion':
+      return JSON.stringify([ref.kind, ref.discussionId]);
     case 'newSession':
       return JSON.stringify([ref.kind, ref.instanceId]);
     case 'pendingMessage':

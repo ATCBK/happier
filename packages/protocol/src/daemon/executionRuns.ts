@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '../strings/maxCodeUnits.js';
 import { z } from 'zod/mini';
 
 import { lazyZodSchema } from '../lazyZodSchema.js';
@@ -100,7 +101,7 @@ export const SessionExecutionRunBrokerAuthorityRequestV1Schema = lazyZodSchema((
   expectedOccurrenceId: z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(512))),
   expectedDirectMaterialUse: z.optional(TeamCredentialDirectMaterialUseV1Schema),
   expectedProviderConnectionModel: z.optional(z.strictObject({
-    agentId: z.string().check(z.trim(), z.minLength(1), z.maxLength(MAX_AGENT_ROUTING_ID_BYTES)),
+    agentId: z.string().check(z.trim(), z.minLength(1), maxCodeUnits(MAX_AGENT_ROUTING_ID_BYTES)),
     agentTargetKey: ProviderAgentTargetKeySchema,
     providerConnectionId: ProviderConnectionIdSchema,
     modelId: ProviderModelIdSchema,
@@ -344,7 +345,7 @@ export const PersistedExecutionRunConnectedServicesLaunchV1Schema = defineStored
 ])), () => z.union([
   createStoredReadSchema(PersistedCurrentExecutionRunConnectedServicesLaunchV1Schema),
   createStoredReadSchema(PersistedLegacyExecutionRunConnectedServicesLaunchV1Schema),
-  z.pipe(z.transform((value) => {
+  (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
     // A malformed current fact must not downgrade into the predecessor shape
     // when its current-only fields would otherwise be dropped on stored read.
     if (value && typeof value === 'object' && !Array.isArray(value)
@@ -411,7 +412,7 @@ export function isPersistedExecutionRunConnectedServicesLaunchIdentityExact(inpu
     && input.normalized.registration.runKey !== input.markerRunId;
 }
 
-const DaemonExecutionRunMarkerBackendIdentitySchema = lazyZodSchema(() => z.pipe(z.transform((value) => {
+const DaemonExecutionRunMarkerBackendIdentitySchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
     const parsed = BackendTargetRefV2Schema.safeParse(
       normalizeBackendTargetRefV2InputToV2(value),
     );
@@ -425,7 +426,7 @@ const DaemonExecutionRunMarkerBackendIdentitySchema = lazyZodSchema(() => z.pipe
     // The marker carries the host Agent routing id, so its bound is the
     // canonical Agent-id wire contract, not the bounded diagnostic-string
     // length used for `permissionMode`/`errorCode` below.
-    backendId: z.string().check(z.trim(), z.minLength(1), z.maxLength(MAX_AGENT_ROUTING_ID_BYTES)),
+    backendId: z.string().check(z.trim(), z.minLength(1), maxCodeUnits(MAX_AGENT_ROUTING_ID_BYTES)),
   })));
 
 /**
@@ -489,8 +490,8 @@ const DaemonExecutionRunMarkerPersistenceReadFieldsSchema = lazyZodSchema(() => 
   callId: z.string().check(z.minLength(1)),
   sidechainId: z.string().check(z.minLength(1)),
   intent: ExecutionRunIntentSchema,
-  backendTarget: z.pipe(z.transform(normalizeBackendTargetRefV2InputToV2), BackendTargetRefV2Schema),
-  backendId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(MAX_AGENT_ROUTING_ID_BYTES))),
+  backendTarget: (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeBackendTargetRefV2InputToV2), BackendTargetRefV2Schema),
+  backendId: z.optional(z.string().check(z.trim(), z.minLength(1), maxCodeUnits(MAX_AGENT_ROUTING_ID_BYTES))),
   configuredBackendId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(200))),
   sourceKind: z.optional(BackendTargetSourceKindV2Schema),
   display: z.optional(ExecutionRunDisplaySchema),
@@ -596,14 +597,14 @@ const DaemonExecutionRunMarkerPersistenceReadSchemaCore = lazyZodSchema(() => (<
     });
   }
 })));
-export const DaemonExecutionRunMarkerSchema = lazyZodSchema(() => z.pipe(z.transform((value) => {
+export const DaemonExecutionRunMarkerSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
     const normalized = normalizeLegacyExecutionRunBackendTargetInput(value);
     if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) return normalized;
     return normalized;
   }), DaemonExecutionRunMarkerSchemaCore));
 export type DaemonExecutionRunMarker = z.infer<typeof DaemonExecutionRunMarkerSchema>;
 
-export const DaemonExecutionRunMarkerPersistenceReadSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeLegacyExecutionRunBackendTargetInput), createStoredReadSchema(DaemonExecutionRunMarkerPersistenceReadSchemaCore)));
+export const DaemonExecutionRunMarkerPersistenceReadSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeLegacyExecutionRunBackendTargetInput), createStoredReadSchema(DaemonExecutionRunMarkerPersistenceReadSchemaCore)));
 export type DaemonExecutionRunMarkerPersistenceRead = z.infer<
   typeof DaemonExecutionRunMarkerPersistenceReadSchema
 >;
@@ -620,7 +621,7 @@ export type DaemonExecutionRunProcessInfo = z.infer<typeof DaemonExecutionRunPro
 const DaemonExecutionRunEntrySchemaCore = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(DaemonExecutionRunMarkerSchemaCore, {
   process: z.optional(DaemonExecutionRunProcessInfoSchema),
 })));
-export const DaemonExecutionRunEntrySchema = lazyZodSchema(() => z.pipe(z.transform(normalizeLegacyExecutionRunBackendTargetInput), DaemonExecutionRunEntrySchemaCore));
+export const DaemonExecutionRunEntrySchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeLegacyExecutionRunBackendTargetInput), DaemonExecutionRunEntrySchemaCore));
 export type DaemonExecutionRunEntry = z.infer<typeof DaemonExecutionRunEntrySchema>;
 
 export const DaemonExecutionRunListRequestSchema = lazyZodSchema(() => z.looseObject({}));

@@ -44,7 +44,7 @@ describe('Prompt stack authoritative readiness', () => {
     });
 
     it('distinguishes an unknown or missing Profile from a loaded empty Profile stack', async () => {
-        const screen = await renderScreen(<InjectedAuthProvider value={{ credentials: null }}>
+        const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
             <PromptStackEditorScreen surface="profile" profileId="profile-1" title="Profile Context" />
         </InjectedAuthProvider>);
         expect(screen.findByTestId('promptStack.empty')).toBeNull();
@@ -58,13 +58,13 @@ describe('Prompt stack authoritative readiness', () => {
         await act(async () => {
             applyProfileCatalogSnapshot(scope, { ...ready, records: [{ revision: 3,
                 record: { v: 1, id: profile.id, definition: { kind: 'legacy', profile },
-                    enabled: true, promptStack: [], secretBindings: {} } }] }, true);
+                    enabled: true, promptStack: [], skillSeeds: [], secretBindings: {} } }] }, true);
         });
         expect(screen.findByTestId('promptStack.empty')).not.toBeNull();
         expect(screen.findByTestId('promptStack.readState')).toBeNull();
         await act(async () => { beginProfileCatalogLoad(scope); });
         expect(screen.findByTestId('promptStack.empty')).not.toBeNull();
-        expect(screen.findByTestId('promptStack.freshness')).not.toBeNull();
+        expect(screen.findByTestId('promptStack.freshness')).toBeNull();
         await act(async () => { applyProfileCatalogSnapshot(scope, { status: 'unavailable', reason: 'unauthorized' }, true); });
         expect(screen.findByTestId('promptStack.empty')).toBeNull();
         expect(screen.findByTestId('promptStack.readState')).not.toBeNull();
@@ -81,7 +81,7 @@ describe('Prompt stack authoritative readiness', () => {
             control: null, controlRevision: 'absent' as const, records: [], referenceGuardRevision: 1 };
         applyProfileCatalogSnapshot(scope, { ...inventory, status: 'partial',
             diagnostics: [{ id: profile.id, revision: 3, reason: 'invalid-stored-content' }] }, true, artifacts);
-        const screen = await renderScreen(<InjectedAuthProvider value={{ credentials: null }}>
+        const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
             <PromptStackEditorScreen surface="profile" profileId={profile.id} title="Profile Context" />
         </InjectedAuthProvider>);
         expect(screen.findByTestId('promptStack.empty')).toBeNull();
@@ -94,11 +94,11 @@ describe('Prompt stack authoritative readiness', () => {
         expect(screen.findByTestId('promptStack.empty')).not.toBeNull();
         await act(async () => { beginProfileCatalogLoad(scope); });
         expect(screen.findByTestId('promptStack.empty')).not.toBeNull();
-        expect(screen.findByTestId('promptStack.freshness')).not.toBeNull();
+        expect(screen.findByTestId('promptStack.freshness')).toBeNull();
         await act(async () => {
             applyProfileCatalogSnapshot(scope, { ...inventory, status: 'partial', records: [{ revision: 4,
                 record: { v: 1, id: profile.id, definition: { kind: 'artifact', artifactId: resource.artifactId },
-                    enabled: true, promptStack: [], secretBindings: {} } }],
+                    enabled: true, promptStack: [], skillSeeds: [], secretBindings: {} } }],
                 diagnostics: [{ id: 'unreadable-neighbor', revision: 2, reason: 'invalid-stored-content' }] }, true, artifacts);
         });
         // An addressed readable private row stays known, even if a different row is unreadable.
@@ -118,7 +118,7 @@ describe('Prompt stack authoritative readiness', () => {
         const artifacts = new Map([[resource.artifactId, resource]]);
         applyProfileCatalogSnapshot(scope, { ...inventory, status: 'partial',
             diagnostics: [{ id: profile.id, revision: 3, reason: 'invalid-stored-content' }] }, true, artifacts);
-        const screen = await renderScreen(<InjectedAuthProvider value={{ credentials: null }}>
+        const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
             <PromptProfileStacksScreen />
         </InjectedAuthProvider>);
         expect(screen.findHostByTestId(`promptStacks.profile.${profile.id}`)).not.toBeNull();
@@ -134,7 +134,7 @@ describe('Prompt stack authoritative readiness', () => {
     });
 
     it('does not turn an unread Profile index into an empty one and retains known-empty inventory while refreshing', async () => {
-        const screen = await renderScreen(<InjectedAuthProvider value={{ credentials: null }}>
+        const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
             <PromptProfileStacksScreen />
         </InjectedAuthProvider>);
         expect(screen.findByTestId('promptStacks.profiles.empty')).toBeNull();
@@ -159,7 +159,7 @@ describe('Prompt stack authoritative readiness', () => {
     });
 
     it.each(['coding', 'voice'] as const)('does not turn an unknown %s stack into an empty one, but admits a genuinely empty ready stack', async (surface) => {
-        const screen = await renderScreen(<InjectedAuthProvider value={{ credentials: null }}>
+        const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
             <PromptStackEditorScreen surface={surface} title="Context" />
         </InjectedAuthProvider>);
         expect(screen.findByTestId('promptStack.empty')).toBeNull();
@@ -175,7 +175,7 @@ describe('Prompt stack authoritative readiness', () => {
 
         await act(async () => { beginPromptLibraryCatalogLoad(scope); });
         expect(screen.findByTestId('promptStack.empty')).not.toBeNull();
-        expect(screen.findByTestId('promptStack.freshness')).not.toBeNull();
+        expect(screen.findByTestId('promptStack.freshness')).toBeNull();
         await act(async () => {
             applyPromptLibraryCatalogSnapshot(scope, { catalog: { status: 'unavailable', reason: 'forbidden' },
                 rawSettings: {}, sourceSettingsVersion: 7 }, true);

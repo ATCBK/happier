@@ -45,6 +45,7 @@ async function renderPicker(params: {
     styles?: ReturnType<typeof buildStyles>;
     effectivePermissionPolicy?: EffectivePermissionModeDescription;
     effectivePermissionLabel?: string;
+    options?: ReadonlyArray<{ value: PermissionMode; label: string; description: string; icon: string }>;
 }) {
     const onSelect = params.onSelect ?? vi.fn<(mode: PermissionMode) => void>();
     const effectivePermissionPolicy: EffectivePermissionModeDescription =
@@ -54,9 +55,9 @@ async function renderPicker(params: {
         screen: await renderScreen(
             <PermissionModePicker
                 title="PERMISSIONS"
-                options={[
-                    { value: 'default', label: 'Default', description: 'Ask each time' },
-                    { value: 'yolo', label: 'YOLO', description: 'Skip prompts' },
+                options={params.options ?? [
+                    { value: 'default', label: 'Default', description: 'Ask each time', icon: 'shield' },
+                    { value: 'yolo', label: 'YOLO', description: 'Skip prompts', icon: 'lightning' },
                 ]}
                 selected={params.selected}
                 onSelect={onSelect}
@@ -74,6 +75,21 @@ describe('PermissionModePicker', () => {
         const { screen } = await renderPicker({ selected: 'default' });
         expect(screen.getTextContent()).toContain('Ask each time');
         expect(screen.getTextContent()).toContain('Skip prompts');
+    });
+
+    it('omits the description line of an option that has none', async () => {
+        const descriptionStyle = { marker: 'description' };
+        const { screen } = await renderPicker({
+            selected: 'default',
+            styles: buildStyles({ overlayOptionDescription: descriptionStyle }),
+            options: [
+                { value: 'default', label: 'Default', description: '', icon: 'shield' },
+                { value: 'yolo', label: 'YOLO', description: 'Skip prompts', icon: 'lightning' },
+            ],
+        });
+
+        // The effective-mode line plus the one described option; the empty one renders no line.
+        expect(screen.findAll((node) => node.props?.style === descriptionStyle)).toHaveLength(2);
     });
 
     it('calls onSelect with the chosen mode', async () => {

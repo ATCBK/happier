@@ -294,7 +294,7 @@ describe('local voice engine agent behavior', () => {
         const beforeCapture = await readLocalVoiceMachinePrerequisites();
         await toggleLocalVoiceTurn('s1');
         const afterCapture = await readLocalVoiceMachinePrerequisites();
-        await toggleLocalVoiceTurn('s1');
+        await expect(toggleLocalVoiceTurn('s1')).rejects.toMatchObject({ code: 'VOICE_AGENT_UNSUPPORTED' });
 
         expect(ensureAgentRpc, JSON.stringify({ beforeCapture, afterCapture,
             afterTranscription: await readLocalVoiceMachinePrerequisites(), runtime: getLocalVoiceState(),
@@ -305,7 +305,7 @@ describe('local voice engine agent behavior', () => {
         expect(getLocalVoiceState()).toMatchObject({
             status: 'idle',
             sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-            error: 'send_failed',
+            error: 'VOICE_AGENT_UNSUPPORTED',
         });
     });
 
@@ -1101,7 +1101,7 @@ describe('local voice engine agent behavior', () => {
         expect(storage.getState().sessions.sys_voice.metadata).not.toHaveProperty('voiceAgentRunV1');
     });
 
-    it('surfaces send_failed when daemon streaming start is unavailable', async () => {
+    it.each([true, false])('rejects a text turn and publishes its typed daemon cause without private prose (already admitted: %s)', async (admitted) => {
         const storage = await getStorage();
         storage.__setState({
             settings: {
@@ -1141,14 +1141,19 @@ describe('local voice engine agent behavior', () => {
 
         ensureAgentRpc.mockResolvedValueOnce({ ok: true, runId: 'local-agent-run', created: true });
         startTurnRpc.mockRejectedValueOnce(
-            Object.assign(new Error('Method not found'), { rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND }),
+            Object.assign(new Error('Private provider response at /Users/private/repository'), { rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND }),
         );
 
         localVoiceSpeechTranscription.mockResolvedValueOnce('hello world');
 
         const { getLocalVoiceState, toggleLocalVoiceTurn } = localVoiceEngine;
         await toggleLocalVoiceTurn('s1');
-        await expect(toggleLocalVoiceTurn('s1')).resolves.toBeUndefined();
+        const onAccepted = vi.fn(async () => {});
+        const turn = localVoiceEngine.sendLocalVoiceAgentTextTurn('s1', 'hello world', admitted ? {
+            localId: 'typed-text-failure', deliveryCommand: 'interrupt_and_send',
+        } : undefined, onAccepted);
+        if (admitted) await expect(turn).rejects.toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
+        else await expect(turn).rejects.toMatchObject({ code: RPC_ERROR_CODES.METHOD_NOT_FOUND });
 
         expect(startTurnRpc, JSON.stringify({
             runtime: getLocalVoiceState(),
@@ -1160,8 +1165,13 @@ describe('local voice engine agent behavior', () => {
         expect(getLocalVoiceState()).toMatchObject({
             status: 'idle',
             sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-            error: 'send_failed',
+            error: RPC_ERROR_CODES.METHOD_NOT_FOUND,
         });
+        expect(onAccepted).not.toHaveBeenCalled();
+        const { voiceCaptureAdmissionController } = await import('@/voice/runtime/input/VoiceCaptureAdmissionController');
+        const dictation = voiceCaptureAdmissionController.acquire('dictation');
+        if (dictation.status === 'acquired') dictation.lease.release();
+        expect(dictation.status).toBe('acquired');
     });
 
     it('rethrows a known before-effect streamed-turn rejection for durable delivery', async () => {
@@ -1218,9 +1228,14 @@ describe('local voice engine agent behavior', () => {
         expect(startTurnRpc).toHaveBeenCalledTimes(1);
         expect(readTurnRpc).not.toHaveBeenCalled();
         expect(onAccepted).not.toHaveBeenCalled();
+        const { voiceConversationRuntimeMachine } = await import('@/voice/runtime/machine/VoiceConversationRuntimeMachine');
+        expect(voiceConversationRuntimeMachine.getSnapshot().error).toHaveProperty('cause', expect.objectContaining({
+            code: 'VOICE_TEXT_TURN_REJECTED_BEFORE_EFFECT',
+            cause: expect.objectContaining({ rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND }),
+        }));
     });
 
-    it('cancels the stream and surfaces send_failed when daemon streaming read is unavailable', async () => {
+    it('cancels the stream and rejects the text caller with the typed read failure', async () => {
         const storage = await getStorage();
         storage.__setState({
             settings: {
@@ -1268,13 +1283,15 @@ describe('local voice engine agent behavior', () => {
 
         const { getLocalVoiceState, toggleLocalVoiceTurn } = localVoiceEngine;
         await toggleLocalVoiceTurn('s1');
-        await expect(toggleLocalVoiceTurn('s1')).resolves.toBeUndefined();
+        await expect(localVoiceEngine.sendLocalVoiceAgentTextTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello world', {
+            localId: 'typed-read-failure', deliveryCommand: 'interrupt_and_send',
+        }, async () => {})).rejects.toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
 
         expect(cancelTurnRpc).toHaveBeenCalledTimes(1);
         expect(getLocalVoiceState()).toMatchObject({
             status: 'idle',
             sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
-            error: 'send_failed',
+            error: RPC_ERROR_CODES.METHOD_NOT_FOUND,
         });
     });
 
@@ -1679,14 +1696,19 @@ describe('local voice engine agent behavior', () => {
                 }, 'retired-local-agent-tool'),
             ],
         }));
-        await localAdapter.sendTextTurn({
+        const onAccepted = vi.fn(async () => {});
+        await expect(localAdapter.sendTextTurn({
             controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
             conversationSessionId: 'voice-home-session',
             text: 'Run the retained tool.',
             localId: 'retired-local-agent-turn',
             deliveryCommand: 'interrupt_and_send',
-            onAccepted: async () => {},
-        });
+            onAccepted,
+        })).resolves.toBeUndefined();
+        // Account retirement already aborted this run. The existing turn
+        // boundary settles cancellation; acceptance and disclosure stay fenced.
+        expect(onAccepted).not.toHaveBeenCalled();
+        expect(startTurnRpc).toHaveBeenCalledTimes(wireTurnsBeforeLateEvents);
 
         await act(async () => {
             await Promise.resolve();

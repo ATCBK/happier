@@ -9,7 +9,8 @@ import type { ManagedServiceProcessSpec } from './managedProcessSupervisor';
 import { createManagedServiceDurabilityOwner } from './managedServiceDurability';
 import { readManagedServiceEndpointProjectionCandidates } from './managedServiceEndpointProjection';
 import { createStablePluginExecService } from './exec';
-import { queryProcessCustodyJob } from '@/subprocess/supervision/processCustody';
+import { queryProcessCustodyJob, terminateProcessCustodyByJob } from '@/subprocess/supervision/processCustody';
+import { createProcessCensusReader, readProcessCensus, type ProcessCensusJobObservation } from '@/processes/census/processCensus';
 import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 
@@ -93,6 +94,59 @@ function createDurability(root: string, helperPath: string) {
     });
 }
 
+function createWindowsProcessTreeBoundary(root: string, helperPath: string, available = () => true, observations: unknown[] = []): NonNullable<
+    Parameters<typeof createStablePluginExecService>[0]['processTreeSystemBoundary']
+> {
+    return {
+        platform: 'win32',
+        terminateWindowsJob: async input => {
+            const state = await terminateProcessCustodyByJob({ executablePath: helperPath, ...input });
+            observations.push({ kind: 'terminate', state });
+            return state;
+        },
+        censusDependencies: {
+            platform: 'win32', helperExecutablePath: helperPath,
+            // Only the native helper transport is substituted. Canonical census
+            // decoding and termination consume actual OS identities and the
+            // real fixture helper's assignment/query evidence, never fake rows.
+            execFile: async (_command, args) => {
+                const snapshot = await readProcessCensus({ freshness: 'fresh', scope: 'all', fields: [] });
+                if (snapshot.status !== 'ok') throw new Error('Real process census is unavailable');
+                const witness: unknown = await readFile(join(root, 'custody.json'), 'utf8')
+                    .then(JSON.parse).catch(error => {
+                        if (error?.code === 'ENOENT') return null;
+                        throw error;
+                    });
+                const jobObservations: ProcessCensusJobObservation[] = [];
+                const jobsByPid = new Map<number, string[]>();
+                for (const name of args.filter(arg => arg.startsWith('--job=')).map(arg => arg.slice('--job='.length))) {
+                    // Unavailable native membership is a strict helper result,
+                    // not a failed helper transport (which has its own minute
+                    // recovery rule and cannot promise an immediate retry).
+                    if (!available()) {
+                        jobObservations.push({ name, state: 'unavailable' });
+                        continue;
+                    }
+                    const state = await queryProcessCustodyJob({ executablePath: helperPath, jobName: name });
+                    const pid = witness && typeof witness === 'object' ? Reflect.get(witness, 'pid') : null;
+                    const assignedJob = witness && typeof witness === 'object' ? Reflect.get(witness, 'job') : null;
+                    const member = assignedJob === name && snapshot.rows.find(row => row.pid === pid && row.state !== 'zombie');
+                    if (state === 'live' && member) {
+                        jobsByPid.set(member.pid, [...(jobsByPid.get(member.pid) ?? []), name]);
+                        jobObservations.push({ name, state: 'live', pids: [member.pid] });
+                    } else jobObservations.push({ name, state: state === 'absent' ? 'absent' : 'unavailable' });
+                }
+                const rows = snapshot.rows.map(row => jobsByPid.has(row.pid) ? { ...row, jobs: jobsByPid.get(row.pid) } : row);
+                observations.push({ kind: 'census', jobObservations, rows: rows.filter(row => row.jobs?.length) });
+                return { stdout: JSON.stringify({ v: 1, capturedAtMs: snapshot.capturedAtMs, logicalCpus: snapshot.logicalCpus,
+                    rows,
+                    partial: snapshot.partial ?? [], jobObservations,
+                }) };
+            },
+        },
+    };
+}
+
 function windowsManagedSpec(): ManagedServiceProcessSpec {
     return {
         id: 'windows-managed',
@@ -147,7 +201,11 @@ describe('managed SVC09 Windows job custody', () => {
         const sourceCustody = runtime.registry.readPluginSourceCustody?.('fixture.plugin');
         if (!sourceCustody) throw new Error('Expected admitted fixture source custody');
 
+        let censusAvailable = true;
+        const nativeObservations: unknown[] = [];
+        const processTreeSystemBoundary = createWindowsProcessTreeBoundary(root, helperPath, () => censusAvailable, nativeObservations);
         const exec = createStablePluginExecService({
+            processTreeSystemBoundary,
             allowedExecutables: [{ kind: 'systemTool', id: 'fixture.server' }],
             signal: new AbortController().signal,
             isOccurrenceCurrent: () => true,
@@ -206,14 +264,28 @@ describe('managed SVC09 Windows job custody', () => {
         expect(projectedRecord.process.pid).toBe(targetPidSidecar);
         expect(projectedRecord.process.startIdentity).toMatch(/^winjob:Local\\happier-svc09-.+$/u);
         expect(projectedRecord.process.startIdentity).toBe(`winjob:${custodyWitness.job}`);
+        const nativeCensus = createProcessCensusReader(processTreeSystemBoundary.censusDependencies);
+        expect(await nativeCensus({ freshness: 'fresh', scope: 'all', verifiedJobNames: [custodyWitness.job] }))
+            .toMatchObject({ status: 'ok', jobObservations: [{ name: custodyWitness.job, state: 'live', pids: [custodyWitness.pid] }] });
 
-        await handle.dispose();
+        censusAvailable = false;
+        await expect(handle.dispose()).rejects.toMatchObject({ code: 'plugin_managed_server_termination_incomplete' });
+        expect(await queryProcessCustodyJob({ executablePath: helperPath, jobName: custodyWitness.job })).toBe('live');
+        expect(readManagedServiceEndpointProjectionCandidates(join(root, 'durability'))).toHaveLength(1);
+        censusAvailable = true;
+        await handle.dispose().catch(cause => {
+            throw new Error(`Restored native custody observations: ${JSON.stringify(nativeObservations)}`, { cause });
+        });
 
         await expect(queryProcessCustodyJob({
             executablePath: helperPath, jobName: projectedRecord.process.startIdentity.slice('winjob:'.length),
         })).resolves.toBe('absent');
         expect(readManagedServiceEndpointProjectionCandidates(join(root, 'durability'))).toEqual([]);
         expect(handle.snapshot().state).toBe('stopped');
+        const stopped = await readProcessCensus({ freshness: 'fresh', scope: 'all', fields: [] });
+        expect(stopped.status).toBe('ok');
+        if (stopped.status !== 'ok') throw new Error('Real process census is unavailable');
+        expect(stopped.rows.some(row => row.pid === custodyWitness.pid || row.pid === custodyWitness.helperPid)).toBe(false);
     });
 
     it('fails establishment before any projection when the handshake never proves assignment', async () => {
@@ -222,6 +294,7 @@ describe('managed SVC09 Windows job custody', () => {
         const helperPath = await writeCustodyHelper(root);
 
         const exec = createStablePluginExecService({
+            processTreeSystemBoundary: createWindowsProcessTreeBoundary(root, helperPath),
             allowedExecutables: [{ kind: 'systemTool', id: 'fixture.server' }],
             signal: new AbortController().signal,
             isOccurrenceCurrent: () => true,

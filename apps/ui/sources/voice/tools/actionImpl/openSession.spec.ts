@@ -116,23 +116,25 @@ describe('openSessionForVoiceTool', () => {
         expect(useVoiceTargetStore.getState().primaryActionSessionAddress).toEqual({ serverId: b, sessionId: 's_other' });
     });
     it('fails without mutating Voice targets when the target Home credential store refuses the switch', async () => {
-        const credentials = vi.mocked(TokenStorage.getCredentialsForServerUrl);
-        const readCredentials = credentials.getMockImplementation();
-        if (!readCredentials) throw new Error('Existing Home credential boundary missing');
-        credentials.mockImplementation(async serverUrl => {
+        const readCredentials = TokenStorage.getCredentialsForServerUrl.bind(TokenStorage);
+        const credentials = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async serverUrl => {
             if (new URL(serverUrl).origin === 'https://voice-open-b.test') throw new Error('Target Home credential storage unavailable');
             return readCredentials(serverUrl);
         });
-        const result = await openSessionForVoiceTool({ sessionId: 's_other',
-            resolveServerIdForSessionId: () => b, resolveServerNameForSessionId: () => 'Server B',
-        });
-        expect(getActiveServerSnapshot().serverId).toBe(a);
-        expect(routerNavigate).not.toHaveBeenCalled();
-        expect(useVoiceTargetStore.getState().primaryActionSessionAddress).toBeNull();
-        expect(useVoiceTargetStore.getState().lastFocusedSessionAddress).toBeNull();
-        expect(result).toEqual({ ok: false, status: 'server_switch_failed', error: {
-            code: 'server_switch_failed', message: 'server_switch_failed', serverId: b, serverName: 'Server B',
-        } });
+        try {
+            const result = await openSessionForVoiceTool({ sessionId: 's_other',
+                resolveServerIdForSessionId: () => b, resolveServerNameForSessionId: () => 'Server B',
+            });
+            expect(getActiveServerSnapshot().serverId).toBe(a);
+            expect(routerNavigate).not.toHaveBeenCalled();
+            expect(useVoiceTargetStore.getState().primaryActionSessionAddress).toBeNull();
+            expect(useVoiceTargetStore.getState().lastFocusedSessionAddress).toBeNull();
+            expect(result).toEqual({ ok: false, status: 'server_switch_failed', error: {
+                code: 'server_switch_failed', message: 'server_switch_failed', serverId: b, serverName: 'Server B',
+            } });
+        } finally {
+            credentials.mockRestore();
+        }
     });
     it('opens a session by human title and ignores trailing sentence punctuation', async () => {
         const result = await openSessionForVoiceTool({ sessionTitle: 'Session Setup.',

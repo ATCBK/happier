@@ -39,6 +39,15 @@ describe('readExternalSessionExchange', () => {
         boundary.rpc.mockReset();
     });
     afterEach(async () => { await connection?.dispose(); connection = undefined; });
+    it('returns the prompt and late hit without the intervening long turn', async () => {
+        const steps = Array.from({ length: 600 }, (_, index) => ({ ...answer, id: `step-${index}`, createdAtMs: index + 2,
+            raw: { role: 'agent', content: { type: 'acp', agentId: 'codex', data: { type: 'text', text: `${index}: ${'Long tool observation. '.repeat(50)}` } } } }));
+        boundary.rpc.mockResolvedValueOnce({ ok: true, items: [prompt, ...steps], hasMore: false });
+        const exchange = await readExternalSessionExchange({ ...input(), sourceItemId: 'step-550' });
+        expect(exchange.messages.map(message => message.realID)).toEqual(['prompt', 'step-550']);
+        expect(exchange.matchedMessageId).toBe(exchange.messages[1]!.id);
+        expect(exchange.elidedMessageCount).toBe(550);
+    });
     it('does not normalize completed later turns again while seeking an older selected exchange', async () => {
         // Observe the real normalizer without replacing its implementation.
         const normalize = vi.spyOn(transcriptNormalization, 'normalizeExternalSessionTranscriptMessages');
@@ -57,27 +66,51 @@ describe('readExternalSessionExchange', () => {
                     ...(pageIndex > 0 ? { nextCursor: `page-${pageIndex - 1}` } : {}) });
             }
             const messages = await readExternalSessionExchange({ ...input(), sourceItemId: 'answer-0' });
-            expect(messages.map(message => message.realID)).toEqual(['prompt-0', 'answer-0']);
+            expect(messages.messages.map(message => message.realID)).toEqual(['prompt-0', 'answer-0']);
             expect(normalize.mock.calls.reduce((total, [items]) => total + items.length, 0))
                 .toBe(pageCount * turnsPerPage * 2);
         } finally {
             normalize.mockRestore();
         }
     });
-    it('keeps every answer page before finding the selected item in a three-page exchange', async () => {
+    it('keeps a tool-result hit attached to its completed call, not an empty preview', async () => {
+        const callId = 'read-notes';
+        boundary.rpc.mockResolvedValueOnce({ ok: true, items: [prompt,
+            { id: 'tool-call', createdAtMs: 2, raw: { role: 'agent', content: { type: 'codex', data: {
+                type: 'tool-call', callId, name: 'exec', input: { command: 'read notes' },
+            } } } },
+            { id: 'tool-result', createdAtMs: 3, raw: { role: 'agent', content: { type: 'codex', data: {
+                type: 'tool-call-result', callId, output: [{ type: 'input_text', text: 'violet harbor lantern' }],
+            } } } },
+        ], hasMore: false });
+        const exchange = await readExternalSessionExchange({ ...input(), sourceItemId: 'tool-result' });
+        expect(exchange.messages).toHaveLength(2);
+        expect(exchange.messages[1]).toMatchObject({ kind: 'tool-call', tool: { id: callId, state: 'completed' } });
+        expect(exchange.matchedMessageId).toBe(exchange.messages[1]!.id);
+        expect(exchange.elidedMessageCount).toBe(0);
+    });
+    it.each(['prompt', 'absent'])('does not substitute a different message for a %s hit', async sourceItemId => {
+        boundary.rpc.mockResolvedValueOnce({ ok: true, items: [prompt, answer], hasMore: false });
+        const exchange = await readExternalSessionExchange({ ...input(), sourceItemId });
+        expect(exchange.messages.map(message => message.realID)).toEqual(sourceItemId === 'prompt' ? ['prompt'] : []);
+        expect(exchange.matchedMessageId).toBe(sourceItemId === 'prompt' ? exchange.messages[0]!.id : null);
+        expect(exchange.elidedMessageCount).toBe(0);
+    });
+    it('finds the selected item across three pages without publishing the rest of its turn', async () => {
         boundary.rpc.mockResolvedValueOnce({ ok: true, items: [{ ...answer, id: 'answer-end', createdAtMs: 4 },
             { ...prompt, id: 'next', createdAtMs: 5 }, { ...answer, id: 'next-answer', createdAtMs: 6 }], hasMore: true, nextCursor: 'middle' })
             .mockResolvedValueOnce({ ok: true, items: [{ ...answer, id: 'answer-middle', createdAtMs: 3 }], hasMore: true, nextCursor: 'start' })
             .mockResolvedValueOnce({ ok: true, items: [prompt, answer], hasMore: false });
         const messages = await readExternalSessionExchange(input());
-        expect(messages.map(message => message.realID)).toEqual(['prompt', 'answer', 'answer-middle', 'answer-end']);
+        expect(messages.messages.map(message => message.realID)).toEqual(['prompt', 'answer']);
+        expect(messages.elidedMessageCount).toBe(0);
     });
     it('reads the selected exchange across pages and excludes the following turn', async () => {
         boundary.rpc.mockResolvedValueOnce({ ok: true, items: [answer, { ...prompt, id: 'next', createdAtMs: 3 }], hasMore: true, nextCursor: 'older' })
             .mockResolvedValueOnce({ ok: true, items: [prompt], hasMore: false });
         const messages = await readExternalSessionExchange(input());
-        expect(messages.map(message => message.realID)).toEqual(['prompt', 'answer']);
-        expect(messages.map(message => 'text' in message ? message.text : '')).toEqual(['Explain this failure', 'The complete answer']);
+        expect(messages.messages.map(message => message.realID)).toEqual(['prompt', 'answer']);
+        expect(messages.messages.map(message => 'text' in message ? message.text : '')).toEqual(['Explain this failure', 'The complete answer']);
         expect(requests[1]).toMatchObject({ method: expect.stringMatching(/^machine:/), params: { cursor: 'older' } });
         const admission = homes.requests.find(request => request.path === '/v1/machines/machine');
         expect(admission).toMatchObject({ serverId, token: expect.any(String) });
@@ -91,8 +124,8 @@ describe('readExternalSessionExchange', () => {
             .mockResolvedValueOnce({ ok: true, items: [{ ...answer, id: 'child-middle', sidechainId: 'child', createdAtMs: 3 }],
                 hasMore: true, nextCursor: 'start' })
             .mockResolvedValueOnce({ ok: true, items: [childPrompt, { ...answer, sidechainId: 'child' }], hasMore: false });
-        expect((await readExternalSessionExchange(input())).map(message => message.realID))
-            .toEqual(['child-prompt', 'answer', 'child-middle', 'child-end']);
+        expect((await readExternalSessionExchange(input())).messages.map(message => message.realID))
+            .toEqual(['child-prompt', 'answer']);
     });
     it('projects a sidechain exchange through the same reducer rather than returning the parent conversation', async () => {
         boundary.rpc.mockResolvedValueOnce({ ok: true, hasMore: false, items: [
@@ -101,7 +134,7 @@ describe('readExternalSessionExchange', () => {
             } } } }, { ...answer, sidechainId: 'child' },
         ] });
         const messages = await readExternalSessionExchange(input());
-        expect(messages.map(message => message.realID)).toEqual(['child-prompt', 'answer']);
+        expect(messages.messages.map(message => message.realID)).toEqual(['child-prompt', 'answer']);
     });
     it('rejects a late response when cancelled and never follows its cursor', async () => {
         const controller = new AbortController();

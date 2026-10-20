@@ -16,7 +16,7 @@ describe('OpenCode plugin session surface declarations', () => {
     expect(backend?.surfaces?.externalSession?.sources).toEqual([
       {
         sourceKind: 'opencodeServer',
-        contentSearch: false,
+        contentSearch: true,
         schema: {
           fields: [
             { name: 'kind', kind: 'literal', value: 'opencodeServer' },

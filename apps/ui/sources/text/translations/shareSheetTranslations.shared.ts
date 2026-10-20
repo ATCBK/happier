@@ -23,6 +23,7 @@ export type ShareSheetTranslations = Readonly<{
     browseGroups: string;
     membersOnlyLink: string;
     allLoaded: string;
+    noConnectedPeople: string;
     copyLink: string;
     linkCopied: string;
     copyLinkFailed: string;
@@ -36,6 +37,7 @@ export type ShareSheetTranslations = Readonly<{
     documents: Readonly<{
         title: string;
         shareTitle: (params: Readonly<{ name: string }>) => string;
+        shareMenu: string;
         levels: Readonly<{ canUse: string; canRead: string; canEdit: string; admin: string }>;
         help: Readonly<{
             workflowUse: string;
@@ -81,9 +83,10 @@ export const shareSheetTranslationsEnglish = { en: {
         browseAll: 'Browse all',
         browsePeople: 'Browse all people',
         browseTeams: 'Browse all Teams',
-        browseGroups: 'Browse all Team groups',
+        browseGroups: 'Browse all Team Groups',
         membersOnlyLink: 'Copy link is for people who already have access.',
         allLoaded: 'All results loaded',
+        noConnectedPeople: 'Only people you’re connected with appear here.',
         copyLink: 'Copy link',
         linkCopied: 'Link copied',
         copyLinkFailed: 'Couldn’t copy the link.',
@@ -97,6 +100,7 @@ export const shareSheetTranslationsEnglish = { en: {
         documents: {
             title: 'Sharing',
             shareTitle: ({ name }) => `Share ${name}`,
+            shareMenu: 'Share…',
             levels: { canUse: 'Can use', canRead: 'Can read', canEdit: 'Can edit', admin: 'Admin' },
             help: {
                 workflowUse: 'see and run it',

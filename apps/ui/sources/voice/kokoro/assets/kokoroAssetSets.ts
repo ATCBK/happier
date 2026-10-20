@@ -6,7 +6,7 @@ import {
   resolveCanonicalModelPackId,
 } from '@happier-dev/protocol/voice/modelPacks/catalog';
 import { t } from '@/text';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 const EXPO_PUBLIC_KOKORO_ASSET_SETS_ENV_VAR = 'EXPO_PUBLIC_KOKORO_ASSET_SETS';
 
@@ -17,9 +17,9 @@ export type KokoroAssetSetOption = {
 };
 
 const KokoroAssetSetOptionSchema = z.object({
-  id: z.string().min(1),
-  title: z.string().min(1),
-  subtitle: z.string().optional(),
+  id: z.string().check(z.minLength(1)),
+  title: z.string().check(z.minLength(1)),
+  subtitle: z.optional(z.string()),
 });
 
 // Display copy is host-local; resolvable ids, including the published q8
@@ -66,7 +66,7 @@ function readAssetSetsFromEnv(env: Record<string, string | undefined>): KokoroAs
   const raw = env[EXPO_PUBLIC_KOKORO_ASSET_SETS_ENV_VAR];
   if (!raw || !raw.trim()) return null;
   try {
-    const parsed = KokoroAssetSetOptionSchema.array().safeParse(JSON.parse(raw));
+    const parsed = z.array(KokoroAssetSetOptionSchema).safeParse(JSON.parse(raw));
     if (!parsed.success) return null;
     return parsed.data;
   } catch {

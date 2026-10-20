@@ -20,6 +20,7 @@ import {
 
 import {
     MAX_TRIAGE_LIST_SOURCE_BATCH_V1,
+    type TriageListInvocationErrorV1,
     type TriageListEntriesInputV1,
     type TriageListEntriesResultV1,
 } from '../actions/listEntriesProtocol.js';
@@ -79,13 +80,21 @@ export type TriageListWindowErrorV1 = Readonly<{
 export type TriageListWindowUnreadableSourceV1 = Readonly<{
     sourceInstanceId: string;
     message: string;
-}>;
+}> & Partial<TriageListInvocationErrorV1>;
 
 export type TriageListWindowSnapshotV1 = Readonly<{
     /** The last admitted window. Retained across a failed refresh. */
     window?: TriageListWindowV1;
     freshness: 'unknown' | 'fresh' | 'stale';
+    /**
+     * Oldest last-successful configured-lane read, on this store's clock — the
+     * same completion fact used for age staleness. Absent until every configured
+     * lane has completed a read (and when none are configured). Failed refreshes
+     * retain this time; re-folding or a paced-away demand cannot advance it.
+     */
+    completedAtMs?: number;
     pending: 'idle' | 'initial' | 'refresh';
+    /** The host is still establishing its Machine binding; original diagnostics remain available. */
     /**
      * How many passes this mount has read: it moves once per pass the coordinator admitted, whether or not the
      * window changed, and never for a demand the pacing refused. A reader that follows reads (the list's
@@ -94,7 +103,8 @@ export type TriageListWindowSnapshotV1 = Readonly<{
      */
     passes: number;
     /**
-     * The aggregate list read itself failed **and produced no window at all**.
+     * The aggregate list read itself failed **and produced no window at all**,
+     * and no retry is currently reading that first window.
      *
      * It belongs to no source: a lane that failed reports itself through the
      * window's own health, and a lane nothing could invoke reports itself
@@ -267,7 +277,7 @@ function sameFilterSelection(
     // Facets are sets: press order changes no query and therefore must not mint
     // a new paging generation. Duplicate values are rejected by the reducer
     // and saved-view owner before a lens reaches this store.
-    return sameMemberSet(left.sources, right.sources, (a, b) => (
+    return left.tasks === right.tasks && sameMemberSet(left.sources, right.sources, (a, b) => (
         sameTriageSourceIdentity(a.source, b.source)
     ))
         && sameMemberSet(left.types, right.types, (a, b) => (
@@ -294,7 +304,7 @@ function sameAcquisitionLens(left: TriageListLensV1, right: TriageListLensV1): b
 function errorFrom(cause: unknown): TriageListWindowErrorV1 {
     if (isPluginError(cause)) {
         return {
-            code: 'plugin_action_failed',
+            code: cause.code,
             message: cause.message,
             // The host's own verdict: `unsupported_method` or `denied` will
             // fail the same way however often the reader presses Refresh.
@@ -405,28 +415,30 @@ export function createTriageListWindowStore(deps: Readonly<{
         return !disposed;
     }
 
-    function freshness(): TriageListWindowSnapshotV1['freshness'] {
+    function completedAtMs(): number | undefined {
+        let oldest: number | undefined;
+        for (const summary of configuredSources) {
+            const completed = lanes.get(summary.sourceInstanceId)?.completedAtMs;
+            if (completed == null) return undefined;
+            oldest = oldest === undefined ? completed : Math.min(oldest, completed);
+        }
+        return oldest;
+    }
+
+    function freshness(completed: number | undefined): TriageListWindowSnapshotV1['freshness'] {
         if (window === null) return 'unknown';
         if (error !== null) return 'stale';
-        // Every configured connection, not only the ones the final Action batch
-        // walked. Each lane keeps the completion time measured on this store's
-        // clock at its own batch boundary: stamping the whole cycle after a slow
-        // tail batch makes an earlier lane look newly read even when it has
-        // already aged past the interval. A connection with no admitted
-        // contribution or one this bounded window has not reached has no lane,
-        // and therefore cannot make a freshness claim either. This is the same
-        // intended-versus-walked distinction `triageListCoverageLanes` owns for
-        // coverage, applied to currentness.
-        const nowMs = deps.nowMs();
+        // Each connection ages from its own completed read, not the final
+        // transport batch. A slow tail cannot make earlier lanes newly fresh.
         for (const summary of configuredSources) {
             const lane = lanes.get(summary.sourceInstanceId);
             if (
                 lane === undefined
                 || lane.error !== null
-                || lane.completedAtMs === null
-                || nowMs - lane.completedAtMs >= TRIAGE_VIEW_REFRESH_MIN_INTERVAL_MS
+                || completed === undefined
             ) return 'stale';
         }
+        if (completed !== undefined && deps.nowMs() - completed >= TRIAGE_VIEW_REFRESH_MIN_INTERVAL_MS) return 'stale';
         return 'fresh';
     }
 
@@ -439,7 +451,11 @@ export function createTriageListWindowStore(deps: Readonly<{
         const unreadable: TriageListWindowUnreadableSourceV1[] = [];
         for (const [sourceInstanceId, state] of lanes) {
             if (state.error === null || state.lane.health.kind === 'failed') continue;
-            unreadable.push(Object.freeze({ sourceInstanceId, message: state.error.message }));
+            unreadable.push(Object.freeze({
+                sourceInstanceId, message: state.error.message,
+                code: state.error.code,
+                ...(state.error.retryable === undefined ? {} : { retryable: state.error.retryable }),
+            }));
         }
         return Object.freeze(unreadable);
     }
@@ -550,9 +566,11 @@ export function createTriageListWindowStore(deps: Readonly<{
         const unreadable = unreadableSources();
         const blocked = refreshBlock();
         const appendable = loadMore();
+        const completed = completedAtMs();
         const next: TriageListWindowSnapshotV1 = Object.freeze({
             ...(window === null ? {} : { window }),
-            freshness: freshness(),
+            freshness: freshness(completed),
+            ...(completed === undefined ? {} : { completedAtMs: completed }),
             pending,
             passes,
             ...(appendable === null ? {} : { loadMore: appendable }),
@@ -562,8 +580,9 @@ export function createTriageListWindowStore(deps: Readonly<{
             // sentence beside rows the reader is looking at, which is the
             // failure this slot has produced three times. It still holds the
             // retained error internally, so freshness never claims a window is
-            // current after a read that failed.
-            ...(error === null || window !== null ? {} : { error }),
+            // current after a read that failed. An initial retry is loading,
+            // not a settled failure: publish its verdict only after it settles.
+            ...(error === null || window !== null || pending !== 'idle' ? {} : { error }),
             ...(unreadable.length === 0 ? {} : { unreadableSources: unreadable }),
             ...(blocked === null ? {} : { refreshBlocked: blocked }),
             configuredSources,
@@ -575,13 +594,11 @@ export function createTriageListWindowStore(deps: Readonly<{
     }
 
     /**
-     * Freshness is the one snapshot member that ages on its own clock, so it is
-     * re-derived on read. The cached object is replaced only when the derived
-     * value actually differs, because a store that returned a new object on
-     * every read would make an external-store subscriber loop forever.
+     * Freshness and pacing deadlines age on read without scheduling a wake.
+     * Keep the same snapshot object until a published fact actually changes.
      */
     function readSnapshot(): TriageListWindowSnapshotV1 {
-        const current = freshness();
+        const current = freshness(snapshot.completedAtMs);
         if (current !== snapshot.freshness) snapshot = Object.freeze({ ...snapshot, freshness: current });
         const blocked = refreshBlock();
         if (blocked === null) {
@@ -1052,7 +1069,10 @@ export function createTriageListWindowStore(deps: Readonly<{
                     continue;
                 }
                 if (lane.health.kind === 'unavailable') {
-                    recordLaneFailure(sourceInstanceId, lane, UNREADABLE_IN_THIS_PASS_V1, walkObservations);
+                    recordLaneFailure(sourceInstanceId, lane, {
+                        ...UNREADABLE_IN_THIS_PASS_V1,
+                        ...lane.health.error,
+                    }, walkObservations);
                     outcomes.set(sourceInstanceId, { kind: 'interrupted' });
                     continue;
                 }

@@ -1,23 +1,30 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { isPluginError } from '@happier-dev/plugin-sdk';
 
 import { prepareExternalActionResponseEnvelopeV1, ExternalActionActionIdV1Schema, ExternalActionExecutionAuthorizationV1Schema, ExternalActionRequestEnvelopeSchema, externalActionTargetsEqualV1, isExternalActionRequestWithinLimit, isExternalActionRequestVersionAllowedForAccountModeV1, projectExternalActionExecutionResultV1, readExternalActionProtectedRequestId } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1, signExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { projectExternalActionRunNowIdempotencyKeyV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { openExternalActionRequestV2, prepareExternalActionResponseV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
 import { SIGNED_ROOT_ACTION_OUTPUT_SCHEMAS, PublicActionIdSchema, SignedRootActionIdSchema, isPluginProvenanceOnlyActionId } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ActionExecuteResult, ActionExecutorContext, ExternalActionResponseEnvelopeV1, ExternalActionTargetV1, PreparedExternalActionResponseEnvelope, ExternalActionEncryptionBindingV2, ExternalActionExecutionAuthorizationV1, ExternalActionServerPrincipalV1, SignedRootActionId } from '@happier-dev/protocol/actions';
+import type { ActionStartDiagnosticV1 } from '@happier-dev/protocol/actions/executor/actionStartDiagnostics';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { ManagedAcquireInputV1Schema, ManagedAdmissionComputeInputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { projectApiTokenSessionSpawnAdmissionV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 
 import { reconcileExternalActionTarget } from './reconcileExternalActionTarget';
-import { projectExternalActionRequesterHttpAuthorization } from '@/api/externalActionExecutionAuthorization';
+import { projectExternalActionRequesterHttpAuthorization, resolveExternalActionAccountInvocationSurface } from '@/api/externalActionExecutionAuthorization';
 import type { ExternalActionRequesterAccountContextPurposeV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import type { ManagedMachinePolicyRequest } from '../startup/managedMachineActionAdapter';
 import { deriveMountedPluginInvocationCaller } from '@/plugins/runtime/invocation/mountedPluginInvocationCaller';
 import { resolvePluginActionCaller } from '@/plugins/runtime/invocation/services/actionCaller';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
-import { isOriginalOwnAccountActionCustody } from '../sessionEncryption/requesterAccountActionProjection';
+import { isOriginalOwnAccountActionCustody, isOriginalSessionInputAccountActionCustody } from "../sessionEncryption/requesterAccountActionProjection";
+import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
 import { createExternalActionStartDiagnosticRecorder, refuseExternalActionPhase, runExternalActionPhase, traceExternalActionStage } from './externalActionPhase';
+import { timeWebLatencyPhase, withWebLatencyTrace } from './webLatencyTrace';
+import { AccountSettingsContentInvalidError } from '@/settings/accountSettings/accountSettingsRefreshError';
+import { projectUnexpectedActionFailureV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 type PublicOutputValidationResult =
   | Readonly<{ success: true; data: unknown }>
@@ -75,10 +82,17 @@ export type VerifyExternalActionExecutionAuthorization = (input: Readonly<{
   signal?: AbortSignal;
 }>) => Promise<boolean>;
 
-/** Installation-admitted private custody selects the existing invocation factory. */
+/**
+ * Installation-admitted private custody selects the existing invocation factory.
+ * Its canonical preparation owner proves fresh Home admission before using
+ * requester credentials; the resolved effect is verified separately below.
+ */
 export type PrepareExternalActionRequesterAccountContext = (input: Readonly<{
   authorization: ExternalActionExecutionAuthorizationV1;
   purpose?: ExternalActionRequesterAccountContextPurposeV1;
+  /** Private SOURCE admission rechecks the installed controller without impersonating the finite worker. */
+  verifyWorkspaceSyncPrepareCurrent?: () => Promise<boolean>;
+  verifyServiceMoveChildCurrent?: () => Promise<boolean>;
   signal?: AbortSignal;
 }>) => Promise<Readonly<{
   authorization: ExternalActionExecutionAuthorizationV1;
@@ -95,7 +109,7 @@ export type PrepareExternalActionRequesterAccountContext = (input: Readonly<{
 export type ExecuteExternalActionResult = Readonly<
   | {
     kind: 'invalid_request';
-    errorCode: 'invalid_action' | 'invalid_envelope' | 'invalid_encrypted_envelope' | 'encrypted_action_unsupported' | 'request_too_large' | 'target_required';
+    errorCode: 'invalid_action' | 'invalid_envelope' | 'invalid_encrypted_envelope' | 'encrypted_action_unsupported' | 'request_too_large' | 'target_required' | 'target_unavailable';
     requestId?: string;
   }
   | {
@@ -227,7 +241,9 @@ export async function executeExternalAction(input: Readonly<{
     : executionAuthorization.data.binding.machineId !== input.currentMachineId ? 'authorization_machine'
     : executionAuthorization.data.binding.installationId !== input.currentInstallationId ? 'authorization_installation'
     : executionAuthorization.data.binding.actionId !== actionId.data ? 'authorization_action'
-    : (executionAuthorization.data.binding.accountEncryptionMode !== undefined
+    // Ordinary PAT V1 deliberately permits Home-readable transport. Account
+    // mode requires V2 for signed private origination, as at Home issuance.
+    : (accountPrincipal && executionAuthorization.data.binding.accountEncryptionMode !== undefined
         && !isExternalActionRequestVersionAllowedForAccountModeV1({
           accountEncryptionMode: executionAuthorization.data.binding.accountEncryptionMode, envelopeVersion: envelope.data.v,
         })) ? 'authorization_account_mode'
@@ -249,27 +265,36 @@ export async function executeExternalAction(input: Readonly<{
   let requesterContext: Awaited<ReturnType<PrepareExternalActionRequesterAccountContext>> = null;
   let pluginRuntimeLease: PluginRuntimeRegistryLease | null = null;
   const prepareOwnAccount = executionAuthorization?.success && input.prepareRequesterAccountContext !== undefined
-    && isOriginalOwnAccountActionCustody(executionAuthorization.data.binding);
+    && (isOriginalOwnAccountActionCustody(executionAuthorization.data.binding)
+      || isOriginalSessionInputAccountActionCustody(executionAuthorization.data.binding));
   if (executionAuthorization?.success && (executionAuthorization.data.requesterAccountContext || prepareOwnAccount)) {
     const authorization = executionAuthorization.data;
-    trace('requester_root_currentness.begin');
-    const current = await runExternalActionPhase('requester_root_currentness', input.currentMachineId, async () =>
-      !input.signal?.aborted && await input.verifyExecutionAuthorization!({ authorization,
-      effectActionId: actionId.data, target: authorization.binding.target,
-      ...(input.signal ? { signal: input.signal } : {}) }));
-    trace('requester_root_currentness.end');
-    if (!current.ok || !input.prepareRequesterAccountContext) return { kind: 'invalid_request',
+    if (input.signal?.aborted || !input.prepareRequesterAccountContext) return { kind: 'invalid_request',
       errorCode: envelope.data.v === 2 ? 'invalid_encrypted_envelope' : 'invalid_envelope',
       ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}) };
     trace('requester_prepare.begin');
-    const preparedRequester = await runExternalActionPhase('requester_prepare', input.currentMachineId, () =>
-      input.prepareRequesterAccountContext!({ authorization,
-        ...(input.signal ? { signal: input.signal } : {}) }));
+    let requesterHomeUnavailable = false;
+    const preparedRequester = await runExternalActionPhase('requester_prepare', input.currentMachineId, async () => {
+      try {
+        return await input.prepareRequesterAccountContext!({ authorization,
+          ...(input.signal ? { signal: input.signal } : {}) });
+      } catch (error) {
+        requesterHomeUnavailable = isPluginError(error) && error.code === 'project_requester_home_unavailable';
+        throw error;
+      }
+    });
     trace('requester_prepare.end');
     requesterContext = preparedRequester.ok ? preparedRequester.value : null;
-    if (!requesterContext) return { kind: 'invalid_request',
-      errorCode: envelope.data.v === 2 ? 'invalid_encrypted_envelope' : 'invalid_envelope',
-      ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}) };
+    if (!requesterContext) {
+      if (requesterHomeUnavailable) refuseExternalActionPhase('requester_prepare', input.currentMachineId, undefined, {
+        ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
+        refusalBranch: 'requester_home_unavailable',
+      });
+      return { kind: 'invalid_request',
+        errorCode: requesterHomeUnavailable ? 'target_unavailable'
+          : envelope.data.v === 2 ? 'invalid_encrypted_envelope' : 'invalid_envelope',
+        ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}) };
+    }
   }
   try {
   let decodedInput: unknown;
@@ -334,6 +359,10 @@ export async function executeExternalAction(input: Readonly<{
   // Signed outer admission facts and private opened input must describe the
   // same invocation before approval, native submission or Session birth.
   try {
+    if (projectExternalActionRunNowIdempotencyKeyV1(actionId.data, decodedInput) !== envelope.data.idempotencyKey
+      || executionAuthorization?.success && executionAuthorization.data.binding.idempotencyKey !== envelope.data.idempotencyKey) {
+      throw new TypeError('Manual retry identity mismatch');
+    }
     if (envelope.data.managedAdmission) {
       if (actionId.data !== 'machines.managed.acquire') throw new TypeError('Wrong managed admission Action');
       const { agentStart, ...compute } = ManagedAcquireInputV1Schema.parse(decodedInput);
@@ -384,7 +413,10 @@ export async function executeExternalAction(input: Readonly<{
     });
   } catch (error) {
     trace('target_resolution.threw');
-    refuseExternalActionPhase('target_resolution', input.currentMachineId, error);
+    refuseExternalActionPhase('target_resolution', input.currentMachineId, error, {
+      ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
+      refusalBranch: 'target_resolution_threw',
+    });
     return prepare({
       v: 1,
       actionId: actionId.data,
@@ -417,7 +449,8 @@ export async function executeExternalAction(input: Readonly<{
         v: 1,
         actionId: actionId.data,
         ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
-        execution: { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' },
+        execution: !current.ok && current.executionFailure
+          ? current.executionFailure : { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' },
       });
     }
   }
@@ -428,13 +461,14 @@ export async function executeExternalAction(input: Readonly<{
     ?? input.executionAuthorization?.requesterAccountProjection;
   if (requesterProjection && admittedAuthorization) {
     trace('requester_account_currentness.begin');
-    if (requesterProjection.accountId !== admittedAuthorization.binding.accountId
-      || requesterProjection.serverId !== input.currentServerId
-      || input.signal?.aborted || !(await runExternalActionPhase('requester_account_currentness', input.currentMachineId,
-        () => requesterProjection.isCurrent())).ok) {
+    const current = requesterProjection.accountId === admittedAuthorization.binding.accountId
+      && requesterProjection.serverId === input.currentServerId && !input.signal?.aborted
+      ? await runExternalActionPhase('requester_account_currentness', input.currentMachineId,
+          () => requesterProjection.isCurrent()) : null;
+    if (!current?.ok) {
       return prepare({ v: 1, actionId: actionId.data,
         ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
-        execution: { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' } });
+        execution: current?.executionFailure ?? { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' } });
     }
     // Strict wire parsing never accepts private ports. Preserve only the
     // already-admitted host facet; it must remain absent from serialization.
@@ -445,46 +479,50 @@ export async function executeExternalAction(input: Readonly<{
     ?? input.executionAuthorization?.requesterHttpProjection;
   if (requesterHttpProjection && admittedAuthorization) {
     trace('requester_http_currentness.begin');
-    if (requesterHttpProjection.accountId !== admittedAuthorization.binding.accountId
-      || requesterHttpProjection.serverId !== input.currentServerId
-      || requesterHttpProjection.serverIdentityId !== admittedAuthorization.binding.serverIdentityId
-      || admittedAuthorization.binding.accountEncryptionMode !== undefined
-        && requesterHttpProjection.accountEncryptionMode !== admittedAuthorization.binding.accountEncryptionMode
-      || input.signal?.aborted || !(await runExternalActionPhase('requester_http_currentness', input.currentMachineId,
-        () => requesterHttpProjection.isCurrent())).ok
-      || Boolean(input.signal?.aborted)) {
+    const current = requesterHttpProjection.accountId === admittedAuthorization.binding.accountId
+      && requesterHttpProjection.serverId === input.currentServerId
+      && requesterHttpProjection.serverIdentityId === admittedAuthorization.binding.serverIdentityId
+      && (admittedAuthorization.binding.accountEncryptionMode === undefined
+        || requesterHttpProjection.accountEncryptionMode === admittedAuthorization.binding.accountEncryptionMode)
+      && !input.signal?.aborted
+      ? await runExternalActionPhase('requester_http_currentness', input.currentMachineId,
+          () => requesterHttpProjection.isCurrent()) : null;
+    if (!current?.ok || Boolean(input.signal?.aborted)) {
       return prepare({ v: 1, actionId: actionId.data,
         ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
-        execution: { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' } });
+        execution: current && !current.ok && current.executionFailure
+          ? current.executionFailure : { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' } });
     }
     Object.defineProperty(admittedAuthorization, 'requesterHttpProjection', { value: requesterHttpProjection, enumerable: false });
     trace('requester_http_currentness.end');
   }
   if (admittedAuthorization && input.currentServerHttpBaseUrl) {
+    const projectionAuthorization = admittedAuthorization;
+    const serverHttpBaseUrl = input.currentServerHttpBaseUrl;
     trace('requester_http_projection.begin');
-    const projected = await projectExternalActionRequesterHttpAuthorization({
-      authorization: admittedAuthorization,
+    const projection = await runExternalActionPhase('requester_http_projection', input.currentMachineId, () => projectExternalActionRequesterHttpAuthorization({
+      authorization: projectionAuthorization,
       serverId: input.currentServerId!,
-      serverIdentityId: admittedAuthorization.binding.serverIdentityId,
-      serverHttpBaseUrl: input.currentServerHttpBaseUrl,
+      serverIdentityId: projectionAuthorization.binding.serverIdentityId,
+      serverHttpBaseUrl,
       target,
       installationId: input.currentInstallationId!,
       privateKey: input.externalActionMachineRequestPrivateKey!,
       isCurrent: input.isInstallationCurrent
         ? async () => input.isInstallationCurrent!()
-        : () => input.verifyExecutionAuthorization!({
+        : readRequesterAccountActionContext(projectionAuthorization)?.isCustodyCurrent ?? (() => input.verifyExecutionAuthorization!({
           authorization: admittedAuthorization!, effectActionId: actionId.data, target,
           ...(input.signal ? { signal: input.signal } : {}),
-        }),
+        })),
       ...(input.signal ? { signal: input.signal } : {}),
-    });
+    }));
     trace('requester_http_projection.end');
-    if (!projected) {
+    if (!projection.ok) {
       return prepare({ v: 1, actionId: actionId.data,
         ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
-        execution: { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' } });
+        execution: projection.executionFailure ?? { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' } });
     }
-    admittedAuthorization = projected;
+    admittedAuthorization = projection.value;
   }
   let mountedCaller: Awaited<ReturnType<typeof deriveMountedPluginInvocationCaller>> = { status: 'absent' };
   if (envelope.data.pluginInvocation) {
@@ -530,12 +568,21 @@ export async function executeExternalAction(input: Readonly<{
     return prepare({ v: 1, actionId: actionId.data, ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
       execution: { ok: false, errorCode: 'forbidden', error: 'forbidden' } });
   }
-  const recordActionStartDiagnostic = createExternalActionStartDiagnosticRecorder(input.actionId, envelope.data.requestId, input.transportRequestId);
+  let actionRefusalWitnessed = false;
+  const baseActionStartDiagnosticRecorder = createExternalActionStartDiagnosticRecorder(
+    input.actionId, envelope.data.requestId, input.currentMachineId, input.transportRequestId,
+  );
+  const recordActionStartDiagnostic = baseActionStartDiagnosticRecorder
+    ? (event: ActionStartDiagnosticV1) => {
+        if (event.refusalReason) actionRefusalWitnessed = true;
+        baseActionStartDiagnosticRecorder(event);
+      }
+    : undefined;
   const context: ActionExecutorContext = {
     ...(recordActionStartDiagnostic ? { recordActionStartDiagnostic } : {}),
     surface: pluginCaller ? 'plugin' : sessionActionOrigin ? 'agent' : apiTokenPrincipal
       ? 'api'
-      : invocation?.surface ?? input.surface ?? (accountPrincipal?.authentication.kind === 'terminal' ? 'cli' : 'ui'),
+      : resolveExternalActionAccountInvocationSurface(accountPrincipal?.authentication.kind, invocation?.surface ?? input.surface),
     authority: invocation && invocation.authority !== 'present_user' ? 'account_automation' : input.principal.authority,
     actionCaller: pluginCaller ?? sessionActionOrigin?.caller ?? invocation?.caller ?? { kind: 'host' },
     ...(invocation ? { callerPermissionMode: invocation.callerPermissionMode,
@@ -549,7 +596,9 @@ export async function executeExternalAction(input: Readonly<{
       causalPermissionAuthority: sessionActionOrigin.causalPermissionAuthority ?? null,
       ...(sessionActionOrigin.workspaceWrites ? { workspaceWrites: sessionActionOrigin.workspaceWrites } : {}),
       sessionInputSource: { sourceSessionId: sessionActionOrigin.caller.sessionId,
-        sourceTurnId: sessionActionOrigin.sourceTurnId, via: 'action' as const },
+        sourceTurnId: sessionActionOrigin.sourceTurnId,
+        ...(sessionActionOrigin.sourceInputId ? { sourceInputId: sessionActionOrigin.sourceInputId } : {}),
+        via: 'action' as const },
     } : {}),
     ...(apiTokenPrincipal
       ? {
@@ -566,13 +615,16 @@ export async function executeExternalAction(input: Readonly<{
     ...(executionAuthorization?.success
       ? {
           externalActionExecutionAuthorization: admittedAuthorization!,
-          ...(actionId.data === 'projects.open' ? { originalActionEnvelope: envelope.data } : {}),
-          signExternalActionApprovalInput: ({ actionId: approvalActionId, input: approvalInput, target: approvalTarget }) =>
+          ...(actionId.data === 'projects.open' || actionId.data === 'projects.script.run' || actionId.data === 'projects.compute.exec' || actionId.data === 'projects.service.relocate'
+            ? { originalActionEnvelope: envelope.data } : {}),
+          signExternalActionApprovalInput: ({ actionId: approvalActionId, input: approvalInput, target: approvalTarget, requesterConfirmation, sessionTargetsV1 }) =>
             signExternalActionApprovalInputV1({
               authorizationToken: executionAuthorization.data.token,
               actionId: approvalActionId,
               target: approvalTarget,
               input: approvalInput,
+              ...(requesterConfirmation ? { requesterConfirmation } : {}),
+              ...(sessionTargetsV1 ? { sessionTargetsV1 } : {}),
               privateKey: input.externalActionMachineRequestPrivateKey!,
             }),
         }
@@ -598,20 +650,34 @@ export async function executeExternalAction(input: Readonly<{
   let internalExecution: ActionExecuteResult;
   try {
     trace('action_execution.begin');
-    internalExecution = await (requesterContext?.executor ?? input.executor).execute(actionId.data, decodedInput, context);
+    internalExecution = await withWebLatencyTrace(envelope.data.requestId, () => timeWebLatencyPhase('daemon.action.execute', () =>
+      (requesterContext?.executor ?? input.executor).execute(actionId.data, decodedInput, context)));
     trace('action_execution.end');
   } catch (error) {
     trace('action_execution.threw');
-    refuseExternalActionPhase('action_execution', input.currentMachineId, error);
+    const requestId = envelope.data.requestId ?? admittedAuthorization?.binding.requestId ?? input.transportRequestId ?? randomUUID();
+    refuseExternalActionPhase('action_execution', input.currentMachineId, error, { actionId: actionId.data, requestId });
+    // Policy preparation runs before protocol execution. Preserve its known
+    // refusal without exposing a schema error's input, cause or message.
+    const errorCode = error instanceof AccountSettingsContentInvalidError ? error.code
+      : isPluginError(error) && error.code === 'project_requester_home_unavailable' ? error.code : 'internal_error';
     return prepare({
       v: 1,
       actionId: actionId.data,
-      ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
-      execution: {
+      requestId,
+      execution: errorCode === 'internal_error' ? projectUnexpectedActionFailureV1(null, requestId) : {
         ok: false,
-        errorCode: 'internal_error',
-        error: 'internal_error',
+        errorCode,
+        error: errorCode,
       },
+    });
+  }
+  if (!internalExecution.ok && internalExecution.errorCode === 'target_unavailable' && !actionRefusalWitnessed) {
+    const details = internalExecution.details && typeof internalExecution.details === 'object'
+      && !Array.isArray(internalExecution.details) ? internalExecution.details as Readonly<Record<string, unknown>> : null;
+    refuseExternalActionPhase('action_execution', input.currentMachineId, undefined, {
+      ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
+      refusalBranch: typeof details?.reason === 'string' ? details.reason : 'action_result_target_unavailable',
     });
   }
   let execution = projectExternalActionExecutionResultV1(internalExecution) ?? {

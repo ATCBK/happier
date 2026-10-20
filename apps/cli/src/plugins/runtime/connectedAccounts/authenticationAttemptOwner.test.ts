@@ -385,13 +385,13 @@ describe('OAuth issuer admission', () => {
         } finally { h.owner.dispose(); }
     });
     it('stages discovered host client configuration in the existing attempt and settlement', async () => {
-        const mode = oauthMode({ outcomeReconciliation: 'none', configuration: {
+        const mode = oauthMode({ outcomeReconciliation: 'none', configuration: PluginConnectedAccountConfigurationV2Schema.parse({
             scope: 'account', changeBehavior: 'reconnect', fields: [
                 { id: 'resource', title: 'Resource', schema: { type: 'string' }, required: true },
                 { id: 'issuer', title: 'Issuer', schema: { type: 'string' } },
                 { id: 'clientSecret', title: 'Client secret', schema: { type: 'string' }, secret: true },
             ],
-        } });
+        }) });
         const record = { revision: 'configuration-1', values: { resource: 'https://mcp.example/mcp' }, secretRefs: {} };
         // Only persistent storage and secret retrieval are replaced; configuration
         // admission, schema normalization, attempt and settlement logic remain real.

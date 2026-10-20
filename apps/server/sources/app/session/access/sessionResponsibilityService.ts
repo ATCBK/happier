@@ -13,12 +13,12 @@ import {
 } from "@/app/account/profile/accountDisplayProfile";
 import { buildAccountTextPrefixFilter } from "@/app/account/accountTextPrefixFilter";
 import { scheduleSessionActivityRemoteAlerts } from "@/app/activity/remoteAlerts/submitSessionActivityRemoteAlerts";
-import { applySessionAutoFollowForRelationshipChangeInTx } from "@/app/session/follow/accountFollowService";
 import { markCurrentSessionReadersChanged } from "@/app/session/changeTracking/markCurrentSessionReadersChanged";
 import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { scheduleSessionPersonalEvent } from "@/app/session/personal/publishPersonalEvent";
 import { AccountStatus, getDbProviderFromEnv } from "@/storage/prisma";
 import { afterTx, inTx, type Tx } from "@/storage/inTx";
+import { afterAccountChangePublication } from "@/app/changes/markAccountChanged";
 import {
     assertSessionCapabilityInTx,
     resolveEffectiveSessionAccess,
@@ -174,17 +174,11 @@ export async function setSessionResponsibility(params: Readonly<{
         });
         const responsibleAccount = await resolveResponsibleAccountSummaryInTx(tx, desired);
 
-        const autoFollowed = desired !== null
-            ? await applySessionAutoFollowForRelationshipChangeInTx(tx, {
-                sessionId: params.sessionId,
-                accountIds: [desired],
-                relationship: "assigned",
-            }) > 0
-            : false;
+        const autoFollowed = false;
         if (desired !== null) {
-            // Self-assignment still applies the recipient's effective auto-Follow
-            // decision, which is distinct from a one-shot self-notification.
-            // Notifying the actor about their own action would be redundant noise.
+            // Relationship defaults are evaluated as rules at the occurrence.
+            // Assignment itself remains a targeted notice; self-assignment
+            // does not notify the actor about their own action.
             if (desired !== params.actorAccountId) {
                 afterTx(tx, () => scheduleSessionActivityRemoteAlerts({
                     sessionId: params.sessionId,
@@ -209,13 +203,13 @@ export async function setSessionResponsibility(params: Readonly<{
         if (desired !== null && desired !== params.actorAccountId) {
             const recipientChange = readerCursors.find(change => change.accountId === desired);
             if (recipientChange) {
-                scheduleSessionPersonalEvent(tx, desired, {
+                afterAccountChangePublication(tx, async () => scheduleSessionPersonalEvent(tx, desired, {
                     type: "session-personal-event",
                     sessionId: params.sessionId,
                     event: "assigned",
-                    eventId: `assigned:${desired}:${recipientChange.cursor}`,
+                    eventId: `assigned:${desired}:${recipientChange.resolveCursor()}`,
                     assignmentAutoFollowed: autoFollowed,
-                });
+                }));
             }
         }
 
@@ -268,6 +262,12 @@ export async function clearSessionResponsibilityIfNoReadAccessInTx(params: Reado
     return { clearedAccountId: responsibleAccountId };
 }
 
+/** Retained responsibility rows are cleanup resources even after access is lost. */
+export async function readSessionResponsibilityRemovalSessionIdsInTx(tx: Tx, accountId: string): Promise<string[]> {
+    return (await tx.session.findMany({ where: { responsibleAccountId: accountId }, select: { id: true } }))
+        .map(session => session.id);
+}
+
 /**
  * Clears current responsibility as part of the Home Account removal transaction.
  * The caller owns permanent Account deletion or loss of active Account status in
@@ -279,22 +279,19 @@ export async function clearSessionResponsibilitiesForAccountRemovalInTx(
     tx: Tx,
     params: Readonly<{ accountId: string }>,
 ): Promise<void> {
-    const sessions = await tx.session.findMany({
-        where: { responsibleAccountId: params.accountId },
-        select: { id: true },
-    });
-    if (sessions.length === 0) return;
+    const sessionIds = await readSessionResponsibilityRemovalSessionIdsInTx(tx, params.accountId);
+    if (sessionIds.length === 0) return;
 
-    await acquireSessionAccountCursorLocksInTx(tx, sessions.map(session => session.id));
+    await acquireSessionAccountCursorLocksInTx(tx, sessionIds);
     await tx.session.updateMany({
         where: { responsibleAccountId: params.accountId },
         data: { responsibleAccountId: null },
     });
-    for (const session of sessions) {
-        const accountIds = await resolveCurrentSessionRecipientAccountIdsInTx(tx, { sessionId: session.id });
+    for (const sessionId of sessionIds) {
+        const accountIds = await resolveCurrentSessionRecipientAccountIdsInTx(tx, { sessionId });
         await markCurrentSessionReadersChanged({
             tx,
-            sessionId: session.id,
+            sessionId,
             accountIds: accountIds.filter(accountId => accountId !== params.accountId),
             hint: { responsibleAccountId: null, responsibleAccount: null },
         });

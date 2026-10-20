@@ -1,10 +1,52 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { listBuiltInHappierTools } from '@/agent/tools/happierTools/listBuiltInHappierTools';
-import { z } from 'zod';
+import { z } from 'zod/mini';
+import * as mini from 'zod/mini';
+import { zodSchemaToJsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
 
 const env = process.env;
 
 describe('registerHappierBridgeTools', () => {
+  it('projects discovered union inputs without wrapping forwarded arguments', async () => {
+    const { registerHappierBridgeTools } = await import('./registerHappierBridgeTools');
+    let registered: z.core.$ZodType | undefined;
+    let handler: ((args: unknown) => Promise<unknown>) | undefined;
+    const forwarded: unknown[] = [];
+    registerHappierBridgeTools({ registerTool: (_name, definition, callback) => {
+      registered = definition.inputSchema;
+      handler = callback;
+    } }, {
+      tools: [{ name: 'upstream_union', inputSchema: { type: 'object', anyOf: [
+        { type: 'object', properties: { text: { type: 'string' } }, required: ['text'], additionalProperties: false },
+        { type: 'object', properties: { count: { type: 'integer' } }, required: ['count'], additionalProperties: false },
+      ] } }],
+      callHttpTool: async (name, args) => { forwarded.push({ name, args }); return { content: [] }; },
+    });
+    if (!registered || !handler) throw new Error('Expected bridge registration');
+    const schema = zodSchemaToJsonSchemaObject(registered);
+    expect(schema).toMatchObject({ type: 'object', properties: { text: { type: 'string' }, count: { type: 'integer' } } });
+    for (const key of ['oneOf', 'anyOf', 'allOf']) expect(schema).not.toHaveProperty(key);
+    const input = { text: '  original bytes  ' };
+    await handler(input);
+    expect(forwarded).toEqual([{ name: 'upstream_union', args: input }]);
+  });
+
+  it('retains strict Mini validation and JSON projection at bridge registration', async () => {
+    const { registerHappierBridgeTools } = await import('./registerHappierBridgeTools');
+    const schema = mini.strictObject({ name: mini.string() });
+    let registered: unknown;
+    registerHappierBridgeTools({ registerTool: (_name, definition) => { registered = definition.inputSchema; } }, {
+      tools: [{ name: 'mini_fixture', inputSchema: schema }],
+      callHttpTool: async () => ({ content: [] }),
+    });
+    if (!(registered instanceof z.core.$ZodType)) throw new Error('Missing registered schema');
+    expect(z.safeParse(registered, { name: 'valid' }).success).toBe(true);
+    expect(z.safeParse(registered, {}).success).toBe(false);
+    expect(z.safeParse(registered, { name: 'valid', extra: true }).success).toBe(false);
+    expect(zodSchemaToJsonSchemaObject(registered)).toMatchObject({
+      type: 'object', required: ['name'], additionalProperties: false,
+    });
+  });
   beforeEach(() => {
     vi.resetModules();
     process.env = { ...env };
@@ -122,8 +164,8 @@ describe('registerHappierBridgeTools', () => {
 
     expect(registered.map((entry) => entry.name)).toEqual(['acme_review_start']);
     const definition = registered[0]?.definition as {
-      inputSchema?: z.ZodType;
-      outputSchema?: z.ZodType;
+      inputSchema?: z.ZodMiniType;
+      outputSchema?: z.ZodMiniType;
       annotations?: unknown;
       _meta?: unknown;
     } | undefined;

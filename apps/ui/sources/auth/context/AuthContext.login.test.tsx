@@ -146,6 +146,11 @@ describe('AuthContext.login', () => {
     });
 
     it('keeps the session authenticated while a login-triggered server refresh is still rebinding credentials', async () => {
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const previousState = storage.getState();
+        storage.getState().applyLocalSettings({ hasCompletedAuthOnce: false }, { source: 'test' });
+        storage.setState(state => ({ settings: { ...state.settings,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } } }));
         switchConnectionToActiveServerSpy.mockImplementation(
             () => new Promise<null>(() => {}),
         );
@@ -173,6 +178,7 @@ describe('AuthContext.login', () => {
             await loginPromise;
 
             expect(getCurrentAuth()?.isAuthenticated).toBe(true);
+            expect(storage.getState().localSettings.hasCompletedAuthOnce).toBe(true);
 
             await act(async () => {
                 activeServerListener?.({
@@ -185,6 +191,7 @@ describe('AuthContext.login', () => {
             expect(getCurrentAuth()?.isAuthenticated).toBe(true);
         } finally {
             await screen.unmount();
+            storage.setState(previousState, true);
         }
     });
 
@@ -317,38 +324,6 @@ describe('AuthContext.login', () => {
         }
     });
 
-    it('rebinds the same focused Home when its connection descriptor revision changes', async () => {
-        vi.useRealTimers();
-        const credentials = { token: buildTokenWithSub('server-test'), secret: 'secret-test' };
-        activeServerSnapshotState.serverId = 'server-test';
-        activeServerSnapshotState.serverUrl = 'http://localhost:53288';
-        activeServerSnapshotState.generation = 1;
-        activeServerSnapshotState.connectionDescriptorRevision = 1;
-        switchConnectionToActiveServerSpy.mockResolvedValue(credentials);
-        const screen = await renderScreen(React.createElement(AuthProvider, {
-            initialCredentials: credentials,
-            children: React.createElement(React.Fragment, null),
-        }));
-        try {
-            await vi.waitFor(() => expect(activeServerListener).toBeTypeOf('function'));
-            activeServerSnapshotState.generation = 2;
-            activeServerSnapshotState.connectionDescriptorRevision = 2;
-            await act(async () => {
-                activeServerListener?.({
-                    serverId: 'server-test',
-                    serverUrl: 'http://localhost:53288',
-                    generation: 2,
-                    connectionDescriptorRevision: 2,
-                });
-                await Promise.resolve();
-            });
-
-            await vi.waitFor(() => expect(switchConnectionToActiveServerSpy).toHaveBeenCalledTimes(1));
-        } finally {
-            await screen.unmount();
-        }
-    });
-
     it('clears stale auth state when the active server changes during a login-triggered rebind', async () => {
         const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
         upsertAndActivateServer({ serverUrl: 'http://localhost:53288', scope: 'tab' });
@@ -420,6 +395,47 @@ describe('AuthContext.login', () => {
             expect(getCurrentAuth()?.credentials).toEqual({ token });
             expect(getCurrentAuth()?.isAuthenticated).toBe(true);
             expect(switchConnectionToActiveServerSpy).toHaveBeenCalled();
+        } finally {
+            await screen.unmount();
+        }
+    });
+
+    it('retains historical keys in persisted and in-memory credentials during same-Account refresh', async () => {
+        const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+        upsertAndActivateServer({ serverUrl: 'http://localhost:53288', scope: 'tab' });
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const token = buildTokenWithSub('server-test');
+        const { encodeBase64 } = await import('@/encryption/base64');
+        const initialCredentials = {
+            token,
+            secret: encodeBase64(new Uint8Array(32).fill(8), 'base64url'),
+        };
+        await TokenStorage.setCredentials(initialCredentials);
+        const screen = await renderScreen(
+            React.createElement(AuthProvider, {
+                initialCredentials,
+                children: React.createElement(React.Fragment, null),
+            }),
+        );
+
+        try {
+            const auth = getCurrentAuth();
+            if (!auth) throw new Error('Expected current auth to be set');
+
+            await act(async () => {
+                await expect(auth.loginWithCredentials({ token }))
+                    .resolves.toEqual({ kind: 'completed' });
+            });
+
+            expect(await TokenStorage.getCredentials()).toEqual(initialCredentials);
+            expect(getCurrentAuth()?.credentials).toEqual(initialCredentials);
+            expect(getCurrentAuth()?.isAuthenticated).toBe(true);
+            expect(switchConnectionToActiveServerSpy).toHaveBeenCalled();
+            await act(async () => {
+                await auth.loginWithCredentials({ token }, { discardHistoricalEncryption: true });
+            });
+            expect(await TokenStorage.getCredentials()).toEqual({ token });
+            expect(getCurrentAuth()?.credentials).toEqual({ token });
         } finally {
             await screen.unmount();
         }

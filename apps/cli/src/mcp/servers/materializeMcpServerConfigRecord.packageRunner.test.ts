@@ -53,7 +53,7 @@ async function probeFixture(params: Parameters<typeof probeMcpStdioServerTools>[
 function buildFixtureServerScript(): string {
   const mcpServerUrl = pathToFileURL(require.resolve('@modelcontextprotocol/sdk/server/mcp.js')).href;
   const stdioTransportUrl = pathToFileURL(require.resolve('@modelcontextprotocol/sdk/server/stdio.js')).href;
-  const zodUrl = pathToFileURL(require.resolve('zod')).href;
+  const zodUrl = pathToFileURL(require.resolve('zod/mini')).href;
 
   return `
 import { McpServer } from ${JSON.stringify(mcpServerUrl)};
@@ -61,7 +61,7 @@ import { StdioServerTransport } from ${JSON.stringify(stdioTransportUrl)};
 import { z } from ${JSON.stringify(zodUrl)};
 
 const server = new McpServer({ name: 'fixture-mcp', version: '1.0.0' });
-server.registerTool('fixture_tool', { inputSchema: z.object({}).optional() }, async () => ({ content: [{ type: 'text', text: process.cwd() }] }));
+server.registerTool('fixture_tool', { inputSchema: z.optional(z.object({})) }, async () => ({ content: [{ type: 'text', text: process.cwd() }] }));
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

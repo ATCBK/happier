@@ -9,10 +9,12 @@ export function readComputerScreenSessionSurfaceResource(value: unknown): Comput
         : null;
 }
 
+export const computerScreenDetailsTabKey = (machineId: string) => `computer-screen:${machineId}`;
+
 /** The Details tab that shows a Session's shared window (one per Session and machine). */
 export function createComputerScreenDetailsTab(input: Readonly<{ machineId: string; title: string; subtitle?: string | null }>) {
     return {
-        key: `computer-screen:${input.machineId}`,
+        key: computerScreenDetailsTabKey(input.machineId),
         kind: 'computerScreen',
         title: input.title,
         subtitle: input.subtitle ?? null,

@@ -18,12 +18,14 @@ describe('ActionsSettingsV1Schema', () => {
     expect(normalizeActionsSettingsV1(parsed).actions['prompt_asset.export']).toEqual(row);
     expect(ActionIdSchema.safeParse('prompt_asset.export').success).toBe(false);
   });
-  it('initializes Account policy from the Actions settings entry point', async () => {
+  it('initializes the Action id and Account policy module graph together', async () => {
     vi.resetModules();
-    const { ActionsSettingsV1Schema: schema } = await import('./actionSettings.js');
-    const { accountSettingsParse } = await import('../account/settings/accountSettings.js');
+    const [{ ActionIdSchema: actionIdSchema }, { accountSettingsParse }] = await Promise.all([
+      import('./actionIds.js'),
+      import('../account/settings/accountSettings.js'),
+    ]);
 
-    expect(schema.parse({ v: 1 }).v).toBe(1);
+    expect(actionIdSchema.parse('session.stop')).toBe('session.stop');
     expect(accountSettingsParse({}).actionsSettingsV1.v).toBe(1);
   });
 

@@ -1,7 +1,9 @@
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import type { ReactTestInstance } from 'react-test-renderer';
 
 import { renderScreen } from '@/dev/testkit';
+import { t } from '@/text';
 
 const nativeFocus = vi.hoisted(() => ({
     input: {},
@@ -28,7 +30,21 @@ vi.mock('react-native', async () => {
     });
 });
 
+// Cold compilation belongs to collection, outside the per-test interaction timeout.
+await import('./PluginSurfaceInteractionBoundary.native');
+
 describe('PluginSurfaceInteractionBoundary.native', () => {
+    it('shows owner-proven content on a cold offline mount while keeping it inaccessible', async () => {
+        const { PluginSurfaceInteractionBoundary } = await import('./PluginSurfaceInteractionBoundary.native');
+        const screen = await renderScreen(
+            <PluginSurfaceInteractionBoundary surfaceId="cold-content" snapshotTitle="Saved content" enabled={false} hasContent>
+                <PluginNativeSnapshot testID="saved-content" />
+            </PluginSurfaceInteractionBoundary>,
+        );
+        expect(screen.findByTestId('saved-content')).toBeTruthy();
+        expect(screen.findByTestId('plugin-surface-snapshot:cold-content')?.props).toMatchObject({ pointerEvents: 'none', accessibilityElementsHidden: true });
+        expect(screen.findByTestId('plugin-surface-offline-state:cold-content')).toBeNull();
+    });
     it('omits the loaded runtime marker until a current native runtime identity is present', async () => {
         const { PluginSurfaceInteractionBoundary } = await import('./PluginSurfaceInteractionBoundary.native');
         const markerA = loadedRuntimeMarkerId('surface-native-load-lifecycle', 'acme.panels', 'occurrence-a');
@@ -97,15 +113,18 @@ describe('PluginSurfaceInteractionBoundary.native', () => {
     it('omits the loaded runtime marker for retained stale or failed native snapshots', async () => {
         const { PluginSurfaceInteractionBoundary } = await import('./PluginSurfaceInteractionBoundary.native');
         const markerA = loadedRuntimeMarkerId('surface-native-stale', 'acme.panels', 'occurrence-a');
-        const screen = await renderScreen(
+        const stale = (enabled: boolean) => (
             <PluginSurfaceInteractionBoundary
                 surfaceId="surface-native-stale"
                 snapshotTitle="Build summary"
-                enabled={false}
+                enabled={enabled}
             >
                 <PluginNativeSnapshot testID="plugin-native-stale-snapshot" />
-            </PluginSurfaceInteractionBoundary>,
+            </PluginSurfaceInteractionBoundary>
         );
+        // A retained snapshot exists only once the surface was live.
+        const screen = await renderScreen(stale(true));
+        await screen.update(stale(false));
 
         expect(screen.findByTestId('plugin-native-stale-snapshot')).toBeTruthy();
         expect(screen.findByTestId(markerA)).toBeNull();
@@ -184,9 +203,11 @@ describe('PluginSurfaceInteractionBoundary.native', () => {
                 <PluginNativeSnapshot testID="plugin-native-snapshot" />
             </PluginSurfaceInteractionBoundary>
         );
-        const screen = await renderScreen(element(false));
+        const screen = await renderScreen(element(true));
+        await screen.update(element(false));
 
         expect(screen.findByTestId('plugin-native-snapshot')).toBeTruthy();
+        expect(hasInaccessibleAncestor(screen.findByTestId('plugin-native-snapshot')!)).toBe(true);
         expect(screen.findByTestId('plugin-surface-offline-summary:surface-native-freshness-text')).toBeTruthy();
         expect(screen.findByTestId('plugin-surface-snapshot:surface-native')?.props).toMatchObject({
             pointerEvents: 'none',
@@ -301,7 +322,51 @@ describe('PluginSurfaceInteractionBoundary.native', () => {
         expect(nativeFocus.focusTextInput).not.toHaveBeenCalled();
         expect(nativeFocus.setAccessibilityFocus).not.toHaveBeenCalled();
     });
+
+    it.each([null, 'unavailable', 'required', 'connecting'] as const)('keeps cold host identity and the %s explanation accessible', async (cause) => {
+        const { PluginSurfaceInteractionBoundary } = await import('./PluginSurfaceInteractionBoundary.native');
+        const { PluginSurfacePageHeaderContext, PluginSurfaceSourceCauseContext } = await import('./pluginSurfaceInteractionAvailability');
+        const screen = await renderScreen(
+            <PluginSurfaceSourceCauseContext.Provider value={cause}>
+                <PluginSurfacePageHeaderContext.Provider value={{ header: <PluginNativeSnapshot testID="host-page-identity" />, loadingFrame: 'column' }}>
+                    <PluginSurfaceInteractionBoundary surfaceId="surface-native-empty" snapshotTitle="PRs & Issues" enabled={false}>
+                        <PluginNativeSnapshot testID="plugin-native-placeholder" />
+                    </PluginSurfaceInteractionBoundary>
+                </PluginSurfacePageHeaderContext.Provider>
+            </PluginSurfaceSourceCauseContext.Provider>,
+        );
+        expect(screen.findByTestId('plugin-native-placeholder')).toBeNull();
+        const state = screen.findByTestId('plugin-surface-offline-state:surface-native-empty');
+        const identity = screen.findByTestId('host-page-identity');
+        expect(state).toBeTruthy();
+        expect(identity).toBeTruthy();
+        expect(hasInaccessibleAncestor(state!)).toBe(false);
+        expect(hasInaccessibleAncestor(identity!)).toBe(false);
+        expect(screen.findByTestId('plugin-surface-offline-summary:surface-native-empty')).toBeNull();
+    });
+
+    it('states a missing source instead of an offline machine when the mount reports that cause', async () => {
+        const { PluginSurfaceInteractionBoundary } = await import('./PluginSurfaceInteractionBoundary.native');
+        const { PluginSurfaceSourceCauseContext } = await import('./pluginSurfaceInteractionAvailability');
+        const screen = await renderScreen(
+            <PluginSurfaceSourceCauseContext.Provider value="unavailable">
+                <PluginSurfaceInteractionBoundary surfaceId="surface-native-source" snapshotTitle="PRs & Issues" enabled={false}>
+                    <PluginNativeSnapshot testID="plugin-native-placeholder" />
+                </PluginSurfaceInteractionBoundary>
+            </PluginSurfaceSourceCauseContext.Provider>,
+        );
+        expect(screen.getTextContent()).toContain(t('pluginSurfaces.state.sourceUnavailable.title'));
+        expect(screen.getTextContent()).not.toContain(t('pluginSurfaces.state.offline.titleNothingLoaded'));
+    });
 });
+
+function hasInaccessibleAncestor(node: ReactTestInstance): boolean {
+    for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) {
+        if (ancestor.props.accessibilityElementsHidden === true
+            || ancestor.props.importantForAccessibility === 'no-hide-descendants') return true;
+    }
+    return false;
+}
 
 function loadedRuntimeMarkerId(surfaceId: string, pluginId: string, occurrenceId: string): string {
     return [

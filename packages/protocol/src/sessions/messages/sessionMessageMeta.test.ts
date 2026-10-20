@@ -4,6 +4,17 @@ import * as protocol from '../../index.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 describe('sessionMessages meta', () => {
+  it('preserves payload-free internal markers through the canonical metadata envelope', () => {
+    const marker = { kind: 'claude_jsonl_consumed_marker.v1' };
+    expect(protocol.HappierMetaEnvelopeSchema.parse(marker)).toEqual(marker);
+    expect(protocol.SessionMessageMetaSchema.parse({ happier: marker })).toEqual({ happier: marker });
+    expect(createStoredReadSchema(protocol.SessionMessageMetaSchema).parse({ happier: marker })).toEqual({ happier: marker });
+    expect(protocol.HappierMetaEnvelopeSchema.parse({ ...marker, payload: null })).toEqual({ ...marker, payload: null });
+    expect(protocol.SessionMessageMetaSchema.safeParse({ happier: { payload: null } }).success).toBe(false);
+    expect(protocol.SessionMessageMetaSchema.safeParse({ happier: { kind: '' } }).success).toBe(false);
+    expect(protocol.SessionMessageMetaSchema.safeParse({ happier: { kind: 'session_media.v1' } }).success).toBe(false);
+  });
+
   it('retains predecessor Claude execution choices without retaining arbitrary metadata', () => {
     // ../0.2 HEAD 639a32ec0e832dedb35d5a5809c36717c568225f (clean):
     // buildClaudeRemoteOutgoingMessageMetaExtras writes this family, and

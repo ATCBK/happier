@@ -30,7 +30,7 @@ describe('SessionScmReviewDetailsView (exact Home)', () => {
             const [target, setTarget] = React.useState<NonNullable<React.ComponentProps<typeof WorkspaceScmReviewDetailsView>['onSelectTarget']> extends (input: infer T) => void ? T : never>({
                 comparison: { kind: 'branch', head: 'feature', base: 'main' }, view: 'walkthrough', explain: false,
             });
-            return <WorkspaceScmReviewDetailsView scopeId="project:workspace" workspaceRefId="workspace" workspaceCacheKey="cache"
+            return <WorkspaceScmReviewDetailsView scopeId="project:workspace"
                 machineId="m1" serverId={fixture.home.id} rootPath="/tmp/repo" {...target} onSelectTarget={setTarget} />;
         }
         const screen = await fixture.render(<Host />);
@@ -52,7 +52,7 @@ describe('SessionScmReviewDetailsView (exact Home)', () => {
         const { WorkspaceScmReviewDetailsView } = await import('@/components/projects/panes/details/views/WorkspaceScmReviewDetailsView');
         const { ChangedFilesReview } = await import('@/components/workspaces/scm/review/ChangedFilesReview');
         const screen = await fixture.render(<WorkspaceScmReviewDetailsView scopeId="project:workspace-row"
-            workspaceRefId="workspace-row" workspaceCacheKey="workspace-cache" machineId="m1"
+            machineId="m1"
             rootPath="/tmp/repo" serverId={fixture.home.id} view="files" comparison={{ kind: 'workingTree' }} />);
         const review = screen.findByType(ChangedFilesReview).props as React.ComponentProps<typeof ChangedFilesReview>;
         expect(review.allRepositoryChangedFiles.map((file) => file.fullPath)).toEqual(['src/workspace.ts']);

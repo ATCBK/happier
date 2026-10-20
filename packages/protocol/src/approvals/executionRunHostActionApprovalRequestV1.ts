@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '../strings/maxCodeUnits.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
@@ -14,7 +15,7 @@ export const EXECUTION_RUN_HOST_ACTION_APPROVAL_LIMITS_V1 = Object.freeze({
   surfaceUtf16Units: 64,
 });
 
-const boundedId = z.string().check(z.trim(), z.minLength(1), z.maxLength(EXECUTION_RUN_HOST_ACTION_APPROVAL_LIMITS_V1.idUtf16Units));
+const boundedId = z.string().check(z.trim(), z.minLength(1), maxCodeUnits(EXECUTION_RUN_HOST_ACTION_APPROVAL_LIMITS_V1.idUtf16Units));
 
 const ExecutionRunHostActionProposalPreviewV1Schema = lazyZodSchema(() => z.strictObject({
   findingId: z.optional(boundedId),
@@ -41,7 +42,7 @@ export const ExecutionRunHostActionApprovalRequestV1Schema = lazyZodSchema(() =>
   createdAtMs: z.number().check(z.int(), z.minimum(0)),
   updatedAtMs: z.number().check(z.int(), z.minimum(0)),
   createdBy: ApprovalRequestCreatedBySchema,
-  requestedSurface: z.string().check(z.trim(), z.minLength(1), z.maxLength(EXECUTION_RUN_HOST_ACTION_APPROVAL_LIMITS_V1.surfaceUtf16Units)),
+  requestedSurface: z.string().check(z.trim(), z.minLength(1), maxCodeUnits(EXECUTION_RUN_HOST_ACTION_APPROVAL_LIMITS_V1.surfaceUtf16Units)),
   actionId: z.literal('reviews.comments.create'),
   sessionId: boundedId,
   runId: boundedId,
@@ -55,7 +56,7 @@ export const ExecutionRunHostActionApprovalRequestV1Schema = lazyZodSchema(() =>
   proposalCount: z.number().check(z.int(), z.minimum(1), z.maximum(200)),
   proposalPreview: z.array(ExecutionRunHostActionProposalPreviewV1Schema).check(z.maxLength(20)),
   subjectFingerprint: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
-  summary: z.string().check(z.trim(), z.minLength(1), z.maxLength(EXECUTION_RUN_HOST_ACTION_APPROVAL_LIMITS_V1.summaryUtf16Units)),
+  summary: z.string().check(z.trim(), z.minLength(1), maxCodeUnits(EXECUTION_RUN_HOST_ACTION_APPROVAL_LIMITS_V1.summaryUtf16Units)),
   decision: z.optional(ApprovalDecisionV1Schema),
 }).check(z.superRefine((value, ctx) => {
   if (value.status === 'open' && value.decision) {

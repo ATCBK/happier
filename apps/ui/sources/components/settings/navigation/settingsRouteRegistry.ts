@@ -146,7 +146,7 @@ function isMountedSettingsRoute(segments: readonly string[]): boolean {
  */
 export function resolveSettingsRouteParentPathname(
     pathname: string | null | undefined,
-    params?: Readonly<{ category?: string | string[] }>,
+    params?: Readonly<{ category?: string | string[]; source?: string | string[] }>,
 ): string | null {
     if (typeof pathname !== 'string') return null;
     const normalizedPathname = pathname.trim().replace(/\/+$/, '') || '/';
@@ -160,6 +160,9 @@ export function resolveSettingsRouteParentPathname(
         && (MACHINE_RETENTION_CATEGORIES_V1 as readonly string[]).includes(category ?? '')) {
         return normalizedPathname;
     }
+
+    // A phone pushes an open plugin source as the Sources page's query state: Back closes it to the list first.
+    if (normalizedPathname === '/settings/plugins/sources' && params?.source !== undefined) return normalizedPathname;
 
     // Custom ACP agents live in the Agents collection; `custom` alone is the new-agent draft, not
     // the parent of a saved agent, although it is a mounted route.
@@ -201,7 +204,7 @@ export function shouldShowSettingsParentBackButton(params: Readonly<{
 export function useSettingsParentBack(tag: string): Readonly<{ parentPathname: string | null; goToParent: () => void }> {
     const pathname = usePathname();
     const router = useRouter();
-    const params = useLocalSearchParams<{ settingsSearch?: string | string[]; category?: string | string[] }>();
+    const params = useLocalSearchParams<{ settingsSearch?: string | string[]; category?: string | string[]; source?: string | string[] }>();
     const searchOrigin = params[SETTINGS_SEARCH_RETURN_QUERY_PARAM];
     const parentPathname = searchOrigin === '1' ? '/settings' : resolveSettingsRouteParentPathname(pathname, params);
     const goToParent = React.useCallback(() => {

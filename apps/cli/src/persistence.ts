@@ -5,6 +5,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import tweetnacl from 'tweetnacl';
 import { isDeepStrictEqual } from 'node:util';
 import { FileHandle } from 'node:fs/promises'
 import { readFile, writeFile, mkdir, open, unlink, rename, stat, chmod, readdir } from 'node:fs/promises'
@@ -28,7 +29,7 @@ export type { DaemonLockSnapshot } from '@happier-dev/cli-common/process';
 import { readProcessInstanceFingerprintSync } from '@happier-dev/cli-common/processInstance';
 import { processGenerationProvesReuse } from '@happier-dev/cli-common/processInstance';
 import { createServerUrlComparableKey } from '@happier-dev/protocol/server/urls/serverUrlComparableKey';
-import * as z from 'zod';
+import * as z from 'zod/mini';
 import { decodeBase64, encodeBase64 } from './api/encryption';
 import { logger } from './ui/logger';
 import { resolveMachineIdForServerFromSettings } from './daemon/resolveMachineIdForServerFromSettings';
@@ -361,33 +362,33 @@ export interface DaemonLocallyPersistedState {
 }
 
 const DaemonLocallyPersistedStateSchemaV2 = z.object({
-  pid: z.number().int().positive(),
-  httpPort: z.number().int().positive(),
-  startedAt: z.number().int().nonnegative(),
+  pid: z.number().check(z.int(), z.positive()),
+  httpPort: z.number().check(z.int(), z.positive()),
+  startedAt: z.number().check(z.int(), z.nonnegative()),
   startedWithCliVersion: z.string(),
   startedWithPublicReleaseChannel: z.optional(DaemonPublicReleaseChannelLabelSchema),
-  startedWithRuntimeEntrypoint: z.string().min(1).optional(),
-  startedWithRuntimeBuiltAt: z.string().min(1).optional(),
-  runtimeId: z.string().min(1).optional(),
-  daemonExecutionGenerationV1: z.string().min(1).optional(),
+  startedWithRuntimeEntrypoint: z.optional(z.string().check(z.minLength(1))),
+  startedWithRuntimeBuiltAt: z.optional(z.string().check(z.minLength(1))),
+  runtimeId: z.optional(z.string().check(z.minLength(1))),
+  daemonExecutionGenerationV1: z.optional(z.string().check(z.minLength(1))),
   startupSource: z.optional(DaemonStartupSourceSchema),
-  serviceLabel: z.string().min(1).optional(),
-  machineId: z.string().min(1).optional(),
-  accountId: z.string().trim().min(1).optional(),
-  lastHeartbeatAt: z.number().int().nonnegative().optional(),
-  machineControlReady: z.boolean().optional(),
-  daemonLogPath: z.string().optional(),
-  controlToken: z.string().optional(),
+  serviceLabel: z.optional(z.string().check(z.minLength(1))),
+  machineId: z.optional(z.string().check(z.minLength(1))),
+  accountId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  lastHeartbeatAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+  machineControlReady: z.optional(z.boolean()),
+  daemonLogPath: z.optional(z.string()),
+  controlToken: z.optional(z.string()),
 });
 
 // Legacy format (string timestamps, no control token).
 const DaemonLocallyPersistedStateSchemaLegacy = z.object({
-  pid: z.number().int().positive(),
-  httpPort: z.number().int().positive(),
+  pid: z.number().check(z.int(), z.positive()),
+  httpPort: z.number().check(z.int(), z.positive()),
   startTime: z.string(),
   startedWithCliVersion: z.string(),
-  lastHeartbeat: z.string().optional(),
-  daemonLogPath: z.string().optional(),
+  lastHeartbeat: z.optional(z.string()),
+  daemonLogPath: z.optional(z.string()),
 });
 
 export const DaemonLocallyPersistedStateSchema = z.union([
@@ -656,12 +657,12 @@ export async function updateSettings(
 //
 
 const credentialsSchema = z.object({
-  token: z.string().optional(),
-  secret: z.string().base64().nullish(), // Legacy
-  encryption: z.object({
-    publicKey: z.string().base64(),
-    machineKey: z.string().base64()
-  }).nullish()
+  token: z.optional(z.string()),
+  secret: z.nullish(z.string().check(z.base64())), // Legacy
+  encryption: z.nullish(z.object({
+    publicKey: z.string().check(z.base64()),
+    machineKey: z.string().check(z.base64())
+  }))
 })
 
 export type AccountEncryptionCredentials =
@@ -743,7 +744,7 @@ export function decodeStoredCredentials(value: unknown): StoredCredentials | nul
   };
 }
 
-export function encodeStoredCredentials(credentials: StoredCredentials): z.infer<typeof credentialsSchema> {
+export function encodeStoredCredentials(credentials: StoredCredentials): z.infer<typeof credentialsSchema> & Pick<StoredCredentials, 'token'> {
   return credentials.encryption?.type === 'legacy'
     ? { token: credentials.token, secret: encodeBase64(credentials.encryption.secret) }
     : credentials.encryption?.type === 'dataKey'
@@ -900,13 +901,65 @@ export async function writeCredentialsDataKey(credentials: { publicKey: Uint8Arr
   }
 }
 
-export async function writeCredentialsTokenOnly(credentials: { token: string }): Promise<void> {
-  await ensureHappyHomeDirExists();
-  await writeFile(configuration.privateKeyFile, JSON.stringify({
-    token: credentials.token
-  }, null, 2), { mode: 0o600 });
-  await bestEffortChmod(configuration.privateKeyFile, 0o600)
+export class HistoricalEncryptionIdentityUnavailableError extends Error {
+  readonly code = 'HISTORICAL_ENCRYPTION_IDENTITY_UNAVAILABLE' as const;
+  constructor() {
+    super('The retained encryption key cannot be associated with this Account. Existing credentials were preserved.');
+    this.name = 'HistoricalEncryptionIdentityUnavailableError';
+  }
+}
 
+/** Identity captured before enrollment registration can update the profile's last Account. */
+export type TokenOnlyCredentialRefreshOptions = Readonly<{ previousAccountId?: string | null }>;
+
+export async function prepareCredentialsTokenOnlyForServerId(
+  serverIdRaw: string,
+  credentials: Readonly<{ token: string }>,
+  options: TokenOnlyCredentialRefreshOptions = {},
+): Promise<StoredCredentials> {
+  const serverId = String(serverIdRaw ?? '').trim();
+  const token = String(credentials.token ?? '').trim();
+  if (!isServerIdFilesystemSafe(serverId) || !token) throw new Error('Invalid server credential target.');
+  const accountId = decodeJwtPayload(token)?.sub;
+  const primaryPath = join(configuration.serversDir, serverId, 'access.key');
+  const path = existsSync(primaryPath) ? primaryPath
+    : serverId === 'cloud' && existsSync(configuration.legacyPrivateKeyFile) ? configuration.legacyPrivateKeyFile : null;
+  if (!path) return { token, encryption: null };
+  // A failed storage read must not silently erase the retained key.
+  const raw = await readFile(path, 'utf8');
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { return { token, encryption: null }; }
+  const parsed = credentialsSchema.safeParse(value);
+  if (!parsed.success) return { token, encryption: null };
+  const previous = parsed.data;
+  const retained = decodeStoredCredentials({ ...previous, token });
+  if (!retained?.encryption) return { token, encryption: null };
+  const encryption = retained.encryption;
+  if (encryption.type === 'legacy') {
+    if (encryption.secret.length !== 32) return { token, encryption: null };
+  } else {
+    if (encryption.machineKey.length !== 32 || encryption.publicKey.length !== 32) return { token, encryption: null };
+    const publicKey = tweetnacl.box.keyPair.fromSecretKey(encryption.machineKey).publicKey;
+    if (!sameCredentialBytes(publicKey, encryption.publicKey)) return { token, encryption: null };
+  }
+  const previousAccountId = previous.token === undefined
+    ? options.previousAccountId !== undefined ? options.previousAccountId
+      : (await readSettings()).lastTokenSubByServerId?.[serverId]
+    : decodeJwtPayload(previous.token)?.sub;
+  if (typeof accountId !== 'string' || !accountId.trim()
+    || typeof previousAccountId !== 'string' || !previousAccountId.trim()) {
+    throw new HistoricalEncryptionIdentityUnavailableError();
+  }
+  if (previousAccountId.trim() !== accountId.trim()) return { token, encryption: null };
+  return { token, encryption };
+}
+
+export async function writeCredentialsTokenOnly(
+  credentials: { token: string },
+  options: TokenOnlyCredentialRefreshOptions = {},
+): Promise<void> {
+  await ensureHappyHomeDirExists();
+  await writeCredentialsTokenOnlyForServerId(configuration.activeServerId, credentials, options);
   if (configuration.activeServerId === 'cloud' && configuration.legacyPrivateKeyFile !== configuration.privateKeyFile) {
     if (existsSync(configuration.legacyPrivateKeyFile)) {
       await unlink(configuration.legacyPrivateKeyFile).catch(() => {});
@@ -914,19 +967,19 @@ export async function writeCredentialsTokenOnly(credentials: { token: string }):
   }
 }
 
-/** Writes a token to an explicit stable profile/identity without changing the active server. */
+/** Refresh a profile bearer, preserving genuine same-Account historical key custody. */
 export async function writeCredentialsTokenOnlyForServerId(
   serverIdRaw: string,
   credentials: Readonly<{ token: string }>,
+  options: TokenOnlyCredentialRefreshOptions = {},
 ): Promise<void> {
   const serverId = String(serverIdRaw ?? '').trim();
-  const token = String(credentials.token ?? '').trim();
-  if (!isServerIdFilesystemSafe(serverId) || !token) throw new Error('Invalid server credential target.');
+  const persisted = encodeStoredCredentials(await prepareCredentialsTokenOnlyForServerId(serverId, credentials, options));
   const serverDir = join(configuration.serversDir, serverId);
   const credentialPath = join(serverDir, 'access.key');
   await mkdir(serverDir, { recursive: true });
   await bestEffortChmod(serverDir, 0o700);
-  await writeFile(credentialPath, JSON.stringify({ token }, null, 2), { mode: 0o600 });
+  await writeFile(credentialPath, JSON.stringify(persisted, null, 2), { mode: 0o600 });
   await bestEffortChmod(credentialPath, 0o600);
 }
 

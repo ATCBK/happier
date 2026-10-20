@@ -21,6 +21,9 @@ describe('Home search service', () => {
         expect(plain.search({ v: 1, query: 'plain', scope: { type: 'session', sessionId: 'other' }, mode: 'auto' }, {
             visibleSessions: [{ sessionId: 's-1', maximumSeq: null }],
         })).toMatchObject({ ok: true, hits: [] });
+        expect(plain.search({ v: 1, query: 'plain', scope: { type: 'project',
+            projectRef: { serverId: 'srv_test', projectKey: 'payments' } }, mode: 'auto' }))
+            .toMatchObject({ ok: false, errorCode: 'memory_project_scope_unsupported' });
         index.close();
     });
 

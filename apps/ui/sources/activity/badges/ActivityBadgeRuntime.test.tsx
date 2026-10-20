@@ -42,6 +42,7 @@ let changelogUnreadValue = false;
 // The canonical Activity Home set the badge reads its per-Home policy for. Empty would mean "no
 // Home has answered yet", which the runtime treats as "do not write the badge".
 const DEFAULT_BADGE_HOME_MEMBERSHIP: Readonly<Record<string, readonly string[]>> = { 'server-1': [] };
+const DEFAULT_BADGE_HOME_QUERY_STATES = {};
 let personalSessionMembershipValue: Readonly<Record<string, readonly string[]>> = DEFAULT_BADGE_HOME_MEMBERSHIP;
 let rejectBroadActivitySourceRead = false;
 let rejectBroadLocalSettingsRead = false;
@@ -103,18 +104,21 @@ function setActivitySessions(sessions: BadgeRuntimeSessionFixture[]): void {
     activityAttentionSourceValue = createActivityAttentionSource(sessions);
 }
 
+const EMPTY_BADGE_RUNTIME_MESSAGES = {};
+const BADGE_RUNTIME_PROFILE_SCOPE = { serverId: 'server-1', accountId: 'account-1' };
+
 function createBadgeRuntimeStorageState(): StorageState {
     const state = {
         sessions: activityAttentionSourceValue.sessionsById,
         machines: {},
-        sessionMessages: {},
+        sessionMessages: EMPTY_BADGE_RUNTIME_MESSAGES,
         sessionPending: {},
         sessionListRowsByServerId: activityAttentionSourceValue.sessionListRowsByServerId,
         ordinarySessionListMembershipByServerId: activityAttentionSourceValue.ordinarySessionListMembershipByServerId,
         sessionListIndexByServerId: activityAttentionSourceValue.sessionListIndexByServerId,
         concurrentSessionListCacheByServerId: activityAttentionSourceValue.concurrentSessionListCacheByServerId,
         isDataReady: activityAttentionSourceValue.isDataReady,
-        profileScope: { serverId: 'server-1', accountId: 'account-1' },
+        profileScope: BADGE_RUNTIME_PROFILE_SCOPE,
         localSettings: localSettingsDefaults,
     };
     // Test storage only needs the badge selector slice; missing domain methods are never read here.
@@ -199,7 +203,7 @@ vi.mock('@/activity/source/useActivityAttentionSource', () => ({
 vi.mock('@/activity/source/activityPersonalSessionMembership', () => ({
     useActivityPersonalSessionMembership: () => ({
         membershipByServerId: personalSessionMembershipValue,
-        statesByServerId: {},
+        statesByServerId: DEFAULT_BADGE_HOME_QUERY_STATES,
         coverageComplete: true,
     }),
 }));
@@ -227,6 +231,10 @@ vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({
 
 describe('ActivityBadgeRuntime', () => {
     beforeEach(async () => {
+        // Home testkit imports may load this SDK port before the optional mock factory is installed.
+        // Set the live platform boundary as well, so native cases cannot silently run as web.
+        const { Platform } = await import('react-native');
+        Object.defineProperty(Platform, 'OS', { configurable: true, get: () => platformState.os });
         // Every Home in the badge corpus starts saved, credentialled, and carrying its own
         // persisted Account settings; a Home without them fails closed, which several cases below
         // assert deliberately.
@@ -301,6 +309,40 @@ describe('ActivityBadgeRuntime', () => {
         await act(async () => {
             tree?.unmount();
         });
+    });
+
+    it('wakes a mounted badge at quiet-hour boundaries without a session update', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-10-19T08:00:00Z'));
+        await persistBadgeHomeAccountSettings('server-1', { attentionDeliveryPolicyV1: {
+            quietHours: { enabled: true, timezone: 'UTC', windows: [{ startLocalTime: '09:00', endLocalTime: '17:00' }] },
+            channels: { badge: { quietHoursBehavior: 'suppress' } },
+        } }, 2);
+        setActivitySessions([{ id: 'session-1', hasUnreadMessages: true, metadata: null }]);
+        activityAttentionSourceValue = { ...activityAttentionSourceValue, sessionsById: {} };
+        const { ActivityBadgeRuntime } = await import('./ActivityBadgeRuntime');
+        const screen = await renderScreen(<ActivityBadgeRuntime />);
+        await flushHookEffects();
+        expect(applyExpoNativeBadgeState).toHaveBeenLastCalledWith({ count: 1, showNonNumericDot: false });
+        await act(async () => { await vi.advanceTimersByTimeAsync(60 * 60 * 1_000); });
+        expect(applyExpoNativeBadgeState).toHaveBeenLastCalledWith({ count: 0, showNonNumericDot: false });
+        await act(async () => { await vi.advanceTimersByTimeAsync(8 * 60 * 60 * 1_000); });
+        expect(applyExpoNativeBadgeState).toHaveBeenLastCalledWith({ count: 1, showNonNumericDot: false });
+        await act(async () => { screen.tree.unmount(); });
+    });
+
+    it('wakes a mounted badge when a pending request expires without a session update', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date(1_000));
+        setActivitySessions([{ id: 'session-1', seq: 0, active: true, presence: 'online',
+            pendingUserActionRequestCount: 1, pendingRequestObservedAt: 1_000, metadata: null }]);
+        const { ActivityBadgeRuntime } = await import('./ActivityBadgeRuntime');
+        const screen = await renderScreen(<ActivityBadgeRuntime />);
+        await flushHookEffects();
+        expect(applyExpoNativeBadgeState).toHaveBeenLastCalledWith({ count: 1, showNonNumericDot: false });
+        await act(async () => { await vi.advanceTimersByTimeAsync(1_000_000); });
+        expect(applyExpoNativeBadgeState).toHaveBeenLastCalledWith({ count: 0, showNonNumericDot: false });
+        await act(async () => { screen.tree.unmount(); });
     });
 
     it('applies badge counts from unread session-list renderables without hydrated sessions', async () => {
@@ -774,8 +816,7 @@ describe('ActivityBadgeRuntime', () => {
 
         const { ActivityBadgeRuntime } = await import('./ActivityBadgeRuntime');
 
-        let tree: renderer.ReactTestRenderer | null = null;
-        tree = (await renderScreen(<ActivityBadgeRuntime />)).tree;
+        const screen = await renderScreen(<ActivityBadgeRuntime />);
         await flushHookEffects();
 
         expect(applyExpoNativeBadgeState).toHaveBeenCalledTimes(1);
@@ -795,15 +836,11 @@ describe('ActivityBadgeRuntime', () => {
             },
         ]);
 
-        await act(async () => {
-            tree?.update(<ActivityBadgeRuntime />);
-        });
+        await screen.update(<ActivityBadgeRuntime />);
 
         expect(applyExpoNativeBadgeState).toHaveBeenCalledTimes(1);
 
-        await act(async () => {
-            tree?.unmount();
-        });
+        await screen.unmount();
     });
 
     it('prefers hydrated session unread state over stale renderable state from the activity source', async () => {

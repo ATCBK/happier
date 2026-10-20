@@ -1,0 +1,234 @@
+import { describe, expect, it } from 'vitest';
+import type { DocPassageRefV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
+
+import {
+  buildDocPassageMargin,
+  readDocPassageThreadQuote,
+  type DocPassageMarginMessage,
+} from './docPassageMargin';
+
+const ref = { kind: 'doc' as const, artifactId: 'doc-1', serverId: 'home-1' };
+const r1 = { headerVersion: 1, bodyVersion: 1 };
+const r2 = { headerVersion: 1, bodyVersion: 2 };
+const source1 =
+  'Check the dashboard. A replay shows two rows. Escalate to on-call.';
+
+function passage(
+  source: string,
+  quote: string,
+  revision = r1,
+): DocPassageRefV1 {
+  const start = source.indexOf(quote);
+  return { ref, revision, range: { start, end: start + quote.length }, quote };
+}
+
+let seq = 0;
+function comment(
+  discussionId: string,
+  target: DocPassageRefV1,
+  text = 'Is this right?',
+): DocPassageMarginMessage {
+  seq += 1;
+  return {
+    id: `m${seq}`,
+    discussionId,
+    seq: 1,
+    authorAccountId: 'ben',
+    createdAt: seq,
+    replyTarget: {
+      kind: 'doc_passage',
+      doc: { ref, revision: target.revision },
+    },
+    content: {
+      kind: 'doc_passage_comment',
+      passage: target,
+      content: { v: 1, parts: [{ t: 'text', text }] },
+    },
+  };
+}
+
+function proposal(
+  discussionId: string,
+  target: DocPassageRefV1,
+  after: string,
+  disposition: DocPassageMarginMessage['docEditProposalDispositionV1'],
+): DocPassageMarginMessage {
+  seq += 1;
+  return {
+    id: `m${seq}`,
+    discussionId,
+    seq: 2,
+    authorAccountId: 'agent-owner',
+    createdAt: seq,
+    replyTarget: { kind: 'message', messageId: 'root' },
+    content: {
+      kind: 'doc_edit_proposal',
+      proposal: {
+        target,
+        baseRevision: target.revision,
+        before: target.quote,
+        after,
+        reason: 'Replays changed.',
+      },
+    },
+    docEditProposalDispositionV1: disposition,
+  };
+}
+
+describe('buildDocPassageMargin', () => {
+  it('orders threads by where their passage sits and keeps an unplaceable passage, last, as changed', () => {
+    const replay = passage(source1, 'A replay shows two rows.');
+    const check = passage(source1, 'Check the dashboard.');
+    const gone = passage(source1, 'Escalate to on-call.');
+    const source2 = source1.replace(
+      'Escalate to on-call.',
+      'Escalate to payments on-call.',
+    );
+    const margin = buildDocPassageMargin({
+      source: source2,
+      revision: r2,
+      threads: [
+        { discussionId: 'd-gone', messages: [comment('d-gone', gone)] },
+        { discussionId: 'd-replay', messages: [comment('d-replay', replay)] },
+        { discussionId: 'd-check', messages: [comment('d-check', check)] },
+      ],
+    });
+    expect(
+      margin.threads.map((thread) => [
+        thread.discussionId,
+        thread.location.state,
+      ]),
+    ).toEqual([
+      ['d-check', 'relocated'],
+      ['d-replay', 'relocated'],
+      ['d-gone', 'detached'],
+    ]);
+  });
+
+  it('marks the revised text and names the acceptance only while the accepted revision is the one being read', () => {
+    const replay = passage(source1, 'A replay shows two rows.');
+    const after = 'A replay shows one row with a replayed badge.';
+    const source2 = source1.replace('A replay shows two rows.', after);
+    const accepted = {
+      state: 'accepted' as const,
+      acceptedRevision: r2,
+      decidedBy: { accountId: 'you', atMs: 500 },
+    };
+    const threads = [
+      {
+        discussionId: 'd-replay',
+        messages: [
+          comment('d-replay', replay),
+          proposal('d-replay', replay, after, accepted),
+        ],
+      },
+    ];
+
+    const current = buildDocPassageMargin({
+      source: source2,
+      revision: r2,
+      threads,
+    });
+    expect(current.threads[0]!.location).toEqual({
+      state: 'revised',
+      range: {
+        start: source2.indexOf(after),
+        end: source2.indexOf(after) + after.length,
+      },
+    });
+    expect(current.threads[0]!.proposal?.id).toBe(threads[0]!.messages[1]!.id);
+    expect(current.accepted).toEqual({
+      deciderAccountId: 'you',
+      proposerAccountId: 'agent-owner',
+      atMs: 500,
+      revision: r2,
+    });
+
+    const later = buildDocPassageMargin({
+      source: `${source2} More.`,
+      revision: { headerVersion: 1, bodyVersion: 3 },
+      threads,
+    });
+    expect(later.accepted).toBeNull();
+    expect(later.threads[0]!.location.state).toBe('detached');
+  });
+
+  it('reads the accepted edit from the proposal accepted into this revision while a later proposal stays open', () => {
+    const replay = passage(source1, 'A replay shows two rows.');
+    const after = 'A replay shows one row with a replayed badge.';
+    const source2 = source1.replace('A replay shows two rows.', after);
+    const accepted = proposal('d-replay', replay, after, {
+      state: 'accepted',
+      acceptedRevision: r2,
+      decidedBy: { accountId: 'you', atMs: 500 },
+    });
+    // A second suggestion on the same words, written against the first revision and still open.
+    const openLater = {
+      ...proposal('d-replay', replay, 'A replay shows three rows.', { state: 'open' }),
+      seq: 3,
+    };
+    const margin = buildDocPassageMargin({
+      source: source2,
+      revision: r2,
+      threads: [
+        { discussionId: 'd-replay', messages: [comment('d-replay', replay), accepted, openLater] },
+      ],
+    });
+    const thread = margin.threads[0]!;
+    expect(thread.location.state).toBe('revised');
+    expect(margin.accepted).toMatchObject({ atMs: 500, revision: r2 });
+    // The card keeps offering the open suggestion; the words as read now are the accepted ones.
+    expect(thread.proposal?.id).toBe(openLater.id);
+    expect(thread.acceptedProposal?.id).toBe(accepted.id);
+    expect(readDocPassageThreadQuote(thread)).toBe(after);
+  });
+
+  it('keeps the accepted edit on the card when a later suggestion was declined', () => {
+    const replay = passage(source1, 'A replay shows two rows.');
+    const after = 'A replay shows one row with a replayed badge.';
+    const source2 = source1.replace('A replay shows two rows.', after);
+    const accepted = proposal('d-replay', replay, after, {
+      state: 'accepted',
+      acceptedRevision: r2,
+      decidedBy: { accountId: 'you', atMs: 500 },
+    });
+    const declinedLater = {
+      ...proposal('d-replay', replay, 'A replay shows three rows.', {
+        state: 'declined',
+        decidedBy: { accountId: 'you', atMs: 600 },
+      }),
+      seq: 3,
+    };
+    const thread = buildDocPassageMargin({
+      source: source2,
+      revision: r2,
+      threads: [{ discussionId: 'd-replay', messages: [comment('d-replay', replay), accepted, declinedLater] }],
+    }).threads[0]!;
+    expect(thread.proposal?.id).toBe(accepted.id);
+  });
+
+  it('drops a thread whose root carries no readable passage', () => {
+    const margin = buildDocPassageMargin({
+      source: source1,
+      revision: r1,
+      threads: [
+        {
+          discussionId: 'd-locked',
+          messages: [
+            {
+              id: 'x',
+              discussionId: 'd-locked',
+              seq: 1,
+              authorAccountId: 'ben',
+              createdAt: 1,
+              content: null,
+              replyTarget: { kind: 'doc_passage', doc: { ref, revision: r1 } },
+            },
+          ],
+        },
+      ],
+    });
+    expect(margin.threads).toEqual([]);
+    expect(margin.unreadable).toBe(1);
+  });
+});

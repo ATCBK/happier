@@ -19,7 +19,7 @@ export const PEER_APPLICATION_ENCRYPTION_INSTALL_CONFIRMATION_V1 = 'happier.peer
 const Sha256DigestSchema = lazyZodSchema(() => z.string().check(z.regex(/^sha256:[0-9a-f]{64}$/u)));
 const SafeSequenceSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)));
 
-function canonicalBase64UrlBytesSchema(minBytes: number, maxBytes: number): z.ZodMiniString {
+function canonicalBase64UrlBytesSchema(minBytes: number, maxBytes: number): z.ZodMiniString<string> {
   return z.string().check(z.regex(/^[A-Za-z0-9_-]+$/u), z.refine((value) => {
     if (value.length % 4 === 1) return false;
     const decoded = decodeBase64(value, 'base64url');

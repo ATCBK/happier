@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useExecutePluginAction, useTabPanelActivity } from '@happier-dev/plugin-ui';
+import { useTriageDetailRequest } from '@happier-dev/triage-sources/ui';
 import type {
   TriageDetailSurfaceInputV1,
   TriageSourceFailureV1,
@@ -92,15 +93,6 @@ function dispatchFailure(status: string, code: string): TriageSourceFailureV1 {
 
 type ExecuteResult = Readonly<{ status: string; result?: unknown; code?: string }>;
 
-function useLocalRef(input: TriageDetailSurfaceInputV1) {
-  const { entryRef } = input.observation;
-  return useMemo(() => ({
-    kindId: entryRef.kindId,
-    collisionScope: entryRef.collisionScope,
-    entryId: entryRef.entryId,
-  }), [entryRef.collisionScope, entryRef.entryId, entryRef.kindId]);
-}
-
 /** The source-private route the target observed for this entry, if it has one. */
 export function useGitlabRoutingToken(input: TriageDetailSurfaceInputV1): string | null {
   return input.observation.locator.routingToken ?? null;
@@ -135,9 +127,8 @@ export function useGitlabOverview(
     localId: GITLAB_TRIAGE_DETAIL_ACTION_IDS.readOverview,
   }), []);
   const { execute } = useExecutePluginAction(action);
-  const localRef = useLocalRef(input);
+  const { instance, localRef } = useTriageDetailRequest(input);
   const routingToken = useGitlabRoutingToken(input);
-  const { instance } = input;
   const { active, activeSignal } = useTabPanelActivity();
   const activeRequest = useRef<AbortSignal | null>(null);
   const initialReadSettled = useRef(false);
@@ -422,9 +413,8 @@ export function useGitlabNotes(
     [],
   );
   const { execute } = useExecutePluginAction(action);
-  const localRef = useLocalRef(input);
+  const { instance, localRef } = useTriageDetailRequest(input);
   const routingToken = useGitlabRoutingToken(input);
-  const { instance } = input;
   const limit = localRef.kindId === 'issue'
     ? GITLAB_ISSUE_NOTES_PAGE_SIZE_V1
     : GITLAB_MERGE_REQUEST_NOTES_PAGE_SIZE_V1;
@@ -480,9 +470,8 @@ export function useGitlabActivityEvents(
     [],
   );
   const { execute } = useExecutePluginAction(action);
-  const localRef = useLocalRef(input);
+  const { instance, localRef } = useTriageDetailRequest(input);
   const routingToken = useGitlabRoutingToken(input);
-  const { instance } = input;
   const limit = localRef.kindId === 'issue'
     ? GITLAB_ISSUE_EVENTS_PAGE_SIZE_V1
     : GITLAB_MERGE_REQUEST_EVENTS_PAGE_SIZE_V1;
@@ -530,9 +519,8 @@ export function useGitlabDiscussions(
     [],
   );
   const { execute } = useExecutePluginAction(action);
-  const localRef = useLocalRef(input);
+  const { instance, localRef } = useTriageDetailRequest(input);
   const routingToken = useGitlabRoutingToken(input);
-  const { instance } = input;
 
   const readPage: PageReader<GitlabProjectedDiscussionRowV1> = useCallback(async (
     continuation,
@@ -588,9 +576,8 @@ export function useGitlabChanges(
     [],
   );
   const { execute } = useExecutePluginAction(action);
-  const localRef = useLocalRef(input);
+  const { instance, localRef } = useTriageDetailRequest(input);
   const routingToken = useGitlabRoutingToken(input);
-  const { instance } = input;
   const [diffLimitStatus, setDiffLimitStatus] = useState<'reported' | 'unknown'>('unknown');
 
   const readPage: PageReader<GitlabProjectedChangedFileRowV1> = useCallback(async (
@@ -657,9 +644,8 @@ export function useGitlabRawDiff(
     [],
   );
   const { execute } = useExecutePluginAction(action);
-  const localRef = useLocalRef(input);
+  const { instance, localRef } = useTriageDetailRequest(input);
   const routingToken = useGitlabRoutingToken(input);
-  const { instance } = input;
   const { active, activeSignal } = useTabPanelActivity();
   const [state, setState] = useState<GitlabRawDiffStateV1>({ kind: 'idle' });
 
@@ -739,9 +725,8 @@ export function useGitlabPipelines(
     [],
   );
   const { execute } = useExecutePluginAction(action);
-  const localRef = useLocalRef(input);
+  const { instance, localRef } = useTriageDetailRequest(input);
   const routingToken = useGitlabRoutingToken(input);
-  const { instance } = input;
   const [rollup, setRollup] = useState<GitlabPipelinesRollupV1>({});
 
   const readPage: PageReader<GitlabProjectedPipelineRowV1> = useCallback(async (
@@ -827,9 +812,8 @@ export function useGitlabApprovals(
   );
   const { execute } = useExecutePluginAction(action);
   const { active, activeSignal } = useTabPanelActivity();
-  const localRef = useLocalRef(input);
+  const { instance, localRef } = useTriageDetailRequest(input);
   const routingToken = useGitlabRoutingToken(input);
-  const { instance } = input;
   const [state, setState] = useState<GitlabReadStateV1<GitlabApprovalsViewV1>>({ kind: 'loading' });
   const [attempt, setAttempt] = useState(0);
 

@@ -1,14 +1,12 @@
 import * as React from 'react';
-import { storage as storageStore } from '@/sync/domains/state/storage';
-import { settingsParse } from '@/sync/domains/settings/settings';
-import { localSettingsParse } from '@/sync/domains/settings/localSettings';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import { standardCleanup } from '@/dev/testkit';
 
-const initialSettingsCatalogStorage = storageStore.getState();
-
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 import { renderScreen } from '@/dev/testkit';
 
@@ -33,12 +31,6 @@ vi.mock('expo-router', async () => {
     }).module;
 });
 
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: () => true,
-}));
-
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => importOriginal());
-
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key) => key });
@@ -62,17 +54,16 @@ vi.mock('expo-clipboard', () => ({
     setStringAsync: async () => {},
 }));
 
-vi.mock('@/components/ui/text/Text', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/components/ui/text/Text')>();
-    return {
-        ...actual,
-        Text: 'StyledText',
-    };
-});
+const account = createProviderSettingsAccountHarness();
+const { storage: storageStore } = await import('@/sync/domains/state/storage');
+const { settingsParse } = await import('@/sync/domains/settings/settings');
+const { localSettingsParse } = await import('@/sync/domains/settings/localSettings');
+const initialSettingsCatalogStorage = storageStore.getState();
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | null = null;
 
 beforeEach(async () => {
-    await loadSyncSingletonForTests();
-    installDisconnectedServerSocketBoundary();
+    browser = await installBrowserRuntimeForTests({ url: 'https://settings-sidebar.test/settings' });
+    await account.restore({ settings: { useProfiles: false } });
     storageStore.setState({
         settings: settingsParse({ useProfiles: false }),
         localSettings: localSettingsParse({ devModeEnabled: false, uiFontScale: 1 }),
@@ -81,7 +72,10 @@ beforeEach(async () => {
 
 afterEach(async () => {
     await standardCleanup();
+    await account.reset();
     storageStore.setState(initialSettingsCatalogStorage, true);
+    browser?.restore();
+    browser = null;
 });
 
 describe('SettingsSidebar real TextInput render', () => {

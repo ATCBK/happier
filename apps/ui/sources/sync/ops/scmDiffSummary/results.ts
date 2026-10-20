@@ -16,7 +16,7 @@ import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributio
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { getSessionDraftSnapshot, writeExistingSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { invokeUiScmAction, type UiScmActionExecutor } from '@/sync/ops/scm/scmActionInvocation';
-import type { z } from 'zod';
+import type { core } from 'zod/mini';
 
 export type ScmDiffSummaryResultRpc = (method: string, input: Readonly<{ cwd: string }>, options: Readonly<{ signal?: AbortSignal }>) => Promise<unknown>;
 /** Transport authority is an actual Session or Machine, never a Project's presentation scope. */
@@ -35,7 +35,7 @@ export function createScmDiffSummaryResultOperations(params: ScmDiffSummaryHost 
   actionExecutor?: UiScmActionExecutor;
 }>) {
   const current = () => !params.signal?.aborted && params.shouldContinue();
-  function invoke<T>(actionId: ActionId, input: Readonly<{ cwd: string }>, schema: z.ZodType<T>) {
+  function invoke<T>(actionId: ActionId, input: Readonly<{ cwd: string }>, schema: core.$ZodType<T>) {
     return invokeUiScmAction({ actionId, input, schema, executor: params.actionExecutor, shouldContinue: current,
       context: {
         ...(params.sessionId ? { defaultSessionId: params.sessionId, externalActionTarget: { kind: 'session' as const, sessionId: params.sessionId } }

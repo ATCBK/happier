@@ -2,7 +2,7 @@ import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import { Directory, File, Paths } from 'expo-file-system';
 import { AlphaType, BlendMode, ColorType, FilterMode, ImageFormat, MipmapMode, Skia, TileMode, type SkImage } from '@shopify/react-native-skia';
-import type { AtmosphereRgb, AtmosphereTheme, AtmosphereTransitionFrames, AtmosphereRippleOptions } from '@happier-dev/brand/atmosphere';
+import type { AtmospherePixels, AtmosphereRgb, AtmosphereTheme, AtmosphereTransitionFrames, AtmosphereRippleOptions } from '@happier-dev/brand/atmosphere';
 import { createWorkletRuntime, runOnRuntimeAsync, type WorkletRuntime } from 'react-native-worklets';
 import { createAtmosphereWorkletCore } from './backdropWorkletCore.generated';
 import { backdropRequestKey } from './backdropRenderRequest';
@@ -25,6 +25,8 @@ function backdropRuntime() {
 export function renderNativeWallpaperHaze(image: SkImage, input: Readonly<{
     width: number; height: number; x: number; y: number; dpr: number;
     layers: readonly Readonly<{ blur: number; rx: number; ry: number; solid: number }>[];
+    /** The page colour over the picture in its own ellipse (`resolveWallpaperHaze`). */
+    veil: Readonly<{ color: string; alpha: number; at: Readonly<{ x: number; y: number }>; rx: number; ry: number; solid: number }> | null;
 }>): Promise<SkImage> {
     const api = Skia, dstIn = BlendMode.DstIn, clamp = TileMode.Clamp, decal = TileMode.Decal;
     return runOnRuntimeAsync(backdropRuntime(), (source: SkImage, options: typeof input) => {
@@ -48,10 +50,53 @@ export function renderNativeWallpaperHaze(image: SkImage, input: Readonly<{
                     canvas.restore();
                 } finally { paint.dispose(); mask.dispose(); blur.dispose(); matrix.dispose(); shader.dispose(); }
             }
+            const veil = options.veil;
+            if (veil) {
+                const paint = api.Paint(), mask = api.Paint();
+                const matrix = api.Matrix([veil.rx * width, 0, veil.at.x * width, 0, veil.ry * height, veil.at.y * height, 0, 0, 1]);
+                const shader = api.Shader.MakeRadialGradient({ x: 0, y: 0 }, 1, [api.Color('#000'), api.Color('#000'), api.Color('transparent')], [0, veil.solid, 1], clamp, matrix);
+                try {
+                    canvas.saveLayer();
+                    paint.setColor(api.Color(veil.color));
+                    paint.setAlphaf(veil.alpha);
+                    canvas.drawRect(rect, paint);
+                    mask.setShader(shader); mask.setBlendMode(dstIn); canvas.drawRect(rect, mask);
+                    canvas.restore();
+                } finally { paint.dispose(); mask.dispose(); matrix.dispose(); shader.dispose(); }
+            }
             surface.flush();
             return surface.makeImageSnapshot();
         } finally { surface.dispose(); }
     }, image, input);
+}
+
+/**
+ * A rendered picture's pixels at a small size, for the atmosphere's tone: the same measurement the web reads
+ * from its canvas. The picture is smooth at that scale; reading it whole would copy megabytes per render.
+ */
+/** The longest side the tone reads at; the measurement samples a few thousand points of it. */
+export const NATIVE_TONE_SIDE = 256;
+
+export function readNativePicturePixels(image: SkImage, maxSide: number): Promise<AtmospherePixels> {
+    const api = Skia, colorType = ColorType.RGBA_8888, alphaType = AlphaType.Unpremul;
+    const linear = FilterMode.Linear, mipmap = MipmapMode.None;
+    return runOnRuntimeAsync(backdropRuntime(), (source: SkImage, side: number) => {
+        'worklet';
+        const scale = Math.min(1, side / Math.max(source.width(), source.height()));
+        const w = Math.max(1, Math.round(source.width() * scale)), h = Math.max(1, Math.round(source.height() * scale));
+        const surface = api.Surface.Make(w, h);
+        if (!surface) throw new Error('Atmosphere tone surface is unavailable');
+        try {
+            surface.getCanvas().drawImageRectOptions(source, api.XYWHRect(0, 0, source.width(), source.height()), api.XYWHRect(0, 0, w, h), linear, mipmap);
+            surface.flush();
+            const snapshot = surface.makeImageSnapshot();
+            try {
+                const bytes = snapshot.readPixels(0, 0, { width: w, height: h, colorType, alphaType });
+                if (!(bytes instanceof Uint8Array)) throw new Error('Atmosphere tone pixels are unavailable');
+                return { rgba: new Uint8ClampedArray(bytes), w, h };
+            } finally { snapshot.dispose(); }
+        } finally { surface.dispose(); }
+    }, image, maxSide);
 }
 
 /** One static ordered mask; its subsequent lattice-step travel is native-driven, with no per-frame pixels. */

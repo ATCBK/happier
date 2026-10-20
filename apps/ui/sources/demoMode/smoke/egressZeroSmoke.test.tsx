@@ -13,11 +13,19 @@ import { JourneyConfigSlot } from '@/components/onboarding/tour/config/JourneyCo
 import { stageSurfaceById } from '@/components/onboarding/tour/stage/stageSurfaces';
 import { DEMO_RICH_SESSION_ID } from '@/demoMode/world/buildDemoWorld';
 import { flushHookEffects, invokeTestInstanceHandler, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installReactDomPortalBoundaryForTests } from '@/dev/testkit/mocks/reactDom';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import type { ExpoRouterParams } from '@/dev/testkit/mocks/router';
 import { getDemoFirewallDenyLog, installDemoFirewall, resetDemoFirewallForTests, uninstallDemoFirewall } from '@/demoMode/guards/demoFirewall';
 import { clearDemoWorld, seedDemoWorld } from '@/demoMode/seed/seedDemoWorld';
+import { isDemoModeActive } from '@/demoMode/runtime/enterExitDemoMode';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { getCachedServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
+import { isServerProfilePersistenceSuspendedForDemo, listServerProfiles } from '@/sync/domains/server/serverProfiles';
 import { storage } from '@/sync/domains/state/storage';
+import { InboxSummaryProvider } from '@/hooks/inbox/useInboxSummary';
 
 const routerPushSpy = vi.hoisted(() => vi.fn());
 const routerState = vi.hoisted(() => ({
@@ -25,15 +33,9 @@ const routerState = vi.hoisted(() => ({
     params: {} as ExpoRouterParams,
 }));
 
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-    return createTokenStorageModuleMock({
-        importOriginal,
-        tokenStorage: {
-            getCredentials: vi.fn(async () => null),
-        },
-    });
-});
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -66,6 +68,14 @@ vi.mock('react-native', async () => {
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
+});
+
+// react-test-renderer has no measured DOM viewport for the shipped web recycler.
+// Keep every real row mounted while substituting only that third-party layout port.
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+    const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
+    const original = await importOriginal<typeof import('@legendapp/list/react-native')>();
+    return createCapturingLegendListMock({ original, renderItems: true }).module;
 });
 
 vi.mock('@/text', async () => {
@@ -240,17 +250,7 @@ vi.mock('react-native-view-shot', () => ({
     releaseCapture: vi.fn(),
 }));
 
-vi.mock('react-native-svg', () => ({
-    __esModule: true,
-    default: 'Svg',
-    Circle: 'Circle',
-    G: 'G',
-    Line: 'Line',
-    Path: 'Path',
-    Rect: 'Rect',
-    Svg: 'Svg',
-    SvgXml: 'SvgXml',
-}));
+vi.mock('react-native-svg', async () => await import('@/dev/testkit/mocks/reactNativeSvg'));
 
 vi.mock('@/track', () => ({
     trackFriendsSearch: vi.fn(),
@@ -263,18 +263,26 @@ vi.mock('@/utils/platform/desktopHost', async (importOriginal) => ({
     isDesktopHost: () => false,
 }));
 
+// The real app entry registers Sync before any screen uses its public handle.
+// Keep that bootstrap in the composed smoke test so attachment availability
+// reaches the real, disconnected runtime rather than an uninitialized handle.
+await loadSyncSingletonForTests();
+const { SessionView } = await import('@/components/sessions/shell/SessionView');
+
 const AppPaneProviderWrapper: React.ComponentType<React.PropsWithChildren> = ({ children }) => (
     <InjectedAuthProvider credentials={null}>
-        <AppPaneProvider>
-            <CommandPaletteProvider>{children ?? null}</CommandPaletteProvider>
-        </AppPaneProvider>
+        <InboxSummaryProvider>
+            <AppPaneProvider>
+                <CommandPaletteProvider>{children ?? null}</CommandPaletteProvider>
+            </AppPaneProvider>
+        </InboxSummaryProvider>
     </InjectedAuthProvider>
 );
 
 async function mountSeededSurface(element: React.ReactElement): Promise<Awaited<ReturnType<typeof renderScreen>>> {
-    await seedDemoWorld();
     installAuditedStaticFetchBoundary();
     installDemoFirewall();
+    await seedDemoWorld();
     return renderScreen(element, {
         wrapper: AppPaneProviderWrapper,
         flushOptions: { cycles: 8, turns: 3, frames: 1 },
@@ -284,9 +292,9 @@ async function mountSeededSurface(element: React.ReactElement): Promise<Awaited<
 async function mountSeededSurfaceFromFactory(
     createElement: () => React.ReactElement,
 ): Promise<Awaited<ReturnType<typeof renderScreen>>> {
-    await seedDemoWorld();
     installAuditedStaticFetchBoundary();
     installDemoFirewall();
+    await seedDemoWorld();
     return renderScreen(createElement(), {
         wrapper: AppPaneProviderWrapper,
         flushOptions: { cycles: 8, turns: 3, frames: 1 },
@@ -317,9 +325,15 @@ function stringifyFetchInput(input: RequestInfo | URL): string {
     return input.url;
 }
 
-function installAuditedStaticFetchBoundary(): void {
+function installAuditedStaticFetchBoundary(realHomeFeatureReads?: string[]): void {
     allowedStaticFetchAttempts = [];
     globalThis.fetch = (vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(stringifyFetchInput(input), globalThis.location.href);
+        if (realHomeFeatureReads && url.pathname === '/v1/features'
+            && !isDemoModeActive() && !isServerProfilePersistenceSuspendedForDemo()) {
+            realHomeFeatureReads.push(url.origin);
+            return Response.json(createRootLayoutFeaturesResponse());
+        }
         allowedStaticFetchAttempts = [
             ...allowedStaticFetchAttempts,
             stringifyFetchInput(input),
@@ -379,7 +393,7 @@ function createJourneyWizardSurfaceProps(): OnboardingWizardSurfaceProps {
     };
 }
 
-async function mountJourneyAt(initialBeatId: 'A2' | 'A7' | 'A14') {
+async function mountJourneyAt(initialBeatId: 'A2' | 'A7' | 'A14', realHomeFeatureReads: string[] = []) {
     const { OnboardingJourneyHost } = await import('@/components/onboarding/tour/OnboardingJourneyHost');
     const sessionsListSurface = stageSurfaceById.get('sessions-list');
     if (!sessionsListSurface) throw new Error('Missing sessions-list stage surface fixture owner.');
@@ -388,21 +402,27 @@ async function mountJourneyAt(initialBeatId: 'A2' | 'A7' | 'A14') {
         ...sessionsListSurface,
         component: React.lazy(async () => ({ default: SubscribedJourneyStageSurface })),
     });
-    installAuditedStaticFetchBoundary();
-    return renderScreen(
+    installAuditedStaticFetchBoundary(realHomeFeatureReads);
+    // The app shell already exists when the user enters the journey. Let its
+    // real Home discovery complete through HTTP before installing the Demo lifetime.
+    const screen = await renderScreen(<React.Fragment />, {
+        wrapper: AppPaneProviderWrapper,
+        flushOptions: { cycles: 12, turns: 4, frames: 2 },
+    });
+    await vi.waitFor(() => expect(getCachedServerFeaturesSnapshot()).toMatchObject({ status: 'ready' }));
+    await screen.update(
         <OnboardingJourneyHost
             surface="desktop"
             isDesktopShell
             initialBeatId={initialBeatId}
+            reducedMotion
             preAuthController={createJourneyPreAuthController()}
             wizardSurfaceProps={createJourneyWizardSurfaceProps()}
             testID="journey-host"
         />,
-        {
-            wrapper: AppPaneProviderWrapper,
-            flushOptions: { cycles: 12, turns: 4, frames: 2 },
-        },
     );
+    await vi.waitFor(() => expect(screen.findByTestId('journey-host-subscribed-stage-surface')).not.toBeNull());
+    return screen;
 }
 
 function SubscribedJourneyStageSurface(): React.ReactElement {
@@ -431,15 +451,6 @@ async function invokeJourneyAction(
     await flushHookEffects({ cycles: 8, turns: 4, frames: 2 });
 }
 
-async function expectNoEgressAfterMountAndInteraction(
-    element: React.ReactElement,
-    interactionTestId: string,
-): Promise<void> {
-    const screen = await mountSeededSurface(element);
-    await settleAndPressControl(screen, interactionTestId);
-    expectZeroFirewallEgress();
-}
-
 async function expectNoEgressAfterFactoryMountAndInteraction(
     createElement: () => React.ReactElement,
     interactionTestId: string,
@@ -460,7 +471,16 @@ describe('demo mode egress-zero smoke', () => {
     let originalCancelAnimationFrame: typeof globalThis.cancelAnimationFrame;
     let originalFetch: typeof globalThis.fetch;
 
-    beforeEach(() => {
+    let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>>;
+    let portals: ReturnType<typeof installReactDomPortalBoundaryForTests>;
+    beforeEach(async () => {
+        // This fixture is a browser, not a desktop/native host. NODE_ENV=test
+        // otherwise selects the deterministic development task bridge, whose
+        // simulated local-daemon tasks do not exist in this browser runtime.
+        vi.stubEnv('EXPO_PUBLIC_SYSTEM_TASKS_RUNNER_MODE', 'unavailable');
+        browser = await installBrowserRuntimeForTests({ url: getActiveServerSnapshot().serverUrl });
+        portals = installReactDomPortalBoundaryForTests();
+        resetServerFeaturesClientForTests();
         routerPushSpy.mockReset();
         routerState.pathname = '/';
         routerState.params = {};
@@ -501,10 +521,13 @@ describe('demo mode egress-zero smoke', () => {
         } catch (error) {
             clearError = error;
         } finally {
+            portals?.restore();
+            browser?.restore();
             globalThis.requestAnimationFrame = originalRequestAnimationFrame;
             globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
             allowedStaticFetchAttempts = [];
             vi.restoreAllMocks();
+            vi.unstubAllEnvs();
         }
         if (clearError) throw clearError;
     });
@@ -549,10 +572,8 @@ describe('demo mode egress-zero smoke', () => {
 
     it('mounts the seeded rich SessionView without network egress', async () => {
         routerState.pathname = `/session/${DEMO_RICH_SESSION_ID}`;
-        const { SessionView } = await import('@/components/sessions/shell/SessionView');
-
-        await expectNoEgressAfterMountAndInteraction(
-            <SessionView id={DEMO_RICH_SESSION_ID} surfaceFocusedOverride surfaceVisibleOverride routeAnchorOverride />,
+        await expectNoEgressAfterFactoryMountAndInteraction(
+            () => <SessionView id={DEMO_RICH_SESSION_ID} routeServerId={getActiveServerSnapshot().serverId} surfaceFocusedOverride surfaceVisibleOverride routeAnchorOverride />,
             'session-header-action-menu-trigger',
         );
     });
@@ -582,8 +603,9 @@ describe('demo mode egress-zero smoke', () => {
         // Opening the seeded machine (a navigation) is the interaction; the "+" menu opens a DOM popover.
         let machineRowTestId = '';
         const { DEMO_MACHINE_ID } = await import('@/demoMode/world/constants');
+        const { machineCollectionRowKey } = await import('@/components/settings/machines/collection/machineCollectionModel');
         const screen = await mountSeededSurfaceFromFactory(() => {
-            machineRowTestId = `settings.machines.row.${getActiveServerSnapshot().serverId}.${DEMO_MACHINE_ID}`;
+            machineRowTestId = `machines.index.row.${machineCollectionRowKey({ serverId: getActiveServerSnapshot().serverId, machineId: DEMO_MACHINE_ID })}`;
             return <MachinesSettingsView />;
         });
         await settleAndPressControl(screen, machineRowTestId);
@@ -623,9 +645,8 @@ describe('demo mode egress-zero smoke', () => {
     it('mounts the review dream surface content (A8) without network egress', async () => {
         const { DEMO_REVIEW_SESSION_ID } = await import('@/demoMode/world/constants');
         routerState.pathname = `/session/${DEMO_REVIEW_SESSION_ID}`;
-        const { SessionView } = await import('@/components/sessions/shell/SessionView');
-        const screen = await mountSeededSurface(
-            <SessionView id={DEMO_REVIEW_SESSION_ID} surfaceFocusedOverride surfaceVisibleOverride routeAnchorOverride />,
+        const screen = await mountSeededSurfaceFromFactory(
+            () => <SessionView id={DEMO_REVIEW_SESSION_ID} routeServerId={getActiveServerSnapshot().serverId} surfaceFocusedOverride surfaceVisibleOverride routeAnchorOverride />,
         );
         await settleAndPressControl(screen, 'session-header-action-menu-trigger');
         expectZeroFirewallEgress();
@@ -644,7 +665,9 @@ describe('demo mode egress-zero smoke', () => {
 
     it('unmounts the real subscribed DemoStage before clearing on the A14 dream-to-setup boundary', async () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-        const screen = await mountJourneyAt('A14');
+        const realHomeFeatureReads: string[] = [];
+        const beforeHomeUrls = listServerProfiles().map((profile) => profile.serverUrl).sort();
+        const screen = await mountJourneyAt('A14', realHomeFeatureReads);
 
         expect(screen.findByTestId('demo-stage')).not.toBeNull();
         expect(screen.findByTestId('journey-host-subscribed-stage-surface')).not.toBeNull();
@@ -659,6 +682,10 @@ describe('demo mode egress-zero smoke', () => {
         expect(screen.findByTestId('journey-host-desktop-current-beat:S1')).not.toBeNull();
         expect(screen.findByTestId('demo-stage')).toBeNull();
         expectZeroFirewallEgress();
+        expect(isDemoModeActive()).toBe(false);
+        expect(isServerProfilePersistenceSuspendedForDemo()).toBe(false);
+        expect(listServerProfiles().map((profile) => profile.serverUrl).sort()).toEqual(beforeHomeUrls);
+        expect(realHomeFeatureReads.length).toBeGreaterThan(0);
         expect(warnSpy.mock.calls.every(([message]) => (
             message === '[DemoStage] Missing spotlight target "session-list-attention-group"; framing full surface.'
             || (typeof message === 'string' && message.includes('[DemoMode]'))

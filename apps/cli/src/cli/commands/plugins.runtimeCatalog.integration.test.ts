@@ -14,6 +14,7 @@ import fastify from 'fastify';
 import { PUBLIC_TOOLCHAIN_SCAFFOLD_BINDINGS_V1 } from '@happier-dev/plugin-sdk/ui/build';
 import { createActionExecutor, createMarketplaceNpmDiscoveryProjectionV1, DEFAULT_CURATED_MARKETPLACE_SOURCE_URL, type MarketplaceIndexSourceSnapshotV1 } from '@happier-dev/protocol';
 import { createPluginCompatibilityProjectionV1 } from '@happier-dev/protocol/plugins/availability/v1';
+import { PluginManifestV2Schema } from '@happier-dev/protocol/plugins/manifest/v2';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { configuration, reloadConfiguration } from '@/configuration';
@@ -354,6 +355,7 @@ async function seedExactCuratedMarketplaceListing(params: Readonly<{
   const manifestDigest = `sha256:${'a'.repeat(64)}`;
   const fetchedAtMs = Date.now();
   const snapshot: MarketplaceIndexSourceSnapshotV1 = {
+    picks: [],
     source: { id: source.id, title: source.title, kind: 'curated' as const, sourceUrl: source.sourceUrl },
     freshness: {
       state: params.freshnessState ?? 'fresh',
@@ -412,9 +414,9 @@ function installMarketplaceHttpFixture(snapshot: MarketplaceIndexSourceSnapshotV
     const entry = snapshot.entries[0];
     if (!entry) throw new Error('Missing published community npm fixture');
     const compatibility = createPluginCompatibilityProjectionV1({
-      manifest: { schemaVersion: 2, id: entry.pluginId, version: entry.distribution.version,
+      manifest: PluginManifestV2Schema.parse({ schemaVersion: 2, id: entry.pluginId, version: entry.distribution.version,
         displayName: entry.display.title, engines: { happier: '>=0.0.0' }, runtime: { apiVersion: 1 },
-        entrypoints: { daemon: './daemon.mjs' }, hostAccess: { required: [], optional: [] }, contributes: {} },
+        entrypoints: { daemon: './daemon.mjs' }, hostAccess: { required: [], optional: [] }, contributes: {} }),
       uiArtifacts: { version: 2, entries: [] },
     });
     const metadata = { name: entry.distribution.packageName, version: entry.distribution.version,
@@ -1619,6 +1621,19 @@ describe('handlePluginsCommand', () => {
 
       expect(runPluginAuthorToolchain).not.toHaveBeenCalled();
       expect(output.text()).toContain('happier plugins test [path] [--packed] [--with-plugin <root-or-archive>]… [--sdk-registry <origin>] [--json]');
+    } finally {
+      output.restore();
+    }
+  });
+
+  it.each([['dev', '--help'], ['dev', '.', '-h']])('renders development help without registering a source: %j', async (...args) => {
+    const output = captureConsoleText();
+    try {
+      await handlePluginsCommand(args, {
+        // Help must not reach the daemon lifecycle/process boundary.
+        ensureDaemon: async () => { throw new Error('Help attempted to reach the daemon'); },
+      });
+      expect(output.text()).toContain('plugins dev');
     } finally {
       output.restore();
     }

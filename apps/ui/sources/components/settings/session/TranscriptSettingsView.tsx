@@ -37,9 +37,8 @@ import { SettingRow, SettingAnchor, SettingSection } from '@/components/settings
 import { TRANSCRIPT_SETTINGS } from '@/components/settings/session/transcriptSettings';
 import { ThinkingDisplayPreview, ToolStylePreview, TranscriptLayoutPreview } from '@/components/settings/session/SessionSettingPreviews';
 import {
-    resolveThinkingDisplayChoice, resolveThinkingDisplayChoiceDelta, type ThinkingDisplayChoice,
+    resolveThinkingDisplayChoice, type ThinkingDisplayChoice,
 } from '@/components/settings/session/thinkingDisplayChoice';
-import { useApplySettings } from '@/sync/store/settingsWriters';
 
 type TranscriptGroupingMode = 'linear' | 'turns';
 type ToolCallsGroupStrategy = 'consecutive_tools' | 'all_tools_in_turn';
@@ -80,7 +79,6 @@ export const TranscriptSettingsView = React.memo(function TranscriptSettingsView
 
     const [sessionThinkingDisplayMode] = useSettingMutable('sessionThinkingDisplayMode');
     const [sessionThinkingInlinePresentation] = useSettingMutable('sessionThinkingInlinePresentation');
-    const applySettings = useApplySettings();
     const [sessionThinkingInlineChrome, setSessionThinkingInlineChrome] = useSettingMutable('sessionThinkingInlineChrome');
 
     const [toolViewTimelineChromeMode, setToolViewTimelineChromeMode] = useSettingMutable('toolViewTimelineChromeMode');
@@ -200,7 +198,7 @@ export const TranscriptSettingsView = React.memo(function TranscriptSettingsView
 
     const normalizedThinkingSelectedId = resolveThinkingDisplayChoice({ sessionThinkingDisplayMode, sessionThinkingInlinePresentation });
     // One write for the whole choice: the two stored fields never land in different revisions.
-    const selectThinkingDisplay = (option: ThinkingDisplayChoice) => applySettings(resolveThinkingDisplayChoiceDelta(option));
+    const selectThinkingDisplay = (option: ThinkingDisplayChoice) => { void setSetting(TRANSCRIPT_SETTINGS.settings.displayMode, option); };
 
     const thinkingDisplayOptions: Array<{ id: ThinkingDisplayChoice; title: string; subtitle: string }> = [
         { id: 'inline_summary', title: t('settingsSessionPages.transcript.thinkingSummary'), subtitle: t('settingsSession.thinking.displayMode.inlineSummarySubtitle') },

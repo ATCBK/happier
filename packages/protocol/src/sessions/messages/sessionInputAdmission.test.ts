@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { SessionMessageProvenanceV1Schema as publicSessionMessageProvenanceV1Schema } from '../general.js';
 import { getActionSpec } from '../../actions/actionSpecs.js';
 import { MAX_COMPOSER_ATTACHMENT_INSTANCES_V1 } from '../../runtime/input/composerAttachmentV1.js';
+import { RawIngressStructuredInputV1Schema } from '../../runtime/input/structuredInputV1.js';
+import { deriveSessionMutationEqualityTagV1, SESSION_INPUT_EQUALITY_HKDF_LABEL_V1 } from '../mutations/sessionMutationEqualityV1.js';
 import * as sessionInputAdmission from './sessionInputAdmission.js';
 import { SessionMessageMetaSchema } from './sessionMessageMeta.js';
 import {
@@ -14,6 +16,99 @@ import {
 const protocol = { ...sessionInputAdmission, SessionMessageMetaSchema };
 
 describe('session input admission metadata', () => {
+  it('retains a Workflow-selected Discussion cutoff only with the exact Machine receipt', () => {
+    const workflow = { purpose: 'invocation', runId: 'run', invocationRecordId: 'invocation' } as const;
+    const discussionAddressing = { discussionId: 'discussion', messageId: 'question', throughSeq: 2, participantSessionId: 'receiver' };
+    const request = protocol.SessionInputRequestV2Schema.parse({ v: 2, producer: 'workflow', caller: { kind: 'host' }, workflow,
+      permission: {}, replyIntent: { mode: 'wait' }, discussionAddressing });
+    const admittedTarget = { homeId: 'home', accountId: 'owner', sessionId: 'receiver', machineId: 'machine', installationId: 'installation' };
+    const receipt = { v: 1, issuer: 'authenticatedMachine', admittedTarget, discussionAddressing };
+    expect(protocol.settleSessionInputRequestV2({ request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt: receipt }))
+      .toMatchObject({ workflow, discussionAddressing, replyIntent: { mode: 'wait' } });
+    expect(() => protocol.settleSessionInputRequestV2({ request, currentSessionPermissionCeiling: 'default',
+      inputAdmissionReceipt: { ...receipt, discussionAddressing: { ...discussionAddressing, throughSeq: 3 } } })).toThrow();
+    expect(() => protocol.settleSessionInputRequestV2({ request, currentSessionPermissionCeiling: 'default',
+      inputAdmissionReceipt: { ...receipt, admittedTarget: { ...admittedTarget, sessionId: 'other' } } })).toThrow();
+    expect(protocol.SessionInputRequestV2Schema.safeParse({ ...request, replyIntent: undefined }).success).toBe(false);
+    expect(protocol.deriveWorkflowSessionInputLocalIdV2(request.workflow)).toBe(protocol.deriveWorkflowSessionInputLocalIdV2(workflow));
+  });
+  it('retains Workflow reply intent through protected V2 settlement without changing invocation identity', () => {
+    const workflow = { purpose: 'invocation', runId: 'run', invocationRecordId: 'invocation' } as const;
+    const request = { v: 2, producer: 'workflow', caller: { kind: 'host' }, workflow, permission: {},
+      replyIntent: { mode: 'wait' } } as const;
+    const parsed = protocol.SessionInputRequestV2Schema.parse(request);
+    const authority = protocol.settleSessionInputRequestV2({ request: parsed,
+      currentSessionPermissionCeiling: 'default', inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine' } });
+    expect(authority).toMatchObject({ v: 2, producer: 'workflow', workflow, replyIntent: { mode: 'wait' } });
+    expect(protocol.deriveWorkflowSessionInputLocalIdV2(authority.workflow)).toBe(protocol.deriveWorkflowSessionInputLocalIdV2(workflow));
+    expect(protocol.SessionInputRequestV2Schema.safeParse({ ...request, replyIntent: { mode: 'return' } }).success).toBe(false);
+    expect(protocol.SessionInputRequestV2Schema.safeParse({ ...request, replyIntent: { mode: 'return', humanOrigin: { sessionId: 'human' } } }).success).toBe(false);
+    expect(protocol.SessionInputRequestV2Schema.safeParse({ ...request, replyIntent: { mode: 'return' },
+      sourceSession: { sourceSessionId: 'source', sourceTurnId: 'turn', via: 'action' } }).success).toBe(true);
+  });
+  it('retains a host-stamped answering Account without admitting a caller-authored person answerer', () => {
+    const request = protocol.SessionInputRequestV1Schema.parse({ v: 1, producer: 'sessionAction', caller: { kind: 'host' }, permission: {},
+      returnedAnswer: { requestSessionId: 'worker', requestLocalId: 'question', outcome: 'answer', delivery: 'wake',
+        answeredBy: { v: 1, kind: 'happierApp', actor: { kind: 'person', accountId: 'bob' } } } });
+    expect(request.returnedAnswer?.answeredBy).toMatchObject({ actor: { kind: 'person', accountId: 'bob' } });
+    expect(() => protocol.assertSessionInputAdmissionReceiptForRequestV1({ request,
+      inputAdmissionReceipt: { v: 1, issuer: 'authenticatedAccount', actorAccountId: 'eve', sessionRelationship: 'owner' } })).toThrow();
+    expect(protocol.readSessionInputSenderSessionIdV1(request)).toBeUndefined();
+  });
+  it('retains a human-origin return destination without manufacturing an agent turn', () => {
+    const request = { v: 1, producer: 'happierApp', caller: { kind: 'host' }, permission: {},
+      replyIntent: { mode: 'return', humanOrigin: { sessionId: 'composer-session' } } };
+    expect(protocol.SessionInputRequestV1Schema.parse(request)).toEqual(request);
+    expect(protocol.SessionInputRequestV1Schema.safeParse({ ...request,
+      sourceSession: { sourceSessionId: 'agent', sourceTurnId: 'turn', via: 'action' } }).success).toBe(false);
+    expect(protocol.SessionInputRequestV1Schema.safeParse({ ...request, producer: 'sessionAction' }).success).toBe(false);
+    expect(protocol.SessionInputRequestV1Schema.safeParse({ ...request,
+      replyIntent: { ...request.replyIntent, mode: 'wait' } }).success).toBe(false);
+    expect(protocol.requiresAuthenticatedMachineAdmissionForSessionInputV1(protocol.SessionInputRequestV1Schema.parse(request))).toBe(false);
+  });
+  it('keeps the Discussion question cutoff in protected input without inventing human causal Session identity', () => {
+    const request = { v: 1, producer: 'sessionAction', caller: { kind: 'host' }, permission: {}, replyIntent: { mode: 'return' },
+      discussionAddressing: { discussionId: 'discussion', messageId: 'question', throughSeq: 2, participantSessionId: 'receiver' } };
+    expect(protocol.SessionInputRequestV1Schema.safeParse(request).success).toBe(true);
+    expect(protocol.SessionInputRequestV1Schema.safeParse({ ...request,
+      discussionAddressing: { ...request.discussionAddressing, throughSeq: 0 } }).success).toBe(false);
+    expect(protocol.SessionInputRequestV1Schema.safeParse({ ...request, returnedAnswer: {
+      requestSessionId: 'source', requestLocalId: 'input', outcome: 'answer', delivery: 'wake' } }).success).toBe(false);
+    const target = { homeId: 'home', accountId: 'owner', sessionId: 'receiver', machineId: 'machine', installationId: 'installation' };
+    const receipt = { v: 1, issuer: 'authenticatedMachine', admittedTarget: target, discussionAddressing: request.discussionAddressing };
+    expect(() => protocol.assertSessionInputAdmissionReceiptForRequestV1({ request: protocol.SessionInputRequestV1Schema.parse(request), inputAdmissionReceipt: receipt })).not.toThrow();
+    expect(() => protocol.assertSessionInputAdmissionReceiptForRequestV1({ request: protocol.SessionInputRequestV1Schema.parse(request),
+      inputAdmissionReceipt: { ...receipt, discussionAddressing: { ...request.discussionAddressing, throughSeq: 3 } } })).toThrow();
+    expect(() => protocol.assertSessionInputAdmissionReceiptForRequestV1({ request: protocol.SessionInputRequestV1Schema.parse(request),
+      inputAdmissionReceipt: { ...receipt, admittedTarget: { ...target, sessionId: 'other' } } })).toThrow();
+  });
+  it('distinguishes the protected returned sender from descriptive answer attribution', () => {
+    const request = protocol.SessionInputRequestV1Schema.parse({ v: 1, producer: 'sessionAction', permission: {},
+      returnedAnswer: { requestSessionId: 'original', requestLocalId: 'question', outcome: 'answer', delivery: 'wake',
+        senderSessionId: 'actual-manager',
+        answeredBy: { v: 1, kind: 'happierSession', sourceSessionId: 'display-manager', via: 'action' } } });
+    expect(protocol.readSessionInputSenderSessionIdV1(request)).toBe('actual-manager');
+    expect(protocol.readSessionInputSenderSessionIdV1({ ...request,
+      returnedAnswer: { ...request.returnedAnswer!, senderSessionId: undefined } })).toBeUndefined();
+    const causal = { sourceSessionId: 'causal-session', sourceTurnId: 'turn', via: 'action' };
+    expect(protocol.SessionInputRequestV1Schema.safeParse({ ...request, sourceSession: causal }).success).toBe(false);
+    expect(protocol.SessionInputRequestV1Schema.safeParse({ ...request,
+      sourceSession: { ...causal, sourceSessionId: 'actual-manager' } }).success).toBe(true);
+  });
+  it('retains protected reply intent and information-only returned answer correlation', () => {
+    const request = { v: 1, producer: 'sessionAction', caller: { kind: 'host' }, permission: {},
+      sourceSession: { sourceSessionId: 'source', sourceTurnId: 'source-turn', via: 'action' },
+      replyIntent: { mode: 'return' } };
+    expect(protocol.SessionInputRequestV1Schema.parse(request)).toEqual(request);
+    expect(protocol.SessionInputRequestV1Schema.safeParse({ ...request, sourceSession: undefined }).success).toBe(false);
+    const returnedAnswer = { requestSessionId: 'original', requestLocalId: 'question', outcome: 'answer', delivery: 'next_turn',
+      answeredBy: { v: 1, kind: 'happierSession', sourceSessionId: 'manager', via: 'action' } };
+    const returned = { ...request, replyIntent: undefined, returnedAnswer };
+    expect(protocol.SessionInputRequestV1Schema.parse(returned)).toEqual(returned);
+    expect(protocol.SessionInputRequestV1Schema.safeParse({ ...request, returnedAnswer }).success).toBe(false);
+    expect(protocol.SessionInputRequestV1Schema.safeParse({ ...returned, returnedAnswer: { ...returnedAnswer, resetCheckIn: true } }).success).toBe(false);
+    expect(protocol.requiresAuthenticatedMachineAdmissionForSessionInputV1(protocol.SessionInputRequestV1Schema.parse(returned))).toBe(true);
+  });
   it('preserves a strict server-admitted exact Machine target without admitting content or credentials', () => {
     const target = { homeId: 'home', accountId: 'requester', sessionId: 'session', machineId: 'machine', installationId: 'installation' };
     const receipt = { v: 1, issuer: 'authenticatedAccount', actorAccountId: 'requester', sessionRelationship: 'owner', admittedTarget: target };
@@ -353,11 +448,80 @@ describe('session input admission metadata', () => {
     });
 
     expect(left).toBe(right);
+    expect(left).toBe('{"requestEnvelope":{"content":{"t":"plain","v":{"alpha":1,"beta":2}},"v":1},"requestedAction":{"kind":"enqueue","v":1},"v":1}');
     expect(changedAction).not.toBe(left);
     expect(() => protocol.serializeSessionInputRequestEqualityIntentV1({
       requestEnvelope: { invalid: undefined },
       requestedAction: { v: 1, kind: 'enqueue' },
     })).toThrow('canonical JSON');
+  });
+
+  it.each(['plain', 'encrypted'] as const)('rejoins fresh staged media transport handles without changing %s input intent', mode => {
+    const structuredInput = RawIngressStructuredInputV1Schema.parse({ v: 1, composerAttachments: [{
+      v: 1, instanceId: 'attachment-instance', attachment: { pluginId: 'acme.media', localId: 'image' },
+      key: 'diagram', value: { caption: 'Architecture' }, presentation: { label: 'Diagram', typeLabel: 'Image' },
+      content: { kind: 'stagedMedia', handle: { v: 1, id: 'first_stage',
+        executionTarget: { serverId: 'home', machineId: 'machine' }, owner: { pluginId: 'acme.media', localId: 'image' },
+        mediaKind: 'image', mimeType: 'image/png', name: 'diagram.png', sizeBytes: 42, sha256: 'a'.repeat(64),
+      } },
+    }] });
+    const record = { role: 'user', content: { type: 'text', text: 'Review the diagram' }, meta: {
+      happierStructuredInputV1: structuredInput,
+      happierInputRequestV1: { v: 1, producer: 'happierApp', permission: {},
+        replyIntent: { mode: 'return', humanOrigin: { sessionId: 'source' } } },
+    } };
+    const serialize = (candidate: unknown, requestedAction: Parameters<typeof protocol.serializeSessionInputRequestEqualityIntentV1>[0]['requestedAction'] = { v: 1, kind: 'enqueue' }) => {
+      const canonicalIntent = protocol.serializeSessionInputRequestEqualityIntentV1({ requestEnvelope: mode === 'plain'
+        ? { t: 'plain', v: candidate }
+        : { v: 1, kind: 'sessionInputRequest', localId: 'original-input', content: { t: 'plain', v: candidate } },
+        requestedAction });
+      return mode === 'plain' ? canonicalIntent : deriveSessionMutationEqualityTagV1({
+        keyMaterial: new Uint8Array(32).fill(7), sessionId: 'receiver', purpose: SESSION_INPUT_EQUALITY_HKDF_LABEL_V1, canonicalIntent,
+      });
+    };
+    const retry = structuredClone(record);
+    retry.meta.happierStructuredInputV1.composerAttachments![0]!.content!.handle.id = 'fresh_stage';
+    expect(serialize(retry)).toBe(serialize(record));
+
+    const changedDigest = structuredClone(retry);
+    changedDigest.meta.happierStructuredInputV1.composerAttachments![0]!.content!.handle.sha256 = 'b'.repeat(64);
+    expect(serialize(changedDigest)).not.toBe(serialize(record));
+    const changedValue = structuredClone(retry);
+    changedValue.meta.happierStructuredInputV1.composerAttachments![0]!.value = { caption: 'Different instructions' };
+    expect(serialize(changedValue)).not.toBe(serialize(record));
+    const changedReturn = structuredClone(retry);
+    changedReturn.meta.happierInputRequestV1.replyIntent.humanOrigin.sessionId = 'another-source';
+    expect(serialize(changedReturn)).not.toBe(serialize(record));
+    expect(serialize(retry, { v: 1, kind: 'send_now' })).not.toBe(serialize(record));
+
+    const selected = retry.meta.happierStructuredInputV1.composerAttachments![0]!;
+    const handle = selected.content!.handle;
+    for (const changedAttachment of [
+      { ...selected, instanceId: 'different-instance' },
+      { ...selected, presentation: { ...selected.presentation, label: 'Different diagram' } },
+      { ...selected, content: { ...selected.content!, handle: { ...handle, executionTarget: { ...handle.executionTarget, machineId: 'another-machine' } } } },
+      { ...selected, content: { ...selected.content!, handle: { ...handle, owner: { ...handle.owner, localId: 'another-definition' } } } },
+      { ...selected, content: { ...selected.content!, handle: { ...handle, name: 'another.png' } } },
+      { ...selected, content: { ...selected.content!, handle: { ...handle, sizeBytes: 43 } } },
+    ]) {
+      expect(serialize({ ...retry, meta: { ...retry.meta, happierStructuredInputV1: {
+        ...retry.meta.happierStructuredInputV1, composerAttachments: [changedAttachment],
+      } } })).not.toBe(serialize(record));
+    }
+    const { id: _transportId, ...missingIdHandle } = handle;
+    expect(serialize({ ...retry, meta: { ...retry.meta, happierStructuredInputV1: {
+      ...retry.meta.happierStructuredInputV1, composerAttachments: [{ ...selected,
+        content: { kind: 'stagedMedia', handle: missingIdHandle },
+      }],
+    } } })).not.toBe(serialize(record));
+    expect(serialize({ ...retry, meta: withParticipantRecipientV1(retry.meta, { kind: 'execution_run', runId: 'another-run' }) }))
+      .not.toBe(serialize(record));
+    expect(serialize({ ...retry, meta: { ...retry.meta, happierInputRequestV1: {
+      ...retry.meta.happierInputRequestV1, permission: { requestedPermissionCeiling: 'read-only' },
+    } } })).not.toBe(serialize(record));
+
+    // A metadata lookalike is ordinary authored JSON, never a second carrier.
+    expect(serialize({ custom: record })).not.toBe(serialize({ custom: retry }));
   });
 
   it('accepts one bounded plugin Session input request and rejects caller-owned authority', () => {

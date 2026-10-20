@@ -12,6 +12,7 @@ import { captureActiveServerAccountScopeLifetime, type ActiveServerAccountScopeL
 import type { CustomProviderTemplateV1 } from '@happier-dev/protocol/providers/connections/customTemplateV1';
 import type { ProviderConnectionRefreshScope } from './useProviderConnections';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 type ProviderConnectionMutationResult = Awaited<ReturnType<typeof MutateProviderConnection>> | null;
 type ProviderConnectionExecutionTarget = Readonly<{ machineId: string; serverId: string }>;
@@ -29,11 +30,9 @@ type PendingMutationState = Readonly<{
     countByKey: ReadonlyMap<string, number>;
 }>;
 
-const DECLINED_APPROVAL_CODES: ReadonlySet<string> = new Set(['approval_rejected', 'approval_canceled']);
-
 function isDeclinedApproval(caught: unknown): boolean {
     const code = typeof caught === 'object' && caught !== null ? (caught as { code?: unknown }).code : undefined;
-    return typeof code === 'string' && DECLINED_APPROVAL_CODES.has(code);
+    return isActionApprovalDeclinedErrorCode(code);
 }
 
 /**
@@ -56,6 +55,8 @@ export function useProviderConnectionMutation(input: Readonly<{
         error: ProviderErrorV1;
         retry?: () => Promise<void>;
         machineRevision?: number;
+        /** The control (its pending key) whose write failed, so its page can show the failure beside it. */
+        key?: string;
     }> | null>(null);
     const activeScope = React.useRef<ProviderConnectionMutationScope>({
         resolveTarget: input.resolveTarget,
@@ -72,6 +73,9 @@ export function useProviderConnectionMutation(input: Readonly<{
     }));
     const inFlightByRequestKey = React.useRef(new Map<string, Readonly<{
         promise: Promise<ProviderConnectionMutationResult> | null;
+        scope: ProviderConnectionMutationScope;
+        machineRevision: number;
+        controller: AbortController | null;
     }>>());
     if (activeScope.current.accountLifetime !== accountLifetime
         || activeScope.current.serverId !== capturedServerId) {
@@ -103,6 +107,13 @@ export function useProviderConnectionMutation(input: Readonly<{
     const boundScope = activeScope.current;
     const boundMachineRevision = boundScope.machineRevision;
     const boundResolveTarget = input.resolveTarget;
+    React.useEffect(() => {
+        for (const operation of inFlightByRequestKey.current.values()) {
+            if (operation.scope !== boundScope || operation.machineRevision !== boundMachineRevision) {
+                operation.controller?.abort();
+            }
+        }
+    }, [boundMachineRevision, boundScope]);
     React.useEffect(() => {
         const scope = activeScope.current;
         setPending((current) => current.scope === scope
@@ -151,6 +162,7 @@ export function useProviderConnectionMutation(input: Readonly<{
                         : {}),
                 });
                 setFailure({
+                    key,
                     error: nextError,
                     ...providerRetryRecoveryForError(nextError, async () => {
                         await run(request, key);
@@ -170,7 +182,13 @@ export function useProviderConnectionMutation(input: Readonly<{
             ...('connectionId' in parsedRequest ? { connectionId: parsedRequest.connectionId } : {}),
         };
         const failureScope = requiresMachine ? { machineRevision: boundMachineRevision } : {};
-        const operation: { promise: Promise<ProviderConnectionMutationResult> | null } = { promise: null };
+        const operation = {
+            promise: null as Promise<ProviderConnectionMutationResult> | null,
+            scope,
+            machineRevision: boundMachineRevision,
+            // Account configuration edits retain their original authority as machine selection moves.
+            controller: requiresMachine ? new AbortController() : null,
+        };
         inFlightByRequestKey.current.set(requestKey, operation);
         operation.promise = (async () => {
             updatePending(scope, pendingKey, 1);
@@ -186,12 +204,13 @@ export function useProviderConnectionMutation(input: Readonly<{
                     // even when the selection has already moved on: a silently
                     // dropped destructive action is indistinguishable from one
                     // that succeeded.
-                    setFailure({ error: createProviderErrorV1('provider_authorization_changed', errorContext) });
+                    setFailure({ key, error: createProviderErrorV1('provider_authorization_changed', errorContext) });
                     return null;
                 }
                 let result: Awaited<ReturnType<typeof mutateProviderConnection>>;
                 try {
-                    result = await scope.mutate({ serverId: target?.serverId ?? scope.serverId, request: parsedRequest });
+                    result = await scope.mutate({ serverId: target?.serverId ?? scope.serverId, request: parsedRequest },
+                        operation.controller ? { signal: operation.controller.signal } : undefined);
                 } catch (caught) {
                     if (!isCurrentScope()) return null;
                     // A rejected or canceled approval is the person's own decision: nothing ran, nothing failed.
@@ -208,6 +227,7 @@ export function useProviderConnectionMutation(input: Readonly<{
                     }
                     setFailure({
                         ...failureScope,
+                        key,
                         error: nextError,
                         ...providerRetryRecoveryForError(nextError, async () => {
                             await run(parsedRequest, key);
@@ -219,6 +239,7 @@ export function useProviderConnectionMutation(input: Readonly<{
                 if (result.status === 'error') {
                     setFailure({
                         ...failureScope,
+                        key,
                         error: result.error,
                         ...providerRetryRecoveryForError(result.error, async () => {
                             await run(parsedRequest, key);
@@ -232,7 +253,7 @@ export function useProviderConnectionMutation(input: Readonly<{
                     onError: caught => {
                         if (!isCurrentScope()) return;
                         const refreshError = providerErrorFromRpcFailure(caught, errorContext);
-                        setFailure({ ...failureScope, error: refreshError, retry: () => scope.refresh(requiresMachine ? 'machine' : 'account') });
+                        setFailure({ ...failureScope, key, error: refreshError, retry: () => scope.refresh(requiresMachine ? 'machine' : 'account') });
                     },
                 });
                 return result;
@@ -266,6 +287,8 @@ export function useProviderConnectionMutation(input: Readonly<{
         /** The approval a write is waiting for, while it waits (its page can be reopened). */
         pendingApproval,
         error: visibleFailure?.error ?? null,
+        /** The pending key of the control whose write failed (`enable:account`, `machine:<id>`, …). */
+        errorKey: visibleFailure?.key ?? null,
         retry: visibleFailure?.retry,
         clearError,
     };

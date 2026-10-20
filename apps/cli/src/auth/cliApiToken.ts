@@ -40,7 +40,7 @@ function validateApiToken(raw: unknown, source: '--api-token' | typeof CLI_API_T
 }
 
 function getEnvironmentValueCaseInsensitive(
-  environment: Readonly<NodeJS.ProcessEnv>,
+  environment: Readonly<Record<string, string | undefined>>,
   name: string,
 ): string | undefined {
   const expected = name.toUpperCase();
@@ -56,7 +56,7 @@ function getEnvironmentValueCaseInsensitive(
  * one-shot handoff below.
  */
 export function stripCliApiTokenEnvironment(
-  environment: Readonly<NodeJS.ProcessEnv>,
+  environment: Readonly<Record<string, string | undefined>>,
 ): Record<string, string> {
   const stripped: Record<string, string> = {};
   for (const [key, value] of Object.entries(environment)) {

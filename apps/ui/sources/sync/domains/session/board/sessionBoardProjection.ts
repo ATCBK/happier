@@ -85,6 +85,15 @@ export type SessionBoardSnapshot = Readonly<{
     incomplete: boolean;
 }>;
 
+/** The one retained-content explanation shared by Board hosts. Record freshness remains an execution fact. */
+export function resolveSessionBoardRetainedFreshness(
+    snapshot: Pick<SessionBoardSnapshot, 'itemsById' | 'reachability' | 'freshness' | 'loading'>,
+): 'offline' | 'stale' | null {
+    if (snapshot.itemsById.size === 0) return null;
+    if (snapshot.reachability === 'offline') return 'offline';
+    return snapshot.freshness === 'stale' && snapshot.loading === 'idle' ? 'stale' : null;
+}
+
 export type SessionBoardProjectionInput = Readonly<{
     layout: SessionBoardOpenedRecord<SessionBoardLayoutV1> | undefined;
     items: ReadonlyMap<string, SessionBoardOpenedRecord<SessionSurfaceItemV1>>;

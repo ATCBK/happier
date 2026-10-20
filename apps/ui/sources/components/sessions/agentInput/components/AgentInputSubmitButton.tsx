@@ -16,7 +16,7 @@ import type { VoiceDictationSnapshot } from '@/voice/dictation/VoiceDictationCon
 import { Icon } from '@/components/ui/icons/Icon';
 import type { Theme } from '@/theme';
 
-import { resolveArmedSubmitPresentation } from './agentContinuationSubmitPresentation';
+import { readArmedRouteContinuationLabel, resolveArmedSubmitPresentation, type ArmedRouteContinuation } from './agentContinuationSubmitPresentation';
 
 /**
  * The submit control's touch target reaches above and below its box.
@@ -137,7 +137,7 @@ export const AgentInputSubmitButton = React.memo(function AgentInputSubmitButton
      * A route or model change for the running Agent, armed for the next message
      * (D15): pressing send restarts it on that source, then sends.
      */
-    armedRouteContinuation?: Readonly<{ sourceLabel: string }> | null;
+    armedRouteContinuation?: ArmedRouteContinuation | null;
     /**
      * Cancels the armed route/model change (D15) and keeps the one the Session runs on. Shown beside
      * the send control for as long as a route is armed, whichever shape the control has.
@@ -227,8 +227,8 @@ export const AgentInputSubmitButton = React.memo(function AgentInputSubmitButton
             variant="plain"
             size={28}
             iconSize={14}
-            accessibilityLabel={t('session.agentContinuation.routeUnarm', { source: props.armedRouteContinuation.sourceLabel })}
-            tooltip={t('session.agentContinuation.routeUnarm', { source: props.armedRouteContinuation.sourceLabel })}
+            accessibilityLabel={t('session.agentContinuation.routeUnarm', { source: readArmedRouteContinuationLabel(props.armedRouteContinuation) })}
+            tooltip={t('session.agentContinuation.routeUnarm', { source: readArmedRouteContinuationLabel(props.armedRouteContinuation) })}
             tooltipPlacement="top"
             disabled={props.unarmRoutePending === true || props.isSending === true}
             onPress={props.onUnarmRoute}

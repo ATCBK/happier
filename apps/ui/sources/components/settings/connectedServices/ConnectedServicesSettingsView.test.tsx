@@ -1,18 +1,36 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectedServiceIdSchema } from '@happier-dev/protocol';
-import type { AccountProfile } from '@happier-dev/protocol/account/profile';
+import { AccountProfileSchema, type AccountProfile } from '@happier-dev/protocol/account/profile';
 import type { QualifiedConnectedAccountPurposeBindingsV1 } from '@happier-dev/protocol/connect/connected-account-purpose-bindings';
-import { createMachineFixture, pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
-import type { ConnectedAccountIndexFacts } from './index/ConnectedAccountIndexRow';
-import type { ConnectedServicesConnectMore } from './setup/ConnectedServicesConnectMore';
+import { createMachineFixture, createRootLayoutFeaturesResponse, pressTestInstanceAsync, renderScreen as renderUiScreen, standardCleanup } from '@/dev/testkit';
 import type { IModal } from '@/modal';
 import {
     connectedServicesModuleState,
     installConnectedServicesCommonModuleMocks,
 } from './connectedServicesTestHelpers';
 import { applyConnectedAccountCatalogSnapshot } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
+import { teamSummaryFixture, teamCapabilitiesFixture } from '@/dev/testkit/fixtures/teamFixtures';
+import { TeamsPageV1Schema, TeamCredentialResourceCatalogEntryV1Schema, TeamCredentialResourceEntitledPageV1Schema,
+    TEAM_DIRECTORY_PAGE_LIMIT_DEFAULT_V1 } from '@happier-dev/protocol/teams';
+import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
+import { BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID } from '@happier-dev/protocol/connect/generatedBuiltInLegacyConnectedAccountCompatibility';
+import { ServerIdentityCapabilitiesSchema } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
+import { PluginSourceCustodyV1Schema, type PluginSourceCustodyV1 } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
+import type { PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -47,7 +65,6 @@ vi.mock('@expo/vector-icons', () => ({
 }));
 
 const profileState = vi.hoisted(() => ({
-    realDefaultAuthRow: false,
     activeAccountScope: null as null | { serverId: string; accountId: string },
     connectedAccountsV4: [] as AccountProfile['connectedAccountsV4'],
     teamCredentialCatalog: {
@@ -78,54 +95,13 @@ const connectedServiceRegistryState = vi.hoisted(() => ({
     }] as Array<Record<string, unknown>>,
 }));
 const serverFeaturesState = vi.hoisted(() => ({
-    qualifiedAccounts: undefined as { protocolVersion: number } | undefined,
+    qualifiedAccounts: undefined as { protocolVersion: 4 } | undefined,
 }));
 const daemonAgentProjectionState = vi.hoisted(() => ({
     mergedProviderProjectionById: {} as Record<string, Record<string, unknown>>,
 }));
 
 const projectionReloadSpy = vi.hoisted(() => vi.fn());
-
-vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', () => ({
-    useAppShellPluginUiProjection: () => ({
-        machineId: 'machine-a',
-        serverId: 'server-1',
-        reloadConnectedAccountProjection: projectionReloadSpy,
-    }),
-    useProjectedConnectedServicesRegistry: () => ({
-        scopeKey: 'server-1', status: connectedServiceRegistryState.status,
-        errorReason: connectedServiceRegistryState.errorReason, entries: connectedServiceRegistryState.entries,
-    }),
-    useProjectedPluginLocalizedTextResolver: () => (_pluginId: string, value: unknown) =>
-        typeof value === 'string' ? value : '',
-}));
-
-vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
-    useDaemonMergedProjectionInputs: () => ({
-        phase: 'ready',
-        inputs: {
-            mergedProviderProjectionById: daemonAgentProjectionState.mergedProviderProjectionById,
-            mergedBackendProjectionById: {},
-        },
-    }),
-}));
-
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: () => false,
-}));
-
-vi.mock('@/sync/domains/features/featureDecisionRuntime', () => ({
-    useServerFeaturesRuntimeSnapshot: () => ({
-        status: 'ready',
-        features: {
-            capabilities: {
-                connectedServices: {
-                    qualifiedAccounts: serverFeaturesState.qualifiedAccounts,
-                },
-            },
-        },
-    }),
-}));
 
 const machineState = vi.hoisted(() => ({
     machines: [] as Array<{ id: string; active: boolean; activeAt?: number; metadata?: { displayName?: string } }>,
@@ -140,117 +116,189 @@ const SETTINGS_FIXTURE = vi.hoisted(() => ({
     connectedServicesDefaultAuthByAgentIdV1: {},
 }));
 
-vi.mock('@/sync/store/hooks', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/store/hooks')>()),
-    useActiveServerAccountScope: () => profileState.activeAccountScope,
-    useAllMachines: () => machineState.machines,
-    useProfile: () => ({
-        id: profileState.activeAccountScope?.accountId ?? '',
-        connectedServicesV2: profileState.connectedServicesV2,
-        connectedAccountsV4: profileState.connectedAccountsV4,
-    }),
-    useSettings: () => SETTINGS_FIXTURE,
-    useSettingsSelector: <T,>(selector: (settings: typeof SETTINGS_FIXTURE) => T): T => selector(SETTINGS_FIXTURE),
-    useSettingMutable: () => [{}, vi.fn()],
-    useSetting: () => undefined,
-    useLocalSetting: () => undefined,
-    useLocalSettingMutable: () => [undefined, vi.fn()],
-}));
-
-vi.mock('@/sync/store/settingsWriters', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/store/settingsWriters')>()),
-    useApplySettings: () => vi.fn(),
-}));
-
-vi.mock('@/hooks/teams/useHomeTeamCredentialModelCatalog', () => ({
-    useHomeTeamCredentialModelCatalog: () => profileState.teamCredentialCatalog,
-}));
-
-
-
-
-// Account rows own their own quota reads (server requests); the index decides only which accounts it
-// lists and what each row says, so a host stand-in keeps the row props assertable.
-vi.mock('./index/ConnectedAccountIndexRow', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('./index/ConnectedAccountIndexRow')>()),
-    ConnectedAccountIndexLiveFacts: ({ render }: { render: (facts: ConnectedAccountIndexFacts) => React.ReactElement }) => render({
-        usage: { kind: 'none' }, planLabel: null, subscription: null, recoveryCredits: null,
-        fetchedAt: null, staleSince: null, refreshing: false, refresh: null,
-    }),
-}));
-// The setup panel runs the sign-in on a machine (daemon RPCs); the page decides where it opens and on what.
-vi.mock('./setup/ConnectedServicesConnectMore', () => ({
-    ConnectedServicesConnectMore: (props: React.ComponentProps<typeof ConnectedServicesConnectMore>) =>
-        React.createElement('ConnectedServicesConnectMore', props),
-}));
-
-vi.mock('./ConnectedServicesDefaultAuthRow', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('./ConnectedServicesDefaultAuthRow')>();
-    return {
-        ...actual,
-        ConnectedServicesDefaultAuthRow: (props: React.ComponentProps<typeof actual.ConnectedServicesDefaultAuthRow>) =>
-            profileState.realDefaultAuthRow
-                ? React.createElement(actual.ConnectedServicesDefaultAuthRow, props)
-                : React.createElement('ConnectedServicesDefaultAuthRow', props),
-    };
-});
-
-vi.mock('./ConnectedServicesProviderStateSharingSettings', () => ({
-    ConnectedServicesProviderStateSharingDisclosure: (props: Record<string, unknown>) => React.createElement('ConnectedServicesProviderStateSharingDisclosure', props),
-}));
-
-vi.mock('@/sync/domains/connectedServices/connectedServiceRegistry', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/domains/connectedServices/connectedServiceRegistry')>();
-    return {
-        ...actual,
-        // Only the daemon projection is fixed; released identity adaptation stays real.
-        getLegacyConnectedServiceRegistryEntry: (serviceId: string) =>
-            connectedServiceRegistryState.entries.find((entry) => entry.legacyServiceId === serviceId)
-            ?? actual.getLegacyConnectedServiceRegistryEntry(serviceId),
-        getConnectedServiceRegistrySnapshot: () => ({
-            scopeKey: 'server-1', status: connectedServiceRegistryState.status, errorReason: connectedServiceRegistryState.errorReason,
-            entries: connectedServiceRegistryState.entries,
-        }),
-        installConnectedAccountDescriptorProjection: vi.fn(),
-    };
-});
-
-vi.mock('@/hooks/server/connectedServices/useConnectedServiceQuotaBadges', () => ({
-    useConnectedServiceQuotaBadges: () => ({}),
-}));
-
-vi.mock('@/hooks/server/connectedServices/useConnectedServiceQuotaSummaries', () => ({
-    useConnectedServiceQuotaSummaries: () => ({
-        summaries: [],
-        accountsWithoutUsage: [],
-        accountsNeedingSignIn: [],
-        keysWithoutLimits: 0,
-        inUseAccountKeys: new Set(),
-        isRefreshing: false,
-        hasConnectedProfiles: false,
-    }),
-}));
-vi.mock('@/sync/domains/state/warmCachePersistence', () => ({
-    loadUsageSummaryWarmCache: () => null,
-    saveUsageSummaryWarmCache: () => {},
-}));
-
+const account = createProviderSettingsAccountHarness();
+const homes = account.home;
+await loadSyncSingletonForTests();
 const { ConnectedServicesAgentSignInView } = await import('./collection/ConnectedServicesAgentSignInView');
 const { Item } = await import('@/components/ui/lists/Item');
+const { ConnectedServicesConnectMore } = await import('./setup/ConnectedServicesConnectMore');
+const { ConnectedServiceSetupPanel } = await import('./setup/ConnectedServiceSetupPanel');
+const { ConnectedServicesDefaultAuthRow } = await import('./ConnectedServicesDefaultAuthRow');
+const { AppShellPluginUiProjectionProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+const { storage } = await import('@/sync/domains/state/storage');
+const { sync } = await import('@/sync/sync');
+const { getConnectedServiceRegistrySnapshot } = await import('@/sync/domains/connectedServices/connectedServiceRegistry');
+const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+const { publishMachineContributionRegistryProjectionInvalidation } = await import('@/sync/ops/machineContributionRegistryProjection');
+const profiles = await import('@/sync/domains/server/serverProfiles');
+// Consume the daemon's pure producer without exposing CLI-private aliases to the UI compiler.
+const originProducerPath = '../../../../../cli/src/plugins/runtime/resolvePluginMachineExecutionOrigin';
+const { resolvePluginMachineExecutionOrigin } = await vi.importActual<{
+    resolvePluginMachineExecutionOrigin(input: Readonly<{
+        pluginId: string;
+        context: Readonly<{ serverIdentityId: string; machineId: string }>;
+        sourceCustody: PluginSourceCustodyV1;
+    }>): PluginMachineExecutionOriginV1 | null;
+}>(originProducerPath);
+const homeIdentity = ServerIdentityCapabilitiesSchema.parse({ serverIdentityId: 'srv_connected_services_fixture' }).serverIdentityId;
+if (!homeIdentity) throw new Error('Expected the Home issuer fixture to advertise a portable identity');
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>>;
+let prepared = false;
+let daemonReadFails = false;
+let preparedScope = '';
+let purposeBoundary: ReturnType<typeof createConnectedPurposeCatalogHttpBoundary> | undefined;
+installSessionActionRpcBoundary(request => {
+    if (request.method.endsWith(`:${RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE}`)) {
+        projectionReloadSpy();
+        if (daemonReadFails) throw new Error(connectedServiceRegistryState.errorReason ?? 'Daemon projection unavailable');
+        return createDaemonProjectionResponse();
+    }
+    return { error: 'RPC method not found', errorCode: 'METHOD_NOT_FOUND' };
+});
+
+/** Cold daemon declarations; the app's registry/catalog/currentness owners interpret them. */
+function createDaemonProjectionResponse() {
+    const descriptors = connectedServiceRegistryState.entries.map(entry => {
+        const service = entry.service;
+        if (!service || typeof service !== 'object' || !('pluginId' in service) || !('localId' in service)
+            || typeof service.pluginId !== 'string' || typeof service.localId !== 'string') throw new Error('Expected qualified daemon service');
+        return ConnectedAccountUiProjectionEntryV1Schema.parse({
+            id: service.localId, pluginId: service.pluginId, serviceId: entry.serviceId,
+            occurrenceId: `occurrence:${service.pluginId}`, provenance: 'external', sourceKind: 'development',
+            title: entry.projectedTitle ?? entry.serviceId,
+            authentication: { defaultModeId: 'sign-in', modes: entry.supportsOauth
+                ? [{ id: 'sign-in', kind: 'oauthDeviceCode', outcomeReconciliation: 'none' }]
+                : [{ id: 'sign-in', kind: 'manual', fields: [], outcomeReconciliation: 'none' }] },
+            capabilities: [], availability: { reason: 'ready', ...(typeof entry.availability === 'object' && entry.availability !== null
+                ? entry.availability : { state: 'available' }) },
+            diagnostics: entry.diagnostics ?? [],
+        });
+    });
+    const pluginIds = [...new Set(descriptors.map(descriptor => descriptor.pluginId!))];
+    return DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1, projection: {
+        v: 2, generation: 1,
+        installedPackagesById: Object.fromEntries(pluginIds.map(pluginId => {
+            // The daemon's installed-package/filesystem leaf owns these source facts.
+            const sourceCustody = PluginSourceCustodyV1Schema.parse({ kind: 'development', registeredRootId: `fixture:${pluginId}` });
+            const profile = profiles.getServerProfileById(profiles.resolveServerProfileScopeIdForIdentifier(account.serverId));
+            const machine = storage.getState().machines['machine-a'];
+            if (!profile?.serverIdentityId || !machine) throw new Error('Expected the restored Home and its published Machine');
+            const executionOrigin = resolvePluginMachineExecutionOrigin({ pluginId, sourceCustody,
+                context: { serverIdentityId: profile.serverIdentityId, machineId: machine.id } });
+            if (!executionOrigin) throw new Error('Expected the daemon producer to admit its exact Home/Machine source');
+            return [pluginId, { id: pluginId, displayName: pluginId, version: '1.0.0', enabled: true,
+                occurrenceId: `occurrence:${pluginId}`, sourceCustody, executionOrigin,
+                source: { kind: 'development', locator: `/plugins/${pluginId}` } }];
+        })),
+        agentsById: Object.fromEntries(Object.entries(daemonAgentProjectionState.mergedProviderProjectionById).map(([id, agent]) => [id, {
+            id, identity: agent.identity, title: agent.title, isBuiltIn: agent.isBuiltIn, acpRegistryIds: [],
+            catalogAgentId: agent.catalogAgentId, connectedAccounts: agent.connectedAccounts,
+        }])),
+        familiesById: { connectedAccounts: { family: 'connectedAccounts',
+            entriesById: Object.fromEntries(descriptors.map(descriptor => [`${descriptor.pluginId}/${descriptor.id}`, descriptor])) } },
+    } });
+}
+
+async function prepareAccountFixture() {
+    const scope = profileState.activeAccountScope ?? { serverId: 'server-1', accountId: 'account-1' };
+    const scopeKey = `${scope.serverId}:${scope.accountId}`;
+    if (prepared && preparedScope !== scopeKey) { await account.reset(); prepared = false; }
+    if (!prepared) {
+        const teamsEnabled = profileState.teamCredentialCatalog.resources.length > 0;
+        const features = createRootLayoutFeaturesResponse({ homePresentation: { v: 1, displayName: 'Home A' },
+            capabilities: { serverIdentity: { serverIdentityId: homeIdentity }, connectedServices: { credentialDelete: { revisionGuard: false },
+                ...(serverFeaturesState.qualifiedAccounts ? { qualifiedAccounts: serverFeaturesState.qualifiedAccounts } : {}) } },
+            features: { providers: { enabled: false }, connectedServices: { quotas: { enabled: false }, accountGroups: { enabled: false } },
+                teams: { enabled: teamsEnabled, credentialResources: { enabled: teamsEnabled, externalApi: { enabled: false } } } } });
+        const machines = machineState.machines.map(row => createMachineFixture({ ...row,
+            metadata: { ...createMachineFixture().metadata!, ...row.metadata }, activeAt: row.activeAt ?? (row.active ? Date.now() : 0) }));
+        await account.restore({ accountId: scope.accountId ?? undefined, serverIdentityId: homeIdentity ?? undefined, features,
+            settings: SETTINGS_FIXTURE, machines });
+        const purposes = createConnectedPurposeCatalogHttpBoundary();
+        purposeBoundary = purposes;
+        homes.answer(account.serverId, purposes.path, { select: async (_input, request) => {
+            const response = await purposes.handle(request.url, request.init);
+            if (!response) throw new Error('Missing purpose catalog response');
+            return { status: response.status, body: await response.json() };
+        } });
+        if (teamsEnabled) {
+            const catalog = profileState.teamCredentialCatalog;
+            const list = bindHomeDomainActionHttpRequestV1('teams.list', { v: 1, scope: 'member', archived: 'active', limit: TEAM_DIRECTORY_PAGE_LIMIT_DEFAULT_V1, cursor: null });
+            homes.answer(account.serverId, `${list.method} ${list.path}`, { body: TeamsPageV1Schema.parse({
+                items: Object.entries(catalog.teamNameById).map(([id, name]) => teamSummaryFixture({ id, name,
+                    capabilities: teamCapabilitiesFixture({ viewTeam: true }) })), nextCursor: null,
+            }) });
+            for (const teamId of Object.keys(catalog.teamNameById)) {
+                const entitled = bindHomeDomainActionHttpRequestV1('teams.credentials.entitled.list', { teamId });
+                homes.answer(account.serverId, `${entitled.method} ${entitled.path}`, { body: TeamCredentialResourceEntitledPageV1Schema.parse({
+                    resources: catalog.resources.filter(resource => resource.teamId === teamId).map(resource => TeamCredentialResourceCatalogEntryV1Schema.parse(resource)),
+                    nextCursor: null,
+                }) });
+            }
+        }
+        prepared = true;
+        preparedScope = scopeKey;
+    }
+    const profile = AccountProfileSchema.parse({ ...storage.getState().profile, id: scope.accountId,
+        connectedServicesV2: profileState.connectedServicesV2, connectedAccountsV4: profileState.connectedAccountsV4 });
+    homes.answer(account.serverId, '/v1/account/profile', { body: profile });
+    await sync.refreshProfile();
+}
+
+function ConnectedServicesTestProviders({ children }: React.PropsWithChildren) {
+    return <InjectedAuthProvider credentials={sync.getCredentials()}>
+        <AppShellPluginUiProjectionProvider>{children}</AppShellPluginUiProjectionProvider>
+    </InjectedAuthProvider>;
+}
+
+async function renderScreen(element: React.ReactElement) {
+    await prepareAccountFixture();
+    const wantsStale = connectedServiceRegistryState.status === 'stale';
+    daemonReadFails = connectedServiceRegistryState.status === 'error';
+    // Validate the daemon fixture against its real consumer schema before a
+    // malformed response can be classified as an unavailable registry read.
+    if (!daemonReadFails && machineState.machines.some(machine => machine.active)) createDaemonProjectionResponse();
+    const screen = await renderUiScreen(element, { wrapper: ConnectedServicesTestProviders });
+    const hasOnlineMachine = machineState.machines.some(machine => machine.active);
+    await waitForHomeGovernance(() => expect(getConnectedServiceRegistrySnapshot().status).toBe(
+        wantsStale ? 'ready' : connectedServiceRegistryState.status));
+    if (wantsStale && hasOnlineMachine) {
+        daemonReadFails = true;
+        await act(async () => publishMachineContributionRegistryProjectionInvalidation({ serverId: account.serverId, machineId: 'machine-a' }));
+        await waitForHomeGovernance(() => expect(getConnectedServiceRegistrySnapshot().status).toBe('stale'));
+    }
+    if (profileState.teamCredentialCatalog.resources.length > 0) {
+        const { getTeamCredentialResourceCatalogSnapshot } = await import('@/sync/store/teams/teamsSnapshots');
+        await waitForHomeGovernance(() => {
+            const scope = storage.getState().profileScope;
+            for (const teamId of Object.keys(profileState.teamCredentialCatalog.teamNameById)) {
+                expect(getTeamCredentialResourceCatalogSnapshot(scope, { serverId: scope!.serverId, teamId })?.status).toBe('ready');
+            }
+        });
+    }
+    return { ...screen, update: async (next: React.ReactElement) => { await prepareAccountFixture(); await screen.update(next); } };
+}
 
 describe('ConnectedServicesSettingsView', () => {
     beforeEach(async () => {
+        browser = await installBrowserRuntimeForTests({ url: 'https://connected-services.test/' });
+        await account.reset();
+        prepared = false;
+        preparedScope = '';
+        purposeBoundary = undefined;
+        daemonReadFails = false;
+        clearDaemonMergedProjectionCacheForTests();
         const { Modal } = await import('@/modal');
         const text = await import('@/text');
         vi.spyOn(Modal, 'alert').mockImplementation(modalAlertSpy);
         vi.spyOn(Modal, 'show').mockImplementation(modalShowSpy);
         vi.spyOn(Modal, 'hide').mockImplementation(modalHideSpy);
-        vi.spyOn(text, 't').mockImplementation((key, params) => (
-            params ? `${key} ${Object.values(params).join(' ')}` : key
+        vi.spyOn(text, 't').mockImplementation((key: string, params?: unknown) => (
+            params && typeof params === 'object' ? `${key} ${Object.values(params).join(' ')}` : key
         ));
         modalShowSpy.mockClear();
         modalHideSpy.mockClear();
-        profileState.realDefaultAuthRow = false;
         profileState.connectedAccountsV4 = [];
         profileState.activeAccountScope = null;
         profileState.teamCredentialCatalog = {
@@ -259,6 +307,7 @@ describe('ConnectedServicesSettingsView', () => {
         daemonAgentProjectionState.mergedProviderProjectionById = {
             codex: {
                 agentId: 'codex',
+                title: 'Codex',
                 qualifiedId: 'happier.agent.codex/codex',
                 identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
                 catalogAgentId: 'codex',
@@ -282,7 +331,7 @@ describe('ConnectedServicesSettingsView', () => {
             executable: true,
         }];
         modalAlertSpy.mockClear();
-        machineState.machines = [];
+        machineState.machines = [{ id: 'machine-a', active: true, activeAt: Date.now() }];
         connectedServicesModuleState.searchParams = {};
         connectedServicesModuleState.routerPushSpy.mockClear();
         profileState.connectedServicesV2 = [
@@ -293,16 +342,21 @@ describe('ConnectedServicesSettingsView', () => {
         ];
     });
 
+    afterEach(async () => {
+        await standardCleanup();
+        try { await account.reset(); } finally { browser?.restore(); }
+    });
+
     it('opens a Team-shared Connected Service resource on its exact Home route', async () => {
         profileState.activeAccountScope = { serverId: 'server-1', accountId: 'account-1' };
         profileState.teamCredentialCatalog = {
             resources: [{
                 id: 'resource-1', teamId: 'team-1', displayName: 'Shared GitHub', resourceRevision: 3,
-                readiness: { kind: 'available' }, recoveryAction: null, deliveryMode: 'direct',
+                readiness: { kind: 'available' }, recoveryAction: null,
                 mayBroker: false, mayReceiveDirect: true, directMaterialState: 'current',
                 sessionUsePolicy: 'personal_allowed', providerModels: [],
                 sourcePresentation: {
-                    kind: 'connected_service', service: { pluginId: 'github', localId: 'github' },
+                    kind: 'connected_service', service: BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID.github.service,
                 },
             }],
             teamNameById: { 'team-1': 'Acme' }, homeNameByTeamId: { 'team-1': 'Home A' },
@@ -311,9 +365,11 @@ describe('ConnectedServicesSettingsView', () => {
         const { ConnectedServicesSettingsView } = await import('./ConnectedServicesSettingsView');
         const screen = await renderScreen(<ConnectedServicesSettingsView />);
 
+        const scope = storage.getState().profileScope;
+        expect(scope).toEqual({ serverId: homeIdentity, accountId: 'account-1' });
         await screen.pressByTestIdAsync('team-credential-catalog-resource:team-1:resource-1');
         expect(connectedServicesModuleState.routerPushSpy)
-            .toHaveBeenCalledWith('/settings/teams/server-1/team-1/credentials/resource-1');
+            .toHaveBeenCalledWith(`/settings/teams/${scope!.serverId}/team-1/credentials/resource-1`);
     });
 
     it('keeps boundary diagnostics out of the primary row and exposes only bounded product-safe support detail', async () => {
@@ -333,9 +389,8 @@ describe('ConnectedServicesSettingsView', () => {
         const row = screen.tree.findAllByType(Item).find((item) => item.props.title === 'Bitbucket Cloud');
 
         expect(row).toBeTruthy();
+        // One message per service: the highest-priority fact; the rest live on the plugin's own page.
         expect(row?.props.subtitle).toContain('common.blocked');
-        expect(row?.props.subtitle).toContain('connectedServicesSettings.runtimeNotLoaded');
-        expect(row?.props.subtitle).toContain('connectedServicesSettings.projectionErrorDescription');
         expect(row?.props.subtitle).not.toContain('missing_runtime');
         expect(row?.props.subtitle).not.toContain('/private/plugin/error');
         expect(row?.props.subtitle).not.toContain('/unexpected/path-shaped-diagnostic');
@@ -345,16 +400,14 @@ describe('ConnectedServicesSettingsView', () => {
         const details = screen.tree.root.findByProps({
             testID: 'connected-services-index:happier.scm.forge.bitbucket/bitbucket-account:support-details',
         } as never);
+        modalAlertSpy.mockClear();
+        connectedServicesModuleState.routerPushSpy.mockClear();
         await pressTestInstanceAsync(details);
-        const supportBody = String(modalAlertSpy.mock.calls[0]?.[1] ?? '');
-        expect(supportBody).toContain('connectedServicesSettings.runtimeNotLoaded');
-        expect(supportBody).toContain('connectedServicesSettings.projectionErrorDescription');
-        expect(supportBody).not.toContain('missing_runtime');
-        expect(supportBody).not.toContain('/private/plugin/error');
-        expect(supportBody).not.toContain('/unexpected/path-shaped-diagnostic');
-        expect(supportBody).not.toContain('token=never-render-this-primary');
-        expect(supportBody).not.toContain(longDiagnostic);
-        expect(supportBody.split('\n')).toEqual(['connectedServicesSettings.runtimeNotLoaded', 'connectedServicesSettings.projectionErrorDescription']);
+        // Details opens the owning plugin's page, where its diagnostics are read in full; never an OK-only alert.
+        expect(modalAlertSpy).not.toHaveBeenCalled();
+        expect(connectedServicesModuleState.routerPushSpy).toHaveBeenCalledWith({
+            pathname: '/(app)/settings/plugins/[pluginId]', params: { pluginId: 'happier.scm.forge.bitbucket' },
+        });
     });
 
     it('keeps projection failure detail product-safe in the failure banner, and retries the read', async () => {
@@ -377,10 +430,11 @@ describe('ConnectedServicesSettingsView', () => {
         )));
         expect(leaked).toHaveLength(0);
 
+        projectionReloadSpy.mockClear();
         await pressTestInstanceAsync(screen.tree.root.findByProps({
             testID: 'connected-services-projection-retry',
         } as never));
-        expect(projectionReloadSpy).toHaveBeenCalledTimes(1);
+        await waitForHomeGovernance(() => expect(projectionReloadSpy).toHaveBeenCalledTimes(1));
     });
 
     it('shows a stale registry read failure once while retaining accounts and service-specific causes', async () => {
@@ -412,11 +466,10 @@ describe('ConnectedServicesSettingsView', () => {
         expect(screen.findByTestId('connected-services-index:happier.agent.codex/openai-codex:support-details')).toBeNull();
         expect(screen.findByTestId('connected-services-service:happier.agent.codex/openai-codex:add-account')).toBeNull();
         expect(serviceRows.find((node) => node.props.title === 'Bitbucket Cloud')?.props.subtitle).toContain('common.blocked');
-        expect(serviceRows.find((node) => node.props.title === 'Bitbucket Cloud')?.props.subtitle).toContain('connectedServicesSettings.projectionErrorDescription');
-        expect(serviceRows.find((node) => node.props.title === 'Bitbucket Cloud')?.props.subtitle).toContain('connectedServicesSettings.runtimeNotLoaded');
         expect(screen.findByTestId('connected-services-index:happier.scm.forge.bitbucket/bitbucket-account:support-details')).not.toBeNull();
+        projectionReloadSpy.mockClear();
         await pressTestInstanceAsync(screen.tree.root.findByProps({ testID: 'connected-services-projection-retry' } as never));
-        expect(projectionReloadSpy).toHaveBeenCalledOnce();
+        await waitForHomeGovernance(() => expect(projectionReloadSpy).toHaveBeenCalledOnce());
     });
 
     it('says which machine offers no service and leads to Agents', async () => {
@@ -424,9 +477,9 @@ describe('ConnectedServicesSettingsView', () => {
         connectedServiceRegistryState.status = 'ready';
         connectedServiceRegistryState.entries = [];
         profileState.connectedServicesV2 = [];
-        machineState.machines = [createMachineFixture({ id: 'machine-a', activeAt: Date.now(), metadata: {
-            ...createMachineFixture().metadata!, displayName: 'lima-happier-fresh',
-        } })];
+        const machine = createMachineFixture({ id: 'machine-a', activeAt: Date.now() });
+        machineState.machines = [{ id: machine.id, active: machine.active, activeAt: machine.activeAt,
+            metadata: { displayName: 'lima-happier-fresh' } }];
         const { ConnectedServicesSettingsView } = await import('./ConnectedServicesSettingsView');
         const screen = await renderScreen(<ConnectedServicesSettingsView />);
 
@@ -460,7 +513,7 @@ describe('ConnectedServicesSettingsView', () => {
         const tree = screen.tree;
 
         expect(tree.root.findAllByProps({ testID: 'connected-services-empty' } as never)).toHaveLength(0);
-        const setup = tree.root.findByType('ConnectedServicesConnectMore' as never);
+        const setup = tree.root.findByType(ConnectedServicesConnectMore);
         expect(setup.props.layout).toBe('firstRun');
         expect(setup.props.model.connectable.map((service: { serviceKey: string }) => service.serviceKey))
             .toContain('happier.agent.codex/openai-codex');
@@ -477,21 +530,20 @@ describe('ConnectedServicesSettingsView', () => {
         connectedServicesModuleState.searchParams = params;
         const { ConnectedServicesSettingsView } = await import('./ConnectedServicesSettingsView');
         const { tree } = await renderScreen(<ConnectedServicesSettingsView />);
-        const setup = tree.root.findByType('ConnectedServicesConnectMore' as never);
+        const setup = tree.root.findByType(ConnectedServicesConnectMore);
 
-        expect(setup.props.request).toEqual(request);
+        expect(tree.findByType(ConnectedServiceSetupPanel).props.target).toEqual(request);
         expect(connectedServicesModuleState.routerPushSpy).not.toHaveBeenCalled();
         await act(async () => setup.props.onRequestHandled());
-        expect(tree.root.findByType('ConnectedServicesConnectMore' as never).props.request).toBeNull();
+        expect(tree.root.findByType(ConnectedServicesConnectMore).props.request).toBeNull();
     });
 
     it('shows the destination purpose default on Agent sign-in with the retired Settings root absent', async () => {
-        const scope = { serverId: 'server-1', accountId: 'destination-account' };
-        profileState.activeAccountScope = scope;
-        profileState.realDefaultAuthRow = true;
+        profileState.activeAccountScope = { serverId: 'server-1', accountId: 'destination-account' };
         serverFeaturesState.qualifiedAccounts = { protocolVersion: 4 };
         profileState.connectedAccountsV4 = [{
             revisionSemantics: 'legacy_unfenced',
+            credentialRevision: null, scopes: [],
             ref: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' },
             status: 'connected', authenticationModeId: null, configurationReady: true, configurationRevision: null,
             kind: 'oauth', expiresAt: null, lastUsedAt: null, providerIdentity: {}, displayName: 'work',
@@ -500,11 +552,15 @@ describe('ConnectedServicesSettingsView', () => {
             purpose: { consumer: { pluginId: 'happier.agent.codex', localId: 'codex' }, purpose: 'primary' },
             target: { kind: 'account', account: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' } },
         }] };
-        applyConnectedAccountCatalogSnapshot(scope, 'purposes', {
-            status: 'ready', revision: 3,
-            record: { key: 'purposes', value: purposeBindings },
-        }, true);
-        const { tree } = await renderScreen(<ConnectedServicesAgentSignInView />);
+        await prepareAccountFixture();
+        const scope = storage.getState().profileScope;
+        if (!scope) throw new Error('Expected the restored destination Account scope');
+        if (!purposeBoundary) throw new Error('Expected the destination purpose HTTP boundary');
+        purposeBoundary.replace(purposeBindings);
+        await purposeBoundary.hydrate(scope);
+        const { tree, update } = await renderScreen(<ConnectedServicesAgentSignInView />);
+        await vi.waitFor(() => expect(tree.findAllByType(Item)
+            .find(candidate => candidate.props.testID === 'settings-connected-services-default-auth-codex')?.props.disabled).toBe(false));
         const row = tree.findAllByType(Item)
             .find(candidate => candidate.props.testID === 'settings-connected-services-default-auth-codex');
         expect(row).toBeTruthy();
@@ -517,7 +573,9 @@ describe('ConnectedServicesSettingsView', () => {
         }> | undefined;
         if (!config) throw new Error('Expected the default-auth picker');
         const Content = config.component;
-        const picker = (await renderScreen(<Content {...config.props} onClose={() => {}} />)).tree;
+        const picker = (await renderUiScreen(<Content {...config.props} onClose={() => {}} />, {
+            wrapper: ConnectedServicesTestProviders,
+        })).tree;
         expect(picker.root.findByProps({ testID: 'new-session.connected-services.selection-list' }).props.selectedOptionId)
             .toBe('connected-service:happier.agent.codex%2Fopenai-codex:profile:work');
         await act(async () => applyConnectedAccountCatalogSnapshot(scope, 'purposes', {
@@ -556,7 +614,7 @@ describe('ConnectedServicesSettingsView', () => {
         modalHideSpy.mockClear();
         profileState.activeAccountScope = { serverId: 'server-2', accountId: 'other-account' };
         profileState.connectedAccountsV4 = [];
-        await act(async () => tree.update(<ConnectedServicesAgentSignInView key="other-home" />));
+        await update(<ConnectedServicesAgentSignInView key="other-home" />);
         const otherHomeRow = tree.findAllByType(Item)
             .find(candidate => candidate.props.testID === 'settings-connected-services-default-auth-codex');
         expect(otherHomeRow?.props.disabled).toBe(true);
@@ -565,27 +623,29 @@ describe('ConnectedServicesSettingsView', () => {
     });
 
     it('marks the destination Account default in the collection with the retired Settings root absent', async () => {
-        const scope = { serverId: 'server-1', accountId: 'collection-destination-account' };
-        profileState.activeAccountScope = scope;
+        profileState.activeAccountScope = { serverId: 'server-1', accountId: 'collection-destination-account' };
         serverFeaturesState.qualifiedAccounts = { protocolVersion: 4 };
         profileState.connectedAccountsV4 = [{
             revisionSemantics: 'legacy_unfenced',
+            credentialRevision: null, scopes: [],
             ref: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' },
             status: 'connected', authenticationModeId: null, configurationReady: true, configurationRevision: null,
             kind: 'oauth', expiresAt: null, lastUsedAt: null, providerIdentity: {}, displayName: 'work',
         }];
-        applyConnectedAccountCatalogSnapshot(scope, 'purposes', {
-            status: 'ready', revision: 3,
-            record: { key: 'purposes', value: { v: 1, bindings: [{
+        await prepareAccountFixture();
+        const scope = storage.getState().profileScope;
+        if (!scope) throw new Error('Expected the restored destination Account scope');
+        if (!purposeBoundary) throw new Error('Expected the destination purpose HTTP boundary');
+        purposeBoundary.replace({ v: 1, bindings: [{
                 purpose: { consumer: { pluginId: 'happier.agent.codex', localId: 'codex' }, purpose: 'primary' },
                 target: { kind: 'account', account: profileState.connectedAccountsV4[0]!.ref },
-            }] } },
-        }, true);
+            }] });
+        await purposeBoundary.hydrate(scope);
         const { ConnectedServicesSettingsView } = await import('./ConnectedServicesSettingsView');
         const { t } = await import('@/text');
         const screen = await renderScreen(<ConnectedServicesSettingsView />);
-        expect(screen.findHostByTestId('connected-services-account:happier.agent.codex/openai-codex:work:star')?.props.accessibilityLabel)
-            .toBe(t('connectedServicesPool.defaultFor', { agent: t('agentInput.agent.codex') }));
+        expect.soft(screen.findHostByTestId('connected-services-account:happier.agent.codex/openai-codex:work:star')?.props.accessibilityLabel)
+            .toBe(t('connectedServicesPool.defaultFor', { agent: 'Codex' }));
         await act(async () => applyConnectedAccountCatalogSnapshot(scope, 'purposes', {
             status: 'unavailable', reason: 'account-mode-mismatch',
         }, true));
@@ -611,7 +671,7 @@ describe('ConnectedServicesSettingsView', () => {
         const { ConnectedServicesAgentSignInView } = await import('./collection/ConnectedServicesAgentSignInView');
 
         const tree = (await renderScreen(<ConnectedServicesAgentSignInView />)).tree;
-        const row = tree.root.findAllByType('ConnectedServicesDefaultAuthRow' as never)
+        const row = tree.findAllByType(ConnectedServicesDefaultAuthRow)
             .find((candidate) => candidate.props.agentId === 'acme.agent/native');
 
         expect(row?.props.agentTitle).toBe('Acme Native');
@@ -626,6 +686,8 @@ describe('ConnectedServicesSettingsView', () => {
             resourceRevision: 3,
             readiness: { kind: 'available' },
             recoveryAction: null,
+            mayBroker: true, mayReceiveDirect: false, directMaterialState: 'never_delivered',
+            sessionUsePolicy: 'personal_allowed', providerModels: [],
             connectedServiceSelections: [{
                 source: 'team_resource', resourceId: 'resource-1', deliveryMode: 'brokered',
             }],
@@ -645,7 +707,7 @@ describe('ConnectedServicesSettingsView', () => {
         };
         const { ConnectedServicesAgentSignInView } = await import('./collection/ConnectedServicesAgentSignInView');
         const tree = (await renderScreen(<ConnectedServicesAgentSignInView />)).tree;
-        const row = tree.root.findAllByType('ConnectedServicesDefaultAuthRow' as never)
+        const row = tree.findAllByType(ConnectedServicesDefaultAuthRow)
             .find((candidate) => candidate.props.agentId === 'codex');
 
         expect(row?.props).toMatchObject({
@@ -660,7 +722,7 @@ describe('ConnectedServicesSettingsView', () => {
         const { CONNECTED_SERVICES_SETTINGS } = await import('./connectedServicesSettings');
 
         const tree = (await renderScreen(<ConnectedServicesAgentSignInView />)).tree;
-        const rows = tree.root.findAllByType('ConnectedServicesDefaultAuthRow' as never);
+        const rows = tree.findAllByType(ConnectedServicesDefaultAuthRow);
 
         expect(rows[0]?.props.setting?.anchor).toBe(CONNECTED_SERVICES_SETTINGS.settings.agentDefaults.anchor);
         expect(rows.slice(1).every((row) => row.props.setting === undefined)).toBe(true);
@@ -670,7 +732,7 @@ describe('ConnectedServicesSettingsView', () => {
         const { ConnectedServicesAgentSignInView } = await import('./collection/ConnectedServicesAgentSignInView');
 
         const tree = (await renderScreen(<ConnectedServicesAgentSignInView />)).tree;
-        const agentIds = tree.root.findAllByType('ConnectedServicesDefaultAuthRow' as never)
+        const agentIds = tree.findAllByType(ConnectedServicesDefaultAuthRow)
             .map((candidate) => candidate.props.agentId);
 
         expect(agentIds).toContain('codex');
@@ -683,8 +745,8 @@ describe('ConnectedServicesSettingsView', () => {
         const { ConnectedServicesAgentSignInView } = await import('./collection/ConnectedServicesAgentSignInView');
         const tree = (await renderScreen(<ConnectedServicesAgentSignInView />)).tree;
 
-        await tree.root
-            .findAllByType('ConnectedServicesDefaultAuthRow' as never)[0]
+        await tree
+            .findAllByType(ConnectedServicesDefaultAuthRow)[0]
             .props.onOpenConnectedServicesSettings('not-a-released-service');
 
         expect(connectedServicesModuleState.routerPushSpy).not.toHaveBeenCalled();
@@ -710,8 +772,8 @@ describe('ConnectedServicesSettingsView', () => {
         const { ConnectedServicesAgentSignInView } = await import('./collection/ConnectedServicesAgentSignInView');
         const tree = (await renderScreen(<ConnectedServicesAgentSignInView />)).tree;
 
-        await tree.root
-            .findAllByType('ConnectedServicesDefaultAuthRow' as never)[0]
+        await tree
+            .findAllByType(ConnectedServicesDefaultAuthRow)[0]
             .props.onOpenConnectedServicesSettings('openai-codex');
 
         expect(modalAlertSpy).not.toHaveBeenCalled();
@@ -730,8 +792,8 @@ describe('ConnectedServicesSettingsView', () => {
         const { ConnectedServicesAgentSignInView } = await import('./collection/ConnectedServicesAgentSignInView');
         const tree = (await renderScreen(<ConnectedServicesAgentSignInView />)).tree;
 
-        await tree.root
-            .findAllByType('ConnectedServicesDefaultAuthRow' as never)[0]
+        await tree
+            .findAllByType(ConnectedServicesDefaultAuthRow)[0]
             .props.onOpenConnectedServicesSettings('openai-codex');
 
         expect(modalAlertSpy).not.toHaveBeenCalled();
@@ -794,7 +856,7 @@ describe('ConnectedServicesSettingsView', () => {
 
         const { ConnectedServicesSettingsView } = await import('./ConnectedServicesSettingsView');
         const screen = await renderScreen(<ConnectedServicesSettingsView />);
-        const panel = screen.tree.root.findByType('ConnectedServicesConnectMore' as never);
+        const panel = screen.tree.root.findByType(ConnectedServicesConnectMore);
 
         // Both the built-in service and the novel qualified descriptor can be added from the catalog,
         // each by its exact qualified identity (never a scalar id).

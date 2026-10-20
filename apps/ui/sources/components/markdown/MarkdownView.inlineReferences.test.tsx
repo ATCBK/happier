@@ -36,7 +36,7 @@ describe('MarkdownView inline references', () => {
 
         const run = screen.findAllByType('EnrichedMarkdownText')[0]!;
         // The citation sits where the narrator put it, labelled by the owner; an unknown one is plain text.
-        expect(run.props.markdown).toContain('open [● High · Codex](happier-ref:finding:codex-run:f1);');
+        expect(run.props.markdown).toContain('open [High · Codex](happier-ref:finding:codex-run:f1);');
         expect(run.props.markdown).toContain('; gone stays text.');
 
         await act(async () => { run.props.onLinkPress({ url: 'happier-ref:finding:codex-run:f1' }); });
@@ -48,5 +48,29 @@ describe('MarkdownView inline references', () => {
         const { MarkdownView } = await import('./MarkdownView');
         const screen = await renderScreen(<MarkdownView markdown={'See [the sheet](finding:codex-run:f1) here.'} />);
         expect(screen.findAllByType('EnrichedMarkdownText')[0]!.props.markdown).toBe('See the sheet here.');
+    });
+
+    it('carries plugin citation severity and presses through the mounted presentation host', async () => {
+        const { Markdown } = await import('@happier-dev/plugin-ui/components');
+        const { PluginUiPresentationHostProviderInternal } = await import('../../../../../packages/plugin-ui/src/presentationHost/context');
+        const { createPluginUiPrivatePresentationHost } = await import('@/components/plugins/surfaces/pluginUiPrivatePresentationHost');
+        const { sanitizeEnrichedMarkdownWithInlineReferences } = await import('./enriched/enrichedMarkdownLinkHandling');
+        const { MarkdownView } = await import('./MarkdownView');
+        const onPress = vi.fn();
+        const reference = { label: 'High · Plugin', severity: 'high' as const, foreground: '#c00', background: '#fee' };
+        const inlineReferences = { scheme: 'plugin-finding', resolve: (target: string) => target === 'f1' ? reference : null, onPress };
+        const screen = await renderScreen(
+            <PluginUiPresentationHostProviderInternal host={createPluginUiPrivatePresentationHost(undefined)}>
+                <Markdown value="See [the finding](plugin-finding:f1)." inlineReferences={inlineReferences} />
+            </PluginUiPresentationHostProviderInternal>,
+        );
+        const markdown = screen.findByType(MarkdownView);
+        const sanitized = sanitizeEnrichedMarkdownWithInlineReferences(markdown.props.markdown, markdown.props.inlineReferences);
+        expect(sanitized.references.get('happier-ref:plugin-finding:f1')).toEqual(reference);
+        const run = screen.findAllByType('EnrichedMarkdownText')[0]!;
+        expect(run.props.markdown).toBe('See [High · Plugin](happier-ref:plugin-finding:f1).');
+        await act(async () => { run.props.onLinkPress({ url: 'happier-ref:plugin-finding:f1' }); });
+        expect(onPress).toHaveBeenCalledWith('f1');
+        expect(openExternalUrl).not.toHaveBeenCalled();
     });
 });

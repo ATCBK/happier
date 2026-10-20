@@ -1,4 +1,4 @@
-import type { PluginUiTargetedContributionsV1 } from '@happier-dev/protocol/plugins/ui';
+import { PluginUiHostApiSurfaceContextV1Schema, type PluginUiTargetedContributionsV1 } from '@happier-dev/protocol/plugins/ui';
 import { act } from 'react';
 import { describe, expect, it, onTestFinished } from 'vitest';
 
@@ -101,11 +101,18 @@ describe('createPluginSurfaceContext', () => {
             },
             translations: fixture.translations,
             targetedContributions,
+            machineConnectionPending: true,
+            machineExecutionReady: false,
         });
 
         expect(targeted.mount).toBe(fixture.mount);
         expect(targeted.accountEncryptionMode).toBe(fixture.accountEncryptionMode);
         expect(targeted.targetedContributions).toBe(targetedContributions);
+        // Both physical transports use this producer and the SDK's strict
+        // context reader; pending is presentation, never surface inactivity.
+        expect(PluginUiHostApiSurfaceContextV1Schema.parse(targeted)).toMatchObject({
+            machineConnectionPending: true, machineExecutionReady: false,
+        });
     });
 
 });

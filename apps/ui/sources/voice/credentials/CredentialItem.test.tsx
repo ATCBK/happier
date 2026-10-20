@@ -210,7 +210,12 @@ function choose(ref = storedRef()) {
 async function render(options: Partial<React.ComponentProps<typeof VoiceCredentialItem>> = {}) {
   return renderScreen(<InjectedAuthProvider credentials={account!.credentials}><ModalProvider><VoiceCredentialItem testID="credential" title="API key" promptTitle="Connect" promptDescription="Paste key"
     contribution={contribution} credentialSlotId="api-key" credentialSourcePurpose="voice.client-auth"
-    credentialSourceDeclaration={credentialSourceDeclaration} disclosePlainStorage={true} {...options} /></ModalProvider></InjectedAuthProvider>);
+    credentialSourceDeclaration={credentialSourceDeclaration} disclosePlainStorage={true} {...options} /></ModalProvider></InjectedAuthProvider>, {
+    // Test Renderer has no native layout engine; keep the real Popover measurable and interactive.
+    createNodeMock: element => element.props.testID === 'credential' ? {
+      measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 100, 320, 48),
+    } : null,
+  });
 }
 async function gesture(screen: Awaited<ReturnType<typeof render>>, id: 'enterNew' | 'useSavedSecret' = 'enterNew') {
   const reviewing = screen.tree.findAll(node => node.props.title === 'API key' && typeof node.props.onPress === 'function')[0]?.props.subtitle
@@ -222,6 +227,12 @@ async function gesture(screen: Awaited<ReturnType<typeof render>>, id: 'enterNew
     if (!trigger) throw new Error('Credential dropdown trigger missing');
     await act(async () => { trigger.props.onPress(); });
     await vi.waitFor(() => expect(screen.tree.findAllByType(DropdownMenu)[0]?.props.open).toBe(true));
+    await vi.waitFor(() => {
+      const option = screen.tree.findByTestId(`dropdown-option-${id}`);
+      expect(option).not.toBeNull();
+      // Opening schedules native anchor measurement before the menu becomes tappable.
+      for (let node = option; node; node = node.parent) expect(node.props.visible).not.toBe(false);
+    });
     await screen.tree.pressByTestIdAsync(`dropdown-option-${id}`);
   } else {
     if (id !== 'enterNew') throw new Error('SavedSecret selector missing');

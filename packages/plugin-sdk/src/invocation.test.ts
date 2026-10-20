@@ -14,7 +14,7 @@ import type {
 } from './invocation.js';
 import type { MessageActionAvailableSnapshotV1 as PublicMessageActionAvailableSnapshotV1 } from './index.js';
 import type { PluginInvocationContributionIdentity } from './identity.js';
-import type { PluginMachineMaterializationRefV1 } from './executionOrigin.js';
+import type { PluginMachineMaterializationRefV1, PluginMachineExecutionOriginV1 } from './executionOrigin.js';
 
 type IsRequired<TValue, TKey extends keyof TValue> = {} extends Pick<TValue, TKey>
     ? false
@@ -61,6 +61,7 @@ describe('Plugin invocation context', () => {
                 occurrenceId: string;
                 sourceCustody: PluginSourceCustodyV1;
                 materialization?: PluginMachineMaterializationRefV1;
+                executionOrigin?: PluginMachineExecutionOriginV1;
                 originSurface?: 'cli' | 'mcp' | 'agent' | 'ui' | 'voice' | 'background' | 'api';
             }>
             | Readonly<{

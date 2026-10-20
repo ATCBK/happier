@@ -1,163 +1,89 @@
 import React from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { renderScreen } from '@/dev/testkit';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-(
-    globalThis as typeof globalThis & {
-        IS_REACT_ACT_ENVIRONMENT?: boolean;
-    }
-).IS_REACT_ACT_ENVIRONMENT = true;
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createConcurrentCacheNetworkHarness } from '@/dev/testkit/harness/concurrentCacheNetworkHarness';
 
-const switchConnectionToActiveServerSpy = vi.hoisted(() => vi.fn(async () => null));
-const disconnectActiveServerConnectionSpy = vi.hoisted(() => vi.fn(async () => {}));
-const disconnectActiveServerConnectionIfCurrentSpy = vi.hoisted(() => vi.fn(async () => true));
-const syncSwitchServerSpy = vi.hoisted(() => vi.fn(async () => {}));
-const subscribeActiveServerSpy = vi.hoisted(() => vi.fn());
-const subscribeAuthCredentialsInvalidationSpy = vi.hoisted(() => vi.fn());
-const startConcurrentSessionCacheSyncSpy = vi.hoisted(() => vi.fn());
-const stopConcurrentSessionCacheSyncSpy = vi.hoisted(() => vi.fn());
+const homes = await createConcurrentCacheNetworkHarness('auth-invalidation');
+const { AuthProvider, ConcurrentSessionCacheRuntime, getCurrentAuth } = await import('./AuthContext');
+const connection = await import('@/sync/runtime/orchestration/connectionManager');
+const { notifyAuthCredentialsInvalidated } = await import('@/sync/runtime/orchestration/authCredentialsInvalidation');
+const { guardAccountEncryptionFirstKeyCredentialMutation } = await import('@/sync/ops/account/accountEncryptionFirstKeyExternalAuth');
 
-let authInvalidationListener: ((event: unknown) => void | Promise<void>) | null = null;
-
-vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
-    switchConnectionToActiveServer: switchConnectionToActiveServerSpy,
-    disconnectActiveServerConnection: disconnectActiveServerConnectionSpy,
-    disconnectActiveServerConnectionIfCurrent: disconnectActiveServerConnectionIfCurrentSpy,
-}));
-
-vi.mock('@/sync/sync', () => ({
-    syncSwitchServer: syncSwitchServerSpy,
-}));
-
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => ({
-        serverId: 'server-a',
-        serverUrl: 'http://localhost:3012',
-        generation: 1,
-    }),
-    subscribeActiveServer: (listener: unknown) => {
-        subscribeActiveServerSpy(listener);
-        return () => {};
-    },
-}));
-
-vi.mock('@/sync/runtime/orchestration/authCredentialsInvalidation', () => ({
-    subscribeAuthCredentialsInvalidation: (listener: unknown) => {
-        subscribeAuthCredentialsInvalidationSpy(listener);
-        authInvalidationListener = listener as ((event: unknown) => void | Promise<void>);
-        return () => {
-            if (authInvalidationListener === listener) {
-                authInvalidationListener = null;
-            }
-        };
-    },
-}));
-
-vi.mock('@/sync/domains/state/persistence', () => ({
-    clearPersistence: vi.fn(),
-}));
-
-vi.mock('@/track', () => ({
-    trackLogout: vi.fn(),
-}));
-
-vi.mock('@/sync/runtime/orchestration/concurrentSessionCache', () => ({
-    startConcurrentSessionCacheSync: startConcurrentSessionCacheSyncSpy,
-    stopConcurrentSessionCacheSync: stopConcurrentSessionCacheSyncSpy,
-}));
+async function recoveryFor(home: typeof homes.homeA) {
+    expect(await homes.TokenStorage.setPendingExternalAuth({
+        provider: 'github', proof: 'proof', secret: 'secret', serverId: home.id, serverUrl: home.serverUrl,
+        accountEncryptionFirstKey: {
+            accountId: home.accountId, requestDigest: 'aemrb1_' + 'A'.repeat(43), requestJson: '{}',
+            pending: 'pending', createdAt: Date.now(), expiresAt: Date.now() + 60_000,
+            migrationSubmissionAttempted: true,
+        },
+    })).toBe(true);
+    const guarded = await guardAccountEncryptionFirstKeyCredentialMutation({ serverId: home.id, serverUrl: home.serverUrl });
+    if (guarded.kind !== 'finish_encryption_setup') throw new Error('Expected retained first-key custody');
+    return guarded.recovery;
+}
 
 describe('AuthContext credential invalidation handling', () => {
-    beforeEach(() => {
-        switchConnectionToActiveServerSpy.mockReset();
-        switchConnectionToActiveServerSpy.mockResolvedValue(null);
-        disconnectActiveServerConnectionSpy.mockReset();
-        disconnectActiveServerConnectionIfCurrentSpy.mockReset();
-        disconnectActiveServerConnectionIfCurrentSpy.mockResolvedValue(true);
-        syncSwitchServerSpy.mockReset();
-        subscribeActiveServerSpy.mockReset();
-        subscribeAuthCredentialsInvalidationSpy.mockReset();
-        startConcurrentSessionCacheSyncSpy.mockReset();
-        stopConcurrentSessionCacheSyncSpy.mockReset();
-        authInvalidationListener = null;
+    beforeEach(async () => {
+        await homes.reset();
+        await connection.restoreConnectionToActiveServer({ token: homes.homeA.token });
     });
-
-    afterEach(() => {
-        vi.unstubAllGlobals();
+    afterEach(async () => {
+        await standardCleanup();
+        await connection.disconnectActiveServerConnection();
+        for (const home of [homes.homeA, homes.homeB]) {
+            const state = await homes.TokenStorage.readPendingExternalAuthStateForServerUrl(home.serverUrl, { serverId: home.id });
+            if (state.value) await homes.TokenStorage.clearPendingExternalAuth({
+                serverUrl: home.serverUrl, serverId: home.id, removeFirstKeyMigrationAttempted: state.value,
+            });
+        }
+        await homes.cleanup();
     });
+    afterAll(async () => { await homes.dispose(); });
 
     it('disconnects first-key rejected auth through the connection owner without stopping secondary-server continuity', async () => {
-        const { AuthProvider, ConcurrentSessionCacheRuntime, getCurrentAuth } = await import('./AuthContext');
+        const credentials = { token: homes.homeA.token };
+        const screen = await renderScreen(<AuthProvider initialCredentials={credentials}>
+            <ConcurrentSessionCacheRuntime><React.Fragment /></ConcurrentSessionCacheRuntime>
+        </AuthProvider>);
+        await vi.waitFor(() => expect(homes.network.socketBoundaries.some(socket => socket.serverUrl === homes.homeB.serverUrl)).toBe(true));
+        await homes.ready();
+        const secondary = homes.socket();
+        expect(secondary.socket.connected).toBe(true);
+        const disconnects = vi.mocked(secondary.socket.disconnect).mock.calls.length;
+        const recovery = await recoveryFor(homes.homeA);
+        const target = homes.profiles.getActiveServerSnapshot();
 
-        const screen = await renderScreen(
-            React.createElement(AuthProvider, {
-                initialCredentials: { token: 'token-a', secret: 'secret-a' },
-                children: React.createElement(ConcurrentSessionCacheRuntime, null, React.createElement(React.Fragment)),
-            }),
-        );
+        await act(async () => { notifyAuthCredentialsInvalidated({ ...target, kind: 'first_key_recovery_required', recovery }); });
+        await vi.waitFor(() => {
+            expect(getCurrentAuth()?.isAuthenticated).toBe(false);
+            expect(connection.isAppliedActiveServerRuntimeAvailable()).toBe(false);
+        });
+        expect(await homes.TokenStorage.getCredentialsForServerUrl(homes.homeA.serverUrl, { serverId: homes.homeA.id })).toEqual(credentials);
+        expect(secondary.socket.disconnect).toHaveBeenCalledTimes(disconnects);
+        const reads = homes.requests('/v2/sessions').filter(request => request.url.origin === homes.homeB.serverUrl).length;
+        await homes.refresh();
+        expect(homes.requests('/v2/sessions').filter(request => request.url.origin === homes.homeB.serverUrl).length).toBeGreaterThan(reads);
+        await homes.ready();
 
-        try {
-            expect(getCurrentAuth()?.isAuthenticated).toBe(true);
-            expect(startConcurrentSessionCacheSyncSpy).toHaveBeenCalledTimes(1);
-            expect(subscribeAuthCredentialsInvalidationSpy).toHaveBeenCalledTimes(1);
-            expect(authInvalidationListener).toBeTypeOf('function');
-
-            await act(async () => {
-                await authInvalidationListener?.({
-                    kind: 'first_key_recovery_required',
-                    serverId: 'server-a',
-                    serverUrl: 'http://localhost:3012',
-                    generation: 1,
-                    recovery: {},
-                });
-            });
-
-            await vi.waitFor(() => {
-                expect(disconnectActiveServerConnectionIfCurrentSpy).toHaveBeenCalledWith({
-                    serverId: 'server-a',
-                    serverUrl: 'http://localhost:3012',
-                    generation: 1,
-                });
-                expect(getCurrentAuth()?.isAuthenticated).toBe(false);
-            });
-            expect(switchConnectionToActiveServerSpy).not.toHaveBeenCalled();
-            expect(syncSwitchServerSpy).not.toHaveBeenCalled();
-            expect(stopConcurrentSessionCacheSyncSpy).not.toHaveBeenCalled();
-        } finally {
-            await screen.unmount();
-        }
-        expect(stopConcurrentSessionCacheSyncSpy).toHaveBeenCalledTimes(1);
+        await screen.unmount();
+        expect(secondary.socket.connected).toBe(false);
     });
 
     it('does not clear the focused Home when a delayed first-key invalidation belongs to another Home', async () => {
-        disconnectActiveServerConnectionIfCurrentSpy.mockResolvedValue(false);
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
-        const initialCredentials = { token: 'token-b', secret: 'secret-b' };
-        const screen = await renderScreen(React.createElement(AuthProvider, {
-            initialCredentials,
-            children: React.createElement(React.Fragment, null),
-        }));
+        const credentials = { token: homes.homeA.token };
+        const screen = await renderScreen(<AuthProvider initialCredentials={credentials}><React.Fragment /></AuthProvider>);
+        const applied = connection.getAppliedActiveServerSnapshot();
+        const recovery = await recoveryFor(homes.homeB);
 
-        try {
-            await act(async () => {
-                await authInvalidationListener?.({
-                    kind: 'first_key_recovery_required',
-                    serverId: 'server-a',
-                    serverUrl: 'http://localhost:3012',
-                    generation: 1,
-                    recovery: {},
-                });
-                await Promise.resolve();
-            });
-
-            await vi.waitFor(() => expect(disconnectActiveServerConnectionIfCurrentSpy).toHaveBeenCalledOnce());
-            expect(getCurrentAuth()).toMatchObject({
-                isAuthenticated: true,
-                credentials: initialCredentials,
-            });
-            expect(disconnectActiveServerConnectionSpy).not.toHaveBeenCalled();
-        } finally {
-            await screen.unmount();
-        }
+        await act(async () => { notifyAuthCredentialsInvalidated({
+            kind: 'first_key_recovery_required', serverId: homes.homeB.id, serverUrl: homes.homeB.serverUrl, recovery,
+        }); });
+        expect(getCurrentAuth()).toMatchObject({ isAuthenticated: true, credentials });
+        expect(connection.getAppliedActiveServerSnapshot()).toBe(applied);
+        expect(connection.isAppliedActiveServerRuntimeAvailable()).toBe(true);
+        await screen.unmount();
     });
 });

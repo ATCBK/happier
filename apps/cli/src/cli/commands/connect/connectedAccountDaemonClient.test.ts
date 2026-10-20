@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { StoredCredentials } from '@/persistence';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { createCliConnectedServiceAction } from '@/session/actions/connectedServiceActionDeps';
 
 import {
@@ -20,7 +22,8 @@ describe('createConnectedAccountDaemonClient', () => {
     const callMachineRpc = vi.fn(async () => ({ status: 'outcomeUnknown' as const,
       account: { service, accountId: 'account-1' } }));
     const actionExecutor = createActionExecutor({
-      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, {}, context),
+      ...createUnavailableActionTransportDeps(),
+      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, normalizeActionsSettingsV1({}), context),
       connectedServiceAction: createCliConnectedServiceAction({ credentials,
         resolveHeaders: () => ({ Authorization: `Bearer ${credentials.token}` }),
         callMachineAction: callMachineRpc,
@@ -81,9 +84,10 @@ describe('createConnectedAccountDaemonClient', () => {
       machineId: 'machine-1',
       callMachineRpc,
       actionExecutor: createActionExecutor({
+        ...createUnavailableActionTransportDeps(),
         isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id,
-          { v: 1, approvalWaivedSurfaces: { 'connectedServices.authentication.beginConnect': ['cli'],
-            'connectedServices.accounts.revoke': ['cli'] } }, context),
+          normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'connectedServices.authentication.beginConnect': ['cli'],
+            'connectedServices.accounts.revoke': ['cli'] } }), context),
         connectedServiceAction: createCliConnectedServiceAction({ credentials,
           resolveHeaders: () => ({ Authorization: `Bearer ${credentials.token}` }),
           callMachineAction: async ({ machineId, method, request, signal }) => callMachineRpc({ credentials,

@@ -64,7 +64,7 @@ export type SessionRightSidebarTabId =
     | `plugin:${string}`;
 
 export type ProjectRightSidebarTabId =
-    | Extract<RightSidebarBuiltInTabId, 'git' | 'files' | 'scripts' | 'terminal' | 'browser' | 'services'>
+    | Extract<RightSidebarBuiltInTabId, 'git' | 'files' | 'scripts' | 'widgets' | 'terminal' | 'browser' | 'services'>
     | `plugin:${string}`;
 
 export type { RightSidebarTabDefinitionFor };

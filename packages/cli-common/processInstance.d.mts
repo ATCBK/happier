@@ -11,6 +11,22 @@ export interface ProcessInstanceBoundary {
   };
 }
 
+export interface ProcessLivenessBoundary {
+  platform?: string;
+  killImpl?: (pid: number, signal: 0) => void;
+  readFileSyncImpl?: ProcessInstanceBoundary['readFileSyncImpl'];
+}
+
+export type ProcessLivenessObservation =
+  | { status: 'alive'; reason: 'signal_probe' | 'permission_denied_but_present' }
+  | { status: 'dead'; reason: 'invalid_pid' | 'not_found' | 'zombie' }
+  | { status: 'inconclusive'; reason: string; error: unknown };
+
+export function observeProcessLivenessSync(
+  pid: unknown,
+  boundary?: ProcessLivenessBoundary,
+): ProcessLivenessObservation;
+
 export function parseLinuxProcStartTime(statText: unknown): string | null;
 export function parseLinuxProcStartTimeMs(statText: unknown): number | null;
 export function hashProcessCommand(command: string): string;

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { listVoiceActionBlockSpecs, resolveVoiceClientToolNameAlias } from '../actions/actionSpecs.js';
 
 export const VOICE_ACTIONS_TAG = 'voice_actions' as const;
@@ -15,27 +15,27 @@ export type VoiceAssistantAction = Readonly<{
 
 type VoiceActionSchemaEntry = Readonly<{
   toolName: string;
-  inputSchema: z.ZodTypeAny;
+  inputSchema: z.ZodMiniType;
 }>;
 
-function unwrapVoiceActionSchema(schema: z.ZodTypeAny): z.ZodTypeAny {
+function unwrapVoiceActionSchema(schema: z.core.$ZodType): z.core.$ZodType {
   let current = schema;
 
   for (;;) {
-    if (current instanceof z.ZodOptional) {
-      current = (current as any)._def.innerType;
+    if (current instanceof z.ZodMiniOptional) {
+      current = current._zod.def.innerType;
       continue;
     }
-    if (current instanceof z.ZodDefault) {
-      current = (current as any)._def.innerType;
+    if (current instanceof z.ZodMiniDefault) {
+      current = current._zod.def.innerType;
       continue;
     }
-    if (current instanceof z.ZodNullable) {
-      current = (current as any)._def.innerType;
+    if (current instanceof z.ZodMiniNullable) {
+      current = current._zod.def.innerType;
       continue;
     }
-    if (current instanceof z.ZodPipe) {
-      current = (current as any)._def.in;
+    if (current instanceof z.ZodMiniPipe) {
+      current = current._zod.def.in;
       continue;
     }
     break;
@@ -52,7 +52,7 @@ function listVoiceActionSchemaEntries(): VoiceActionSchemaEntry[] {
   });
 }
 
-function buildVoiceAssistantActionSchema(): z.ZodType<VoiceAssistantAction> {
+function buildVoiceAssistantActionSchema(): z.ZodMiniType<VoiceAssistantAction> {
   // Centralized: the action block schema is derived from Action Specs.
   // Each spec that opts into the voice surface must bind a stable voiceClientToolName and inputSchema.
   const voiceActionBlockOptions = listVoiceActionSchemaEntries().map(({ toolName, inputSchema }) => {
@@ -64,21 +64,22 @@ function buildVoiceAssistantActionSchema(): z.ZodType<VoiceAssistantAction> {
     ];
   });
 
-  return z.discriminatedUnion('t', voiceActionBlockOptions.flat() as any) as z.ZodType<VoiceAssistantAction>;
+  const options = voiceActionBlockOptions.flat();
+  return z.discriminatedUnion('t', options as [typeof options[number], ...typeof options[number][]]) as z.ZodMiniType<VoiceAssistantAction>;
 }
 
-let memoizedVoiceAssistantActionSchema: z.ZodType<VoiceAssistantAction> | undefined;
-function getVoiceAssistantActionSchema(): z.ZodType<VoiceAssistantAction> {
+let memoizedVoiceAssistantActionSchema: z.ZodMiniType<VoiceAssistantAction> | undefined;
+function getVoiceAssistantActionSchema(): z.ZodMiniType<VoiceAssistantAction> {
   if (!memoizedVoiceAssistantActionSchema) {
     memoizedVoiceAssistantActionSchema = buildVoiceAssistantActionSchema();
   }
   return memoizedVoiceAssistantActionSchema;
 }
 
-export const VoiceAssistantActionSchema: z.ZodType<VoiceAssistantAction> = z.lazy(() => getVoiceAssistantActionSchema());
+export const VoiceAssistantActionSchema: z.ZodMiniType<VoiceAssistantAction> = z.lazy(() => getVoiceAssistantActionSchema());
 
-let memoizedVoiceActionSchemaByToolName: ReadonlyMap<string, z.ZodTypeAny> | undefined;
-function getVoiceActionSchemaByToolName(): ReadonlyMap<string, z.ZodTypeAny> {
+let memoizedVoiceActionSchemaByToolName: ReadonlyMap<string, z.ZodMiniType> | undefined;
+function getVoiceActionSchemaByToolName(): ReadonlyMap<string, z.ZodMiniType> {
   if (!memoizedVoiceActionSchemaByToolName) {
     memoizedVoiceActionSchemaByToolName = new Map(
       listVoiceActionSchemaEntries().map(({ toolName, inputSchema }) => [toolName, inputSchema]),
@@ -113,42 +114,38 @@ function splitVoiceActionListString(value: string): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-function coerceVoiceActionValueForSchema(value: unknown, schema: z.ZodTypeAny): unknown {
+function coerceVoiceActionValueForSchema(value: unknown, schema: z.core.$ZodType): unknown {
   const core = unwrapVoiceActionSchema(schema);
 
-  if (core instanceof z.ZodObject) {
+  if (core instanceof z.ZodMiniObject) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       return coerceVoiceActionScalarStrings(value);
     }
-    const shape = (core as any).shape ?? (core as any)._def?.shape ?? {};
+    const shape = core.shape;
     return Object.fromEntries(
       Object.entries(value).map(([key, entry]) => {
-        const fieldSchema = shape?.[key] as z.ZodTypeAny | undefined;
+        const fieldSchema = shape[key];
         return [key, fieldSchema ? coerceVoiceActionValueForSchema(entry, fieldSchema) : coerceVoiceActionScalarStrings(entry)];
       }),
     );
   }
 
-  if (core instanceof z.ZodArray) {
-    const elementSchema = (core as any)._def?.element as z.ZodTypeAny | undefined;
+  if (core instanceof z.ZodMiniArray) {
+    const elementSchema = core._zod.def.element;
     const items = Array.isArray(value)
       ? value
       : typeof value === 'string'
         ? splitVoiceActionListString(value)
         : null;
     if (!items) return coerceVoiceActionScalarStrings(value);
-    return items.map((entry) => (elementSchema ? coerceVoiceActionValueForSchema(entry, elementSchema) : coerceVoiceActionScalarStrings(entry)));
+    return items.map((entry) => coerceVoiceActionValueForSchema(entry, elementSchema));
   }
 
-  if (core instanceof z.ZodUnion || core instanceof z.ZodDiscriminatedUnion) {
-    const options: z.ZodTypeAny[] = Array.isArray((core as any)._def?.options)
-      ? ((core as any)._def.options as z.ZodTypeAny[])
-      : core instanceof z.ZodDiscriminatedUnion && (core as any).options instanceof Map
-        ? (Array.from((core as any).options.values()) as z.ZodTypeAny[])
-        : [];
+  if (core instanceof z.ZodMiniUnion || core instanceof z.ZodMiniDiscriminatedUnion) {
+    const options = core._zod.def.options;
     for (const option of options) {
       const candidate = coerceVoiceActionValueForSchema(value, option);
-      if (option.safeParse(candidate).success) return candidate;
+      if (z.safeParse(option, candidate).success) return candidate;
     }
   }
 

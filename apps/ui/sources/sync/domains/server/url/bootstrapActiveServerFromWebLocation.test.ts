@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { scopedStorageId } from '@/utils/system/storageScope';
@@ -42,8 +43,9 @@ async function importFreshServerProfiles() {
     return await import('../serverProfiles');
 }
 
-// Collect the real override graph before case deadlines; each case still reloads its scope.
+// Collect the real override/switch graph before case deadlines; each case still reloads its scope.
 await import('./resolveAuthenticatedWebServerUrlOverrideAction');
+await import('../activeServerSwitch');
 
 describe('bootstrapActiveServerFromWebLocation', () => {
     const previousEnv = process.env.EXPO_PUBLIC_HAPPY_SERVER_URL;

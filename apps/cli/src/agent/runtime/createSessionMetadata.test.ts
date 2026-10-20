@@ -2,6 +2,7 @@ import { mergeSessionMetadataForStartup } from './mergeSessionMetadataForStartup
 import { describe, expect, it } from 'vitest';
 
 import type { Metadata } from '@/api/types';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 
 import {
     applyInitialSessionCreationFactsToMetadata,
@@ -10,6 +11,7 @@ import {
     createSessionMetadata,
 } from './createSessionMetadata';
 import { HAPPIER_SESSION_CONNECTED_SERVICES_BINDINGS_ENV_KEY } from './sessionConnectedServicesBindingsEnv';
+import { createDeferredStartupMetadataPlan } from './startup/createDeferredStartupMetadataPlan';
 
 const HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY =
     'HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_V1_JSON';
@@ -26,6 +28,20 @@ function createMetadata(
 }
 
 describe('createSessionMetadata', () => {
+    it('publishes the initialized Machine on attach when a retained birth has no placement and the launch environment is empty', () => {
+        const plan = createDeferredStartupMetadataPlan({
+            flavor: 'test-agent', initialMachineId: '', directory: '/project',
+            initialPermissionMode: 'default',
+            launchControlMetadata: captureSessionLaunchControlMetadata({ processEnvironment: {} }),
+        });
+        expect(plan.initialMetadata).not.toHaveProperty('machineId');
+        expect(plan.initialMetadata).not.toHaveProperty('sessionWorkspaceLocationV1');
+        const current = createTestMetadata({ path: '/project', host: 'retained-host' });
+        const next = plan.createInitializedSessionMetadata('registered-machine').metadata;
+        expect(mergeSessionMetadataForStartup({ current, next, mode: 'attach', nowMs: 1 }))
+            .toMatchObject({ machineId: 'registered-machine', path: '/project', host: 'retained-host',
+                sessionWorkspaceLocationV1: { machineId: 'registered-machine', agentPath: '/project', machinePath: '/project' } });
+    });
     it('refuses malformed captured tool policy rather than starting with default ask behavior', () => {
         for (const raw of ['not-json', 'null', '{"allowedTools":"Read"}', '{"unlistedTools":"allow"}']) {
             expect(() => captureSessionLaunchControlMetadata({
@@ -35,7 +51,7 @@ describe('createSessionMetadata', () => {
     });
     it('sets attestation only at birth, removes inherited assertions and keeps the persisted facts on attach', () => {
         const attestedContext = { externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<lead@example.test>' };
-        const source = { path: '/project', host: 'machine', attestedContext };
+        const source = createTestMetadata({ path: '/project', host: 'machine', attestedContext });
         expect(applyInitialSessionCreationFactsToMetadata(source, {})).not.toHaveProperty('attestedContext');
         const current = applyInitialSessionCreationFactsToMetadata(source, { attestedContext });
         expect(current).toMatchObject({ attestedContext });
@@ -43,10 +59,10 @@ describe('createSessionMetadata', () => {
         expect(mergeSessionMetadataForStartup({ current, next, mode: 'attach', nowMs: 1 })).toMatchObject({ attestedContext });
     });
     it('seeds the authored tool policy at birth and preserves it when a runner attaches', () => {
-        const policy = { allowedTools: ['mcp__wilson-intake__*'], unlistedTools: 'deny' as const };
-        const current = applyInitialSessionCreationFactsToMetadata({ path: '/project', host: 'machine' }, policy);
+        const policy = { allowedTools: ['mcp__wilson-intake__*'], unlistedTools: 'deny' as const, workspaceWrites: 'deny' as const };
+        const current = applyInitialSessionCreationFactsToMetadata(createTestMetadata({ path: '/project', host: 'machine' }), policy);
         expect(current).toMatchObject(policy);
-        const next = createMetadata({ flavor: 'test-agent', machineId: 'machine-1' }).metadata;
+        const next = { ...createMetadata({ flavor: 'test-agent', machineId: 'machine-1' }).metadata, workspaceWrites: 'allow' as const };
         expect(mergeSessionMetadataForStartup({ current, next, mode: 'attach', nowMs: 1 })).toMatchObject(policy);
     });
     it('clears a previous runner generation when the replacement process cannot read its generation', () => {
@@ -414,9 +430,9 @@ describe('createSessionMetadata', () => {
         const mcp = { v: 1 as const, managedServersEnabled: false, forceIncludeServerIds: ['server-a'], forceExcludeServerIds: ['server-b'] };
         const skills = { v: 1 as const, forceIncludeSkillIds: ['lint'], forceExcludeSkillIds: ['review'], excludeNativeSkillNames: ['native'] };
         const metadata = buildCommittedLaunchMetadata({
-            directory: '/project', options: { directory: '/project', capabilitySelection: { mcp, skills } },
+            directory: '/project', options: { directory: '/project', machineId: 'machine-1', capabilitySelection: { mcp, skills } },
         });
-        expect(metadata).toMatchObject({ mcpSelectionV1: mcp, skillSelectionV1: skills });
+        expect(metadata).toMatchObject({ machineId: 'machine-1', mcpSelectionV1: mcp, skillSelectionV1: skills });
         expect(metadata).not.toHaveProperty('mcpSelectionRestartRequiredV1');
         expect(metadata).not.toHaveProperty('skillSelectionRestartRequiredV1');
     });
@@ -427,9 +443,9 @@ describe('createSessionMetadata', () => {
                 source: 'team_resource' as const, resourceId: 'claude-ai1', deliveryMode: 'brokered' as const,
             },
         } };
-        const current = buildCommittedLaunchMetadata({ directory: '/project', options: {
+        const current = createTestMetadata(buildCommittedLaunchMetadata({ directory: '/project', options: {
             directory: '/project', connectedServices, connectedServicesUpdatedAt: 123,
-        } });
+        } }));
         expect(current).toMatchObject({ connectedServices, connectedServicesUpdatedAt: 123 });
         const next = createMetadata({ flavor: 'claude', machineId: 'machine-1' }).metadata;
         expect(mergeSessionMetadataForStartup({ current, next, mode: 'attach', nowMs: 124 }))

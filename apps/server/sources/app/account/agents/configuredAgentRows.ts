@@ -10,11 +10,14 @@ import type { AccountSettingsCleanupV1 } from '@happier-dev/protocol/account/set
 import { KIRO_ACP_STDERR_RULES } from '@happier-dev/plugins-kiro/agent/acp/transport';
 import { isDeepStrictEqual } from 'node:util';
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
+import { validateSavedSecretResourceReferencesInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
+import { AccountSettingsPublicationConflict, validateAccountSettingsVersionAtPublicationInTx, writeAccountSettingsInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
 import { openPlainAccountSettingsDbValue, PlainAccountSettingsStorageUnavailableError } from '@/app/encryption/accountSettingsStorage';
 import type { TeamOperationAuthenticationContext } from '@/app/teams/actorContext';
-import { inTx, type Tx } from '@/storage/inTx';
+import { inTx, type TransactionResult, type Tx } from '@/storage/inTx';
 import { mutateReservedAccountScopedKvRowInTx, readReservedAccountScopedKvRowInTx,
+    readReservedAccountScopedKvRowMutationConflict,
     type ReservedAccountScopedKvRowDomain } from '@/app/kv/reservedAccountScopedKvRow';
 
 /** Reads retain the original inventory; only current, complete records are new writes. */
@@ -31,7 +34,7 @@ export const configuredAgentCatalogRowDomain: ReservedAccountScopedKvRowDomain<S
     assertEnvelopeForMode: assertAcpCatalogContentForModeV1,
 };
 
-export function markConfiguredAgentCatalogRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): Promise<number> {
+export function markConfiguredAgentCatalogRowChangedInTx(tx: Tx, input: Readonly<{ accountId: string; revision: number }>): ReturnType<typeof markAccountChanged> {
     return markAccountChanged(tx, { accountId: input.accountId, kind: 'account', entityId: ACP_CATALOG_ACCOUNT_ROW_KEY_V1,
         hint: { acpCatalog: true, revision: input.revision } });
 }
@@ -47,8 +50,12 @@ type MutationInput = Readonly<{ accountId: string; authentication?: TeamOperatio
     & Readonly<{ referencedSavedSecretIds?: readonly string[];
         savedSecretRevisions?: readonly Readonly<{ resourceId: string; expectedRevision: number }>[] }>;
 type MutationResult = ReturnType<typeof AcpCatalogRowMutationResponseV1Schema.parse>;
+type MutationSuccess = Extract<MutationResult, { status: 'updated' }>;
+type MutationInTxResult = Exclude<MutationResult, { status: 'updated' }>
+    | (Omit<MutationSuccess, 'cursor'> & TransactionResult<MutationSuccess>);
 type PreparedMutationResult = Exclude<MutationResult, { status: 'updated' }>
-    | Readonly<{ status: 'updated'; revision: number; cursor: number; settingsCleanup?: AccountSettingsCleanupV1 }>;
+    | (Omit<MutationSuccess, 'cursor'> & TransactionResult<MutationSuccess>
+        & Readonly<{ settingsCleanup?: AccountSettingsCleanupV1 }>);
 
 export class ConfiguredAgentCatalogTransactionAbort extends Error {
     constructor(readonly result: Exclude<MutationResult, { status: 'updated' }>) { super(result.status); }
@@ -61,7 +68,7 @@ async function applyConfiguredAgentCatalogMutationInTx(tx: Tx, input: MutationIn
         source: input.source, sourceSettingsVersion: input.sourceSettingsVersion,
         settingsCleanup: input.settingsCleanup,
         referencedSavedSecretIds: input.referencedSavedSecretIds, savedSecretRevisions: input.savedSecretRevisions });
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
     if (fence.status === 'account_not_found') return { status: 'account-not-found' };
     if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent', reason: fence.reason };
     try { assertAcpCatalogContentForModeV1(mutation.content, fence.account.currentness.encryptionMode); }
@@ -79,6 +86,9 @@ async function applyConfiguredAgentCatalogMutationInTx(tx: Tx, input: MutationIn
         if (fence.account.settingsVersion !== mutation.sourceSettingsVersion) {
             return { status: 'settings-conflict', revision: fence.account.settingsVersion };
         }
+        if (mutation.sourceSettingsVersion !== undefined) {
+            validateAccountSettingsVersionAtPublicationInTx(tx, { accountId: input.accountId, expectedVersion: mutation.sourceSettingsVersion });
+        }
         if (mutation.settingsCleanup?.nextSettings
             && mutation.settingsCleanup.nextSettings.t !== (fence.account.currentness.encryptionMode === 'plain' ? 'plain' : 'encrypted')) {
             return { status: 'account-mode-mismatch' };
@@ -91,7 +101,8 @@ async function applyConfiguredAgentCatalogMutationInTx(tx: Tx, input: MutationIn
                     if (!isFreshAcpCatalogSourceV1(raw)) return { status: 'source-transfer-required' };
                 } else {
                     const prepared = prepareAcpCatalogTransferV2({ rawSettings: raw, sourceSettingsVersion: fence.account.settingsVersion,
-                        savedSecretRefs, kiroStderrRules: KIRO_ACP_STDERR_RULES });
+                        savedSecretRefs, agentDeclarations: [{ identity: { pluginId: 'happier.agent.kiro', localId: 'kiro' },
+                            acpStderrRules: KIRO_ACP_STDERR_RULES }] });
                     if (prepared.status !== 'ready' || mutation.content.t !== 'plain'
                         || !isDeepStrictEqual(prepared.record, mutation.content.v)) return { status: 'source-transfer-required' };
                 }
@@ -115,7 +126,6 @@ async function applyConfiguredAgentCatalogMutationInTx(tx: Tx, input: MutationIn
     if (mutation.content.t === 'plain' && !isDeepStrictEqual([...references].sort(), [...new Set(mutation.referencedSavedSecretIds)].sort())) {
         return { status: 'invalid-reference' };
     }
-    const { validateSavedSecretResourceReferencesInTx } = await import('@/app/account/savedSecrets/savedSecretResourceService');
     if (!(await validateSavedSecretResourceReferencesInTx(tx, { accountId: input.accountId, authentication: input.authentication,
         references, savedSecretRevisions: mutation.savedSecretRevisions ?? [] }))) return { status: 'invalid-reference' };
     const result = await mutateReservedAccountScopedKvRowInTx(tx, { accountId: input.accountId, physicalKey: ACP_CATALOG_ACCOUNT_ROW_KEY_V1,
@@ -136,11 +146,10 @@ export async function transferConfiguredAgentCatalogSourceInTx(tx: Tx, input: Re
 }
 
 /** The ordinary row owner commits captured source cleanup in the caller's rollback boundary. */
-export async function mutateConfiguredAgentCatalogRowInTx(tx: Tx, input: MutationInput): Promise<MutationResult> {
+export async function mutateConfiguredAgentCatalogRowInTx(tx: Tx, input: MutationInput): Promise<MutationInTxResult> {
     const result = await applyConfiguredAgentCatalogMutationInTx(tx, input);
     if (result.status !== 'updated') return result;
     if (result.settingsCleanup) {
-        const { writeAccountSettingsInTx } = await import('@/app/accountSettings/writeAccountSettingsInTx');
         const settings = await writeAccountSettingsInTx({ tx, accountId: input.accountId,
             expectedVersion: result.settingsCleanup.expectedSettingsVersion, next: { kind: 'v2', content: result.settingsCleanup.nextSettings } }).catch(error => {
                 if (error instanceof PlainAccountSettingsStorageUnavailableError) throw new ConfiguredAgentCatalogTransactionAbort({ status: 'invalid-stored-content' });
@@ -149,10 +158,22 @@ export async function mutateConfiguredAgentCatalogRowInTx(tx: Tx, input: Mutatio
         if (settings.status !== 'success') throw new ConfiguredAgentCatalogTransactionAbort(settings.status === 'version_mismatch'
             ? { status: 'settings-conflict', revision: settings.currentVersion } : { status: 'invalid-stored-content' });
     }
-    return { status: 'updated', revision: result.revision, cursor: result.cursor };
+    return result;
 }
 
 export async function mutateConfiguredAgentCatalogRow(input: MutationInput): Promise<MutationResult> {
-    try { return await inTx(tx => mutateConfiguredAgentCatalogRowInTx(tx, input), { /* Shared Secret revisions and Team-derived access precede catalog writes. */ isolationLevel: "Serializable" }); }
-    catch (error) { if (error instanceof ConfiguredAgentCatalogTransactionAbort) return error.result; throw error; }
+    // The Account fence serializes mode, source Settings and catalog CAS. Only
+    // referenced grants can change under another Account and still require SSI.
+    try { return await inTx(tx => mutateConfiguredAgentCatalogRowInTx(tx, input), {
+        ...((input.referencedSavedSecretIds?.length ?? 0) > 0 ? { isolationLevel: "Serializable" as const } : {}),
+        transactionClass: "acp-catalog-mutate",
+    }); }
+    catch (error) {
+        if (error instanceof ConfiguredAgentCatalogTransactionAbort) return error.result;
+        const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+        if (conflict) return conflict;
+        if (error instanceof AccountSettingsPublicationConflict) return error.result.status === 'version_mismatch'
+            ? { status: 'settings-conflict', revision: error.result.currentVersion } : { status: 'invalid-stored-content' };
+        throw error;
+    }
 }

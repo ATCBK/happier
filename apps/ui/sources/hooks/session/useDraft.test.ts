@@ -80,13 +80,14 @@ vi.mock('@/sync/store/hooks', () => ({
 
 vi.mock('@/sync/ops/sessionDrafts/sessionDraftRepository', () => ({
   flushSessionDraft: (input: unknown) => flushSessionDraftSpy(input),
-  getSessionDraftSnapshot: (scope: Readonly<{ serverId: string; accountId: string }>, address: { sessionId: string }) => {
+  getSessionDraftSnapshot: () => null,
+  getSessionComposerDraftSnapshot: (scope: Readonly<{ serverId: string; accountId: string }>, address: { sessionId: string }) => {
     const key = scopedDraftKey(scope, address.sessionId);
     const text = scopedDraftsByOwner.has(key)
       ? scopedDraftsByOwner.get(key)
       : sessionsById[address.sessionId]?.draft;
     return typeof text === 'string'
-      ? { document: { composer: { text: { value: text } } } }
+      ? { targetKind: 'session', composer: { text: { value: text } } }
       : null;
   },
   subscribeSessionDraft: (_scope: unknown, _address: unknown, listener: () => void) => {

@@ -184,6 +184,13 @@ export function loadIrohNodeNativeAddon(
   return addon;
 }
 
+/** Best-effort host maintenance; old addons and non-Linux hosts need no trim. */
+export async function trimProcessAllocator(): Promise<boolean> {
+  if (process.platform !== 'linux') return false;
+  const addon = loadIrohNodeNativeAddon(resolveIrohNodeAddonPath());
+  return await addon.trimProcessAllocator?.() ?? false;
+}
+
 /**
  * Resolves and loads the lifecycle addon for the current (or explicit)
  * platform/arch, returning the typed module or a `native_unavailable` result.

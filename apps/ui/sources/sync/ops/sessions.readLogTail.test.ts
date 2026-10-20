@@ -1,4 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { sessionReadLogTail } from './sessions';
 import { apiSocket } from '../api/session/apiSocket';
 import '@/sync/syncEngine';

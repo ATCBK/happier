@@ -104,9 +104,9 @@ function rootPath(screen: Awaited<ReturnType<typeof mount>>) {
 }
 
 describe('ProjectDetailScreen active worktree selection', () => {
-    it('keeps the Project header and Overview/Code bodies on the wide page column with compact preference', async () => {
+    it('keeps the Project header on the wide page column for every page while Overview/Code bodies are wide and the rest keep the default cap', async () => {
         storage.setState({ localSettings: { ...storage.getState().localSettings, uiContentWidthMode: 'compact' } });
-        const renderProject = (page: 'overview' | 'code' | 'context') => (
+        const renderProject = (page: 'overview' | 'code' | 'changes' | 'scripts' | 'services' | 'context') => (
             <runtime.Wrapper><ProjectDetailScreen workspaceRefId="wr_1" serverId={runtime.serverId} page={page} /></runtime.Wrapper>
         );
         const screen = await renderScreen(renderProject('overview'));
@@ -129,8 +129,13 @@ describe('ProjectDetailScreen active worktree selection', () => {
         const codeSurface = screen.findHostByTestId('workspace-code');
         expect(codeSurface ? columnWidth(codeSurface) : undefined).toBe(PAGE_COLUMN_MAX_WIDTH_PX.wide);
 
-        await screen.update(renderProject('context'));
-        expect(headerWidth()).toBe(PAGE_COLUMN_MAX_WIDTH_PX.reading);
+        for (const page of ['changes', 'scripts', 'services', 'context'] as const) {
+            await screen.update(renderProject(page));
+            expect(headerWidth()).toBe(PAGE_COLUMN_MAX_WIDTH_PX.wide);
+        }
+        // The header is the only wide column left on Context, so a reading-width column is the body's.
+        await vi.waitFor(() => expect(screen.root.findAll(node => typeof node.type === 'string'
+            && flattenStyle(node.props.style).maxWidth === PAGE_COLUMN_MAX_WIDTH_PX.reading).length).toBeGreaterThan(0));
         expect(screen.findByType(ProjectShellHeaderHost).props.activeRootPath).toBe('/repo');
     });
 

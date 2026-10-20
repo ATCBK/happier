@@ -17,7 +17,9 @@ import { t } from '@/text';
 import { getAgentIdentityColor } from '@/agents/catalog/catalog';
 import {
   UsageBodyInsufficient,
+  UsageBodyReading,
   UsageCoverageLine,
+  isUsageReadOutstanding,
   usageAgentTitle,
   useUsagePluginTheme,
   type UsageBodyProps,
@@ -31,6 +33,14 @@ import {
 } from './usageHowYouWorkPresentation';
 
 const MINUTE_MS = 60_000;
+/** Axis marks every three hours of the day; the timeline drops any that would crowd a neighbour. */
+const TICK_STEP_MINUTES = 180;
+
+function hourTicks(endMinutes: number): number[] {
+  const ticks: number[] = [];
+  for (let minute = TICK_STEP_MINUTES; minute < endMinutes; minute += TICK_STEP_MINUTES) ticks.push(minute);
+  return ticks;
+}
 /** Below this body width a timeline row cannot place its clock axis; the exact rows remain. */
 const PLOT_MIN_WIDTH_PX = 320;
 
@@ -76,12 +86,19 @@ export function UsageParallelWidget(props: UsageBodyProps) {
         : [],
     [today, lanes, sessions, machineNames, theme],
   );
+  const intervals = React.useMemo(
+    () => groups.flatMap((group) => group.intervals),
+    [groups],
+  );
   useWidgetFrameBodyCaption(
     today && today.maxParallel > 1
       ? t('usage.board.howYouWork.peakAtOnce', { count: today.maxParallel })
       : t('usage.today'),
   );
   if (!today) {
+    // Until today's read answers, the body is loading, never "aren't readable here".
+    if (isUsageReadOutstanding(props.slice, ['how_you_work']))
+      return <UsageBodyReading testID={`${props.testID}.loading`} waitingOn={{ slice: props.slice, sources: ['how_you_work'] }} />;
     return (
       <UsageBodyInsufficient
         testID={`${props.testID}.empty`}
@@ -103,6 +120,8 @@ export function UsageParallelWidget(props: UsageBodyProps) {
           label={t('usage.board.howYouWork.agentTimeToday')}
           value={formatUsageDuration(today.agentTimeMs)}
           testID={`${props.testID}.agentTime`}
+          size="stat"
+          showLabel
           comparison={{
             value: formatUsageDuration(today.elapsedBusyMs),
             label: t('usage.board.howYouWork.ofClockTime'),
@@ -114,12 +133,16 @@ export function UsageParallelWidget(props: UsageBodyProps) {
           label={t('usage.board.howYouWork.waitingOnYou')}
           value={formatUsageDuration(sumUsageWaitingOnYouMs(groups))}
           testID={`${props.testID}.waiting`}
+          size="stat"
+          showLabel
         />
         <HappierDataMetric
           theme={chartTheme}
           label={t('usage.board.howYouWork.peakParallel')}
           value={today.maxParallel}
           testID={`${props.testID}.peak`}
+          size="stat"
+          showLabel
           comparison={{
             value: formatUsageDuration(today.parallelBusyMs),
             label: t('usage.board.howYouWork.withTwoOrMore'),
@@ -134,14 +157,15 @@ export function UsageParallelWidget(props: UsageBodyProps) {
           title={t('usage.board.howYouWork.noRunsToday')}
         />
       ) : (
-        groups.map((group) => (
-          <IntervalTimeline
-            key={group.id}
-            testID={`${props.testID}.machine.${group.id}`}
+        <IntervalTimeline
+            testID={`${props.testID}.lanes`}
             theme={chartTheme}
-            label={group.label}
-            intervals={group.intervals}
+            layout="lanes"
+            label={t('usage.board.howYouWork.parallelRunsLabel')}
+            laneLabel={t('usage.board.howYouWork.machineLabel')}
+            intervals={intervals}
             domain={domain}
+            ticks={hourTicks(domain.end)}
             startLabel={t('usage.board.howYouWork.started')}
             endLabel={t('usage.board.howYouWork.ended')}
             unknownLabel={t('usage.board.howYouWork.notRecorded')}
@@ -150,7 +174,6 @@ export function UsageParallelWidget(props: UsageBodyProps) {
               width !== undefined && width < PLOT_MIN_WIDTH_PX ? 'tile' : 'full'
             }
           />
-        ))
       )}
       {unknownEnds > 0 ? (
         <UsageBodyInsufficient

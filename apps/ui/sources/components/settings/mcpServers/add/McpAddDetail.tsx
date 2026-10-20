@@ -21,7 +21,9 @@ import { ToolbarSelect } from '@/components/ui/forms/ToolbarSelect';
 import { ValueRefRowsEditor } from '@/components/ui/forms/valueRefs/ValueRefRowsEditor';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
+import { BareSectionContent } from '@/components/ui/lists/BareSectionContent';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useRegistryItem } from '@/registries/useRegistryItem';
@@ -156,7 +158,12 @@ export function McpAddDetail(
     supported?.fields.filter((f) => f.presentation === 'header') ?? [];
   const textFields =
     supported?.fields.filter((f) => f.presentation === 'text') ?? [];
-  const described = supported?.fields.filter((f) => f.description) ?? [];
+  // A declared input says what it is for under its own name, once: env and header rows carry it, a text field
+  // carries it under its label.
+  const descriptionsOf = (fields: readonly McpAddField[]) =>
+    Object.fromEntries(
+      fields.flatMap((f) => (f.description ? [[f.key, f.description] as const] : [])),
+    );
   const hasSecret = supported?.fields.some((f) => f.secret) ?? false;
   const added = props.state?.status === 'added';
   const deprecated = props.row.flags?.deprecated === true;
@@ -166,6 +173,7 @@ export function McpAddDetail(
   return (
     <View style={styles.detail}>
       <ItemGroup surface="none">
+        <BareSectionContent>
         <View style={styles.head}>
           <View style={styles.title}>
             <McpServerMark
@@ -251,13 +259,16 @@ export function McpAddDetail(
             </Text>
           ) : null}
         </View>
+        </BareSectionContent>
       </ItemGroup>
 
       {props.existing === null && supported ? (
         <>
           <ItemGroup
             title={t('capabilities.mcpAdd.detail.needsTitle')}
-            surface="none"
+            {...(supported.fields.length > 0
+              ? { description: t('capabilities.mcpAdd.detail.needsBody') }
+              : {})}
           >
             {supported.fields.length === 0 ? (
               supported.signIn ? (
@@ -275,82 +286,71 @@ export function McpAddDetail(
                   subtitle={t('capabilities.mcpAdd.detail.signInBody')}
                 />
               ) : (
-                <Text
-                  variant="body"
-                  style={{ color: theme.colors.text.secondary }}
-                >
-                  {t('capabilities.mcpAdd.detail.nothingNeeded')}
-                </Text>
-              )
-            ) : (
-              <View style={styles.needs}>
-                <Text
-                  variant="meta"
-                  style={{ color: theme.colors.text.secondary }}
-                >
-                  {t('capabilities.mcpAdd.detail.needsBody')}
-                </Text>
-                {envFields.length > 0 ? (
-                  <ValueRefRowsEditor
-                    kind="env"
-                    declaredNames
-                    entries={entriesOf(envFields, values)}
-                    onChangeEntries={setGroup}
-                    secrets={secrets}
-                    scope={props.scope}
-                    testIdPrefix={`${props.testID}.env`}
-                    attentionKeys={attention(envFields, values)}
-                  />
-                ) : null}
-                {headerFields.length > 0 ? (
-                  <ValueRefRowsEditor
-                    kind="header"
-                    declaredNames
-                    entries={entriesOf(headerFields, values)}
-                    onChangeEntries={setGroup}
-                    secrets={secrets}
-                    scope={props.scope}
-                    testIdPrefix={`${props.testID}.header`}
-                    attentionKeys={attention(headerFields, values)}
-                  />
-                ) : null}
-                {textFields.map((field) => (
-                  <TextField
-                    key={field.key}
-                    field={field}
-                    value={values[field.key]}
-                    onChange={(value) => setValue(field.key, value)}
-                    testID={`${props.testID}.field.${field.key}`}
-                  />
-                ))}
-                {described.map((field) => (
+                <SectionContentRow>
                   <Text
-                    key={field.key}
-                    variant="meta"
+                    variant="body"
                     style={{ color: theme.colors.text.secondary }}
                   >
-                    {`${field.key} · ${field.description}`}
+                    {t('capabilities.mcpAdd.detail.nothingNeeded')}
                   </Text>
-                ))}
-                {hasSecret ? (
-                  <View style={styles.hint}>
-                    <Icon
-                      name="lock"
-                      size={ICON_SIZE.xs}
-                      color={theme.colors.text.secondary}
+                </SectionContentRow>
+              )
+            ) : (
+              <SectionContentRow>
+                <View style={styles.needs}>
+                  {envFields.length > 0 ? (
+                    <ValueRefRowsEditor
+                      kind="env"
+                      declaredNames
+                      descriptions={descriptionsOf(envFields)}
+                      entries={entriesOf(envFields, values)}
+                      onChangeEntries={setGroup}
+                      secrets={secrets}
+                      scope={props.scope}
+                      testIdPrefix={`${props.testID}.env`}
                     />
-                    <Text
-                      variant="meta"
-                      style={{
-                        color: theme.colors.text.secondary,
-                        flexShrink: 1,
-                      }}
-                    >
-                      {t('capabilities.mcpAdd.detail.keySaved')}
-                    </Text>
-                  </View>
-                ) : null}
-              </View>
+                  ) : null}
+                  {headerFields.length > 0 ? (
+                    <ValueRefRowsEditor
+                      kind="header"
+                      declaredNames
+                      descriptions={descriptionsOf(headerFields)}
+                      entries={entriesOf(headerFields, values)}
+                      onChangeEntries={setGroup}
+                      secrets={secrets}
+                      scope={props.scope}
+                      testIdPrefix={`${props.testID}.header`}
+                    />
+                  ) : null}
+                  {textFields.map((field) => (
+                    <TextField
+                      key={field.key}
+                      field={field}
+                      value={values[field.key]}
+                      onChange={(value) => setValue(field.key, value)}
+                      testID={`${props.testID}.field.${field.key}`}
+                    />
+                  ))}
+                  {hasSecret ? (
+                    <View style={styles.hint}>
+                      <Icon
+                        name="lock"
+                        size={ICON_SIZE.xs}
+                        color={theme.colors.text.secondary}
+                      />
+                      <Text
+                        variant="meta"
+                        style={{
+                          color: theme.colors.text.secondary,
+                          flexShrink: 1,
+                        }}
+                      >
+                        {t('capabilities.mcpAdd.detail.keySaved')}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+              </SectionContentRow>
             )}
           </ItemGroup>
 
@@ -371,10 +371,7 @@ export function McpAddDetail(
           />
 
           {supported.runs !== 'remoteSignIn' ? (
-          <ItemGroup
-            title={t('capabilities.mcpAdd.detail.runsTitle')}
-            surface="none"
-          >
+          <ItemGroup title={t('capabilities.mcpAdd.detail.runsTitle')}>
             <Item
               icon={
                 <Icon
@@ -388,10 +385,8 @@ export function McpAddDetail(
           </ItemGroup>
           ) : null}
 
-          <ItemGroup
-            title={t('capabilities.mcpAdd.detail.nextTitle')}
-            surface="none"
-          >
+          <ItemGroup title={t('capabilities.mcpAdd.detail.nextTitle')}>
+            <SectionContentRow>
             <View style={styles.steps}>
               {[
                 hasSecret
@@ -411,28 +406,12 @@ export function McpAddDetail(
                 </Text>
               ))}
             </View>
+            </SectionContentRow>
           </ItemGroup>
         </>
       ) : null}
 
     </View>
-  );
-}
-
-function attention(
-  fields: readonly McpAddField[],
-  values: McpAddValues,
-): ReadonlySet<string> {
-  return new Set(
-    fields
-      .filter((field) => {
-        const value = values[field.key];
-        if (!field.required || !value) return field.required;
-        return value.t === 'literal'
-          ? value.v.trim().length === 0
-          : value.t === 'savedSecret' && value.secretId.length === 0;
-      })
-      .map((field) => field.key),
   );
 }
 
@@ -452,6 +431,11 @@ function TextField(
       <Text variant="label" style={{ color: theme.colors.text.primary }}>
         {props.field.key}
       </Text>
+      {props.field.description ? (
+        <Text variant="meta" style={{ color: theme.colors.text.secondary }}>
+          {props.field.description}
+        </Text>
+      ) : null}
       {props.field.choices ? (
         <ToolbarSelect
           testID={props.testID}
@@ -469,7 +453,6 @@ function TextField(
           value={text}
           onChangeText={(next) => props.onChange({ t: 'literal', v: next })}
           accessibilityLabel={props.field.key}
-          invalid={props.field.required && text.trim().length === 0}
           monospace
         />
       )}
@@ -493,5 +476,5 @@ const styles = StyleSheet.create((theme) => ({
   needs: { gap: theme.space.s12 },
   hint: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
   textField: { gap: theme.space.s4 },
-  steps: { gap: theme.space.s8, paddingTop: theme.space.s4 },
+  steps: { gap: theme.space.s8 },
 }));

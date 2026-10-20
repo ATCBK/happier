@@ -93,6 +93,9 @@ describe('Session Role value row (Work tab top row)', () => {
             { ...lead, owner: undefined, access: createSessionAccessFixture('owner') }, 'lead-owner')).toBe(true);
         expect(isSessionRoleSnapshotCopiedAcrossOwners(ownWorker,
             { ...lead, owner: undefined, access: createSessionAccessFixture('owner') }, 'worker-owner')).toBe(false);
+        const ownerProjectedWorker = { ...worker, metadataLayoutVersion: 1, metadata: null, ownerMetadataView: metadata };
+        expect(isSessionRoleSnapshotCopiedAcrossOwners(ownerProjectedWorker, lead, 'worker-owner')).toBe(true);
+        expect(isSessionRoleSnapshotCopiedAcrossOwners({ ...ownerProjectedWorker, metadata, ownerMetadataView: null }, lead, 'worker-owner')).toBe(false);
     });
 
     it('names the copied role with hands-off and lets its owner open the Role popover', async () => {

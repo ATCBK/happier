@@ -1,10 +1,10 @@
-import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 
 import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
-import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import type { ScmBackendPluginRuntimeRegistry } from './pluginBackends/runtimeRegistry';
 
 import {
   runWithScmBackendRegistryLease,
@@ -23,39 +23,16 @@ vi.mock('@/plugins/runtime/reload/runtimeLease', () => ({
 }));
 
 function createContributionRegistry(): ResolvedContributionRegistry {
-  return {
-    agents: Object.freeze([]),
-        actions: Object.freeze([]),
-    resources: Object.freeze([]),
-    uiViewsV2: Object.freeze([]),
-    uiRenderersV2: Object.freeze([]),
-    uiTranslationsV2: Object.freeze([]),
-    activationTargets: Object.freeze([]),
-        catalogEntriesById: Object.freeze({}),
-    agentDefinitionsById: new Map(),
-        pluginDiagnosticsByPluginId: Object.freeze({}),
-  };
+  return createResolvedContributionRegistry({});
 }
 
-function createRuntimeRegistry(contributes: ResolvedContributionRegistry): ResolvedExecutablePluginRuntimeRegistry {
+function createRuntimeRegistry(contributes: ResolvedContributionRegistry): ScmBackendPluginRuntimeRegistry & Pick<ResolvedExecutablePluginRuntimeRegistry, 'activateContributionsOnDemand'> {
   return {
-    claimReleaseLessDeclarations: async () => undefined,
     contributes,
-    resolvePromptAssetBlocks: async () => [],
-    resolveCaptureSource: async () => null,
-    resolveProjectNativeAdapter: unexpectedProjectNativeAdapterResolution,
-    hookHandlersByHookId: new Map(),
-    agentRuntimesByAgentId: new Map(),
     scmHostingProvidersById: new Map(),
     scmBackendsById: new Map(),
     scmBackendRegistrations: Object.freeze([]),
-    pluginDiagnosticsByPluginId: Object.freeze({}),
-    activatedPluginIds: new Set(),
     activateContributionsOnDemand: async () => [],
-    addRuntimeDisposable: (_pluginId, disposable) => disposable,
-    createAgentInvocationServices: async () => createUnavailablePluginServices(),
-    retireConsumers: () => {},
-    dispose: async () => {},
   };
 }
 

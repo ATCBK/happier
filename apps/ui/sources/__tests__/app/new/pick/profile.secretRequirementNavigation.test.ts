@@ -39,6 +39,7 @@ import { refreshProfileCatalog } from '@/sync/engine/settings/profileCatalogEngi
 import { getProfileCatalogSnapshot } from '@/sync/store/settings/profileCatalogSnapshot';
 import { readCachedDaemonMergedProjectionCacheEntry } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 
 enableReactActEnvironment();
 
@@ -125,12 +126,37 @@ async function renderProfilePicker() {
     const props = screen.findByType(ProfilesList).props;
     const admittedProfile = props.customProfiles.find((candidate: { id: string }) => candidate.id === profile.id);
     expect(admittedProfile).toMatchObject({ id: profile.id, profileRecordRevision: 2 });
-    return { onPressProfile: props.onPressProfile, profile: admittedProfile };
+    return { screen, onPressProfile: props.onPressProfile, profile: admittedProfile };
 }
 
 describe('ProfilePickerScreen (native secret requirement)', () => {
-    afterEach(() => {
+    afterEach(async () => {
         standardCleanup();
+        (await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool')).serverScopedRpcSocketPool.resetForTests();
+        (await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool')).resetScopedMachineTransportCacheForTests();
+    });
+
+    it('cancels superseded profile checks and prevents navigation after unmount', async () => {
+        resetProfileSecretRequirementHarness();
+        routerMock.push.mockClear();
+        const { screen, onPressProfile, profile } = await renderProfilePicker();
+        const signals: AbortSignal[] = [];
+        installSessionActionRpcBoundary((request, context) => {
+            if (!request.method.endsWith('preview-env')) return {};
+            signals.push(context.signal);
+            return new Promise<never>(() => {});
+        });
+        (await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool')).serverScopedRpcSocketPool.resetForTests();
+        const first = onPressProfile(profile);
+        await vi.waitFor(() => expect(signals).toHaveLength(1));
+        const second = onPressProfile(profile);
+        await vi.waitFor(() => expect(signals).toHaveLength(2));
+        await vi.waitFor(() => expect(signals[0]?.aborted).toBe(true));
+        expect(signals[1]?.aborted).toBe(false);
+        await screen.unmount();
+        await vi.waitFor(() => expect(signals[1]?.aborted).toBe(true));
+        await Promise.all([first, second]);
+        expect(routerMock.push).not.toHaveBeenCalled();
     });
 
     it('navigates to the secret requirement screen when required secrets are missing', async () => {

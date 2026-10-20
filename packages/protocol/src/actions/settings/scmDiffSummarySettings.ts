@@ -17,10 +17,17 @@ const ScmDiffSummaryCatalogProfileSchema = lazyZodSchema(() => z.strictObject({
         structuredOutput: z.optional(z.enum(['supported', 'unsupported', 'unknown'])),
         costTier: z.optional(z.enum(['low', 'standard', 'premium'])),
 }));
+const ScmDiffSummaryCatalogUnavailableTargetV1Schema = lazyZodSchema(() => z.strictObject({
+    backendTargetKey: BackendTargetKeyV2Schema,
+    reason: z.enum(['native_sign_in_required', 'native_auth_unavailable', 'account_metadata_unavailable', 'connected_default_unavailable']),
+}));
+export type ScmDiffSummaryCatalogUnavailableTargetV1 = z.infer<typeof ScmDiffSummaryCatalogUnavailableTargetV1Schema>;
 export const ScmDiffSummaryModelCatalogObservationV1Schema = lazyZodSchema(() => z.strictObject({
     profiles: z.array(ScmDiffSummaryCatalogProfileSchema),
     automaticProfiles: z.array(ScmDiffSummaryCatalogProfileSchema),
     discoveryTargetKeys: z.array(BackendTargetKeyV2Schema),
+    unavailableReason: z.optional(z.literal('account_metadata_unavailable')),
+    unavailableTargets: z.optional(z.array(ScmDiffSummaryCatalogUnavailableTargetV1Schema)),
     probeFailures: z.optional(z.array(z.strictObject({ backendTargetKey: BackendTargetKeyV2Schema, spawnFailure: SpawnFailureV1Schema }))),
 }));
 
@@ -34,6 +41,8 @@ export type ScmDiffSummaryCatalogMutationServicesV1<T extends ScmDiffSummarySett
         profiles: readonly ScmDiffSummaryCatalogProfile[];
         automaticProfiles?: readonly ScmDiffSummaryCatalogProfile[];
         discoveryTargetKeys?: readonly string[];
+        unavailableReason?: 'account_metadata_unavailable';
+        unavailableTargets?: readonly ScmDiffSummaryCatalogUnavailableTargetV1[];
         probeFailures?: readonly Readonly<{ backendTargetKey: string; spawnFailure: SpawnFailureV1 }>[];
         isCurrent: (settings: T) => boolean;
     }> | null>;

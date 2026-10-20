@@ -286,7 +286,11 @@ export function censusPackedConsumerResolvability(packageJson, resolveExists) {
     const files = packageJson.files ?? [];
     const targets = new Set();
     for (const [subpath, condition] of Object.entries(packageJson.exports ?? {})) {
-        const values = typeof condition === 'string' ? [condition] : Object.values(condition ?? {});
+        // Source-development resolution is not a publication target. Published
+        // consumers resolve the types/default branches after the managed build.
+        const values = typeof condition === 'string' ? [condition] : Object.entries(condition ?? {})
+            .filter(([name]) => name !== 'happier-source')
+            .map(([, target]) => target);
         for (const value of values) {
             if (typeof value === 'string') targets.add(`${subpath} ${value}`);
         }

@@ -7,8 +7,7 @@ import { automationPortableQueryChunks } from "./automationPortableQueryChunks";
 import { AUTOMATION_SESSION_LIFECYCLE_TERMINAL_NO_RUN_ACTIONS } from "./automationSessionLifecycleTerminalTruth";
 import { decodeAutomationSessionLifecycleConfiguration } from "./automationSessionLifecycleConfigurationCodec";
 import {
-    AUTOMATION_RUN_STATES,
-    isAutomationRunState,
+    projectAutomationRunState,
     isTerminalAutomationRunState,
     type AutomationListItem,
     type AutomationRunState,
@@ -100,7 +99,6 @@ export async function loadAutomationSessionLifecycleStatusProjections(params: Re
                 where: {
                     causeKind: "trigger",
                     causeTriggerKind: "sessionLifecycle",
-                    state: { in: [...AUTOMATION_RUN_STATES] },
                     OR: page.map(({ trigger, stored }) => (
                         stored.definition.policy.kind === "currentTurn"
                             ? {
@@ -133,9 +131,9 @@ export async function loadAutomationSessionLifecycleStatusProjections(params: Re
     }>;
     const latestRunByTrigger = new Map<string, LegacyLifecycleRun>();
     for (const run of runPages.flat()) {
-        const state = run.state;
+        const state = projectAutomationRunState(run.state);
         if (
-            isAutomationRunState(state)
+            state !== null
             && run.triggerId !== null
             && !latestRunByTrigger.has(run.triggerId)
         ) {

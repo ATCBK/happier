@@ -16,6 +16,7 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { prepareLegacyNotificationChannelCatalogV1 } from '@happier-dev/protocol/account/settings/notificationChannelCatalogV1';
 import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
+import { DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1 } from '@happier-dev/protocol/account/settings/notificationChannels';
 import { loadNotificationsSettingsActionExecutorForTests, restoreNotificationsSettingsCatalog } from './notificationsSettingsCatalogTestHarness';
 import { clearActiveUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
 import type { LiveActivityRemoteUpdateCapabilityDiagnostics } from '@happier-dev/protocol/activity/live/remoteUpdateCapabilities';
@@ -35,24 +36,18 @@ const modalPromptMock = vi.fn();
 const modalConfirmMock = vi.fn();
 const modalAlertMock = vi.fn();
 const routerPushMock = vi.fn();
-const translateMock = vi.fn((key: string) => key);
+const translateMock = vi.fn((key: string, _params?: Record<string, unknown>) => key);
 const scheduleExpoNotificationMock = vi.hoisted(() => vi.fn());
 const tauriIsPermissionGrantedMock = vi.hoisted(() => vi.fn(async () => true));
 const tauriRequestPermissionMock = vi.hoisted(() => vi.fn(async () => 'granted'));
-const enabledLegacyNotificationTopics = {
-    ready: true,
-    permissionRequest: true,
-    userActionRequest: true,
-    connectedServiceAccountSwitch: true,
-    connectedServiceQuotaBlocked: true,
-    connectedServiceQuotaRecovered: true,
-};
+const enabledLegacyNotificationTopics = { ...DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1 };
 const liveActivityRemoteDiagnosticsState = vi.hoisted((): { value: LiveActivityRemoteUpdateCapabilityDiagnostics } => ({
     value: {
         modes: {
             hosted_happier_relay: {
                 available: false,
                 reasons: ['hosted_relay_provider_blocked'],
+                configurationDiagnostics: [],
             },
             direct_apns: {
                 available: false,
@@ -62,6 +57,7 @@ const liveActivityRemoteDiagnosticsState = vi.hoisted((): { value: LiveActivityR
             background_wake_best_effort: {
                 available: false,
                 reasons: ['background_wake_disabled'],
+                configurationDiagnostics: [],
             },
         },
         capabilities: {
@@ -391,6 +387,7 @@ describe('NotificationsSettingsView', () => {
                 hosted_happier_relay: {
                     available: false,
                     reasons: ['hosted_relay_provider_blocked'],
+                    configurationDiagnostics: [],
                 },
                 direct_apns: {
                     available: false,
@@ -400,6 +397,7 @@ describe('NotificationsSettingsView', () => {
                 background_wake_best_effort: {
                     available: false,
                     reasons: ['background_wake_disabled'],
+                    configurationDiagnostics: [],
                 },
             },
             capabilities: liveActivityRemoteDiagnosticsState.value.capabilities,
@@ -414,7 +412,9 @@ describe('NotificationsSettingsView', () => {
         await act(async () => row.props.rightElement.props.onValueChange(owner === 'account'));
         expect(storage.getState().settings.attentionDeliveryPolicyV1).toEqual(rawBeforeControl.attentionDeliveryPolicyV1);
         expect(storage.getState().localSettings.attentionDeviceOverridesV1).toEqual(localBeforeControl.attentionDeviceOverridesV1);
-        await vi.waitFor(() => expect(modalAlertMock).toHaveBeenCalledWith(expect.any(String), 'action_disabled'));
+        await vi.waitFor(() => expect(modalAlertMock).toHaveBeenCalledWith(
+            'actionConfirmations.turnedOffTitle', 'actionConfirmations.turnedOffMessage', expect.any(Array),
+        ));
         expect(fixture!.settingsWrites).toEqual(settingsWritesBeforeControl);
     });
 
@@ -714,6 +714,7 @@ describe('NotificationsSettingsView', () => {
                 hosted_happier_relay: {
                     available: false,
                     reasons: ['hosted_relay_provider_blocked'],
+                    configurationDiagnostics: [],
                 },
                 direct_apns: {
                     available: false,
@@ -723,6 +724,7 @@ describe('NotificationsSettingsView', () => {
                 background_wake_best_effort: {
                     available: true,
                     reasons: [],
+                    configurationDiagnostics: [],
                 },
             },
         };
@@ -761,6 +763,7 @@ describe('NotificationsSettingsView', () => {
                 hosted_happier_relay: {
                     available: false,
                     reasons: ['hosted_relay_provider_blocked'],
+                    configurationDiagnostics: [],
                 },
                 direct_apns: {
                     available: true,
@@ -770,6 +773,7 @@ describe('NotificationsSettingsView', () => {
                 background_wake_best_effort: {
                     available: true,
                     reasons: [],
+                    configurationDiagnostics: [],
                 },
             },
         };
@@ -952,7 +956,9 @@ describe('NotificationsSettingsView', () => {
         };
         const screen = await openNotificationsScreen();
         await act(async () => screen.pressRow(`settings-notifications-quiet-hours-${owner}:${choice}`));
-        await vi.waitFor(() => expect(modalAlertMock).toHaveBeenCalledWith(expect.any(String), 'action_disabled'));
+        await vi.waitFor(() => expect(modalAlertMock).toHaveBeenCalledWith(
+            'actionConfirmations.turnedOffTitle', 'actionConfirmations.turnedOffMessage', expect.any(Array),
+        ));
         expect(storage.getState().settings.attentionDeliveryPolicyV1).toEqual(rawBeforeControl.attentionDeliveryPolicyV1);
         expect(storage.getState().localSettings.attentionDeviceOverridesV1).toEqual(localBeforeControl.attentionDeviceOverridesV1);
         expect(fixture!.readRaw().attentionDeliveryPolicyV1).toEqual(rawBeforeControl.attentionDeliveryPolicyV1);

@@ -13,11 +13,11 @@ export async function createScpReadyPayloadArchive(payloadRoot: string): Promise
   const scpReadyPayload = await createScpReadyPayloadCopy(payloadRoot);
   const archiveStageRoot = createHappierTempDir({ purpose: 'first-party-scp-archive' });
   const extractedPayloadDirName = basename(scpReadyPayload.payloadRoot);
-  const archiveFileName = `${extractedPayloadDirName}.tar`;
+  const archiveFileName = `${extractedPayloadDirName}.tar.gz`;
 
   try {
     await runCommandStreaming({ cmd: 'tar', args: [
-      '-cf',
+      '-czf',
       join(archiveStageRoot, archiveFileName),
       '-C',
       join(scpReadyPayload.payloadRoot, '..'),

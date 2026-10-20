@@ -1,12 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
-import type { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
+import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
+import { ServerBoundPermissionRpcHandlerManager } from '@/agent/permissions/testkit/serverBoundPermissionRpcHandlerManager';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type {
     HostSessionApprovalRequest,
     HostSessionConfirmationRequest,
     HostSessionQuestionsRequest,
 } from '@/agent/runtime/state/currentSessionUiTypes';
-import { createWorkflowInteractionCapacityError } from '@/agent/permissions/interactionPersistenceError';
 
 import {
     createNativeAgentCurrentSessionUiServices,
@@ -14,32 +16,62 @@ import {
     type NativeAgentSessionInteractionParams,
 } from './nativeAgentSessionInteractions';
 
-type PermissionHandlerBoundary = Pick<ProviderEnforcedPermissionHandler, 'handleToolCall'>;
-
 function createFixture(
-    handleToolCall: PermissionHandlerBoundary['handleToolCall'] | null,
-    overrides: Partial<NativeAgentSessionInteractionParams> = {},
+    overrides: Partial<Omit<NativeAgentSessionInteractionParams, 'permissionHandler' | 'sessionId'>> = {},
+    options: Readonly<{ mode?: 'default' | 'yolo'; presentationAvailable?: boolean }> = {},
 ) {
+    // Only Session state and the authenticated server RPC transport are replaced.
+    // The existing transport testkit stamps the account actor required by permission replies.
+    const rpc = new ServerBoundPermissionRpcHandlerManager('session-1');
+    const session = createMutableApiSessionClientFixture({
+        sessionId: 'session-1',
+        overrides: {
+            // The transport testkit intentionally implements only registration/delivery.
+            rpcHandlerManager: rpc as unknown as ApiSessionClient['rpcHandlerManager'],
+        },
+    });
+    const handler = new ProviderEnforcedPermissionHandler(session, {
+        logPrefix: '[Native interaction test]', getWorkspaceWrites: () => 'allow',
+    });
+    handler.setPermissionMode(options.mode ?? 'default');
+    const lifetime = new AbortController();
     const params: NativeAgentSessionInteractionParams = {
-        permissionHandler: handleToolCall ? { handleToolCall } : null,
+        permissionHandler: options.presentationAvailable === false ? null : handler,
         pluginId: 'acme.plugin',
         contributionId: 'acme-agent',
         runtimeId: 'acme.agent/runtime',
-        sessionId: 'session-1',
+        sessionId: session.sessionId,
         occurrenceId: 'occurrence-1',
         immutableGenerationId: 'immutable-generation-1',
         sourceCustody: { kind: 'managed', immutableGenerationId: 'immutable-generation-1', installSource: 'npm' },
         interactionDeadlineMs: 1_000,
         isCurrent: () => true,
-        signal: new AbortController().signal,
+        signal: lifetime.signal,
         ...overrides,
     };
     const currentSessionUi = createNativeAgentCurrentSessionUiServices(params);
     const publicServices = createNativeAgentSessionServices({ ...params, currentSessionUi });
+    onTestFinished(async () => {
+        lifetime.abort();
+        await handler.abortPendingRequestsAndFlush('test cleanup');
+        await session.close();
+    });
     return Object.freeze({
+        session,
+        handler,
         current: currentSessionUi.interactions,
         public: publicServices.interactions,
         availability: publicServices.availability,
+        async publishedRequest() {
+            await vi.waitFor(() => expect(Object.keys(session.__getAgentState().requests ?? {})).toHaveLength(1));
+            const [id, request] = Object.entries(session.__getAgentState().requests ?? {})[0]!;
+            return { id, request };
+        },
+        async respond(input: unknown, kind: 'user_action' | 'permission' = 'user_action') {
+            const respond = rpc.handlers.get(kind === 'user_action' ? 'session.user_action.answer' : 'session.permission.respond');
+            if (!respond) throw new Error('Expected registered Session response RPC');
+            return await respond(input);
+        },
     });
 }
 
@@ -70,381 +102,273 @@ const questionsRequest: HostSessionQuestionsRequest = {
 };
 
 describe('native Agent current-session interactions', () => {
-    it('presents through the permission owner without a caller-supplied deadline', async () => {
-        const handleToolCall = vi.fn(async () => ({ decision: 'approved' as const }));
-        const fixture = createFixture(handleToolCall, { interactionDeadlineMs: undefined });
+    it.each(['default', 'yolo'] as const)(
+        'requires explicit confirmation answers through the real permission owner in %s mode',
+        async (mode) => {
+            const fixture = createFixture({}, { mode });
+            for (const [choice, status] of [
+                ['confirm', 'approved'], ['decline', 'declined'], ['denied', 'declined'], ['abort', 'userCancelled'],
+            ] as const) {
+                const pending = fixture.current.request({ kind: 'confirmation', message: 'Continue?' }, {
+                    permissionContext: {
+                        turnId: 'turn-1',
+                        causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: mode },
+                    },
+                });
+                const { id, request } = await fixture.publishedRequest();
+                expect(request).toMatchObject({
+                    tool: 'AskUserQuestion', kind: 'user_action', turnId: 'turn-1',
+                    arguments: {
+                        questions: [{
+                            id: 'confirmation', question: 'Continue?', required: true,
+                            selection: 'single',
+                            options: [{ id: 'confirm', label: 'Confirm' }, { id: 'decline', label: 'Cancel' }],
+                        }],
+                    },
+                });
+                const answered = choice === 'confirm' || choice === 'decline';
+                await expect(fixture.respond({
+                    id, approved: answered, decision: answered ? 'approved' : choice,
+                    ...(answered ? { answers: { confirmation: [choice] } } : {}),
+                })).resolves.toBeUndefined();
+                await expect(pending).resolves.toMatchObject({ kind: 'confirmation', status });
+                expect(fixture.session.__getAgentState().requests).toEqual({});
+            }
+        },
+    );
 
+    it('presents through the permission owner without a caller-supplied deadline', async () => {
+        const fixture = createFixture({ interactionDeadlineMs: undefined });
         expect(fixture.availability('interactions')).toEqual({ status: 'available' });
-        await expect(fixture.public.confirm({
-            kind: 'confirmation',
-            message: 'Continue?',
-        })).resolves.toEqual({
-            requestId: expect.any(String),
-            kind: 'confirmation',
-            status: 'approved',
-        });
-        expect(handleToolCall).toHaveBeenCalledWith(
-            expect.any(String),
-            'AgentConfirmation',
-            expect.objectContaining({ message: 'Continue?' }),
-            expect.objectContaining({
-                owner: { kind: 'plugin', pluginId: 'acme.plugin', runtimeId: 'acme.agent/runtime' },
-            }),
-        );
+        const pending = fixture.public.confirm({ kind: 'confirmation', message: 'Continue?' });
+        const { id, request } = await fixture.publishedRequest();
+        expect(request).toMatchObject({ tool: 'AskUserQuestion', kind: 'user_action' });
+        await expect(fixture.respond({ id, approved: true, answers: { confirmation: ['confirm'] } })).resolves.toBeUndefined();
+        await expect(pending).resolves.toEqual({ requestId: id, kind: 'confirmation', status: 'approved' });
+        expect(fixture.session.__getAgentState().completedRequests?.[id]).toMatchObject({ status: 'approved' });
     });
 
     it('fails closed when a caller supplies a malformed deadline', async () => {
-        const handleToolCall = vi.fn(async () => ({ decision: 'approved' as const }));
-        const fixture = createFixture(handleToolCall, { interactionDeadlineMs: 0 });
-
-        expect(fixture.availability('interactions')).toEqual({
-            status: 'unavailable',
-            code: 'plugin_service_unavailable',
+        const fixture = createFixture({ interactionDeadlineMs: 0 });
+        expect(fixture.availability('interactions')).toEqual({ status: 'unavailable', code: 'plugin_service_unavailable' });
+        await expect(fixture.public.confirm({ kind: 'confirmation', message: 'Continue?' })).resolves.toMatchObject({
+            kind: 'confirmation', status: 'unavailable',
         });
-        await expect(fixture.public.confirm({
-            kind: 'confirmation',
-            message: 'Continue?',
-        })).resolves.toEqual({
-            requestId: expect.any(String),
-            kind: 'confirmation',
-            status: 'unavailable',
-        });
-        expect(handleToolCall).not.toHaveBeenCalled();
+        expect(fixture.session.__getAgentState().requests ?? {}).toEqual({});
+        expect(fixture.session.__getAgentState().completedRequests ?? {}).toEqual({});
     });
 
     it('keeps Session inventory available while transient presentation is unavailable', async () => {
-        const fixture = createFixture(null, {
-            credentials: {
-                token: 'account-token',
-                encryption: { type: 'legacy', secret: new Uint8Array(32) },
-            },
-        });
-
+        const fixture = createFixture({
+            credentials: { token: 'account-token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+        }, { presentationAvailable: false });
         expect(fixture.availability('sessions')).toEqual({ status: 'available' });
-        expect(fixture.availability('interactions')).toEqual({
-            status: 'unavailable',
-            code: 'plugin_service_unavailable',
+        expect(fixture.availability('interactions')).toEqual({ status: 'unavailable', code: 'plugin_service_unavailable' });
+        await expect(fixture.public.requestApproval(approvalRequest)).resolves.toMatchObject({
+            kind: 'approval', status: 'unavailable',
         });
-        await expect(fixture.public.requestApproval(approvalRequest)).resolves.toEqual({
-            requestId: expect.any(String),
-            kind: 'approval',
-            status: 'unavailable',
-        });
+        expect(fixture.session.__getAgentState().requests ?? {}).toEqual({});
     });
 
-    it('maps approval outcomes into the strict result vocabulary and session ceiling', async () => {
-        const decisions = [
-            { decision: 'approved' as const },
-            { decision: 'approved_for_session' as const },
-            { decision: 'denied' as const, rationale: 'Read-only mode' },
-            { decision: 'abort' as const },
-        ];
-        const handleToolCall = vi.fn(async () => {
-            const decision = decisions.shift();
-            if (!decision) throw new Error('Missing permission decision fixture');
-            return decision;
-        });
-        const fixture = createFixture(handleToolCall);
-
-        await expect(fixture.public.requestApproval(approvalRequest)).resolves.toMatchObject({
-            kind: 'approval', status: 'approved', persistence: 'once',
-        });
-        await expect(fixture.public.requestApproval(approvalRequest)).resolves.toMatchObject({
-            kind: 'approval', status: 'approved', persistence: 'session',
-        });
-        await expect(fixture.public.requestApproval(approvalRequest)).resolves.toMatchObject({
-            kind: 'approval', status: 'declined',
-        });
-        await expect(fixture.public.requestApproval(approvalRequest)).resolves.toMatchObject({
-            kind: 'approval', status: 'userCancelled',
-        });
-        expect(handleToolCall).toHaveBeenNthCalledWith(
-            1,
-            expect.any(String),
-            'Bash',
-            approvalRequest.subject.input,
-            expect.objectContaining({
-                owner: {
-                    kind: 'plugin',
-                    pluginId: 'acme.plugin',
-                    runtimeId: 'acme.agent/runtime',
-                },
-            }),
-        );
-    });
-
-    it('rejects persistence outside the author-requested approval ceiling', async () => {
-        const fixture = createFixture(vi.fn(async () => ({
-            decision: 'approved_for_session' as const,
-        })));
-
-        await expect(fixture.public.requestApproval({
-            ...approvalRequest,
-            allowSessionPersistence: undefined,
-        })).resolves.toMatchObject({ kind: 'approval', status: 'unavailable' });
-    });
-
-    it('maps exact question answer records without splitting comma-bearing values', async () => {
-        const handleToolCall = vi.fn(async () => ({
-            decision: 'approved' as const,
-            answers: {
-                notes: ['Keep Alpha, Beta intact'],
-                components: ['alpha-beta', 'gamma', 'Custom, other'],
-            },
-        }));
-        const fixture = createFixture(handleToolCall);
-
-        await expect(fixture.public.askQuestions(questionsRequest)).resolves.toMatchObject({
-            kind: 'questions',
-            status: 'answered',
-            answers: {
-                notes: { kind: 'text', value: 'Keep Alpha, Beta intact' },
-                components: {
-                    kind: 'multipleChoice',
-                    answers: [
-                        { kind: 'choice', choiceId: 'alpha-beta' },
-                        { kind: 'choice', choiceId: 'gamma' },
-                        { kind: 'custom', value: 'Custom, other' },
-                    ],
-                },
-            },
-        });
-        expect(handleToolCall).toHaveBeenCalledWith(
-            expect.any(String),
-            'AskUserQuestion',
-            {
-                title: 'Configure release',
-                questions: [
-                    {
-                        id: 'notes',
-                        question: 'Notes',
-                        required: true,
-                        selection: 'text',
-                        presentation: { initialValue: 'Existing notes' },
-                    },
-                    {
-                        id: 'components',
-                        question: 'Components',
-                        selection: 'multiple',
-                        options: [
-                            { id: 'alpha-beta', label: 'Alpha, Beta' },
-                            { id: 'gamma', label: 'Gamma' },
-                        ],
-                        allowCustom: true,
-                    },
-                ],
-            },
-            expect.anything(),
-        );
-    });
-
-    it('fails closed on missing required, unknown, duplicate, empty, or accessor-backed answers', async () => {
-        const answerFixtures: unknown[] = [
-            {},
-            { notes: ['note'], components: ['gamma'], unknown: ['ignored?'] },
-            { notes: ['note'], components: ['gamma', 'gamma'] },
-            { notes: [''], components: ['gamma'] },
-        ];
-        const accessorAnswers: Record<string, unknown> = { components: ['gamma'] };
-        Object.defineProperty(accessorAnswers, 'notes', {
-            enumerable: true,
-            get: () => { throw new Error('must not escape the boundary'); },
-        });
-        answerFixtures.push(accessorAnswers);
-
-        for (const answers of answerFixtures) {
-            const fixture = createFixture(vi.fn(async () => ({
-                decision: 'approved' as const,
-                answers,
-            } as never)));
-            await expect(fixture.public.askQuestions(questionsRequest)).resolves.toMatchObject({
-                kind: 'questions',
-                status: 'unavailable',
-            });
+    it('maps real approval RPC outcomes into the strict result vocabulary and session ceiling', async () => {
+        for (const [decision, status, persistence] of [
+            ['approved', 'approved', 'once'], ['denied', 'declined', undefined],
+            ['abort', 'userCancelled', undefined], ['approved_for_session', 'approved', 'session'],
+        ] as const) {
+            const fixture = createFixture();
+            const pending = fixture.public.requestApproval(approvalRequest);
+            const { id, request } = await fixture.publishedRequest();
+            expect(request).toMatchObject({ tool: 'Bash', kind: 'permission', arguments: approvalRequest.subject.input });
+            await expect(fixture.respond({
+                id, approved: status === 'approved', decision,
+            }, 'permission')).resolves.toBeUndefined();
+            await expect(pending).resolves.toMatchObject({ kind: 'approval', status, ...(persistence ? { persistence } : {}) });
+            expect(fixture.session.__getAgentState().requests).toEqual({});
         }
     });
 
-    it('maps confirmations and refuses effect-bearing permission results', async () => {
-        const confirmation: HostSessionConfirmationRequest = {
-            kind: 'confirmation',
-            title: 'Continue?',
-            message: 'Continue with the operation?',
-        };
-        const decisions = [
-            { decision: 'approved' as const },
-            { decision: 'denied' as const },
-            { decision: 'abort' as const },
-            { decision: 'approved_for_session' as const },
-            {
-                decision: 'approved' as const,
-                execPolicyAmendment: { command: ['git', 'status'] },
-            },
-        ];
-        const fixture = createFixture(vi.fn(async () => decisions.shift()!));
+    it('rejects reusable authority outside the author-requested approval ceiling before settling', async () => {
+        const fixture = createFixture();
+        const pending = fixture.public.requestApproval({ ...approvalRequest, allowSessionPersistence: undefined });
+        const { id } = await fixture.publishedRequest();
+        await expect(fixture.respond({ id, approved: true, decision: 'approved_for_session' }, 'permission')).resolves.toMatchObject({
+            ok: false, errorCode: 'permission_response_invalid', requestId: id,
+        });
+        expect(fixture.session.__getAgentState().requests?.[id]).toBeDefined();
+        expect(fixture.session.__getAgentState().completedRequests?.[id]).toBeUndefined();
+        await expect(fixture.respond({ id, approved: true, decision: 'approved' }, 'permission')).resolves.toBeUndefined();
+        await expect(pending).resolves.toMatchObject({ kind: 'approval', status: 'approved', persistence: 'once' });
+    });
 
-        await expect(fixture.public.confirm(confirmation)).resolves.toMatchObject({ status: 'approved' });
-        await expect(fixture.public.confirm(confirmation)).resolves.toMatchObject({ status: 'declined' });
-        await expect(fixture.public.confirm(confirmation)).resolves.toMatchObject({ status: 'userCancelled' });
-        await expect(fixture.public.confirm(confirmation)).resolves.toMatchObject({ status: 'unavailable' });
-        await expect(fixture.public.confirm(confirmation)).resolves.toMatchObject({ status: 'unavailable' });
+    it('projects questions and maps exact real RPC answers without splitting comma-bearing values', async () => {
+        const fixture = createFixture();
+        const pending = fixture.public.askQuestions(questionsRequest);
+        const { id, request } = await fixture.publishedRequest();
+        expect(request).toMatchObject({
+            tool: 'AskUserQuestion', kind: 'user_action',
+            arguments: {
+                title: 'Configure release',
+                questions: [
+                    { id: 'notes', question: 'Notes', required: true, selection: 'text', presentation: { initialValue: 'Existing notes' } },
+                    { id: 'components', question: 'Components', selection: 'multiple',
+                        options: [{ id: 'alpha-beta', label: 'Alpha, Beta' }, { id: 'gamma', label: 'Gamma' }], allowCustom: true },
+                ],
+            },
+        });
+        await expect(fixture.respond({ id, approved: true, answers: {
+            notes: ['Keep Alpha, Beta intact'], components: ['alpha-beta', 'gamma', 'Custom, other'],
+        } })).resolves.toBeUndefined();
+        await expect(pending).resolves.toMatchObject({
+            kind: 'questions', status: 'answered',
+            answers: {
+                notes: { kind: 'text', value: 'Keep Alpha, Beta intact' },
+                components: { kind: 'multipleChoice', answers: [
+                    { kind: 'choice', choiceId: 'alpha-beta' }, { kind: 'choice', choiceId: 'gamma' },
+                    { kind: 'custom', value: 'Custom, other' },
+                ] },
+            },
+        });
+    });
+
+    it('fails closed on missing required, unknown, or empty real question answers', async () => {
+        for (const answers of [
+            {}, { notes: ['note'], components: ['gamma'], unknown: ['ignored?'] }, { notes: [''], components: ['gamma'] },
+        ]) {
+            const fixture = createFixture();
+            const pending = fixture.public.askQuestions(questionsRequest);
+            const { id } = await fixture.publishedRequest();
+            await expect(fixture.respond({ id, approved: true, answers })).resolves.toBeUndefined();
+            await expect(pending).resolves.toMatchObject({ kind: 'questions', status: 'unavailable' });
+        }
+    });
+
+    it('rejects malformed decisions, duplicate answers, and effect-bearing user-action replies without settling', async () => {
+        const fixture = createFixture();
+        const pending = fixture.public.confirm({ kind: 'confirmation', title: 'Continue?', message: 'Continue with the operation?' });
+        const { id, request } = await fixture.publishedRequest();
+        expect(request.arguments).toMatchObject({ title: 'Continue?' });
+        for (const fields of [
+            { decision: 42 }, { decision: 'mystery' },
+            { execPolicyAmendment: { command: ['git', 'status'] } },
+            { answers: { confirmation: ['confirm', 'confirm'] } },
+        ]) {
+            await expect(fixture.respond({ id, approved: true, answers: { confirmation: ['confirm'] }, ...fields })).resolves.toMatchObject({
+                ok: false, errorCode: 'permission_response_invalid', requestId: id,
+            });
+            expect(fixture.session.__getAgentState().requests?.[id]).toBeDefined();
+            expect(fixture.session.__getAgentState().completedRequests?.[id]).toBeUndefined();
+        }
+        await expect(fixture.respond({ id, approved: true, answers: { confirmation: ['confirm'] } })).resolves.toBeUndefined();
+        await expect(pending).resolves.toMatchObject({ kind: 'confirmation', status: 'approved' });
+    });
+
+    it('rejects answerless or reusable confirmation results from the real permission owner', async () => {
+        for (const fields of [
+            {}, { decision: 'approved_for_session', answers: { confirmation: ['confirm'] } },
+        ]) {
+            const fixture = createFixture();
+            const pending = fixture.public.confirm({ kind: 'confirmation', message: 'Continue?' });
+            const { id } = await fixture.publishedRequest();
+            await expect(fixture.respond({ id, approved: true, ...fields })).resolves.toBeUndefined();
+            await expect(pending).resolves.toMatchObject({ kind: 'confirmation', status: 'unavailable' });
+        }
     });
 
     it('settles an already-aborted caller without presenting it', async () => {
-        const handleToolCall = vi.fn(async () => ({ decision: 'approved' as const }));
-        const fixture = createFixture(handleToolCall);
+        const fixture = createFixture();
         const caller = new AbortController();
         caller.abort(new Error('caller stopped'));
-
-        await expect(fixture.public.confirm({
-            kind: 'confirmation',
-            message: 'Continue?',
-        }, { signal: caller.signal })).resolves.toMatchObject({
-            kind: 'confirmation',
-            status: 'requesterAborted',
+        await expect(fixture.public.confirm({ kind: 'confirmation', message: 'Continue?' }, { signal: caller.signal })).resolves.toMatchObject({
+            kind: 'confirmation', status: 'requesterAborted',
         });
-        expect(handleToolCall).not.toHaveBeenCalled();
+        expect(fixture.session.__getAgentState().requests ?? {}).toEqual({});
+        expect(fixture.session.__getAgentState().completedRequests ?? {}).toEqual({});
     });
 
-    it('distinguishes requester abort, session end, and occurrence retirement', async () => {
-        const handleToolCall = vi.fn((
-            _requestId: string,
-            _toolName: string,
-            _input: unknown,
-            options?: Readonly<{ signal?: AbortSignal }>,
-        ) => new Promise<never>((_resolve, reject) => {
-            options?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
-        }));
-        const authorRequest: HostSessionConfirmationRequest = {
-            kind: 'confirmation',
-            message: 'Continue?',
-        };
-
-        const requester = new AbortController();
-        const requesterPending = createFixture(handleToolCall).current.request(authorRequest, {
-            signal: requester.signal,
-        });
-        requester.abort();
-        await expect(requesterPending).resolves.toMatchObject({ status: 'requesterAborted' });
-
-        const session = new AbortController();
-        const sessionPending = createFixture(handleToolCall, { signal: session.signal })
-            .current.request(authorRequest);
-        session.abort();
-        await expect(sessionPending).resolves.toMatchObject({ status: 'sessionEnded' });
-
-        let current = true;
-        const retired = new AbortController();
-        const retiredPending = createFixture(handleToolCall, {
-            signal: retired.signal,
-            isCurrent: () => current,
-        }).current.request(authorRequest);
-        current = false;
-        retired.abort();
-        await expect(retiredPending).resolves.toMatchObject({ status: 'occurrenceRetired' });
+    it('distinguishes requester abort, session end, and occurrence retirement after real presentation', async () => {
+        for (const status of ['requesterAborted', 'sessionEnded', 'occurrenceRetired'] as const) {
+            const session = new AbortController();
+            const requester = new AbortController();
+            let current = true;
+            const fixture = createFixture({ signal: session.signal, isCurrent: () => current });
+            const pending = fixture.current.request({ kind: 'confirmation', message: 'Continue?' }, { signal: requester.signal });
+            const { id } = await fixture.publishedRequest();
+            if (status === 'requesterAborted') requester.abort();
+            else {
+                current = status !== 'occurrenceRetired';
+                session.abort();
+            }
+            await expect(pending).resolves.toMatchObject({ status });
+            await vi.waitFor(() => expect(fixture.session.__getAgentState().requests ?? {}).toEqual({}));
+            expect(fixture.session.__getAgentState().completedRequests?.[id]).toMatchObject({ status: 'canceled' });
+        }
     });
 
     it('fences before presentation and after an in-flight occurrence retires', async () => {
         let current = false;
-        let resolveHost!: (result: { decision: 'approved' }) => void;
-        const handleToolCall = vi.fn(() => new Promise<{ decision: 'approved' }>((resolve) => {
-            resolveHost = resolve;
-        }));
-        const fixture = createFixture(handleToolCall, { isCurrent: () => current });
+        const fixture = createFixture({ isCurrent: () => current });
         const request: HostSessionConfirmationRequest = { kind: 'confirmation', message: 'Continue?' };
-
         await expect(fixture.current.request(request)).resolves.toMatchObject({ status: 'occurrenceRetired' });
-        expect(handleToolCall).not.toHaveBeenCalled();
-
+        expect(fixture.session.__getAgentState().requests ?? {}).toEqual({});
         current = true;
         const pending = fixture.current.request(request);
-        await vi.waitFor(() => expect(handleToolCall).toHaveBeenCalledOnce());
+        const { id } = await fixture.publishedRequest();
         current = false;
-        resolveHost({ decision: 'approved' });
+        await expect(fixture.respond({ id, approved: true, answers: { confirmation: ['confirm'] } })).resolves.toBeUndefined();
         await expect(pending).resolves.toMatchObject({ status: 'occurrenceRetired' });
     });
 
-    it('host-stamps authenticated requester attribution into the permission owner', async () => {
-        const handleToolCall = vi.fn(async () => ({ decision: 'approved' as const }));
-        const fixture = createFixture(handleToolCall);
-
-        const result = await fixture.current.request({
-            kind: 'confirmation',
-            message: 'Continue?',
-        }, {
-            requester: {
-                pluginId: 'caller.plugin',
-                contributionId: 'caller-action',
-                occurrenceId: 'caller-occurrence',
-                invocationId: 'native-agent-runtime',
-            },
-        });
-
-        expect(result).toMatchObject({
-            requestId: expect.any(String),
-            kind: 'confirmation',
-            status: 'approved',
-        });
-        expect(handleToolCall).toHaveBeenCalledWith(
-            result.requestId,
-            'AgentConfirmation',
-            { title: undefined, message: 'Continue?' },
-            expect.objectContaining({
-                owner: {
-                    kind: 'plugin',
-                    pluginId: 'caller.plugin',
-                    runtimeId: 'native-agent-runtime',
-                },
-            }),
-        );
+    it('host-stamps requester attribution and isolates real session grants by plugin and invocation', async () => {
+        const fixture = createFixture();
+        const requester = { pluginId: 'caller.plugin', contributionId: 'caller-action', occurrenceId: 'caller-occurrence', invocationId: 'native-agent-runtime' };
+        const pending = fixture.current.request(approvalRequest, { requester });
+        const { id } = await fixture.publishedRequest();
+        await expect(fixture.respond({ id, approved: true, decision: 'approved_for_session' }, 'permission')).resolves.toBeUndefined();
+        await expect(pending).resolves.toMatchObject({ status: 'approved', persistence: 'session' });
+        await expect(fixture.current.request(approvalRequest, { requester })).resolves.toMatchObject({ status: 'approved', persistence: 'session' });
+        expect(fixture.session.__getAgentState().requests).toEqual({});
+        for (const otherRequester of [
+            { ...requester, pluginId: 'other.plugin' }, { ...requester, invocationId: 'other-runtime' },
+        ]) {
+            const other = fixture.current.request(approvalRequest, { requester: otherRequester });
+            const { id: otherId } = await fixture.publishedRequest();
+            await expect(fixture.respond({ id: otherId, approved: false, decision: 'denied' }, 'permission')).resolves.toBeUndefined();
+            await expect(other).resolves.toMatchObject({ status: 'declined' });
+        }
     });
 
-    it('fails closed on strict request violations without invoking the permission owner', async () => {
-        const handleToolCall = vi.fn(async () => ({ decision: 'approved' as const }));
-        const fixture = createFixture(handleToolCall);
+    it('fails closed on strict request violations without creating a permission request', async () => {
+        const fixture = createFixture();
         const cyclic: Record<string, unknown> = {};
         cyclic.self = cyclic;
         const { proxy, revoke } = Proxy.revocable({}, {});
         revoke();
-        const invalidRequests: unknown[] = [
+        for (const request of [
             { ...approvalRequest, requestId: 'author-must-not-supply-this' },
             { ...approvalRequest, subject: { kind: 'tool', name: 'Bash', input: cyclic } },
-            {
-                ...approvalRequest,
-                subject: { kind: 'tool', name: 'Bash', input: 'x'.repeat(256 * 1_024 + 1) },
-            },
+            { ...approvalRequest, subject: { kind: 'tool', name: 'Bash', input: 'x'.repeat(256 * 1_024 + 1) } },
             proxy,
-        ];
-
-        for (const request of invalidRequests) {
-            await expect(fixture.current.request(request as HostSessionApprovalRequest)).resolves.toMatchObject({
-                status: 'unavailable',
-            });
+        ]) {
+            await expect(fixture.current.request(request as HostSessionApprovalRequest)).resolves.toMatchObject({ status: 'unavailable' });
         }
-        expect(handleToolCall).not.toHaveBeenCalled();
+        expect(fixture.session.__getAgentState().requests ?? {}).toEqual({});
+        expect(fixture.session.__getAgentState().completedRequests ?? {}).toEqual({});
     });
 
-    it('turns permission-owner failures and malformed results into typed unavailability', async () => {
-        const failures: Array<PermissionHandlerBoundary['handleToolCall']> = [
-            vi.fn(async () => { throw new Error('sensitive provider failure'); }),
-            vi.fn(async () => ({ decision: 42 } as never)),
-            vi.fn(async () => ({ decision: 'mystery' } as never)),
-        ];
-
-        for (const handleToolCall of failures) {
-            const result = await createFixture(handleToolCall).public.requestApproval(approvalRequest);
-            expect(result).toEqual({
-                requestId: expect.any(String),
-                kind: 'approval',
-                status: 'unavailable',
-            });
-            expect(result).not.toHaveProperty('diagnostic');
-        }
-    });
-
-    it('preserves the canonical durable interaction capacity failure', async () => {
-        const capacityError = createWorkflowInteractionCapacityError();
-        const fixture = createFixture(vi.fn(async () => { throw capacityError; }));
-
-        await expect(fixture.public.requestApproval(approvalRequest)).rejects.toBe(capacityError);
+    it('turns a Session metadata-read failure into typed unavailability without leaking diagnostics', async () => {
+        const fixture = createFixture();
+        const readMetadata = fixture.session.getMetadataSnapshot.bind(fixture.session);
+        let failed = false;
+        fixture.session.getMetadataSnapshot = () => {
+            if (!failed) {
+                failed = true;
+                throw new Error('sensitive Session persistence failure');
+            }
+            return readMetadata();
+        };
+        await expect(fixture.public.requestApproval(approvalRequest)).resolves.toEqual({
+            requestId: expect.any(String), kind: 'approval', status: 'unavailable',
+        });
+        expect(fixture.session.__getAgentState().requests ?? {}).toEqual({});
     });
 });

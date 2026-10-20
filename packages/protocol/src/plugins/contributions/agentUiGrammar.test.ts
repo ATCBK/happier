@@ -396,7 +396,7 @@ describe('Agent UI grammar in the full public Manifest projection', () => {
       { schema: createPluginManifestJsonSchemaV2(), dialect: 'draft-2020-12' },
     ];
     for (const target of ['draft-7', 'draft-2020-12'] as const) {
-      projections.push({ schema: z.toJSONSchema(PluginManifestV2Schema, { io: 'input', target, unrepresentable: 'any' }),
+      projections.push({ schema: zodSchemaToJsonSchemaObject(PluginManifestV2Schema, { target, unrepresentable: 'any' }),
         dialect: target === 'draft-7' ? 'draft-07' : 'draft-2020-12' });
       // Custom authoring nodes are intentionally unrepresentable by the strict action helper.
       expect(() => zodSchemaToJsonSchemaObject(PluginManifestV2Schema, { target }))

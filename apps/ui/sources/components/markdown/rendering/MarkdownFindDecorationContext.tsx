@@ -3,6 +3,9 @@ import type { MarkdownSpan } from '../parseMarkdown';
 import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
 import type { FindDisplayText } from '@/components/markdown/rendering/markdownFindProjection';
 
+/** Whether this Markdown's source marks are Find matches or commented passages. */
+export const MarkdownSourceMarkKindContext = React.createContext<'find' | 'passage'>('find');
+
 export const MarkdownFindDecorationContext = React.createContext<ReadonlyMap<MarkdownSpan, readonly FindTextRange[]> | null>(null);
 
 export function projectLeafRanges(leaf: FindDisplayText, sourceStart: number, ranges: readonly FindTextRange[]) {

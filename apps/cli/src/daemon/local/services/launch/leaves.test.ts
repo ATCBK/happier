@@ -96,7 +96,7 @@ describe('createLocalServiceLauncherLeafRoutes', () => {
         });
     });
 
-    it('dispatches launcher Register, Open and Clear through the real feed, preview and history owners', async () => {
+    it('reuses Session previews through the real Action, launcher feed, preview admission and history owners', async () => {
         const inventoryRegistry = createLocalServiceInventoryRegistry();
         inventoryRegistry.replaceSnapshot({
             v: 1, machineId: MACHINE_ID, generatedAt: 1_000, refreshState: 'idle', diagnostics: [],
@@ -110,6 +110,7 @@ describe('createLocalServiceLauncherLeafRoutes', () => {
             }],
         });
         const previewRegistry = createLocalServicePreviewRegistry();
+        let admission = 0;
         const previewRoutes = createLocalServicePreviewRoutes({
             machineId: MACHINE_ID, accountId: 'account-1', inventoryRegistry, registry: previewRegistry,
             server: {
@@ -118,7 +119,7 @@ describe('createLocalServiceLauncherLeafRoutes', () => {
                 http: {
                     async post(_url, body) {
                         const resource = LocalServicePreviewResourceV1Schema.parse(body);
-                        return { data: { resource, accessUrl: 'https://private.example.test/?previewToken=admission', expiresAt: 61_000 } };
+                        return { data: { resource, accessUrl: `https://private.example.test/?previewToken=admission-${++admission}`, expiresAt: 61_000 } };
                     },
                     async delete() { return { data: { ok: true } }; },
                 },
@@ -143,6 +144,7 @@ describe('createLocalServiceLauncherLeafRoutes', () => {
         });
         await featureGate.refresh();
         const execute = createLocalServicesDaemonRuntimeActionExecutor({ featureGate, routes: {
+            previewRoutes,
             launcherRoutes: { getSnapshot: feed.getSnapshot, leaves: routes },
         } });
         const input = { machineId: MACHINE_ID, targetId: target.id, sessionId: 'session-1' };
@@ -157,22 +159,50 @@ describe('createLocalServiceLauncherLeafRoutes', () => {
             machineId: MACHINE_ID, sessionId: 'session-1', owner: { kind: 'session', id: 'session-1' },
             target: { scheme: 'http', host: '127.0.0.1', port: 5173 },
         });
-        expect(preview.accessUrl).toBe('https://private.example.test/?previewToken=admission');
+        expect(preview.accessUrl).toBe('https://private.example.test/?previewToken=admission-1');
         expect(result).toMatchObject({ status: 'registered', targetId: target.id, previewId: preview.previewId });
         expect(result).toMatchObject({ browserTarget: preview.resource.browserTarget });
         const openable = (await feed.getSnapshot()).targets.find(candidate => candidate.id === target.id);
         expect(openable?.browserTarget).toBeDefined();
+        // The phone launchpad has Machine scope even when the listener is already Session-owned.
+        const machineInput = { machineId: MACHINE_ID, targetId: target.id };
+        const reused = await execute({ actionId: 'localServices.launcher.registerPreview', input: machineInput, context: {} });
+        assertActionOutputContract('localServices.launcher.registerPreview', reused);
+        expect(reused).toMatchObject({ status: 'existing', previewId: preview.previewId,
+            browserTarget: preview.resource.browserTarget });
+        expect((await previewRoutes.getSnapshot()).resources).toEqual([preview.resource]);
+        const direct = await execute({ actionId: 'localServices.preview.openOrCreate',
+            input: { machineId: MACHINE_ID, inventoryEntryId: 'entry-vite:authority' }, context: {} });
+        assertActionOutputContract('localServices.preview.openOrCreate', direct);
+        expect(direct).toMatchObject({ status: 'existing', preview: { resource: preview.resource },
+            snapshot: { resources: [preview.resource] } });
+        const beforeOpenAdmission = (await previewRoutes.getSnapshot()).previews?.[0]?.accessUrl;
         const opened = await execute({ actionId: 'localServices.launcher.openPreview', input, context: {} });
         assertActionOutputContract('localServices.launcher.openPreview', opened);
         expect(opened).toMatchObject({ status: 'opened', targetId: target.id, browserTarget: openable?.browserTarget });
+        expect((await previewRoutes.getSnapshot()).previews?.[0]?.accessUrl).not.toBe(beforeOpenAdmission);
         expect(history.list()).toEqual([target.id]);
         const cleared = await execute({ actionId: 'localServices.launcher.history.clear',
             input: { machineId: MACHINE_ID }, context: {} });
         assertActionOutputContract('localServices.launcher.history.clear', cleared);
         expect(cleared).toMatchObject({ cleared: 1 });
         expect(history.list()).toEqual([]);
-        expect((await previewRoutes.getSnapshot()).previews).toEqual(snapshot.previews);
+        expect((await previewRoutes.getSnapshot()).resources).toEqual(snapshot.resources);
+        expect((await previewRoutes.getSnapshot()).previews?.[0]?.accessUrl).not.toBe(preview.accessUrl);
         expect(inventoryRegistry.getSnapshot().entries).toMatchObject([{ id: 'entry-vite:authority', state: 'listening' }]);
+
+        inventoryRegistry.replaceSnapshot({ ...inventoryRegistry.getSnapshot(), entries: [] });
+        const retained = (await feed.getSnapshot()).targets.find(candidate => candidate.source === 'registered_preview');
+        if (!retained) throw new Error('Expected retained registered preview target');
+        const priorAdmission = (await previewRoutes.getSnapshot()).previews?.[0]?.accessUrl;
+        const reopened = await execute({ actionId: 'localServices.launcher.registerPreview',
+            input: { machineId: MACHINE_ID, targetId: retained.id }, context: {} });
+        assertActionOutputContract('localServices.launcher.registerPreview', reopened);
+        expect(reopened).toMatchObject({ status: 'existing', previewId: preview.previewId,
+            browserTarget: preview.resource.browserTarget });
+        const final = await previewRoutes.getSnapshot();
+        expect(final.resources).toEqual([preview.resource]);
+        expect(final.previews?.[0]?.accessUrl).not.toBe(priorAdmission);
     });
 
     it('clearHistory dismisses recents without changing the observed running service or its preview', async () => {
@@ -219,9 +249,6 @@ describe('createLocalServiceLauncherLeafRoutes', () => {
         expect(history.isDismissed(target.id)).toBe(true);
         expect(result.snapshot.targets).toEqual(before.targets);
         expect(inventoryRegistry.getSnapshot().entries).toMatchObject([{ id: 'entry-vite', state: 'listening' }]);
-        expect(await routes.openPreview({ machineId: MACHINE_ID, targetId: target.id }))
-            .toMatchObject({ status: 'opened', browserTarget: target.browserTarget });
-        expect(history.list()).toEqual([target.id]);
     });
 
     it('clears only the requested workspace history while both observed services remain running', async () => {

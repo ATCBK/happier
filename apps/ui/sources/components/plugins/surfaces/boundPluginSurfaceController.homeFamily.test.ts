@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NO_TEAM_CAPABILITIES_V1, type TeamSummaryV1 } from '@happier-dev/protocol/teams';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { PluginUiJsonValueV1Schema, type PluginUiHostApiRequestEnvelopeV1 } from '@happier-dev/protocol/plugins/ui';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
@@ -49,7 +50,7 @@ function team(id: string, name: string): TeamSummaryV1 {
     };
 }
 
-function request(facts: Readonly<{ pluginId: string; contributionId: string; surfaceId: string }>, payload: unknown) {
+function request(facts: Readonly<{ pluginId: string; contributionId: string; surfaceId: string }>, payload: unknown): PluginUiHostApiRequestEnvelopeV1 {
     return {
         version: 1,
         requestId: 'req:executeAction',
@@ -64,8 +65,8 @@ function request(facts: Readonly<{ pluginId: string; contributionId: string; sur
             diagnostics: [],
         },
         method: 'executeAction',
-        payload,
-    } as never;
+        payload: PluginUiJsonValueV1Schema.parse(payload),
+    };
 }
 
 beforeEach(async () => {
@@ -95,10 +96,13 @@ async function mountedSurface() {
     });
     connection = await restoreServerAccountForTest({
         serverUrl: 'https://home-plugin-front-door.example', accountId: 'account-1',
+        request: harness.request,
     });
     const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
     const scopeId = resolveServerProfileScopeIdForIdentifier(serverId);
-    (await import('@/sync/domains/state/storage')).storage.setState({ profileScope: { serverId: scopeId, accountId: 'account-1' } });
+    const { storage } = await import('@/sync/domains/state/storage');
+    await waitForHomeGovernance(() => expect(storage.getState().profileScope)
+        .toEqual({ serverId: scopeId, accountId: 'account-1' }));
     const accountLifetime = (await import('@/sync/domains/scope/activeServerAccountScope')).captureActiveServerAccountScopeLifetime();
     if (!accountLifetime) throw new Error('Expected the restored Home Account to be applied.');
     const facts = {

@@ -68,6 +68,8 @@ export type ManagedLifecyclePresentation = Readonly<{
   detail?: string;
   /** The cause and detail as one sentence pair, for one-line consumers. */
   line: string;
+  /** A word for a narrow one-line rail, where the line would truncate; absent where the line is already short. */
+  word?: string;
   actions: readonly ManagedLifecycleAction[];
   /**
    * A state that blocks use or leaves billing uncertain speaks as the page's banner, titled with the
@@ -173,13 +175,13 @@ export function describeManagedLifecycleState(
         'checkNow',
       ]);
     case 'absent':
-      return present('neutral', { detail: t('managedPower.resourceAbsent') }, [
+      return { ...present('neutral', { detail: t('managedPower.resourceAbsent') }, [
         'remove',
-      ]);
+      ]), word: t('managedPower.ended') };
     case 'expired':
-      return present('neutral', { detail: t('managedPower.expired') }, [
+      return { ...present('neutral', { detail: t('managedPower.expired') }, [
         'remove',
-      ]);
+      ]), word: t('managedPower.ended') };
     case 'volumeLost':
       return present('warning', { cause: t('managedPower.volumeLost') }, [
         'remove',

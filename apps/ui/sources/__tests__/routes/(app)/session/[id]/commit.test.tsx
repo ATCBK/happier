@@ -1,284 +1,103 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createPlainSessionByIdResponseFixture, flushHookEffects, standardCleanup } from '@/dev/testkit';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import {
-    createStorageStoreMock } from '@/dev/testkit/mocks/storage';
-import {
-    createThemeFixture,
-    flushHookEffects,
-    renderScreen,
-    standardCleanup,
-} from '@/dev/testkit';
-import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
+    createSessionFilesViewFixture, fileViewSnapshot,
+    installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit,
+} from '@/components/sessions/files/views/sessionFilesViewTestkit';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
+const route = vi.hoisted(() => ({ params: {} as Record<string, string | string[] | undefined>, back: vi.fn() }));
+// Register native and route boundaries before loading the Account/route dependency graph.
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+    params: () => route.params, router: { back: route.back, push: vi.fn(), replace: vi.fn(), setParams: vi.fn() },
+}).module);
+installSessionFilesViewBoundaries({ platformOS: 'web', confirmResult: true, emitViewability: false });
 let scmWriteEnabled = true;
-let searchParams: { id: string; sha: string } = { id: 'session-1', sha: 'abc123' };
-let routerBack: ReturnType<typeof vi.fn> = vi.fn();
-const storageFixture = vi.hoisted(() => ({
-    isStorageDataReady: true,
-    sessionById: {
-        'session-1': {
-            encryptionMode: 'plain',
-            metadata: {
-                path: '/repo',
-            },
-        },
-    } as Record<string, any>,
-}));
+let searchParams = { id: 'session-1', sha: 'abc123' };
+const routerBack = route.back;
+vi.doMock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+    params: () => route.params, router: { back: route.back, push: vi.fn(), replace: vi.fn(), setParams: vi.fn() },
+}).module);
+vi.doMock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
+vi.doMock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
-const codeLinesSpy = vi.fn();
-const diffFilesListSpy = vi.fn();
-const syntaxHookSpy = vi.fn();
-
-installSessionRouteCommonModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            ScrollView: ({ children }: any) => React.createElement('ScrollView', null, children),
-            Pressable: ({ children, ...props }: any) => React.createElement('Pressable', props, children),
-            Platform: { OS: 'web', select: (value: any) => value?.default ?? null },
-            useWindowDimensions: () => ({ width: 1024, height: 768, scale: 1, fontScale: 1 }),
-        });
-    },
-    router: async () => {
-        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-        const routerMock = createExpoRouterMock({
-            params: searchParams as any,
-            router: {
-                back: (...args: unknown[]) => routerBack(...args),
-                push: vi.fn(),
-                replace: vi.fn(),
-                setParams: vi.fn(),
-            },
-        });
-        return {
-            ...routerMock.module,
-            useLocalSearchParams: () => searchParams,
-        };
-    },
-    unistyles: async () => {
-        const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-        const theme = createThemeFixture();
-        return createUnistylesMock({
-            theme,
-        });
-    },
-    text: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({
-            translate: (key: string) => key,
-        });
-    },
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({
-            confirmResult: true,
-        }).module;
-    },
-    storageModule: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        const createRouteStorageStore = () => ({
-            getState: () => createStorageStoreMock({
-                sessions: storageFixture.sessionById as any,
-            }).getState(),
-            getInitialState: () => createStorageStoreMock({
-                sessions: storageFixture.sessionById as any,
-            }).getState(),
-            setState: () => undefined,
-            subscribe: () => () => undefined,
-            destroy: () => undefined,
-        });
-        return createStorageModuleStub({
-            storage: createRouteStorageStore(),
-            useSessions: () => (storageFixture.isStorageDataReady ? [] : null),
-            useSession: (id: string) => storageFixture.sessionById[id] ?? null,
-            useSessionRpcAvailabilityState: (id: string) => ({
-                sessionExists: Boolean(storageFixture.sessionById[id]),
-                sessionRpcAvailable: Boolean(storageFixture.sessionById[id]),
-            }),
-            useSessionWorkspacePath: (id: string) => (
-                storageFixture.sessionById[id]?.metadata?.path ?? null
-            ),
-            useSessionProjectScmInFlightOperation: () => null,
-            // Narrow test fixture: this route only reads repo/branch/totals from the snapshot.
-            useSessionProjectScmSnapshot: (() => ({
-                projectKey: 'session-1',
-                fetchedAt: 0,
-                entries: [],
-                repo: { isRepo: true, rootPath: '/repo' },
-                branch: { head: 'main', detached: false },
-                hasConflicts: false,
-                totals: { includedFiles: 0, pendingFiles: 0 },
-            })) as any,
-            useSetting: () => true,
-            useLocalSetting: (() => null) as any,
-        });
-    },
-});
-
-vi.mock('@/components/ui/layout/layout', () => ({
-    layout: { maxWidth: 999 },
-    useLayoutMaxWidth: () => 999,
-    useLayoutMaxWidthStyle: () => ({ maxWidth: 999 }),
-}));
-
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: 'Text',
-    TextInput: 'TextInput',
-}));
-
-vi.mock('@/components/ui/feedback/ActivitySpinner', () => ({
-    ActivitySpinner: (props: Record<string, unknown>) => React.createElement('ActivitySpinner', props),
-}));
-
-vi.mock('@/components/ui/code/view/CodeLinesView', () => ({
-    CodeLinesView: (props: any) => {
-        codeLinesSpy(props);
-        return React.createElement('CodeLinesView', props);
-    },
-}));
-
-vi.mock('@/components/ui/code/diff/DiffFilesListView', () => ({
-    DiffFilesListView: (props: any) => {
-        diffFilesListSpy(props);
-        return React.createElement('DiffFilesListView', {
-            ...props,
-            testID: 'scm-commit-diff-files-list',
-        });
-    },
-}));
-
-vi.mock('@/components/ui/code/highlighting/useCodeLinesSyntaxHighlighting', () => ({
-    useCodeLinesSyntaxHighlighting: (filePath: string | null) => {
-        syntaxHookSpy(filePath);
-        return {
-            mode: 'simple',
-            language: filePath?.endsWith('.ts') ? 'typescript' : 'text',
-            maxBytes: 250_000,
-            maxLines: 5_000,
-            maxLineLength: 2_000,
-        };
-    },
-}));
-
-vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
-    useHydrateSessionForRoute: (sessionId: string) => {
-        if (!sessionId) {
-            return { kind: 'missing', sessionId, cause: 'not_found' };
-        }
-        if (!storageFixture.isStorageDataReady) {
-            return { kind: 'loading', sessionId, reason: 'cold' };
-        }
-        if (!storageFixture.sessionById[sessionId]) {
-            return { kind: 'missing', sessionId, cause: 'not_found' };
-        }
-        return { kind: 'available', sessionId };
-    },
-}));
-
-vi.mock('@/sync/ops', async (importOriginal) => {
-    const { createSyncOpsModuleMock } = await import('@/dev/testkit/mocks/syncOps');
-    return createSyncOpsModuleMock({
-        importOriginal,
-        overrides: {
-            sessionScmDiffCommit: vi.fn(async () => ({
-                success: true,
-                diff: 'diff --git a/a.ts b/a.ts',
-            })),
-            sessionScmCommitBackout: vi.fn(async () => ({
-                success: true,
-            })),
-        },
-    });
-});
-
-vi.mock('@/scm/operations/safety', () => ({
-    canRevertFromSnapshot: () => true,
-}));
-
-vi.mock('@/scm/core/operationPolicy', () => ({
-    evaluateScmOperationPreflight: () => ({ allowed: true, message: '' }),
-}));
-
-vi.mock('@/scm/operations/userFacingErrors', () => ({
-    getScmUserFacingError: ({ fallback }: any) => fallback,
-}));
-
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: (featureId: string) => (
-        featureId === 'scm.writeOperations' ? scmWriteEnabled : false
-    ),
-}));
-
-vi.mock('@/scm/operations/revertFeedback', () => ({
-    buildRevertConfirmBody: () => 'confirm',
-}));
-
-vi.mock('@/scm/operations/withOperationLock', () => ({
-    withSessionProjectScmOperationLock: async ({ run }: any) => {
-        await run();
-        return { started: true };
-    },
-}));
-
-vi.mock('@/scm/operations/reporting', () => ({
-    reportSessionScmOperation: vi.fn(),
-    trackBlockedScmOperation: vi.fn(),
-}));
-
-vi.mock('@/track', () => ({
-    tracking: {},
-}));
-
-vi.mock('@/scm/scmStatusSync', () => ({
-    scmStatusSync: {
-        invalidateFromMutationAndAwait: vi.fn(async () => {}),
-    },
-}));
+const diffResponse = vi.fn();
+const backoutResponse = vi.fn();
+let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>>;
+let hydrateReady = true;
+const pendingHydrationReads = new Set<() => void>();
+// Prepare the one-time module graph during collection, before case-owned Account lifetimes.
+await prepareSessionFilesViewTestkit();
+const operations = await import('@/sync/ops');
+vi.spyOn(operations, 'sessionScmDiffCommit');
+vi.spyOn(operations, 'sessionScmCommitBackout');
+const { DiffFilesListView } = await import('@/components/ui/code/diff/DiffFilesListView');
+const { ActivitySpinner } = await import('@/components/ui/feedback/ActivitySpinner');
+const { SessionCommitDetailsView } = await import('@/components/sessions/files/views/SessionCommitDetailsView');
 
 describe('CommitScreen', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
+        browser = await installBrowserRuntimeForTests({ url: 'http://localhost/' });
         scmWriteEnabled = true;
         searchParams = { id: 'session-1', sha: 'abc123' };
-        routerBack = vi.fn();
-        storageFixture.isStorageDataReady = true;
-        storageFixture.sessionById = {
-            'session-1': {
-                encryptionMode: 'plain',
-                metadata: {
-                    path: '/repo',
-                    host: 'localhost',
-                },
+        routerBack.mockClear();
+        hydrateReady = true;
+        diffResponse.mockReset().mockResolvedValue({ success: true, diff: 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-a\n+b\n' });
+        backoutResponse.mockReset().mockResolvedValue({ success: true });
+        vi.mocked(operations.sessionScmDiffCommit).mockClear();
+        vi.mocked(operations.sessionScmCommitBackout).mockClear();
+        fixture = await createSessionFilesViewFixture({ credentials: { token: createAccountTokenForTests("alice", { currentAccount: true }) }, sessionId: 'session-1', rootPath: '/repo',
+            request: async (input, init) => {
+                if (new URL(String(input)).pathname !== '/v2/sessions/' + 'session-1') return new Response(null, { status: 404 });
+                if (hydrateReady) return Response.json(createPlainSessionByIdResponseFixture(fixture.session));
+                return new Promise<Response>(resolve => {
+                    const release = () => { pendingHydrationReads.delete(release); resolve(Response.json(createPlainSessionByIdResponseFixture(fixture.session))); };
+                    pendingHydrationReads.add(release);
+                    init?.signal?.addEventListener('abort', release, { once: true });
+                });
             },
-        };
-        codeLinesSpy.mockClear();
-        diffFilesListSpy.mockClear();
-        syntaxHookSpy.mockClear();
-        vi.clearAllMocks();
+            rpc: request => {
+                if (request.method === RPC_METHODS.SCM_DIFF_COMMIT) return diffResponse(request);
+                if (request.method === RPC_METHODS.SCM_COMMIT_BACKOUT) return backoutResponse(request);
+                if (request.method === RPC_METHODS.SCM_LOG_LIST) return { success: true, entries: [] };
+                return undefined;
+            },
+        });
+        fixture.setSnapshot(fileViewSnapshot({ rootPath: '/repo', capabilities: { writeBackout: true } }));
+        fixture.storage.setState({ isDataReady: true });
     });
-
-    afterEach(() => {
+    afterEach(async () => {
         standardCleanup();
+        hydrateReady = true;
+        for (const release of pendingHydrationReads) release();
+        await fixture?.dispose();
+        browser?.restore();
     });
-
-    const AppPaneProviderWrapper = ({ children }: { children?: React.ReactNode }) => (
-        <AppPaneProvider>{children ?? null}</AppPaneProvider>
-    );
-
-    async function renderCommitScreen(Screen: React.ComponentType<any>) {
-        return renderScreen(
-            <Screen />,
-            {
-                wrapper: AppPaneProviderWrapper,
-            },
-        );
+    async function renderCommitScreen(Screen: React.ComponentType) {
+        route.params = { ...searchParams, serverId: fixture.scope.serverId };
+        fixture.storage.getState().applySettingsLocal({ experiments: true, featureToggles: {
+            ...fixture.storage.getState().settings.featureToggles, 'scm.writeOperations': scmWriteEnabled,
+        } });
+        fixture.storage.setState({ localSettings: { ...fixture.storage.getState().localSettings, uiMultiPanePanelsEnabled: false } });
+        const screen = await fixture.render(<Screen />);
+        if (hydrateReady && searchParams.id) {
+            await vi.waitFor(() => {
+                const contentAdmitted = screen.findAllByType(SessionCommitDetailsView).length > 0;
+                const invalidLinkAdmitted = Boolean(screen.findByTestId('session-invalid-link'));
+                expect(contentAdmitted || invalidLinkAdmitted).toBe(true);
+                expect(screen.findAllByTestId('scm-commit-details-loading')).toHaveLength(0);
+            });
+        }
+        return screen;
     }
 
     it('renders commit diffs per file with syntax highlighting per filePath', async () => {
-        const { sessionScmDiffCommit } = await import('@/sync/ops');
-        vi.mocked(sessionScmDiffCommit).mockResolvedValueOnce({
+        diffResponse.mockResolvedValueOnce({
             success: true,
             diff: [
                 'diff --git a/foo.ts b/foo.ts',
@@ -294,23 +113,23 @@ describe('CommitScreen', () => {
                 '-a',
                 '+b',
             ].join('\n'),
-        } as any);
+        });
 
         const Screen = (await import('@/app/(app)/session/[id]/commit')).default;
         const screen = await renderCommitScreen(Screen);
 
-        expect(diffFilesListSpy).toHaveBeenCalled();
-        const [list] = diffFilesListSpy.mock.calls.at(-1)!;
+        expect(screen.findAllByType(DiffFilesListView)).toHaveLength(1);
+        const list = screen.findByType(DiffFilesListView).props as React.ComponentProps<typeof DiffFilesListView>;
         expect(list.files).toHaveLength(2);
-        const filePaths = (list.files ?? []).map((f: any) => String(f.filePath ?? ''));
+        const filePaths = (list.files ?? []).map((f) => String(f.filePath ?? ''));
         expect(filePaths).toContain('foo.ts');
         expect(filePaths).toContain('bar.ts');
     });
 
     it('loads commit diff after session path becomes available (deep-link hydration)', async () => {
         // Simulate a deep-link where storage isn't ready yet, then becomes ready with session metadata.
-        storageFixture.isStorageDataReady = false;
-        storageFixture.sessionById = {};
+        hydrateReady = false;
+        fixture.storage.setState({ isDataReady: false, sessions: {} });
 
         const { sessionScmDiffCommit } = await import('@/sync/ops');
         const Screen = (await import('@/app/(app)/session/[id]/commit')).default;
@@ -318,21 +137,16 @@ describe('CommitScreen', () => {
         const screen = await renderCommitScreen(Screen);
 
         // Still loading; no diff call yet.
-        expect(screen.findAllByType('ActivitySpinner')).toHaveLength(1);
+        expect(screen.findAllByType(ActivitySpinner)).toHaveLength(1);
         expect(vi.mocked(sessionScmDiffCommit)).not.toHaveBeenCalled();
 
         // Storage rehydrates.
-        storageFixture.isStorageDataReady = true;
-        storageFixture.sessionById = {
-            'session-1': {
-                encryptionMode: 'plain',
-                metadata: {
-                    path: '/repo',
-                },
-            },
-        };
+        hydrateReady = true;
+        fixture.storage.getState().applySessions([fixture.session]);
+        fixture.storage.setState({ isDataReady: true });
+        for (const release of pendingHydrationReads) release();
 
-        await screen.update(<Screen />);
+        await screen.update(fixture.wrap(<Screen />));
         await flushHookEffects();
 
         expect(vi.mocked(sessionScmDiffCommit)).toHaveBeenCalled();
@@ -342,8 +156,7 @@ describe('CommitScreen', () => {
     });
 
     it('shows missing context error when storage is ready but session is unknown', async () => {
-        storageFixture.isStorageDataReady = true;
-        storageFixture.sessionById = {};
+        fixture.storage.setState({ isDataReady: true, sessions: {} });
         searchParams = { id: 'session-unknown', sha: 'abc123' } as any;
         const Screen = (await import('@/app/(app)/session/[id]/commit')).default;
         const screen = await renderCommitScreen(Screen);
@@ -379,8 +192,7 @@ describe('CommitScreen', () => {
     });
 
     it('shows a fallback error when loading commit diff throws', async () => {
-        const { sessionScmDiffCommit } = await import('@/sync/ops');
-        vi.mocked(sessionScmDiffCommit).mockRejectedValueOnce(new Error('network down'));
+        diffResponse.mockRejectedValueOnce(new Error('network down'));
         const Screen = (await import('@/app/(app)/session/[id]/commit')).default;
         const screen = await renderCommitScreen(Screen);
         // The transport message is a diagnostic behind the collapsed Details, never the headline.
@@ -390,11 +202,10 @@ describe('CommitScreen', () => {
     });
 
     it('shows a back button when commit diff fails to load', async () => {
-        const { sessionScmDiffCommit } = await import('@/sync/ops');
-        vi.mocked(sessionScmDiffCommit).mockResolvedValueOnce({
+        diffResponse.mockResolvedValueOnce({
             success: false,
             error: 'Commit reference must not contain whitespace',
-        } as any);
+        });
 
         const Screen = (await import('@/app/(app)/session/[id]/commit')).default;
         const screen = await renderCommitScreen(Screen);
@@ -405,9 +216,8 @@ describe('CommitScreen', () => {
     });
 
     it('shows an error alert when revert throws unexpectedly', async () => {
-        const { sessionScmCommitBackout } = await import('@/sync/ops');
         const { Modal } = await import('@/modal');
-        vi.mocked(sessionScmCommitBackout).mockRejectedValueOnce(new Error('rpc unavailable'));
+        backoutResponse.mockRejectedValueOnce(new Error('rpc unavailable'));
         const Screen = (await import('@/app/(app)/session/[id]/commit')).default;
         const screen = await renderCommitScreen(Screen);
         expect(screen.findByTestId('scm-commit-details-revert')).toBeTruthy();

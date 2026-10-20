@@ -1,8 +1,12 @@
 import React from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { flushHookEffects, renderSettingsView } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';
+import { CurrentCursorResponseSchema } from '@happier-dev/protocol/changes';
+import { createEmptyAccountBootstrapHttpResponse, createEmptyAccountMigrationCensusHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
 import {
     type AccountSecurityGetResponseV1,
@@ -44,17 +48,19 @@ import {
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 
+installTokenStorageWebPlatformMocks();
 installAccountSettingsRouteModuleMocks();
 
 const routerMockRef = getAccountSettingsRouteRouterMockRef();
 
-// Native cryptography and socket transport are genuine system boundaries. The
-// isolated recovery cases below use real Home, Account and credential owners.
-vi.mock('@more-tech/react-native-libsodium', () => import('libsodium-wrappers'));
-vi.mock('@/platform/cryptoRandom', () => import('@/platform/cryptoRandom.node'));
-vi.mock('@/platform/digest', () => import('@/platform/digest.node'));
-vi.mock('@/platform/hmacSha512', () => import('@/platform/hmacSha512.node'));
-vi.mock('@/platform/randomUUID', () => import('@/platform/randomUUID.node'));
+// UI Vitest selects the real Node crypto ports and libsodium-wrappers already.
+// Re-mocking an alias by importing its target can wait on its own factory.
+const browser = await installBrowserRuntimeForTests({
+    url: 'https://account-settings.example.test', onNavigate: () => {},
+});
+beforeEach(() => { browser.activate(); browser.window.sessionStorage.clear(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterAll(() => browser.restore());
 
 const useFeatureEnabledMock = vi.hoisted(() => vi.fn());
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
@@ -421,67 +427,6 @@ describe('Settings → Account (encryption mode toggle)', () => {
         }
     });
 
-    it('keeps a generic migration-required mode response fail-closed without a Secret Key recovery CTA', async () => {
-        useFeatureEnabledMock.mockReturnValue(true);
-        useAuthMock.mockReturnValue({
-            isAuthenticated: true,
-            credentials: { token: 't' },
-            logout: vi.fn(),
-            login: vi.fn(),
-        });
-        storage.getState().applyProfile({
-            ...profileDefaults,
-            id: 'account-1',
-            linkedProviders: [],
-            username: null,
-        });
-
-        const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-            const url = getRequestUrl(input);
-            const method = (init?.method ?? 'GET').toUpperCase();
-            if (url.endsWith('/health') && method === 'GET') {
-                return createReachabilityProbeResponse();
-            }
-            if (url.endsWith('/v1/auth/ping') && method === 'GET') {
-                return createReachabilityProbeResponse();
-            }
-            if (isFeaturesRequest(url)) {
-                return Response.json(createAccountFeaturesResponse({
-                        encryptionAccountOptOutEnabled: true,
-                    }));
-            }
-            if (url.endsWith('/v1/account/encryption') && method === 'GET') {
-                return {
-                    ok: false,
-                    status: 400,
-                    json: async () => ({ error: 'migration-required' }),
-                };
-            }
-            throw new Error(`Unexpected fetch: ${url} (${method})`);
-        });
-        vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
-
-        const { Modal } = await import('@/modal');
-        const alertSpy = vi.spyOn(Modal, 'alertAsync').mockResolvedValue();
-        const { AccountEncryptionSettingsSection: AccountScreen } = await import('@/components/settings/account/AccountEncryptionSettingsSection');
-
-        let screen: Awaited<ReturnType<typeof renderSettingsView>> | undefined;
-        try {
-            screen = await renderSettingsView(<AccountScreen />);
-            await flushHookEffects();
-            await vi.waitFor(() => {
-                expect(alertSpy).toHaveBeenCalledWith(
-                    'common.error',
-                    'Failed to load encryption setting',
-                );
-            });
-            expect(
-                screen.findByTestId('settings-account-encryption-recovery'),
-            ).toBeNull();
-        } finally {
-            await screen?.unmount();
-        }
-    });
 
     it('withdraws a recovery CTA before same-scope refetches and across credential and server scope changes', async () => {
         useFeatureEnabledMock.mockReturnValue(true);
@@ -690,17 +635,6 @@ const currentAccountOwnerModules = [
     '@/sync/domains/state/storage',
 ] as const;
 
-async function withCurrentAccountOwners(run: () => Promise<void>) {
-    const incumbentModules = await Promise.all(currentAccountOwnerModules.map((id) => vi.importMock(id)));
-    currentAccountOwnerModules.forEach((id) => vi.doUnmock(id));
-    vi.resetModules();
-    try { await run(); }
-    finally {
-        currentAccountOwnerModules.forEach((id, index) => vi.doMock(id, () => incumbentModules[index]));
-        vi.resetModules();
-    }
-}
-
 async function mountCurrentEncryptionHome(params: Readonly<{
     mode: 'plain' | 'e2ee';
     retainedCredential?: boolean;
@@ -717,17 +651,19 @@ async function mountCurrentEncryptionHome(params: Readonly<{
     const { installRealActionExecutorModuleLoader } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
     const restoreExecutor = await installRealActionExecutorModuleLoader();
     let mode = params.mode;
+    let rejectModeRead = false;
     let accountVersion = 4;
     let settingsVersion = 0;
     let settingsContent: unknown = null;
     const serverUrl = 'https://encryption-' + crypto.randomUUID() + '.example.test';
-    const homeIdentity = 'encryption-' + crypto.randomUUID();
+    const homeIdentity = 'srv_' + crypto.randomUUID();
     const { adoptHomeProfile } = await import('@/sync/domains/server/serverProfiles');
     await adoptHomeProfile({ source: 'manual', descriptorAuthority: 'current_connection_observation', descriptor: {
         v: 1, homeServerIdentityId: homeIdentity, canonicalServerUrl: serverUrl, revision: 1,
         endpoints: [{ kind: 'https', url: serverUrl }],
     } });
-    const token = 'e30.' + Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64url') + '.signature';
+    const { createAccountTokenForTests } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+    const token = createAccountTokenForTests('account-a', { currentAccount: true });
     const credentials = mode === 'e2ee' || params.retainedCredential
         ? { token, secret: Buffer.from(new Uint8Array(32).fill(7)).toString('base64url') }
         : { token };
@@ -772,6 +708,8 @@ async function mountCurrentEncryptionHome(params: Readonly<{
             vi.stubGlobal('onmessage', previousHandler);
             vi.stubGlobal('postMessage', previousPostMessage);
         };
+    }
+    if (params.password || mode === 'e2ee') {
         const { deriveAccountSigningPublicKey } = await import('@/auth/flows/challenge');
         const { buildContentKeyBinding } = await import('@/auth/oauth/contentKeyBinding');
         signingKeyFingerprint = computeAccountEncryptionMigrateKeyFingerprintV1(deriveAccountSigningPublicKey(new Uint8Array(32).fill(7)));
@@ -797,7 +735,9 @@ async function mountCurrentEncryptionHome(params: Readonly<{
             requests.push({ path, method, body });
             if (path === '/health') return Response.json({});
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createAccountFeaturesResponse({ encryptionAccountOptOutEnabled: true }));
-            if (path === '/v1/account/encryption') return Response.json({ mode, updatedAt: 1 });
+            if (path === '/v1/account/encryption') return rejectModeRead
+                ? Response.json({ error: 'migration-required' }, { status: 400 })
+                : Response.json({ mode, updatedAt: 1 });
             if (path === '/v1/account/encryption/currentness') return Response.json({ mode, version: accountVersion,
                 updatedAt: 1, signingKeyFingerprint, contentKeyFingerprint,
                 recipientEnvelopeReadiness: mode === 'plain' ? { status: 'unavailable', reason: 'plain_account' } : { status: 'available' } });
@@ -823,7 +763,14 @@ async function mountCurrentEncryptionHome(params: Readonly<{
             if (path === '/v2/sessions/active' || path === '/v2/sessions/archived') return Response.json({ sessions: [], hasNext: false, nextCursor: null });
             if (path === '/v1/machines' || path === '/v1/artifacts') return Response.json([]);
             if (path === '/v1/kv') return Response.json({ items: [], nextCursor: null });
-            if (path === '/v1/account/profile') return Response.json({ ...profileDefaults, id: 'account-a' });
+            if (path === '/v1/account/profile') return Response.json({ ...profileDefaults, id: 'account-a',
+                linkedProviders: params.provider ? [{ id: params.provider, login: 'fixture-user', displayName: 'Fixture user',
+                    avatarUrl: null, profileUrl: null, showOnProfile: false }] : [],
+            });
+            if (path === '/v2/cursor') return Response.json(CurrentCursorResponseSchema.parse({ cursor: 0, changesFloor: 0 }));
+            const bootstrapResponse = createEmptyAccountMigrationCensusHttpResponse(path, init)
+                ?? createEmptyAccountBootstrapHttpResponse(path, init);
+            if (bootstrapResponse) return bootstrapResponse;
             if (path === '/v1/account/encryption/migrate/review-comments/inventory') return Response.json({ v: 1, items: [] });
             if (path === '/v1/account/encryption/migrate/session-organization/inventory') return Response.json({ version: 0, folders: [], tags: [], labels: [] });
             if (path === '/v1/account/encryption/migrate/automations/inventory') return Response.json({ templates: [], runs: [] });
@@ -846,7 +793,14 @@ async function mountCurrentEncryptionHome(params: Readonly<{
                         contentKeyFingerprint = computeAccountEncryptionMigrateKeyFingerprintV1(new Uint8Array(Buffer.from(contentPublicKey, 'base64')));
                     }
                 }
-                return Response.json({ success: true, mode, accountVersion, settingsVersion });
+                return Response.json({ success: true, mode, accountVersion, settingsVersion,
+                    ...(migration.providerConnections ? { providerConnections: {
+                        row: { revision: migration.providerConnections.expectedRevision, content: null },
+                    } } : {}),
+                    ...(migration.profileRows ? { profileRows: {
+                        rows: [], referenceGuardRevision: 'absent', transferControl: { status: 'absent' },
+                    } } : {}),
+                });
             }
             return Response.json({ error: 'not_found' }, { status: 404 });
         },
@@ -857,10 +811,11 @@ async function mountCurrentEncryptionHome(params: Readonly<{
     await queue.awaitQueue();
     currentStorage.getState().applySettingsLocal({ clientEncryptionRequirementV1: 'follow_account',
         clientEncryptionRequirementLocalV1: 'follow_account', experiments: true, featureToggles: { 'encryption.accountOptOut': true } });
-    currentStorage.setState({ isDataReady: true, profileScope: { serverId: account.home.id, accountId: 'account-a' } });
-    if (params.provider) currentStorage.getState().applyProfile({ ...profileDefaults, id: 'account-a', linkedProviders: [{
-        id: params.provider, login: 'fixture-user', displayName: 'Fixture user', avatarUrl: null, profileUrl: null, showOnProfile: false,
-    }] });
+    const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    await vi.waitFor(() => expect(captureActiveServerAccountScopeLifetime()?.scope).toEqual({
+        serverId: account.serverId, accountId: 'account-a',
+    }));
+    currentStorage.setState({ isDataReady: true });
     const { InjectedAuthProvider, AuthProvider } = await import('@/auth/context/AuthContext');
     const { AccountEncryptionSettingsSection } = await import('@/components/settings/account/AccountEncryptionSettingsSection');
     const { renderSettingsView: renderCurrentSettings } = await import('@/dev/testkit');
@@ -869,20 +824,27 @@ async function mountCurrentEncryptionHome(params: Readonly<{
     const alert = vi.spyOn(Modal, 'alertAsync').mockResolvedValue();
     const prompt = vi.spyOn(Modal, 'prompt').mockResolvedValue('current plain password');
     const { TokenStorage: currentTokens } = await import('@/auth/storage/tokenStorage');
-    let retainedDeviceCredentials: import('@/auth/storage/tokenStorage').AuthCredentials = credentials;
     let rejectNextCredentialWrite = false;
-    const credentialWrites: import('@/auth/storage/tokenStorage').AuthCredentials[] = [];
-    const actualSetCredentials = currentTokens.setCredentialsForServerUrl.bind(currentTokens);
-    const writeBoundary = params.mutableDeviceCustody ? vi.spyOn(currentTokens, 'setCredentialsForServerUrl').mockImplementation(async (...args) => {
-        credentialWrites.push(args[2]);
-        if (rejectNextCredentialWrite) { rejectNextCredentialWrite = false; return false; }
-        const written = await actualSetCredentials(...args);
-        if (written) retainedDeviceCredentials = args[2];
-        return written;
+    const credentialWrites: unknown[] = [];
+    // Observe only adopted credentials at the native browser storage port;
+    // pending continuation documents carry no root bearer.
+    const storagePort = Object.getPrototypeOf(browser.storage) as Storage;
+    const actualSetItem = storagePort.setItem;
+    const writeBoundary = params.mutableDeviceCustody ? vi.spyOn(storagePort, 'setItem').mockImplementation(function (this: Storage, key, value) {
+        let written: unknown;
+        try { written = JSON.parse(value); } catch { written = null; }
+        if (written && typeof written === 'object' && Reflect.get(written, 'token') === credentials.token
+            && typeof Reflect.get(written, 'secret') === 'string') {
+            credentialWrites.push(written);
+            if (rejectNextCredentialWrite) {
+                rejectNextCredentialWrite = false;
+                throw new Error('Browser storage write unavailable');
+            }
+        }
+        actualSetItem.call(this, key, value);
     }) : null;
-    if (params.mutableDeviceCustody) vi.mocked(currentTokens.getCredentialsForServerUrl).mockImplementation(async url => url === serverUrl ? retainedDeviceCredentials : null);
-    const render = () => renderCurrentSettings(params.mutableDeviceCustody
-        ? <AuthProvider initialCredentials={retainedDeviceCredentials}><AccountEncryptionSettingsSection /></AuthProvider>
+    const render = async () => renderCurrentSettings(params.mutableDeviceCustody
+        ? <AuthProvider initialCredentials={await currentTokens.getCredentialsForServerUrl(serverUrl, { serverId: account.serverId })}><AccountEncryptionSettingsSection /></AuthProvider>
         : <InjectedAuthProvider credentials={credentials}><AccountEncryptionSettingsSection /></InjectedAuthProvider>);
     let screen = await render();
     await vi.waitFor(() => expect(screen.findByTestId('settings-account-encryption-mode-switch')?.props.disabled).toBe(false));
@@ -890,12 +852,31 @@ async function mountCurrentEncryptionHome(params: Readonly<{
         get mode() { return mode; }, get settingsContent() { return settingsContent; },
         get preparedPasswordCredential() { return preparedPasswordCredential; },
         rejectNextCredentialWrite() { rejectNextCredentialWrite = true; },
+        rejectModeRead() { rejectModeRead = true; },
         async remount() { await screen.unmount(); screen = await render(); },
-        async dispose() { await screen.unmount(); await account.dispose(); writeBoundary?.mockRestore(); confirm.mockRestore(); alert.mockRestore(); prompt.mockRestore(); restorePasswordWorker(); restoreExecutor(); } };
+        async dispose() { await screen.unmount(); writeBoundary?.mockRestore(); await account.dispose(); confirm.mockRestore(); alert.mockRestore(); prompt.mockRestore(); restorePasswordWorker(); restoreExecutor(); } };
 }
 
 describe('Account encryption current Home authority', () => {
-    it('publishes authoritative plaintext mode without requiring retirement of historical credentials', async () => withCurrentAccountOwners(async () => {
+    beforeAll(() => {
+        // Retire the preceding legacy fixture graph once. Real Home cases share
+        // one Sync/transport/Auth graph for their complete Account lifecycles.
+        currentAccountOwnerModules.forEach((id) => vi.doUnmock(id));
+        vi.resetModules();
+    });
+    it('keeps a generic migration-required mode response fail-closed without a Secret Key recovery CTA', async () => {
+        const home = await mountCurrentEncryptionHome();
+        try {
+            home.rejectModeRead();
+            (await import('@/sync/api/account/apiAccountEncryptionMode')).invalidateAccountEncryptionModeCache();
+            await home.remount();
+            await vi.waitFor(() => expect(home.alert).toHaveBeenCalledWith('common.error', 'Failed to load encryption setting'));
+            expect(home.screen.findByTestId('settings-account-encryption-recovery')).toBeNull();
+            expect(home.migrations).toEqual([]);
+        } finally { await home.dispose(); }
+    });
+
+    it('publishes authoritative plaintext mode without requiring retirement of historical credentials', async () => {
         const home = await mountCurrentEncryptionHome({ mode: 'plain', retainedCredential: true });
         try {
             expect(home.screen.findByTestId('settings-account-encryption-mode-switch')?.props.value).toBe(false);
@@ -906,13 +887,13 @@ describe('Account encryption current Home authority', () => {
             expect(home.migrations).toEqual([]);
             expect(home.alert).not.toHaveBeenCalled();
         } finally { await home.dispose(); }
-    }));
+    });
 
-    it('preserves historical credentials without replacement or retry after disabling Account encryption', async () => withCurrentAccountOwners(async () => {
+    it('preserves historical credentials without replacement or retry after disabling Account encryption', async () => {
         const home = await mountCurrentEncryptionHome({ mode: 'e2ee' });
         try {
             await act(async () => { await home.screen.findByTestId('settings-account-encryption-mode-switch')?.props.onValueChange(false); });
-            expect(home.migrations).toHaveLength(1);
+            expect(home.migrations, home.requests.map(({ method, path }) => `${method} ${path}`).join('\n')).toHaveLength(1);
             expect(home.migrations[0]).toMatchObject({ toMode: 'plain', expectedAccountVersion: 4,
                 expectedSettingsVersion: 0, settingsContent: { t: 'plain' } });
             expect(home.mode).toBe('plain');
@@ -924,9 +905,9 @@ describe('Account encryption current Home authority', () => {
             expect(home.alert).not.toHaveBeenCalled();
             expect(JSON.stringify(home.settingsContent)).not.toContain(Reflect.get(home.credentials, 'secret'));
         } finally { await home.dispose(); }
-    }));
+    });
 
-    it('refuses a stale encryption control after the mounted Account lifetime disconnects', async () => withCurrentAccountOwners(async () => {
+    it('refuses a stale encryption control after the mounted Account lifetime disconnects', async () => {
         const home = await mountCurrentEncryptionHome({ mode: 'e2ee' });
         try {
             const staleControl = home.screen.findByTestId('settings-account-encryption-mode-switch');
@@ -937,9 +918,9 @@ describe('Account encryption current Home authority', () => {
             expect(home.migrations).toEqual([]);
             expect(home.requests.slice(before).some(row => row.path.includes('/encryption/migrate') || row.path === '/v1/auth/email/step-up')).toBe(false);
         } finally { await home.dispose(); }
-    }));
+    });
 
-    it('aborts before POST when Session owner material is unavailable', async () => withCurrentAccountOwners(async () => {
+    it('aborts before POST when Session owner material is unavailable', async () => {
         const home = await mountCurrentEncryptionHome({ mode: 'e2ee', ownerMaterialUnavailable: true });
         try {
             await act(async () => { await home.screen.findByTestId('settings-account-encryption-mode-switch')?.props.onValueChange(false); });
@@ -948,13 +929,17 @@ describe('Account encryption current Home authority', () => {
             expect(home.mode).toBe('e2ee');
             expect(home.alert).toHaveBeenCalledWith('common.error', 'settingsAccount.encryptionUpdateFailed');
         } finally { await home.dispose(); }
-    }));
+    });
 
-    it('emits the request-bound body only for a restored pinned Account key', async () => withCurrentAccountOwners(async () => {
+    it('emits the request-bound body only for a restored pinned Account key', async () => {
         const home = await mountCurrentEncryptionHome({ mode: 'plain', retainedCredential: true, password: true, mutableDeviceCustody: true });
         try {
-            await act(async () => { await home.screen.findByTestId('settings-account-encryption-mode-switch')?.props.onValueChange(true); });
-            expect(home.migrations).toHaveLength(1);
+            await act(async () => {
+                await home.screen.findByTestId('settings-account-encryption-mode-switch')?.props.onValueChange(true);
+                // The rendered Switch dispatches a native event; its return value is
+                // not the completion of the password Worker or migration request.
+                await vi.waitFor(() => expect(home.migrations, home.requests.map(({ method, path }) => `${method} ${path}`).join('\n')).toHaveLength(1));
+            });
             const migration = home.migrations[0];
             expect(migration).toMatchObject({ toMode: 'e2ee', expectedAccountVersion: 4, expectedSettingsVersion: 0,
                 expectedSigningKeyFingerprint: expect.any(String), expectedContentKeyFingerprint: expect.any(String),
@@ -967,18 +952,20 @@ describe('Account encryption current Home authority', () => {
                 requestDigest: createAccountEncryptionMigrateRequestBindingDigestV1({ request: boundRequest, accountId: 'account-a', sourceMode: 'plain' }),
             }]);
             expect(home.mode).toBe('e2ee');
-            const { createEncryptionFromAuthCredentials } = await import('@/auth/encryption/createEncryptionFromAuthCredentials');
-            const encryption = await createEncryptionFromAuthCredentials(home.credentials);
+            const { resolveAccountScopedCryptoMaterialFromCredentials } = await import('@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials');
+            const { openAccountScopedBlobCiphertext } = await import('@happier-dev/protocol/crypto/accountScopedCipher');
             const content = migration.settingsContent;
             if (!content) throw new Error('Expected migrated Settings envelope');
             expect(content.t).toBe('encrypted');
             if (content.t !== 'encrypted') throw new Error('Expected encrypted Settings');
-            await expect(encryption.decryptRaw(content.c)).resolves.toMatchObject({ clientEncryptionRequirementV1: 'follow_account' });
+            expect(openAccountScopedBlobCiphertext({ kind: 'account_settings',
+                material: resolveAccountScopedCryptoMaterialFromCredentials(home.credentials), ciphertext: content.c,
+            })?.value).toMatchObject({ clientEncryptionRequirementV1: 'follow_account' });
             expect(home.alert).not.toHaveBeenCalled();
         } finally { await home.dispose(); }
-    }));
+    });
 
-    it('replays retained mTLS custody after credential persistence fails without issuing a second challenge', async () => withCurrentAccountOwners(async () => {
+    it('replays retained mTLS custody after credential persistence fails without issuing a second challenge', async () => {
         const home = await mountCurrentEncryptionHome({ mode: 'plain', provider: 'mtls', mutableDeviceCustody: true });
         try {
             const { TokenStorage: currentTokens } = await import('@/auth/storage/tokenStorage');
@@ -986,10 +973,10 @@ describe('Account encryption current Home authority', () => {
             home.rejectNextCredentialWrite();
             const control = home.screen.findByTestId('settings-account-encryption-mode-switch');
             await act(async () => { await control?.props.onValueChange(true); });
-            expect(home.migrations).toHaveLength(1);
+            expect(home.migrations, home.requests.map(({ method, path }) => `${method} ${path}`).join('\n')).toHaveLength(1);
             expect(home.credentialWrites).toHaveLength(1);
             expect(home.alert).toHaveBeenCalled();
-            const retained = await currentTokens.readPendingExternalAuthStateForServerUrl(home.account.home.serverUrl, { serverId: home.account.home.id });
+            const retained = await currentTokens.readPendingExternalAuthStateForServerUrl(home.account.home.serverUrl, { serverId: home.account.serverId });
             expect(retained.value?.accountEncryptionFirstKey?.migrationSubmissionAttempted).toBe(true);
             expect(retained.value?.provider).toBe('mtls');
             await act(async () => { await control?.props.onValueChange(true); });
@@ -1005,18 +992,15 @@ describe('Account encryption current Home authority', () => {
             const { getCurrentAuth } = await import('@/auth/context/currentAuth');
             await vi.waitFor(() => expect(getCurrentAuth()?.credentials).toEqual(home.credentialWrites[1]));
             expect(home.credentialWrites[1]).toMatchObject({ token: home.credentials.token, secret: expect.any(String) });
-            await expect(currentTokens.readPendingExternalAuthStateForServerUrl(home.account.home.serverUrl, { serverId: home.account.home.id })).resolves.toEqual({ value: null, serverMismatch: false });
+            await expect(currentTokens.readPendingExternalAuthStateForServerUrl(home.account.home.serverUrl, { serverId: home.account.serverId })).resolves.toEqual({ value: null, serverMismatch: false });
             expect(home.mode).toBe('e2ee');
         } finally { await home.dispose(); }
-    }));
+    });
 
-    it('automatically resumes retained OAuth custody after authoritative E2EE hydration', async () => withCurrentAccountOwners(async () => {
+    it('automatically resumes retained OAuth custody after authoritative E2EE hydration', async () => {
         const home = await mountCurrentEncryptionHome({ mode: 'plain', provider: 'github', mutableDeviceCustody: true });
         // External browser navigation is the OS boundary; custody/request
         // construction and callback recovery remain the real canonical owners.
-        const previousWindow = globalThis.window;
-        const navigation = vi.fn();
-        vi.stubGlobal('window', { ...previousWindow, location: { assign: navigation } });
         const { Linking } = await import('react-native');
         const canOpen = vi.spyOn(Linking, 'canOpenURL').mockResolvedValue(true);
         const open = vi.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
@@ -1024,8 +1008,8 @@ describe('Account encryption current Home authority', () => {
             const { TokenStorage: currentTokens } = await import('@/auth/storage/tokenStorage');
             await currentTokens.clearPendingExternalAuth();
             await act(async () => { await home.screen.findByTestId('settings-account-encryption-mode-switch')?.props.onValueChange(true); });
-            const pending = await currentTokens.readPendingExternalAuthStateForServerUrl(home.account.home.serverUrl, { serverId: home.account.home.id });
-            expect(pending.value?.provider).toBe('github');
+            const pending = await currentTokens.readPendingExternalAuthStateForServerUrl(home.account.home.serverUrl, { serverId: home.account.serverId });
+            expect(pending.value?.provider, home.requests.map(({ method, path }) => `${method} ${path}`).join('\n')).toBe('github');
             expect(pending.value?.accountEncryptionFirstKey).toMatchObject({ accountId: 'account-a', requestJson: expect.any(String) });
             expect(home.migrations).toEqual([]);
             home.rejectNextCredentialWrite();
@@ -1034,8 +1018,8 @@ describe('Account encryption current Home authority', () => {
             if (!auth) throw new Error('Expected real mounted Auth');
             const { resumeAccountEncryptionFirstKeyExternalAuth: resumeCurrent } = await import('@/sync/ops/account/accountEncryptionFirstKeyExternalAuth');
             await expect(resumeCurrent({ provider: 'github', pending: 'oauth-pending', currentCredentials: home.credentials,
-                target: { serverId: home.account.home.id, serverUrl: home.account.home.serverUrl }, persistCredentials: auth.loginWithCredentials })).rejects.toThrow('Failed to save credentials');
-            expect(home.migrations).toHaveLength(1);
+                target: { serverId: home.account.serverId, serverUrl: home.account.home.serverUrl }, persistCredentials: auth.loginWithCredentials })).rejects.toThrow('Failed to save credentials');
+            expect(home.migrations, home.requests.map(({ method, path }) => `${method} ${path}`).join('\n')).toHaveLength(1);
             expect(home.credentialWrites).toHaveLength(1);
             const beforeRemount = home.requests.length;
             await home.remount();
@@ -1044,13 +1028,13 @@ describe('Account encryption current Home authority', () => {
             expect(home.migrations[1]).toEqual(home.migrations[0]);
             expect(home.requests.slice(beforeRemount).some(row => row.path.startsWith('/v1/auth/external/') || row.path === '/v1/auth/mtls')).toBe(false);
             await vi.waitFor(async () => expect(await currentTokens.readPendingExternalAuthStateForServerUrl(home.account.home.serverUrl,
-                { serverId: home.account.home.id })).toEqual({ value: null, serverMismatch: false }));
+                { serverId: home.account.serverId })).toEqual({ value: null, serverMismatch: false }));
             expect(home.mode).toBe('e2ee');
             expect(home.alert).not.toHaveBeenCalled();
-        } finally { canOpen.mockRestore(); open.mockRestore(); vi.stubGlobal('window', previousWindow); await home.dispose(); }
-    }));
+        } finally { canOpen.mockRestore(); open.mockRestore(); await home.dispose(); }
+    });
 
-    it('aborts before the migration request when e2ee content-key binding construction fails', async () => withCurrentAccountOwners(async () => {
+    it('aborts before the migration request when e2ee content-key binding construction fails', async () => {
         const home = await mountCurrentEncryptionHome({ mode: 'plain' });
         const hmac = await import('@/platform/hmacSha512');
         // Fault the platform crypto port after hydration. Signing-key
@@ -1063,7 +1047,7 @@ describe('Account encryption current Home authority', () => {
             expect(home.mode).toBe('plain');
             expect(home.alert).toHaveBeenCalled();
         } finally { cryptoFailure.mockRestore(); await home.dispose(); }
-    }));
+    });
 });
 
 describe('Account encryption recovery through the current Home boundary', () => {
@@ -1073,23 +1057,6 @@ describe('Account encryption recovery through the current Home boundary', () => 
     ])('$title', async ({ legacy, optOut }) => {
         // The remaining incumbent migration/mock family is a distinct P2 lane;
         // these changed recovery-policy cases run no internal authority mocks.
-        const internalModules = [
-            '@/hooks/server/useFeatureEnabled', '@/auth/context/AuthContext',
-            '@/hooks/server/useActiveServerSnapshot', '@/sync/domains/server/serverRuntime',
-            '@/sync/http/client', '@/sync/api/auth/accountSecurity',
-            '@/components/settings/account/accountSecurityActionClient',
-            '@/sync/api/account/apiAccountEncryptionMode', '@/sync/sync',
-            '@/sync/engine/machines/syncMachines', '@/sync/api/account/apiKv',
-            '@/sync/api/artifacts/apiArtifacts',
-            '@/sync/ops/account/fetchAccountEncryptionMigrationSessionInventory',
-            '@/sync/domains/reviews/comments/accountEncryptionMigrationApi',
-            '@/sync/ops/account/fetchSessionOrganizationAccountEncryptionMigrationInventory',
-            '@/auth/oauth/contentKeyBinding', '@/auth/flows/challenge',
-            '@/sync/domains/state/storage',
-        ] as const;
-        const incumbentModules = await Promise.all(internalModules.map((id) => vi.importMock(id)));
-        internalModules.forEach((id) => vi.doUnmock(id));
-        vi.resetModules();
         let account: Awaited<ReturnType<typeof import('@/dev/testkit/harness/serverAccountConnectionHarness')['restoreServerAccountForTest']>> | undefined;
         let screen: Awaited<ReturnType<typeof renderSettingsView>> | undefined;
         try {
@@ -1098,7 +1065,8 @@ describe('Account encryption recovery through the current Home boundary', () => 
             installDisconnectedServerSocketBoundary();
             const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
             await loadSyncSingletonForTests();
-            const token = 'e30.' + Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64url') + '.signature';
+            const { createAccountTokenForTests } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+            const token = createAccountTokenForTests('account-a', { currentAccount: !legacy });
             const credentials = legacy ? { token, secret: Buffer.from(new Uint8Array(32).fill(7)).toString('base64url') } : { token };
             let requireRecovery = false;
             const requests: Array<{ path: string; method: string }> = [];
@@ -1115,6 +1083,7 @@ describe('Account encryption recovery through the current Home boundary', () => 
                     if (path === '/v1/account/encryption/currentness') return Response.json({ mode: legacy ? 'e2ee' : 'plain',
                         version: 1, updatedAt: 1, signingKeyFingerprint: null, contentKeyFingerprint: null });
                     if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
+                    if (path === '/v1/account/profile') return Response.json({ ...profileDefaults, id: 'account-a' });
                     if (path === '/v2/sessions' || path === '/v2/sessions/active') return Response.json({ sessions: [], hasNext: false, nextCursor: null });
                     if (path === '/v1/account/security') return Response.json({ v: 1, encryptionMode: legacy ? 'e2ee' : 'plain',
                         terminalPresentUserPolicy: 'allowed', nativeEmail: null, password: { status: 'not_enrolled', revision: null } });
@@ -1125,7 +1094,10 @@ describe('Account encryption recovery through the current Home boundary', () => 
             const queue = Reflect.get(sync, 'settingsSync') as import('@/utils/sessions/sync').InvalidateSync;
             await queue.awaitQueue();
             const { storage: currentStorage } = await import('@/sync/domains/state/storage');
-            currentStorage.setState({ isDataReady: true, profileScope: { serverId: account.home.id, accountId: 'account-a' } });
+            const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+            const restoredScope = { serverId: account.serverId, accountId: 'account-a' };
+            await vi.waitFor(() => expect(captureActiveServerAccountScopeLifetime()?.scope).toEqual(restoredScope));
+            currentStorage.setState({ isDataReady: true });
             requireRecovery = true;
             const modeOwner = await import('@/sync/api/account/apiAccountEncryptionMode');
             modeOwner.invalidateAccountEncryptionModeCache();
@@ -1142,8 +1114,6 @@ describe('Account encryption recovery through the current Home boundary', () => 
         } finally {
             await screen?.unmount();
             await account?.dispose();
-            internalModules.forEach((id, index) => vi.doMock(id, () => incumbentModules[index]));
-            vi.resetModules();
         }
     });
 });

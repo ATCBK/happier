@@ -86,6 +86,48 @@ describe('createDaemonPluginChangeService', () => {
     expect(cleanup).not.toHaveBeenCalled();
   });
 
+  it('retains an otherwise trusted candidate when an enclosing Action still requires present-user approval', async () => {
+    const apply = vi.fn(async () => ({
+      kind: 'committed' as const,
+      pluginId: 'acme.trusted',
+      desiredGeneration: 'generation-1',
+      appliedGeneration: 'generation-1',
+      pendingSurfaces: [],
+    }));
+    const service = createDaemonPluginChangeService({
+      prepare: async () => ({
+        pluginId: 'acme.trusted',
+        requiresReview: false,
+        review: createPluginInstallationReviewFixture({
+          pluginId: 'acme.trusted',
+          displayName: 'Trusted plugin',
+          source: { kind: 'path', locator: '/plugins/acme.trusted' },
+          updateChannel: { kind: 'path', locator: '/plugins/acme.trusted', development: true },
+        }),
+        apply,
+        cleanup: async () => undefined,
+      }),
+      createPendingChangeId: () => 'pending-action-approval',
+    });
+
+    const retained = await service.requestPluginChange({
+      kind: 'installPath',
+      locator: '/plugins/acme.trusted',
+    }, { retainReview: true });
+    expect(retained).toMatchObject({
+      kind: 'reviewRequired',
+      pendingChangeId: 'pending-action-approval',
+      review: expect.objectContaining({ pluginId: 'acme.trusted' }),
+    });
+    expect(apply).not.toHaveBeenCalled();
+    if (retained.kind !== 'reviewRequired') throw new Error('Expected retained Action review');
+    await expect(service.decidePluginChange({
+      pendingChangeId: retained.pendingChangeId,
+      decision: 'cancel',
+    })).resolves.toEqual({ kind: 'cancelled' });
+    expect(apply).not.toHaveBeenCalled();
+  });
+
   it('preserves a daemon-owner preparation denial code', async () => {
     const service = createDaemonPluginChangeService({
       prepare: async () => {

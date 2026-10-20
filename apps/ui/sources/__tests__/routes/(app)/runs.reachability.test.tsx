@@ -9,11 +9,11 @@ import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccount
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { createStackOptionsCapture } from '@/dev/testkit/mocks/router';
 import { installRouteRootCommonModuleMocks } from '../routeRootTestHelpers';
+import { t } from '@/text';
 
 const header = createStackOptionsCapture();
 installRouteRootCommonModuleMocks({
     router: async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ stackOptionsCapture: header }).module,
-    storage: importOriginal => importOriginal(),
 });
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 // Only native presentation leaves are replaced; inventory, admission, and RPC remain real.
@@ -84,7 +84,7 @@ it('suppresses automatic run reads after request failure but explicit refresh st
     const HeaderRight = header.getResolved()?.headerRight as React.ComponentType | undefined;
     expect(HeaderRight).toBeDefined();
     const refresh = await renderScreen(React.createElement(HeaderRight!));
-    await act(async () => { refresh.findByProps({ accessibilityLabel: 'runs.a11y.refresh' }).props.onPress(); });
+    await act(async () => { refresh.findByProps({ accessibilityLabel: t('runs.a11y.refresh') }).props.onPress(); });
     const runReads = () => network.requests.filter(request => request.method === RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST);
     await vi.waitFor(() => expect(runReads().length).toBeGreaterThan(0));
     const restoredConnection = connection;
@@ -94,7 +94,7 @@ it('suppresses automatic run reads after request failure but explicit refresh st
     expect(readMachineRequestReachabilityObservation({ serverId: snapshot.serverIdentityId, accountId: snapshot.accountId }, 'studio'))
         .toMatchObject({ outcome: 'succeeded' });
     await flushHookEffects({ cycles: 4 });
-    expect(screen.findAll(node => node.props?.title === 'runs.empty').length).toBeGreaterThan(0);
+    expect(screen.findAll(node => node.props?.title === t('runs.empty')).length).toBeGreaterThan(0);
     const settledReadCount = runReads().length;
     // Recovery publishes once; unrelated renders must not turn that publication into a read storm.
     await act(async () => { screen.update(<RunsScreen />); });

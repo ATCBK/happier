@@ -1,8 +1,8 @@
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod/mini';
 import { DaemonContributionRegistryProjectionDescribeResponseSchema, MACHINE_PLAIN_DATA_KEY_MARKER, PluginProjectionV2Schema } from '@happier-dev/protocol';
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -13,10 +13,11 @@ import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/pane
 import { createBuiltinPaneDestination, type SelectedPaneDestinationV1 } from '@/components/appShell/panes/model/selectedPaneDestination';
 import { ProjectDefinitionInspectInputSchema, ProjectDefinitionInspectOutputSchema } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { readMachineStatusNextRefreshAtMs } from '@/utils/sessions/machineUtils';
 import { buildProjectPaneScopeId } from './projectPaneScope';
 import { createProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 
 const device = vi.hoisted(() => ({ phone: false, native: false }));
 vi.mock('socket.io-client', async (importOriginal) =>
@@ -47,15 +48,30 @@ let projection = PluginProjectionV2Schema.parse({ v: 2, generation: 4, familiesB
 let deferred: ReturnType<typeof createDeferred<ReturnType<typeof PluginProjectionV2Schema.parse>>> | null = null;
 const projectionTransportTrace: string[] = [];
 const inspectedWorkspaces: unknown[] = [];
+let projectInspection: Awaited<ReturnType<typeof createExternalActionAccountHttpBoundary>>;
+beforeAll(async () => {
+    projectInspection = await createExternalActionAccountHttpBoundary({
+        serverUrl: 'https://session-pane.test', serverIdentityId: 'srv_session_pane', accountId: 'account-a', machineId: 'm1',
+        actionId: 'projects.inspect', tokenEpoch: 0, requesterInvocation: 'none',
+        execute: input => {
+            inspectedWorkspaces.push(ProjectDefinitionInspectInputSchema.parse(input).workspace);
+            return ProjectDefinitionInspectOutputSchema.parse({
+                definition: { basis: { kind: 'absent' }, document: null },
+                detection: { entries: [{ source: { kind: 'native', tool: 'package_script', file: 'package.json', target: 'check' }, usage: 'script' }],
+                    environments: [], devcontainers: [], coverage: 'complete', diagnostics: [] }, importCandidates: [],
+            });
+        },
+    });
+});
 const runtime = installSessionPaneRuntimeTestHarness({
+    credentials: { token: createAccountTokenForTests('account-a', { currentAccount: true }) },
     scopeId: ({ serverId }) => buildProjectPaneScopeId('wr_1', serverId),
     request: async (url, init) => {
         const method = init?.method ?? 'GET';
         const pathname = new URL(String(url)).pathname;
         projectionTransportTrace.push(`HTTP ${method} ${pathname}`);
-        if (method === 'GET' && pathname === '/v1/machines') {
-            return Response.json([createPlainMachineRowFixture({ id: 'm1', accountId: 'account-a' })]);
-        }
+        const inspection = await projectInspection.handle(new URL(String(url)), init);
+        if (inspection) return inspection;
         if (method === 'GET' && pathname === '/v1/machines/m1') {
             return Response.json({ machine: { id: 'm1', kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
         }
@@ -76,20 +92,11 @@ const runtime = installSessionPaneRuntimeTestHarness({
         });
         vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload) => {
             if (event !== 'rpc-call') throw new Error(`Unexpected Project transport event: ${event}`);
-            const request = z.object({ method: z.string(), params: z.unknown() }).passthrough().parse(payload);
+            const request = z.looseObject({ method: z.string(), params: z.unknown() }).parse(payload);
             projectionTransportTrace.push(`Socket ${event} ${request.method}`);
             if (request.method.endsWith(`:${RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE}`)) {
                 return { ok: true, result: DaemonContributionRegistryProjectionDescribeResponseSchema.parse({
                     protocolVersion: 1, projection: deferred ? await deferred.promise : projection,
-                }) };
-            }
-            if (request.method.endsWith(':daemon.projects.inspect.v1')) {
-                const inspection = ProjectDefinitionInspectInputSchema.parse(request.params);
-                inspectedWorkspaces.push(inspection.workspace);
-                return { ok: true, result: ProjectDefinitionInspectOutputSchema.parse({
-                    definition: { basis: { kind: 'absent' }, document: null },
-                    detection: { entries: [{ source: { kind: 'native', tool: 'package_script', file: 'package.json', target: 'check' }, usage: 'script' }],
-                        environments: [], devcontainers: [], coverage: 'complete', diagnostics: [] }, importCandidates: [],
                 }) };
             }
             return { ok: false, error: 'Method not found', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
@@ -238,6 +245,27 @@ describe('ProjectRightPanel right-sidebar registry tabs', () => {
         await act(async () => screen.update(rail('overview')));
         expect(screen.findHostByTestId('project-rightpanel-action:files')).not.toBeNull();
         expect(runtime.pane.scopeState?.right).toEqual(retainedRight);
+    });
+    it('offers the Project Widgets block beside Code through the shared Project area, never on a phone', async () => {
+        const { ProjectAsideWidgets } = await import('@/components/widgets/area/ProjectWidgetArea');
+        const { ProjectRightSidebarProvider, ProjectRightSidebarRail } = await import('./ProjectRightPanel');
+        const screen = await mount(createBuiltinPaneDestination('widgets'));
+        expect(screen.findHostByTestId('project-rightpanel-tab:widgets')).not.toBeNull();
+        expect(screen.findHostByTestId('project-rightpanel-surface-widgets')).not.toBeNull();
+        // The same Project area binding Overview uses: this Project and its selected checkout.
+        expect(screen.tree.findByType(ProjectAsideWidgets).props).toMatchObject({
+            serverId: runtime.serverId, projectRef: panelProps().workspaceRef });
+        const rail = (activePage: 'code' | 'overview') => <runtime.Wrapper>
+            <ProjectRightSidebarProvider {...panelProps()} activePage={activePage}><ProjectRightSidebarRail /></ProjectRightSidebarProvider>
+        </runtime.Wrapper>;
+        await act(async () => screen.update(rail('code')));
+        expect(screen.findHostByTestId('project-rightpanel-action:widgets')).not.toBeNull();
+        // Overview already draws the whole layout, its side area included.
+        await act(async () => screen.update(rail('overview')));
+        expect(screen.findHostByTestId('project-rightpanel-action:widgets')).toBeNull();
+        device.phone = true;
+        const phone = await mount(createBuiltinPaneDestination('browser'));
+        expect(phone.findHostByTestId('project-rightpanel-tab:widgets')).toBeNull();
     });
     it('keeps Browser and Services available on phone', async () => {
         device.phone = true;

@@ -1,6 +1,34 @@
 import { relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolveWorkspaceBuildMode, WORKSPACE_BUILD_MODE_ENV } from '../../../../../scripts/workspaces/workspaceChildBuildEnv.mjs';
+import { requiresTypeScriptAdmission } from '../../../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
+import { runWorkspaceBuildAdmission } from '../proc/workspace_build_admission.mjs';
+
+async function prepareCliSourceNativeCustody(repoDir, env) {
+  const setupModule = pathToFileURL(resolve(repoDir, 'apps/cli/src/test-setup.ts')).href;
+  const sourceRuntime = resolve(repoDir, 'packages/cli-common/registerSourceRuntime.mjs');
+  const projectRoot = resolve(repoDir, 'apps/cli');
+  const sourceArgs = ['--import', sourceRuntime, '--input-type=module', '--eval'];
+  const result = await runWorkspaceBuildAdmission({
+    command: process.execPath,
+    args: [...sourceArgs,
+      `import { prepareNativeCustody } from ${JSON.stringify(setupModule)};\nawait prepareNativeCustody(process.argv[1]);`,
+      projectRoot],
+    // Native compilation is prepared before the test reader's reservation.
+    // Reuse its existing six-GiB producer envelope and publication resource;
+    // neither capacity nor the lease survives into the validation payload.
+    admissionClass: 'package-dist', admissionRequired: requiresTypeScriptAdmission({ env }),
+    locks: [{ path: resolve(repoDir, '.project/tmp/cli-dist-build.lock'), errorLabel: 'CLI native process custody lock' }],
+    repoDir, cwd: repoDir, env, stdio: 'inherit',
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0 || result.signal) {
+    throw Object.assign(new Error(result.signal
+      ? `CLI native process custody preparation terminated by ${result.signal}`
+      : `CLI native process custody preparation exited with status ${String(result.status)}`),
+    { exitCode: result.status, signal: result.signal });
+  }
+}
 
 export function resolveRemoteValidationPreparationEnv(env, validationKind, defaultBuildMode = validationKind === 'runtime' ? 'source-dev' : 'strict') {
   return { ...env, [WORKSPACE_BUILD_MODE_ENV]: resolveWorkspaceBuildMode({
@@ -26,6 +54,7 @@ export async function prepareRemoteValidationWorkspace({
   repoDir = resolve(process.cwd()),
   componentRelativeDir = '.',
   validationKind = 'runtime',
+  requiredTools = '',
   defaultBuildMode = validationKind === 'runtime' ? 'source-dev' : 'strict',
   env = process.env,
   loadWorkspaceBuildOwner = async () => await import('../proc/pm.mjs'),
@@ -38,6 +67,9 @@ export async function prepareRemoteValidationWorkspace({
   if (!componentPath) return { ok: true, built: [], skipped: ['repository-root-script-owned'] };
   const normalizedComponentPath = componentPath.replaceAll('\\', '/');
   if (validationKind === 'source-test') {
+    if (normalizedComponentPath === 'apps/cli' && requiredTools.split(/\s+/u).includes('go')) {
+      await prepareCliSourceNativeCustody(repoDir, env);
+    }
     return { ok: true, built: [], skipped: ['workspace-source-test'] };
   }
   if (validationKind === 'typecheck') {
@@ -108,17 +140,16 @@ if (entryPath && pathToFileURL(resolve(entryPath)).href === import.meta.url) {
   const env = { ...process.env, [WORKSPACE_BUILD_MODE_ENV]: resolveWorkspaceBuildMode({
     buildMode: process.env[WORKSPACE_BUILD_MODE_ENV] ?? mode, env: process.env,
   }) };
-  if (repo && resolve(repoDir) !== resolve(executorRepoRoot)) {
-    if (kind !== 'source-test' && kind !== 'typecheck') {
-      // The selected checkout owns its package graph and emitted output.
-      const { ensureWorkspacePackagesBuiltForComponent } = await import(pathToFileURL(resolve(repoDir, 'scripts/workspaces/ensureWorkspacePackagesBuilt.mjs')).href);
-      await ensureWorkspacePackagesBuiltForComponent(resolveComponentDir(repoDir, readComponentRelativeDir(process.argv.slice(2))).componentDir, { env: resolveRemoteValidationPreparationEnv(env, kind, mode) });
-    }
+  if (repo && resolve(repoDir) !== resolve(executorRepoRoot) && kind !== 'source-test' && kind !== 'typecheck') {
+    // The selected checkout owns its package graph and emitted output.
+    const { ensureWorkspacePackagesBuiltForComponent } = await import(pathToFileURL(resolve(repoDir, 'scripts/workspaces/ensureWorkspacePackagesBuilt.mjs')).href);
+    await ensureWorkspacePackagesBuiltForComponent(resolveComponentDir(repoDir, readComponentRelativeDir(process.argv.slice(2))).componentDir, { env: resolveRemoteValidationPreparationEnv(env, kind, mode) });
   } else {
     await prepareRemoteValidationWorkspace({
       repoDir,
       componentRelativeDir: readComponentRelativeDir(process.argv.slice(2)),
       validationKind: kind,
+      requiredTools: process.argv.slice(2).find(value => value.startsWith('--required-tools='))?.slice('--required-tools='.length) ?? '',
       env,
     });
   }

@@ -6,6 +6,7 @@ import { ProjectSetupReviewV1Schema, type ProjectSetupReviewV1 } from '@happier-
 import { ProjectExecutionChoiceV1Schema } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 import type { ApprovalRequest } from '@happier-dev/protocol';
 import type { ProjectExecutionChoiceV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
+import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
@@ -18,7 +19,7 @@ import {
   useServerScopedMachine,
 } from '@/sync/store/hooks';
 import { t } from '@/text';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { listReviewedSetupCommands } from '@/components/projects/projectSetup/projectSetupEffectPresentation';
 import { formatProjectInvocation } from '@/components/projects/projectSetup/projectScriptPresentation';
 import { ProjectSetupReviewFacts } from '@/components/projects/projectSetup/ProjectSetupReview';
@@ -26,6 +27,7 @@ import { ProjectSetupReviewFacts } from '@/components/projects/projectSetup/Proj
 export type ProjectCommandApprovalPresentation =
   | Readonly<{
       kind: 'exec';
+      workspace: WorkspaceAddressV1;
       serverId: string;
       sourceMachineId: string;
       command: string;
@@ -34,6 +36,7 @@ export type ProjectCommandApprovalPresentation =
     }>
   | Readonly<{
       kind: 'script';
+      workspace: WorkspaceAddressV1;
       serverId: string;
       sourceMachineId: string;
       name: string;
@@ -42,6 +45,7 @@ export type ProjectCommandApprovalPresentation =
   | Readonly<{
       /** Target-produced setup review; presentation never grants consent or executes it. */
       kind: 'setup';
+      workspace: WorkspaceAddressV1;
       serverId: string;
       sourceMachineId: string;
       destination: Destination;
@@ -76,6 +80,7 @@ export function readProjectCommandApproval(
     const { workspace, executable, argv, cwd, choice } = input.data;
     return {
       kind: 'exec',
+      workspace,
       serverId: workspace.serverId,
       sourceMachineId: workspace.machineId,
       command: formatProjectInvocation({ tool: executable, args: argv }),
@@ -92,6 +97,7 @@ export function readProjectCommandApproval(
       || input.data.expectedEffectDigest === reviewed.data.reviewedEffectDigest) ? reviewed.data : null;
     return {
       kind: 'setup',
+      workspace: input.data.workspace,
       serverId: input.data.workspace.serverId,
       sourceMachineId: input.data.workspace.machineId,
       destination: { kind: 'primary' },
@@ -110,6 +116,7 @@ export function readProjectCommandApproval(
         : `${selection.source.file}#${selection.source.target}`;
     return {
       kind: 'script',
+      workspace,
       serverId: workspace.serverId,
       sourceMachineId: workspace.machineId,
       name,
@@ -175,7 +182,7 @@ export function useProjectCommandApprovalTitle(
 ): string | null {
   const source = useServerScopedMachine(presentation?.serverId ?? null, presentation?.sourceMachineId ?? '');
   return presentation
-    ? describeProjectCommandApprovalTitle(presentation, getMachineDisplayName(source) ?? presentation.sourceMachineId)
+    ? describeProjectCommandApprovalTitle(presentation, source ? getMachineSentenceName(source) : presentation.sourceMachineId)
     : null;
 }
 
@@ -208,7 +215,7 @@ export const ProjectCommandApprovalFacts = React.memo(
     );
     const pools = useMachinePoolListForServer(presentation.serverId);
     const sourceName =
-      getMachineDisplayName(source) ?? presentation.sourceMachineId;
+      source ? getMachineSentenceName(source) : presentation.sourceMachineId;
     const pool =
       destination.kind === 'pool'
         ? (pools?.find((candidate) => candidate.pool.id === destination.poolId)?.pool ??
@@ -218,7 +225,7 @@ export const ProjectCommandApprovalFacts = React.memo(
       destination.kind === 'primary'
         ? sourceName
         : destination.kind === 'machine'
-          ? (getMachineDisplayName(target) ?? destination.machineId)
+          ? (target ? getMachineSentenceName(target) : destination.machineId)
           : t('projects.scripts.adhocWherePool', {
               pool: pool?.name ?? destination.poolId,
             });
@@ -239,6 +246,9 @@ export const ProjectCommandApprovalFacts = React.memo(
           : t('projects.scripts.adhocAsYou', { machine: where });
     const rows: ReadonlyArray<readonly [string, string, string]> = [
       ['where', t('projects.scripts.adhocWhere'), where],
+      ...(presentation.kind === 'service'
+        ? []
+        : [['checkout', t('common.path'), presentation.workspace.rootPath] as const]),
       [
         'files',
         t('projects.scripts.adhocFiles'),

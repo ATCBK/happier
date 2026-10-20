@@ -10,6 +10,7 @@ import { workflowDefinitionPromptTitle } from './workflowBlockLabel';
 import { createWorkflowEditorDraft } from './workflowEditorDraft';
 import type { WorkflowReviewedRunSeed } from './workflowReviewedRunSeed';
 import type { WorkflowRunDetailActions } from './workflowRunDetailActions';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 export async function startWorkflowPlanReview(params: Readonly<{
     runId: string;
@@ -48,7 +49,7 @@ export function readWorkflowPlanResult(value: JsonValue): Readonly<{ document: s
     };
 }
 
-export async function validateWorkflowPlanProposal(value: JsonValue, signal?: AbortSignal): Promise<WorkflowDefinitionV1 | null> {
+export async function validateWorkflowPlanProposal(value: JsonValue, signal?: AbortSignal, accountLifetime?: ServerAccountScopeLifetime | null): Promise<WorkflowDefinitionV1 | null> {
     const plan = readWorkflowPlanResult(value);
     if (plan?.proposal === undefined) return null;
     const request = WorkflowActionInputSchemasV1['workflow.validate'].safeParse({ definition: plan.proposal });
@@ -58,6 +59,7 @@ export async function validateWorkflowPlanProposal(value: JsonValue, signal?: Ab
         input: request.data,
         parseResult: (response) => WorkflowActionOutputSchemasV1['workflow.validate'].parse(response),
         signal,
+        ...(accountLifetime === undefined ? {} : { accountLifetime }),
     });
     return result.valid ? result.normalizedDefinition ?? null : null;
 }

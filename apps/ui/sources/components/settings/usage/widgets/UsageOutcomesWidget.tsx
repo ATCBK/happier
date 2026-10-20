@@ -78,8 +78,25 @@ export function UsageOutcomesWidget(props: UsageBodyProps) {
         reason={t('usage.board.work.emptyReason')}
       />
     );
-  const accent = usageSeriesColor(appTheme, 0);
   const { funnel } = summary;
+  // Sessions with no PR evidence at all would draw a funnel that stops at its first step: the one honest empty state.
+  if (summary.outcomes.length === 0 && funnel.witnessed === 0)
+    return (
+      <View style={styles.body} testID={`${props.testID}.outcomes`}>
+        <UsageBodyInsufficient
+          testID={`${props.testID}.noPrs`}
+          title={t('usage.board.work.noPrsTitle')}
+          reason={t('usage.board.work.noPrsReason')}
+        />
+        <UsageCoverageLine
+          slice={props.slice}
+          sources={['work']}
+          onRetry={props.model.refresh}
+          testID={`${props.testID}.coverage`}
+        />
+      </View>
+    );
+  const accent = usageSeriesColor(appTheme, 0);
   const byKey = new Map(summary.outcomes.map((row) => [row.key, row]));
   const moneyGroups = partitionUsageWorkMoneyRows(summary.outcomes, props.query.metric);
   return (

@@ -39,7 +39,7 @@ afterEach(() => { standardCleanup(); modal.show.mockClear(); device.current = nu
 describe('Script row title line', () => {
   const workspace: WorkspaceAddressV1 = { serverId: 'home', machineId: 'machine', workspaceId: 'ws', rootPath: '/repo' };
   const row = () => <ProjectScriptRow testID="script" workspace={workspace} name="test" badge="package.json" command="yarn test"
-    portable idleText="Not run" pending={false} failureCode={null} compact={false} onRun={() => {}} />;
+    portable operation={null} idleText="Not run" pending={false} failureCode={null} compact={false} onRun={() => {}} />;
 
   it('names the worker pool beside a portable script on a wide page', async () => {
     const screen = await renderScreen(row());
@@ -106,13 +106,15 @@ describe('Script output before a terminal exists', () => {
         enabled: true, createdAtMs: 1, updatedAtMs: 1,
         provenance: { kind: 'worker_clean_copy', sourceWorkspaceRefId: workspace.workspaceId, targetWorkspaceRefId: 'worker-copy' } },
       alpha: { workspaceRefId: workspace.workspaceId, workspaceRef: { id: workspace.workspaceId, serverId: workspace.serverId,
-        machineId: workspace.machineId, rootPath: workspace.rootPath, createdAtMs: 1 }, label: 'Source', machineName: 'Source' },
+        machineId: workspace.machineId, rootPath: workspace.rootPath, createdAtMs: 1 }, label: 'Source', name: 'Source', machineName: 'Source' },
       beta: { workspaceRefId: 'worker-copy', workspaceRef: { id: 'worker-copy', serverId: workspace.serverId,
-        machineId: 'worker-machine', rootPath: '/worker', createdAtMs: 1 }, label: 'Worker', machineName: 'Worker' },
+        machineId: 'worker-machine', rootPath: '/worker', createdAtMs: 1 }, label: 'Worker', name: 'Worker', machineName: 'Worker' },
     };
-    modal.show.mock.calls[0]?.[0].props.onOpenExisting(summary);
+    const firstModal = modal.show.mock.calls[0]?.[0];
+    if (!firstModal?.props) throw new Error('Expected worker-copy modal props');
+    firstModal.props.onOpenExisting(summary);
     expect(modal.show).toHaveBeenCalledTimes(2);
-    expect(modal.show.mock.calls[1]?.[0].props.resource).toMatchObject({
+    expect(modal.show.mock.calls[1]?.[0].props?.resource).toMatchObject({
       kind: 'workspaceSyncConflicts', serverId: workspace.serverId,
       workspaceRefId: workspace.workspaceId, controllerMachineId: 'source-machine',
     });

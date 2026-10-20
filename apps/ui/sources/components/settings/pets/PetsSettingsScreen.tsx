@@ -7,7 +7,6 @@ import type { SegmentedChoiceOption } from '@/components/ui/lists/SegmentedChoic
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
-import { resetDesktopActivityOverlayPosition } from '@/activity/adapters/desktop/runtime/desktopActivityOverlayBridge';
 import {
     BUILT_IN_PET_IDS,
     resolveBuiltInPetPackage,
@@ -27,6 +26,8 @@ import { normalizeLocalPetSourceMetadata } from '@/sync/domains/pets/normalizeLo
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { useApplyLocalSettings, useApplySettings } from '@/sync/store/settingsWriters';
 import { settingRendersOnHost } from '@/components/settings/catalog/settingDeclarations';
+import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
+import { DESKTOP_SETTINGS } from '@/components/settings/desktop/desktopSettings';
 import { PETS_SETTINGS } from '@/components/settings/pets/petsSettings';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
@@ -95,6 +96,7 @@ export function PetsSettingsScreen() {
     const localPetSourcesBySourceKey = storage((state) => state.localPetSourcesBySourceKey);
     const applySettings = useApplySettings();
     const applyLocalSettings = useApplyLocalSettings();
+    const writeSetting = useSettingActionWriter();
     const companionEnabled = useFeatureEnabled('pets.companion');
     const syncEnabled = useFeatureEnabled('pets.sync');
     const [desktopOverlayVisibilityModeOpen, setDesktopOverlayVisibilityModeOpen] = React.useState(false);
@@ -107,8 +109,24 @@ export function PetsSettingsScreen() {
     const [importedAccountPets, setImportedAccountPets] = React.useState<AccountPetLibraryEntryV1[]>([]);
     const [localImportDiagnostic, setLocalImportDiagnostic] = React.useState<LocalPetImportDiagnostic | null>(null);
     const [localImportDiagnosticTargetKey, setLocalImportDiagnosticTargetKey] = React.useState<string | null>(null);
-    const removingLocalPetSourceKeysRef = React.useRef(new Set<string>());
     const forgottenLocalPetSourceKeysRef = React.useRef(new Set<string>());
+    const requestsRef = React.useRef(new Map<string, AbortController>());
+    const beginRequest = React.useCallback((key: string) => {
+        requestsRef.current.get(key)?.abort();
+        const controller = new AbortController();
+        requestsRef.current.set(key, controller);
+        return controller;
+    }, []);
+    const finishRequest = React.useCallback((key: string, controller: AbortController) => {
+        if (requestsRef.current.get(key) === controller) requestsRef.current.delete(key);
+    }, []);
+    React.useEffect(() => {
+        setCodexDetectionState('idle');
+        return () => {
+            for (const controller of requestsRef.current.values()) controller.abort();
+            requestsRef.current.clear();
+        };
+    }, [executionTargetKey]);
     const showDesktopOverlaySettings = settingRendersOnHost(PETS_SETTINGS.settings.desktopOverlayEnabled);
     const companionSizeScale = normalizePetCompanionSizeScale(localSettings.petsCompanionSizeScale);
     const scopedDiscoveredPets = discoveredPetsTargetKey === executionTargetKey ? discoveredPets : [];
@@ -181,7 +199,7 @@ export function PetsSettingsScreen() {
             return;
         }
         const targetKey = machineAdministrationExecutionTargetKey(target);
-        if (codexDetectionState === 'loading' && codexDetectionTargetKey === targetKey) return;
+        const request = beginRequest('discovery');
         setCodexDetectionTargetKey(targetKey);
         setCodexDetectionState('loading');
         try {
@@ -196,8 +214,9 @@ export function PetsSettingsScreen() {
                 serverId: target.serverId,
                 method: PET_DAEMON_RPC_METHODS.DISCOVER_PACKAGES,
                 payload,
+                signal: request.signal,
             });
-            if (!isExecutionTargetCurrent(target)) return;
+            if (request.signal.aborted || !isExecutionTargetCurrent(target)) return;
             if (isRpcMethodNotAvailableError(raw)) {
                 setDiscoveredPets([]);
                 setDiscoveredPetsTargetKey(targetKey);
@@ -226,13 +245,15 @@ export function PetsSettingsScreen() {
                 setCodexDetectionState('error');
             }
         } catch (error) {
-            if (!isExecutionTargetCurrent(target)) return;
+            if (request.signal.aborted || !isExecutionTargetCurrent(target)) return;
             setDiscoveredPets([]);
             setDiscoveredPetsTargetKey(targetKey);
             setCodexDetectionTargetKey(targetKey);
             setCodexDetectionState(isRpcMethodNotAvailableError(error) ? 'daemonMismatch' : 'error');
+        } finally {
+            finishRequest('discovery', request);
         }
-    }, [administrationTargetSelection.resolveExecutionTarget, codexDetectionState, codexDetectionTargetKey, isExecutionTargetCurrent]);
+    }, [administrationTargetSelection.resolveExecutionTarget, beginRequest, finishRequest, isExecutionTargetCurrent]);
 
     React.useEffect(() => {
         const refreshIfRequested = () => {
@@ -249,6 +270,7 @@ export function PetsSettingsScreen() {
         const targetKey = machineAdministrationExecutionTargetKey(target);
         const payload = buildImportPayload(candidate);
         if (!payload) return;
+        const request = beginRequest('localImport');
         setLocalImportDiagnosticTargetKey(targetKey);
         setLocalImportDiagnostic(null);
         try {
@@ -257,8 +279,9 @@ export function PetsSettingsScreen() {
                 serverId: target.serverId,
                 method: PET_DAEMON_RPC_METHODS.IMPORT_LOCAL_PACKAGE,
                 payload,
+                signal: request.signal,
             });
-            if (!isExecutionTargetCurrent(target)) return;
+            if (request.signal.aborted || !isExecutionTargetCurrent(target)) return;
             const parsed = DaemonPetImportLocalPackageResponseV1Schema.parse(raw);
             if ('ok' in parsed && parsed.ok === false) {
                 setLocalImportDiagnosticTargetKey(targetKey);
@@ -287,11 +310,13 @@ export function PetsSettingsScreen() {
                 },
             });
         } catch {
-            if (!isExecutionTargetCurrent(target)) return;
+            if (request.signal.aborted || !isExecutionTargetCurrent(target)) return;
             setLocalImportDiagnosticTargetKey(targetKey);
             setLocalImportDiagnostic({ code: 'daemon_import_failed' });
+        } finally {
+            finishRequest('localImport', request);
         }
-    }, [administrationTargetSelection.resolveExecutionTarget, applyLocalSettings, isExecutionTargetCurrent]);
+    }, [administrationTargetSelection.resolveExecutionTarget, applyLocalSettings, beginRequest, finishRequest, isExecutionTargetCurrent]);
 
     const importAccountPet = React.useCallback(async (candidate: PetImportCandidate) => {
         if (!syncEnabled) return;
@@ -299,6 +324,7 @@ export function PetsSettingsScreen() {
         if (!target) return;
         const importPayload = buildImportPayload(candidate);
         if (!importPayload) return;
+        const request = beginRequest('accountImport');
         try {
             const payload: DaemonPetImportAccountPackageRequestV1 = {
                 ...importPayload,
@@ -309,8 +335,9 @@ export function PetsSettingsScreen() {
                 serverId: target.serverId,
                 method: PET_DAEMON_RPC_METHODS.IMPORT_ACCOUNT_PACKAGE,
                 payload,
+                signal: request.signal,
             });
-            if (!isExecutionTargetCurrent(target)) return;
+            if (request.signal.aborted || !isExecutionTargetCurrent(target)) return;
             const parsed = DaemonPetImportResponseV1Schema.parse(raw);
             if (!parsed.ok || parsed.target !== 'account' || !parsed.account.ok) return;
             const pet = parsed.account.pet;
@@ -323,30 +350,18 @@ export function PetsSettingsScreen() {
                 applyLocalSettings({ petsSelectedPetOverride: { kind: 'inherit' } });
             }
         } catch {
-            if (!isExecutionTargetCurrent(target)) return;
+            if (request.signal.aborted || !isExecutionTargetCurrent(target)) return;
+        } finally {
+            finishRequest('accountImport', request);
         }
-    }, [administrationTargetSelection.resolveExecutionTarget, applyLocalSettings, applySettings, isExecutionTargetCurrent, localSettings.petsSelectedPetOverride.kind, syncEnabled]);
+    }, [administrationTargetSelection.resolveExecutionTarget, applyLocalSettings, applySettings, beginRequest, finishRequest, isExecutionTargetCurrent, localSettings.petsSelectedPetOverride.kind, syncEnabled]);
 
     const removeLocalPet = React.useCallback(async (pet: LocalDevicePetRow) => {
-        if (removingLocalPetSourceKeysRef.current.has(pet.sourceKey)) return;
-        removingLocalPetSourceKeysRef.current.add(pet.sourceKey);
-        try {
-            // The persisted local-source record owns cleanup routing. Administration
-            // selection only authorizes new discovery/import work, never relocation.
-            const payload: DaemonPetForgetLocalPackageRequestV1 = { sourceKey: pet.sourceKey };
-            const raw = await machineRpcWithServerScope<unknown, DaemonPetForgetLocalPackageRequestV1>({
-                machineId: pet.previewAsset.target.machineId,
-                serverId: pet.previewAsset.target.serverId,
-                method: PET_DAEMON_RPC_METHODS.FORGET_LOCAL_PACKAGE,
-                payload,
-            });
-            DaemonPetForgetLocalPackageResponseV1Schema.safeParse(raw);
-        } catch {
-            // Removal from the device list is local user intent; daemon cleanup is best effort.
-        } finally {
-            removingLocalPetSourceKeysRef.current.delete(pet.sourceKey);
-        }
+        const requestKey = `remove:${pet.sourceKey}`;
+        if (requestsRef.current.has(requestKey)) return;
+        const request = beginRequest(requestKey);
 
+        // Device removal is local intent; the daemon cleanup below is best effort.
         forgottenLocalPetSourceKeysRef.current.add(pet.sourceKey);
         storage.getState().removeLocalPetSource(pet.sourceKey);
         setImportedLocalPets((pets) => pets.filter((candidate) => candidate.sourceKey !== pet.sourceKey));
@@ -357,7 +372,24 @@ export function PetsSettingsScreen() {
         ) {
             applyLocalSettings({ petsSelectedPetOverride: { kind: 'inherit' } });
         }
-    }, [applyLocalSettings, localSettings.petsSelectedPetOverride]);
+        try {
+            // The persisted local-source record owns cleanup routing. Administration
+            // selection only authorizes new discovery/import work, never relocation.
+            const payload: DaemonPetForgetLocalPackageRequestV1 = { sourceKey: pet.sourceKey };
+            const raw = await machineRpcWithServerScope<unknown, DaemonPetForgetLocalPackageRequestV1>({
+                machineId: pet.previewAsset.target.machineId,
+                serverId: pet.previewAsset.target.serverId,
+                method: PET_DAEMON_RPC_METHODS.FORGET_LOCAL_PACKAGE,
+                payload,
+                signal: request.signal,
+            });
+            DaemonPetForgetLocalPackageResponseV1Schema.safeParse(raw);
+        } catch {
+            // Removal from the device list is local user intent; daemon cleanup is best effort.
+        } finally {
+            finishRequest(requestKey, request);
+        }
+    }, [applyLocalSettings, beginRequest, finishRequest, localSettings.petsSelectedPetOverride]);
 
     const handleSelectBuiltInPet = React.useCallback((petId: string) => {
         applySettings({ petsSelectedPetRef: { kind: 'builtIn', petId } });
@@ -379,16 +411,10 @@ export function PetsSettingsScreen() {
     }, [applyLocalSettings, applySettings, localSettings.petsSelectedPetOverride.kind]);
 
     const handleResetDesktopOverlayPosition = React.useCallback(() => {
-        applyLocalSettings({
-            desktopOverlayPlacementMode: 'anchored',
-            desktopOverlayAnchor: 'top_center',
-            desktopOverlayOffsetX: 0,
-            desktopOverlayOffsetY: 0,
-        });
-        fireAndForget(resetDesktopActivityOverlayPosition(), {
+        fireAndForget(writeSetting(DESKTOP_SETTINGS.settings.placementMode, 'anchored'), {
             tag: 'PetsSettingsScreen.resetDesktopActivityOverlayPosition',
         });
-    }, [applyLocalSettings]);
+    }, [writeSetting]);
 
     const selectedBuiltInPetId =
         localSettings.petsSelectedPetOverride.kind === 'inherit'

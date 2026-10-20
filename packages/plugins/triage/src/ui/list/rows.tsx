@@ -13,7 +13,6 @@ import {
   Stack,
   Status,
   Text,
-  useListMultiSelectionRow,
   usePluginHostApi,
   usePluginTranslation,
   useSurfaceContext,
@@ -27,13 +26,16 @@ import { formatTriageTimestampV1, resolveTriageRowFactStatusToneV1 } from '@happ
 
 import type { TriageListDisplayRowV1 } from '../marks/pinnedRows.js';
 import type { TriageSourceDescriptorV1, TriageSourceWorkflowSubjectV1 } from '@happier-dev/triage-protocol/v1';
-import { readTriageSourceDescriptorV1, resolveTriageSourceWorkflowSubjectV1 } from '../detail/sourceSurface.js';
+import { readTriageSourceDescriptorV1, resolveTriageSourceDescriptorV1, resolveTriageSourceWorkflowSubjectV1 } from '../detail/sourceSurface.js';
 import {
   readTriageEntryRowAnnouncementV1,
   readTriageEntryRowContextV1,
+  readTriageEntryGlyphV1,
   type TriageEntryDisplayTextV1,
 } from '../window/entryDisplay.js';
-import type { TriageListItemV1, TriageListRowSignalV1 } from './sections.js';
+import type { TriageListGroupIdV1, TriageListItemV1, TriageListRowSignalV1 } from './sections.js';
+
+const NO_SHARED_GROUP_REASONS: ReadonlyMap<TriageListGroupIdV1, string> = new Map();
 import type { TriageAgentStatusV1 } from '../detail/agentState.js';
 import { TRIAGE_ENTRY_DRAG_SOURCE_ID_V1, TRIAGE_ENTRY_SESSION_DROP_TARGET_ID_V1 } from './entryDragDrop.js';
 
@@ -46,11 +48,11 @@ import { TRIAGE_ENTRY_DRAG_SOURCE_ID_V1, TRIAGE_ENTRY_SESSION_DROP_TARGET_ID_V1 
  * file decides are which already-projected words go in which anatomy slot, and which single Pin/Unpin affordance
  * the row carries.
  *
- * There is exactly one such affordance per row, and it is never two states of two controls. A materialized row
- * offers it through the public secondary-action owner, which keeps the overflow outside the row press target and
- * owns the menu's focus and keyboard behavior. A pinned row this mount never materialized carries an inline
- * **Unpin** instead, because it has no detail panel to host the operation and dropping it would strand a pin the
- * reader cannot remove.
+ * There is exactly one such affordance per row, and it is never two states of two controls. Every row offers it
+ * through the public secondary-action owner, which keeps the overflow outside the row press target and owns the
+ * menu's focus and keyboard behavior. That includes a pinned row this mount never materialized: it has no detail
+ * panel to host the operation, so its row menu is where the reader removes the pin (an inline Unpin beside the
+ * shared row menu read as a stray word in the Age column and squeezed the place on a phone).
  */
 
 export type TriageRowPinHandlersV1 = Readonly<{
@@ -83,34 +85,15 @@ export function readTriagePinActionLabelV1(
 }
 
 /**
- * The row's own way into a bulk selection, and the ONLY one a touch reader has.
- *
- * The shared `List` already turns a modified press into a set and an unmodified
- * press into a toggle once a set is being built — but a finger has no Command
- * key, so without a stated affordance the whole capability is desktop-only. It
- * lives in the row's existing secondary-action overflow rather than as a new
- * control: that owner already handles focus, keyboard activation and the touch
- * target, and it keeps the press target of the row itself unchanged.
- */
-export const TRIAGE_ROW_SELECT_ACTION_ID_V1 = 'toggle-selected';
-
-/**
- * The row's secondary actions, in the order a reader meets them.
- *
- * Select comes first because it is the affordance a touch reader has no other
- * way to reach, while Pin is also reachable from the entry's own detail. The
- * order is decided here rather than inline so it can be stated and falsified
- * rather than re-derived from a JSX literal.
+ * The row's secondary actions. Select is not among them: the shared `List` owns the row menu's Select/Deselect
+ * (the only way a finger builds a bulk set) for every Collection, so a second Triage copy would list it twice.
+ * The menu already names its row ("More actions for {title}"), so each item is a short verb.
  */
 export function triageListRowSecondaryActionsV1(input: Readonly<{
-  selectLabel: string;
   pinLabel: string;
   pinDisabled: boolean;
 }>): readonly Readonly<{ id: string; label: string; disabled?: boolean }>[] {
-  return [
-    { id: TRIAGE_ROW_SELECT_ACTION_ID_V1, label: input.selectLabel },
-    { id: PIN_ACTION_ID, label: input.pinLabel, disabled: input.pinDisabled },
-  ];
+  return [{ id: PIN_ACTION_ID, label: input.pinLabel, disabled: input.pinDisabled }];
 }
 
 /**
@@ -176,32 +159,37 @@ export function readTriageRowMarkV1(
 }
 
 /**
- * The one glyph an entry wears, in its row and in its detail header: its kind
- * while it is open (a pull request, an issue, an error group), then where its
- * lifecycle ended. A kind nobody declared keeps the lifecycle glyph rather than
- * a guess at what the entry is.
- */
-export function readTriageEntryGlyphV1(
-  lifecycle: TriageListDisplayRowV1['lifecyclePresentation'],
-  workflowSubject: TriageSourceWorkflowSubjectV1 | null,
-): IconName {
-  if (lifecycle === 'closed' || lifecycle === 'suppressed') return 'close';
-  if (lifecycle === 'resolved') {
-    return workflowSubject === 'pullRequest' ? 'change-complete' : 'check';
-  }
-  if (lifecycle !== 'active') return 'info';
-  if (workflowSubject === 'issue') return 'issue';
-  if (workflowSubject === 'errorIssue') return 'bug';
-  if (workflowSubject === 'other') return 'info';
-  return workflowSubject === 'pullRequest' ? 'change-open' : 'info';
-}
-
-/**
  * The tone of the detail header's attention badge: a required reason is the
  * entry's one loud fact, a suggestion stays quiet.
  */
 export function readTriageAttentionBadgeToneV1(level: 'required' | 'suggested'): TextTone {
   return level === 'required' ? HAPPIER_WORK_STATUS_SEMANTIC_TONE.attention : 'secondary';
+}
+
+/** The table row's reason chip (one per row; the list's row key scopes it). */
+export const TRIAGE_ROW_REASON_TEST_ID_V1 = 'triage-row-reason';
+
+/**
+ * An attention reason as a chip, led by its mark: the row's "Why it's here" cell and the detail header draw
+ * this one component, so a reason reads the same wherever it appears. A required reason takes the attention
+ * tint; a suggestion ("Mentioned") stays a neutral chip, because amber is reserved for needs-you.
+ */
+export function TriageAttentionReasonChip(props: Readonly<{
+  level: 'required' | 'suggested';
+  label: string;
+  icon: string | null;
+  testID?: string;
+}>): React.ReactElement {
+  const icon = props.icon !== null && isHappierIconName(props.icon) ? props.icon : undefined;
+  return (
+    <Badge
+      variant="tinted"
+      tone={readTriageAttentionBadgeToneV1(props.level)}
+      value={props.label}
+      {...(props.testID === undefined ? {} : { testID: props.testID })}
+      {...(icon === undefined ? {} : { icon })}
+    />
+  );
 }
 
 /**
@@ -289,7 +277,7 @@ export function triageListRowItemProps(
 
 
 /**
- * A compact, locale-owned age for the table's tabular Age column ("18m", "2h", "3d"). The row's accessible
+ * A compact, locale-owned age for the table's tabular Age column ("18m", "2h", "3d", "10w", "2y"). The row's accessible
  * description keeps the full relative phrase; this is only what fits the column.
  */
 export function formatTriageCompactAgeV1(locale: string, atMs: number, nowMs: number): string {
@@ -300,7 +288,10 @@ export function formatTriageCompactAgeV1(locale: string, atMs: number, nowMs: nu
       ? [Math.round(seconds / 3_600), 'hour' as const]
       : seconds < 30 * 86_400
         ? [Math.round(seconds / 86_400), 'day' as const]
-        : [Math.round(seconds / (7 * 86_400)), 'week' as const];
+        // Weeks up to a year, then years: a narrow month ("3m") would read as minutes in this column.
+        : seconds < 365 * 86_400
+          ? [Math.round(seconds / (7 * 86_400)), 'week' as const]
+          : [Math.round(seconds / (365 * 86_400)), 'year' as const];
   return new Intl.NumberFormat(locale, { style: 'unit', unit, unitDisplay: 'narrow' }).format(value);
 }
 
@@ -323,10 +314,8 @@ function useTriageListRowEnvironment(): TriageListRowEnvironmentV1 {
 }
 
 /**
- * The row's own controls beside its press target, which is the one Pin/Unpin affordance per row. A
- * materialized row offers Select and Pin through the public secondary-action owner; a pinned row this mount never
- * materialized carries an inline **Unpin**, because it has no detail to host the operation and dropping it would
- * strand a pin the reader cannot remove.
+ * The row's own controls beside its press target, which is the one Pin/Unpin affordance per row, offered through
+ * the public secondary-action owner for every row (a pin this mount never materialized included).
  *
  * It is the Collection's row-actions hook: called inside each row, so the shared selection owner's per-row
  * facts commit this row and the row that lost the anchor, not every mounted cell.
@@ -339,40 +328,17 @@ export function useTriageListRowActions(item: TriageListItemV1): CollectionRowAc
   const text = usePluginTranslation();
   const busy = handlers.busyKey === row.key;
   const disabled = handlers.unavailableReason !== null;
-  const label = readTriagePinActionLabelV1(row, text);
-  const selection = useListMultiSelectionRow(row.key);
-  const selectLabel = selection.isSelected
-    ? text('plugins.triage.surface.row.deselect', 'Deselect {title}', { title: row.title })
-    : text('plugins.triage.surface.row.select', 'Select {title}', { title: row.title });
   const onSecondaryAction = React.useCallback((actionId: string) => {
-    // `replace` rather than `toggle` for the first row: turning selection mode on AND choosing the row the reader
-    // pressed is one gesture, and entering an empty selection mode would make the bar appear with nothing in it.
-    if (actionId === TRIAGE_ROW_SELECT_ACTION_ID_V1) {
-      if (selection.isSelectionMode) selection.toggle();
-      else selection.replace();
-      return;
-    }
-    handlers.onSetPinned(row);
-  }, [handlers, row, selection]);
-  if (!row.materialized) {
-    return {
-      busy,
-      accessory: (
-        <Button
-          // A short visible verb; the full "Unpin {title}" stays the name a reader hears.
-          title={text('plugins.triage.surface.row.unpinShort', 'Unpin')}
-          accessibilityLabel={label}
-          variant="plain"
-          busy={busy}
-          disabled={disabled}
-          onPress={() => { handlers.onSetPinned(row); }}
-        />
-      ),
-    };
-  }
+    if (actionId === PIN_ACTION_ID) handlers.onSetPinned(row);
+  }, [handlers, row]);
   return {
     busy,
-    secondaryActions: triageListRowSecondaryActionsV1({ selectLabel, pinLabel: label, pinDisabled: disabled }),
+    secondaryActions: triageListRowSecondaryActionsV1({
+      pinLabel: row.pinned
+        ? text('plugins.triage.surface.row.unpinShort', 'Unpin')
+        : text('plugins.triage.surface.row.pinShort', 'Pin'),
+      pinDisabled: disabled,
+    }),
     // Kept as an explicit override: plugin-ui's default resolves against the MOUNTED plugin's catalog, which
     // Triage does not declare, so dropping this would degrade to English rather than inherit a translation.
     secondaryActionAccessibilityLabel: text('plugins.triage.surface.row.moreActions', 'More actions for {title}', { title: row.title }),
@@ -418,7 +384,8 @@ function TriageListPeek(props: Readonly<{ item: TriageListItemV1 }>): React.Reac
           <Button
             // The same destination and words as the detail header's Open at the source.
             title={text('plugins.triage.surface.detail.openAtSource', 'Open at the source')}
-            variant="plain"
+            // A peer of Pin in the peek's one row of chips (lab `merged-list`): Open leads, the rest are equal.
+            variant="secondary"
             size="small"
             onPress={() => { void hostApi.openExternalLink(webUrl); }}
           />
@@ -477,6 +444,14 @@ export function readTriageAgentCellMarkV1(agent: Pick<TriageAgentStatusV1, 'tone
 
 const TRIAGE_CELL_STATE_STYLE_V1 = Object.freeze({ minWidth: 0, maxWidth: '100%' as const });
 const TRIAGE_CELL_STATE_WORD_STYLE_V1 = Object.freeze({ flexShrink: 1, minWidth: 0 });
+/** The designation never gives up width ("#2481" stays whole beside a wide reason chip). */
+const TRIAGE_CELL_KEEP_STYLE_V1 = Object.freeze({ flexShrink: 0 });
+/**
+ * The author takes only the width the place and designation leave (no basis of its own), so it is truncated
+ * first and gone before the place gives up a letter (lab `merged-list-phone`: "payments-api #2481 · Ma…").
+ * A shrink weight alone cannot promise that order: shrinking is shared in proportion to each part's width.
+ */
+const TRIAGE_CELL_TRAIL_STYLE_V1 = Object.freeze({ flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 });
 
 /**
  * Where an entry lives, in words: its scope when the designation is said beside the title, else the source's own
@@ -488,16 +463,58 @@ export function readTriageRowPlaceV1(
   return row.scopeDisplayName ?? (row.designation === null ? row.identifierLabel ?? row.scopeLabel : row.scopeLabel);
 }
 
-/** Where an entry lives, led by its source's own mark so GitHub, GitLab and Sentry rows tell apart at a glance. */
-function TriageRowWhere(props: Readonly<{ pluginId: string; label: string }>): React.ReactElement {
+/** The list byline's parts: the place, which truncates, and the designation after it ("#2481"), which does not. */
+export function readTriageRowBylinePartsV1(
+  row: Pick<TriageListDisplayRowV1, 'designation' | 'identifierLabel' | 'scopeLabel' | 'scopeDisplayName'>,
+): Readonly<{ place: string; designation: string | null }> {
+  return { place: readTriageRowPlaceV1(row), designation: row.designation };
+}
+
+/** The list byline's place with the designation after it ("payments-api #2481"), else the place alone. */
+export function readTriageRowBylinePlaceV1(
+  row: Pick<TriageListDisplayRowV1, 'designation' | 'identifierLabel' | 'scopeLabel' | 'scopeDisplayName'>,
+): string {
+  const { place, designation } = readTriageRowBylinePartsV1(row);
+  return designation === null ? place : `${place} ${designation}`;
+}
+
+/**
+ * Where an entry lives, led by its source's own mark so GitHub, GitLab and Sentry rows tell apart at a glance.
+ * `keep` (the designation) is said after the place and is the last thing a narrow row gives up; `trail` (who
+ * opened it) goes after it and gives way before it.
+ */
+function TriageRowWhere(props: Readonly<{ pluginId: string; label: string; keep?: string | null; trail?: string | null }>): React.ReactElement {
   return (
     <Row gap="xsmall" align="center" style={TRIAGE_CELL_STATE_STYLE_V1}>
       <BrandMark pluginId={props.pluginId} size="small" externallyLabelled />
       <Stack style={TRIAGE_CELL_STATE_WORD_STYLE_V1}>
         <Text variant="meta" tone="secondary" value={props.label} numberOfLines={1} />
       </Stack>
+      {props.keep == null ? null : (
+        <Stack style={TRIAGE_CELL_KEEP_STYLE_V1}>
+          <Text variant="meta" tone="secondary" value={props.keep} numberOfLines={1} />
+        </Stack>
+      )}
+      {props.trail == null ? null : (
+        <Stack style={TRIAGE_CELL_TRAIL_STYLE_V1}>
+          <Text variant="meta" tone="secondary" value={`· ${props.trail}`} numberOfLines={1} />
+        </Stack>
+      )}
     </Row>
   );
+}
+
+/**
+ * Whether a row says why it is here: a reason that is not only a summary, and not the one suggestion its group's
+ * line already says for every entry (`readTriageSharedGroupReasonsV1`). The column is drawn only while a row does.
+ */
+export function readTriageRowSaysReasonV1(
+  item: Pick<TriageListItemV1, 'row' | 'group'>,
+  sharedGroupReasons: ReadonlyMap<TriageListGroupIdV1, string>,
+): boolean {
+  const { row } = item;
+  if (row.detail === null || row.detailKind === 'summary') return false;
+  return !(row.detailKind === 'suggestion' && sharedGroupReasons.get(item.group) === row.detail);
 }
 
 /**
@@ -505,13 +522,24 @@ function TriageRowWhere(props: Readonly<{ pluginId: string; label: string }>): R
  * row's accessible NAME and only the entry; everything else a sighted reader takes from the row's surroundings is
  * its description, composed by the one announcement owner (`triageListRowItemProps`).
  */
-export function useTriageListAnatomyV1(input: Readonly<{ withSignal: boolean; withAgent?: boolean; organizing?: boolean }>): CollectionAnatomy<TriageListItemV1> {
+export function useTriageListAnatomyV1(input: Readonly<{
+  withSignal: boolean;
+  withAgent?: boolean;
+  /** Whether any row says why it is here (`readTriageRowSaysReasonV1`); otherwise the column is not drawn. */
+  withReason?: boolean;
+  organizing?: boolean;
+  /** Groups whose one shared suggestion their header already says (`readTriageSharedGroupReasonsV1`). */
+  sharedGroupReasons?: ReadonlyMap<TriageListGroupIdV1, string>;
+}>): CollectionAnatomy<TriageListItemV1> {
   const text = usePluginTranslation();
-  const surfaceContext = useSurfaceContext();
+  const { locale, targetedContributions } = useSurfaceContext();
+  // Row facts read only these serialized contributions and the locale. Other
+  // host-context pushes must not replace every row's anatomy and callbacks.
+  const contributionSnapshotJson = JSON.stringify(targetedContributions);
   // A column no listed entry fills is not drawn: an all-dash Agent column is noise, like an all-dash Signal one.
-  const { withSignal, withAgent = true, organizing = false } = input;
+  const { withSignal, withAgent = true, withReason = true, organizing = false, sharedGroupReasons = NO_SHARED_GROUP_REASONS } = input;
   return React.useMemo<CollectionAnatomy<TriageListItemV1>>(() => {
-    const descriptorOf = (item: TriageListItemV1) => readTriageSourceDescriptorV1(surfaceContext, item.row.entryRef.source);
+    const descriptorOf = (item: TriageListItemV1) => resolveTriageSourceDescriptorV1(targetedContributions, item.row.entryRef.source);
     return {
       wrapItem: (item, children) => {
         const { row, locator } = item;
@@ -551,7 +579,7 @@ export function useTriageListAnatomyV1(input: Readonly<{ withSignal: boolean; wi
       glyph: (item) => {
         const mark = readTriageRowMarkV1(
           item.row,
-          resolveTriageSourceWorkflowSubjectV1(surfaceContext.targetedContributions, item.row.entryRef),
+          resolveTriageSourceWorkflowSubjectV1(targetedContributions, item.row.entryRef),
         );
         return <Icon name={mark.name} size="small" tone={mark.tone} />;
       },
@@ -571,28 +599,40 @@ export function useTriageListAnatomyV1(input: Readonly<{ withSignal: boolean; wi
       // The table says the designation quietly after the title ("Retry … #2481") and Where is the place alone.
       titleSuffix: (item) => item.row.designation,
       where: (item) => <TriageRowWhere pluginId={item.row.entryRef.source.pluginId} label={readTriageRowPlaceV1(item.row)} />,
-      // The list has room for both, and for who opened it ("tidewater/payments-api #2481 · Mara Oduya").
+      // The list says the place with the designation, and who opened it ("payments-api #2481 · Mara Oduya"); the
+      // full source address stays in the peek and the detail.
       byline: (item) => {
         const { row } = item;
-        const where = row.designation === null ? readTriageRowPlaceV1(row) : `${row.scopeLabel} ${row.designation}`;
+        const { place, designation } = readTriageRowBylinePartsV1(row);
         return (
           <TriageRowWhere
             pluginId={row.entryRef.source.pluginId}
-            label={row.authorLabel === null ? where : `${where} · ${row.authorLabel}`}
+            label={place}
+            keep={designation}
+            trail={row.authorLabel}
           />
         );
       },
-      reason: (item) => {
+      ...(withReason ? { reason: (item: TriageListItemV1) => {
         const { row } = item;
-        if (row.detail === null || row.detailKind === 'summary') return null;
-        // One tone owner for the trailing detail: needs-you in the attention ink (blue stays for focus and links).
+        // The group's header already says the one suggestion all its rows share; the row does not repeat it.
+        if (row.detail === null || !readTriageRowSaysReasonV1(item, sharedGroupReasons)) return null;
+        // An attention reason is the detail header's chip, required or suggested (one owner for both places).
+        if (row.detailKind === 'attention' || row.detailKind === 'suggestion') {
+          return (
+            <TriageAttentionReasonChip
+              level={row.detailKind === 'attention' ? 'required' : 'suggested'}
+              label={row.detail}
+              icon={row.detailIcon}
+              testID={TRIAGE_ROW_REASON_TEST_ID_V1}
+            />
+          );
+        }
+        // A presence problem keeps its caution as a tinted chip; a neutral note stays plain words.
         const tone: TextTone = readTriageRowDetailToneV1(row) ?? 'secondary';
-        // The row's one loud fact is a tinted chip led by its reason's mark; a quiet note ("Waiting on Priya")
-        // stays plain words.
         if (tone === 'secondary') return <Text variant="meta" tone={tone} value={row.detail} numberOfLines={1} />;
-        const icon = row.detailIcon !== null && isHappierIconName(row.detailIcon) ? row.detailIcon : undefined;
-        return <Badge variant="tinted" tone={tone} value={row.detail} {...(icon === undefined ? {} : { icon })} />;
-      },
+        return <Badge variant="tinted" tone={tone} value={row.detail} />;
+      } } : {}),
       ...(withSignal ? {
         signal: (item: TriageListItemV1) => {
           if (item.signal === null) return null;
@@ -611,12 +651,12 @@ export function useTriageListAnatomyV1(input: Readonly<{ withSignal: boolean; wi
       } } : {}),
       age: (item) => (item.row.activityAtMs === null
         ? null
-        : formatTriageCompactAgeV1(surfaceContext.locale, item.row.activityAtMs, Date.now())),
+        : formatTriageCompactAgeV1(locale, item.row.activityAtMs, Date.now())),
       peek: (item) => <TriageListPeek item={item} />,
       accessibilityLabel: (item) => item.row.title,
       accessibilityHint: (item) => triageListRowItemProps(item.row, false, {
         nowMs: Date.now(),
-        locale: surfaceContext.locale,
+        locale,
         descriptor: descriptorOf(item),
         source: item.row.entryRef.source,
         text,
@@ -635,5 +675,5 @@ export function useTriageListAnatomyV1(input: Readonly<{ withSignal: boolean; wi
         age: text('plugins.triage.surface.column.age', 'Age'),
       },
     };
-  }, [organizing, surfaceContext, text, withAgent, withSignal]);
+  }, [contributionSnapshotJson, locale, organizing, sharedGroupReasons, text, withAgent, withReason, withSignal]);
 }

@@ -5,12 +5,14 @@ import { SessionIdSchema } from '../idsV1.js';
 import { PendingLocalIdSchema } from '../pending/pendingLocalId.js';
 import { PendingRequestedActionV1Schema } from '../pending/pendingRequestedActionV1.js';
 import {
-  SessionInputAdmissionResultV1Schema,
+  SessionInputEnqueueResultV1Schema,
   SessionInputRequestEqualityEvidenceV1Schema,
+  SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1,
 } from './sessionInputAdmission.js';
 import { SessionStoredMessageContentSchema } from './sessionStoredMessageContent.js';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
 import { ExternalActionMachineRpcExecutionV1Schema } from '../../actions/externalActionApi.js';
+import { SessionMessageReplyAdmissionV1Schema } from './sessionMessageReplyV1.js';
 
 export const SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1 =
   'session-pending-enqueue-by-machine-v1' as const;
@@ -26,6 +28,8 @@ export const SessionPendingEnqueueByMachineFieldsV1 = {
   content: SessionStoredMessageContentSchema,
   requestedAction: PendingRequestedActionV1Schema,
   requestEqualityEvidenceV1: z.optional(SessionInputRequestEqualityEvidenceV1Schema),
+  reply: z.optional(SessionMessageReplyAdmissionV1Schema),
+  ...SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1,
   /** Existing invocation authorization plus exact Machine-signed payload; never raw caller constraints. */
   externalAction: z.optional(z.lazy(() => ExternalActionMachineRpcExecutionV1Schema)),
 };
@@ -62,7 +66,7 @@ export type SessionPendingEnqueueByMachineRequestV1 = z.infer<
 
 export const SessionPendingEnqueueByMachineResponseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  result: SessionInputAdmissionResultV1Schema,
+  result: SessionInputEnqueueResultV1Schema,
 }));
 export type SessionPendingEnqueueByMachineResponseV1 = z.infer<
   typeof SessionPendingEnqueueByMachineResponseV1Schema

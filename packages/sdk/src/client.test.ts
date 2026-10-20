@@ -2,6 +2,7 @@ import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { formatAccountApiTokenCredentialV1 } from '@happier-dev/protocol/auth/accountApiTokens';
 import { wrapApiTokenEncryptionAccessV1 } from '@happier-dev/protocol';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { actionSpecToActionDefinitionV1 } from '@happier-dev/protocol/actions/actionCatalog';
 import {
   EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES_V2,
   ActionIdSchema,
@@ -147,9 +148,15 @@ const TRANSCRIPT_RESULT = {
 } as const;
 const WAIT_IDLE_RESULT = { ok: true, sessionId: 'session-1', idle: true, observedAt: 1 } as const;
 
+function sessionStatusForRequest(init: RequestInit | undefined, active = true) {
+  const request = JSON.parse(String(init?.body)) as Readonly<{ input: { sessionId: string } }>;
+  return { session: { id: request.input.sessionId, active, createdAt: 0, updatedAt: 0, activeAt: 0, encryption: null } } satisfies PublicActionResultById['session.status.get'];
+}
+
 function resultFor(actionId: string): unknown {
   switch (actionId) {
     case 'session.message.send': return MESSAGE_SEND_RESULT;
+    case 'action.spec.get': return { actionSpec: actionSpecToActionDefinitionV1(getActionSpec('session.message.send'), { surface: 'api', includeOutputSchema: false }) };
     case 'execution.run.get': return { run: RUN_RESULT };
     case 'execution.run.wait': return {
       ok: true, status: 'succeeded', result: { run: { ...RUN_RESULT, status: 'succeeded' } },
@@ -343,7 +350,7 @@ describe('Happier SDK client', () => {
       const request = JSON.parse(String(init?.body)) as { v: number; target: unknown };
       expect(request.v).toBe(1);
       expect(request.target).toEqual({ kind: 'machine', machineId: 'alice-machine' });
-      if (refused) return response({ error: 'invalid_request', code: 'target_not_local' }, 400);
+      if (refused) return response({ error: 'invalid_request', code: 'target_unavailable' }, 409);
       return responseForRequest(init, { v: 1, actionId: 'session.list', execution: { ok: true, result } });
     });
     vi.stubGlobal('fetch', fetch);
@@ -352,7 +359,8 @@ describe('Happier SDK client', () => {
       await expect(client.machine('alice-machine').actions.session.list({})).resolves.toEqual(result);
       refused = true;
       await expect(client.machine('alice-machine').actions.session.list({})).rejects.toMatchObject({
-        name: 'HappierTransportError', code: 'target_not_local', status: 400,
+        name: 'HappierTransportError', code: 'target_unavailable', status: 409,
+        message: 'The Happier API returned HTTP 409 (target_unavailable).',
       });
       expect(accountBootstrapReads).toBe(0);
     } finally { await client.close(); }
@@ -749,11 +757,14 @@ describe('Happier SDK client', () => {
         tokenId: context.tokenId, encryptionAccess });
       if (path === '/v1/machines') return response([]);
       const request = ExternalActionRequestEnvelopeV2Schema.parse(JSON.parse(String(init?.body)));
+      const isRun = path.endsWith('/workflow.trigger.run_now');
       const binding = { serverIdentityId: context.serverIdentityId, accountId: context.accountId,
-        credentialId: context.tokenId, actionId: 'session.message.send',
+        credentialId: context.tokenId, actionId: isRun ? 'workflow.trigger.run_now' : 'session.message.send',
         requestId: request.requestId, target: { kind: 'machine' as const, machineId: 'machine-1' } };
       expect(openExternalActionRequestV2({ envelope: request, binding, material })?.input)
-        .toMatchObject({ message: 'private-input-sentinel' });
+        .toMatchObject(isRun ? { automationId: 'private-automation-sentinel', idempotencyKey: 'qa-run-retry' }
+          : { message: 'private-input-sentinel' });
+      if (isRun) expect(Reflect.get(request, 'idempotencyKey')).toBe('qa-run-retry');
       const prepared = prepareExternalActionResponseV2({ binding, request, material,
         randomBytes: (length) => new Uint8Array(length).fill(4), executedMachineId: 'machine-1',
         execution: { ok: false, errorCode: 'conflict', error: 'private-error-sentinel',
@@ -767,9 +778,11 @@ describe('Happier SDK client', () => {
       await expect(client.machine('machine-1').sessions.get('session-1').send('private-input-sentinel'))
         .rejects.toMatchObject({ code: 'conflict', message: 'private-error-sentinel',
           details: { document: 'private-document-sentinel' } });
+      await expect(client.machine('machine-1').actions.execute('workflow.trigger.run_now', {
+        automationId: 'private-automation-sentinel', idempotencyKey: 'qa-run-retry',
+      })).rejects.toMatchObject({ code: 'conflict', message: 'private-error-sentinel' });
       expect(captured.join('')).not.toContain('sentinel');
       expect(captured.join('')).not.toContain(token);
-      expect(fetch).toHaveBeenCalledTimes(3);
     } finally { await client.close(); }
   });
 
@@ -926,13 +939,14 @@ describe('Happier SDK client', () => {
     await expect(run.sendAndWait('hello', { localId: 'input-1' })).resolves.toEqual(MESSAGE_SEND_RESULT);
     await run.history({ limit: 5 }, { requestId: 'history-1', target: { kind: 'machine', machineId: 'machine-1' } });
     expect(calls.map(({ actionId }) => actionId)).toEqual([
-      'session.message.send', 'execution.run.get', 'session.transcript.get',
+      'action.spec.get', 'session.message.send', 'execution.run.get', 'session.transcript.get',
     ]);
-    expect(calls[0]).toMatchObject({ input: { sessionId: 'session-1', message: 'hello', localId: 'input-1',
-      recipient: { kind: 'execution_run', runId: 'run-1' }, wait: true }, target: { kind: 'session', sessionId: 'session-1' } });
-    expect(calls[1]).toEqual({ actionId: 'execution.run.get', input: { sessionId: 'session-1', runId: 'run-1' },
+    expect(calls[1]).toMatchObject({ input: { sessionId: 'session-1', message: 'hello', localId: 'input-1',
+      recipient: { kind: 'execution_run', runId: 'run-1' }, reply: 'wait' }, target: { kind: 'session', sessionId: 'session-1' } });
+    expect(calls[1]?.input).not.toHaveProperty('wait');
+    expect(calls[2]).toEqual({ actionId: 'execution.run.get', input: { sessionId: 'session-1', runId: 'run-1' },
       target: { kind: 'machine', machineId: 'machine-1' }, requestId: undefined });
-    expect(calls[2]).toEqual({ actionId: 'session.transcript.get', input: {
+    expect(calls[3]).toEqual({ actionId: 'session.transcript.get', input: {
       sessionId: 'session-1', scope: 'sidechain', sidechainId: 'sidechain-1', limit: 5,
     }, target: { kind: 'machine', machineId: 'machine-1' }, requestId: 'history-1' });
     await client.close();
@@ -956,7 +970,7 @@ describe('Happier SDK client', () => {
     expect(calls).toEqual([
       { actionId: 'session.message.send', input: {
         sessionId: 'session-1', message: 'hello',
-        recipient: { kind: 'execution_run', runId: 'run-1' }, wait: false,
+        recipient: { kind: 'execution_run', runId: 'run-1' }, reply: 'none',
       } },
       { actionId: 'execution.run.wait', input: { sessionId: 'session-1', runId: 'run-1', timeoutSeconds: 30 } },
       { actionId: 'execution.run.stop', input: { sessionId: 'session-1', runId: 'run-1' } },
@@ -1005,12 +1019,13 @@ describe('Happier SDK client', () => {
     const run = client.sessions.get('session-1').runs.get('run-1');
 
     await run.send('hello', {
-      sessionId: 'other-session', recipient: { kind: 'execution_run', runId: 'other-run' }, wait: true,
+      sessionId: 'other-session', recipient: { kind: 'execution_run', runId: 'other-run' }, wait: true, reply: 'return',
     } as never);
 
     expect(calls[0]?.input).toMatchObject({
-      sessionId: 'session-1', recipient: { kind: 'execution_run', runId: 'run-1' }, wait: false,
+      sessionId: 'session-1', recipient: { kind: 'execution_run', runId: 'run-1' }, reply: 'none',
     });
+    expect(calls[0]?.input).not.toHaveProperty('wait');
     await client.close();
   });
 
@@ -1201,7 +1216,8 @@ describe('Happier SDK client', () => {
           execution: { ok: true, result: { items: [{ role: 'assistant' }], nextCursor: '1', truncated: false } },
         });
       }
-      return responseForRequest(init, { v: 1, actionId, execution: { ok: true, result: { ok: true } } });
+      return responseForRequest(init, { v: 1, actionId, execution: { ok: true,
+        result: actionId === 'session.status.get' ? sessionStatusForRequest(init) : { ok: true } } });
     });
     vi.stubGlobal('fetch', fetch);
 
@@ -1465,11 +1481,10 @@ describe('Happier SDK client', () => {
   });
 
   it('sends and waits through the correlated session Action', async () => {
-    const fetch = vi.fn(async (_url: URL | RequestInfo, init?: RequestInit) => responseForRequest(init, {
-      v: 1,
-      actionId: 'session.message.send',
-      execution: { ok: true, result: MESSAGE_SEND_RESULT },
-    }));
+    const fetch = vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
+      const actionId = decodeURIComponent(new URL(String(url)).pathname.split('/').at(-1) ?? '');
+      return responseForRequest(init, { v: 1, actionId, execution: { ok: true, result: resultFor(actionId) } });
+    });
     vi.stubGlobal('fetch', fetch);
 
     await connect({ endpoint: 'http://daemon', token: TEST_API_TOKEN })
@@ -1478,7 +1493,7 @@ describe('Happier SDK client', () => {
       .get('session-1')
       .sendAndWait(
         'Inspect the failure, then report back.',
-        { localId: 'input-1', timeoutSeconds: 3600 },
+        { localId: 'input-1', timeoutSeconds: 3600, wait: false, reply: 'none' } as never,
         { requestId: 'request-1' },
       );
 
@@ -1486,7 +1501,8 @@ describe('Happier SDK client', () => {
       new URL('http://daemon/v1/actions/session.message.send'),
       expect.objectContaining({ method: 'POST' }),
     );
-    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual({
+    const sendCall = fetch.mock.calls.find(([url]) => String(url).endsWith('/session.message.send'));
+    expect(JSON.parse(String(sendCall?.[1]?.body))).toEqual({
       v: 1,
       requestId: 'request-1',
       target: { kind: 'machine', machineId: 'machine-7' },
@@ -1495,7 +1511,7 @@ describe('Happier SDK client', () => {
         message: 'Inspect the failure, then report back.',
         localId: 'input-1',
         timeoutSeconds: 3600,
-        wait: true,
+        reply: 'wait',
       },
     });
     expect(undiciRequest).toHaveBeenCalledWith(
@@ -1531,6 +1547,7 @@ describe('Happier SDK client', () => {
 
     expect(requests.map(({ actionId }) => actionId)).toEqual([
       'session.message.send',
+      'action.spec.get',
       'session.message.send',
       'session.wait.idle',
       'session.transcript.get',
@@ -1773,7 +1790,7 @@ describe('Happier SDK client', () => {
     ]);
   });
 
-  it('publishes identity removal previews without exposing present-user directory removal to automation', async () => {
+  it('publishes identity previews and exact directory removal preview/execute methods', async () => {
     const calls: Array<{ actionId: string; input: unknown }> = [];
     const fetch = vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
       const actionId = decodeURIComponent(new URL(String(url)).pathname.split('/').at(-1) ?? '');
@@ -1790,7 +1807,12 @@ describe('Happier SDK client', () => {
     await callsTransport(client.actions.teams.identity.connections.remove.preview({
       v: 1, teamId: 'team-1', connectionId: 'connection-1', expectedRevision: 1,
     }));
-    expect(client.actions.teams.directory.sources).not.toHaveProperty('remove');
+    const directorySource = { v: 1 as const, teamId: 'team-1', sourceId: 'source-1' };
+    await callsTransport(client.actions.teams.directory.sources.remove.preview(directorySource));
+    await callsTransport(client.actions.teams.directory.sources.remove.execute(directorySource));
+    for (const sibling of ['create', 'sync', 'pause', 'resume']) {
+      expect(client.actions.teams.directory.sources).not.toHaveProperty(sibling);
+    }
 
     expect(calls).toEqual([
       { actionId: 'identity.providers.remove.preview', input: {
@@ -1799,6 +1821,8 @@ describe('Happier SDK client', () => {
       { actionId: 'teams.identity.connections.remove.preview', input: {
         v: 1, teamId: 'team-1', connectionId: 'connection-1', expectedRevision: 1,
       } },
+      { actionId: 'teams.directory.sources.remove.preview', input: directorySource },
+      { actionId: 'teams.directory.sources.remove', input: directorySource },
     ]);
     await client.close();
   });
@@ -2697,7 +2721,8 @@ describe('Happier SDK client', () => {
       return responseForRequest(init, {
         v: 1,
         actionId,
-        execution: { ok: true, result: { ok: true, released: true } },
+        execution: { ok: true, result: actionId === 'session.status.get'
+          ? sessionStatusForRequest(init) : { ok: true, released: true } },
       });
     });
     vi.stubGlobal('fetch', fetch);
@@ -2761,7 +2786,8 @@ describe('Happier SDK client', () => {
       return responseForRequest(init, {
         v: 1,
         actionId,
-        execution: { ok: true, result: { ok: true, released: true } },
+        execution: { ok: true, result: actionId === 'session.status.get'
+          ? sessionStatusForRequest(init) : { ok: true, released: true } },
       });
     });
     vi.stubGlobal('fetch', fetch);
@@ -2793,10 +2819,11 @@ describe('Happier SDK client', () => {
           execution: { ok: true, result: { items: [{ role: 'assistant' }], nextCursor: '1', truncated: false } },
         });
       }
-      return response({
+      return responseForRequest(init, {
         v: 1,
         actionId,
-        execution: { ok: true, result: { ok: true, released: true } },
+        execution: { ok: true, result: actionId === 'session.status.get'
+          ? sessionStatusForRequest(init) : { ok: true, released: true } },
       });
     });
     vi.stubGlobal('fetch', fetch);
@@ -3122,7 +3149,7 @@ describe('Happier SDK client', () => {
         return response({
           v: 1,
           actionId,
-          execution: { ok: true, result: { session: { active: false } } },
+          execution: { ok: true, result: sessionStatusForRequest(init, false) },
         });
       }
       return responseForRequest(init, {

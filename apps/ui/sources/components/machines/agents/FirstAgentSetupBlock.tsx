@@ -2,6 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { buildMachineAgentInventoryKey } from '@happier-dev/protocol/capabilities';
 
 import type { MachineAgent } from '@/agents/machineAgents/machineAgentTypes';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -41,7 +42,7 @@ export const FirstAgentSetupBlock = React.memo(function FirstAgentSetupBlock(pro
 }>) {
     const { theme } = useUnistyles();
     const [chosenId, setChosenId] = React.useState<string | null>(null);
-    const chosen = chosenId ? props.agents.find((agent) => agent.agentId === chosenId) ?? null : null;
+    const chosen = chosenId ? props.agents.find((agent) => buildMachineAgentInventoryKey(agent) === chosenId) ?? null : null;
     const { choices, more } = rankFirstAgentChoices(props.agents);
     return (
         <View testID={props.testID} style={styles.block}>
@@ -73,7 +74,7 @@ export const FirstAgentSetupBlock = React.memo(function FirstAgentSetupBlock(pro
                 <>
                     <CardGrid testID={`${props.testID}.choices`} columns={props.phone ? 1 : 3}>
                         {choices.map((agent, index) => (
-                            <SetupBlockPaper key={agent.agentId} testID={`${props.testID}.choice.${agent.agentId}`} layout={props.phone ? 'row' : 'card'}>
+                            <SetupBlockPaper key={buildMachineAgentInventoryKey(agent)} testID={`${props.testID}.choice.${buildMachineAgentInventoryKey(agent)}`} layout={props.phone ? 'row' : 'card'}>
                                 <View style={props.phone ? styles.choiceRowMark : styles.choiceMark}>{props.renderMark(agent)}</View>
                                 <View style={props.phone ? styles.choiceRowText : null}>
                                     <Text style={styles.choiceTitle}>{agent.title}</Text>
@@ -81,11 +82,11 @@ export const FirstAgentSetupBlock = React.memo(function FirstAgentSetupBlock(pro
                                 </View>
                                 <View style={props.phone ? null : styles.choiceFoot}>
                                     <RoundButton
-                                        testID={`${props.testID}.choice.${agent.agentId}.setUp`}
+                                        testID={`${props.testID}.choice.${buildMachineAgentInventoryKey(agent)}.setUp`}
                                         size="small"
                                         display={index === 0 ? 'default' : 'secondary'}
                                         title={t('machineAgents.setUp')}
-                                        onPress={() => setChosenId(agent.agentId)}
+                                        onPress={() => setChosenId(buildMachineAgentInventoryKey(agent))}
                                     />
                                 </View>
                             </SetupBlockPaper>

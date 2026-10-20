@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestSessionTranscriptSource, pressTestInstanceAsync, renderWithSessionTranscriptSource, renderScreen, renderHook, wrapWithSessionTranscriptSource, standardCleanup } from '@/dev/testkit';
+import type { RenderWithAppProvidersOptions } from '@/dev/testkit';
 import { markPendingNavigationTranscriptReady, markSessionPendingAnswer, setPendingNavigationLanding, usePendingNavigationLanding } from '@/activity/source/pendingNavigationRuntime';
 import { installPermissionShellCommonModuleMocks } from './permissionShellTestHelpers';
 import { AgentStateSchema } from '@happier-dev/session-core/state';
@@ -12,7 +13,7 @@ const nativeFocusBoundary = vi.hoisted(() => ({
     setAccessibilityFocus: vi.fn(),
 }));
 
-function hasHostTestId(element: React.ReactElement, testID: string): boolean {
+function hasHostTestId(element: Parameters<NonNullable<RenderWithAppProvidersOptions['createNodeMock']>>[0], testID: string): boolean {
     if (React.isValidElement<{ testID?: string }>(element)) return element.props.testID === testID;
     // react-test-renderer may pass a plain native host descriptor to createNodeMock.
     const props: unknown = element.props;

@@ -196,7 +196,8 @@ function createWorkMapStyles(theme: HappierWorkTheme, density: HappierWorkMapDen
     // The mark column is at least one mark wide; a leading that also carries the step's ordinal chip
     // (a Run's map, numbered as the editor numbers it) widens it instead of running into the title.
     mark: { minWidth: g.mark, height: g.mark, alignItems: 'center', justifyContent: 'center' },
-    glyph: { width: 18, alignItems: 'center', justifyContent: 'center' },
+    // A frame caption's glyph slot widens the same way when the ordinal leads it (a Run's group step).
+    glyph: { minWidth: 18, alignItems: 'center', justifyContent: 'center' },
     copy: { flex: 1, minWidth: 0 },
     rowWrap: { flexWrap: 'wrap', alignContent: 'center' },
     subtitle: { marginTop: 1 },

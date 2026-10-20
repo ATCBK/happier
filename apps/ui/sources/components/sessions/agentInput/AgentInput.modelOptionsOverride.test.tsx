@@ -1,7 +1,8 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { findTestInstanceByTypeContainingText, pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
+import { createSessionFixture, findTestInstanceByTypeContainingText, pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
+import { buildAgentUniverseBackendTargetKey } from '@/agents/catalog/agentUniverse';
 import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
 import { createReducer } from "@happier-dev/session-core/reducer";
 import { settingsDefaults, type Settings } from '@/sync/domains/settings/settings';
@@ -18,12 +19,15 @@ let mockAgentInputActionBarLayout: 'wrap' | 'collapsed' = 'wrap';
 let mockWindowWidth = 800;
 const storageSettings: Settings = {
     ...settingsDefaults,
-    profiles: [],
     agentInputEnterToSend: true,
     agentInputActionBarLayout: 'wrap',
     agentInputChipDensity: 'labels',
     sessionPermissionModeApplyTiming: 'immediate',
 };
+const codexSessionMetadata = createSessionFixture({
+    metadata: { path: '/tmp', host: 'test-host', flavor: 'codex' },
+}).metadata!;
+const codexAgentTargetKey = buildAgentUniverseBackendTargetKey('codex');
 
 installAgentInputCommonModuleMocks({
     reactNative: async () => {
@@ -144,36 +148,6 @@ vi.mock('@/agents/catalog/catalog', async (importOriginal) => ({
     getAgentIconTintColor: () => null,
 }));
 
-vi.mock('@/sync/domains/models/describeEffectiveModelMode', () => ({
-    describeEffectiveModelMode: (params: {
-        agentType?: string | null;
-        selectedModelId?: string | null;
-        metadata?: {
-            sessionAppliedModelV1?: {
-                provider?: string;
-                modelId?: string;
-            };
-        } | null;
-    }) => {
-        const selectedModelId = params.selectedModelId?.trim() || 'default';
-        const appliedModel = params.metadata?.sessionAppliedModelV1;
-        return {
-            selectedModelId,
-            appliedModelId: appliedModel?.provider === params.agentType
-                ? appliedModel?.modelId?.trim() || null
-                : null,
-            effectiveModelId: selectedModelId,
-            applyScope: 'spawn_only',
-            notes: [],
-        };
-    },
-}));
-
-
-vi.mock('@/sync/domains/permissions/describeEffectivePermissionMode', () => ({
-    describeEffectivePermissionMode: () => ({ effectiveMode: 'default', notes: [] }),
-}));
-
 vi.mock('@/components/ui/forms/MultiTextInput', () => ({
     MultiTextInput: (props: Record<string, unknown>) => React.createElement('MultiTextInput', props, null),
 }));
@@ -284,14 +258,6 @@ vi.mock('@/hooks/ui/useKeyboardHeight', () => ({
     useKeyboardHeight: () => 0,
 }));
 
-
-vi.mock('@/sync/domains/sessionControl/configOptionsControl', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/domains/sessionControl/configOptionsControl')>();
-    return {
-        ...actual,
-        computeAcpConfigOptionControls: () => null,
-    };
-});
 
 vi.mock('./components/PermissionModePicker', () => ({
     PermissionModePicker: () => null,
@@ -460,7 +426,7 @@ describe('AgentInput (modelOptionsOverride)', () => {
         lastOptionPickerOverlayProps = null;
 
         const metadata = {
-            flavor: null,
+            ...codexSessionMetadata,
             acpSessionModelsV1: {
                 v: 1,
                 agentId: 'codex',
@@ -496,7 +462,7 @@ describe('AgentInput (modelOptionsOverride)', () => {
         lastOptionPickerOverlayProps = null;
 
         const metadata = {
-            flavor: null,
+            ...codexSessionMetadata,
             sessionModelsV1: {
                 v: 1,
                 agentId: 'codex',
@@ -532,7 +498,7 @@ describe('AgentInput (modelOptionsOverride)', () => {
         lastOptionPickerOverlayProps = null;
 
         const metadataLoading = {
-            flavor: null,
+            ...codexSessionMetadata,
             acpSessionModelsV1: {
                 v: 1,
                 agentId: 'codex',
@@ -571,7 +537,7 @@ describe('AgentInput (modelOptionsOverride)', () => {
         expect(lastOptionPickerOverlayProps?.probe).toBeUndefined();
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 React.createElement(AgentInput, {
                     value: 'hello',
                     placeholder: 'placeholder',
@@ -598,7 +564,7 @@ describe('AgentInput (modelOptionsOverride)', () => {
         lastOptionPickerOverlayProps = null;
 
         const metadataLoaded = {
-            flavor: null,
+            ...codexSessionMetadata,
             acpSessionModelsV1: {
                 v: 1,
                 agentId: 'codex',
@@ -638,7 +604,7 @@ describe('AgentInput (modelOptionsOverride)', () => {
         expect(lastOptionPickerOverlayProps?.probe).toBeUndefined();
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 React.createElement(AgentInput, {
                     value: 'hello',
                     placeholder: 'placeholder',
@@ -1136,6 +1102,37 @@ describe('AgentInput (modelOptionsOverride)', () => {
         expect(screen.findByTestId('agent-input-chip-picker.option:engine:claude')).toBeTruthy();
     });
 
+    it('opens on the running Agent, not on a row a caller leads the rail with', async () => {
+        const { buildRolesRailPickerOption } = await import('@/components/roles/rail/buildRolesRailPickerOption');
+        const screen = await renderScreen(React.createElement(AgentInput, {
+            value: 'hello',
+            placeholder: 'placeholder',
+            onChangeText: () => {},
+            onSend: () => {},
+            autocompleteKinds: [],
+            autocompleteSuggestions: async () => [],
+            agentType: 'claude',
+            permissionMode: 'default',
+            onPermissionModeChange: () => {},
+            modelMode: 'default',
+            onModelModeChange: () => {},
+            agentPickerTitle: 'Select engine',
+            // A running session has nothing armed, so it names no selected row of its own.
+            composeAgentPickerOptions: (currentAgentOptions: ReadonlyArray<{ id: string }>) => [
+                buildRolesRailPickerOption({ value: null, onChange: () => {}, roles: [] }),
+                ...currentAgentOptions,
+            ],
+        } as any));
+
+        await screen.pressByTestIdAsync('agent-input-agent-chip');
+
+        // The chip names the running model, so the popover opens on that Agent's model cards.
+        expect(screen.findByTestId('agent-input-chip-picker.option:engine:claude')?.props.accessibilityState)
+            .toEqual(expect.objectContaining({ selected: true }));
+        expect(screen.findByTestId('agent-input-chip-picker.option:roles')?.props.accessibilityState)
+            .toEqual(expect.objectContaining({ selected: false }));
+    });
+
     it('offers the Roles rail as a controlled value ahead of the Agent rows', async () => {
         const { buildRolesRailPickerOption } = await import('@/components/roles/rail/buildRolesRailPickerOption');
         const onChange = vi.fn();
@@ -1345,6 +1342,7 @@ describe('AgentInput (modelOptionsOverride)', () => {
                     onModelModeChange: () => {},
                     onAgentClick,
                     metadata: {
+                        ...codexSessionMetadata,
                         sessionModelsV1: {
                             v: 1,
                             updatedAt: 1,
@@ -1381,6 +1379,7 @@ describe('AgentInput (modelOptionsOverride)', () => {
                     modelMode: 'default',
                     onModelModeChange,
                     metadata: {
+                        ...codexSessionMetadata,
                         sessionModelsV1: {
                             v: 1,
                             updatedAt: 1,
@@ -1403,8 +1402,9 @@ describe('AgentInput (modelOptionsOverride)', () => {
         expect(screen.findByTestId('agent-input-chip-picker-popover')).toBeTruthy();
         expect(screen.findByTestId('agent-input-chip-picker.option:engine:codex')).toBeTruthy();
         expect(lastPopoverProps?.anchorRef).toBe(agentChip.props.ref);
-        // The live engine detail picker uses the wider rail layout in this branch.
-        expect(lastPopoverProps?.maxWidthCap).toBe(720);
+        // With the rail shown the engine picker may span the composer column; without it, 570 (below).
+        const { layout } = await import('@/components/ui/layout/layout');
+        expect(lastPopoverProps?.maxWidthCap).toBe(layout.maxWidth);
         expect((lastOptionPickerOverlayProps?.options ?? []).map((o: any) => o.value)).toEqual(['default', 'session-model']);
 
         await act(async () => {
@@ -1426,6 +1426,7 @@ describe('AgentInput (modelOptionsOverride)', () => {
             autocompleteSuggestions: async () => [],
             agentType: 'codex',
             metadata: {
+                ...codexSessionMetadata,
                 sessionModelsV1: {
                     v: 1,
                     agentId: 'codex',
@@ -1439,7 +1440,7 @@ describe('AgentInput (modelOptionsOverride)', () => {
                     updatedAt: 11,
                     modelId: 'session-model',
                     selection: {
-                        agentTargetKey: 'backend:codex',
+                        agentTargetKey: codexAgentTargetKey,
                         providerConnectionId: null,
                         modelId: 'session-model',
                     },
@@ -1479,6 +1480,7 @@ describe('AgentInput (modelOptionsOverride)', () => {
             autocompleteSuggestions: async () => [],
             agentType: 'codex',
             metadata: {
+                ...codexSessionMetadata,
                 sessionModelsV1: {
                     v: 1,
                     agentId: 'codex',
@@ -1495,7 +1497,7 @@ describe('AgentInput (modelOptionsOverride)', () => {
                     updatedAt: 11,
                     modelId: 'applied-model',
                     selection: {
-                        agentTargetKey: 'backend:codex',
+                        agentTargetKey: codexAgentTargetKey,
                         providerConnectionId: null,
                         modelId: 'applied-model',
                     },
@@ -1535,6 +1537,7 @@ describe('AgentInput (modelOptionsOverride)', () => {
                     modelMode: 'session-model',
                     onModelModeChange: () => {},
                     metadata: {
+                        ...codexSessionMetadata,
                         sessionModelsV1: {
                             v: 1,
                             updatedAt: 1,
@@ -1717,6 +1720,7 @@ describe('AgentInput (modelOptionsOverride)', () => {
                         modelMode: 'session-model',
                         onModelModeChange: () => {},
                         metadata: {
+                            ...codexSessionMetadata,
                             sessionModelsV1: {
                                 v: 1,
                                 updatedAt: 1,

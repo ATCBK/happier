@@ -183,4 +183,10 @@ describe('buildCodeLinesFromUnifiedDiff', () => {
         const lines = buildCodeLinesFromUnifiedDiff({ unifiedDiff: diff, hideFilePrelude: true });
         expect(lines.some((l) => (l.renderCodeText ?? '').startsWith('diff --git'))).toBe(true);
     });
+    it('draws no row for the newline that ends the diff text', () => {
+        const diff = '@@ -0,0 +1,2 @@\n+export const a = 1;\n+\n';
+        const lines = buildCodeLinesFromUnifiedDiff({ unifiedDiff: diff });
+        // The header, the code line and the added blank line; the terminating newline is not a line.
+        expect(lines.map((l) => l.kind)).toEqual(['header', 'add', 'add']);
+    });
 });

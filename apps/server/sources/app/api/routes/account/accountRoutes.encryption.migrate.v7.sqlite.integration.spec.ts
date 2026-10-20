@@ -45,6 +45,7 @@ import { PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1, DEFAULT_PROVIDER_CONNECTIONS_CA
     ProviderConnectionsCatalogV1Schema, openProviderConnectionsContentV1, sealProviderConnectionsContentV1,
     type ProviderConnectionsMigrationContentV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
+import { NotificationChannelCatalogRecordV1Schema } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { buildProfilePhysicalKey, PROFILE_REFERENCE_GUARD_ACCOUNT_KV_KEY, PROFILE_TRANSFER_ACCOUNT_KV_KEY } from '@/app/kv/accountScopedKv';
 
 import { enableErrorHandlers } from "@/app/api/utils/enableErrorHandlers";
@@ -71,6 +72,13 @@ import { prepareArtifactBlobWrite, completeArtifactBlobCandidateCustodyInTx, ope
 import { stageArtifactBlobAccountEncryptionConversion } from '@/app/artifacts/artifactEncryptionConversionBlobService';
 import { registerAccountEncryptionMigrateRoutes } from "./registerAccountEncryptionMigrateRoutes";
 import { updateAccountEncryptionMode } from './updateAccountEncryptionMode';
+import { buildSessionFollowRulePhysicalKeyV1, SessionFollowRuleDefinitionV1Schema, SessionFollowRuleStoredRowV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
+import { sealSessionFollowRuleContentV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleContentCodecV1';
+import { SESSION_FOLLOW_ZERO_FRONTIER_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
+import { setAccountFollowRule } from '@/app/session/follow/accountFollowRuleService';
+import { DiscussionAccountEncryptionInventoryV1Schema } from '@happier-dev/protocol/discussions/accountEncryptionMigration';
+import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
+import { getDiscussion } from '@/app/discussions/queries';
 
 const SESSION_OWNER_MATERIAL = {
     type: "legacy",
@@ -421,6 +429,88 @@ describe("account encryption migration .7 SQLite matrix", () => {
 
     afterAll(async () => {
         await harness.close();
+    });
+
+    it('converts retained Discussions atomically in both directions and rejoins exact replay without changing grants or history', async () => {
+        harness.resetEnv({ HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional', HAPPIER_FEATURE_ENCRYPTION__ALLOW_ACCOUNT_OPTOUT: '1' });
+        const signing = tweetnacl.sign.keyPair();
+        const binding = createSignedContentKeyBinding(signing.secretKey);
+        const owner = await db.account.create({ data: { encryptionMode: 'plain', publicKey: privacyKit.encodeHex(new Uint8Array(signing.publicKey)),
+            contentPublicKey: privacyKit.decodeBase64(binding.contentPublicKey), contentPublicKeySig: privacyKit.decodeBase64(binding.contentPublicKeySig) } });
+        const recipientBinding = createSignedAccountContentBinding();
+        const recipient = await db.account.create({ data: { encryptionMode: 'e2ee', ...recipientBinding } });
+        const title = { t: 'plain' as const, v: { v: 1, title: 'Retained Discussion' } };
+        const content = { t: 'plain' as const, v: { v: 1, parts: [{ t: 'text', text: 'Retained answer' }] } };
+        const row = await db.discussion.create({ data: { ownerAccountId: owner.id, createdByAccountId: owner.id,
+            creationLocalId: randomUUID(), creationEqualityEvidenceV1: { kind: 'plainDigest', digest: 'A'.repeat(43) },
+            encryptionMode: 'plain', dataEncryptionKey: privacyKit.decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER), titleContent: title,
+            archivedAt: new Date(), lastMessageAt: new Date(), messageSeq: 1,
+            messages: { create: { localId: randomUUID(), seq: 1, authorAccountId: owner.id, content,
+                requestEqualityEvidenceV1: { kind: 'plainDigest', digest: 'B'.repeat(43) } } },
+            accountGrants: { create: { accountId: recipient.id, accessLevel: 'view', createdByAccountId: owner.id } } }, include: { messages: true } });
+        const app = createTestApp();
+        const headers = { 'x-test-user-id': owner.id, ...currentCompatibilityHeaders() };
+        const encryptedKey = privacyKit.encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey: new Uint8Array(32).fill(7),
+            recipientPublicKey: privacyKit.decodeBase64(binding.contentPublicKey), randomBytes: length => new Uint8Array(length).fill(9) }));
+        const recipientKey = privacyKit.encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey: new Uint8Array(32).fill(7),
+            recipientPublicKey: recipientBinding.contentPublicKey, randomBytes: length => new Uint8Array(length).fill(8) }));
+        try {
+            for (const toMode of ['e2ee', 'plain'] as const) {
+                const inventoryResponse = await app.inject({ method: 'GET', url: '/v1/account/encryption/migrate/discussions/inventory', headers });
+                expect(inventoryResponse.statusCode, inventoryResponse.body).toBe(200);
+                const inventory = DiscussionAccountEncryptionInventoryV1Schema.parse(inventoryResponse.json());
+                expect(inventory.items.map(item => item.discussionId)).toEqual([row.id]);
+                const source = inventory.items[0]!;
+                const current = await db.account.findUniqueOrThrow({ where: { id: owner.id } });
+                const fingerprints = deriveAccountEncryptionMigrationKeyFingerprints(current);
+                const request = { toMode, expectedAccountVersion: current.seq,
+                    expectedSigningKeyFingerprint: fingerprints.signingKeyFingerprint, expectedContentKeyFingerprint: fingerprints.contentKeyFingerprint,
+                    expectedSettingsVersion: current.settingsVersion, settingsContent: null,
+                    connectedServices: { action: 'assert_empty' as const }, automations: { action: 'assert_empty' as const },
+                    machines: { action: 'assert_empty' as const }, todos: { action: 'assert_empty' as const }, artifacts: { action: 'assert_empty' as const },
+                    sessions: { action: 'assert_empty' as const }, ...EMPTY_AMENDMENT9_DIRECTIVES,
+                    discussions: { items: [{ discussionId: row.id, expectedDataEncryptionKey: source.dataEncryptionKey,
+                        expectedTitleContent: source.titleContent, titleContent: toMode === 'plain' ? title : { t: 'encrypted' as const, c: 'sealed-title' },
+                        dataEncryptionKey: toMode === 'plain' ? ARTIFACT_PLAIN_DATA_KEY_MARKER : encryptedKey,
+                        messages: source.messages.map(message => ({ id: message.id, expectedContent: message.content,
+                            content: toMode === 'plain' ? content : { t: 'encrypted' as const, c: 'sealed-message' } })),
+                        recipientKeyEnvelopes: toMode === 'plain' ? [] : [{ recipientAccountId: recipient.id, encryptedDataKey: recipientKey,
+                            recipientContentPublicKeyFingerprint: source.recipients.recipients.find(item => item.recipientAccountId === recipient.id)!.contentPublicKeyFingerprint! }] }] } };
+                const payload = toMode === 'e2ee' ? signPlainToE2eeRequest({ accountId: owner.id, signingSecretKey: signing.secretKey,
+                    request: { ...request, keyProof: { v: 1, publicKey: privacyKit.encodeBase64(new Uint8Array(signing.publicKey)), ...binding } } }) : request;
+                const options = { method: 'POST' as const, url: '/v1/account/encryption/migrate', headers, payload };
+                if (toMode === 'e2ee') {
+                    const item = request.discussions.items[0]!;
+                    for (const discussions of [undefined, { items: [{ ...item, messages: [] }] },
+                        { items: [{ ...item, recipientKeyEnvelopes: [] }] },
+                        { items: [{ ...item, expectedTitleContent: { t: 'plain' as const, v: { v: 1, title: 'Stale source' } } }] }]) {
+                        const { discussions: _completeCensus, ...withoutDiscussions } = request;
+                        const invalid = signPlainToE2eeRequest({ accountId: owner.id, signingSecretKey: signing.secretKey,
+                            request: { ...withoutDiscussions, ...(discussions ? { discussions } : {}),
+                                keyProof: { v: 1, publicKey: privacyKit.encodeBase64(new Uint8Array(signing.publicKey)), ...binding } } });
+                        const refused = await app.inject({ ...options, payload: invalid });
+                        expect(refused.statusCode, refused.body).toBe(400);
+                        expect(await db.account.findUniqueOrThrow({ where: { id: owner.id } })).toMatchObject({ encryptionMode: 'plain' });
+                        expect(await db.discussion.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({ encryptionMode: 'plain', titleContent: title });
+                    }
+                }
+                const response = await app.inject(options);
+                expect(response.statusCode, response.body).toBe(200);
+                const committed = await db.discussion.findUniqueOrThrow({ where: { id: row.id }, include: { messages: true, accountGrants: true, keyEnvelopes: true } });
+                expect(committed).toMatchObject({ encryptionMode: toMode, messageSeq: row.messageSeq, archivedAt: row.archivedAt,
+                    creationEqualityEvidenceV1: row.creationEqualityEvidenceV1, messages: [expect.objectContaining({ id: row.messages[0]!.id,
+                        seq: 1, localId: row.messages[0]!.localId, requestEqualityEvidenceV1: row.messages[0]!.requestEqualityEvidenceV1 })],
+                    accountGrants: [expect.objectContaining({ accountId: recipient.id, accessLevel: 'view' })] });
+                expect(committed.keyEnvelopes).toHaveLength(toMode === 'e2ee' ? 1 : 0);
+                const accessed = await getDiscussion({ discussionId: row.id, actorAccountId: recipient.id,
+                    authentication: createPresentUserSessionAccessAuthentication() });
+                expect(accessed).toMatchObject({ ok: true, value: { discussion: { encryptionMode: toMode, keyReadiness: true } } });
+                const changes = await db.accountChange.count();
+                const replay = await app.inject(options);
+                expect(replay.statusCode, replay.body).toBe(200);
+                expect(await db.accountChange.count()).toBe(changes);
+            }
+        } finally { await app.close(); }
     });
 
     it.each(['text', 'binary'] as const)("preserves retained Artifact %s bodies through plain to E2EE to plain transitions and exact replay", async kind => {
@@ -855,6 +945,113 @@ describe("account encryption migration .7 SQLite matrix", () => {
         } finally { await app.close(); }
     });
 
+    it.each([
+        { fromMode: 'plain', receiverKind: 'account' },
+        { fromMode: 'e2ee', receiverKind: 'account' },
+        { fromMode: 'plain', receiverKind: 'session' },
+        { fromMode: 'e2ee', receiverKind: 'session' },
+    ] as const)('converts private Follow rules atomically with complete census and exact replay ($fromMode source, $receiverKind receiver)', async ({ fromMode, receiverKind }) => {
+        harness.resetEnv({ HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional', HAPPIER_FEATURE_ENCRYPTION__ALLOW_ACCOUNT_OPTOUT: '1', HAPPIER_FEATURE_ENCRYPTION__PLAIN_ACCOUNT_SETTINGS_AT_REST: 'none' });
+        const signing = tweetnacl.sign.keyPair();
+        const binding = createSignedContentKeyBinding(signing.secretKey);
+        const account = await db.account.create({ data: { publicKey: privacyKit.encodeHex(new Uint8Array(signing.publicKey)),
+            contentPublicKey: privacyKit.decodeBase64(binding.contentPublicKey), contentPublicKeySig: privacyKit.decodeBase64(binding.contentPublicKeySig),
+            encryptionMode: fromMode, settings: null } });
+        const toMode = fromMode === 'plain' ? 'e2ee' as const : 'plain' as const;
+        const definition = SessionFollowRuleDefinitionV1Schema.parse({ v: 1, enabled: true, policy: { preset: 'important' },
+            filter: { show: 'both', startedBy: ['you'], scope: 'all_accessible', attention: 'any', homeServerIds: ['home'], audiences: [], tagIds: [], source: 'all' } });
+        // Private definitions remain retained after their receiver is deleted;
+        // the Account conversion must still preserve this exact bound identity.
+        const receiver = receiverKind === 'account' ? { kind: 'account' as const }
+            : { kind: 'session' as const, sessionId: randomUUID() };
+        const content = (mode: 'plain' | 'e2ee') => sealSessionFollowRuleContentV1({ ruleId: 'rule-a', receiver, definition, mode,
+            material: mode === 'plain' ? null : SESSION_OWNER_MATERIAL, randomBytes: length => new Uint8Array(length).fill(27) });
+        const key = buildSessionFollowRulePhysicalKeyV1('rule-a');
+        const originalSources = [{ sourceSessionId: 'source', delivered: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 3 } }];
+        const inception = { createdAt: 50, accountChangeCursor: 0 };
+        await db.userKVStore.create({ data: { accountId: account.id, key, version: 9,
+            value: new TextEncoder().encode(JSON.stringify({ version: 4, receiver, content: content(fromMode), inception, sources: originalSources })) } });
+        const deletedKey = buildSessionFollowRulePhysicalKeyV1('deleted');
+        await db.userKVStore.create({ data: { accountId: account.id, key: deletedKey, version: 7, value: null } });
+        const fingerprints = deriveAccountEncryptionMigrationKeyFingerprints(account);
+        const base = { toMode, expectedAccountVersion: account.seq, expectedSigningKeyFingerprint: fingerprints.signingKeyFingerprint,
+            expectedContentKeyFingerprint: fingerprints.contentKeyFingerprint, expectedSettingsVersion: 0, settingsContent: null,
+            connectedServices: { action: 'assert_empty' as const }, automations: { action: 'assert_empty' as const }, machines: { action: 'assert_empty' as const },
+            todos: { action: 'assert_empty' as const }, artifacts: { action: 'assert_empty' as const }, sessions: { action: 'assert_empty' as const }, ...EMPTY_AMENDMENT9_DIRECTIVES };
+        const buildRequest = (sessionFollowRules?: { items: { ruleId: string; receiver: typeof receiver; expectedVersion: number; content: ReturnType<typeof content> }[] }) => {
+            const request = { ...base, ...(sessionFollowRules ? { sessionFollowRules } : {}) };
+            return toMode === 'e2ee' ? signPlainToE2eeRequest({ accountId: account.id, signingSecretKey: signing.secretKey,
+                request: { ...request, keyProof: { v: 1, publicKey: privacyKit.encodeBase64(new Uint8Array(signing.publicKey)), ...binding } } }) : request;
+        };
+        const app = createTestApp();
+        const options = { method: 'POST' as const, url: '/v1/account/encryption/migrate', headers: { 'x-test-user-id': account.id, ...currentCompatibilityHeaders() } };
+        const before = await db.userKVStore.findMany({ where: { accountId: account.id } });
+        try {
+            // The compatibility PATCH cannot strand a nonempty private rule domain.
+            if (fromMode === 'e2ee') {
+                expect(await updateAccountEncryptionMode({ accountId: account.id, mode: 'plain' })).toEqual({ status: 'migration_required' });
+            }
+            for (const directive of [undefined, { items: [] }, { items: [{ ruleId: 'rule-a', receiver, expectedVersion: 3, content: content(toMode) }] }]) {
+                const refused = await app.inject({ ...options, payload: buildRequest(directive) });
+                expect(refused.statusCode, refused.body).toBe(400);
+                expect(await db.account.findUniqueOrThrow({ where: { id: account.id } })).toEqual(account);
+                expect(await db.userKVStore.findMany({ where: { accountId: account.id } })).toEqual(before);
+            }
+            const payload = buildRequest({ items: [{ ruleId: 'rule-a', receiver, expectedVersion: 4, content: content(toMode) }] });
+            const trigger = `follow_before_mode_${randomUUID().replaceAll('-', '')}`;
+            await db.$executeRawUnsafe(`CREATE TRIGGER "${trigger}" BEFORE UPDATE OF "encryptionMode" ON "Account"
+                FOR EACH ROW WHEN OLD."id" = ${sqliteString(account.id)} AND NEW."encryptionMode" = ${sqliteString(toMode)}
+                AND (SELECT COUNT(*) FROM "UserKVStore" WHERE "accountId" = ${sqliteString(account.id)}
+                    AND "key" = ${sqliteString(key)} AND "version" = 10) = 1
+                BEGIN SELECT RAISE(ABORT, 'intentional Follow final mode failure'); END`);
+            try {
+                const refused = await app.inject({ ...options, payload });
+                expect(refused.statusCode, refused.body).toBe(500);
+                expect(await db.account.findUniqueOrThrow({ where: { id: account.id } })).toEqual(account);
+                expect(await db.userKVStore.findMany({ where: { accountId: account.id } })).toEqual(before);
+            } finally { await db.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${trigger}"`); }
+            const response = await app.inject({ ...options, payload });
+            expect(response.statusCode, response.body).toBe(200);
+            expect(response.json().sessionFollowRules).toEqual({ rules: [{ ruleId: 'rule-a', receiver, version: 5,
+                content: content(toMode), inception, sources: originalSources }] });
+            expect(await db.userKVStore.findUniqueOrThrow({ where: { accountId_key: { accountId: account.id, key: deletedKey } } })).toMatchObject({ value: null, version: 7 });
+            const committed = await db.userKVStore.findMany({ where: { accountId: account.id } });
+            const changes = await db.accountChange.findMany({ where: { accountId: account.id } });
+            const replay = await app.inject({ ...options, payload });
+            expect([replay.statusCode, replay.json()]).toEqual([200, response.json()]);
+            expect(await db.userKVStore.findMany({ where: { accountId: account.id } })).toEqual(committed);
+            expect(await db.accountChange.findMany({ where: { accountId: account.id } })).toEqual(changes);
+            const committedRule = committed.find(row => row.key === key);
+            if (!committedRule?.value) throw new Error('Expected committed private rule');
+            const stored = SessionFollowRuleStoredRowV1Schema.parse(JSON.parse(new TextDecoder().decode(committedRule.value)));
+            expect(stored.sources).toEqual(originalSources);
+            expect(stored.inception).toEqual(inception);
+            const progressed = { ...stored, sources: [{ sourceSessionId: 'source', delivered: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 5 } }] };
+            // Actual database CAS models the progress owner's independent, content-free write.
+            expect(await db.userKVStore.updateMany({ where: { accountId: account.id, key, version: committedRule.version },
+                data: { version: { increment: 1 }, value: new TextEncoder().encode(JSON.stringify(progressed)) } })).toEqual({ count: 1 });
+            const afterProgress = await db.userKVStore.findMany({ where: { accountId: account.id } });
+            const replayAfterProgress = await app.inject({ ...options, payload });
+            expect([replayAfterProgress.statusCode, replayAfterProgress.json()]).toEqual([200, {
+                ...response.json(), sessionFollowRules: { rules: [{ ...response.json().sessionFollowRules.rules[0], sources: progressed.sources }] },
+            }]);
+            expect(await db.userKVStore.findMany({ where: { accountId: account.id } })).toEqual(afterProgress);
+            expect(await db.accountChange.findMany({ where: { accountId: account.id } })).toEqual(changes);
+            // A deleted Session receiver cannot be edited; migration/replay above
+            // intentionally do not require its current delivery authority.
+            if (receiverKind === 'session') return;
+            const edited = await setAccountFollowRule({ accountId: account.id, ruleId: 'rule-a',
+                authentication: { env: process.env, authority: 'present_user', authenticationEvidence: undefined },
+                mutation: { receiver, expectedVersion: 5, content: sealSessionFollowRuleContentV1({ ruleId: 'rule-a', receiver,
+                    definition: { ...definition, enabled: false }, mode: toMode, material: toMode === 'plain' ? null : SESSION_OWNER_MATERIAL }) } });
+            expect(edited.ok).toBe(true);
+            const afterEdit = await db.userKVStore.findMany({ where: { accountId: account.id } });
+            const refusedReplay = await app.inject({ ...options, payload });
+            expect(refusedReplay.statusCode, refusedReplay.body).toBe(400);
+            expect(await db.userKVStore.findMany({ where: { accountId: account.id } })).toEqual(afterEdit);
+        } finally { await app.close(); }
+    });
+
     it.each(['plain', 'e2ee'] as const)('converts all five D9 catalogs in one transaction with exact replay and retained tombstones (%s source)', async fromMode => {
         harness.resetEnv({ HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional', HAPPIER_FEATURE_ENCRYPTION__ALLOW_ACCOUNT_OPTOUT: '1', HAPPIER_FEATURE_ENCRYPTION__PLAIN_ACCOUNT_SETTINGS_AT_REST: 'none' });
         const signing = tweetnacl.sign.keyPair();
@@ -968,10 +1165,10 @@ describe("account encryption migration .7 SQLite matrix", () => {
             { field: 'remoteHosts', key: '@happier/account/remote-hosts/v1/catalog', kind: 'account_remote_host_catalog', value: { v: 1,
                 hosts: [{ id: 'retained-host', name: 'Build box', ssh: { target: 'builder@localhost', authMode: 'agent' },
                     createdAt: 1, updatedAt: 2, lastUsedAt: null, linkedMachineId: 'exact-machine', linkedRelayProfileId: null }] } },
-            { field: 'notificationChannels', key: '@happier/account/notification-channels/v1/catalog', kind: 'account_notification_channels', value: { v: 1,
+            { field: 'notificationChannels', key: '@happier/account/notification-channels/v1/catalog', kind: 'account_notification_channels', value: NotificationChannelCatalogRecordV1Schema.parse({ v: 1,
                 channels: [{ v: 1, id: 'retained-webhook', kind: 'webhook', enabled: true, url: 'http://localhost:9081/notify', signingSecretRef: null,
                     topics: { ready: true, permissionRequest: false, userActionRequest: true, connectedServiceAccountSwitch: false,
-                        connectedServiceQuotaBlocked: false, connectedServiceQuotaRecovered: true, connectedServiceUsage: false }, readyIncludeMessageText: false, requestIncludeMessageText: false }] } },
+                        connectedServiceQuotaBlocked: false, connectedServiceQuotaRecovered: true, connectedServiceUsage: false }, readyIncludeMessageText: false, requestIncludeMessageText: false }] }) },
             { field: 'connectedPresentation', key: '@happier/account/connected-presentation/v1/catalog', kind: 'account_connected_presentation_catalog', value: { v: 1,
                 entries: [{ v: 1, subject: { kind: 'account', account: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'default' } }, label: 'Work' }] } },
             { field: 'connectedAcknowledgements', key: '@happier/account/connected-acknowledgements/v1/catalog', kind: 'account_connected_acknowledgement_catalog', value: { v: 1,

@@ -63,8 +63,9 @@ export const coreTerminalTools = {
             if (shellBridge) return getHappierToolsShellBridgeDisplay(shellBridge).subtitle;
 
             const cmdRaw = extractShellCommand(opts.tool.input);
-            const cmd = typeof cmdRaw === 'string' ? stripShellCommandPreludeForDisplay(cmdRaw) : cmdRaw;
-            if (typeof cmd === 'string' && cmd.length > 0) return cmd;
+            const cmd = typeof cmdRaw === 'string' ? stripShellCommandPreludeForDisplay(cmdRaw).trim() : cmdRaw;
+            // The title already names the program; a one-word command would only repeat it.
+            if (typeof cmd === 'string' && cmd.length > 0 && /\s/.test(cmd)) return cmd;
             return null;
         }
     },

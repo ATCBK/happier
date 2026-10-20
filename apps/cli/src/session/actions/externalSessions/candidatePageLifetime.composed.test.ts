@@ -20,7 +20,7 @@ import { serverScopedRpcSocketPool } from '../../../../../ui/sources/sync/runtim
 import { resetScopedMachineTransportCacheForTests } from '../../../../../ui/sources/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool';
 
 const boundary = vi.hoisted(() => ({ activeServerDir: '', token: '', slowPath: '',
-    offsetMs: 0, finalizationMs: 0, scanEntered: () => {}, scanWaitMs: 0, receiptAdmissionMs: 0 }));
+    finalizationMs: 0, scanEntered: () => {}, scanWaitMs: 0, receiptAdmissionMs: 0 }));
 await vi.hoisted(async () => {
     vi.stubGlobal('__DEV__', true);
     vi.stubGlobal('self', globalThis);
@@ -82,7 +82,9 @@ vi.mock('@/persistence', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/persistence')>(),
     readSettings: async () => {
         // Device settings IO occurs after RPC receipt, before source admission.
-        boundary.offsetMs += boundary.receiptAdmissionMs;
+        // The admitted Agent runs across the native module boundary and has its
+        // own clock. Model actual receiving IO time so both clocks observe it.
+        if (boundary.receiptAdmissionMs) await new Promise(resolve => setTimeout(resolve, boundary.receiptAdmissionMs));
         return { memory: { v: 1, enabledAtMs: 1 } };
     },
     readStoredCredentials: async () => ({ token: 'fixture-token', encryption: null }),
@@ -114,7 +116,6 @@ afterAll(async () => {
 
 afterEach(async () => {
     vi.restoreAllMocks();
-    boundary.offsetMs = 0;
     boundary.finalizationMs = 0;
     boundary.receiptAdmissionMs = 0;
     boundary.scanWaitMs = 0;
@@ -132,8 +133,13 @@ async function createCandidateHome(schedule: Readonly<{ ingressMs: number; retur
     boundary.finalizationMs = schedule.finalizationMs;
     const project = join(configDir, 'projects', 'project');
     await mkdir(project, { recursive: true });
-    await writeFile(join(project, 'recent.jsonl'), JSON.stringify({ type: 'user', uuid: 'recent', parentUuid: null,
-        message: { role: 'user', content: 'lifetime needle' } }) + '\n');
+    // A one-row transcript reaches verified EOF in its first indivisible unit,
+    // which is allowed to finish after the scan deadline. Keep an older row so
+    // expiry must checkpoint before it can publish a hit from this transcript.
+    await writeFile(join(project, 'recent.jsonl'), [
+        { type: 'user', uuid: 'recent', parentUuid: null, message: { role: 'user', content: 'lifetime needle' } },
+        { type: 'assistant', uuid: 'recent-reply', parentUuid: 'recent', message: { role: 'assistant', content: 'ordinary reply' } },
+    ].map(row => JSON.stringify(row)).join('\n') + '\n');
     await utimes(join(project, 'recent.jsonl'), new Date('2026-10-01'), new Date('2026-10-01'));
     boundary.slowPath = join(project, 'slow.jsonl');
     await writeFile(boundary.slowPath, Array.from({ length: 1500 }, (_, index) => JSON.stringify({
@@ -217,8 +223,6 @@ async function createCandidateHome(schedule: Readonly<{ ingressMs: number; retur
     } catch (error) { await close(); throw error; }
     packets.length = 0;
     responses.length = 0;
-    const originalNow = Date.now.bind(Date);
-    vi.spyOn(Date, 'now').mockImplementation(() => originalNow() + boundary.offsetMs);
     return {
         packets, responses, cancelled,
         settle: async () => { await Promise.all(pendingRequests); },
@@ -282,12 +286,10 @@ describe('candidate page operation lifetime through the real caller and receiver
             expect(ExternalSessionsCandidatesListResponseSchema.parse(home.responses[0])).toMatchObject({ ok: false });
             boundary.scanEntered = () => {};
             boundary.scanWaitMs = 0;
-            boundary.offsetMs = 0;
             boundary.receiptAdmissionMs = 500;
             const expired = ExternalSessionsCandidatesListResponseSchema.parse(await home.call());
             expect(expired).toMatchObject({ ok: true, candidates: [], contentCoverage: 'partial', nextCursor: expect.any(String) });
             boundary.receiptAdmissionMs = 0;
-            boundary.offsetMs = 0;
             const retry = ExternalSessionsCandidatesListResponseSchema.parse(await home.call(undefined, 5_000, 50));
             expect(retry).toMatchObject({ ok: true, contentCoverage: 'complete', nextCursor: null });
             if (!retry.ok) throw new Error('Expected fresh retry success');

@@ -16,6 +16,7 @@ import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
 import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import { createCliMcpServerStore } from '@/settings/mcp/mcpServerStore';
 import { readSkillLibraryItems } from '@/prompts/skills/library/readSkillLibraryItems';
+import { readAccountPluginSkills } from '@/prompts/skills/library/readAccountPluginSkills';
 import { resolveAvailableAccountSettings } from '@/settings/accountSettings/resolveAvailableAccountSettings';
 
 import type { SessionCreateSpawnRequest } from './parseSessionCreateSpawnOptions';
@@ -66,10 +67,12 @@ function defaultNormalizerDeps(): SessionCreateSpawnRequestNormalizerDeps {
     readCapabilityCatalogs: async (kinds) => {
       const credentials = await readStoredCredentials();
       if (!credentials) throw Object.assign(new Error('Capability catalogs unavailable'), { code: 'catalog_unavailable' });
-      if (!await resolveAvailableAccountSettings({ credentials })) throw Object.assign(new Error('Capability catalogs unavailable'), { code: 'catalog_unavailable' });
+      const settings = await resolveAvailableAccountSettings({ credentials });
+      if (!settings) throw Object.assign(new Error('Capability catalogs unavailable'), { code: 'catalog_unavailable' });
       const [mcp, skills] = await Promise.all([
         kinds.mcp ? createCliMcpServerStore({ credentials }).readCatalog() : null,
-        kinds.skills ? readSkillLibraryItems(createCredentialedAccountArtifactStore(credentials)) : [],
+        kinds.skills ? readSkillLibraryItems({ ...createCredentialedAccountArtifactStore(credentials),
+          readPluginSkills: (signal, skillIds) => readAccountPluginSkills({ credentials, settings, signal, skillIds, availableOnly: true }) }) : [],
       ]);
       if (mcp && mcp.status !== 'ready') throw Object.assign(new Error('MCP catalog unavailable'), { code: 'catalog_unavailable' });
       return { mcp: mcp?.catalog.servers ?? [], skills };

@@ -191,7 +191,286 @@ async function profiles(homes: readonly Awaited<ReturnType<typeof home>>[]) {
     }),
   );
 }
+
+async function startPromptPreparationDispatch(prepare: () => Promise<string>, options?: { metadataAvailable?: boolean }) {
+  const { runPermissionModePromptLoop } = await import('@/agent/runtime/runPermissionModePromptLoop');
+  const { MessageQueue2 } = await import('@/agent/runtime/modeMessageQueue');
+  const { combinePermissionModeQueuedPrompts } = await import('@/agent/runtime/permissions/queuedPrompt');
+  const { createMutableApiSessionClientFixture } = await import('@/testkit/backends/sessionFixtures');
+  const { createTestMetadata } = await import('@/testkit/backends/sessionMetadata');
+  const { MessageBuffer } = await import('@/ui/ink/messageBuffer');
+  type Options = Parameters<typeof runPermissionModePromptLoop>[0];
+  type QueuedPrompt = import('@/agent/runtime/permissions/queuedPrompt').PermissionModeQueuedPrompt;
+  type QueuedMode = import('@/agent/runtime/permissions/queuedPrompt').PermissionModeQueuedPromptMode;
+  const observeProviderInputSettlement = vi.fn(async () => false);
+  const publications: unknown[] = [];
+  const failures: unknown[] = [];
+  const metadataWaiters = new Set<(changed: boolean) => void>();
+  const controller = new AbortController();
+  const session = createMutableApiSessionClientFixture({ overrides: {
+    sessionId: 'prompt-preparation-session', observeProviderInputSettlement,
+    async enqueueAgentMessageCommitted(_agent, body) {
+      publications.push(body);
+      return { persisted: true, delivered: false };
+    },
+    waitForMetadataUpdate: signal => options?.metadataAvailable === false ? Promise.resolve(false) : new Promise<boolean>(resolve => {
+      const finish = (changed: boolean) => {
+        metadataWaiters.delete(finish);
+        signal?.removeEventListener('abort', abort);
+        resolve(changed);
+      };
+      const abort = () => finish(false);
+      metadataWaiters.add(finish);
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) abort();
+    }),
+  } });
+  session.__setMetadata(createTestMetadata({ permissionMode: 'default', permissionModeUpdatedAt: 0 }));
+  const queue = new MessageQueue2<QueuedMode, QueuedPrompt>(mode => JSON.stringify(mode), {
+    batcher: messages => combinePermissionModeQueuedPrompts(messages),
+  });
+  queue.push({ text: 'Retained input', localId: 'retained-input', userMessageSeq: 42 }, { permissionMode: 'default' });
+  // Only the native Agent boundary is substituted. The real prompt-library HTTP
+  // reader, Protocol preparation and host dispatch/settlement path run together.
+  const runtime = {
+    beginTurnLifecycle: vi.fn(), sendTurnPrompt: vi.fn(async () => {}),
+    steerInFlightTurn: vi.fn(async () => {}), waitForTurnCompletion: vi.fn(async () => {}),
+    subscribeRuntimeEvents: () => () => {}, respondToPermission: vi.fn(async () => {}),
+    cancelTurn: vi.fn(async () => {}), readSessionIdentity: () => ({ sessionId: 'native-session' }),
+    updateSessionRuntimeConfig: vi.fn(async () => {}), resetOrDisposeRuntime: vi.fn(async () => {}),
+    shouldResumeAfterPermissionModeChange: () => true,
+  } as unknown as Options['runtime'];
+  let done = false;
+  const messageBuffer = new MessageBuffer();
+  const run = runPermissionModePromptLoop({
+    providerName: 'Fixture Agent', agentMessageType: 'fixture', explicitPermissionMode: undefined,
+    session, messageQueue: queue, permissionHandler: { setPermissionMode() {}, reset() {} }, runtime,
+    createOverrideSynchronizer: () => ({ syncFromMetadata() {}, flushPendingAfterStart: async () => {} }),
+    messageBuffer, shouldExit: () => done,
+    getAbortSignal: () => controller.signal, keepAlive() {}, setThinking() {},
+    sendReady() { done = true; }, currentPermissionModeUpdatedAt: 0,
+    setCurrentPermissionMode() {}, setCurrentPermissionModeUpdatedAt() {},
+    resolveFreshSessionSystemPrompt: prepare,
+    onPromptFailure: error => { failures.push(error); },
+    formatPromptErrorMessage: () => 'Preparation unavailable', registerProviderAcceptedEffect() {},
+  });
+  return { runtime, observeProviderInputSettlement, publications, failures, messageBuffer, run,
+    wake: () => { for (const finish of [...metadataWaiters]) finish(true); },
+    enqueue: (localId: string) => queue.push({ text: 'Later input', localId }, { permissionMode: 'default' }),
+    stop: () => { done = true; controller.abort(); },
+  };
+}
+
+async function dispatchWithPromptPreparation(prepare: () => Promise<string>) {
+  const dispatch = await startPromptPreparationDispatch(prepare);
+  await dispatch.run;
+  return dispatch;
+}
+
 describe('CLI qualified current Artifact prompt preparation', () => {
+  it.each([503, 403])('retains Home read classification through header and body preparation (HTTP %s)', async status => {
+    const a = await home('alpha', 'active-token');
+    await profiles([a]);
+    a.set('doc', 'Forbidden instructions');
+    a.fail(status);
+    const { resolveCliPromptStackSystemAppendBlocks: resolve, withCliPromptLibraryArtifactReader } = await import('./resolveCliPromptStackSystemAppendBlocks');
+    const { HomeReadPreparationError } = await import('./homeReadPreparationError');
+    const { classifyPrimarySessionRuntimeIssue } = await import('@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue');
+    const failures = [await resolve({ surface: 'coding', accountEntries: [entry('doc')], memoryEnabled: false }).catch((error: unknown) => error),
+      await withCliPromptLibraryArtifactReader(reader => reader.readArtifact({ kind: 'doc', artifactId: 'doc' })).catch((error: unknown) => error)];
+    for (const error of failures) {
+      const code = status === 503 ? 'preparation_pending' : 'attachment_unavailable';
+      expect(error).toMatchObject({ code, reason: status === 503 ? 'unavailable' : 'locked',
+        cause: { classification: { kind: status === 503 ? 'server_error' : 'auth_failed', statusCode: status, retryable: status === 503 } } });
+      expect(error instanceof Error ? error.cause : null).toBeInstanceOf(HomeReadPreparationError);
+      expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error })).toMatchObject({ code, source: 'dependency_failure' });
+    }
+  });
+
+  it.each([{ status: 500, wake: 'metadata' }, { status: 503, wake: 'queue' }])('retains unavailable required context and wakes early on $wake (HTTP $status)', async ({ status, wake }) => {
+    const a = await home('alpha', 'active-token');
+    await profiles([a]);
+    a.set('doc', 'Required instruction');
+    const { resolveCliPromptStackSystemAppendBlocks: resolve } = await import('./resolveCliPromptStackSystemAppendBlocks');
+    let failed!: () => void;
+    let unavailableReads = 0;
+    const preparationFailed = new Promise<void>(resolve => { failed = resolve; });
+    const prepare = async () => {
+      try { return (await resolve({ surface: 'coding', accountEntries: [entry('doc')] })).blocks.join('\n'); }
+      catch (error) { unavailableReads += 1; failed(); throw error; }
+    };
+    a.fail(status);
+    const dispatch = await startPromptPreparationDispatch(prepare);
+    try {
+      await preparationFailed;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(dispatch.runtime.beginTurnLifecycle).not.toHaveBeenCalled();
+      expect(dispatch.runtime.sendTurnPrompt).not.toHaveBeenCalled();
+      expect(dispatch.observeProviderInputSettlement).not.toHaveBeenCalled();
+      expect(dispatch.failures).toEqual([]);
+      expect(dispatch.publications).toEqual([]);
+      const requestCount = a.requests.length;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(a.requests).toHaveLength(requestCount);
+      if (wake === 'queue') dispatch.enqueue('later-input-1');
+      else dispatch.wake();
+      await vi.waitFor(() => expect(unavailableReads).toBe(2));
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(dispatch.runtime.sendTurnPrompt).not.toHaveBeenCalled();
+      expect(dispatch.failures).toEqual([]);
+      expect(dispatch.publications).toEqual([]);
+      a.fail(200);
+      if (wake === 'queue') dispatch.enqueue('later-input-2');
+      else dispatch.wake();
+      await dispatch.run;
+      expect(dispatch.runtime.sendTurnPrompt).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining('Required instruction'), expect.objectContaining({ localId: 'retained-input', userMessageSeq: 42 }),
+      );
+      expect(dispatch.observeProviderInputSettlement).not.toHaveBeenCalled();
+      expect(dispatch.failures).toEqual([]);
+      expect(dispatch.messageBuffer.getMessages().filter(message => message.type === 'user'))
+        .toMatchObject([{ content: 'Retained input' }]);
+    } finally {
+      dispatch.stop();
+      await dispatch.run;
+    }
+    a.fail(404);
+    const absent = await dispatchWithPromptPreparation(prepare);
+    expect(absent.runtime.sendTurnPrompt).not.toHaveBeenCalled();
+    expect(absent.observeProviderInputSettlement).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      reason: 'provider_rejected_before_acceptance', retryable: false,
+      diagnostic: expect.objectContaining({ code: 'attachment_unavailable' }),
+    }));
+    expect(absent.failures).toHaveLength(1);
+    expect(absent.publications).toContainEqual(expect.objectContaining({ type: 'message' }));
+  });
+
+  it('retains unavailable Account prompt inventory until cancellation without publishing a failed turn', async () => {
+    const a = await home('alpha', 'active-token');
+    await profiles([a]);
+    const { prepareSessionPromptStackInputs } = await import('@/agent/prompting/coding/sessionPromptStack');
+    let failed!: () => void;
+    const preparationFailed = new Promise<void>(resolve => { failed = resolve; });
+    const result = await startPromptPreparationDispatch(async () => {
+      try { await prepareSessionPromptStackInputs({ machineId: 'machine-1', metadata: null,
+        credentials: { token: 'active-token', encryption: null },
+        accountContext: { scopeKey: 'unavailable-account', lifetimeToken: -1, settings: null },
+      }); } catch (error) { failed(); throw error; }
+      return '';
+    });
+    await preparationFailed;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    result.stop();
+    await result.run;
+    expect(result.runtime.sendTurnPrompt).not.toHaveBeenCalled();
+    expect(result.observeProviderInputSettlement).not.toHaveBeenCalled();
+    expect(result.failures).toEqual([]);
+    expect(result.publications).toEqual([]);
+  });
+
+  it.each([true, false])('paces repeated Home outages and dispatches once after silent recovery (metadata subscription available: %s)', async metadataAvailable => {
+    const a = await home('alpha', 'active-token');
+    await profiles([a]);
+    a.set('doc', 'Required instruction');
+    const { resolveCliPromptStackSystemAppendBlocks: resolve } = await import('./resolveCliPromptStackSystemAppendBlocks');
+    let failed!: () => void;
+    const preparationAttempts: number[] = [];
+    let preparationError: unknown;
+    const preparationFailed = new Promise<void>(resolve => { failed = resolve; });
+    a.fail(503);
+    const dispatch = await startPromptPreparationDispatch(async () => {
+      preparationAttempts.push(Date.now());
+      try { return (await resolve({ surface: 'coding', accountEntries: [entry('doc')] })).blocks.join('\n'); }
+      catch (error) { preparationError = error; failed(); throw error; }
+    }, { metadataAvailable });
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.9);
+    try {
+      // Install the clock before the real HTTP failure can arm any recovery
+      // delay; leave socket I/O and setImmediate running on the real event loop.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      await preparationFailed;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(preparationError).toMatchObject({ status: 'preparation_pending', reason: 'unavailable' });
+      // Pass the default createBackoff attempt cap and reach the incumbent
+      // offline policy's delay saturation; failures must never retire custody.
+      for (let attempt = 1; attempt <= 11; attempt += 1) {
+        const nextFailure = new Promise<void>(resolve => { failed = resolve; });
+        await vi.advanceTimersToNextTimerAsync();
+        expect(preparationAttempts).toHaveLength(attempt + 1);
+        await nextFailure;
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(dispatch.runtime.sendTurnPrompt).not.toHaveBeenCalled();
+        expect(dispatch.observeProviderInputSettlement).not.toHaveBeenCalled();
+        expect(dispatch.failures).toEqual([]);
+        expect(dispatch.publications).toEqual([]);
+      }
+      const spacing = preparationAttempts.slice(1).map((time, index) => time - preparationAttempts[index]!);
+      // The real offline policy owns 5s minimum / 60s maximum / saturation at
+      // ten failures. Fix randomness so spacing, rather than wall time, decides.
+      expect(spacing[0]).toBeGreaterThanOrEqual(5_000);
+      expect(spacing[1]).toBeGreaterThan(spacing[0]!);
+      expect(spacing[2]).toBeGreaterThan(spacing[1]!);
+      expect(Math.max(...spacing)).toBeLessThanOrEqual(60_000);
+      expect(spacing[10]).toBe(spacing[9]);
+      a.fail(200);
+      // Prove the same real Home reader is healthy independently of the parked
+      // loop. This does not emit a Session metadata/reconnect or queue wake.
+      expect((await resolve({ surface: 'coding', accountEntries: [entry('doc')] })).blocks.join('\n'))
+        .toContain('Required instruction');
+      await vi.advanceTimersToNextTimerAsync();
+      await dispatch.run;
+      expect(dispatch.runtime.beginTurnLifecycle).toHaveBeenCalledTimes(1);
+      expect(dispatch.runtime.sendTurnPrompt).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining('Required instruction'), expect.objectContaining({ localId: 'retained-input', userMessageSeq: 42 }),
+      );
+      expect(dispatch.observeProviderInputSettlement).not.toHaveBeenCalled();
+      expect(dispatch.failures).toEqual([]);
+      expect(dispatch.publications).toEqual([]);
+      expect(dispatch.messageBuffer.getMessages().filter(message => message.type === 'user'))
+        .toMatchObject([{ content: 'Retained input' }]);
+    } finally {
+      dispatch.stop();
+      await dispatch.run;
+      vi.useRealTimers();
+      random.mockRestore();
+    }
+  });
+
+  it('cancels paced Home re-preparation without dispatching after silent recovery', async () => {
+    const a = await home('alpha', 'active-token');
+    await profiles([a]);
+    a.set('doc', 'Required instruction');
+    a.fail(503);
+    const { resolveCliPromptStackSystemAppendBlocks: resolve } = await import('./resolveCliPromptStackSystemAppendBlocks');
+    let failed!: () => void;
+    let attempts = 0;
+    const preparationFailed = new Promise<void>(resolve => { failed = resolve; });
+    const dispatch = await startPromptPreparationDispatch(async () => {
+      attempts += 1;
+      try { return (await resolve({ surface: 'coding', accountEntries: [entry('doc')] })).blocks.join('\n'); }
+      catch (error) { failed(); throw error; }
+    });
+    try {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      await preparationFailed;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      a.fail(200);
+      dispatch.stop();
+      await dispatch.run;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(attempts).toBe(1);
+      expect(dispatch.runtime.beginTurnLifecycle).not.toHaveBeenCalled();
+      expect(dispatch.runtime.sendTurnPrompt).not.toHaveBeenCalled();
+      expect(dispatch.observeProviderInputSettlement).not.toHaveBeenCalled();
+      expect(dispatch.failures).toEqual([]);
+      expect(dispatch.publications).toEqual([]);
+    } finally {
+      dispatch.stop();
+      await dispatch.run;
+      vi.useRealTimers();
+    }
+  });
+
   it.each(['local', 'published'] as const)('uses the admitted %s route when descriptor HTTPS is unreachable', async carrier => {
     const a = await home('alpha', 'active-token');
     await profiles([a]);
@@ -246,7 +525,8 @@ describe('CLI qualified current Artifact prompt preparation', () => {
     const failure = await resolve({ surface: 'coding', serverId: 'missing-home', accountEntries: [entry('required')] })
       .catch((error: unknown) => error);
     expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: failure }))
-      .toMatchObject({ code: 'profile_missing', source: 'dependency_failure' });
+      .toMatchObject({ code: 'preparation_pending', source: 'dependency_failure' });
+    expect(failure).toMatchObject({ status: 'preparation_pending', reason: 'unavailable' });
     expect(JSON.stringify(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: failure })))
       .not.toContain('missing-home');
   });
@@ -292,6 +572,55 @@ describe('CLI qualified current Artifact prompt preparation', () => {
     // Birth resolves the selected qualified document, not the optional catalog listing.
     expect(a.requests, JSON.stringify(a.requests)).toContain('/v1/artifacts/instructions');
     });
+  });
+
+  it.each(['owner', 'requester', 'invocation'] as const)('inherits stored UI memory through the daemon Home alias with %s custody', async custody => {
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'alpha' })).toString('base64url')}.signature`;
+    const a = await home('stack_agent-qa-orc__id_default', token);
+    const foreign = await home('foreign-home', 'foreign-token');
+    await profiles([a, foreign]);
+    const portableId = 'srv_memory_home';
+    const { adoptServerProfileHomeConnectionDescriptor } = await import('@/server/serverProfiles');
+    await adoptServerProfileHomeConnectionDescriptor({ expectedProfileId: a.id, observation: 'exact', descriptor: {
+      v: 1, homeServerIdentityId: portableId, canonicalServerUrl: a.url, revision: 1,
+      endpoints: [{ kind: 'https', url: a.url }],
+    } });
+    a.set('memory', 'unused', 'memory_doc.v1');
+    const row = a.rows.get('memory')!;
+    a.rows.set('memory', { ...row, body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1,
+      index: [{ id: 'e5b7472e-ff36-441e-96a1-8dcff5a0c022', text: 'INHERITED_HOME_MEMORY', createdAtMs: 1, sourceSessionRef: null }], topics: [],
+    }) }) });
+    foreign.set('memory', 'Foreign private memory', 'memory_doc.v1');
+    const credentials = { token, encryption: null, ...(custody === 'requester' ? {
+      requesterSessionCredentialScope: { serverId: a.id, serverHttpBaseUrl: a.url },
+    } : {}) };
+    const { createInvocationSavedSecretOperationContextV1 } = await import('@/settings/secrets/hydrateSavedSecretCatalog');
+    const { resolveAccountSettingsScopeKey } = await import('@/settings/accountSettings/accountSettingsScopeKey');
+    const { accountSettingsParse } = await import('@happier-dev/protocol/account/settings/accountSettings');
+    const operationContext = custody === 'invocation' ? createInvocationSavedSecretOperationContextV1({ credentials,
+      serverHttpBaseUrl: a.url, snapshot: { source: 'network', settings: accountSettingsParse({}), rawSettings: {},
+        settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) },
+      isCurrent: async () => true }) : undefined;
+    const { prepareSessionMemoryInheritance } = await import('@/agent/prompting/coding/sessionPromptStack');
+    const { resolveCliPromptStackSystemAppendBlocks: resolve, withCliPromptLibraryArtifactReader } = await import('./resolveCliPromptStackSystemAppendBlocks');
+    const { SessionPromptStackV1Schema } = await import('@happier-dev/protocol/sessions/context/sessionContextV1');
+    const selected = entry('memory', portableId);
+    const inherited = await prepareSessionMemoryInheritance({ credentials, serverId: a.id,
+      metadata: { work: { memoryEnabled: true, promptStack: SessionPromptStackV1Schema.parse([selected]) } } });
+    expect(inherited).toEqual({ memoryEnabled: true, promptStack: [selected] });
+    const composed = await resolve({ credentials, serverId: a.id, operationContext, surface: 'coding',
+      memoryEnabled: inherited.memoryEnabled, sessionEntries: SessionPromptStackV1Schema.parse(inherited.promptStack) });
+    expect(composed.blocks.join('\n')).toContain('INHERITED_HOME_MEMORY');
+    // Both directions of the spelling mismatch must keep the captured Account.
+    await withCliPromptLibraryArtifactReader(async reader => {
+      expect(await reader.readArtifact({ kind: 'doc', artifactId: 'memory', serverId: a.id })).not.toBeNull();
+      await expect(reader.readArtifact({ kind: 'doc', artifactId: 'memory', serverId: foreign.id }))
+        .rejects.toMatchObject({ code: 'artifact_encryption_material_unavailable' });
+    }, { credentials: { ...credentials, requesterSessionCredentialScope: { serverId: portableId, serverHttpBaseUrl: a.url } }, serverId: portableId });
+    await expect(prepareSessionMemoryInheritance({ credentials, serverId: a.id,
+      metadata: { work: { memoryEnabled: true, promptStack: [entry('memory', foreign.id)] } } }))
+      .rejects.toMatchObject({ reason: 'unavailable' });
+    expect(foreign.authenticatedRequests).toEqual([]);
   });
 
   describe('private requester Home admission', () => {
@@ -446,16 +775,20 @@ describe('CLI qualified current Artifact prompt preparation', () => {
     await expect(resolve({ ...args, accountEntries: [optional, { ...optional, id: 'required-foreign', required: true }] }))
       .rejects.toMatchObject({ reason: 'not_found', cause: { code: 'profile_missing' } });
   });
-  it('continues with typed unavailable facts for optional context, while required context fails closed', async () => {
+  it('omits optional context but keeps required context pending during a transient outage and recovers', async () => {
     const a = await home('alpha', 'active-token');
     await profiles([a]);
     a.set('optional', 'Optional local context');
     a.fail(503);
     const { resolveCliPromptStackSystemAppendBlocks: resolve } = await import('./resolveCliPromptStackSystemAppendBlocks');
-    expect(await resolve({ surface: 'coding', accountEntries: [{ ...entry('optional'), required: false }] }))
-      .toMatchObject({ blocks: [], admittedEntries: [{ outcome: 'unavailable', reason: 'unavailable' }] });
+    await expect(resolve({ surface: 'coding', accountEntries: [{ ...entry('optional'), required: false }] }))
+      .resolves.toMatchObject({ blocks: [],
+        admittedEntries: [{ outcome: 'unavailable', reason: 'unavailable' }] });
     await expect(resolve({ surface: 'coding', accountEntries: [entry('optional')] }))
       .rejects.toMatchObject({ status: 'preparation_pending', reason: 'unavailable' });
+    a.fail(200);
+    expect(await resolve({ surface: 'coding', accountEntries: [{ ...entry('optional'), required: false }] }))
+      .toMatchObject({ blocks: ['Optional local context'], admittedEntries: [{ outcome: 'ready' }] });
   });
   it('qualifies identical ids to distinct Homes without forwarding active credentials', async () => {
     const a = await home('alpha', 'active-token');

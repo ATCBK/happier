@@ -4,7 +4,7 @@ import { backoff } from '@/utils/timing/time';
 import { HappyError } from '@/utils/errors/errors';
 import { createServerFetchForActiveServer, serverFetch } from '@/sync/http/client';
 import { runtimeFetchWithServerReachability } from '@/sync/runtime/connectivity/serverReachabilityRuntimeFetch';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { PushTokenSchema, PushTokenRegisterResponseSchema, PushTokensResponseSchema, PushTokensRemoteAlertProjectionV2Schema, type PushTokensRemoteAlertProjectionV2 } from '@happier-dev/protocol/push/pushTokenRegistration';
 import type { DeviceRemoteAlertPolicyV1 } from '@happier-dev/protocol/account/settings/accountRemoteAlertPolicy';
 

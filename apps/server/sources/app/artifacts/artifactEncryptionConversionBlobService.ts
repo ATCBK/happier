@@ -36,7 +36,7 @@ export async function stageArtifactBlobAccountEncryptionConversion(input: Readon
     if (!candidate) throw new Error('Artifact conversion staging failed');
     try {
         await inTx(async tx => {
-            const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+            const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
             if (fence.status !== 'ready' || fence.account.currentness.encryptionMode !== source.encryptionMode) {
                 throw new Error('Artifact conversion Account changed');
             }
@@ -93,7 +93,7 @@ export async function cancelArtifactBlobAccountEncryptionConversion(input: Reado
         if (candidate.path !== artifactConversionBlobKey(artifactId, blobId, input.uploadId)) continue;
         // Acquire the same parent mutation fence as activation, so cancellation cannot delete an activated target.
         const prepared = await inTx(async tx => {
-            const account = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
+            const account = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content");
             if (account.status === 'account_not_found') return null;
             // If the parent was deleted, activation is impossible; exact Account-owned stage custody remains cancellable.
             await tx.artifact.updateMany({ where: { id: artifactId, accountId: input.accountId }, data: { id: artifactId } });

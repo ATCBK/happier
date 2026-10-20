@@ -8,8 +8,9 @@ import type { LocalServiceLauncherRunTarget } from './runTargets';
 import type { LocalServiceLauncherHistoryStore } from './leaves';
 import { buildLocalServiceLauncherSnapshot, formatLocalServiceLauncherTitle } from './suggestions';
 import type { createManagedServicesOwner, ProjectManagedServiceHandle } from '@/plugins/runtime/invocation/services/managedServicesOwner';
+import { selectManagedOwnedTreeEndpoint } from '@/plugins/runtime/invocation/services/managedOwnedTreeEndpoint';
 
-type ProjectManagedServicesFeed = Pick<ReturnType<typeof createManagedServicesOwner>, 'listProjectServices'>;
+type ProjectManagedServicesFeed = Pick<ReturnType<typeof createManagedServicesOwner>, 'listProjectServices' | 'readProcessRoots'>;
 
 export type LocalServiceLauncherFeedSnapshotRequest = Readonly<{
     sessionId?: string;
@@ -93,6 +94,7 @@ function managedTarget(handle: ProjectManagedServiceHandle): LocalServiceLaunchT
         workspace: { serverId: handle.workspace.serverId, workspaceId: handle.workspace.id,
             machineId: handle.workspace.machineId, rootPath: handle.workspace.rootPath },
         declaration: handle.declaration, cwd: handle.cwd,
+        ...(handle.execution ? { execution: handle.execution } : {}),
         title: formatLocalServiceLauncherTitle(selection.kind === 'manifest' ? selection.name : selection.source.target),
         subtitle: handle.cwd, confidence: 'high',
         state: snapshot.state === 'starting' ? 'starting' : 'available',
@@ -176,33 +178,62 @@ export function createLocalServiceLauncherFeed(
                     code: 'local_service_workspace_scope_unavailable',
                 });
             }
-            if (request?.projection === 'managed_bindings') {
-                const targets = input.projectManagedServices!.listProjectServices({ requireComplete: true,
-                    ...(workspaceScopePaths?.length === 1 ? { workspaceRoot: workspaceScopePaths[0] } : {}) })
-                    .filter(handle => handle.isCurrent() && handle.workspace.machineId === input.machineId
-                        && (!workspaceScopePaths || workspaceScopePaths.some(root => isWorkspacePathWithin(root, handle.cwd))))
-                    .map(managedTarget);
-                return { v: 1, machineId: input.machineId, updatedAt: now(), targets: sortTargets(targets) };
-            }
+            const bindingsOnly = request?.projection === 'managed_bindings';
+            // Complete bindings read cached listener evidence without waiting for discovery.
+            // Both projections must retain the same managed identity and preview presentation.
+            const runTargets = bindingsOnly ? [] : await resolveRunTargets(input.runTargets, input.onRunTargetsError);
+            const inventoryEntries = input.inventoryRegistry.getSnapshot().entries;
             const snapshot = buildLocalServiceLauncherSnapshot({
                 machineId: input.machineId,
                 sessionId,
                 ...(workspaceScopePaths ? { workspaceScopePaths } : {}),
                 updatedAt: now(),
-                runTargets: await resolveRunTargets(input.runTargets, input.onRunTargetsError),
-                inventoryEntries: input.inventoryRegistry.getSnapshot().entries,
+                runTargets,
+                inventoryEntries,
                 previewResources: listLocalServicePreviewResources(input.previewRegistry),
                 terminateDetectedEnabled: input.terminateDetectedEnabled?.() === true,
             });
-            const managed = (input.projectManagedServices?.listProjectServices() ?? [])
-                .filter(handle => handle.workspace.machineId === input.machineId
+            const processRoots = input.projectManagedServices?.readProcessRoots() ?? [];
+            const inventoryTargets = new Map(snapshot.targets.flatMap(target => target.sourceClass?.kind === 'inventory_entry'
+                ? [[target.sourceClass.inventoryEntryId, target] as const] : []));
+            const correlatedInventoryIds = new Set<string>();
+            const managed = (input.projectManagedServices?.listProjectServices(bindingsOnly ? { requireComplete: true,
+                ...(workspaceScopePaths?.length === 1 ? { workspaceRoot: workspaceScopePaths[0] } : {}) } : undefined) ?? [])
+                .filter(handle => (!bindingsOnly || handle.isCurrent()) && handle.workspace.machineId === input.machineId
                     && (!workspaceScopePaths || workspaceScopePaths.some(root => isWorkspacePathWithin(root, handle.cwd))))
-                .map(managedTarget);
+                .map(handle => {
+                    const target = managedTarget(handle);
+                    const root = processRoots.find(root => root.live === true && root.owner.kind === 'service'
+                        && root.owner.serviceId === handle.instanceId);
+                    if (!root || !handle.isCurrent() || target.unavailableReason) return target;
+                    // Correlate each binding independently: several interfaces can belong to
+                    // one occurrence. This does not select or change its advertised endpoint.
+                    const owned = inventoryEntries.filter(entry => entry.machineId === input.machineId
+                        && entry.state === 'listening' && inventoryTargets.has(entry.id)
+                        && selectManagedOwnedTreeEndpoint({ entries: [entry], managedPid: root.pid, minimumConfidence: 'high' }));
+                    for (const entry of owned) correlatedInventoryIds.add(entry.id);
+                    // Prefer usable preview evidence, then a direct-root binding. This only
+                    // chooses presentation; native endpoint authority stays with the supervisor.
+                    const entry = owned.sort((a, b) => Number(!inventoryTargets.get(a.id)?.browserTarget) - Number(!inventoryTargets.get(b.id)?.browserTarget)
+                        || Number(b.provenance?.process?.pid === root.pid) - Number(a.provenance?.process?.pid === root.pid)
+                        || a.id.localeCompare(b.id))[0];
+                    const listener = entry ? inventoryTargets.get(entry.id) : undefined;
+                    if (!entry || !listener) return target;
+                    return { ...target,
+                        sourceClass: { kind: 'managed_service' as const, managedServiceId: handle.instanceId, inventoryEntryId: entry.id },
+                        subtitle: listener.subtitle, kind: listener.kind, commandPreview: listener.commandPreview,
+                        ...(listener.browserTarget ? { browserTarget: listener.browserTarget } : {}),
+                        actions: [...target.actions, ...listener.actions.filter(action => action === 'open_preview' || action === 'register_preview')],
+                    };
+                });
+            if (bindingsOnly) return { v: 1, machineId: input.machineId, updatedAt: snapshot.updatedAt, targets: sortTargets(managed) };
             const managedIds = new Set(managed.map(target => target.id));
             return {
                 ...snapshot,
                 targets: [...sortTargets([
-                    ...snapshot.targets.filter(target => !managedIds.has(target.id)).map(fenceExecutableAuthority),
+                    ...snapshot.targets.filter(target => !managedIds.has(target.id)
+                        && !(target.sourceClass?.kind === 'inventory_entry' && correlatedInventoryIds.has(target.sourceClass.inventoryEntryId)))
+                        .map(fenceExecutableAuthority),
                     ...managed,
                 ]).filter(target => !input.history?.isDismissed(target.id))],
             };

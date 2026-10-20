@@ -3,6 +3,7 @@ import * as React from 'react';
 import { getInstallablesRegistryEntries } from '@/capabilities/installablesRegistry';
 import { buildMachineUpdateFactsRequest } from '@/capabilities/requests';
 import { prefetchMachineCapabilities } from '@/hooks/server/useMachineCapabilitiesCache';
+import { resolveDaemonCapabilitiesCacheKeySalt } from '@/hooks/server/useDaemonScopedMachineCapabilitiesCache';
 import { machineCapabilitiesInvoke, type MachineCapabilitiesInvokeResult } from '@/sync/ops/capabilities';
 import { startAgentInstallJob, waitForAgentInstallJob, type AgentInstallJobStartOptions } from '@/agents/machineAgents/installJobs/installJobStore';
 import type { MachineAgentJob } from '@/agents/machineAgents/machineAgentTypes';
@@ -11,6 +12,8 @@ import { MACHINE_RPC_POLL_INTERVAL_MS } from '@/sync/ops/machineRpcPollInterval'
 import { t } from '@/text';
 
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { recordUpdateCompleted } from './updateCompletions';
 export { markUpdateCompletionsSeen, readUnseenUpdateCompletions, recordUpdateCompleted, useUnseenUpdateCompletions } from './updateCompletions';
 import type { UpdateItem, UpdateItemStep } from './items/updateItem';
@@ -332,8 +335,16 @@ async function runRemoteCliUpdate(scope: ServerAccountScope, itemId: string, mac
  * latest version) through the capability-cache owner, so a finished update resolves its row and
  * the pill count from the machine's own answer.
  */
-export function refreshMachineUpdateFacts(serverId: string, machineId: string): void {
-    void prefetchMachineCapabilities({ machineId, serverId, request: { ...buildMachineUpdateFactsRequest(), bypassCache: true } });
+export function refreshMachineUpdateFacts(serverId: string, machineId: string, options?: Readonly<{ accountScope: ServerAccountScope }>): void {
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    if (!lifetime?.isCurrent() || !areServerProfileIdentifiersEquivalent(lifetime.scope.serverId, serverId)
+        || (options?.accountScope && (options.accountScope.accountId !== lifetime.scope.accountId
+            || !areServerProfileIdentifiersEquivalent(options.accountScope.serverId, serverId)))) return;
+    const controller = new AbortController();
+    const retirement = lifetime.onRetire(() => controller.abort());
+    void prefetchMachineCapabilities({ machineId, serverId, signal: controller.signal, accountLifetime: lifetime,
+        cacheKeySalt: resolveDaemonCapabilitiesCacheKeySalt({ id: machineId }, serverId) || null,
+        request: { ...buildMachineUpdateFactsRequest(), bypassCache: true } }).finally(() => retirement.dispose());
 }
 
 /** Admission starts the existing job store; its acknowledgement and row settlement stay separate. */
@@ -359,13 +370,13 @@ export async function startMachineAgentItemUpdate(item: UpdateItem, scope: Serve
             } catch (error) {
                 setRecord(scope.serverId, item.id, { status: 'failed', message: presentAgentInstallJobRpcFailure(error).body });
             } finally {
-                refreshMachineUpdateFacts(scope.serverId, target.machineId);
+                refreshMachineUpdateFacts(scope.serverId, target.machineId, { accountScope: scope });
             }
         })();
         return job;
     } catch (error) {
         setRecord(scope.serverId, item.id, { status: 'failed', message: presentAgentInstallJobRpcFailure(error).body });
-        refreshMachineUpdateFacts(scope.serverId, target.machineId);
+        refreshMachineUpdateFacts(scope.serverId, target.machineId, { accountScope: scope });
         throw error;
     }
 }
@@ -438,6 +449,6 @@ export async function runMachineItemUpdate(
         setRecord(serverId, item.id, { status: 'failed', message: t('updates.row.failedGeneric') });
         return { supported: false, reason: 'error' };
     } finally {
-        refreshMachineUpdateFacts(serverId, machineId);
+        refreshMachineUpdateFacts(serverId, machineId, { accountScope: scope });
     }
 }

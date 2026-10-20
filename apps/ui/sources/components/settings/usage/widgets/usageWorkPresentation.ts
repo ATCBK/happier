@@ -71,12 +71,16 @@ export type UsageWorkBranchRow = UsageWorkIdentities & MoneyDisplay & Readonly<{
 
 export type UsageWorkProjectRow = MoneyDisplay & Readonly<{
   projectKey: string | null;
+  /** Distinct unnamed folders represented by the single null-key display row. */
+  unnamedProjectCount: number;
   amount: number | null;
   allocated: number | null;
   unallocated: number | null;
   allocatedBasis: UsageWorkMoneyBasis | null;
   unallocatedBasis: UsageWorkMoneyBasis | null;
   sessionIds: readonly string[];
+  /** Machines that contributed to this project, in id order; what tells same-named folders on two machines apart. */
+  machineIds: readonly string[];
   agentIds: readonly string[];
   providers: readonly UsageWorkProvider[];
   outcomes: readonly UsageWorkOutcomeRow[];
@@ -88,6 +92,9 @@ export type UsageWorkProjectRow = MoneyDisplay & Readonly<{
 
 export type UsageWorkSessionRow = MoneyDisplay & Readonly<{
   sessionId: string;
+  /** Machines the Session's usage came from, in id order, and when it was last observed: what tells untitled Sessions apart. */
+  machineIds: readonly string[];
+  lastObservedAtMs: number;
   amount: number | null;
   agentIds: readonly string[];
   providers: readonly UsageWorkProvider[];
@@ -220,7 +227,9 @@ function groupBranches(allocations: UsageWorkProjection['branchAllocations'], ba
 export function summarizeUsageWork(
   work: UsageWorkProjection,
   basis: UsageWorkAmount,
+  namedProjectKeys?: ReadonlySet<string>,
 ): UsageWorkSummary {
+  const displayProjectKey = (key: string | null) => key === null || namedProjectKeys && !namedProjectKeys.has(key) ? null : key;
   const unallocatedAmounts: Record<UsageWorkUnallocatedReason, AmountAccumulator> = {
     missing_turn: newAmount(),
     missing_evidence: newAmount(),
@@ -248,16 +257,20 @@ export function summarizeUsageWork(
       allocated: AmountAccumulator;
       unallocated: AmountAccumulator;
       sessions: Set<string>;
+      machines: Set<string>;
       agents: Set<string>;
       providers: Map<string, UsageWorkProvider>;
       outcomes: Set<string>;
       parts: Map<string, AmountAccumulator>;
+      projectKeys: Set<string | null>;
     }
   >();
   const sessionRows = new Map<
     string,
     {
       amount: AmountAccumulator;
+      machines: Set<string>;
+      lastObservedAtMs: number;
       agents: Set<string>;
       providers: Map<string, UsageWorkProvider>;
       outcomes: Map<string, UsageWorkOutcome>;
@@ -272,26 +285,33 @@ export function summarizeUsageWork(
     accumulate(total, row, basis);
     addPart(agentAmounts, contribution.agentId, row, basis);
     if (amount === null) missingMoneyCount += 1;
-    const project = projectRows.get(contribution.projectKey) ?? {
+    const projectKey = displayProjectKey(contribution.projectKey);
+    const project = projectRows.get(projectKey) ?? {
       amount: newAmount(),
       allocated: newAmount(),
       unallocated: newAmount(),
       sessions: new Set(),
+      machines: new Set(),
       agents: new Set(),
       providers: new Map(),
       outcomes: new Set(),
       parts: new Map(),
+      projectKeys: new Set<string | null>(),
     };
+    project.projectKeys.add(contribution.projectKey);
     accumulate(project.amount, row, basis);
     addPart(project.parts, contribution.sessionId, row, basis);
     if (contribution.sessionId) project.sessions.add(contribution.sessionId);
+    if (contribution.machineId) project.machines.add(contribution.machineId);
     if (contribution.agentId) project.agents.add(contribution.agentId);
     const provider = contribution.providerId ? { providerId: contribution.providerId, machineId: contribution.machineId } : null;
     if (provider) project.providers.set(JSON.stringify(provider), provider);
-    projectRows.set(contribution.projectKey, project);
+    projectRows.set(projectKey, project);
     if (contribution.sessionId) {
       const session = sessionRows.get(contribution.sessionId) ?? {
         amount: newAmount(),
+        machines: new Set(),
+        lastObservedAtMs: 0,
         agents: new Set(),
         providers: new Map(),
         outcomes: new Map(),
@@ -299,6 +319,8 @@ export function summarizeUsageWork(
         reasons: new Set(),
       };
       accumulate(session.amount, row, basis);
+      if (contribution.machineId) session.machines.add(contribution.machineId);
+      session.lastObservedAtMs = Math.max(session.lastObservedAtMs, contribution.observedAtMs);
       if (contribution.agentId) session.agents.add(contribution.agentId);
       if (provider) session.providers.set(JSON.stringify(provider), provider);
       session.witnessed ||= row.evidence.length > 0;
@@ -344,6 +366,7 @@ export function summarizeUsageWork(
   const projects = [...projectRows.entries()]
     .map(([projectKey, row]): UsageWorkProjectRow => ({
       projectKey,
+      unnamedProjectCount: projectKey === null ? row.projectKeys.size : 0,
       amount: row.amount.amount,
       moneyBasis: row.amount.moneyBasis,
       allocated: row.allocated.amount,
@@ -351,18 +374,21 @@ export function summarizeUsageWork(
       allocatedBasis: row.allocated.moneyBasis,
       unallocatedBasis: row.unallocated.moneyBasis,
       sessionIds: sorted(row.sessions),
+      machineIds: sorted(row.machines),
       agentIds: sorted(row.agents),
       providers: [...row.providers.values()].sort((a, b) => a.providerId.localeCompare(b.providerId)),
       outcomes: [...row.outcomes]
         .flatMap((key) => outcomeByKey.get(key) ?? [])
         .sort(byAmount),
       sessions: sessionParts(row.parts),
-      branches: groupBranches(work.branchAllocations.filter((allocation) => allocation.contribution.projectKey === projectKey), basis, work.allocations),
+      branches: groupBranches(work.branchAllocations.filter((allocation) => displayProjectKey(allocation.contribution.projectKey) === projectKey), basis, work.allocations),
     }))
     .sort(byAmount);
   const sessions = [...sessionRows.entries()]
     .map(([sessionId, row]): UsageWorkSessionRow => ({
       sessionId,
+      machineIds: sorted(row.machines),
+      lastObservedAtMs: row.lastObservedAtMs,
       amount: row.amount.amount,
       moneyBasis: row.amount.moneyBasis,
       agentIds: sorted(row.agents),

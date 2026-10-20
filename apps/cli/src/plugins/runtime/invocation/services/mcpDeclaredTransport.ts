@@ -246,7 +246,7 @@ export function createStableDeclaredMcpTransportConnector(params?: Readonly<{
         const [
             { Client }, { StdioClientTransport }, { StreamableHTTPClientTransport },
             { ElicitRequestSchema, ResourceUpdatedNotificationSchema },
-            { mcpElicitationFormContent, mcpElicitationFormQuestions },
+            { mcpElicitationFormContent, mcpElicitationFormRequest },
         ] = await Promise.all([
             import('@modelcontextprotocol/sdk/client/index.js'),
             import('@modelcontextprotocol/sdk/client/stdio.js'),
@@ -330,13 +330,9 @@ export function createStableDeclaredMcpTransportConnector(params?: Readonly<{
                 const requestSignal = composeSignals(lifetimeSignal, extra?.signal);
                 if (requestSignal?.aborted || !seed.isOccurrenceCurrent()) return { action: 'cancel' as const };
                 try {
-                    const questions = mcpElicitationFormQuestions(request.params.requestedSchema);
-                    if (questions === null) {
-                        const result = await interactions.confirm({
-                            kind: 'confirmation',
-                            title: 'MCP request',
-                            message: request.params.message,
-                        }, {
+                    const interaction = mcpElicitationFormRequest(request.params.requestedSchema, request.params.message);
+                    if (interaction.kind === 'confirmation') {
+                        const result = await interactions.confirm(interaction, {
                             ...(requestSignal ? { signal: requestSignal } : {}),
                         });
                         if (requestSignal?.aborted || !seed.isOccurrenceCurrent()) return { action: 'cancel' as const };
@@ -346,11 +342,7 @@ export function createStableDeclaredMcpTransportConnector(params?: Readonly<{
                                 ? { action: 'decline' as const }
                                 : { action: 'cancel' as const };
                     }
-                    const result = await interactions.askQuestions({
-                        kind: 'questions',
-                        title: request.params.message,
-                        questions: [...questions],
-                    }, {
+                    const result = await interactions.askQuestions(interaction, {
                         ...(requestSignal ? { signal: requestSignal } : {}),
                     });
                     if (

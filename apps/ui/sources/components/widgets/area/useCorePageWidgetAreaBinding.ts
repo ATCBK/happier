@@ -5,8 +5,8 @@ import { buildWidgetAreaActionInputV1, PluginUiWidgetAreaResultV1Schema, pluginU
 import { WidgetSurfaceRefV1Schema, WidgetSurfaceReadV1Schema, readWidgetActionSurfaceV1, type WidgetAreaPresetV1, type WidgetAreaPresetUndoV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import type { WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
 import { widgetProvidedContext } from '@/components/widgets/surface/widgetSurfaceSetup';
-import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
-import { captureActiveServerAccountScopeLifetime, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
+import { useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
+import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import type { WidgetAreaPort } from './useWidgetAreaLayout';
 import { registerWidgetAreaLayoutSelectionOwner, widgetAreaLayoutBaseSurface, type WidgetAreaLayoutSelectionOwner } from './widgetAreaLayoutSelection';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -27,12 +27,12 @@ export function useCorePageWidgetAreaBinding(input: Readonly<{
     selectLayout(layoutId: string): Promise<ActionExecuteResult>;
     executeLayoutAction(actionId: Extract<ActionId, `widgets.area.layout.${string}`>, args: unknown): Promise<ActionExecuteResult>;
 }> {
-    const viewer = useActiveServerAccountScope();
+    const lifetime = useActiveServerAccountScopeLifetime();
+    const viewer = lifetime?.scope ?? null;
     const [selected, setSelected] = React.useState<Readonly<{ serverId: string; accountId: string; pageId: string; area: string; layoutId?: string; routeLayoutId?: string | null }> | null>(null);
     const layoutId = selected && viewer && areServerProfileIdentifiersEquivalent(selected.serverId, viewer.serverId) && selected.accountId === viewer.accountId
         && selected?.pageId === input.pageId && selected.area === input.area && selected.routeLayoutId === input.initialLayoutId
         ? selected.layoutId : input.initialLayoutId ?? input.preset?.id ?? input.presets?.[0]?.id;
-    const lifetime = React.useMemo(() => captureActiveServerAccountScopeLifetime(), [viewer?.serverId, viewer?.accountId]);
     const surface = React.useMemo((): WidgetSurfaceRefV1 | null => {
         if (!lifetime?.isCurrent() || !selectActiveServerAccountScopeForServer(viewer, input.serverId)) return null;
         return WidgetSurfaceRefV1Schema.parse({ serverId: lifetime.scope.serverId, accountId: lifetime.scope.accountId,

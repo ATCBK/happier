@@ -349,6 +349,13 @@ export const SETTINGS_PAGE_CATALOG: readonly SettingsPageNode[] = [
                         icon: ({ theme }) => <Icon name="terminal" size={16} color={theme.colors.text.secondary} />,
                     },
                     {
+                        id: 'coordination',
+                        titleKey: 'settingsCoordination.title',
+                        route: SETTINGS_ROUTES.coordination,
+                        keywordsKey: 'settingsCoordination.keywords',
+                        icon: ({ theme }) => <Icon name="tree-structure" size={16} color={theme.colors.text.secondary} />,
+                    },
+                    {
                         id: 'externalSessions',
                         titleKey: 'externalSessions.settingsTitle',
                         subtitleKey: 'externalSessions.settingsEntrySubtitle',

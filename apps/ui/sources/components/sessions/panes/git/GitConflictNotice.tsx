@@ -3,7 +3,6 @@ import { View } from 'react-native';
 
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { formatExactCount } from '@/components/ui/navigation/tabBadge/tabBadgeModel';
-import { Modal } from '@/modal';
 import { sync } from '@/sync/sync';
 import type { ScmOperationState } from '@happier-dev/protocol';
 
@@ -51,15 +50,6 @@ export const GitConflictNotice = React.memo(function GitConflictNotice(props: Re
             callerSurface: 'scm_conflict_resolution',
         }).then(() => props.onAskedAgent?.(), () => props.onAskFailed?.()).finally(() => setAsking(false));
     }, [asking, kind, props]);
-    const abort = React.useCallback(async () => {
-        if (!kind) return;
-        const confirmed = await Modal.confirm(
-            t('sessionGitPane.flow.conflicts.abortTitle', { operation: operationName(kind) }),
-            t('sessionGitPane.flow.conflicts.abortBody'),
-            { confirmText: t('sessionGitPane.flow.conflicts.abort', { operation: operationName(kind) }), cancelText: t('common.cancel'), destructive: true },
-        );
-        if (confirmed) props.onAbort(kind);
-    }, [kind, props]);
 
     if (!kind && count === 0) return null;
     const title = kind
@@ -80,7 +70,7 @@ export const GitConflictNotice = React.memo(function GitConflictNotice(props: Re
             : null;
     const canSkip = kind !== null && props.operation?.canSkip === true && props.canSkipOperation === true && Boolean(props.onSkip);
     const secondary = kind && canAbort
-        ? { label: t('sessionGitPane.flow.conflicts.abort', { operation: operationName(kind) }), onPress: () => void abort(), disabled: props.busy, testID: 'session-git-conflicts-abort' }
+        ? { label: t('sessionGitPane.flow.conflicts.abort', { operation: operationName(kind) }), onPress: () => props.onAbort(kind), disabled: props.busy, testID: 'session-git-conflicts-abort' }
         : null;
     const skip = kind && canSkip
         ? [{ label: t('sessionGitPane.flow.conflicts.skip'), onPress: () => props.onSkip?.(kind), disabled: props.busy, testID: 'session-git-conflicts-skip' }]

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import * as fsPromises from 'node:fs/promises';
@@ -29,6 +29,8 @@ import { createDiagnosticsControllerWithRemovalFailure } from '../../daemon/voic
 
 import { RpcHandlerManager } from '../rpc/RpcHandlerManager';
 import type { RpcHandler as Handler } from '../rpc/types';
+
+afterAll(async () => { await pluginReloadController.shutdown(); });
 
 // Faults are injected only at Node's filesystem boundary; every unstubbed
 // operation keeps the real filesystem and all Voice/RPC owners remain real.

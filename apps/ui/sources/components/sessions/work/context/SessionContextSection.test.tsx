@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { applyPromptLibraryCatalogSnapshot, resetPromptLibraryCatalogSnapshotsForTests } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
 import { resetPromptLibraryCatalogEngineForTests } from '@/sync/engine/settings/promptLibraryCatalogEngine';
@@ -60,7 +61,7 @@ afterEach(async () => {
 const { SessionContextSection } = await import('./SessionContextSection');
 const { SessionMemorySection } = await import('../memory/SessionMemorySection');
 
-const entry = (id: string, artifactId: string, enabled = true) => ({
+const entry = (id: string, artifactId: string, enabled = true): PromptStackEntryV1 => ({
     id, ref: { kind: 'doc', artifactId, serverId }, enabled, placement: 'system_append',
 });
 function sessionWith(work: Record<string, unknown>, overrides: Partial<Session> = {}): Session {
@@ -125,6 +126,26 @@ describe('Work › Context', () => {
         expect(screen.findByTestId('session-work-context.entry.session.session.notes.more')).toBeTruthy();
     });
 
+    it('marks a Doc added here as its plan, and clears the mark from the marked row', async () => {
+        execute.mockResolvedValue({ ok: true, result: { ok: true } });
+        const rowActions = (screen: Awaited<ReturnType<typeof renderScreen>>, id: string) => screen.tree.root.findAll((node) =>
+            node.props.overflowTriggerTestID === `session-work-context.entry.session.${id}.more` && Array.isArray(node.props.actions))[0]
+            ?.props.actions as ReadonlyArray<{ id: string; onPress: () => void }> | undefined;
+        const screen = await renderScreen(<SessionContextSection serverId={serverId}
+            session={sessionWith({ promptStack: [entry('session.notes', 'notes-doc'), { ...entry('session.rollout', 'instructions-doc'), plan: true }] })} />);
+        const mark = rowActions(screen, 'session.notes')?.find((action) => action.id === 'plan');
+        expect(mark).toBeTruthy();
+        await React.act(async () => { mark?.onPress(); });
+        expect(execute).toHaveBeenLastCalledWith('session.context.update', {
+            sessionId: 's1', serverId, expectedMetadataRevision: 9, intent: { kind: 'set_plan', entryId: 'session.notes' },
+        }, expect.objectContaining({ surface: 'ui', serverId }));
+        const clear = rowActions(screen, 'session.rollout')?.find((action) => action.id === 'plan');
+        await React.act(async () => { clear?.onPress(); });
+        expect(execute).toHaveBeenLastCalledWith('session.context.update', {
+            sessionId: 's1', serverId, expectedMetadataRevision: 9, intent: { kind: 'set_plan', entryId: null },
+        }, expect.objectContaining({ surface: 'ui', serverId }));
+    });
+
     it('keeps an unresolved document off and without an editor link', async () => {
         const screen = await renderScreen(<SessionContextSection serverId={serverId}
             session={sessionWith({ promptStack: [entry('session.unknown', 'missing')] })} />);
@@ -150,6 +171,22 @@ describe('Work › Memory', () => {
         expect(execute).toHaveBeenCalledWith('session.memory.set', {
             sessionId: 's1', serverId, expectedMetadataRevision: 9, enabled: true,
         }, expect.objectContaining({ surface: 'ui' }));
+    });
+
+    it('shows the requested choice while the save is pending, so a slow Home never leaves the switch looking stuck', async () => {
+        let settle: (result: { ok: true; result: { ok: true } }) => void = () => {};
+        execute.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
+        const screen = await renderScreen(<SessionMemorySection serverId={serverId} session={sessionWith({})} />);
+        await React.act(async () => { screen.findByTestId('session-work-memory.enabled.switch')?.props.onValueChange(true); });
+        const pending = screen.findByTestId('session-work-memory.enabled.switch');
+        expect(pending?.props.value).toBe(true);
+        // The row owns its switch, so a disabled switch would dim the title too: a save in flight is not
+        // "disabled", it just takes no second choice until it settles.
+        expect(pending?.props.disabled).toBeFalsy();
+        await React.act(async () => { pending?.props.onValueChange(false); });
+        expect(execute).toHaveBeenCalledTimes(1);
+        await React.act(async () => { settle({ ok: true, result: { ok: true } }); });
+        expect(screen.findByTestId('session-work-memory.enabled.switch')?.props.disabled).toBeFalsy();
     });
 
     it('says a refused switch in the section, beside the switch it did not move, and opens no dialog', async () => {

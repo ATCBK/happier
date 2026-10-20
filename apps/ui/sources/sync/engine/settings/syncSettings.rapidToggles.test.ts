@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHomeGovernanceHarness, createAccountTokenForTests, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { Settings } from '@/sync/domains/settings/settings';
+import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
@@ -19,8 +20,52 @@ const keys = [
     'transcriptMessagePluginActionsEnabled', 'transcriptMessageMakeRepeatableActionEnabled',
 ] as const satisfies readonly (keyof Settings)[];
 afterEach(async () => { await harness.reset(); });
+// reset retires the HTTP port as well as fixture Homes; restore that real
+// system boundary before each case rather than letting later cases hit DNS.
+beforeEach(() => { installHomeGovernanceBoundaries(harness); });
 
 describe('rapid Account settings intents', () => {
+    it('does not echo an unchanged stale preference during refresh or an unrelated write', async () => {
+        const serverId = await harness.addHome({ name: 'Stale client', serverUrl: 'https://stale-client.example', accountId: 'owner', currentAccount: true });
+        const scope = { serverId, accountId: 'owner' };
+        let raw: Record<string, unknown> = { keyboardShortcutsV2Enabled: false, analyticsOptOut: false };
+        let version = 2;
+        let pending: Partial<Settings> = {};
+        // Another client has already restored the preference. This client's
+        // older projection is not an intent to restore its stale value.
+        storage.setState({ settingsScope: scope, settingsVersion: 1,
+            settings: settingsParse({ keyboardShortcutsV2Enabled: true, analyticsOptOut: false }) });
+        savePendingAccountSettings(scope, {});
+        harness.answer(serverId, '/v2/account/settings', { select: () => ({ body: { content: { t: 'plain', v: raw }, version } }) });
+        let posts = 0;
+        harness.answer(serverId, 'POST /v2/account/settings', { select: input => {
+            // Real HTTP boundary: accept exactly the current CAS version.
+            const request = input as { expectedVersion: number; content: { t: 'plain'; v: Record<string, unknown> } };
+            expect(request.expectedVersion).toBe(version);
+            raw = request.content.v;
+            posts++;
+            return { body: { success: true, version: ++version } };
+        } });
+        const sync = () => syncSettings({ credentials: { token: createAccountTokenForTests('owner', { currentAccount: true }) },
+            encryption: null, settingsScope: scope, pendingSettings: pending,
+            getPendingSettings: () => pending, clearPendingSettings: next => { pending = next; savePendingAccountSettings(scope, next); } });
+        await sync();
+        expect(posts).toBe(0);
+        expect(storage.getState().settings.keyboardShortcutsV2Enabled).toBe(false);
+        // Recreate the stale projection before a real unrelated local intent.
+        storage.setState({ settingsVersion: 1, settings: settingsParse({ keyboardShortcutsV2Enabled: true, analyticsOptOut: false }) });
+        applySettingsLocalDelta({ expectedSettingsScope: scope, delta: { analyticsOptOut: true }, settingsSecretsKey: null,
+            getPendingSettings: () => pending, setPendingSettings: next => { pending = next; }, schedulePendingSettingsFlush: () => {} });
+        expect(pending).toEqual({ analyticsOptOut: true });
+        await sync();
+        expect(posts).toBe(1);
+        expect(raw).toMatchObject({ keyboardShortcutsV2Enabled: false, analyticsOptOut: true });
+        expect(pending).toEqual({});
+        await sync();
+        expect(posts).toBe(1);
+        expect(storage.getState().settings.keyboardShortcutsV2Enabled).toBe(false);
+    });
+
     it('parses a fetched Settings baseline only once before publication', async () => {
         const serverId = await harness.addHome({ name: 'Settings', serverUrl: 'https://settings-perf.example', accountId: 'owner', currentAccount: true });
         const scope = { serverId, accountId: 'owner' };
@@ -182,5 +227,73 @@ describe('rapid Account settings intents', () => {
         const response = await harness.request('https://reversal.example/v2/account/settings');
         const readback = await response.json() as { content: { t: 'plain'; v: Record<string, unknown> } };
         expect(readback.content.v[key]).toBe(false);
+    });
+
+    it('retires recovered organization-only pending roots without importing them or writing Account settings', async () => {
+        const serverId = await harness.addHome({ name: 'Retired pending', serverUrl: 'https://retired-pending.example', accountId: 'owner', currentAccount: true });
+        const scope = { serverId, accountId: 'owner' };
+        storage.setState({ settingsScope: scope, settingsVersion: 1, settings: settingsParse({}) });
+        // Recovered/JavaScript ingress can still contain a historical root that typed editors cannot author.
+        let pending: Partial<Settings> & { pinnedSessionKeysV1?: string[] } = {
+            pinnedSessionKeysV1: [`${serverId}:pending-session`],
+        };
+        harness.answer(serverId, '/v2/account/settings', { body: {
+            content: { t: 'plain', v: { analyticsOptOut: false } }, version: 1,
+        } });
+
+        await syncSettings({
+            credentials: { token: createAccountTokenForTests('owner', { currentAccount: true }) },
+            encryption: null,
+            settingsScope: scope,
+            pendingSettings: pending,
+            getPendingSettings: () => pending,
+            clearPendingSettings: next => { pending = next; savePendingAccountSettings(scope, next); },
+        });
+
+        expect(pending).toEqual({});
+        expect(loadPendingAccountSettings(scope)).toEqual({});
+        expect(harness.requestsFor('/v2/account/settings')).toHaveLength(1);
+        expect(harness.requests.filter(request => request.path.startsWith('/v2/session-organization'))).toEqual([]);
+        expect(storage.getState().settingsVersion).toBe(1);
+    });
+
+    it('commits a current preference while retiring a recovered organization root from the same pending delta', async () => {
+        const serverId = await harness.addHome({ name: 'Mixed pending', serverUrl: 'https://mixed-pending.example', accountId: 'owner', currentAccount: true });
+        const scope = { serverId, accountId: 'owner' };
+        storage.setState({ settingsScope: scope, settingsVersion: 1, settings: settingsParse({}) });
+        let pending: Partial<Settings> & { pinnedSessionKeysV1?: string[] } = {
+            analyticsOptOut: true,
+            pinnedSessionKeysV1: [`${serverId}:pending-session`],
+        };
+        let raw: Record<string, unknown> = { analyticsOptOut: false };
+        let version = 1;
+        const written: Record<string, unknown>[] = [];
+        harness.answer(serverId, '/v2/account/settings', { select: () => ({ body: {
+            content: { t: 'plain', v: raw }, version,
+        } }) });
+        harness.answer(serverId, 'POST /v2/account/settings', { select: input => {
+            const request = AccountSettingsV2UpdateRequestSchema.parse(input);
+            expect(request.expectedVersion).toBe(version);
+            if (request.content?.t !== 'plain') throw new Error('Expected plain Account settings');
+            raw = request.content.v;
+            written.push(raw);
+            return { body: { success: true, version: ++version } };
+        } });
+
+        await syncSettings({
+            credentials: { token: createAccountTokenForTests('owner', { currentAccount: true }) },
+            encryption: null,
+            settingsScope: scope,
+            pendingSettings: pending,
+            getPendingSettings: () => pending,
+            clearPendingSettings: next => { pending = next; savePendingAccountSettings(scope, next); },
+        });
+
+        expect(written).toEqual([{ analyticsOptOut: true }]);
+        expect(pending).toEqual({});
+        expect(loadPendingAccountSettings(scope)).toEqual({});
+        expect(harness.requests.filter(request => request.path.startsWith('/v2/session-organization'))).toEqual([]);
+        expect(storage.getState().settings.analyticsOptOut).toBe(true);
+        expect(storage.getState().settingsVersion).toBe(2);
     });
 });

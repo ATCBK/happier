@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { MachineAddSshStartInputSchema, MachineAddSshTaskInputSchema, MachineAddSshRespondInputSchema, MachineAddSshCancelInputSchema } from '@happier-dev/protocol/actions/specs/machineConnection';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { resolveHomeTargetFromDescriptor } from '@happier-dev/cli-common/homeTarget';
@@ -30,8 +30,8 @@ import { beginMachineAddWatch, startMachineAddTask } from './machineAddTaskLifet
 import { getMachineAddSshSupportedAuthModes } from './machineAddSshTask';
 
 const ResolutionSchema = z.object({
-    hostTrust: z.object({ kind: z.enum(['ssh.trustHost', 'ssh.replaceHostKey']), fingerprint: z.string(), existingFingerprint: z.string().nullable().optional() }).optional(),
-    authApproval: z.object({ publicKey: z.string() }).optional(),
+    hostTrust: z.optional(z.object({ kind: z.enum(['ssh.trustHost', 'ssh.replaceHostKey']), fingerprint: z.string(), existingFingerprint: z.optional(z.nullable(z.string())) })),
+    authApproval: z.optional(z.object({ publicKey: z.string() })),
 });
 
 /** Actions consume the existing retained draft and system task, never a parallel task registry. */

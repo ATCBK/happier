@@ -7,6 +7,7 @@ import { createStablePluginDeclarativeModel } from '@/plugins/runtime/invocation
 import type { LoadedPlugin } from '@/plugins/discovery/load/installed';
 import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 import { readCliWidgetCatalogProjectionV1 } from './widgetCatalogProjection';
+import { describeWidgetAreaApprovalSurfaceV1 } from '@happier-dev/protocol/widgets';
 
 describe('headless widget catalog projection', () => {
     it('offers both execution targets and retains available localized descriptors from the real registry producer', () => {
@@ -14,6 +15,8 @@ describe('headless widget catalog projection', () => {
         const parsed = ingestCanonicalPluginManifest(JSON.stringify({ schemaVersion: 2, id: pluginId, version: '1.0.0', displayName: 'Widgets',
             engines: { happier: '^0.2.0' }, runtime: { apiVersion: 1 }, entrypoints: { daemon: './daemon.mjs' },
             contributes: { ui: { views: [
+                { id: 'overview', container: 'appPage', target: { kind: 'app' }, renderer: 'content', title: { key: 'page.title', fallback: 'Widget areas' },
+                  widgetAreas: [{ name: 'pinned', contextSchema: { type: 'object' } }] },
                 { sizeDeclaration: { sizes: ['small', 'medium', 'wide', 'full', 'tall', 'large'], defaultSize: 'medium' }, id: 'app', container: 'widget', target: { kind: 'app' }, renderer: 'content', title: { key: 'widget.app', fallback: 'App widget' } },
                 { sizeDeclaration: { sizes: ['small', 'medium', 'wide', 'full', 'tall', 'large'], defaultSize: 'medium' }, id: 'session', container: 'widget', target: { kind: 'session' }, renderer: 'content', title: 'Session widget', sessionInputPath: 'session',
                   inputs: { fields: [{ path: 'session', title: 'Session', widget: 'select', optionsSourceId: 'sessions.list' }] }, inputSchema: { type: 'object', properties: { session: { type: 'object' } } } },
@@ -34,15 +37,21 @@ describe('headless widget catalog projection', () => {
         const projection = buildPluginProjectionV2({ registry, generation: 1,
             pluginUiHostRuntime: { declarative: { modelsByRendererKey: { [`${pluginId}\0content`]: model } } },
         });
-        expect(readCliWidgetCatalogProjectionV1(projection).filter(candidate => 'definition' in candidate)).toMatchObject([
-            { definition: { kind: 'builtin', id: 'session_summary' }, target: 'session', sessionInputPath: 'session' },
-            { definition: { kind: 'builtin', id: 'agent_plan' } },
-            { definition: { kind: 'builtin', id: 'changes' } },
-            { definition: { kind: 'builtin', id: 'local_services' } },
-        ]);
+        expect(readCliWidgetCatalogProjectionV1(projection).filter(candidate => 'definition' in candidate)).toEqual(expect.arrayContaining([
+            expect.objectContaining({ definition: { kind: 'builtin', id: 'session_summary' }, target: 'session',
+                fields: expect.arrayContaining([expect.objectContaining({ path: 'session', inputType: { hostType: 'session' }, required: true })]) }),
+            expect.objectContaining({ definition: { kind: 'builtin', id: 'agent_plan' } }),
+            expect.objectContaining({ definition: { kind: 'builtin', id: 'changes' } }),
+            expect.objectContaining({ definition: { kind: 'builtin', id: 'local_services' } }),
+        ]));
         expect(readCliWidgetCatalogProjectionV1(projection).filter(candidate => candidate.surface)).toMatchObject([
             { key: `${pluginId}/app`, title: 'App widget', target: 'app', availability: 'available' },
             { key: `${pluginId}/session`, title: 'Session widget', target: 'session', availability: 'available' },
         ]);
+        const surface = { serverId: 'home', accountId: 'account', owner: { kind: 'pluginArea', pluginId, pageId: 'overview', area: 'pinned' } } as const;
+        const entries = Object.values(projection.familiesById.pluginUi?.entriesById ?? {});
+        expect(describeWidgetAreaApprovalSurfaceV1(surface, entries)).toEqual({ pageName: 'Widget areas', areaName: 'Pinned' });
+        expect(describeWidgetAreaApprovalSurfaceV1(surface, [...entries, ...entries])).toBeNull();
+        expect(describeWidgetAreaApprovalSurfaceV1({ ...surface, owner: { ...surface.owner, pluginId: 'another.plugin' } }, entries)).toBeNull();
     });
 });

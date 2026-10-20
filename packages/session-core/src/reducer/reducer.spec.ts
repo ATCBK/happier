@@ -544,6 +544,28 @@ describe('reducer', () => {
             expect(reducer(state, [retracted]).messages).toEqual([]);
         });
 
+        it('updates an existing Follow batch event when its server delivery proof changes', () => {
+            const state = createReducer();
+            const localId = 'session-follow-wake:batch-1';
+            const initial: NormalizedMessage = {
+                id: 'follow-event-row', localId, createdAt: 1_000, seq: 8,
+                role: 'event', isSidechain: false,
+                content: { type: 'worker-update', followWakeEventLocalId: localId, update: {
+                    v: 1, workerKind: 'session', workerId: 'worker-session',
+                    ownerState: 'published', wake: 'published', headline: 'Worker updated', canInspect: true,
+                } },
+                followDeliveryProjection: { status: null, reason: null },
+            };
+            expect(reducer(state, [initial]).messages[0]).toMatchObject({
+                kind: 'agent-event', followDeliveryProjection: { status: null },
+            });
+            const changed = reducer(state, [], null, [{ id: initial.id, localId,
+                followDeliveryProjection: { status: 'woke', reason: null } }]);
+            expect(changed.messages).toEqual([expect.objectContaining({
+                kind: 'agent-event', followDeliveryProjection: { status: 'woke', reason: null },
+            })]);
+        });
+
         it('refreshes a server-issued message action reference even when the durable user content is unchanged', () => {
             const state = createReducer();
             const messageActionReference = {

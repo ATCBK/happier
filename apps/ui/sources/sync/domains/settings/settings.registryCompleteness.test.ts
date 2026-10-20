@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
 describe('settings registry completeness', () => {
+    it('reads omitted chat wrapping preferences with compatible defaults and retains explicit account choices', async () => {
+        const { applySettings, settingsParse } = await import('./settings');
+        const defaults = settingsParse({ wrapLinesInDiffs: true });
+        expect(defaults.showChatCodeBlockWrapControls).toBe(true);
+        expect(defaults.wrapChatCodeBlocks).toBe(false);
+        const reread = settingsParse(applySettings(defaults, { showChatCodeBlockWrapControls: false, wrapChatCodeBlocks: true }));
+        expect(reread.showChatCodeBlockWrapControls).toBe(false);
+        expect(reread.wrapChatCodeBlocks).toBe(true);
+        expect(reread.wrapLinesInDiffs).toBe(true);
+    });
+
     it('owns the default Home atmosphere in the account catalog', async () => {
         const { ACCOUNT_SETTING_ARTIFACTS } = await import('./settings');
         expect(ACCOUNT_SETTING_ARTIFACTS.defaults).toHaveProperty('homeAtmosphere.source', 'planet');

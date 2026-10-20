@@ -49,6 +49,18 @@ export function homeHorizonBand(
 /** The Horizon dissolve runs from 58 % of the band to its foot, thinning through the composer. */
 export const HOME_HORIZON_FADE_FROM = 0.58;
 
+/**
+ * A Project's planet lives in its band (plan R-7): drawn only above the bottom of the Project tabs and
+ * ending there in the ordered foot fade, so the page under the tabs keeps its own ground. Rise's limb
+ * sits high in the band so its crown shows behind the header instead of falling below the tabs.
+ */
+export function projectPlanetBand(band: number) {
+  return {
+    fade: { from: Math.round(band * HOME_HORIZON_FADE_FROM), to: band },
+    riseLimb: Math.round(band * 0.4),
+  };
+}
+
 /** Rise: the limb crosses the composer's top; its body leaves in order before the widgets. */
 export function homeRiseLimb(composerTop: number): number {
   return composerTop + 10;

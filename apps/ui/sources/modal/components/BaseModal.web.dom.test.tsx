@@ -40,9 +40,12 @@ vi.mock('react-native-keyboard-controller', () => ({
     ),
 }));
 
+// Prepare the real modal graph after its SDK boundaries, outside the behavioral budget.
+const { BaseModal } = await import('./BaseModal');
+const { PopoverScrollSourceProvider, usePopoverScrollSourceRef } = await import('@/components/ui/popover/PopoverScrollSource');
+
 describe('BaseModal (web focus)', () => {
     it('returns focus to the pre-open trigger when its portal dialog unmounts', async () => {
-        const { BaseModal } = await import('./BaseModal');
         const backgroundButton = document.createElement('button');
         backgroundButton.textContent = 'Background';
         document.body.appendChild(backgroundButton);
@@ -69,13 +72,13 @@ describe('BaseModal (web focus)', () => {
 
             expect(document.activeElement).toBe(backgroundButton);
         } finally {
+            await act(async () => { root.unmount(); });
             container.remove();
             backgroundButton.remove();
         }
     });
 
     it('keeps Tab and Shift+Tab focus traversal inside the active dialog', async () => {
-        const { BaseModal } = await import('./BaseModal');
         const backgroundButton = document.createElement('button');
         backgroundButton.textContent = 'Background';
         document.body.appendChild(backgroundButton);
@@ -125,6 +128,36 @@ describe('BaseModal (web focus)', () => {
             });
             container.remove();
             backgroundButton.remove();
+        }
+    });
+    // L77: a modal opened from a scrolling page is not scrolled by that page. A list inside it follows the modal's
+    // own scroller (overlay host) or, when its content owns the scrolling, none - never the page behind.
+    it.each([
+        ['overlay', 'dialog'],
+        ['body', null],
+    ] as const)('replaces the page scroll source for its content with the %s scroller', async (scrollHost, expected) => {
+        const pageScroller = { page: true };
+        let seen: React.RefObject<unknown> | null | undefined;
+        function SourceProbe() { seen = usePopoverScrollSourceRef(); return null; }
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        try {
+            await act(async () => {
+                root.render(
+                    <PopoverScrollSourceProvider scrollSourceRef={{ current: pageScroller }}>
+                        <BaseModal visible closeOnBackdrop={false} scrollHost={scrollHost} placement="bottom">
+                            <SourceProbe />
+                        </BaseModal>
+                    </PopoverScrollSourceProvider>,
+                );
+            });
+            const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
+            expect(dialog).not.toBeNull();
+            expect(seen?.current ?? null).toBe(expected === 'dialog' ? dialog : null);
+        } finally {
+            await act(async () => { root.unmount(); });
+            container.remove();
         }
     });
 });

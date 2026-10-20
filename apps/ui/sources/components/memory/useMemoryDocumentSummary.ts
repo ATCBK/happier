@@ -1,14 +1,15 @@
 import * as React from 'react';
 import type { MemorySearchScope } from '@happier-dev/protocol/memory/memorySearch';
+import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { fetchDaemonMemoryDocumentSummary, type MemoryDocumentSummary } from '@/sync/domains/memory/fetchDaemonMemoryStatus';
 import { useMemorySearchProvider } from '@/sync/domains/memory/useMemorySearchProvider';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 import type { MemoryDocumentSource } from './useMemoryDocument';
 
 const UNAVAILABLE: MemoryDocumentSummary = { state: 'unavailable' };
-const PENDING: MemoryDocumentSummary = { state: 'pending' };
 const DOCUMENTS = ['documents'] as const;
 
 /** One cancellable read of the existing daemon admission owner, not a retained preparation. */
@@ -32,23 +33,40 @@ export function useMemoryDocumentSummary(params: Readonly<{
   const provider = useMemorySearchProvider({ kind: 'exact', serverId: account?.serverId ?? serverId },
     { enabled, corpora: DOCUMENTS });
   const target = provider.daemonTarget;
+  const selectedTarget = provider.selectedDaemonTarget;
+  const unavailableMachine = React.useMemo<MemoryDocumentSummary>(() => selectedTarget && account
+    && areServerProfileIdentifiersEquivalent(selectedTarget.serverId, account.serverId)
+    ? { state: 'unavailable', cause: { reason: 'machine_unavailable', target: selectedTarget } }
+    : UNAVAILABLE, [account, selectedTarget]);
+  // An admitted status operation follows its caller's lifetime and may not answer.
+  // Unknown counts are unavailable now, not a promise that a loading row will finish.
+  // Keep that same read alive so a late answer can still supply the counts.
+  const awaitingStatus = React.useMemo<MemoryDocumentSummary>(() => target
+    ? { state: 'unavailable', cause: { reason: 'status_pending', target } }
+    : UNAVAILABLE, [target]);
   const key = JSON.stringify([account?.serverId, account?.accountId, target?.serverId, target?.machineId,
     view?.ref, view?.revision, sessionId, params.preparationBasis, source.status, source.stale]);
   const [loaded, setLoaded] = React.useState<Readonly<{ key: string; summary: MemoryDocumentSummary }> | null>(null);
   React.useEffect(() => {
     if (!enabled || !view || !target || !account || custody?.isCurrent() !== true) return;
     const controller = new AbortController();
-    setLoaded({ key, summary: PENDING });
+    setLoaded({ key, summary: awaitingStatus });
     void fetchDaemonMemoryDocumentSummary({ ...target, accountId: account.accountId,
       ref: view.ref, revision: view.revision, signal: controller.signal,
       scope: sessionId ? { type: 'session', sessionId } : { type: 'global' },
     }).then(summary => {
-      if (!controller.signal.aborted && custody.isCurrent()) setLoaded({ key, summary });
-    }).catch(() => {
-      if (!controller.signal.aborted && custody.isCurrent()) setLoaded({ key, summary: UNAVAILABLE });
+      if (!controller.signal.aborted && custody.isCurrent()) setLoaded({ key, summary: summary.state === 'pending'
+        ? { state: 'unavailable', cause: { reason: 'coverage_pending', target } }
+        : summary });
+    }).catch((error: unknown) => {
+      const errorCode = readRpcErrorCode(error);
+      if (!controller.signal.aborted && custody.isCurrent()) setLoaded({ key, summary: { state: 'unavailable', cause: {
+        reason: 'status_failed', target, ...(errorCode ? { errorCode } : {}),
+      } } });
     });
     return () => controller.abort();
-  }, [account, custody, enabled, key, params.preparationBasis, sessionId, target, view]);
-  if (!enabled || !target || !account || custody?.isCurrent() !== true) return UNAVAILABLE;
-  return loaded?.key === key ? loaded.summary : PENDING;
+  }, [account, awaitingStatus, custody, enabled, key, params.preparationBasis, sessionId, target, view]);
+  if (!enabled || !account || custody?.isCurrent() !== true) return UNAVAILABLE;
+  if (!target) return unavailableMachine;
+  return loaded?.key === key ? loaded.summary : awaitingStatus;
 }

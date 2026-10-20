@@ -14,6 +14,9 @@ function createMockResolvedContributionRegistry(params?: Readonly<{
     catalogEntriesById: {},
     agentDefinitionsById: new Map<never, never>(),
     pluginDiagnosticsByPluginId: {},
+    voiceProviders: [],
+    connectedAccountDescriptorsById: new Map(),
+    providersByContributionKey: new Map(),
   };
 }
 
@@ -28,6 +31,9 @@ const { getResolvedContributionRegistry } = vi.hoisted(() => ({
     catalogEntriesById: {},
     agentDefinitionsById: new Map(),
     pluginDiagnosticsByPluginId: {},
+    voiceProviders: [],
+    connectedAccountDescriptorsById: new Map(),
+    providersByContributionKey: new Map(),
   })),
 }));
 const { readDaemonPluginCatalog } = vi.hoisted(() => ({
@@ -86,6 +92,7 @@ vi.mock('@/session/transport/rpc/sessionRpc', () => ({
 
 import { callBuiltInHappierTool } from './callBuiltInHappierTool';
 import { configuration } from '@/configuration';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { accountSettingsParse } from '@happier-dev/protocol';
 import {
   commitActiveAccountSettingsSnapshot,
@@ -148,7 +155,7 @@ describe('callBuiltInHappierTool', () => {
     expect(createCliActionExecutorFromCredentials).toHaveBeenCalledWith(expect.objectContaining({
       credentials: { token: 'token', encryption: null },
       serverId: configuration.activeServerId,
-      serverApiUrl: configuration.apiServerUrl,
+      serverApiUrl: resolveServerHttpBaseUrl(),
     }));
   });
 
@@ -483,7 +490,7 @@ describe('callBuiltInHappierTool', () => {
     expect(execute).toHaveBeenCalledOnce();
   });
 
-  it('rejects action-backed MCP-only tools on the CLI surface', async () => {
+  it('admits memory search on the CLI surface through the shared Action executor', async () => {
     const { callBuiltInHappierTool } = await import('./callBuiltInHappierTool');
     const result = await callBuiltInHappierTool({
       credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } },
@@ -491,12 +498,13 @@ describe('callBuiltInHappierTool', () => {
       toolName: 'memory_search',
       args: {
         machineId: 'machine-1',
-        query: { q: 'needle' },
+        query: { v: 1, query: 'needle', scope: { type: 'global' }, mode: 'hints' },
       },
     });
 
-    expectActionDisabled(result);
-    expect(execute).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: true, result: { started: true } });
+    expect(execute).toHaveBeenCalledWith('memory.search', expect.objectContaining({ machineId: 'machine-1' }),
+      expect.objectContaining({ surface: 'cli' }));
   });
 
   it('preserves execution_run_start failures from the shared action executor', async () => {

@@ -1,5 +1,5 @@
-import { useRef, type ReactNode } from 'react';
-import { I18nManager, Platform, View } from 'react-native';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { I18nManager, Platform, ScrollView, View } from 'react-native';
 
 import { useOptionalHappierUiLocalization, useOptionalHappierUiTypography } from '../../environment/context.js';
 import { HappierPressable } from '../interaction/Pressable.js';
@@ -53,6 +53,8 @@ export const HAPPIER_SEGMENTED_METRICS = Object.freeze({
   segmentPaddingVerticalPx: Object.freeze({ default: 6, compact: 4 }),
   /** A content-sized segment's side padding (a segment hugging its label). */
   segmentPaddingHorizontalPx: 12,
+  /** The side padding when the track is too narrow for its labels at their natural width. */
+  segmentPaddingTightPx: 4,
   /**
    * The default label is the control text role (selects, buttons and segment labels read as one
    * family beside the row titles); the track stays 32px tall (2 + 6 + 16 + 6 + 2).
@@ -120,6 +122,16 @@ export type HappierSegmentedChoiceProps = Readonly<{
    */
   iconOnly?: boolean;
   /**
+   * A track that can be wider than its container (a phone's board columns). It scrolls sideways
+   * instead of being clipped, and the chosen segment is kept in view whenever it changes.
+   */
+  scrollable?: boolean;
+  /**
+   * A track that takes its container's whole width, its segments sharing it equally (a panel's
+   * level choice above what it means). Without it the track is content-sized.
+   */
+  fill?: boolean;
+  /**
    * Where the chosen value comes from. `set` (default): the person chose it, drawn on the filled thumb.
    * `inherited`: it follows a default (a tool on its server's default), drawn as an outlined thumb with
    * the label in secondary ink, and announced with a "default" suffix. Selection semantics are unchanged.
@@ -155,8 +167,62 @@ export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
     : selectedIndex >= 0 ? selectedIndex : props.segments.findIndex((segment) => !segment.disabled);
   const verticalPadding = HAPPIER_SEGMENTED_METRICS.segmentPaddingVerticalPx[size];
   const horizontalPadding = HAPPIER_SEGMENTED_METRICS.segmentPaddingHorizontalPx;
+  const scrollable = props.scrollable === true;
+  const scrollRef = useRef<ScrollView | null>(null);
+  const reach = useRef({ viewport: 0, offset: 0, selected: selectedIndex, pending: true, segments: new Map<string, Readonly<{ x: number; width: number }>>() });
+  reach.current.selected = selectedIndex;
+  const revealSelected = () => {
+    const state = reach.current;
+    const chosen = props.segments[state.selected];
+    const frame = chosen === undefined ? undefined : state.segments.get(chosen.key);
+    if (!state.pending || frame === undefined || state.viewport === 0) return;
+    // A choice is revealed once, so a reader who scrolls the strip on to other segments is not pulled back.
+    state.pending = false;
+    const margin = HAPPIER_SEGMENTED_METRICS.trackPaddingPx * 4;
+    const target = frame.x < state.offset ? frame.x - margin
+      : frame.x + frame.width > state.offset + state.viewport ? frame.x + frame.width - state.viewport + margin
+      : null;
+    if (target === null) return;
+    state.offset = Math.max(0, target);
+    scrollRef.current?.scrollTo({ x: state.offset, animated: false });
+  };
+  useEffect(() => {
+    reach.current.pending = true;
+    if (scrollable) revealSelected();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedIndex, scrollable]);
 
-  return (
+  // A track that cannot show every label at its natural width gives up its segments' side padding and
+  // spreads them across the width it has (a narrow pane, an enlarged text size), instead of clipping.
+  // The natural width is measured only while it is roomy, so the two states never fight over a size.
+  const fitsContainer = !props.wrap && !scrollable;
+  const fill = fitsContainer && props.fill === true;
+  const fit = useRef({ available: 0, natural: 0 });
+  const [tight, setTight] = useState(false);
+  const labelSignature = `${size}\u0000${props.segments.map((segment) => segment.label).join('\u0000')}`;
+  useEffect(() => {
+    fit.current.natural = 0;
+    setTight(false);
+  }, [labelSignature]);
+  const refit = () => {
+    const { available, natural } = fit.current;
+    if (available === 0 || natural === 0) return;
+    setTight(natural + HAPPIER_SEGMENTED_METRICS.trackPaddingPx * 2 > available + 0.5);
+  };
+  // A filled track spreads its segments over the width it is given, so it never needs the roomy padding.
+  const stretch = tight || fill;
+  const segmentPadding = stretch ? HAPPIER_SEGMENTED_METRICS.segmentPaddingTightPx : horizontalPadding;
+  const fitRow = (segments: ReactNode) => fitsContainer ? (
+    <View
+      style={stretch ? { flexDirection: 'row', flexGrow: 1, minWidth: 0 } : { flexDirection: 'row', flexShrink: 0, alignSelf: 'flex-start' }}
+      onLayout={(event) => {
+        if (!stretch) fit.current.natural = event.nativeEvent.layout.width;
+        refit();
+      }}
+    >{segments}</View>
+  ) : segments;
+
+  const track = (
     <View
       role="radiogroup"
       accessibilityLabel={props.accessibilityLabel}
@@ -166,8 +232,8 @@ export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
       style={{
         flexDirection: 'row',
         flexWrap: props.wrap ? 'wrap' : 'nowrap',
-        alignSelf: 'flex-start',
-        maxWidth: '100%',
+        alignSelf: stretch ? 'stretch' : 'flex-start',
+        ...(scrollable ? undefined : { maxWidth: '100%' }),
         padding: HAPPIER_SEGMENTED_METRICS.trackPaddingPx,
         borderRadius: HAPPIER_SEGMENTED_METRICS.trackRadiusPx[size],
         backgroundColor: paintColor(props.colors.track),
@@ -175,12 +241,12 @@ export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
         opacity: groupDisabled ? HAPPIER_SEGMENTED_METRICS.disabledOpacity : 1,
       }}
     >
-      {props.segments.map((segment, index) => {
+      {fitRow(props.segments.map((segment, index) => {
         const disabled = groupDisabled || segment.disabled;
         const showsLabel = props.iconOnly !== true || segment.leading === undefined || segment.leading === null;
-        return (
+        const pressable = (
           <HappierPressable
-            key={segment.key}
+            key={scrollable ? undefined : segment.key}
             accessibilityRole="radio"
             accessibilityLabel={segment.selected && inheritedSuffix !== null
               ? `${segment.accessibilityLabel ?? segment.label}, ${inheritedSuffix}`
@@ -219,13 +285,15 @@ export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
               gap: segment.leading && showsLabel ? HAPPIER_SEGMENTED_METRICS.trackPaddingPx * 2 : 0,
               justifyContent: 'center',
               paddingVertical: verticalPadding,
-              paddingHorizontal: horizontalPadding,
+              paddingHorizontal: segmentPadding,
+              ...(fill ? { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 }
+                : tight ? { flexGrow: 1, flexShrink: 1, flexBasis: 'auto', minWidth: 0 } : undefined),
               borderRadius: HAPPIER_SEGMENTED_METRICS.segmentRadiusPx[size],
               ...happierFocusRingStyle({ visible: state.focused, color: props.colors.focusRing }),
               backgroundColor: segment.selected && !inherited ? paintColor(props.colors.thumb, undefined, 'solidControl') : 'transparent',
               // An inherited value is outlined: the same box (the border sits inside it), no fill, no lift.
               ...(segment.selected && inherited
-                ? { borderWidth: 1, borderColor: props.colors.inheritedThumbBorder ?? props.colors.track, paddingVertical: verticalPadding - 1, paddingHorizontal: horizontalPadding - 1 }
+                ? { borderWidth: 1, borderColor: props.colors.inheritedThumbBorder ?? props.colors.track, paddingVertical: verticalPadding - 1, paddingHorizontal: segmentPadding - 1 }
                 : undefined),
               ...(segment.selected && !inherited && !state.pressed ? props.colors.thumbLift : undefined),
               opacity: !groupDisabled && segment.disabled
@@ -251,7 +319,29 @@ export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
             </HappierText> : null}
           </HappierPressable>
         );
-      })}
+        // A scrolling track reads each segment's frame to keep the chosen one in view.
+        return scrollable ? (
+          <View key={segment.key} onLayout={(event) => {
+            const { x, width } = event.nativeEvent.layout;
+            reach.current.segments.set(segment.key, { x, width });
+            revealSelected();
+          }}>{pressable}</View>
+        ) : pressable;
+      }))}
     </View>
+  );
+  if (!scrollable) return fitsContainer ? <View style={{ alignSelf: stretch ? 'stretch' : 'flex-start', maxWidth: '100%' }} onLayout={(event) => { fit.current.available = event.nativeEvent.layout.width; refit(); }}>{track}</View> : track;
+  return (
+    <ScrollView
+      ref={scrollRef}
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      scrollEventThrottle={16}
+      style={{ flexGrow: 0 }}
+      onLayout={(event) => { reach.current.viewport = event.nativeEvent.layout.width; revealSelected(); }}
+      onScroll={(event) => { reach.current.offset = event.nativeEvent.contentOffset.x; }}
+    >
+      {track}
+    </ScrollView>
   );
 }

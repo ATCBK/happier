@@ -1,11 +1,13 @@
 import type { RpcAckResponseEmitter, RpcTargetSelectionResult } from "./_types";
 import { selectRpcTarget } from "./rpcTargetSelection";
+import type { SocketRpcAnsweringClientV1 } from '@happier-dev/protocol/socketRpc';
 
 export async function waitForRpcTargetAvailability(params: Readonly<{
     graceMs: number;
     pollMs: number;
     discoverTargets: () => Promise<RpcAckResponseEmitter[]>;
     excludedSocketId?: string;
+    answeringClient?: SocketRpcAnsweringClientV1;
     /** Only accepted wake preparation extends discovery into its original caller's lifetime. */
     callerLifetime?: Readonly<{ signal: AbortSignal; isCurrent(): Promise<boolean> }>;
 }>): Promise<RpcTargetSelectionResult> {
@@ -15,6 +17,7 @@ export async function waitForRpcTargetAvailability(params: Readonly<{
     let selection = selectRpcTarget({
         targets: await params.discoverTargets(),
         excludedSocketId: params.excludedSocketId,
+        answeringClient: params.answeringClient,
     });
     if (selection.type !== "not-available") {
         return selection;
@@ -39,6 +42,7 @@ export async function waitForRpcTargetAvailability(params: Readonly<{
         selection = selectRpcTarget({
             targets: await params.discoverTargets(),
             excludedSocketId: params.excludedSocketId,
+            answeringClient: params.answeringClient,
         });
         if (selection.type !== "not-available") {
             if (!await current()) return { type: 'not-available' };

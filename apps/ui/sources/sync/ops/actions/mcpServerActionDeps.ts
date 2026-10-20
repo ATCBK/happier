@@ -23,6 +23,7 @@ import { readInstalledMachineAgentIds } from '@/sync/domains/capabilities/reach/
 import { machineAgentInventoryStore } from '@/agents/machineAgents/machineAgentInventoryStore';
 import { serverAccountScopedResourceKey } from '@/sync/domains/scope/serverAccountScope';
 import { resolveVisibleMachinesForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
+import { resolveWebappUrlFromServerUrl } from '@/sync/domains/server/url/resolveWebappUrlFromServerUrl';
 
 /** Reuse the catalog and RPC owners within the Action host's captured Account lifetime. */
 export function createUiMcpServerActionExecuteV1(account: LazyActionAccountContext,
@@ -42,12 +43,13 @@ export function createUiMcpServerActionExecuteV1(account: LazyActionAccountConte
                 const machineId = resolveUiAccountActionFallbackMachineId(account);
                 if (!machineId) return null;
                 const { loadDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
-                const inputs = await loadDaemonMergedProjectionInputs({ machineId, serverId: account.serverId, accountLifetime: account.accountLifetime });
+                const inputs = await loadDaemonMergedProjectionInputs({ machineId, serverId: account.serverId, accountLifetime: account.accountLifetime, signal: cancellation.signal });
                 assertCurrent();
                 if (!inputs?.pluginProjectionV2) return null;
                 return readMcpPluginItemMetadataFromProjectionV1(inputs.pluginProjectionV2);
             };
             return await createMcpServerActionExecuteV1({
+                resolveWebappUrl: () => { assertCurrent(); return resolveWebappUrlFromServerUrl(account.endpointUrl); },
                 registryActionExecute: dependencies.registryActionExecute,
                 personalSavedSecretActionExecute: dependencies.personalSavedSecretActionExecute,
                 readImportLink: async url => {
@@ -63,12 +65,17 @@ export function createUiMcpServerActionExecuteV1(account: LazyActionAccountConte
                 connectedServiceAction,
                 resolveAdministrationMachine: async () => {
                     assertCurrent();
+                    // Preserve the Action's admitted exact target, just as Test
+                    // does. Presence guides automatic selection, not rerouting.
+                    if (context.externalActionTarget?.kind === 'machine') {
+                        return context.externalActionTarget.machineId.trim() || null;
+                    }
                     const [{ resolveFreshMachineAdministrationExecutionTarget }, { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 }] = await Promise.all([
                         import('@/sync/domains/machines/administration/useTargetSelection'),
                         import('@/sync/domains/machines/administration/selectionPreferences'),
                     ]);
                     assertCurrent();
-                    const selected = storage.getState().settings.machineAdministrationTargetsLocalV1[MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.connectedAccounts] ?? null;
+                    const selected = storage.getState().settings.machineAdministrationTargetsLocalV1[MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.mcpServers] ?? null;
                     const target = resolveFreshMachineAdministrationExecutionTarget(selected, { accountScope: account.accountLifetime.scope });
                     return target && areServerProfileIdentifiersEquivalent(target.profile.id, account.serverId)
                         ? target.machine.id : resolveUiAccountActionFallbackMachineId(account);
@@ -88,7 +95,7 @@ export function createUiMcpServerActionExecuteV1(account: LazyActionAccountConte
                     const { loadDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
                     assertCurrent();
                     const inputs = await loadDaemonMergedProjectionInputs({ machineId, serverId: account.serverId,
-                        accountLifetime: account.accountLifetime });
+                        accountLifetime: account.accountLifetime, signal: cancellation.signal });
                     assertCurrent();
                     const projection = inputs?.pluginProjectionV2;
                     if (!projection) return null;

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import {
+    encodeV2SessionListCursorV2,
     projectLegacySessionAccessCapabilitiesV1,
     type AccountEncryptionCurrentnessResponse,
     type SessionListQueryV1,
@@ -95,6 +96,7 @@ describe('fetchAndApplySessions query source', () => {
             applySessions: () => {}, applySessionListRenderables: () => {},
             applySessionListRenderablePatches: (next) => patches.push(...next),
             getCurrentSessionListRenderable: () => current,
+            priorityHydrationSessionIds: [row.id],
             log: { log: () => {} },
         });
         await vi.waitFor(() => expect(patches).toContainEqual(expect.objectContaining({
@@ -127,26 +129,29 @@ describe('fetchAndApplySessions query source', () => {
         expect(Object.prototype.hasOwnProperty.call(rendered, 'responsibleAccount')).toBe(false);
     });
     it('uses the query route for both row families and returns an unfinished attention frontier', async () => {
+        const ordinaryCursor = encodeV2SessionListCursorV2({ sessionId: 'ordinary-before', meaningfulActivityAt: 3 });
+        const attentionCursor = encodeV2SessionListCursorV2({ sessionId: 'attention-before', meaningfulActivityAt: 2 });
+        const attentionNextCursor = encodeV2SessionListCursorV2({ sessionId: 'attention', meaningfulActivityAt: 1 });
         const request = vi.fn(async (path: string, init: RequestInit) => {
             expect(path).toBe('/v2/sessions/query');
             expect(init.method).toBe('POST');
             const body = JSON.parse(String(init.body)) as Record<string, unknown>;
             if (body.attentionCursor === undefined) {
-                expect(body).toEqual({ ...buildQuery(), limit: 50 });
+                expect(body).toEqual({ ...buildQuery(), cursor: ordinaryCursor, limit: 50 });
                 return jsonResponse({
                     sessions: [buildSessionRow('ordinary')],
                     nextCursor: null,
                     hasNext: false,
-                    attentionNextCursor: 'attention-1',
+                    attentionNextCursor: attentionCursor,
                     attentionHasNext: true,
                 });
             }
-            expect(body).toEqual({ ...buildQuery(), attentionCursor: 'attention-1', limit: 50 });
+            expect(body).toEqual({ ...buildQuery(), attentionCursor, limit: 50 });
             return jsonResponse({
                 sessions: [buildSessionRow('attention')],
                 nextCursor: null,
                 hasNext: false,
-                attentionNextCursor: 'attention-2',
+                attentionNextCursor,
                 attentionHasNext: true,
             });
         });
@@ -155,7 +160,7 @@ describe('fetchAndApplySessions query source', () => {
 
         const result = await fetchAndApplySessions({
             serverId: 'home-a',
-            source: { kind: 'query', body: buildQuery(), allowV1Fallback: false },
+            source: { kind: 'query', body: { ...buildQuery(), cursor: ordinaryCursor }, allowV1Fallback: false },
             sessionListAttentionMaxPages: 1,
             credentials: { token: 'token-a', secret: 'secret-a' } as AuthCredentials,
             accountCurrentness: PLAIN_ACCOUNT_CURRENTNESS,
@@ -172,7 +177,7 @@ describe('fetchAndApplySessions query source', () => {
             sessionIds: ['ordinary', 'attention'],
             nextCursor: null,
             hasNext: false,
-            attentionNextCursor: 'attention-2',
+            attentionNextCursor,
             attentionHasNext: true,
             current: true,
         });

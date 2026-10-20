@@ -1,13 +1,22 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 import { createSessionFixture, createTestSessionTranscriptSource, renderWithSessionTranscriptSource, standardCleanup } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { storage } from '@/sync/domains/state/storage';
-import { installTranscriptCommonModuleMocks, resetTranscriptCommonModuleMockState } from './transcriptTestHelpers';
 
-installTranscriptCommonModuleMocks();
+vi.mock('react-native', async () =>
+    (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () =>
+    (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () =>
+    (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
+vi.mock('@/modal', async () =>
+    (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 installDisconnectedServerSocketBoundary();
 
 vi.mock('react-native-safe-area-context', () => ({
@@ -36,7 +45,6 @@ beforeEach(() => {
 
 afterEach(() => {
     standardCleanup();
-    resetTranscriptCommonModuleMockState();
     storage.setState(storage.getInitialState(), true);
     vi.unstubAllGlobals();
 });

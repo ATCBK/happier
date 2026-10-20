@@ -29,7 +29,8 @@ async function readManifest(url: URL): Promise<PackageManifest> {
 
 /**
  * Every module path an installed consumer can reach through the export map,
- * both conditions of every subpath.
+ * runtime and declaration conditions of every subpath. `happier-source` is
+ * the repository development resolver's input, not an installed-consumer target.
  *
  * The declaration path matters as much as the runtime one: a tarball that
  * carried `dist/**\/*.js` and no `.d.ts` resolves at runtime and fails at
@@ -38,7 +39,8 @@ async function readManifest(url: URL): Promise<PackageManifest> {
 function exportTargets(manifest: PackageManifest): readonly string[] {
     const targets: string[] = [];
     for (const condition of Object.values(manifest.exports ?? {})) {
-        for (const target of Object.values(condition as Record<string, unknown>)) {
+        for (const [name, target] of Object.entries(condition as Record<string, unknown>)) {
+            if (name === 'happier-source') continue;
             if (typeof target === 'string') targets.push(target.replace(/^\.\//u, ''));
         }
     }
@@ -100,6 +102,14 @@ describe('Triage protocol publication boundary', () => {
             './testing/v1',
             './v1',
         ]);
+        // a1d3a54f97 added current-source resolution without changing publication's dist-only boundary.
+        expect(Object.fromEntries(Object.entries(packageJson.exports ?? {}).map(([subpath, entry]) => [
+            subpath, (entry as Readonly<Record<string, unknown>>)['happier-source'],
+        ]))).toEqual({
+            '.': './src/index.ts',
+            './v1': './src/v1/index.ts',
+            './testing/v1': './src/testing/v1/index.ts',
+        });
 
         await expect(Promise.all([
             'README.md',

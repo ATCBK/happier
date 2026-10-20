@@ -1330,8 +1330,12 @@ function hasUnchangedPredecessorChatSource(
         const local = adapters && isRecord(adapters.local_conversation) ? adapters.local_conversation : null;
         return local && isRecord(local.agent) ? local.agent : null;
     };
+    // Runtime Voice contains the canonical providers, not the retained adapter
+    // carrier. An unchanged canonical selection must preserve that raw source.
+    const proposedVoice = isRecord(next.voice) && isRecord(next.voice.providers)
+        && !hasOwn(next.voice, 'adapters') ? current.voice : next.voice;
     const original = readAgent(current.voice);
-    const proposed = readAgent(next.voice);
+    const proposed = readAgent(proposedVoice);
     if (!original || !proposed
         || original.backend !== proposed.backend
         || original.agentSource !== proposed.agentSource
@@ -1340,7 +1344,7 @@ function hasUnchangedPredecessorChatSource(
     const readBinding = (voice: unknown) => parsePredecessorVoiceCredentialBindings(voice)
         .find(binding => binding.providerId === 'openai_compat')?.credentialBindings.account?.chat_api_key;
     const originalId = readBinding(current.voice);
-    const proposedId = readBinding(next.voice);
+    const proposedId = readBinding(proposedVoice);
     if (originalId === proposedId) return true;
     if (typeof originalId !== 'string' || typeof proposedId !== 'string'
         || hasOwn(current, VOICE_SETTINGS_ACCOUNT_SETTING_KEY)
@@ -1425,7 +1429,8 @@ function normalizeVoiceSettingsServerDelta<T extends object>(
         && (!isRecord(canonicalLocal) || !isRecord(canonicalLocal.agent) || !canonicalLocal.agent.providerChat)) {
         migrateLegacyVoiceOpenAiChatProvider(deltaRecord, { voiceSettingsV1: canonical });
     }
-    const pendingLegacyImport = currentRecord ? resolveLegacyVoiceOpenAiChatImportState(currentRecord, account) : null;
+    const pendingLegacyImport = currentRecord && !isCurrentWriterPredecessorVoiceProjection(currentRecord.voice)
+        ? resolveLegacyVoiceOpenAiChatImportState(currentRecord, account) : null;
     const chatAuthority = (voice: VoiceSettingsPersistenceV1 | null, legacyIngress = false) => {
         const parsed = createStoredReadSchema(VoiceLocalConversationSchema).safeParse(voice && readProviderEnvelope(voice, 'local_conversation')?.config);
         return parsed.success ? { agentSource: parsed.data.agent.agentSource, agentId: parsed.data.agent.agentId,

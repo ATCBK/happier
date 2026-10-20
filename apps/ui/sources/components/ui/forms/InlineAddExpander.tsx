@@ -6,7 +6,8 @@ import type { StyleProp, ViewStyle } from 'react-native';
 import { ItemAddRow } from '@/components/ui/lists/ItemAddRow';
 import { Typography } from '@/constants/Typography';
 import { Text, TextInput } from '@/components/ui/text/Text';
-import { SplitActionButtons } from '@/components/ui/forms/SplitActionButtons';
+import { RoundButton, RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
+import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 
 
 export interface InlineAddExpanderProps {
@@ -84,17 +85,15 @@ export function InlineAddExpander({
 
                     {children}
 
-                    <View style={{ height: 16 }} />
-
-                    <SplitActionButtons
-                        secondaryLabel={cancelLabel}
-                        onSecondaryPress={onCancel}
-                        primaryLabel={saveLabel}
-                        onPrimaryPress={onSave}
-                        primaryDisabled={saveDisabled}
-                        secondaryTestID={cancelTestID}
-                        primaryTestID={saveTestID}
-                    />
+                    {/* A form's one primary, then a quiet Cancel: the shared action row and button family. */}
+                    <View style={styles.actions}>
+                        <RoundButtonSizeScope size="normal" presentation="uniform">
+                            <SectionButtonRow>
+                                <RoundButton testID={saveTestID} title={saveLabel} accessibilityLabel={saveLabel} onPress={onSave} disabled={saveDisabled} />
+                                <RoundButton testID={cancelTestID} display="secondary" title={cancelLabel} accessibilityLabel={cancelLabel} onPress={onCancel} />
+                            </SectionButtonRow>
+                        </RoundButtonSizeScope>
+                    </View>
                 </View>
             ) : null}
         </>
@@ -107,6 +106,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: theme.space.s16,
         paddingTop: theme.space.s12,
         paddingBottom: theme.space.s16,
+    },
+    actions: {
+        marginTop: theme.space.s16,
     },
     helpText: {
         color: theme.colors.text.secondary,

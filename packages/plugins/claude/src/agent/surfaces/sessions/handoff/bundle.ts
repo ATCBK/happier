@@ -6,7 +6,7 @@ import { isPluginError, PluginError } from '@happier-dev/plugin-sdk';
 import { isCanonicalAbsolutePathInsideRoot } from '@happier-dev/plugin-sdk/fs';
 import type { HandoffExportSessionMetadata } from '@happier-dev/plugin-sdk/agents/runtime';
 
-import { resolveClaudeConfigDir } from '../../../environment.js';
+import { resolveClaudeConfigDir, resolveClaudeConfigDirEnvOverlay } from '../../../environment.js';
 import { hasClaudeProviderIdentityValue } from '../../../../protocol/providerIdentity.js';
 import { resolveClaudeJsonlSessionFile } from '../external/files.js';
 import type { ClaudeExternalSessionSource } from '../external/source.js';
@@ -430,9 +430,7 @@ export async function importClaudeSessionBundle(params: Readonly<{
         },
         launch: {
             directory: params.targetPath,
-            environmentVariables: {
-                CLAUDE_CONFIG_DIR: resolvedClaudeConfigDir,
-            },
+            environmentVariables: resolveClaudeConfigDirEnvOverlay(params.env),
         },
     };
 }

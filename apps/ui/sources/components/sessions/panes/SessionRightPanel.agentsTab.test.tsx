@@ -53,8 +53,9 @@ function getStyleValue(style: unknown, key: string): unknown {
 import { installSessionPaneRuntimeTestHarness } from './sessionPaneRuntimeTestHarness';
 const runtime = installSessionPaneRuntimeTestHarness();
 async function renderScreen(element: React.ReactElement) {
-    const screen = await renderPanelScreen(<runtime.Wrapper>{element}</runtime.Wrapper>);
+    const screen = await renderPanelScreen(<runtime.Wrapper />);
     await act(async () => runtime.pane.openRight({ tabId: initialTabId }));
+    await act(async () => screen.tree.update(<runtime.Wrapper>{element}</runtime.Wrapper>));
     return screen;
 }
 
@@ -71,7 +72,7 @@ describe('SessionRightPanel (core tabs)', () => {
         const { storage } = await import('@/sync/domains/state/storage');
         const now = Date.now();
         storage.getState().applySessions([createSessionFixture({ id: 'child', serverId: runtime.serverId,
-            reportsTo: { sessionId: 's1' }, active: false, activeAt: now, presence: 'offline',
+            manager: { sessionId: 's1' }, active: false, activeAt: now, presence: now,
             latestTurnStatus: 'in_progress', latestTurnStatusObservedAt: now })]);
         function WorkRail() {
             const sources = useSessionWorkSourcesOwner({ sessionId: 's1', serverId: runtime.serverId,

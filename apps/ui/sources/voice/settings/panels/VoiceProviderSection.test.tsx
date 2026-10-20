@@ -1,5 +1,5 @@
 import React from 'react';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import { act, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import 'fake-indexeddb/auto';
 import { PluginContributesV2Schema, PluginProjectionV2Schema, buildQualifiedPluginContributionKey, createPluginContributionIdentity, createRecipientContractDigestV1, type PluginProjectionV2, type VoiceProviderContribution } from '@happier-dev/protocol';
@@ -16,7 +16,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DaemonVoiceClientRawCredentialAuthorizationInspectResponseV1Schema } from '@happier-dev/protocol/daemon/voiceCredentials';
 import { PluginPermissionGrantListActionOutputV1Schema } from '@happier-dev/protocol/plugins/permissions/grants';
 
-import { findAllHostTestInstances, findTestInstanceByTypeWithProps, pressTestInstanceAsync, renderScreen as renderTestScreen } from '@/dev/testkit';
+import { createDeferred, findAllHostTestInstances, findTestInstanceByTypeWithProps, pressTestInstanceAsync, renderScreen as renderTestScreen } from '@/dev/testkit';
 import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
 import { getConnectedAccountAuthentication } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { AppShellPluginUiProjectionProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
@@ -32,7 +32,7 @@ import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { createVoiceSettingsAccountTestHarness } from './voiceSettingsAccountTestHarness';
+import { createVoiceSettingsAccountTestHarness, withVoiceSettingsCredentialResource } from './voiceSettingsAccountTestHarness';
 import { ModalProvider } from '@/modal/ModalProvider';
 import { t, tLoose } from '@/text';
 import { VoiceServiceGallery, type VoiceServiceTile } from './VoiceServiceGallery';
@@ -71,6 +71,7 @@ async function renderScreen(...input: Parameters<typeof renderTestScreen>) {
     if (passiveSetupBoundary.state.status === 'loaded') await primeCapabilities();
     return renderTestScreen(input[0], { ...input[1], wrapper: ({ children }) => <ModalProvider>{children}</ModalProvider> });
 }
+
 beforeEach(async () => {
     descriptorAvailable = false;
     voiceProjectionEntries = {};
@@ -882,20 +883,23 @@ describe('VoiceProviderSection', () => {
         await act(async () => {});
         expect(checkedReadinessRow(screen.tree)?.props.announcement).toContain(tLoose('voice.readiness.ready'));
 
-        let settleFreshCheck!: (value: unknown) => void;
-        const freshCheck = new Promise(resolve => { settleFreshCheck = resolve; });
-        passiveSetupBoundary.invoke.mockImplementation(async () => freshCheck);
+        const freshCheck = createDeferred<unknown>();
+        passiveSetupBoundary.invoke.mockClear();
+        passiveSetupBoundary.invoke.mockImplementation(async () => freshCheck.promise);
         accountA.retire();
         await createActiveAccountLifetime('account-a');
         await act(async () => {
             await screen.update(React.createElement(VoiceProviderSection, sectionProps));
         });
 
-        expect(checkedReadinessRow(screen.tree)).toBeNull();
+        await vi.waitFor(() => expect(passiveSetupBoundary.invoke).toHaveBeenCalled());
+        expect(checkedReadinessRow(screen.tree)?.props.announcement).toBe(tLoose('settings.updates.checking'));
+        expect(checkedReadinessRow(screen.tree)?.props.announcement).not.toContain(tLoose('voice.readiness.ready'));
         await act(async () => {
-            settleFreshCheck({ ok: true, result: { v: 1, status: 'unavailable' } });
+            freshCheck.resolve({ ok: true, result: { v: 1, status: 'unavailable' } });
         });
-        expect(checkedReadinessRow(screen.tree)).toBeNull();
+        await vi.waitFor(() => expect(checkedReadinessRow(screen.tree)?.props.announcement)
+            .toContain(tLoose('voice.readiness.runtime_unknown')));
     }, 120_000);
 
     it('does not commit a stale passive result after the active Account lifetime restarts', async () => {
@@ -949,18 +953,27 @@ describe('VoiceProviderSection', () => {
         const screen = await renderScreen(render());
 
         await act(async () => {});
-        passiveSetupBoundary.invoke.mockResolvedValue({ ok: true, result: { v: 1, status: 'unavailable' } });
+        const freshCheck = createDeferred<unknown>();
+        passiveSetupBoundary.invoke.mockClear();
+        passiveSetupBoundary.invoke.mockImplementation(async () => freshCheck.promise);
         accountA.retire();
         await createActiveAccountLifetime('account-a');
         await act(async () => {
             await screen.update(render());
         });
+        await vi.waitFor(() => expect(passiveSetupBoundary.invoke).toHaveBeenCalled());
         await act(async () => {
             settlePassiveCheck?.({ ok: true, result: { v: 1, status: 'ready' } });
             await Promise.resolve();
         });
 
-        expect(checkedReadinessRow(screen.tree)).toBeNull();
+        expect(checkedReadinessRow(screen.tree)?.props.announcement).toBe(tLoose('settings.updates.checking'));
+        expect(checkedReadinessRow(screen.tree)?.props.announcement).not.toContain(tLoose('voice.readiness.ready'));
+        await act(async () => {
+            freshCheck.resolve({ ok: true, result: { v: 1, status: 'unavailable' } });
+        });
+        await vi.waitFor(() => expect(checkedReadinessRow(screen.tree)?.props.announcement)
+            .toContain(tLoose('voice.readiness.runtime_unknown')));
     }, 120_000);
 
     it('does not commit a delayed passive result after the selected daemon restarts', async () => {
@@ -1786,7 +1799,7 @@ describe('VoiceProviderSection', () => {
         const { createDefaultVoiceProviderRegistry } = await import('@/voice/registry/defaultRegistry');
         const entry = createDefaultVoiceProviderRegistry().get(XAI_PROVIDER_ID);
         const slot = entry?.accountCredentialSlot;
-        if (!slot) throw new Error('expected Grok account credential slot');
+        if (!slot || entry?.kind !== 'voice.conversation-provider.v1' || !entry.declaration) throw new Error('expected Grok account credential slot');
         const voice = {
             providerId: XAI_PROVIDER_ID,
             providers: {
@@ -1795,32 +1808,19 @@ describe('VoiceProviderSection', () => {
                     config: XAI_REALTIME_DEFAULT_SETTINGS,
                 },
             },
-            credentialBindings: [{
-                providerId: XAI_PROVIDER_ID,
-                approvedRecipientContractDigest: `sha256:${'0'.repeat(64)}`,
-                credentialBindings: {
-                    account: { [slot.id]: 'grok-secret' },
-                },
-            }],
         };
-        storageBoundary.settings = settingsParse({
-            secrets: [{
-                id: 'grok-secret',
-                name: 'Grok Voice',
-                kind: 'apiKey',
-                encryptedValue: { _isSecretValue: true, value: 'retained' },
-                createdAt: 1,
-                updatedAt: 1,
-            }],
-            voice,
+        const settings = await withVoiceSettingsCredentialResource(accountFixture, {
+            settings: settingsParse({ voice }), declaration: entry.declaration, pluginId: entry.pluginId,
+            resourceId: 'grok-secret', approvedRecipientContractDigest: `sha256:${'0'.repeat(64)}`,
         });
+        storageBoundary.settings = settings;
         onTestFinished(() => {
             storageBoundary.settings = null;
         });
 
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
         const screen = await renderScreen(React.createElement(VoiceProviderSection, {
-            voice: settingsParse({ voice: voice }).voice,
+            voice: settings.voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web',
@@ -1840,7 +1840,7 @@ describe('VoiceProviderSection', () => {
         const { createDefaultVoiceProviderRegistry } = await import('@/voice/registry/defaultRegistry');
         const entry = createDefaultVoiceProviderRegistry().get(ELEVENLABS_PROVIDER_ID);
         const slot = entry?.accountCredentialSlot;
-        if (!slot) throw new Error('expected ElevenLabs account credential slot');
+        if (!slot || entry?.kind !== 'voice.conversation-provider.v1' || !entry.declaration) throw new Error('expected ElevenLabs account credential slot');
         const voice = {
             providerId: ELEVENLABS_PROVIDER_ID,
             providers: {
@@ -1849,32 +1849,19 @@ describe('VoiceProviderSection', () => {
                     config: elevenLabsByoConfig(),
                 },
             },
-            credentialBindings: [{
-                providerId: ELEVENLABS_PROVIDER_ID,
-                approvedRecipientContractDigest: slot.recipientContractDigest,
-                credentialBindings: {
-                    account: { [slot.id]: 'elevenlabs-secret' },
-                },
-            }],
         };
-        storageBoundary.settings = settingsParse({
-            secrets: [{
-                id: 'elevenlabs-secret',
-                name: 'ElevenLabs Voice',
-                kind: 'apiKey',
-                encryptedValue: { _isSecretValue: true, value: 'retained' },
-                createdAt: 1,
-                updatedAt: 1,
-            }],
-            voice,
+        const settings = await withVoiceSettingsCredentialResource(accountFixture, {
+            settings: settingsParse({ voice }), declaration: entry.declaration, pluginId: entry.pluginId,
+            resourceId: 'elevenlabs-secret', recipientContractDigest: slot.recipientContractDigest,
         });
+        storageBoundary.settings = settings;
         onTestFinished(() => {
             storageBoundary.settings = null;
         });
 
         const { VoiceProviderSection } = await import('./VoiceProviderSection');
         const screen = await renderScreen(React.createElement(VoiceProviderSection, {
-            voice: settingsParse({ voice: voice }).voice,
+            voice: settings.voice,
             setVoice: vi.fn(),
             happierVoiceSupported: true,
             platformOs: 'web',
@@ -2627,7 +2614,6 @@ describe('VoiceProviderSection', () => {
             writeVoiceProviderSettingsConfig,
         } = await import('@/sync/domains/settings/voiceSettings');
         const { settingsParse } = await import('@/sync/domains/settings/settings');
-        const { saveAndUseAccountVoiceCredential } = await import('@/voice/credentials/accountVoiceCredential');
         const { createDefaultVoiceProviderRegistry } = await import('@/voice/registry/defaultRegistry');
         const local = readLocalConversationVoiceSettings(voiceSettingsDefaults);
         const voice = writeLocalConversationVoiceSettings(
@@ -2666,32 +2652,18 @@ describe('VoiceProviderSection', () => {
         if (sttDeclaration?.kind !== 'speech' || ttsDeclaration?.kind !== 'speech') {
             throw new Error('expected current Google speech declarations');
         }
-        const sttReady = saveAndUseAccountVoiceCredential({
+        const sttReady = await withVoiceSettingsCredentialResource(accountFixture, {
             settings: settingsParse({ voice }),
-            contribution: { pluginId: 'happier.voice.google', localId: 'gemini-stt' },
-            credentialSlotId: 'api_key',
-            expectedSettingsVersion: 0,
-            currentDeclaration: sttDeclaration,
+            pluginId: 'happier.voice.google', declaration: sttDeclaration,
+            resourceId: 'google-stt-secret', recipientContractDigest: sttEntry?.accountCredentialSlot?.recipientContractDigest,
             machineId: 'machine-online',
-            value: 'google-stt-key',
-            generateId: () => 'google-stt-secret',
-            now: 1,
-            expectedSecretId: null,
-            expectedSecretUpdatedAt: null,
-        }).settings;
-        const ready = saveAndUseAccountVoiceCredential({
+        });
+        const ready = await withVoiceSettingsCredentialResource(accountFixture, {
             settings: sttReady,
-            contribution: { pluginId: 'happier.voice.google', localId: 'google-cloud-tts' },
-            credentialSlotId: 'api_key',
-            expectedSettingsVersion: 0,
-            currentDeclaration: ttsDeclaration,
+            pluginId: 'happier.voice.google', declaration: ttsDeclaration,
+            resourceId: 'google-tts-secret', recipientContractDigest: ttsEntry?.accountCredentialSlot?.recipientContractDigest,
             machineId: 'machine-online',
-            value: 'google-tts-key',
-            generateId: () => 'google-tts-secret',
-            now: 1,
-            expectedSecretId: null,
-            expectedSecretUpdatedAt: null,
-        }).settings;
+        });
         rawCredentialReadiness.mockClear();
         storageBoundary.settings = ready;
         accountFixture.replaceVoice({ ...ready.voice, executionMachine: { mode: 'fixed', machineId: 'machine-online' } });
@@ -2758,8 +2730,7 @@ describe('VoiceProviderSection', () => {
             } satisfies React.ComponentProps<typeof VoiceProviderSection>;
             return <><VoiceProviderSection {...props} /><LocalMetadata {...props} /></>;
         };
-        // This keeper starts from usable retained resources, not the foreground
-        // catalog read that can precede the real legacy-import maintenance.
+        // The real foreground catalog materializes the current resource fixtures.
         const { getSavedSecretCatalogSnapshot } = await import('@/sync/store/settings/savedSecretCatalogSnapshot');
         await refreshSavedSecretCatalog(accountFixture.scope);
         await vi.waitFor(() => expect(accountFixture.resources, JSON.stringify({
@@ -2818,7 +2789,6 @@ describe('VoiceProviderSection', () => {
             writeLocalConversationVoiceSettings,
         } = await import('@/sync/domains/settings/voiceSettings');
         const { settingsParse } = await import('@/sync/domains/settings/settings');
-        const { saveAndUseAccountVoiceCredential } = await import('@/voice/credentials/accountVoiceCredential');
         const { createDefaultVoiceProviderRegistry } = await import('@/voice/registry/defaultRegistry');
         const local = readLocalConversationVoiceSettings(voiceSettingsDefaults);
         const base = {
@@ -2845,19 +2815,12 @@ describe('VoiceProviderSection', () => {
             const entry = registry.get(`happier.voice.google/${localId}`);
             const declaration = entry?.kind === 'voice.speech-engine.v1' ? entry.declaration : null;
             if (declaration?.kind !== 'speech') throw new Error('expected current Google speech declarations');
-            settings = saveAndUseAccountVoiceCredential({
+            settings = await withVoiceSettingsCredentialResource(accountFixture, {
                 settings,
-                contribution: { pluginId: 'happier.voice.google', localId },
-                credentialSlotId: 'api_key',
-                expectedSettingsVersion: 0,
-                currentDeclaration: declaration,
+                pluginId: 'happier.voice.google', declaration,
+                resourceId: `${localId}-secret`, recipientContractDigest: entry?.accountCredentialSlot?.recipientContractDigest,
                 machineId: 'machine-online',
-                value: `${localId}-key`,
-                generateId: () => `${localId}-secret`,
-                now: 1,
-                expectedSecretId: null,
-                expectedSecretUpdatedAt: null,
-            }).settings;
+            });
         }
         rawCredentialReadiness.mockClear();
         storageBoundary.settings = settings;

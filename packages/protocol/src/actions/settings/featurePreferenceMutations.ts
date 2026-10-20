@@ -62,8 +62,8 @@ export const UI_FEATURE_REGISTRY = {
         settingsToggle: undefined,
     },
     // Promoted (Voice Experience r1): Voice is a product surface, not an experiment; the switch in
-    // Settings → Features stays the person's own way to turn it off. Its agent/daemon inference
-    // sub-features remain experimental.
+    // Settings → Features stays the person's own way to turn it off. Voice Agent and Machine
+    // speech also default on independently of Experiments (owner ruling 2026-10-15).
     voice: {
         settingsToggle: {
             showInSettings: true,
@@ -79,8 +79,8 @@ export const UI_FEATURE_REGISTRY = {
     'voice.agent': {
         settingsToggle: {
             showInSettings: true,
-            isExperimental: true,
-            defaultEnabled: false,
+            isExperimental: false,
+            defaultEnabled: true,
             titleKey: 'settingsFeatures.expVoiceAgent',
             subtitleKey: 'settingsFeatures.expVoiceAgentSubtitle',
         },
@@ -88,8 +88,8 @@ export const UI_FEATURE_REGISTRY = {
     'voice.daemonInference': {
         settingsToggle: {
             showInSettings: true,
-            isExperimental: true,
-            defaultEnabled: false,
+            isExperimental: false,
+            defaultEnabled: true,
             titleKey: 'settingsFeatures.expVoiceDaemonInference',
             subtitleKey: 'settingsFeatures.expVoiceDaemonInferenceSubtitle',
         },
@@ -162,6 +162,9 @@ export const UI_FEATURE_REGISTRY = {
         settingsToggle: undefined,
     },
     'sessions.following': {
+        settingsToggle: undefined,
+    },
+    'sessions.autonomousExchange': {
         settingsToggle: undefined,
     },
     'sessions.conversations': {

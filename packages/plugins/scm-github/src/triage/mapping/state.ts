@@ -47,10 +47,10 @@ export function mapGithubIssueState(
     // `completed` is a resolution; `not_planned` is a dismissal. They are different
     // outcomes and the aggregate lanes them differently.
     if (reason === 'completed') {
-      return Object.freeze({ presentation: 'resolved', nativeLabel: 'Closed as completed' });
+      return Object.freeze({ presentation: 'resolved', nativeLabel: 'Closed as completed', completionReason: 'completed' });
     }
     if (reason === 'not_planned') {
-      return Object.freeze({ presentation: 'closed', nativeLabel: 'Closed as not planned' });
+      return Object.freeze({ presentation: 'closed', nativeLabel: 'Closed as not planned', completionReason: 'canceled' });
     }
     return Object.freeze({ presentation: 'closed', nativeLabel: 'Closed' });
   }

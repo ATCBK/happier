@@ -6,6 +6,7 @@ import {
   type AttentionDeliveryEventConfig,
   type AttentionDeliveryPolicyV1,
   type AttentionPreviewBehavior,
+  type ResolveAttentionDeliveryPolicyDecisionParams,
 } from './attentionDeliveryPolicy.js';
 import { accountSettingsParse } from './accountSettings.js';
 import { resolveAttentionDeliveryPolicyDecision } from './attentionDeliveryPolicyDecision.js';
@@ -93,6 +94,8 @@ export function resolveRemoteAlertPolicyDecision(params: Readonly<{
   event: string;
   now: Date | string;
   foregroundState?: 'foreground' | 'background';
+  follow?: ResolveAttentionDeliveryPolicyDecisionParams['follow'];
+  inboxItemType?: ResolveAttentionDeliveryPolicyDecisionParams['inboxItemType'];
 }>) {
   const account = AccountRemoteAlertPolicyV1Schema.safeParse(params.accountPolicy);
   const device = DeviceRemoteAlertPolicyV1Schema.safeParse(params.devicePolicy);
@@ -104,6 +107,7 @@ export function resolveRemoteAlertPolicyDecision(params: Readonly<{
     previewBehavior: 'account',
     soundVolume: device.data.soundVolume,
   });
-  const decision = resolveAttentionDeliveryPolicyDecision({ policy, event: params.event, channel: 'expo_push', now: params.now, foregroundState: params.foregroundState });
+  const decision = resolveAttentionDeliveryPolicyDecision({ policy, event: params.event, channel: 'expo_push', now: params.now,
+    foregroundState: params.foregroundState, follow: params.follow, inboxItemType: params.inboxItemType });
   return { ...decision, previewBehavior: restrictAttentionPreviewBehavior(decision.previewBehavior, device.data.previewCeiling) };
 }

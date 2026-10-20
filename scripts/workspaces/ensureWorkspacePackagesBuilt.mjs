@@ -1241,7 +1241,7 @@ async function ensureWorkspacePackageBuilt(packageDir, {
         signal,
         dependencyInstallDir: monorepoRoot,
         admissionRequired: requiresTypeScriptAdmission({ env }),
-        admissionClass: resolveWorkspacePackageBuildAdmissionClass({ packageJson, cwd: packageDir, env }),
+        admissionClass: await resolveWorkspacePackageBuildAdmissionClass({ packageJson, cwd: packageDir, env, repoRoot: monorepoRoot }),
         stdio: ['inherit', 'pipe', 'inherit'],
         onStdout: consumeStdout,
       });

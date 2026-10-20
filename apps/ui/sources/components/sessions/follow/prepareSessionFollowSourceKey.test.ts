@@ -145,12 +145,12 @@ describe('prepareSessionFollowSourceKey', () => {
         const input = { serverId: 'home-a', sourceSessionId: 'source-a', destinationSessionId: 'destination-a' };
 
         await expect(prepareSessionFollowSourceKey(input, rejectWith(Object.assign(new Error('old daemon'), { rpcErrorCode: 'RPC_METHOD_NOT_AVAILABLE' }))))
-            .resolves.toEqual({ kind: 'waiting', reason: 'unsupported' });
+            .resolves.toEqual({ kind: 'waiting', reason: 'unsupported', cause: 'rpc_method_unavailable' });
         await expect(prepareSessionFollowSourceKey(input, rejectWith(Object.assign(new Error('no runner key'), { rpcErrorCode: 'machine_content_key_unavailable' }))))
-            .resolves.toEqual({ kind: 'waiting', reason: 'runner_key_unavailable' });
+            .resolves.toEqual({ kind: 'waiting', reason: 'runner_key_unavailable', cause: 'machine_content_key_unavailable' });
         await expect(prepareSessionFollowSourceKey(input, rejectWith(Object.assign(new Error('persistent'), { rpcErrorCode: 'machine_kind_mismatch' }))))
             .resolves.toEqual({ kind: 'not_needed' });
         await expect(prepareSessionFollowSourceKey(input, rejectWith(new Error('socket closed'))))
-            .resolves.toEqual({ kind: 'waiting', reason: 'runner_unreachable' });
+            .resolves.toEqual({ kind: 'waiting', reason: 'runner_unreachable', cause: 'machine_rpc_failed' });
     });
 });

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createActionExecutor } from './actionExecutor.js';
 import type { ActionExecutorContext, ActionExecutorDeps } from './executor/types.js';
 import { buildBackendTargetKeyV2 } from '../backends/targets/backendTargetRefV2.js';
-import { buildSessionPermissionRespondRpcParamsV1, type SessionPermissionRespondRpcParamsV1 } from '../sessions/permissions/respondRpcParamsV1.js';
+import { buildSessionPermissionRespondRpcParamsV1, SessionUserActionAnswerRpcParamsV1Schema, type SessionPermissionRespondRpcParamsV1 } from '../sessions/permissions/respondRpcParamsV1.js';
 import { projectSessionBoardGetResultV1, SessionBoardGetInputV1Schema } from '../sessions/board/actions.js';
 import { SessionSurfaceItemV1Schema } from '../sessions/board/item.js';
 import { AutomationV3RunMutationResponseSchema } from '../automations/automationApiV3.js';
@@ -149,6 +149,30 @@ describe('ActionExecutor API token grant admission', () => {
       .toMatchObject({ ok: false, errorCode: 'credential_scope_denied' });
   });
 
+  it('validates unknown execution policy amendments before producing a Session RPC carrier', () => {
+    const amendment: unknown = { command: ['git', 'status'] };
+    expect(buildSessionPermissionRespondRpcParamsV1({
+      id: 'permission-one', decision: 'allow', execPolicyAmendment: amendment,
+    })).toEqual({
+      id: 'permission-one', approved: true, decision: 'approved_execpolicy_amendment',
+      execPolicyAmendment: { command: ['git', 'status'] },
+    });
+    for (const invalid of [{ command: 'git status' }, { command: ['git'], unexpected: true }]) {
+      expect(() => buildSessionPermissionRespondRpcParamsV1({
+        id: 'permission-one', decision: 'allow', execPolicyAmendment: invalid,
+      })).toThrow();
+    }
+  });
+
+  it('admits pass-up without creating an approval or partial answer', () => {
+    expect(SessionUserActionAnswerRpcParamsV1Schema.parse({ id: 'q1', disposition: 'pass_up' }))
+      .toEqual({ id: 'q1', disposition: 'pass_up' });
+    for (const forbidden of [{ approved: true }, { decision: 'approved' }, { answers: { branch: ['dev'] } },
+      { updatedPermissions: {} }, { allowedTools: ['Bash'] }, { actor: { sessionId: 'fake' } }]) {
+      expect(SessionUserActionAnswerRpcParamsV1Schema.safeParse({ id: 'q1', disposition: 'pass_up', ...forbidden }).success).toBe(false);
+    }
+  });
+
   it.each(['approved_for_session', 'abort'] as const)('preserves %s and response metadata at the Session RPC boundary', async (decision) => {
     const requests: SessionPermissionRespondRpcParamsV1[] = [];
     const sessionPermissionRespond: NonNullable<ActionExecutorDeps['sessionPermissionRespond']> = async (args) => {
@@ -269,6 +293,8 @@ describe('ActionExecutor API token grant admission', () => {
     if (!result.ok) throw new Error('expected discovery');
     expect(result.result).toMatchObject({ actionSpecs: expect.arrayContaining([expect.objectContaining({ id: 'session.message.send' })]) });
     expect(result.result).not.toMatchObject({ actionSpecs: expect.arrayContaining([expect.objectContaining({ id: 'session.title.set' })]) });
+    expect(await executor.execute('action.spec.get', { id: 'session.message.send', includeOutputSchema: false }, ctx))
+      .toMatchObject({ ok: true, result: { actionSpec: { id: 'session.message.send' } } });
     expect(await executor.execute('action.spec.get', { id: 'session.title.set' }, ctx))
       .toMatchObject({ ok: false, errorCode: 'credential_scope_denied' });
     expect(await executor.execute('action.options.resolve', { actionId: 'session.spawn_new', fieldPath: 'permissionMode' }, ctx))

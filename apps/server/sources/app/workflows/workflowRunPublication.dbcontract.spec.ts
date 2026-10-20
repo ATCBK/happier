@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import * as workflowStorage from "./workflowRunService";
 import * as privacyKit from "privacy-kit";
 import {
     ARTIFACT_PLAIN_DATA_KEY_MARKER,
@@ -13,12 +14,13 @@ import { inTx, type Tx } from "@/storage/inTx";
 import { encodeAutomationRunCause } from "@/app/automations/automationRunCauseCodec";
 import { automationAccountCurrentnessSelect, deriveAutomationAccountCurrentnessWitness } from "@/app/automations/automationAccountCurrentness";
 import { materializeWorkflowAcceptedSnapshotFixture } from "@/testkit/workflowAcceptedSnapshot";
-import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from "@happier-dev/protocol/workflows";
-import { admitWorkflowRun, cancelWorkflowRun } from "./workflowRunService";
+import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowCheckpointStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from "@happier-dev/protocol/workflows";
+import { admitWorkflowRun, cancelWorkflowRun, commitWorkflowInvocationFact } from "./workflowRunService";
+import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { observeLazyPrismaQuery } from "@/app/changes/accountPublicationContention.testkit";
 import { cancelAutomationRun } from "@/app/automations/automationRunService";
 import { revokeMachineInTx } from "@/app/machines/machineMutations";
 import { createAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
-import { registerSessionArchiveRoutes } from "@/app/api/routes/session/registerSessionArchiveRoutes";
 import { encodeAutomationSessionLifecycleConfiguration } from "@/app/automations/automationSessionLifecycleConfigurationCodec";
 import { updateAutomationTrigger } from "@/app/automations/automationCrudService";
 
@@ -123,6 +125,290 @@ describe.skipIf(provider !== "postgres" && provider !== "postgresql")("Workflow 
         return { accounts, runAudience, watcher, reviewSession, sources };
     }
 
+    it.each(["initialize", "allocate", "publish", "review", "transition", "pause", "resume", "cancel", "recover", "withdraw", "trigger-update", "automation-cancel", "exhaustion"] as const)(
+        "%s storage commits while unrelated Account cursors advance", async operation => {
+        const f = await fixture();
+        const source = f.sources[0];
+        const assignment = await db.automationRunAssignment.findFirstOrThrow({ where: { runId: source.run.id } });
+        const accountCurrentness = deriveAutomationAccountCurrentnessWitness(await db.account.findUniqueOrThrow({
+            where: { id: source.owner.id }, select: automationAccountCurrentnessSelect,
+        }));
+        if (!accountCurrentness) throw new Error("fixture Account currentness unavailable");
+        const rootId = randomUUID();
+        const leafId = randomUUID();
+        const progress = (id: string, sequence: bigint, parentRecordId: string | null, attempt = 0n, result?: string) =>
+            serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: "plain",
+                binding: { v: 1, purpose: "invocation_progress", accountId: source.owner.id, runId: source.run.id,
+                    recordId: id, sequence: String(sequence), parentRecordId, memberOrdinal: "0", attempt: String(attempt) },
+                progress: { kind: "happier.workflow-progress.v1", invocationPath: { blockId: parentRecordId ? "answer" : "$root", scope: [] },
+                    blockKind: parentRecordId ? "step" : "root", attempt: String(attempt),
+                    logicalInvocationRecordId: attempt === 0n ? id : leafId,
+                    ...(attempt === 0n ? {} : { previousAttemptRecordId: leafId }),
+                    ...(result === undefined ? {} : { result }) },
+            }));
+        const checkpoint = (nextSequence: number) => serializeWorkflowStoredContentEnvelopeV1(sealWorkflowCheckpointStoredEnvelopeV1({
+            mode: "plain", binding: { v: 1, purpose: "checkpoint", accountId: source.owner.id, runId: source.run.id },
+            checkpoint: { kind: "happier.workflow-checkpoint.v1", rootRecordId: rootId, nextSequence: String(nextSequence),
+                frontier: { nextBlockOrdinal: nextSequence, paused: false } },
+        }));
+        const state = operation === "recover" ? "interrupted"
+            : ["resume", "withdraw", "cancel", "automation-cancel"].includes(operation) ? "paused" : "running";
+        await db.automationRun.update({ where: { id: source.run.id }, data: {
+            state, claimedByMachineId: assignment.machineId, attempt: 1,
+            workflowCheckpointEnvelope: operation === "initialize" ? null : checkpoint(2),
+        } });
+        if (operation !== "initialize") {
+            await db.workflowRunInvocation.create({ data: { id: rootId, runId: source.run.id, sequence: 0n,
+                parentRecordId: null, memberOrdinal: 0n, attempt: 0n, lifecycle: "running", contentEnvelope: progress(rootId, 0n, null) } });
+            if (operation !== "allocate") await db.workflowRunInvocation.create({ data: {
+                id: leafId, runId: source.run.id, sequence: 1n, parentRecordId: rootId, memberOrdinal: 0n, attempt: 0n,
+                lifecycle: operation === "recover" ? "failed" : operation === "review" ? "waiting_for_review" : operation === "withdraw" ? "admitting" : "running",
+                contentEnvelope: progress(leafId, 1n, rootId),
+            } });
+        }
+        if (operation === "automation-cancel") {
+            const automation = await db.automation.create({ data: { accountId: source.owner.id, name: "Cancellation under publication",
+                enabled: true, templateCiphertext: f.watcher.templateCiphertext, templateVersion: 1 } });
+            await db.automationRun.update({ where: { id: source.run.id }, data: { automationId: automation.id, originKind: "automation",
+                ...encodeAutomationRunCause(AutomationRunCauseSchema.parse({ kind: "manual", invokedAt: Date.now() })) } });
+        }
+        const originalTransaction = db.$transaction.bind(db);
+        const conflicts: string[] = [];
+        let publications = 0;
+        let publishingPeer = false;
+        // A real concurrent publisher advances Account.seq after the snapshot's
+        // audience read and before its first ordered Account lock on every attempt.
+        // All storage decisions, locks, CAS predicates and watcher owners stay real.
+        const interleaved = async (body: (tx: Tx) => Promise<unknown>, options?: Parameters<typeof originalTransaction>[1]) =>
+            publishingPeer ? originalTransaction(body, options) : originalTransaction(async tx => {
+                let advanced = false;
+                return body(new Proxy(tx, { get(target, property, receiver) {
+                    if (property !== "$queryRawUnsafe") return Reflect.get(target, property, receiver);
+                    return (query: string, ...values: unknown[]) => observeLazyPrismaQuery(target.$queryRawUnsafe(query, ...values), () => ({
+                        started() {},
+                        settled(succeeded, error) { if (!succeeded) { const state = sqlState(error); if (state) conflicts.push(state); } },
+                    }), async () => {
+                        if (!advanced && query.includes('FROM "Account"') && query.includes("FOR ")) {
+                            advanced = true;
+                            publishingPeer = true;
+                            try {
+                                await inTx(cursorTx => markAccountChanged(cursorTx, {
+                                    accountId: source.owner.id, kind: "account", entityId: "unrelated-storage-publication",
+                                }));
+                            } finally { publishingPeer = false; }
+                            publications++;
+                        }
+                    });
+                } }));
+            }, operation === "exhaustion" ? { ...options, isolationLevel: "Serializable" } : options);
+        db.$transaction = interleaved as typeof db.$transaction;
+        restoreTransport = () => { db.$transaction = originalTransaction; };
+        const worker = { accountId: source.owner.id, runId: source.run.id, machineId: assignment.machineId,
+            parentAttempt: 1, expectedRevision: 0, accountCurrentness };
+        const review = { ...worker, invocationId: leafId, invocationAttempt: 0n,
+            expectedContentRevision: 0n, contentEnvelope: progress(leafId, 1n, rootId) };
+        const replacementId = randomUUID();
+        switch (operation) {
+            case "initialize":
+                expect(await workflowStorage.initializeWorkflowRunExecution({ ...worker, checkpointEnvelope: checkpoint(1),
+                    rootInvocation: { id: rootId, contentEnvelope: progress(rootId, 0n, null) } })).toMatchObject({ initialization: "created" });
+                break;
+            case "allocate":
+                expect(await workflowStorage.admitWorkflowInvocations({ ...worker, checkpointEnvelope: checkpoint(3), invocations: [0n, 1n].map(ordinal => {
+                    const id = randomUUID();
+                    const sequence = ordinal + 1n;
+                    return { id, sequence, parentRecordId: rootId, memberOrdinal: ordinal,
+                        contentEnvelope: serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: "plain",
+                            binding: { v: 1, purpose: "invocation_progress", accountId: source.owner.id, runId: source.run.id,
+                                recordId: id, sequence: String(sequence), parentRecordId: rootId, memberOrdinal: String(ordinal), attempt: "0" },
+                            progress: { kind: "happier.workflow-progress.v1", invocationPath: { blockId: `role-${ordinal}`, scope: [] },
+                                blockKind: "step", attempt: "0", logicalInvocationRecordId: id } })) };
+                }) })).toMatchObject({ disposition: "created", invocations: [{ sequence: "1" }, { sequence: "2" }] });
+                break;
+            case "publish":
+                expect(await workflowStorage.publishWorkflowInvocationDraft({ ...review,
+                    contentEnvelope: progress(leafId, 1n, rootId, 0n, "Updated role result") }))
+                    .toMatchObject({ invocation: { index: { contentRevision: "1" } } });
+                break;
+            case "review":
+                expect(await workflowStorage.completeWorkflowInvocationReview({ ...review, mode: "use_result" }))
+                    .toMatchObject({ disposition: "completed", invocation: { index: { lifecycle: "completed" } } });
+                break;
+            case "transition":
+                expect(await workflowStorage.transitionWorkflowRun({ ...worker, state: "interrupted", checkpointEnvelope: checkpoint(2) }))
+                    .toMatchObject({ state: "interrupted", revision: 1 });
+                break;
+            case "pause": expect(await workflowStorage.pauseWorkflowRun(worker)).toMatchObject({ run: { state: "pause_requested" } }); break;
+            case "resume": expect(await workflowStorage.resumeWorkflowRunBoundary(worker)).toMatchObject({ run: { state: "queued" } }); break;
+            case "cancel": expect(await workflowStorage.cancelWorkflowRun(worker)).toMatchObject({ run: { state: "cancelled" } }); break;
+            case "recover":
+                expect(await workflowStorage.recoverWorkflowInvocations({ ...worker, checkpointEnvelope: checkpoint(3), recoveries: [{
+                    invocationId: leafId, newInvocationId: replacementId, contentEnvelope: progress(replacementId, 2n, rootId, 1n),
+                }] })).toMatchObject({ disposition: "accepted", invocations: [{ attempt: "1" }] });
+                break;
+            case "withdraw":
+                expect(await workflowStorage.recordWorkflowRunOriginInputWithdrawn({ ...worker, originSessionId: source.session.id,
+                    invocationRecordId: leafId })).toMatchObject({ index: { lifecycle: "pending" } });
+                break;
+            case "trigger-update":
+                await updateAutomationTrigger({ accountId: f.accounts[2].id, automationId: f.watcher.id,
+                    triggerId: source.trigger.id, expectedRevision: 0, enabled: false });
+                expect(await db.automationTrigger.findUniqueOrThrow({ where: { id: source.trigger.id } })).toMatchObject({ enabled: false });
+                break;
+            case "automation-cancel":
+                await cancelAutomationRun({ accountId: source.owner.id, runId: source.run.id });
+                expect(await db.automationRun.findUniqueOrThrow({ where: { id: source.run.id } })).toMatchObject({ state: "cancelled" });
+                break;
+            case "exhaustion": {
+                const { registerWorkflowRunStorageRoutes } = await import("@/app/api/routes/automations/registerWorkflowRunStorageRoutes");
+                const app = createAuthenticatedTestApp();
+                registerWorkflowRunStorageRoutes(app);
+                await app.ready();
+                try {
+                    const response = await app.inject({ method: "POST", url: "/v3/automations/runs/workflow-storage",
+                        headers: { "x-test-user-id": source.owner.id },
+                        payload: { operation: "pause", runId: source.run.id, expectedRevision: 0 } });
+                    expect(response.statusCode, response.body).toBe(503);
+                    expect(response.json()).toEqual({ error: "storage_unavailable" });
+                    expect(conflicts.length).toBeGreaterThan(0);
+                    expect(await db.automationRun.findUniqueOrThrow({ where: { id: source.run.id } })).toMatchObject({ state, revision: 0 });
+                } finally { await app.close(); }
+                break;
+            }
+        }
+        expect(publications).toBeGreaterThan(0);
+        if (operation !== "exhaustion") expect(conflicts).toEqual([]);
+    });
+
+    it("commits an invocation fact after an unrelated Account cursor write without serialization rollback", async () => {
+        const f = await fixture();
+        const source = f.sources[0];
+        const assignment = await db.automationRunAssignment.findFirstOrThrow({ where: { runId: source.run.id } });
+        await db.automationRun.update({ where: { id: source.run.id }, data: {
+            state: "running", claimedByMachineId: assignment.machineId, attempt: 1,
+        } });
+        const accountCurrentness = deriveAutomationAccountCurrentnessWitness(await db.account.findUniqueOrThrow({
+            where: { id: source.owner.id }, select: automationAccountCurrentnessSelect,
+        }));
+        if (!accountCurrentness) throw new Error("fixture Account currentness unavailable");
+        const invocationId = randomUUID();
+        const envelope = (result?: string) => serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
+            mode: "plain", binding: { v: 1, purpose: "invocation_progress", accountId: source.owner.id,
+                runId: source.run.id, recordId: invocationId, sequence: "0", parentRecordId: null, memberOrdinal: "0", attempt: "0" },
+            progress: { kind: "happier.workflow-progress.v1", invocationPath: { blockId: "$root", scope: [] },
+                blockKind: "root", attempt: "0", logicalInvocationRecordId: invocationId,
+                ...(result === undefined ? {} : { result }) },
+        }));
+        await db.workflowRunInvocation.create({ data: { id: invocationId, runId: source.run.id, sequence: 0n,
+            parentRecordId: null, memberOrdinal: 0n, attempt: 0n, lifecycle: "running", contentEnvelope: envelope() } });
+        const originalTransaction = db.$transaction.bind(db);
+        const conflicts: string[] = [];
+        let publishingPeer = false;
+        // Interleave at the real Prisma boundary, after the audience read has
+        // established a snapshot but before its first Account lock. Cursor
+        // publication and all Workflow internals execute their real owners.
+        const interleaved = async (operation: (tx: Tx) => Promise<unknown>, options?: Parameters<typeof originalTransaction>[1]) => {
+            if (publishingPeer) return originalTransaction(operation, options);
+            return originalTransaction(async tx => {
+                let advanced = false;
+                const boundary = new Proxy(tx, { get(target, property, receiver) {
+                    if (property !== "$queryRawUnsafe") return Reflect.get(target, property, receiver);
+                    return (query: string, ...values: unknown[]) => observeLazyPrismaQuery(target.$queryRawUnsafe(query, ...values), () => ({
+                        started() {},
+                        settled(succeeded, error) { if (!succeeded) { const state = sqlState(error); if (state) conflicts.push(state); } },
+                    }), async () => {
+                        if (!advanced && query.includes('FROM "Account"') && query.includes("FOR ")) {
+                            advanced = true;
+                            publishingPeer = true;
+                            try {
+                                await inTx(cursorTx => markAccountChanged(cursorTx, {
+                                    accountId: source.owner.id, kind: "account", entityId: "unrelated-cursor-publication",
+                                }));
+                            } finally { publishingPeer = false; }
+                        }
+                    });
+                } });
+                return operation(boundary);
+            }, options);
+        };
+        db.$transaction = interleaved as typeof db.$transaction;
+        restoreTransport = () => { db.$transaction = originalTransaction; };
+        const contentEnvelope = envelope("first leaf input prepared");
+        await expect(commitWorkflowInvocationFact({ accountId: source.owner.id, runId: source.run.id,
+            machineId: assignment.machineId, invocationId, invocationAttempt: 0n, expectedContentRevision: 0n,
+            expectedLifecycle: "running", lifecycle: "running", contentEnvelope, parentAttempt: 1, accountCurrentness,
+        })).resolves.toMatchObject({ contentRevision: "1", parentRevision: source.run.revision });
+        expect(conflicts).toEqual([]);
+        expect(await db.workflowRunInvocation.findUniqueOrThrow({ where: { id: invocationId } }))
+            .toMatchObject({ contentEnvelope, contentRevision: 1n, lifecycle: "running" });
+    });
+
+    it.each(["session", "run"] as const)("creates and rejoins a %s trigger set while unrelated Account cursors advance", async kind => {
+        const { registerAutomationV3Routes } = await import("@/app/api/routes/automations/registerAutomationV3Routes");
+        const f = await fixture();
+        const source = f.sources[kind === "session" ? 0 : 1];
+        const assignment = await db.automationRunAssignment.findFirstOrThrow({ where: { runId: source.run.id } });
+        const automationId = randomUUID();
+        const payload = {
+            automationId, name: "Current Workflow trigger", enabled: true,
+            executionRecipe: JSON.parse(f.watcher.templateCiphertext),
+            assignments: [{ machineId: assignment.machineId }],
+            ...(kind === "session" ? { scopeSessionId: source.session.id, workflowDefinitionId: "builtin:keep-going" } : {}),
+            triggers: [{ triggerId: randomUUID(), trigger: kind === "session"
+                ? { kind: "sessionLifecycle", enabled: true, sourceSessionId: source.session.id,
+                    events: ["parentTurnCompleted"], policy: { kind: "everyMatch" } }
+                : { kind: "runLifecycle", enabled: true, source: { kind: "workflow_run", runId: f.sources[0].run.id },
+                    condition: "terminal" } }],
+        };
+        const originalTransaction = db.$transaction.bind(db);
+        const conflicts: string[] = [];
+        let publishingPeer = false;
+        // Real cursor publication lands after audience discovery, before the
+        // first ordered Account lock, on every attempt. No internal owner is
+        // replaced: HTTP admission, mode/access fences and storage stay real.
+        const interleaved = async (operation: (tx: Tx) => Promise<unknown>, options?: Parameters<typeof originalTransaction>[1]) => {
+            if (publishingPeer) return originalTransaction(operation, options);
+            return originalTransaction(async tx => {
+                let advanced = false;
+                return operation(new Proxy(tx, { get(target, property, receiver) {
+                    if (property !== "$queryRawUnsafe") return Reflect.get(target, property, receiver);
+                    return (query: string, ...values: unknown[]) => observeLazyPrismaQuery(target.$queryRawUnsafe(query, ...values), () => ({
+                        started() {},
+                        settled(succeeded, error) { if (!succeeded) { const state = sqlState(error); if (state) conflicts.push(state); } },
+                    }), async () => {
+                        if (!advanced && query.includes('FROM "Account"') && query.includes("FOR ")) {
+                            advanced = true;
+                            publishingPeer = true;
+                            try {
+                                await inTx(cursorTx => markAccountChanged(cursorTx, {
+                                    accountId: source.owner.id, kind: "account", entityId: "unrelated-create-publication",
+                                }));
+                            } finally { publishingPeer = false; }
+                        }
+                    });
+                } }));
+            }, options);
+        };
+        db.$transaction = interleaved as typeof db.$transaction;
+        restoreTransport = () => { db.$transaction = originalTransaction; };
+        const app = createAuthenticatedTestApp();
+        registerAutomationV3Routes(app);
+        await app.ready();
+        try {
+            for (let repeat = 0; repeat < 2; repeat++) {
+                const response = await app.inject({ method: "POST", url: "/v3/automations",
+                    headers: { "x-test-user-id": source.owner.id }, payload });
+                expect({ statusCode: response.statusCode, conflicts }).toEqual({ statusCode: 200, conflicts: [] });
+                expect(response.json()).toMatchObject({ id: automationId, templateVersion: 1 });
+            }
+            expect(await db.automation.count({ where: { id: automationId } })).toBe(1);
+            expect(await db.automationTrigger.count({ where: { automationId } })).toBe(1);
+            const conflicting = await app.inject({ method: "POST", url: "/v3/automations",
+                headers: { "x-test-user-id": source.owner.id }, payload: { ...payload, name: "Different request" } });
+            expect(conflicting.statusCode).toBe(409);
+        } finally { await app.close(); }
+    });
+
     it("reciprocal shared Run cancellation commits with current mode fences, origin hints and watcher admission without a physical deadlock", async () => {
         const f = await fixture();
         const owners = f.sources.map(source => source.owner.id);
@@ -209,7 +495,11 @@ describe.skipIf(provider !== "postgres" && provider !== "postgresql")("Workflow 
                     events: ["sessionArchived"], policy: { kind: "everyMatch" } }) } });
         }
         const app = archiveSession ? createAuthenticatedTestApp() : null;
-        if (app) { registerSessionArchiveRoutes(app); await app.ready(); }
+        if (app) {
+            const { registerSessionArchiveRoutes } = await import("@/app/api/routes/session/registerSessionArchiveRoutes");
+            registerSessionArchiveRoutes(app);
+            await app.ready();
+        }
         const runId = randomUUID();
         const currentness = deriveAutomationAccountCurrentnessWitness(await db.account.findUniqueOrThrow({
             where: { id: owner.id }, select: automationAccountCurrentnessSelect,

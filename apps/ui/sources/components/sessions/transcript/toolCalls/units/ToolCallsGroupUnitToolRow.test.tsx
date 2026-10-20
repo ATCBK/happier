@@ -230,6 +230,16 @@ describe('ToolCallsGroupUnitToolRow', () => {
         expect(rows[0]?.props.headerAction).toBeTruthy();
     });
 
+    it('omits Pin from a grouped tool row when its switch is off', async () => {
+        const screen = await renderToolRow({
+            ...createTranscriptSessionCommonPropsFixture({ messageDisplayCommon: { transcriptMessagePinActionEnabled: false } }),
+            message: createToolCallMessageFixture({ id: 'm1', createdAt: 1, seq: 11, transcriptBlockIndex: 3 }),
+            expanded: false,
+            onToggleToolPin: vi.fn(),
+        });
+        expect(screen.findAllByType('ToolTimelineRow' as React.ElementType)[0]?.props.headerAction).toBeNull();
+    });
+
     it('does not reserve a grouped feed header action slot when tool pin identity facts are unavailable', async () => {
         const onToggleToolPin = vi.fn();
         const screen = await renderToolRow({

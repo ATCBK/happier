@@ -2,6 +2,8 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { FilesystemCreateDirectoryInputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import {
     DaemonFilesystemListDirectoryRequestSchema,
     DaemonWorkspaceFileListRequestSchema,
@@ -9,7 +11,14 @@ import {
     type DaemonWorkspaceFileListResponse,
 } from '@happier-dev/protocol';
 import { storage } from '@/sync/domains/state/storage';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import { installReactDomPortalBoundaryForTests } from '@/dev/testkit/mocks/reactDom';
 
 import {
     getPathBrowserRowTestId,
@@ -18,8 +27,7 @@ import {
     PATH_BROWSER_CREATE_FOLDER_TEST_ID,
     PATH_BROWSER_MODAL_TEST_ID,
 } from './pathBrowserTestIds';
-import { flushHookEffects, invokeTestInstanceHandler, renderScreen } from '@/dev/testkit';
-import { createCapturingLegendListMock } from '@/dev/testkit/mocks/legendList';
+import { flushHookEffects, invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
 import type { CustomModalChromeCardConfig, CustomModalInjectedProps } from '@/modal/types';
 
 
@@ -98,27 +106,21 @@ const machineWorkspaceFileListMock = vi.hoisted(() => vi.fn<(machineId: string, 
     paths: [],
     truncated: false,
 })));
-// Secure credentials are an environment boundary; credential and lifetime owners stay real.
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-    return createTokenStorageModuleMock({ importOriginal, tokenStorage: {
-        getCredentialsForServerUrl: async () => ({ token: `header.${Buffer.from(JSON.stringify({ sub: 'target-account' })).toString('base64')}.signature` }),
-    } });
-});
 const modalPromptMock = vi.hoisted(() => vi.fn<(...args: any[]) => Promise<string | null>>(async () => null));
 const modalAlertMock = vi.hoisted(() => vi.fn());
 const itemRenderCounts = vi.hoisted(() => new Map<string, number>());
 
-const { module: capturedLegendList } = createCapturingLegendListMock({
-    renderItems: true,
-    refHandle: {
-        scrollToIndex: flatListScrollToIndexMock,
-        scrollToOffset: vi.fn(),
-    },
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+    const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
+    return createCapturingLegendListMock({
+        original: await importOriginal<typeof import('@legendapp/list/react-native')>(),
+        renderItems: true,
+        refHandle: {
+            scrollToIndex: flatListScrollToIndexMock,
+            scrollToOffset: vi.fn(),
+        },
+    }).module;
 });
-vi.mock('@legendapp/list/react-native', () => ({
-    LegendList: capturedLegendList.LegendList,
-}));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -156,20 +158,7 @@ vi.mock('react-native', async () => {
 
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-    return createUnistylesMock({
-        theme: {
-            colors: {
-                surface: '#fff',
-                text: '#111',
-                textSecondary: '#666',
-                textLink: '#06f',
-                divider: '#ddd',
-                shadow: { color: '#000' },
-                button: { primary: { background: '#06f', tint: '#fff' } },
-                header: { tint: '#111' },
-            },
-        },
-    });
+    return createUnistylesMock();
 });
 
 vi.mock('@/text', async () => {
@@ -179,15 +168,7 @@ vi.mock('@/text', async () => {
     });
 });
 
-vi.mock('@expo/vector-icons', () => ({
-    Ionicons: 'Ionicons',
-    Octicons: 'Octicons',
-}));
-
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: 'Text',
-    TextInput: 'TextInput',
-}));
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
 // Observe render passes of the shared tree row without replacing it: the real row still renders.
 vi.mock('@happier-dev/plugin-ui/presentation', async (importOriginal) => {
@@ -203,30 +184,6 @@ vi.mock('@happier-dev/plugin-ui/presentation', async (importOriginal) => {
     };
 });
 
-vi.mock('@/components/ui/lists/Item', () => ({
-    // Keep interactive rows pressable in the host tree so tests can detect nested toggle controls.
-    Item: (props: any) => {
-        if (typeof props.testID === 'string') {
-            itemRenderCounts.set(props.testID, (itemRenderCounts.get(props.testID) ?? 0) + 1);
-        }
-        return React.createElement(
-            props.onPress || props.onLongPress || props.onContextMenu ? 'Pressable' : 'Item',
-            props,
-            props.icon ?? null,
-            props.rightElement ?? null,
-            props.subtitle ?? null,
-        );
-    },
-}));
-
-vi.mock('@/components/ui/popover', () => ({
-    Popover: (props: any) => {
-        if (!props.open) return null;
-        return React.createElement('Popover', props, props.children({ maxHeight: 400, maxWidth: 520, placement: 'bottom' }));
-    },
-    PopoverScope: ({ children }: any) => React.createElement(React.Fragment, null, children),
-}));
-
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({
     spies: {
         prompt: (...args: any[]) => modalPromptMock(...args),
@@ -235,85 +192,144 @@ vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).creat
     },
 }).module);
 
-// Only daemon transport is replaced: settings, scope binding, parsing and caches remain real.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
-    const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
-    return createServerScopedMachineRpcBoundaryMock(async (params) => {
-        const options = { serverId: params.serverId, accountId: params.accountId, signal: params.signal };
-        switch (params.method) {
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+// Only the external daemon ACK is replaced. Credential custody, guarded RPC
+// policy, scope capture, filesystem parsers and caches all execute for real.
+const machineRequests = installSessionActionRpcBoundary(async (request, context) => {
+        const home = context.serverUrl && homes.findByServerUrl(context.serverUrl.replace(/\/+$/, ''));
+        if (!home) throw new Error('Unexpected path-browser Home');
+        const separator = request.method.indexOf(':');
+        const machineId = request.method.slice(0, separator);
+        const method = request.method.slice(separator + 1);
+        const options = { serverId: home.serverId, accountId: 'target-account', signal: context.signal };
+        switch (method) {
+            case 'daemon.filesystem.createDirectory': {
+                const payload = FilesystemCreateDirectoryInputSchema.parse(request.params);
+                return machineCreateDirectoryMock(machineId, payload.path, options);
+            }
             case RPC_METHODS.CREATE_DIRECTORY: {
-                // The daemon transport boundary receives the real owner's serialized request.
-                const payload = params.payload as { path: string };
-                return machineCreateDirectoryMock(params.machineId, payload.path, options);
+                const payload = request.params;
+                if (!payload || typeof payload !== 'object' || !('path' in payload) || typeof payload.path !== 'string') {
+                    throw new Error('Malformed create-directory request');
+                }
+                return machineCreateDirectoryMock(machineId, payload.path, options);
             }
             case RPC_METHODS.DAEMON_WORKSPACE_FILES_LIST:
                 return machineWorkspaceFileListMock(
-                    params.machineId,
-                    DaemonWorkspaceFileListRequestSchema.parse(params.payload),
+                    machineId,
+                    DaemonWorkspaceFileListRequestSchema.parse(request.params),
                     options,
                 );
             case RPC_METHODS.DAEMON_FILESYSTEM_LIST_ROOTS:
-                return listMachineFileBrowserRootsMock({ machineId: params.machineId, serverId: params.serverId });
+                return listMachineFileBrowserRootsMock({ machineId, serverId: home.serverId });
             case RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY: {
-                const payload = DaemonFilesystemListDirectoryRequestSchema.parse(params.payload);
+                const payload = DaemonFilesystemListDirectoryRequestSchema.parse(request.params);
                 const response = await listMachineFileBrowserDirectoryEntriesMock({
                     directoryPath: payload.path,
                     includeFiles: payload.includeFiles,
-                    machineId: params.machineId,
-                    serverId: params.serverId,
+                    machineId,
+                    serverId: home.serverId,
                 });
                 return response.ok ? { ...response, path: payload.path } : response;
             }
             default:
-                throw new Error(`Unexpected path-browser RPC: ${params.method}`);
+                throw Object.assign(new Error('Fixture daemon method is unavailable'), { code: 'RPC_METHOD_NOT_AVAILABLE' });
         }
-    });
 });
-
-vi.mock('@/components/ui/buttons/RoundButton', () => ({
-    RoundButton: (props: any) => React.createElement('RoundButton', props),
-}));
 
 const defaultDirectoryEntries = listMachineFileBrowserDirectoryEntriesMock.getMockImplementation()!;
 const defaultRoots = listMachineFileBrowserRootsMock.getMockImplementation()!;
+const initialState = storage.getState();
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | undefined;
+let portal: ReturnType<typeof installReactDomPortalBoundaryForTests> | undefined;
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+async function setFolderActionPolicy(mode: 'off' | 'ask' | 'allowed') {
+    const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const scope = getActiveServerAccountScope();
+    if (!scope) throw new Error('Expected the path-browser Account');
+    await storage.getState().activateSettingsScope(scope);
+    const actionId = 'daemon.filesystem.createDirectory';
+    const settings = { ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+        v: 1,
+        actions: mode === 'off' ? { [actionId]: { disabledSurfaces: ['ui'] } }
+            : mode === 'ask' ? { [actionId]: { approvalRequiredSurfaces: ['ui'] } } : {},
+        approvalWaivedSurfaces: mode === 'allowed' ? { [actionId]: ['ui'] } : {},
+    }) };
+    const version = (storage.getState().settingsVersion ?? 0) + 1;
+    storage.getState().applySettingsForScope(scope, settings, version);
+    homes.answer(scope.serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version } });
+    return scope;
+}
+async function addPathHome(options: Readonly<{ serverUrl: string; name: string; serverIdentityId: string; active?: boolean }>) {
+    const id = await homes.addHome({ ...options, accountId: 'target-account', currentAccount: true, active: options.active ?? false });
+    const machine = createMachineFixture({ storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+        metadata: { host: 'path-browser.test', platform: 'darwin', happyCliVersion: 'test',
+            happyHomeDir: '/Users/leeroy/.happier', homeDir: '/Users/leeroy' },
+    });
+    const row = { ...createPlainMachineRowFixture({ id: machine.id, accountId: 'target-account' }),
+        metadata: encodePlainMachineStoredContent(machine.metadata) };
+    homes.answer(id, '/v1/machines', { body: [row] });
+    homes.answer(id, `/v1/machines/${machine.id}`, { body: { machine: row } });
+    storage.getState().applyMachines([{ ...machine, access: row.access }], true, { sourceServerId: id, sourceAccountId: 'target-account' });
+    storage.getState().markMachineListSettled(id);
+    return { id };
+}
 
 // Load the real component after the boundary factories are initialized, during
 // collection rather than inside a fake-timer test's execution budget.
+await loadSyncSingletonForTests();
 const { MachinePathBrowserModal, MachinePathBrowserView } = await import('./MachinePathBrowserModal');
 
 describe('MachinePathBrowserModal', () => {
-    afterEach(() => { vi.useRealTimers(); });
+    afterEach(async () => {
+        vi.useRealTimers();
+        standardCleanup();
+        try {
+            await connection?.dispose(); connection = undefined;
+            await homes.reset();
+            storage.setState(initialState, true);
+        } finally {
+            portal?.restore(); portal = undefined;
+            browser?.restore(); browser = undefined;
+        }
+    });
     beforeEach(async () => {
-        const { upsertServerProfile, setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
-        const home = await upsertServerProfile({ serverUrl: 'https://path-browser-active.example.test', name: 'Active Home' });
-        await setActiveServerId(home.id);
-        const machine = createMachineFixture({
-            metadata: {
-                host: 'path-browser.test', platform: 'darwin', happyCliVersion: 'test',
-                happyHomeDir: '/Users/leeroy/.happier', homeDir: '/Users/leeroy',
-            },
-        });
+        browser = await installBrowserRuntimeForTests({ url: 'https://path-browser-active.example.test' });
+        portal = installReactDomPortalBoundaryForTests();
+        await homes.reset();
+        storage.setState(initialState, true);
+        await addPathHome({ serverUrl: 'https://path-browser-active.example.test', name: 'Active Home', serverIdentityId: 'srv_path_active', active: true });
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const credentials = await TokenStorage.getCredentialsForServerUrl('https://path-browser-active.example.test');
+        if (!credentials) throw new Error('Path-browser Home credentials are missing');
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://path-browser-active.example.test',
+            serverIdentityId: 'srv_path_active', accountId: 'target-account', credentials, request: homes.request,
+            additionalRequestOrigins: ['https://path-browser-folder-target.example.test', 'https://path-browser-target.example.test'] });
+        const { sync } = await import('@/sync/sync');
+        await sync.awaitBootstrapForegroundAcquisition();
         storage.setState({
-            machines: { [machine.id]: machine },
-            machineListByServerId: { [home.id]: [machine] },
             localSettings: { ...storage.getState().localSettings, uiItemDensity: 'comfortable', uiFontScale: 1 },
         });
         const { clearCachedMachineFileBrowserRoots, clearCachedMachineFileBrowserEntries } = await import('@/sync/domains/input/machineFileBrowser');
-        clearCachedMachineFileBrowserRoots({ machineId: machine.id });
-        clearCachedMachineFileBrowserEntries({ machineId: machine.id });
+        clearCachedMachineFileBrowserRoots({ machineId: 'machine-1' });
+        clearCachedMachineFileBrowserEntries({ machineId: 'machine-1' });
         listMachineFileBrowserRootsMock.mockReset().mockImplementation(defaultRoots);
         listMachineFileBrowserDirectoryEntriesMock.mockReset().mockImplementation(defaultDirectoryEntries);
         flatListScrollToIndexMock.mockClear();
         machineCreateDirectoryMock.mockClear();
+        machineRequests.length = 0;
         machineWorkspaceFileListMock.mockReset().mockResolvedValue({ ok: true, paths: [], truncated: false });
         modalPromptMock.mockReset().mockResolvedValue(null);
         modalAlertMock.mockClear();
         itemRenderCounts.clear();
+        await setFolderActionPolicy('allowed');
     });
 
     it('loads root children on the selected Home before confirming a folder, without selecting the disclosure target', async () => {
-        const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
-        const targetHome = await upsertServerProfile({ serverUrl: 'https://path-browser-folder-target.example.test', name: 'Folder Home' });
+        const targetHome = await addPathHome({ serverUrl: 'https://path-browser-folder-target.example.test', name: 'Folder Home', serverIdentityId: 'srv_path_folder_target' });
         const { clearCachedMachineFileBrowserRoots, clearCachedMachineFileBrowserEntries } = await import('@/sync/domains/input/machineFileBrowser');
         clearCachedMachineFileBrowserRoots({ machineId: 'machine-1', serverId: targetHome.id });
         clearCachedMachineFileBrowserEntries({ machineId: 'machine-1', serverId: targetHome.id });
@@ -528,7 +544,7 @@ describe('MachinePathBrowserModal', () => {
 
         expect(machineWorkspaceFileListMock).toHaveBeenCalledWith(
             'machine-1',
-            { rootPath: '/repo', query: 'readme', includeHidden: true },
+            { rootPath: '/repo', query: 'readme', includeHidden: true, budgetMs: expect.any(Number) },
             expect.anything(),
         );
 
@@ -540,8 +556,7 @@ describe('MachinePathBrowserModal', () => {
     });
 
     it('binds a targeted Home search to its credential Account and reports incomplete coverage', async () => {
-        const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
-        const targetHome = await upsertServerProfile({ serverUrl: 'https://path-browser-target.example.test', name: 'Target Home' });
+        const targetHome = await addPathHome({ serverUrl: 'https://path-browser-target.example.test', name: 'Target Home', serverIdentityId: 'srv_path_search_target' });
         vi.useFakeTimers();
         machineWorkspaceFileListMock.mockResolvedValueOnce({ ok: true, paths: ['src/needle.ts'], truncated: true });
         const screen = await renderScreen(<MachinePathBrowserView machineId="machine-1" serverId={targetHome.id}
@@ -603,7 +618,7 @@ describe('MachinePathBrowserModal', () => {
 
         expect(machineWorkspaceFileListMock).toHaveBeenCalledWith(
             'machine-1',
-            { rootPath: '/Users', query: 'ssh', includeHidden: true },
+            { rootPath: '/Users', query: 'ssh', includeHidden: true, budgetMs: expect.any(Number) },
             expect.anything(),
         );
 
@@ -957,7 +972,8 @@ describe('MachinePathBrowserModal', () => {
         }));
     });
 
-    it('creates a folder under the selected directory via the header action', async () => {
+    it.each(['off', 'ask', 'allowed'] as const)('admits New folder through the rooted Action under %s policy', async mode => {
+        const scope = await setFolderActionPolicy(mode);
         modalPromptMock.mockResolvedValueOnce('new-folder');
 
         const screen = await renderInModalChrome(<MachinePathBrowserModal
@@ -975,11 +991,48 @@ describe('MachinePathBrowserModal', () => {
         await screen.pressByTestIdAsync(PATH_BROWSER_CREATE_FOLDER_TEST_ID);
         await flushHookEffects({ cycles: 2, turns: 2 });
 
-        expect(machineCreateDirectoryMock).toHaveBeenCalledWith(
-            'machine-1',
-            '/Users/new-folder',
-            expect.anything(),
-        );
+        if (mode === 'allowed') {
+            await vi.waitFor(() => expect(machineRequests).toContainEqual(expect.objectContaining({
+                method: 'machine-1:daemon.filesystem.createDirectory',
+                params: { rootPath: '/Users', path: '/Users/new-folder' },
+            })));
+            expect(machineCreateDirectoryMock).toHaveBeenCalledWith('machine-1', '/Users/new-folder', expect.anything());
+            expect(modalAlertMock).not.toHaveBeenCalled();
+        } else {
+            await vi.waitFor(() => expect(modalAlertMock).toHaveBeenCalled());
+            expect(machineCreateDirectoryMock).not.toHaveBeenCalled();
+            expect(machineRequests.some(request => request.method.endsWith(`:${RPC_METHODS.CREATE_DIRECTORY}`))).toBe(false);
+            if (mode === 'ask') {
+                expect(homes.artifacts(scope.serverId).list()).toHaveLength(1);
+            }
+        }
+    });
+
+    it('cancels an admitted folder request when its picker unmounts', async () => {
+        let finishRequest = () => {};
+        machineCreateDirectoryMock.mockImplementationOnce(async () => new Promise<{ success: true }>(resolve => {
+            finishRequest = () => resolve({ success: true });
+        }));
+        modalPromptMock.mockResolvedValueOnce('new-folder');
+        const screen = await renderInModalChrome(<MachinePathBrowserModal
+            machineId="machine-1" initialPath="/Users" onResolve={vi.fn()} onClose={vi.fn()} />);
+        try {
+            await waitForTestId(screen, getPathBrowserRowTestId('/Users'));
+            await screen.pressByTestIdAsync(getPathBrowserRowTestId('/Users'));
+            await screen.pressByTestIdAsync(PATH_BROWSER_CREATE_FOLDER_TEST_ID);
+            await vi.waitFor(() => expect(machineCreateDirectoryMock).toHaveBeenCalled());
+            const options = machineCreateDirectoryMock.mock.calls[0]?.[2];
+            if (!options || typeof options !== 'object' || !('signal' in options) || !(options.signal instanceof AbortSignal)) {
+                throw new Error('Expected the daemon request cancellation lifetime');
+            }
+            const signal = options.signal;
+            expect(signal.aborted).toBe(false);
+            await screen.unmount();
+            await vi.waitFor(() => expect(signal.aborted).toBe(true));
+            expect(modalAlertMock).not.toHaveBeenCalled();
+        } finally {
+            await act(async () => { finishRequest(); });
+        }
     });
 
     it('opens a context menu on right click and creates a folder in the clicked directory', async () => {

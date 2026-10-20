@@ -81,7 +81,7 @@ describe('useChangedFilesReviewPrefetch (requestedPaths)', () => {
             isCollapsed: () => false,
             normalizeError: () => 'e',
             fallbackError: 'failed',
-            initialRequestedPaths: ['a.ts'],
+            initialRequestedPaths: ['a.ts', 'b.ts'],
         }));
 
         expect(hook.getCurrent().requestedPaths).toEqual(['a.ts']);
@@ -112,7 +112,7 @@ describe('useChangedFilesReviewPrefetch (requestedPaths)', () => {
         hook.unmount();
     });
 
-    it('uses a custom diff fetcher for background prefetch', async () => {
+    it('does not acquire offscreen diffs and observes workspace rows without a Session', async () => {
         prefetchConcurrencySetting = 2;
         const sessionId = 'workspace:repo:prefetch-custom';
         const { scmDiffCache } = await import('@/scm/diffCache/scmDiffCacheSingleton');
@@ -120,7 +120,7 @@ describe('useChangedFilesReviewPrefetch (requestedPaths)', () => {
         const { useChangedFilesReviewPrefetch } = await import('./useChangedFilesReviewPrefetch');
 
         const hook = await renderHook(() => useChangedFilesReviewPrefetch({
-            sessionId,
+            sessionId: '',
             snapshotSignature: 'sig-1',
             diffArea: 'pending' as any,
             rows: [
@@ -143,11 +143,26 @@ describe('useChangedFilesReviewPrefetch (requestedPaths)', () => {
             expect(hook.getCurrent().viewableRowIndices).toEqual([0]);
         });
         await vi.waitFor(() => {
-            expect(prefetchDiffSpy).toHaveBeenCalledWith(expect.objectContaining({
-                path: 'b.ts',
-                diffArea: 'pending',
-            }));
+            expect(hook.getCurrent().requestedPaths).toEqual(['a.ts']);
         });
+        expect(prefetchDiffSpy).not.toHaveBeenCalled();
+        act(() => { hook.getCurrent().onViewableItemsChanged({ viewableItems: [{ index: 1 }] }); });
+        await vi.waitFor(() => { expect(hook.getCurrent().requestedPaths).toEqual(['b.ts']); });
+        expect(prefetchDiffSpy).not.toHaveBeenCalled();
+        hook.unmount();
+    });
+
+    it('requests nothing when the visible viewport contains only a section header', async () => {
+        const { useChangedFilesReviewPrefetch } = await import('./useChangedFilesReviewPrefetch');
+        const hook = await renderHook(() => useChangedFilesReviewPrefetch({
+            sessionId: 's1', snapshotSignature: 'collapsed', diffArea: 'pending',
+            rows: [{ kind: 'section', key: 'section', title: 'Changes' }, { kind: 'file', file: file('b.ts') }] as any,
+            reviewFiles: [file('a.ts'), file('b.ts')], isCollapsed: () => false,
+            normalizeError: () => 'e', fallbackError: 'failed', initialRequestedPaths: ['a.ts'],
+        }));
+        act(() => { hook.getCurrent().onViewableItemsChanged({ viewableItems: [{ index: 0 }] }); });
+        await vi.waitFor(() => { expect(hook.getCurrent().viewableRowIndices).toEqual([0]); });
+        expect(hook.getCurrent().requestedPaths).toEqual([]);
         hook.unmount();
     });
 });

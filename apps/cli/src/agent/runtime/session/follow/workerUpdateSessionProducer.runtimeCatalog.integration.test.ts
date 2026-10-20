@@ -7,8 +7,9 @@ import { SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1, SESSION_FOLLOW_OBSERVE_PENDING_EVE
   createAccountScopedCryptoMaterialSnapshotV1, prepareWorkflowRunDataKeyV1,
   convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1,
   TranscriptRawAgentEventV1Schema, TranscriptRawRecordV1Schema, WorkerUpdateV1Schema,
-  type SessionWorkerPublishInputV1,
-  type SessionFollowPendingObservationV1, type WorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol';
+  type SessionUpdatePostInputV1,
+  type SessionRuntimeIssueV1,
+  type SessionFollowSessionPendingObservationV1, type WorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol';
 import { ApiSessionClient } from '@/api/session/sessionClient';
 import { createSessionScopedSocket } from '@/api/session/sockets';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
@@ -27,9 +28,14 @@ import type { RawTranscriptRow } from '@/session/replay/fetchEncryptedTranscript
 import { encryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
 import type { StoredCredentials } from '@/persistence';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
 import { isSessionFollowFrontierEqualV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
-import { SessionFollowAcknowledgeRequestV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { SessionFollowAcknowledgeRequestV1Schema, SessionFollowObservePendingRequestV1Schema,
+  type SessionFollowObservePendingRequestV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { SessionMessagesPageV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
+import { classifyWorkerUpdateEventV1 } from '@happier-dev/protocol/sessions/relations/workerUpdateV1';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 
 const { mockIo } = vi.hoisted(() => ({ mockIo: vi.fn() }));
 // Socket.IO and HTTP are network boundaries; all internal owners remain real.
@@ -40,8 +46,9 @@ const cleanups: Array<() => Promise<void>> = [];
 beforeEach(() => { vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 404 }))); });
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); vi.unstubAllGlobals(); });
 
-async function fixture(status: 'completed' | 'failed' | 'cancelled' | 'running', pendingReviewRuns = 0, restricted = false,
-  review?: Readonly<{ outcome: 'exhausted' | 'stop_condition'; sourceTurnId?: string; readable?: boolean; ref?: string; olderExhausted?: boolean; listReadable?: boolean; keyState?: 'available' | 'missing' }>) {
+async function fixture(status: 'completed' | 'failed' | 'cancelled' | 'running' | 'waiting', pendingReviewRuns = 0, restricted = false,
+  review?: Readonly<{ outcome: 'exhausted' | 'stop_condition'; sourceTurnId?: string; readable?: boolean; ref?: string; olderExhausted?: boolean; listReadable?: boolean; keyState?: 'available' | 'missing' }>,
+  runtimeIssueV1?: SessionRuntimeIssueV1, overlap = false) {
   const secret = randomBytes(32);
   const credentials: StoredCredentials = { token: 'lead-own-grant',
     encryption: review?.keyState ? { type: 'legacy', secret } : null };
@@ -54,20 +61,27 @@ async function fixture(status: 'completed' | 'failed' | 'cancelled' | 'running',
       : { kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } } });
   const runKeyEnvelope = preparedRunKey.recipientKeyEnvelopes[0]?.encryptedDataKey ?? null;
   const runAccess = { readable: review?.readable !== false };
-  const observation: SessionFollowPendingObservationV1 = {
-    sourceSessionId: workerId, destinationSessionId: 'lead', edgeKind: 'reports_to', attachedAt: 100, mode: 'next_turn',
+  const observation: SessionFollowSessionPendingObservationV1 = {
+    sourceSessionId: workerId, destinationSessionId: 'lead', relation: 'manager', attachedAt: 100, policy: { preset: 'everything' as const },
     delivered: { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null },
     observed: { transcriptSeq: 1, readyEventSeq: 1, agentStateVersion: 0,
       turn: status === 'running' ? null : { id: 'worker-turn', status } },
   };
+  const observations: SessionFollowSessionPendingObservationV1[] = [observation, ...(overlap ? [{
+    sourceSessionId: workerId, destinationSessionId: 'lead', relation: 'follower' as const, policy: { preset: 'quiet' as const },
+    delivered: { ...observation.delivered }, observed: observation.observed,
+  }] : [])];
   const metadata = { path: '/worker', host: 'host' };
   const row = createSessionRecordFixture({ id: workerId, seq: 1, encryptionMode: review?.keyState ? 'e2ee' : 'plain',
     metadata: review?.keyState ? encryptSessionPayload({ ctx, payload: metadata }) : JSON.stringify(metadata), active: true,
     activeAt: Date.now(), updatedAt: Date.now(), latestTurnStatus: status === 'running' ? 'in_progress' : status,
     latestTurnStatusObservedAt: Date.now(), latestReadyEventSeq: 1,
-    reportsTo: { sessionId: 'lead' }, pendingReviewRuns, pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0 });
+    latestTurnId: 'worker-turn', ...(runtimeIssueV1 ? { lastRuntimeIssue: runtimeIssueV1 } : {}),
+    manager: { sessionId: 'lead' }, pendingReviewRuns, pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0 });
   const app = fastify();
-  const features = FeaturesResponseSchema.parse({ features: {}, capabilities: { session: {
+  const features = FeaturesResponseSchema.parse({ features: {
+    sessions: { enabled: true, autonomousExchange: { enabled: true } },
+  }, capabilities: { session: {
     runtimeActivity: { protocolVersion: 2 }, pendingInput: { protocolVersion: 4 }, publisherAuthority: { protocolVersion: 1 },
   } } });
   vi.stubGlobal('fetch', vi.fn<typeof fetch>(async input => {
@@ -76,7 +90,7 @@ async function fixture(status: 'completed' | 'failed' | 'cancelled' | 'running',
   }));
   app.get('/v1/auth/ping', async () => ({ ok: true }));
   const finalText = { role: 'agent', content: { type: 'codex', data: { type: 'message', message: 'Actual final result' } } };
-  const messages: RawTranscriptRow[] = [{ seq: 1, createdAt: 1,
+  const messages: (RawTranscriptRow & { seq: number })[] = [{ seq: 1, createdAt: 1,
     content: review?.keyState ? { t: 'encrypted', c: encryptSessionPayload({ ctx, payload: finalText }) } : { t: 'plain', v: finalText } }];
   app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture(
     review?.keyState ? witness : { mode: 'plain' }));
@@ -158,26 +172,43 @@ async function fixture(status: 'completed' | 'failed' | 'cancelled' | 'running',
     return { session: row };
   });
   app.get('/v1/sessions/:id/messages', async (request, reply) => {
-    const rejected = findTranscriptMessagesQueryRejection(new URL(request.url, origin).searchParams);
+    const query = new URL(request.url, origin).searchParams;
+    const rejected = findTranscriptMessagesQueryRejection(query);
     if (rejected) return reply.code(400).send({ error: rejected });
-    return { messages: [...messages].reverse().map((message) => ({
+    const limit = Number(query.get('limit'));
+    const after = query.get('afterSeq');
+    const before = query.get('beforeSeq');
+    const selected = after !== null ? messages.filter(message => message.seq > Number(after))
+      : messages.filter(message => before === null || message.seq < Number(before)).reverse();
+    const page = selected.slice(0, limit).map((message) => ({
       ...message, id: `worker-message-${message.seq}`,
-    })), hasMore: false };
+    }));
+    const hasMore = selected.length > limit;
+    return SessionMessagesPageV1Schema.parse({ messages: page, hasMore,
+      nextAfterSeq: after !== null && hasMore ? page.at(-1)?.seq : null,
+      nextBeforeSeq: after === null && hasMore ? page.at(-1)?.seq : null });
   });
   app.post('/v2/sessions/:id/follows/source-projection', async (request) => {
-    expect(request.body).toMatchObject({ sourceSessionId: workerId, edgeKind: 'reports_to', attachedAt: 100,
-      readMode: 'initial_current_snapshot', afterTranscriptSeq: 0, observedTranscriptSeq: observation.observed.transcriptSeq });
+    expect(request.body).toMatchObject({ sourceSessionId: workerId, relation: 'manager', attachedAt: 100,
+      readMode: 'incremental', observedTranscriptSeq: observation.observed.transcriptSeq });
+    const body = request.body as { afterTranscriptSeq: number; limit: number };
+    const selected = messages.filter(message => message.seq > body.afterTranscriptSeq);
     return { v: 1, source: { id: row.id, encryptionMode: 'plain', metadata: row.metadata, metadataLayoutVersion: 0,
       archivedAt: null, createdAt: row.createdAt, updatedAt: row.updatedAt, active: row.active, activeAt: row.activeAt,
       thinking: false, thinkingAt: null, latestTurnStatus: row.latestTurnStatus,
+      latestTurnId: row.latestTurnId, lastRuntimeIssue: row.lastRuntimeIssue,
       latestTurnStatusObservedAt: row.latestTurnStatusObservedAt, latestReadyEventSeq: row.latestReadyEventSeq,
-      latestReadyEventAt: null, meaningfulActivityAt: null, agentStateVersion: 0, pendingReviewRuns: row.pendingReviewRuns },
-      messages: [...messages].reverse(), hasMore: false };
+      latestReadyEventAt: null, meaningfulActivityAt: null, agentStateVersion: row.agentStateVersion, pendingReviewRuns: row.pendingReviewRuns },
+      messages: selected.slice(0, body.limit), hasMore: selected.length > body.limit };
   });
   const restore = installAxiosFastifyAdapter({ app, origin });
   const acknowledgements: unknown[] = [];
-  const leadMessages: RawTranscriptRow[] = [];
-  const acknowledgementState = { accepted: true };
+  const followObserveRequests: SessionFollowObservePendingRequestV1[] = [];
+  const leadMessages: (RawTranscriptRow & { seq: number })[] = [];
+  const acknowledgementState: { accepted: boolean; failBeforeCommit: boolean; publisherGeneration: string;
+    beforeAcknowledge?: (relation: 'manager' | 'follower') => Promise<void> } = {
+      accepted: true, failBeforeCommit: false, publisherGeneration: '1',
+    };
   const runtimeActivityHome = createSessionRuntimeActivityHomeStub({ machineId: 'worker-machine' });
   const socket = createApiSessionSocketStub({ connected: true, emitWithAck: (event, payload) => {
     const activity = runtimeActivityHome.answer(event, payload);
@@ -195,24 +226,49 @@ async function fixture(status: 'completed' | 'failed' | 'cancelled' | 'running',
       target.push({ seq, createdAt: seq, localId: request.localId, messageRole: request.messageRole, content });
       if (request.sessionId === workerId) {
         observation.observed = { ...observation.observed, transcriptSeq: seq };
+        for (const route of observations) route.observed = observation.observed;
         row.seq = seq;
       }
       return SessionTranscriptObservationAckV1Schema.parse({ ok: true, status: 'observed', id: `message-${seq}`,
         seq, localId: request.localId, didWrite: true, ingestedAt: Date.now() });
     }
-    if (event === SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1) return { ok: true, v: 1, sessionId: 'lead',
-      publisherGeneration: '1', currentSourceSessionIds: [workerId],
-      observations: isSessionFollowFrontierEqualV1(observation.delivered, observation.observed) ? [] : [{ ...observation }] };
+    if (event === SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1) {
+      const request = SessionFollowObservePendingRequestV1Schema.parse(payload);
+      followObserveRequests.push(request);
+      return { ok: true, v: 1, sessionId: 'lead',
+        publisherGeneration: acknowledgementState.publisherGeneration, currentSourceSessionIds: [workerId],
+        observations: observations.filter(entry => !isSessionFollowFrontierEqualV1(entry.delivered, entry.observed))
+          .map(entry => ({ ...entry })),
+        ...(request.wakeAdmission ? { wakeAdmission: { status: 'allowed' } } : {}) };
+    }
     if (event === SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1) {
       const request = SessionFollowAcknowledgeRequestV1Schema.parse(payload);
+      if (!('relation' in request)) throw new Error('Expected a Session relation acknowledgement');
       acknowledgements.push(request);
-      if (!acknowledgementState.accepted) return { ok: false, error: 'stale_observation' };
-      observation.delivered = request.consumed;
-      return { ok: true, v: 1, destinationSessionId: 'lead', sourceSessionId: workerId, delivered: request.consumed };
+      const apply = () => {
+        if (acknowledgementState.failBeforeCommit) throw new Error('ACK failed before progress commit');
+        if (!acknowledgementState.accepted) return { ok: false, error: 'stale_observation' };
+        const route = observations.find(entry => entry.relation === request.relation);
+        if (!route) throw new Error('ACK names an unobserved route');
+        route.delivered = request.consumed;
+        return {  ok: true, v: 1, destinationSessionId: 'lead', sourceSessionId: workerId, delivered: request.consumed };
+      };
+      return acknowledgementState.beforeAcknowledge?.(request.relation).then(apply) ?? apply();
     }
     return { ok: true };
   } });
-  mockIo.mockImplementation(() => socket);
+  mockIo.mockImplementation((url, options) => {
+    if (options?.auth?.clientType !== 'user-scoped') return socket;
+    expect(url).toBe(origin);
+    return createApiSessionSocketStub({ connected: true, emitWithAck: async (event, payload) => {
+      if (event !== SOCKET_RPC_EVENTS.CALL || !payload || typeof payload !== 'object'
+        || !('method' in payload) || !('params' in payload)) throw new Error('Unexpected publication RPC');
+      expect(payload.method).toBe(`${workerId}:session.update.post`);
+      return { ok: true, result: await getWorkerSession().rpcHandlerManager.invokeLocal('session.update.post', payload.params, {
+        localActionContext: { surface: 'cli', authority: 'present_user' },
+      }) };
+    } });
+  });
   const leadSession = createPlainSessionFixture({ id: 'lead' });
   const session = new ApiSessionClient('lead-own-grant', review?.keyState
     ? { ...leadSession, encryptionMode: 'e2ee', encryptionKey: secret, encryptionVariant: 'legacy' }
@@ -246,29 +302,152 @@ async function fixture(status: 'completed' | 'failed' | 'cancelled' | 'running',
     return workerSession;
   };
   const publisher = createCliActionDeps({ token: credentials.token, credentials, sessionId: workerId,
-    mode: 'plain', ctx: null, serverHttpBaseUrl: origin,
-    publishWorkerReport: (report) => getWorkerSession().enqueueSessionEventCommitted({ type: 'worker-report', ...report }),
+    mode: 'plain', ctx: null, serverId: 'worker-home', serverHttpBaseUrl: origin,
+    postSessionUpdate: (report) => getWorkerSession().enqueueSessionEventCommitted({ type: 'worker-report', ...report }),
   });
-  return { observation, acknowledgements, acknowledgementState, row, messages, leadMessages, session, runAccess,
-    publish: (report: SessionWorkerPublishInputV1) => publisher.sessionWorkerPublish!({ context: {}, ...report }),
-    reconcile: createSessionFollowContextReconciler({ session, hydrateObservation, maxFollowContextUtf8Bytes: 8192 }) };
+  const publicationExecutor = createActionExecutor(publisher);
+  const makeReconciler = () => createSessionFollowContextReconciler({ session, hydrateObservation, maxFollowContextUtf8Bytes: 8192 });
+  return { observation, observations, acknowledgements, acknowledgementState, row, messages, leadMessages, session, runAccess, makeReconciler,
+    commitEvent: (event: Parameters<ApiSessionClient['enqueueSessionEventCommitted']>[0]) => getWorkerSession().enqueueSessionEventCommitted(event),
+    postViaRpc: (report: unknown, callerSessionId?: string) => getWorkerSession().rpcHandlerManager.invokeLocal('session.update.post', report, {
+      localActionContext: { surface: 'ui', authority: 'present_user' },
+      ...(callerSessionId ? { rpcContext: { sessionActionOrigin: {
+        v: 1 as const, caller: { kind: 'session' as const, sessionId: callerSessionId, starterDepth: 0, turnDepth: 0 },
+        sourceTurnId: 'original-turn', requestId: 'original-publication', callerPermissionMode: null,
+      } } } : {}),
+    }),
+    publish: async (report: SessionUpdatePostInputV1) => {
+      const result = await publicationExecutor.execute('session.update.post', report, {
+        surface: 'agent', authority: 'account_automation', defaultSessionId: workerId,
+      });
+      expect(result).toMatchObject({ ok: true });
+      return result.ok ? result.result : result;
+    },
+    publishViaCli: (report: SessionUpdatePostInputV1) => createActionExecutor(createCliActionDeps({
+      token: credentials.token, credentials, sessionId: workerId, mode: 'plain', ctx: null,
+      serverId: 'worker-home', serverHttpBaseUrl: origin,
+    })).execute('session.update.post', report, { surface: 'cli', authority: 'present_user' }),
+    reconcile: makeReconciler(), followObserveRequests };
 }
 
 describe('session WorkerUpdate producer through Follow', () => {
+  it.each([false, true])('delivers an ended question-wait turn once without stopped/finished or private question reads (restricted=%s)', async restricted => {
+    const f = await fixture('waiting', 0, restricted);
+    f.observation.policy = { preset: 'important' };
+    // The restricted source has no AgentState or request counts. Its canonical
+    // typed lifecycle alone carries this needs-you fact to the manager.
+    const waiting = await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' });
+    expect(waiting?.workerUpdates).toEqual([expect.objectContaining({
+      workerId, ownerState: 'needs_input', wake: 'needs_you',
+    })]);
+    expect(waiting?.wakeEventLocalId).toBeTruthy();
+    expect(await waiting!.recheckAdmission(new AbortController().signal)).toBe(true);
+    // The source can accept the answer between observing its frontier and
+    // opening its current projection. That old wait can no longer wake anyone.
+    f.row.latestTurnId = 'answer-turn';
+    f.row.latestTurnStatus = 'in_progress';
+    expect(await waiting!.recheckAdmission(new AbortController().signal)).toBe(false);
+    f.row.latestTurnId = 'worker-turn';
+    f.row.latestTurnStatus = 'waiting';
+    waiting!.acknowledgeAccepted({ kind: 'context_only_wake', eventLocalId: waiting!.wakeEventLocalId! });
+    await vi.waitFor(() => expect(f.observation.delivered).toEqual(f.observation.observed));
+    expect(await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' })).toBeNull();
+
+    // A later state echo is not another occurrence of the same waiting turn.
+    f.row.agentStateVersion = 1;
+    f.observation.observed = { ...f.observation.observed, agentStateVersion: 1 };
+    expect(await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' })).toBeNull();
+
+    // S3's returned information starts a new host turn. The old question wait
+    // must not survive that begin or become a successful completion.
+    f.row.latestTurnId = 'answer-turn';
+    f.row.latestTurnStatus = 'in_progress';
+    f.row.agentStateVersion = 2;
+    f.observation.observed = { ...f.observation.observed, agentStateVersion: 2, turn: null };
+    expect(await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' })).toBeNull();
+  });
+
+  // Original delivery/overlap/prefix/retry contracts run through actual Pending
+  // custody in sessionFollowStalled.sqlite.composed.integration.spec.ts. Legacy
+  // route observations are retained only for disjoint manager Turn outcomes.
+  it.each(['goal-changed', 'worker-report'] as const)('does not redeliver a committed %s original through legacy route intake', async type => {
+    const f = await fixture('running', 0, false, undefined, undefined, true);
+    await f.commitEvent(type === 'goal-changed' ? { type } : { type, summary: 'Original finding' });
+    const stored = SessionStoredMessageContentSchema.parse(f.messages.at(-1)?.content);
+    if (stored.t !== 'plain') throw new Error('Expected plain original');
+    expect(TranscriptRawRecordV1Schema.parse(stored.v)).toMatchObject({ role: 'agent',
+      content: { type: 'event', data: { type } } });
+    expect(await f.reconcile({ signal: new AbortController().signal })).toBeNull();
+    expect(await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' })).toBeNull();
+    expect(f.acknowledgements).toEqual([]);
+  });
+
+  it('posts an original mid-turn update through the registered source publisher with no manager', async () => {
+    const f = await fixture('running');
+    delete f.row.manager;
+    const report = { summary: 'A finding before completion', deliverables: [
+      { kind: 'workspace_file' as const, sessionId: workerId, path: 'docs/finding.md' },
+    ] };
+    const result = await f.postViaRpc(report);
+    expect(result).toMatchObject({ sessionId: workerId, persisted: true, localId: expect.any(String) });
+    expect(f.messages.at(-1)?.content).toMatchObject({ t: 'plain', v: { role: 'agent',
+      content: { type: 'event', data: TranscriptRawAgentEventV1Schema.parse({ type: 'worker-report', ...report }) },
+    } });
+    const stored = f.messages.length;
+    expect(await f.postViaRpc({ ...report, sessionId: 'another-source' }))
+      .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    expect(await f.postViaRpc(report, 'another-source'))
+      .toMatchObject({ ok: false, errorCode: 'session_update_source_mismatch' });
+    expect(f.messages).toHaveLength(stored);
+  });
+  it('posts a CLI original through the bound source RPC and retains source ownership guards', async () => {
+    const f = await fixture('running');
+    const report = { summary: 'CLI finding before completion', deliverables: [
+      { kind: 'workspace_file' as const, sessionId: workerId, path: 'docs/cli-finding.md' },
+    ] };
+    const result = await f.publishViaCli(report);
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: {
+      sessionId: workerId, persisted: true, localId: expect.any(String),
+    } });
+    expect(f.messages.at(-1)?.content).toMatchObject({ t: 'plain', v: { role: 'agent',
+      content: { type: 'event', data: TranscriptRawAgentEventV1Schema.parse({ type: 'worker-report', ...report }) },
+    } });
+    const stored = f.messages.length;
+    expect(await f.publishViaCli({ summary: 'Unowned', deliverables: [
+      { kind: 'workspace_file', sessionId: 'another-source', path: 'docs/foreign.md' },
+    ] })).toMatchObject({ ok: false, errorCode: 'session_update_deliverable_scope_mismatch' });
+    f.row.origin = { kind: 'run_step', runId: 'workflow-run' };
+    expect(await f.publishViaCli({ summary: 'Unreviewed workflow result' }))
+      .toMatchObject({ ok: false, errorCode: 'session_update_run_step_requires_publish_draft' });
+    expect(f.messages).toHaveLength(stored);
+  });
   it.each([['completed', 'settled'], ['failed', 'failed'], ['cancelled', 'cancelled']] as const)(
     'projects awareness %s into %s without a user row', async (status, ownerState) => {
       const f = await fixture(status);
       const prepared = await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' });
       expect(prepared?.workerUpdates).toEqual([expect.objectContaining({ workerKind: 'session', workerId,
-        ownerState, result: 'Actual final result', wake: status === 'failed' ? 'needs_you' : 'finished' })]);
+        ownerState, result: 'Actual final result', wake: status === 'completed' ? 'finished' : 'needs_you' })]);
+      expect(classifyWorkerUpdateEventV1(prepared!.workerUpdates![0]!)).toBe(status === 'completed' ? 'finished' : 'failed_or_stopped');
       expect(prepared?.workerUpdates?.[0]).not.toHaveProperty('bucket');
       expect(prepared?.updates).toEqual([]);
       expect(f.acknowledgements).toEqual([]);
       prepared?.acknowledgeAccepted({ kind: 'context_only_wake', eventLocalId: prepared.wakeEventLocalId! });
       await Promise.resolve();
-      expect(f.acknowledgements).toEqual([expect.objectContaining({ edgeKind: 'reports_to', attachedAt: 100 })]);
+      expect(f.acknowledgements).toEqual([expect.objectContaining({ relation: 'manager', attachedAt: 100 })]);
     },
   );
+  it.each([true, false])('carries a source-owned terminal issue to the real receiver (restricted=%s)', async restricted => {
+    const runtimeIssueV1: SessionRuntimeIssueV1 = { v: 1, scope: 'primary_session', status: 'failed', code: 'usage_limit',
+      source: 'usage_limit', occurredAt: 1000, usageLimit: { v: 1, resetAtMs: 1_800_000, retryAfterMs: null,
+        quotaScope: 'provider', recoverability: 'wait' } };
+    const f = await fixture('failed', 0, restricted, undefined, runtimeIssueV1);
+    const prepared = await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' });
+    expect(prepared?.workerUpdates?.[0]?.runtimeIssueV1).toEqual(runtimeIssueV1);
+    expect(WorkerUpdateV1Schema.parse(prepared!.workerUpdates![0]!).runtimeIssueV1).toEqual(runtimeIssueV1);
+    f.row.latestTurnId = 'later-turn';
+    const stale = await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' });
+    expect(stale?.workerUpdates?.[0]).not.toHaveProperty('runtimeIssueV1');
+  });
   it('waits for the server pending-review count under the lead own read grant', async () => {
     const f = await fixture('completed', 1);
     expect(await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' })).toBeNull();
@@ -288,7 +467,7 @@ describe('session WorkerUpdate producer through Follow', () => {
     expect(f.acknowledgements).toEqual([]);
     prepared?.acknowledgeAccepted({ kind: 'context_only_wake', eventLocalId: prepared.wakeEventLocalId! });
     await Promise.resolve();
-    expect(f.acknowledgements).toEqual([expect.objectContaining({ edgeKind: 'reports_to', attachedAt: 100 })]);
+    expect(f.acknowledgements).toEqual([expect.objectContaining({ relation: 'manager', attachedAt: 100 })]);
   });
   it.each([
     { outcome: 'stop_condition' },
@@ -325,7 +504,7 @@ describe('session WorkerUpdate producer through Follow', () => {
     expect(await prepared?.recheckAdmission(new AbortController().signal)).toBe(false);
     expect(f.acknowledgements).toEqual([]);
   });
-  it('hydrates a restricted Runner reports-to snapshot through its existing source projection transport', async () => {
+  it('hydrates a restricted Runner manager through its incremental source projection transport', async () => {
     const f = await fixture('completed', 0, true);
     expect((await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' }))?.workerUpdates).toEqual([
       expect.objectContaining({ ownerState: 'settled', result: 'Actual final result', engine: { agentId: 'codex' } }),
@@ -346,71 +525,21 @@ describe('session WorkerUpdate producer through Follow', () => {
     f.observation.observed.turn = null;
     expect(await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' })).toBeNull();
   });
-  it('publishes an explicit worker-report mid-turn through the same frontier without awaiting terminal state', async () => {
-    const f = await fixture('running');
-    const deliverables = [{ kind: 'workspace_file', sessionId: workerId, path: 'docs/result.md' }, { kind: 'artifact', artifactId: 'document-1' }];
-    f.messages[0] = { seq: 1, createdAt: 1, content: { t: 'plain', v: { role: 'agent',
-      content: { type: 'event', data: { type: 'worker-report', summary: 'Partial finding', future: true,
-        deliverables: deliverables.map((item) => ({ ...item, future: true })) } } } } };
-    expect((await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' }))?.workerUpdates).toEqual([
-      expect.objectContaining({ ownerState: 'published', wake: 'published', result: 'Partial finding', deliverables }),
-    ]);
-  });
-  it.each([true, false])('delivers a real publish once per accepted frontier and retries an unaccepted ACK (accepted=%s)', async (accepted) => {
+  it('commits a published report as a strict original event before returning its receipt', async () => {
     const f = await fixture('running');
     const report = { summary: 'Partial finding', deliverables: [
       { kind: 'workspace_file' as const, sessionId: workerId, path: 'docs/result.md' },
       { kind: 'artifact' as const, artifactId: 'document-1' },
     ] };
-    expect(await f.publish(report)).toMatchObject({ sessionId: workerId, leadSessionId: 'lead', localId: expect.any(String) });
-    await vi.waitFor(() => expect(f.row.seq).toBe(2));
-    const published = SessionStoredMessageContentSchema.parse(f.messages.at(-1)?.content);
-    if (published.t !== 'plain') throw new Error('Expected plain worker report');
-    expect(TranscriptRawRecordV1Schema.parse(published.v)).toMatchObject({ role: 'agent',
-      content: { type: 'event', data: { type: 'worker-report', ...report } } });
-    const prepared = await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' });
-    expect(prepared?.workerUpdates).toEqual([expect.objectContaining({ workerId, ownerState: 'published',
-      wake: 'published', result: report.summary, deliverables: report.deliverables,
-      transcriptPointer: { kind: 'session', sessionId: workerId, seq: 2 } })]);
-    expect(prepared?.updates).toEqual([]);
-    expect(prepared?.workerUpdateEvents).toHaveLength(1);
-    const update = WorkerUpdateV1Schema.parse(prepared?.workerUpdates?.[0]);
-    expect(TranscriptRawAgentEventV1Schema.parse({ type: 'worker-update', update })).toEqual({ type: 'worker-update', update });
-    // The committed host event must carry the event role used by the Home's ACK acceptance proof.
-    expect(await f.session.enqueueSessionEventCommitted({ type: 'worker-update', update }, prepared?.workerUpdateEvents?.[0]?.localId))
-      .toMatchObject({ persisted: true });
-    await vi.waitFor(() => expect(f.leadMessages).toHaveLength(1));
-    const hostEvent = f.leadMessages[0]!;
-    const hostContent = SessionStoredMessageContentSchema.parse(hostEvent.content);
-    expect(hostEvent.messageRole).toBe('event');
-    if (hostContent.t !== 'plain') throw new Error('Expected plain host event');
-    expect(TranscriptRawRecordV1Schema.parse(hostContent.v)).toMatchObject({ role: 'agent',
-      content: { type: 'event', data: { type: 'worker-update', update } } });
-    expect(f.messages.at(-1)?.messageRole).toBe('event');
-    const retry = await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' });
-    expect(retry?.workerUpdateEvents).toEqual(prepared?.workerUpdateEvents);
-    expect(f.acknowledgements).toEqual([]);
-    prepared?.acknowledgeAccepted({ kind: 'context_only_wake', eventLocalId: 'another-wake' });
-    expect(f.acknowledgements).toEqual([]);
-    f.acknowledgementState.accepted = accepted;
-    prepared?.acknowledgeAccepted({ kind: 'context_only_wake', eventLocalId: prepared.wakeEventLocalId! });
-    await vi.waitFor(() => expect(f.acknowledgements).toHaveLength(1));
-    expect(f.acknowledgements[0]).toMatchObject({ edgeKind: 'reports_to', attachedAt: 100,
-      expected: { transcriptSeq: 0 }, consumed: { transcriptSeq: 2 },
-      acceptance: { kind: 'context_only_wake', eventLocalId: prepared?.wakeEventLocalId } });
-    if (!accepted) {
-      const unaccepted = await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' });
-      expect(unaccepted?.workerUpdateEvents).toEqual(prepared?.workerUpdateEvents);
-      f.acknowledgementState.accepted = true;
-      unaccepted?.acknowledgeAccepted({ kind: 'context_only_wake', eventLocalId: unaccepted.wakeEventLocalId! });
-      await vi.waitFor(() => expect(f.acknowledgements).toHaveLength(2));
-    }
-    expect(await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' })).toBeNull();
-    expect(await f.publish({ summary: 'Second finding' })).toMatchObject({ sessionId: workerId, leadSessionId: 'lead' });
-    await vi.waitFor(() => expect(f.row.seq).toBe(3));
-    const next = await f.reconcile({ signal: new AbortController().signal, deliveryIntent: 'wake' });
-    expect(next?.workerUpdates?.[0]).toMatchObject({ ownerState: 'published', result: 'Second finding' });
-    expect(next?.workerUpdateEvents?.[0]?.localId).not.toBe(prepared?.workerUpdateEvents?.[0]?.localId);
+    const result = await f.publish(report);
+    expect(result).toMatchObject({ sessionId: workerId, persisted: true, localId: expect.any(String) });
+    if (!result || typeof result !== 'object' || !('localId' in result)) throw new Error('Expected committed original receipt');
+    const original = f.messages.at(-1)!;
+    expect(original).toMatchObject({ seq: 2, localId: result.localId, messageRole: 'event' });
+    const content = SessionStoredMessageContentSchema.parse(original.content);
+    if (content.t !== 'plain') throw new Error('Expected plain original');
+    expect(TranscriptRawRecordV1Schema.parse(content.v)).toMatchObject({ role: 'agent',
+      content: { type: 'event', data: TranscriptRawAgentEventV1Schema.parse({ type: 'worker-report', ...report }) } });
   });
   it.each([['lead', 'accepted', true], ['other-lead', 'accepted', false], ['lead', 'rejected', false]] as const)(
     'suppresses final text only after the exact current lead accepted the last send (%s/%s)', async (target, status, omitted) => {

@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import axios from 'axios';
 
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import {
   ConnectedServiceAuthGroupV1Schema,
@@ -13,6 +14,7 @@ import {
   buildProviderAccountUsageRecordId,
   buildConnectedServiceCredentialRecord,
   sealAccountScopedBlobCiphertext,
+  sealQualifiedConnectedAccountContentEnvelope,
   QualifiedConnectedAccountGroupV4Schema,
   QualifiedConnectedAccountListResponseV4Schema,
   QualifiedConnectedAccountCredentialSnapshotV4Schema,
@@ -24,6 +26,7 @@ import {
 } from '@happier-dev/protocol';
 import type { Credentials, StoredCredentials } from '@/persistence';
 import type { ApiClient } from '@/api/api';
+import { logger } from '@/utils/logger';
 import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from './accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
 import {
   ConnectedServiceAuthGroupSwitchCoordinator,
@@ -59,8 +62,10 @@ import type { QualifiedConnectedAccountPurposeBindingsV1 } from '@happier-dev/pr
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { createQualifiedConnectedAccountEstablishedRuntimeOwner } from './qualifiedConnectedAccountEstablishedRuntimeOwner';
 import { resolveConnectedServiceMaterializedRootDir } from './materialize/resolveConnectedServiceMaterializedRootDir';
+import { resolveConnectedServiceHomeDir, resolveConnectedServiceGroupHomeDir } from './homes/resolveConnectedServiceHomeDir';
 
 async function readCodexConnectedAccountLaunchRegistration() {
   let captured: unknown;
@@ -692,6 +697,74 @@ const EXTERNAL_CONNECTED_ACCOUNT_PURPOSE = Object.freeze({
   purpose: 'external-spawn-test',
 });
 
+async function createExternalSpawnRefreshFixture() {
+  const runtime = await createAuthoredAdmittedPluginRuntimeFixture({
+    plugins: [{
+      manifest: {
+        schemaVersion: 2,
+        id: EXTERNAL_CONNECTED_ACCOUNT_SERVICE.pluginId,
+        version: '1.0.0',
+        displayName: 'External spawn account',
+        runtime: { apiVersion: 1 },
+        entrypoints: { daemon: './daemon.mjs' },
+        contributes: {
+          connectedAccountDescriptors: [{
+            id: EXTERNAL_CONNECTED_ACCOUNT_SERVICE.localId,
+            title: 'External account',
+            authentication: {
+              defaultModeId: 'manual',
+              modes: [{
+                id: 'manual', kind: 'manual', outcomeReconciliation: 'none',
+                fields: [{ id: 'token', title: 'Token', schema: { type: 'string' }, secret: true }],
+              }],
+            },
+          }],
+        },
+      },
+      files: {
+        'daemon.mjs': `export function activate(api) {
+          api.connectedAccounts.register('credential', {
+            authentication: { modes: { manual: { kind: 'manual', async complete() {
+              return { status: 'connected', accountId: 'external-direct', displayName: 'External account', scopes: [] };
+            } } } },
+            async status() { return { status: 'connected', displayName: 'External account', scopes: [] }; },
+            async refresh() { throw new Error('unexpected_external_spawn_refresh'); },
+            async revoke() { return { status: 'remoteUnsupported' }; },
+            async materialize() { return { kind: 'environment', env: {} }; },
+          });
+        }`,
+      },
+    }],
+  });
+  onTestFinished(async () => await runtime.dispose());
+  const credential = QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
+    ref: { service: EXTERNAL_CONNECTED_ACCOUNT_SERVICE, accountId: 'external-direct' },
+    authenticationModeId: 'manual',
+    revisionSemantics: 'revisioned',
+    credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
+    configurationRevision: null,
+    content: sealQualifiedConnectedAccountContentEnvelope({
+      kind: 'credential', accountMode: 'plain', payload: { v: 1, values: { token: 'external-token' } },
+      randomBytes: (length) => new Uint8Array(length),
+    }),
+    metadata: { scopes: [] },
+  });
+  // The Account credential store is the boundary. Keep status admission, plugin
+  // execution, currentness and refresh classification on their real owners.
+  const readCredential: NonNullable<Parameters<typeof createQualifiedConnectedAccountEstablishedRuntimeOwner>[0]['readCredential']> = async () => credential;
+  const established = createQualifiedConnectedAccountEstablishedRuntimeOwner({
+    reloadController: runtime.controller,
+    credentials: { token: 'happy-token', encryption: null },
+    getAccountEncryptionMode: async () => 'plain',
+    readCredential,
+    configuration: {
+      read: async () => null,
+      secrets: { admit: async () => undefined, has: async () => false, read: async () => null },
+    },
+  });
+  return { established, readCredential, groups: new Map<string, ReturnType<typeof QualifiedConnectedAccountGroupV4Schema.parse>>() };
+}
+
 let externalPurposeOwner: ConnectedAccountPurposeBindingOwner | null = null;
 let externalRuntimeLease: PluginRuntimeRegistryLease | null = null;
 
@@ -849,29 +922,43 @@ afterAll(async () => {
 });
 
 describe('resolveConnectedServiceAuthForSpawn V4 group ingress', () => {
-  it('admits a novel qualified direct account through the real spawn materialization owner without legacy credential projection', async () => {
+  it.each(['unchanged', 'refresh', 'profile_revoked', 'requester_revoked', 'unfenced'] as const)(
+    'admits a novel qualified direct account without repeating preflight metadata reads (%s)', async (scenario) => {
+    const log = vi.spyOn(logger, 'infoFile');
+    try {
+    const refresh = scenario !== 'unchanged';
+    const refreshFixture = refresh && scenario !== 'unfenced'
+      ? await createExternalSpawnRefreshFixture()
+      : null;
+    let metadataReads = 0;
+    let requesterCurrent = true;
+    const materializationKey = `external-direct-${scenario}`;
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-external-direct-spawn-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-external-direct-spawn-server-'));
     const getConnectedServiceCredentialPlain = vi.fn(async () => null);
     const getConnectedServiceCredentialSealed = vi.fn(async () => null);
     const listConnectedServiceProfiles = vi.fn(async () => ({ profiles: [] }));
     const credentialRevision = 'csr_0123456789ABCDEFGHJKMNPQRS';
-    const listAccounts = vi.fn(async () => QualifiedConnectedAccountListResponseV4Schema.parse({
+    const listAccounts = vi.fn(async () => {
+      metadataReads += 1;
+      if (metadataReads > 1 && scenario === 'requester_revoked') requesterCurrent = false;
+      return QualifiedConnectedAccountListResponseV4Schema.parse({
       service: EXTERNAL_CONNECTED_ACCOUNT_SERVICE,
       accounts: [{
         ref: {
           service: EXTERNAL_CONNECTED_ACCOUNT_SERVICE,
           accountId: 'external-direct',
         },
-        status: 'connected',
+        status: metadataReads > 1 && scenario === 'profile_revoked' ? 'needs_reauth' : 'connected',
         authenticationModeId: 'manual',
-        revisionSemantics: 'revisioned',
-        credentialRevision,
+        revisionSemantics: scenario === 'unfenced' ? 'legacy_unfenced' : 'revisioned',
+        credentialRevision: scenario === 'unfenced' ? null : credentialRevision,
         configurationReady: true,
         configurationRevision: null,
         scopes: [],
       }],
-    }));
+      });
+    });
     const snapshot = externalSpawnPurposeSnapshot({
       kind: 'account',
       account: {
@@ -880,7 +967,7 @@ describe('resolveConnectedServiceAuthForSpawn V4 group ingress', () => {
       },
     });
 
-    const result = await resolveConnectedServiceAuthForSpawnImpl({
+    const resolveSpawn = () => resolveConnectedServiceAuthForSpawnImpl({
       agentId: 'codex',
       connectedServicesBindingsRaw: {
         v: 1,
@@ -892,9 +979,10 @@ describe('resolveConnectedServiceAuthForSpawn V4 group ingress', () => {
           },
         },
       },
-      materializationKey: 'external-direct',
+      materializationKey,
       activeServerDir,
       baseDir,
+      isAccountRuntimeCurrent: async () => requesterCurrent,
       credentials: { token: 'happy-token', encryption: null },
       api: {
         getConnectedServiceCredentialPlain,
@@ -905,20 +993,43 @@ describe('resolveConnectedServiceAuthForSpawn V4 group ingress', () => {
         readGroup: vi.fn(async () => null),
         listAccounts,
       },
+      ...(refresh ? { credentialRefreshService: createSpawnPreflightRefreshService({
+        credentials: { token: 'happy-token', encryption: null },
+        api: {} as ApiClient,
+        activeServerDir,
+        baseDir,
+      }) } : {}),
       resolveQualifiedPurposeBindingSnapshot: () => snapshot,
       activateQualifiedPurposeBindings: (purposeSnapshot) =>
         externalPurposeOwner!.activateSessionPurposeBindings({
-          sessionId: 'external-direct-subject',
+          sessionId: `${materializationKey}-subject`,
           purposes: purposeSnapshot.purposes,
           bindings: purposeSnapshot.bindings,
         }),
       nowMs: () => 1_000,
     });
+    const launch = refreshFixture
+      ? spawnFixtureContext.run(refreshFixture, resolveSpawn)
+      : resolveSpawn();
+    if (scenario === 'profile_revoked' || scenario === 'requester_revoked' || scenario === 'unfenced') {
+      if (scenario === 'profile_revoked') {
+        await expect(launch).rejects.toMatchObject({ kind: 'profile_action_required' });
+      } else if (scenario === 'unfenced') {
+        await expect(launch).rejects.toMatchObject({ kind: 'active_profile_missing' });
+      } else {
+        await expect(launch).rejects.toThrow('requester_account_context_unavailable');
+      }
+      return;
+    }
+    const result = await launch;
 
     expect(result).not.toBeNull();
     expect(listAccounts).toHaveBeenCalledWith({
       service: EXTERNAL_CONNECTED_ACCOUNT_SERVICE,
     });
+    // Binding resolution already read this profile. Only a refresh needs a
+    // second metadata observation, so rotation/revocation is still observed.
+    expect(listAccounts).toHaveBeenCalledTimes(refresh ? 2 : 1);
     expect(getConnectedServiceCredentialPlain).not.toHaveBeenCalled();
     expect(getConnectedServiceCredentialSealed).not.toHaveBeenCalled();
     expect(listConnectedServiceProfiles).not.toHaveBeenCalled();
@@ -932,6 +1043,15 @@ describe('resolveConnectedServiceAuthForSpawn V4 group ingress', () => {
       credentialRevision,
     })]);
     await result?.cleanupOnExit?.();
+    await result?.materializationPurposeLease?.dispose();
+    for (const phase of ['credential_binding_resolution', ...(refresh ? ['credential_read'] : []), 'purpose_activation']) {
+      expect(log).toHaveBeenCalledWith('[CONNECTED ACCOUNT] Materialization phase', expect.objectContaining({
+        materializationKey, phase, status: 'completed', durationMs: expect.any(Number),
+      }));
+    }
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it('admits a novel qualified group through the real spawn materialization owner without a scalar gate', async () => {
@@ -1550,9 +1670,9 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
       contributions: codexContributions,
     })).toHaveLength(1);
     expect(connectedServiceAuth!.env.CODEX_HOME).toBe(connectedServiceAuth!.targetMaterializedRoot);
-    expect(connectedServiceAuth!.env.CODEX_HOME).toBe(resolveConnectedServiceMaterializedRootDir({
-      baseDir, agentId: 'codex', materializationKey: 'session-1',
-    }));
+    expect(connectedServiceAuth!.env.CODEX_HOME).toBe(join(resolveConnectedServiceHomeDir({
+      activeServerDir, serviceId: 'happier.agent.codex/openai-codex', profileId: 'work', agentId: 'codex',
+    }), 'codex-home'));
     const nativeAuth = JSON.parse(await readFile(join(connectedServiceAuth!.env.CODEX_HOME!, 'auth.json'), 'utf8'));
     expect(nativeAuth.tokens.access_token).toBe('access');
     expect(JSON.stringify(connectedServiceAuth!.env)).not.toContain('access');
@@ -1671,9 +1791,9 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
 
     expect(connectedServiceAuth).not.toBeNull();
     expect(connectedServiceAuth!.env.CODEX_HOME).toBe(connectedServiceAuth!.targetMaterializedRoot);
-    expect(connectedServiceAuth!.env.CODEX_HOME).toBe(resolveConnectedServiceMaterializedRootDir({
-      baseDir, agentId: 'codex', materializationKey: 'session-1',
-    }));
+    expect(connectedServiceAuth!.env.CODEX_HOME).toBe(join(resolveConnectedServiceGroupHomeDir({
+      activeServerDir, serviceId: 'happier.agent.codex/openai-codex', groupId: 'codex-main', agentId: 'codex',
+    }), 'codex-home'));
     const nativeAuth = JSON.parse(await readFile(join(connectedServiceAuth!.env.CODEX_HOME!, 'auth.json'), 'utf8'));
     expect(nativeAuth.tokens.access_token).toBe('backup-access');
     expect(JSON.stringify(connectedServiceAuth!.env)).not.toContain('backup-access');
@@ -3916,6 +4036,10 @@ describe('persistMaterializationFailureCredentialHealthForSpawn', () => {
   it('does not latch needs_reauth for a non-auth blocking materialization diagnostic', async () => {
     const updateConnectedServiceCredentialHealth = vi.fn(async () => {});
     const api = { updateConnectedServiceCredentialHealth } as unknown as ApiClient;
+    const patch = vi.spyOn(axios, 'patch').mockResolvedValue({ status: 200, data: {
+      success: true, credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS', configurationRevision: null,
+    } });
+    onTestFinished(() => patch.mockRestore());
     const diagnostic: ConnectedServicesMaterializationDiagnostic = {
       // A blocking, NON-auth failure (e.g. shared-state link unavailable): no credentialRefreshFailure.
       code: 'claude_shared_state_link_unavailable',
@@ -3931,14 +4055,16 @@ describe('persistMaterializationFailureCredentialHealthForSpawn', () => {
       profileId: 'primary',
       diagnostic,
       nowMs: 1_000,
+      qualifiedCredential: { token: 'account-token',
+        ref: { service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' }, accountId: 'primary' },
+        expectedCredentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS', expectedConfigurationRevision: null },
     });
 
-    expect(updateConnectedServiceCredentialHealth).toHaveBeenCalledTimes(1);
-    const written = (updateConnectedServiceCredentialHealth.mock.calls[0] as unknown as [
-      { serviceId: string; profileId: string; health: { status: string; reconnectRequired: boolean; lastRefreshFailureKind?: string; providerHttpStatus?: number } },
-    ])[0];
-    expect(written.serviceId).toBe('claude-subscription');
-    expect(written.profileId).toBe('primary');
+    expect(patch).toHaveBeenCalledOnce();
+    const written = QualifiedConnectedAccountCredentialHealthPatchV4Schema.parse(patch.mock.calls[0]?.[1]);
+    expect(written.ref.accountId).toBe('primary');
+    expect(written.expectedCredentialRevision).toBe('csr_0123456789ABCDEFGHJKMNPQRS');
+    expect(updateConnectedServiceCredentialHealth).not.toHaveBeenCalled();
     expect(written.health.status).not.toBe('needs_reauth');
     expect(written.health.reconnectRequired).toBe(false);
     expect(written.health.providerHttpStatus).toBeUndefined();
@@ -3947,6 +4073,10 @@ describe('persistMaterializationFailureCredentialHealthForSpawn', () => {
   it('latches needs_reauth only for a genuine auth (provider_403) materialization diagnostic', async () => {
     const updateConnectedServiceCredentialHealth = vi.fn(async () => {});
     const api = { updateConnectedServiceCredentialHealth } as unknown as ApiClient;
+    const patch = vi.spyOn(axios, 'patch').mockResolvedValue({ status: 200, data: {
+      success: true, credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS', configurationRevision: null,
+    } });
+    onTestFinished(() => patch.mockRestore());
     const diagnostic: ConnectedServicesMaterializationDiagnostic = {
       code: 'claude_subscription_missing_claude_code_scope',
       providerId: 'claude',
@@ -3966,11 +4096,14 @@ describe('persistMaterializationFailureCredentialHealthForSpawn', () => {
       profileId: 'primary',
       diagnostic,
       nowMs: 1_000,
+      qualifiedCredential: { token: 'account-token',
+        ref: { service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' }, accountId: 'primary' },
+        expectedCredentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS', expectedConfigurationRevision: null },
     });
 
-    const written = (updateConnectedServiceCredentialHealth.mock.calls[0] as unknown as [
-      { health: { status: string; reconnectRequired: boolean; lastRefreshFailureKind?: string; providerHttpStatus?: number } },
-    ])[0];
+    expect(patch).toHaveBeenCalledOnce();
+    const written = QualifiedConnectedAccountCredentialHealthPatchV4Schema.parse(patch.mock.calls[0]?.[1]);
+    expect(updateConnectedServiceCredentialHealth).not.toHaveBeenCalled();
     expect(written.health.status).toBe('needs_reauth');
     expect(written.health.reconnectRequired).toBe(true);
     expect(written.health.lastRefreshFailureKind).toBe('provider_403');

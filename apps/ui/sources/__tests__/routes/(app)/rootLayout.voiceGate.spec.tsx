@@ -13,6 +13,9 @@ import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 
+vi.mock('socket.io-client', async original =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+
 installTerminalRouteCommonModuleMocks({
     router: async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
         pathname: '/', segments: ['(app)'],

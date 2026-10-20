@@ -49,6 +49,7 @@ import {
   Badge,
   Banner,
   Button,
+  DiffStat,
   Divider,
   EmptyState,
   ErrorState,
@@ -70,6 +71,9 @@ import {
   Tabs,
   Text,
   defineUiSurface,
+  formatHappierDiffStat,
+  usePluginHostApi,
+  usePluginTheme,
   usePluginTranslation,
   useExecutePluginAction,
   useReviewCommentProposalsForEntry,
@@ -91,7 +95,9 @@ import {
   TriageDetailPanel,
   TriageDetailStory,
   TriageDetailChangeSummary,
+  TriageChecksRollupLine,
   TriageDetailChecks,
+  type TriageDetailChecksRollupV1,
   TriageStatusRow,
   TriageActivityTimeline,
   useTriagePostMutationCompletion,
@@ -107,7 +113,6 @@ import {
 import {
   resolveTriageRowFactStatusToneV1,
   describeTriageSourceFailureV1 as failureDescription,
-  formatTriageCountV1 as formatNumber,
   formatTriageTimestampV1 as formatTimestamp,
   projectTriageDetailFieldTextV1 as fieldValueText,
 } from '@happier-dev/triage-protocol/v1';
@@ -122,7 +127,7 @@ import type {
   GithubProjectedTimelineRowV1,
 } from '../triage/detail/projection.js';
 import { GITHUB_CHANGED_FILES_CEILING_V1 } from '../triage/detail/routes.js';
-import { projectGithubMarkdownForDisplay } from '../triage/detail/markdown/projectGithubMarkdownForDisplay.js';
+import { githubMarkdownDisplayText, projectGithubMarkdownForDisplay } from '../triage/detail/markdown/projectGithubMarkdownForDisplay.js';
 import type { GithubOverviewResultV1 } from '../triage/detail/contracts.js';
 import {
   GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1,
@@ -731,7 +736,7 @@ function MergeWrite({
       : buildGithubPullRequestMergeInputV1(input, mergeMethod)),
     [input, mergeMethod],
   );
-  const head = input.observation.nativeRevision;
+  const head = input.observation.snapshot.reviewRevision?.headSha;
   const allowedMethods = GITHUB_MERGE_METHODS_V1.filter((method) => {
     if (capabilities.kind !== 'ready') return true;
     const availability = capabilities.value.mergeMethods[method];
@@ -1789,7 +1794,7 @@ function githubOverviewEntries(
   const headRevision = overview?.kindId === 'pull-request'
     ? overview.headRevision
     : overview === null
-      ? input.observation.nativeRevision
+      ? input.observation.snapshot.reviewRevision?.headSha
       : undefined;
   const entries: MetadataEntry[] = [
     {
@@ -1848,7 +1853,7 @@ function githubOverviewEntries(
           ? 'Refresh to read'
           : pullRequest.additions === undefined || pullRequest.deletions === undefined
             ? 'Unavailable'
-            : `+${formatNumber(locale, pullRequest.additions, 'plain')} −${formatNumber(locale, pullRequest.deletions, 'plain')}`,
+            : githubDiffStatText(pullRequest.additions, pullRequest.deletions, locale),
       },
     );
   }
@@ -2266,7 +2271,7 @@ function GithubActivityView({
     );
   }
 
-  const answered = streams.filter((stream) => stream.unavailable === null);
+  const answered = streams.filter((stream) => !stream.settling && stream.unavailable === null);
   const remarkHrefs = new Set(answered
     .filter((stream) => stream.mirrorsRemarks === undefined)
     .flatMap((stream) => stream.events)
@@ -2302,7 +2307,7 @@ function GithubActivityView({
           ))}
         </Stack>
       )}
-      empty={answered[0]?.empty ?? null}
+      empty={answered.length === streams.length ? answered[0]?.empty ?? null : null}
       continuations={answered.flatMap((stream) => stream.continuations)}
       footer={(
         <Stack gap="small">
@@ -2354,16 +2359,17 @@ const CHANGED_FILE_TONES: Readonly<Record<string, 'success' | 'danger' | 'info' 
     copied: 'info',
   });
 
-function changedFileDetail(
-  row: GithubProjectedChangedFileRowV1,
-  locale: string,
-): string {
-  return `+${formatNumber(locale, row.additions, 'compact')} −${formatNumber(locale, row.deletions, 'compact')}`;
+/** A text-only slot's "+53 −5", by the shared diff-stat owner: a side with nothing to say is left out. */
+function githubDiffStatText(additions: number, deletions: number, locale: string): string {
+  const counts = formatHappierDiffStat(additions, deletions, { locale });
+  return [counts.added, counts.removed].filter((count) => count !== null).join(' ') || 'None';
 }
 
-function changedFileSubtitle(text: PluginTranslate, row: GithubProjectedChangedFileRowV1): string {
+function changedFileSubtitle(text: PluginTranslate, row: GithubProjectedChangedFileRowV1): string | undefined {
   const declaredStatus = GITHUB_CHANGED_FILE_STATUS_LABELS_V1[row.status];
-  const status = declaredStatus === undefined
+  // Modified is what a changed file usually is, and its +/− counts already say how: the row names its status
+  // only when it is something else (added, removed, renamed), so a long list does not repeat one word.
+  const status = row.status === 'modified' ? null : declaredStatus === undefined
     ? row.status
     : text(githubChangedFileStatusKey(row.status), declaredStatus);
   const renamed = row.previousPath === undefined
@@ -2374,7 +2380,8 @@ function changedFileSubtitle(text: PluginTranslate, row: GithubProjectedChangedF
   const diff = row.diffAvailable
     ? null
     : text('plugins.github.ui.fileDiffUnavailable', 'diff unavailable for this file');
-  return [status, renamed, diff].filter((part) => part !== null).join(' · ');
+  const parts = [status, renamed, diff].filter((part) => part !== null);
+  return parts.length === 0 ? undefined : parts.join(' · ');
 }
 
 function checkStatusText(text: PluginTranslate, row: GithubProjectedCheckRowV1): string {
@@ -2388,11 +2395,35 @@ function checkStatusText(text: PluginTranslate, row: GithubProjectedCheckRowV1):
   return declared === undefined ? row.status : text(githubCheckStatusKey(row.status), declared);
 }
 
+/**
+ * A row's Copy and Open as the list's own quiet overflow: one trailing control per row instead of
+ * two plain buttons beside every file and check.
+ */
+function quietRowActions(
+  hostApi: ReturnType<typeof usePluginHostApi>,
+  text: PluginTranslate,
+  input: Readonly<{ copyValue: string; openUrl?: string }>,
+) {
+  return {
+    secondaryActions: [
+      { id: 'copy', label: text('happier.plugin-ui.action.copy', 'Copy') },
+      ...(input.openUrl === undefined
+        ? []
+        : [{ id: 'open', label: text('happier.plugin-ui.action.open', 'Open') }]),
+    ],
+    onSecondaryAction: (id: string) => {
+      if (id === 'copy') void hostApi.writeClipboard(input.copyValue);
+      else if (id === 'open' && input.openUrl !== undefined) void hostApi.openExternalLink(input.openUrl);
+    },
+  };
+}
+
 function FilesPanel({
   input,
   locale,
 }: Readonly<{ input: TriageDetailSurfaceInputV1; locale: string }>): React.ReactElement {
   const text = usePluginTranslation();
+  const hostApi = usePluginHostApi();
   const controller = useGithubChangedFiles(input);
   const { state } = controller;
   // The reading order is a source-owned fact computed over everything read so
@@ -2496,34 +2527,17 @@ function FilesPanel({
       renderItem={(row) => (
         <Item
           title={row.path}
-          subtitle={changedFileSubtitle(text, row)}
-          detail={changedFileDetail(row, locale)}
+          titleEllipsizeMode="middle"
+          {...(() => {
+            const subtitle = changedFileSubtitle(text, row);
+            return subtitle === undefined ? {} : { subtitle };
+          })()}
+          accessory={<DiffStat added={row.additions} removed={row.deletions} locale={locale} />}
           tone={CHANGED_FILE_TONES[row.status] ?? 'neutral'}
-          accessoryOutsidePressable
-          accessory={(
-            <Row gap="small">
-              <Action.Copy
-                value={row.path}
-                variant="plain"
-                accessibilityLabel={text('plugins.github.ui.copyValue', 'Copy {item}', {
-                  item: row.path,
-                })}
-              />
-              {row.webUrl === undefined
-                ? null
-                : (
-                  <Action.OpenExternal
-                    url={row.webUrl}
-                    variant="plain"
-                    accessibilityLabel={text(
-                      'plugins.github.ui.openOnGithub',
-                      'Open {item} on GitHub',
-                      { item: row.path },
-                    )}
-                  />
-                )}
-            </Row>
-          )}
+          {...quietRowActions(hostApi, text, {
+            copyValue: row.path,
+            ...(row.webUrl === undefined ? {} : { openUrl: row.webUrl }),
+          })}
         />
       )}
     />
@@ -2532,33 +2546,13 @@ function FilesPanel({
 
 /* ----------------------------------------------------------------------- Checks */
 
-function checksRollup(view: GithubChecksViewV1): readonly MetadataEntry[] {
-  // A count is shown only where the source could compute one over a suite it
-  // fully read. Rendering `0 failing` for a suite nobody could read would be a
-  // fabricated fact, so the entry is absent instead.
-  return [
-    ...(view.failingCount === undefined
-      ? []
-      : [{
-        label: 'Failing',
-        labelKey: 'plugins.github.ui.checksFailing',
-        value: String(view.failingCount),
-      }]),
-    ...(view.runningCount === undefined
-      ? []
-      : [{
-        label: 'Running',
-        labelKey: 'plugins.github.ui.checksRunning',
-        value: String(view.runningCount),
-      }]),
-    ...(view.passingCount === undefined
-      ? []
-      : [{
-        label: 'Passing',
-        labelKey: 'plugins.github.ui.checksPassing',
-        value: String(view.passingCount),
-      }]),
-  ];
+/** What needs the reader leads: failed checks, then the ones still running, then the rest in GitHub's order. */
+const CHECK_OUTCOME_RANK_V1: Readonly<Record<string, number>> = Object.freeze({ failed: 0, pending: 1 });
+function orderGithubCheckRowsV1(rows: readonly GithubProjectedCheckRowV1[]): readonly GithubProjectedCheckRowV1[] {
+  return rows
+    .map((row, index) => ({ row, index, rank: CHECK_OUTCOME_RANK_V1[readGithubCheckOutcomeV1(row)] ?? 2 }))
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    .map(({ row }) => row);
 }
 
 function ChecksBody({
@@ -2575,7 +2569,8 @@ function ChecksBody({
   onRefresh: () => void;
 }>): React.ReactElement {
   const text = usePluginTranslation();
-  const rollup = checksRollup(view);
+  const hostApi = usePluginHostApi();
+  const { spacing } = usePluginTheme();
   const failures = [
     ...(view.checkRunsFailure === undefined
       ? []
@@ -2595,7 +2590,7 @@ function ChecksBody({
     <List
       accessibilityLabel="Checks GitHub reports for this pull request"
       accessibilityLabelKey="plugins.github.ui.checksLabel"
-      items={view.rows}
+      items={orderGithubCheckRowsV1(view.rows)}
       keyForItem={(row) => row.key}
       header={(
         <Stack gap="small">
@@ -2622,14 +2617,18 @@ function ChecksBody({
                 descriptionKey="plugins.github.ui.checkSuiteIncomplete.description"
               />
             )}
-          {rollup.length === 0 ? null : <Metadata title="At this head" titleKey="plugins.github.ui.atHead" entries={rollup} />}
-          <Text
-            variant="micro"
-            tone="neutral"
-            valueKey="plugins.github.ui.readAgainstRevision"
-            fallback="Read against {revision}."
-            values={{ revision: view.headRevision.slice(0, 7) }}
-          />
+          {/* On the rows' text edge: the plugin row's own horizontal inset (`spacing.medium`). A text-only
+              header has no control edge, so it keeps a row's breath before the first check. */}
+          <Stack gap="xsmall" style={{ paddingHorizontal: spacing.medium, paddingBottom: spacing.small }}>
+            <TriageChecksRollupLine latestCommit rollup={githubChecksRollupV1(view)} />
+            <Text
+              variant="micro"
+              tone="secondary"
+              valueKey="plugins.github.ui.readAgainstRevision"
+              fallback="Read against {revision}."
+              values={{ revision: view.headRevision.slice(0, 7) }}
+            />
+          </Stack>
         </Stack>
       )}
       empty={(
@@ -2682,30 +2681,10 @@ function ChecksBody({
           {...(row.completedAtMs === undefined
             ? {}
             : { detail: formatTimestamp(locale, row.completedAtMs, 'relative', nowMs) })}
-          actions={(
-            <Row gap="small">
-              <Action.Copy
-                value={row.name}
-                variant="plain"
-                accessibilityLabel={text('plugins.github.ui.copyValue', 'Copy {item}', {
-                  item: row.name,
-                })}
-              />
-              {row.detailsUrl === undefined
-                ? null
-                : (
-                  <Action.OpenExternal
-                    url={row.detailsUrl}
-                    variant="plain"
-                  accessibilityLabel={text(
-                    'plugins.github.ui.openResults',
-                    'Open results for {item}',
-                    { item: row.name },
-                  )}
-                  />
-                )}
-            </Row>
-          )}
+          {...quietRowActions(hostApi, text, {
+            copyValue: row.name,
+            ...(row.detailsUrl === undefined ? {} : { openUrl: row.detailsUrl }),
+          })}
         />
       )}
     />
@@ -2790,7 +2769,7 @@ function remarkEvent(text: PluginTranslate, remark: Readonly<{
       ? remark.kind === 'comment'
         ? { detail: text('plugins.github.ui.commentNoText', 'This comment carries no text.') }
         : {}
-      : { quote: remark.body }),
+      : { quote: githubMarkdownDisplayText(remark.body) }),
     href: remark.webUrl,
     hrefLabel: text('plugins.github.ui.openOnGithub', 'Open {item} on GitHub', {
       item: `${actor} · ${remark.summary}`,
@@ -2844,7 +2823,7 @@ function ThreadReplyRow({
             fallback="This comment carries no text."
           />
         )
-        : <Markdown value={reply.body} />}
+        : <Markdown value={githubMarkdownDisplayText(reply.body)} />}
     </Stack>
   );
 }
@@ -3295,6 +3274,9 @@ function useGithubFeedbackStream(context: GithubFeedbackWriteContextV1): GithubA
   ];
   const connectionFailure = conversation.state.failure ?? threadsFailure ?? reviewsFailure
     ?? requestsFailure ?? checksFailure;
+  const allConnectionsAnswered = conversation.state.kind === 'ready'
+    && threads.state.kind === 'ready' && reviews.state.kind === 'ready'
+    && requests.state.kind === 'ready' && checks.state.kind === 'ready';
   const commentsIncomplete = incompleteDescription(text, conversation.state.incomplete, null);
   const checksIncompleteDescription = text(
     'plugins.github.ui.feedbackChecksIncomplete',
@@ -3330,13 +3312,6 @@ function useGithubFeedbackStream(context: GithubFeedbackWriteContextV1): GithubA
             />
           )}
         <ReviewPeople people={view.people} locale={locale} nowMs={nowMs} />
-        <Text
-          variant="micro"
-          tone="neutral"
-          valueKey="plugins.github.ui.feedbackScope"
-          fallback={'This keeps issue comments, review bodies, outstanding requests, line'
-            + ' conversations, check state, and timeline history as distinct GitHub facts.'}
-        />
         {checksKnownIncomplete
           ? (
             // The same fact the Checks plane states, in the plane that would
@@ -3386,7 +3361,7 @@ function useGithubFeedbackStream(context: GithubFeedbackWriteContextV1): GithubA
         ? [{ key: 'requests', title: 'Load more review requests', titleKey: 'plugins.github.ui.loadMoreReviewRequests', pending: requests.state.pending, onLoadMore: requests.loadMore }]
         : []),
     ],
-    summary: (
+    summary: conversation.state.kind !== 'ready' ? null : (
       <Stack gap="small">
         <Text
           variant="micro"
@@ -3427,7 +3402,7 @@ function useGithubFeedbackStream(context: GithubFeedbackWriteContextV1): GithubA
     },
     pending: conversation.state.pending || threads.state.pending || reviews.state.pending
       || requests.state.pending || checks.pending,
-    empty: (
+    empty: !allConnectionsAnswered || failedConnections.length > 0 ? null : (
       <EmptyState
         title="Nothing has been said yet"
         titleKey="plugins.github.ui.noFeedback"
@@ -3618,6 +3593,22 @@ function GithubChangeStep({ input, overview }: Readonly<{
 }
 
 /**
+ * What the checks say as counts, for the story's Checks step and the Checks tab alike. When GitHub
+ * had more check pages than were read (`knownIncomplete`) it states no counts, so the rollup carries
+ * what was read so far, marked incomplete.
+ */
+function githubChecksRollupV1(view: GithubChecksViewV1): TriageDetailChecksRollupV1 {
+  if (view.state !== 'knownIncomplete') return view;
+  return {
+    incomplete: true,
+    failingCount: view.rowState?.kind === 'failing'
+      ? view.rowState.failingCount
+      : view.rows.filter((row) => readGithubCheckOutcomeV1(row) === 'failed').length,
+    runningCount: view.rows.filter((row) => readGithubCheckOutcomeV1(row) === 'pending').length,
+  };
+}
+
+/**
  * The checks step: GitHub's rollup of the head commit's checks, and the ones that failed.
  * When GitHub had more check pages than were read (`knownIncomplete`) it states no counts,
  * so the step carries what was read so far: the failing count `checks.ts` observed and the
@@ -3628,11 +3619,7 @@ function GithubChecksStep({ input }: Readonly<{ input: TriageDetailSurfaceInputV
   if (checks.state.kind !== 'ready') return null;
   const view = checks.state.value;
   const failed = view.rows.filter((row) => readGithubCheckOutcomeV1(row) === 'failed');
-  const rollup = view.state !== 'knownIncomplete' ? view : {
-    incomplete: true as const,
-    failingCount: view.rowState?.kind === 'failing' ? view.rowState.failingCount : failed.length,
-    runningCount: view.rows.filter((row) => readGithubCheckOutcomeV1(row) === 'pending').length,
-  };
+  const rollup = githubChecksRollupV1(view);
   return (
     <TriageDetailChecks title="Checks" titleKey="plugins.github.ui.story.checks" latestCommit rollup={rollup}
       failing={failed.map((row) => ({ id: row.key, name: row.name }))} />
@@ -3706,7 +3693,7 @@ function GithubStoryOverview({
           />
         )}
         {ask === undefined || ask === null || ask.length === 0
-          ? <Text variant="micro" tone="secondary" valueKey="plugins.github.ui.story.noDescription" fallback="No description." />
+          ? exact === null ? null : <Text variant="micro" tone="secondary" valueKey="plugins.github.ui.story.noDescription" fallback="No description." />
           : <GithubOverviewMarkdown body={ask} />}
         {exact === null ? null : <GithubStoryFacts overview={exact} />}
     </TriageDetailStory>

@@ -79,7 +79,7 @@ describe('verified storage recognizers', () => {
   it('uses current catalog verdicts and account declined facts; only agents omit a matching decline', async () => {
     const home = await fixture(); const path = join(home, 'cache'); await mkdir(path);
     let item: StorageItemV1 = { itemId: 'cache', path, title: 'Cache', kind: 'category-item', categoryId: 'caches', size,
-      verdict: 'safe', reason: { code: 'reinstalls' }, evidence: ['owner_unused'], collectable: true };
+      verdict: 'safe', reason: { code: 'reinstalls' }, evidence: ['managed_cache_root'], collectable: true };
     const suggestions = createStorageSuggestions({ readCatalogItems: async () => [item], readProtectionFacts: () => ({ homeDir: home }),
       isDeclined: value => value.size.allocatedBytes === 4096 });
     expect((await suggestions.list({ callerKind: 'person' })).items).toHaveLength(1);

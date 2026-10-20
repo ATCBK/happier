@@ -2,9 +2,8 @@ import React from 'react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
-import { storage } from '@/sync/domains/state/storageStore';
 import {
-    createConfiguredBackendRouteParams, createNavigationMock, createRouterMock,
+    createConfiguredBackendRouteParams, createConfiguredAgentRouteParams, createNavigationMock, createRouterMock,
     createStackOptionsCapture, enableReactActEnvironment, installPickerCommonModuleMocks,
 } from './testHarness';
 
@@ -32,7 +31,6 @@ beforeEach(async () => {
     navigation.getState = () => ({
         index: 0, routes: [{ key: 'secret-requirement-route', name: '(app)/new/pick/secret-requirement', path: '/new/pick/secret-requirement' }],
     });
-    storage.getState().applySettingsLocal({ profiles: [] });
     const { clearTempData } = await import('@/utils/sessions/tempDataStore');
     clearTempData();
 });
@@ -58,7 +56,7 @@ describe('SecretRequirementPickerScreen invalid route state', () => {
         expect(router.replace).toHaveBeenCalledWith({
             pathname: '/new',
             params: {
-                ...createConfiguredBackendRouteParams('review-bot'),
+                ...createConfiguredAgentRouteParams('review-bot'),
                 dataId: 'draft-1', machineId: 'machine-1', profileId: 'missing-profile',
                 secretRequirementResultId: expect.any(String), spawnServerId: runtime.serverId,
             },

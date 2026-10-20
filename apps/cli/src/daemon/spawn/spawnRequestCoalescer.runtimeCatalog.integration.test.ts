@@ -6,6 +6,9 @@ import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers
 import type { ProviderConnectionId } from '@happier-dev/protocol';
 import { createDeferred } from '@/testkit/async/deferred';
 import type { SpawnSessionResult } from '@/session/shared/spawnSessionContract';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { registerPrivateSpawnSessionRpcHandlers } from '@/rpc/handlers/sessionLifecycle';
+import type { RpcHandler } from '@/api/rpc/types';
 
 describe('spawn preparation live custody', () => {
   it('publishes coalesced accepted work through actual settlement without counting retained success', async () => {
@@ -742,28 +745,83 @@ describe('computeDaemonSpawnRequestKey', () => {
 });
 
 describe('createSpawnRequestCoalescer', () => {
+  it('serializes a fresh admission behind retired same-key work and coalesces its current duplicates', async () => {
+    const coalescer = createSpawnRequestCoalescer({ recentSuccessTtlMs: 0 });
+    const key = computeAuthorizedExistingSessionKey('same');
+    const retiredWork = createDeferred<SpawnSessionResult>();
+    const currentWork = createDeferred<SpawnSessionResult>();
+    let firstAdmissionCurrent = true;
+    const first = coalescer.run(key, () => retiredWork.promise, () => firstAdmissionCurrent);
+    firstAdmissionCurrent = false;
+    const successorWork = vi.fn(() => currentWork.promise);
+    const successor = coalescer.run(key, successorWork, () => true);
+    const duplicateWork = vi.fn(() => currentWork.promise);
+    const duplicate = coalescer.run(key, duplicateWork, () => true);
+    expect(successorWork).not.toHaveBeenCalled();
+    retiredWork.resolve({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE, errorMessage: 'Retired admission' });
+    await first;
+    await vi.waitFor(() => expect(successorWork).toHaveBeenCalledOnce());
+    expect(duplicateWork).not.toHaveBeenCalled();
+    expect(coalescer.readInFlightRequests()).toHaveLength(1);
+    // Retirement of the old same-key operation must not clear its successor's
+    // exact authorization while that successor is still physically pending.
+    const conflictingKey = computeDaemonSpawnRequestKey({ directory: '/changed', existingSessionId: 'sess_1',
+      executionAuthorization: { provenance: 'user_request', requestId: 'same' } });
+    const conflictingWork = vi.fn(() => currentWork.promise);
+    await expect(coalescer.run(conflictingKey, conflictingWork)).resolves.toMatchObject({
+      type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
+    });
+    expect(conflictingWork).not.toHaveBeenCalled();
+    currentWork.resolve({ type: 'success', sessionId: 'successor' });
+    await expect(successor).resolves.toMatchObject({ type: 'success', sessionId: 'successor' });
+    await expect(duplicate).resolves.toMatchObject({ type: 'success', sessionId: 'successor' });
+    expect(coalescer.readInFlightRequests()).toHaveLength(0);
+  });
+
   it('coalesces concurrent calls for the same key and caches recent new-session success', async () => {
     let now = 10_000;
     const nowMs = () => now;
     const coalescer = createSpawnRequestCoalescer({ nowMs, recentSuccessTtlMs: 2_000 });
 
-    const work = vi.fn(async () => ({ type: 'success' as const, sessionId: 'sess_new' }));
-    const key = { kind: 'new' as const, key: 'new:abc' };
+    const result = {
+      type: 'success' as const,
+      sessionId: 'sess_new',
+      sessionCreationOutcome: {
+        disposition: 'created' as const,
+        organizationPlacement: { folderId: null, tagIds: [] },
+      },
+    };
+    const work = vi.fn(async () => result);
+    const key = computeDaemonSpawnRequestKey({ directory: '/tmp/project', spawnNonce: 'new-creation' });
 
     const [r1, r2] = await Promise.all([coalescer.run(key, work), coalescer.run(key, work)]);
     expect(work).toHaveBeenCalledTimes(1);
-    expect(r1).toEqual({ type: 'success', sessionId: 'sess_new' });
-    expect(r2).toEqual({ type: 'success', sessionId: 'sess_new' });
+    expect(r1).toEqual(result);
+    expect(r2).toEqual(result);
 
     now += 500;
     const r3 = await coalescer.run(key, work);
     expect(work).toHaveBeenCalledTimes(1);
-    expect(r3).toEqual({ type: 'success', sessionId: 'sess_new' });
+    expect(r3).toEqual(result);
+
+    const handlers = new Map<string, RpcHandler>();
+    registerPrivateSpawnSessionRpcHandlers({
+      rpcHandlerManager: { registerHandler: (method, handler) => { handlers.set(method, handler); } },
+      spawnLifecycleHandler: async () => coalescer.run(key, work),
+      requireSessionCreationOutcome: true,
+    });
+    await expect(handlers.get(RPC_METHODS.SPAWN_HAPPY_SESSION)?.({
+      type: 'spawn-in-directory',
+      directory: '/tmp/project',
+      spawnNonce: 'new-creation',
+      backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
+    })).resolves.toEqual(result);
+    expect(work).toHaveBeenCalledTimes(1);
 
     now += 5_000;
     const r4 = await coalescer.run(key, work);
     expect(work).toHaveBeenCalledTimes(2);
-    expect(r4).toEqual({ type: 'success', sessionId: 'sess_new' });
+    expect(r4).toEqual(result);
   });
 
   it('keeps a timed-out nonce admitted as pending so retries do not spawn duplicate provider work', async () => {

@@ -1,8 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
-import type { ApprovalRequest } from '@happier-dev/protocol';
-import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { readPromptDocInLibrary } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 
 import { ToolDiffView } from '@/components/tools/shell/presentation/ToolDiffView';
@@ -10,39 +8,8 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { withUiPromptLibraryArtifactReader } from '@/sync/ops/promptLibrary/promptLibraryArtifactStore';
 import { t } from '@/text';
-
-export type PromptDocUpdateApproval = Readonly<{
-  artifactId: string;
-  title: string;
-  markdown: string;
-  expectedRevision: Readonly<{
-    headerVersion: number;
-    bodyVersion: number;
-  }> | null;
-}>;
-
-/** A pending `prompt_doc.update` request's reviewed edit, read through the Action's own input schema. */
-export function readPromptDocUpdateApproval(
-  approval: ApprovalRequest,
-): PromptDocUpdateApproval | null {
-  if (approval.actionId !== 'prompt_doc.update') return null;
-  const parsed = getActionSpec('prompt_doc.update').inputSchema.safeParse(
-    approval.actionArgs,
-  );
-  if (!parsed.success) return null;
-  const input = parsed.data as Readonly<{
-    artifactId: string;
-    title: string;
-    markdown: string;
-    expectedRevision?: Readonly<{ headerVersion: number; bodyVersion: number }>;
-  }>;
-  return {
-    artifactId: input.artifactId,
-    title: input.title,
-    markdown: input.markdown,
-    expectedRevision: input.expectedRevision ?? null,
-  };
-}
+import type { PromptDocUpdateApproval } from './promptDocApprovalModel';
+export { readPromptDocUpdateApproval, type PromptDocUpdateApproval } from './promptDocApprovalModel';
 
 type CurrentDocument =
   | Readonly<{ status: 'loading' }>

@@ -21,11 +21,10 @@ export function useMachineStorageCleanup(input: MachineStorageHookInput) {
         check: (refs: Without<MachineStorageCheckInput>['refs']) => machineStorageStore.checkPile({ ...key, refs }),
         apply: (mode: 'trash' | 'delete', items: readonly MachineStorageApplyItem[]) => machineStorageStore.applyPile({ ...key, mode, items }),
         undo: () => machineStorageStore.undoReceipt(key),
-        /** `confirmed`: the person confirmed Empty now in its dialog (the UI confirmation host). */
-        emptyNow: (confirmed: boolean) => machineStorageStore.emptyReceipt({ ...key, confirmedByPerson: confirmed }),
+        emptyNow: () => machineStorageStore.emptyReceipt(key),
         dismiss: () => machineStorageStore.dismissReceipt(key),
         restore: (selection: Without<MachineStorageTrashRestoreInput>) => machineStorageStore.restoreTrash({ ...key, ...selection }),
-        empty: (selection: Without<MachineStorageTrashEmptyInput>, confirmed: boolean) => machineStorageStore.emptyTrash({ ...key, ...selection, confirmedByPerson: confirmed }),
+        empty: (selection: Without<MachineStorageTrashEmptyInput>) => machineStorageStore.emptyTrash({ ...key, ...selection }),
         setProtected: (path: string, protect: boolean) => machineStorageStore.setProtectedFolder({ ...key, path, protect }),
     }), [enabled, key, receipt]);
 }

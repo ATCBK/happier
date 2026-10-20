@@ -1,4 +1,5 @@
 import { MMKV } from 'react-native-mmkv';
+import { ArtifactCoarseKindV1Schema } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { isEmbedWindowContext } from '@/embed/isEmbedWindowContext';
 import { MachineKindFromLegacyProjectionSchema } from '@happier-dev/protocol/machines/machineKind';
 import { ExternalSessionsSourceSchema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
@@ -13,7 +14,7 @@ import { SessionEffectiveAccessV1Schema } from '@happier-dev/protocol/sessions/a
 import { SessionViewerProjectionV1Schema } from '@happier-dev/protocol/sessions/personal/viewer';
 import { PendingActivationAuthorizationV1Schema } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
 import { PluginUiTargetedContributionsV1Schema, type PluginUiTargetedContributionsV1 } from '@happier-dev/protocol/plugins/ui';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import * as zMini from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { MachinePublishedAgentInventoryV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
@@ -24,6 +25,8 @@ import { readStorageScopeFromEnv, scopedStorageId } from '@/utils/system/storage
 import { prepareWarmCacheEncryptionKey, readResolvedWarmCacheEncryptionKey } from './warmCacheEncryptionKey';
 import { SESSION_CONTENT_AVAILABILITIES } from '@/sync/domains/session/encryptedContentAvailability';
 import { MachineLockedReasonSchema } from './storageTypes';
+import { isServerProfilePersistenceSuspendedForDemo } from '@/sync/domains/server/serverProfiles';
+import { subscribeHomeCredentialMutations } from '@/auth/storage/tokenStorage';
 
 /**
  * The same predicate the rest of this corridor uses (`state/persistence.ts`,
@@ -219,6 +222,51 @@ const MACHINE_DISPLAY_WARM_CACHE_PREFIX = 'machine-display-warm-cache-v1';
  * unencrypted instance, so there is nothing there to retire.
  */
 const PLUGIN_UI_PROJECTION_WARM_CACHE_PREFIX = 'plugin-ui-projection-warm-cache-v1';
+const ARTIFACT_INVENTORY_WARM_CACHE_PREFIX = 'artifact-inventory-warm-cache-v1';
+
+// Header-only projection: never persist content keys, key envelopes, bodies or
+// private revision provenance. Storage placement remains the warm-cache owner's.
+const ArtifactInventoryWarmCacheSchema = z.object({
+    binding: z.string(),
+    cursor: z.string().check(z.regex(/^\d+$/)),
+    artifacts: z.array(z.object({
+        id: z.string().check(z.minLength(1)),
+        kind: z.optional(z.nullable(ArtifactCoarseKindV1Schema)),
+        rawHeader: z.nullable(z.record(z.string(), z.unknown())),
+        isDecrypted: z.boolean(),
+        lockedReason: z.optional(z.enum(['encryption_material_unavailable', 'decryption_failed', 'invalid_stored_content'])),
+        storageMode: z.enum(['plain', 'e2ee']),
+        access: z.optional(z.enum(['owner', 'view', 'edit', 'admin'])),
+        ownerAccountId: z.optional(z.string()),
+        headerVersion: z.number().check(z.int(), z.nonnegative()),
+        bodyVersion: z.optional(z.number().check(z.int(), z.nonnegative())),
+        seq: z.number(), createdAt: z.number(), updatedAt: z.number(),
+    })),
+});
+export type ArtifactInventoryWarmCache = z.infer<typeof ArtifactInventoryWarmCacheSchema>;
+
+export function loadArtifactInventoryWarmCache(serverId: string, accountId: string, binding: string): ArtifactInventoryWarmCache | null {
+    const key = buildScopedKey(ARTIFACT_INVENTORY_WARM_CACHE_PREFIX, serverId, accountId);
+    const entry = loadScopedRecord(key, ArtifactInventoryWarmCacheSchema);
+    if (entry?.binding === binding) return entry;
+    if (entry && key) { getWarmCacheStorage()?.delete(key); warmCacheSavedValueByKey.delete(key); }
+    return null;
+}
+
+export function saveArtifactInventoryWarmCache(serverId: string, accountId: string, entry: ArtifactInventoryWarmCache): void {
+    saveScopedRecord(buildScopedKey(ARTIFACT_INVENTORY_WARM_CACHE_PREFIX, serverId, accountId), ArtifactInventoryWarmCacheSchema.parse(entry));
+}
+
+subscribeHomeCredentialMutations(event => {
+    if (event.kind !== 'credentials_removed') return;
+    const prefix = `${ARTIFACT_INVENTORY_WARM_CACHE_PREFIX}:${event.serverId}:`;
+    const storage = getWarmCacheStorage();
+    for (const key of storage?.getAllKeys() ?? []) {
+        if (!key.startsWith(prefix)) continue;
+        storage?.delete(key);
+        warmCacheSavedValueByKey.delete(key);
+    }
+});
 /**
  * The prefixes older native builds wrote into the shared unencrypted instance. Moving to a new id
  * would only orphan those bytes; the plaintext titles and paths would still be sitting in the old
@@ -238,80 +286,77 @@ const EMPTY_PLUGIN_UI_PROJECTION_WARM_CACHE_ENTRIES = EMPTY_WARM_CACHE_ENTRIES a
 >;
 
 export const SessionListCacheEntryV1Schema = z.object({
-    sessionId: z.string().min(1),
-    seq: z.number().int().nonnegative().optional(),
-    metadataLayoutVersion: z.number().int().nonnegative().optional(),
-    metadataVersion: z.number().int().nonnegative(),
-    agentStateVersion: z.number().int().nonnegative(),
+    sessionId: z.string().check(z.minLength(1)),
+    seq: z.optional(z.number().check(z.int(), z.nonnegative())),
+    metadataLayoutVersion: z.optional(z.number().check(z.int(), z.nonnegative())),
+    metadataVersion: z.number().check(z.int(), z.nonnegative()),
+    agentStateVersion: z.number().check(z.int(), z.nonnegative()),
     updatedAt: z.number(),
-    meaningfulActivityAt: z.number().nullable().optional(),
+    meaningfulActivityAt: z.optional(z.nullable(z.number())),
     createdAt: z.number(),
     active: z.boolean(),
     activeAt: z.number(),
-    archivedAt: z.number().nullable(),
-    lastViewedSessionSeq: z.number().int().nonnegative().nullable().optional(),
+    archivedAt: z.nullable(z.number()),
+    lastViewedSessionSeq: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
     viewer: zMini.optional(SessionViewerProjectionV1Schema),
-    pendingCount: z.number().int().nonnegative().optional(),
-    pendingBlockedCount: z.number().int().nonnegative().optional(),
-    pendingVersion: z.number().int().nonnegative().optional(),
+    pendingCount: z.optional(z.number().check(z.int(), z.nonnegative())),
+    pendingBlockedCount: z.optional(z.number().check(z.int(), z.nonnegative())),
+    pendingVersion: z.optional(z.number().check(z.int(), z.nonnegative())),
     pendingActivationAuthorization: zMini.optional(zMini.nullable(PendingActivationAuthorizationV1Schema)),
     latestTurnStatus: zMini.optional(zMini.nullable(PrimaryTurnStatusV1Schema)),
-    latestTurnStatusObservedAt: z.number().int().nonnegative().nullable().optional(),
+    latestTurnStatusObservedAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
     lastRuntimeIssue: zMini.optional(zMini.nullable(SessionRuntimeIssueV1Schema)),
-    runtimeActivityActiveCount: z.number().int().nonnegative().nullable().optional(),
+    runtimeActivityActiveCount: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
     runtimeActivityState: zMini.optional(zMini.nullable(SessionRuntimeActivityStateSchema)),
-    runtimeActivityObservedAt: z.number().int().nonnegative().nullable().optional(),
-    runtimeActivityRevision: z.number().int().nonnegative().nullable().optional(),
-    runtimeActivitySourceClass: z.never().optional(),
-    rollbackEligibleTurnStarts: z.array(z.number().int().nonnegative()).optional(),
-    latestReadyEventSeq: z.number().int().nonnegative().nullable().optional(),
-    latestReadyEventAt: z.number().int().nonnegative().nullable().optional(),
-    pendingRequestObservedAt: z.number().int().nonnegative().nullable().optional(),
+    runtimeActivityObservedAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    runtimeActivityRevision: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    runtimeActivitySourceClass: z.optional(z.never()),
+    rollbackEligibleTurnStarts: z.optional(z.array(z.number().check(z.int(), z.nonnegative()))),
+    latestReadyEventSeq: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    latestReadyEventAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    pendingRequestObservedAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
     // The row's settled content fact, so a cold restore does not read an own readable Session as
     // locked. Absent (older entries, or unsettled when written) restores as unsettled.
-    encryptionMode: z.enum(['e2ee', 'plain']).optional(),
-    encryptedContentAvailability: z.enum(SESSION_CONTENT_AVAILABILITIES).optional(),
+    encryptionMode: z.optional(z.enum(['e2ee', 'plain'])),
+    encryptedContentAvailability: z.optional(z.enum(SESSION_CONTENT_AVAILABILITIES)),
     // Additive current authority. Absence keeps old cache bytes readable and
     // permits only the released flattened fallback; null preserves malformed
     // current ingress as unavailable across a restart.
     effectiveAccess: zMini.optional(zMini.nullable(SessionEffectiveAccessV1Schema)),
-    accessLevel: z.enum(['view', 'edit', 'admin']).optional(),
-    canApprovePermissions: z.boolean().optional(),
-    responsibleAccountId: z.string().min(1).nullable().optional(),
+    accessLevel: z.optional(z.enum(['view', 'edit', 'admin'])),
+    canApprovePermissions: z.optional(z.boolean()),
+    responsibleAccountId: z.optional(z.nullable(z.string().check(z.minLength(1)))),
     responsibleAccount: zMini.optional(zMini.nullable(SessionAccessAccountSummaryV1Schema)),
-    name: z.string().optional(),
-    summaryText: z.string().nullable().optional(),
+    name: z.optional(z.string()),
+    summaryText: z.optional(z.nullable(z.string())),
     path: z.string(),
-    homeDir: z.string().nullable().optional(),
-    host: z.string().nullable().optional(),
-    machineId: z.string().nullable().optional(),
-    flavor: z.string().nullable().optional(),
-    externalSessionV1: z.preprocess(
-        (value) => normalizeLinkedExternalSessionMetadataV1({ externalSessionV1: value }, 'stored')
-            ?.externalSessionV1 ?? value,
-        z.object({
+    homeDir: z.optional(z.nullable(z.string())),
+    host: z.optional(z.nullable(z.string())),
+    machineId: z.optional(z.nullable(z.string())),
+    flavor: z.optional(z.nullable(z.string())),
+    externalSessionV1: z.optional(z.nullable((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => normalizeLinkedExternalSessionMetadataV1({ externalSessionV1: value }, 'stored')
+            ?.externalSessionV1 ?? value), z.looseObject({
             v: z.literal(1),
-            agentId: z.string().min(1),
-            machineId: z.string().min(1),
-            remoteSessionId: z.string().min(1),
+            agentId: z.string().check(z.minLength(1)),
+            machineId: z.string().check(z.minLength(1)),
+            remoteSessionId: z.string().check(z.minLength(1)),
             source: ExternalSessionsSourceSchema,
             runtimeDescriptorV1: zMini.optional(RuntimeDescriptorV1Schema),
             linkData: zMini.optional(PluginAgentExternalSessionLinkDataSchema),
-            codexBackendMode: z.never().optional(),
-        }).passthrough(),
-    ).nullable().optional(),
-    hiddenSystemSession: z.boolean().optional(),
+            codexBackendMode: z.optional(z.never()),
+        })))),
+    hiddenSystemSession: z.optional(z.boolean()),
     // The Bot marker (`metadata.bot`), flattened like the fields above. Without it a cold-restored
     // Bot reads as an ordinary Session until its metadata changes, so the Bots roster loses it.
-    bot: z.boolean().optional(),
+    bot: z.optional(z.boolean()),
     // The no-folder marker (`sessionDirectoryV1.kind === 'managed'`), flattened like the fields above.
     // Without it a cold-restored row reads its private folder as a workspace to show.
-    managedSessionDirectory: z.boolean().optional(),
-    keepVisibleWhenInactive: z.boolean().optional(),
-    hasPendingPermissionRequests: z.boolean().optional(),
-    hasPendingUserActionRequests: z.boolean().optional(),
-    hasUnreadMessages: z.boolean().optional(),
-}).superRefine((entry, context) => {
+    managedSessionDirectory: z.optional(z.boolean()),
+    keepVisibleWhenInactive: z.optional(z.boolean()),
+    hasPendingPermissionRequests: z.optional(z.boolean()),
+    hasPendingUserActionRequests: z.optional(z.boolean()),
+    hasUnreadMessages: z.optional(z.boolean()),
+}).check(z.superRefine((entry, context) => {
     if (parseSessionRuntimeActivityProjectionFields(entry).kind === 'invalid') {
         context.addIssue({
             code: 'custom',
@@ -327,30 +372,30 @@ export const SessionListCacheEntryV1Schema = z.object({
     } else if (typeof entry.responsibleAccountId === 'string' && entry.responsibleAccount?.accountId !== entry.responsibleAccountId) {
         context.addIssue({ code: 'custom', message: 'Responsible Account summary must match its id' });
     }
-});
+}));
 
 export type SessionListCacheEntryV1 = z.infer<typeof SessionListCacheEntryV1Schema>;
 
 export const MachineDisplayCacheEntryV1Schema = z.object({
     agentInventory: zMini.catch(zMini.optional(createStoredReadSchema(MachinePublishedAgentInventoryV1Schema)), undefined),
-    machineId: z.string().min(1),
+    machineId: z.string().check(z.minLength(1)),
     kind: zMini.optional(MachineKindFromLegacyProjectionSchema),
-    metadataVersion: z.number().int().nonnegative(),
+    metadataVersion: z.number().check(z.int(), z.nonnegative()),
     updatedAt: z.number(),
     active: z.boolean(),
     activeAt: z.number(),
-    revokedAt: z.number().nullable(),
-    replacedByMachineId: z.string().nullable().optional(),
-    replacedAt: z.union([z.number(), z.string()]).nullable().optional(),
-    replacementReason: z.string().nullable().optional(),
-    replacementSource: z.string().nullable().optional(),
-    replacementActorUserId: z.string().nullable().optional(),
-    lockedReason: MachineLockedReasonSchema.nullable().optional(),
-    displayName: z.string().nullable().optional(),
-    host: z.string().nullable().optional(),
-    homeDir: z.string().nullable().optional(),
-    platform: z.string().nullable().optional(),
-    arch: z.string().nullable().optional(),
+    revokedAt: z.nullable(z.number()),
+    replacedByMachineId: z.optional(z.nullable(z.string())),
+    replacedAt: z.optional(z.nullable(z.union([z.number(), z.string()]))),
+    replacementReason: z.optional(z.nullable(z.string())),
+    replacementSource: z.optional(z.nullable(z.string())),
+    replacementActorUserId: z.optional(z.nullable(z.string())),
+    lockedReason: z.optional(z.nullable(MachineLockedReasonSchema)),
+    displayName: z.optional(z.nullable(z.string())),
+    host: z.optional(z.nullable(z.string())),
+    homeDir: z.optional(z.nullable(z.string())),
+    platform: z.optional(z.nullable(z.string())),
+    arch: z.optional(z.nullable(z.string())),
 });
 
 export type MachineDisplayCacheEntryV1 = z.infer<typeof MachineDisplayCacheEntryV1Schema>;
@@ -374,13 +419,13 @@ export type PluginUiProjectionCacheEntryV1 = {
     targetedContributionsByPluginId?: Record<string, PluginUiTargetedContributionsV1>;
 };
 
-export const PluginUiProjectionCacheEntryV1Schema: z.ZodType<PluginUiProjectionCacheEntryV1> = z.object({
-    machineId: z.string().min(1),
+export const PluginUiProjectionCacheEntryV1Schema: z.ZodMiniType<PluginUiProjectionCacheEntryV1> = z.object({
+    machineId: z.string().check(z.minLength(1)),
     projection: PluginProjectionV2Schema,
-    targetedContributionsByPluginId: z.record(
-        z.string().min(1),
+    targetedContributionsByPluginId: z.optional(z.record(
+        z.string().check(z.minLength(1)),
         PluginUiTargetedContributionsV1Schema,
-    ).optional(),
+    )),
 });
 
 /**
@@ -390,24 +435,24 @@ export const PluginUiProjectionCacheEntryV1Schema: z.ZodType<PluginUiProjectionC
 export const UsageSummaryCacheV1Schema = z.object({
     v: z.literal(1),
     entries: z.array(z.object({
-        key: z.string().min(1),
+        key: z.string().check(z.minLength(1)),
         /** Unknown when the producer has no reading time; never inferred from another account. */
-        fetchedAt: z.number().int().nonnegative().nullable(),
+        fetchedAt: z.nullable(z.number().check(z.int(), z.nonnegative())),
         serviceLabel: z.string(),
         /** Added with per-provider grouping; absent in values saved before it (still readable). */
-        serviceGroupKey: z.string().min(1).optional(),
-        legacyServiceId: z.string().nullable().optional(),
-        accountLabel: z.string().optional(),
+        serviceGroupKey: z.optional(z.string().check(z.minLength(1))),
+        legacyServiceId: z.optional(z.nullable(z.string())),
+        accountLabel: z.optional(z.string()),
         /** Added with "Hide account emails and IDs": the raw identity the one presenter formats. */
-        accountEmail: z.string().nullable().optional(),
-        accountId: z.string().nullable().optional(),
-        profileLabel: z.string().nullable(),
-        planLabel: z.string().nullable(),
+        accountEmail: z.optional(z.nullable(z.string())),
+        accountId: z.optional(z.nullable(z.string())),
+        profileLabel: z.nullable(z.string()),
+        planLabel: z.nullable(z.string()),
         meters: z.array(z.object({
-            meterId: z.string().min(1),
+            meterId: z.string().check(z.minLength(1)),
             label: z.string(),
-            remainingPct: z.number().nullable(),
-            resetsAt: z.number().nullable(),
+            remainingPct: z.nullable(z.number()),
+            resetsAt: z.nullable(z.number()),
         })),
     })),
 });
@@ -415,13 +460,13 @@ export const UsageSummaryCacheV1Schema = z.object({
 export type UsageSummaryCacheV1 = z.infer<typeof UsageSummaryCacheV1Schema>;
 
 /** Kind-keyed Found metadata, never bytes or reachability authority. */
-export const FoundCacheEntryV1Schema = z.discriminatedUnion('kind', [z.object({
-    kind: z.literal('skill'), machineId: z.string().min(1), observedAt: z.number().int().nonnegative(),
+export const FoundCacheEntryV1Schema = z.discriminatedUnion('kind', [z.strictObject({
+    kind: z.literal('skill'), machineId: z.string().check(z.minLength(1)), observedAt: z.number().check(z.int(), z.nonnegative()),
     result: SkillFoundListResultV1Schema,
-}).strict(), z.object({
-    kind: z.literal('mcp_server'), machineId: z.string().min(1), observedAt: z.number().int().nonnegative(),
+}), z.strictObject({
+    kind: z.literal('mcp_server'), machineId: z.string().check(z.minLength(1)), observedAt: z.number().check(z.int(), z.nonnegative()),
     result: DaemonMcpServersDetectResponseSchema,
-}).strict()]);
+})]);
 export type FoundCacheEntryV1 = z.infer<typeof FoundCacheEntryV1Schema>;
 const foundCacheListeners = new Set<Readonly<{ key: string | null; listener: () => void }>>();
 function foundCacheKey(serverId: string | null | undefined, accountId: string | null | undefined,
@@ -464,14 +509,14 @@ export function saveUsageSummaryWarmCache(
 
 export const SessionListQueryMembershipCacheEntryV1Schema = z.object({
     /** The exact Home identifier the corpus was read under (the query key embeds the same one). */
-    serverId: z.string().min(1),
-    sessionIds: z.array(z.string().min(1)),
+    serverId: z.string().check(z.minLength(1)),
+    sessionIds: z.array(z.string().check(z.minLength(1))),
 });
 
 export type SessionListQueryMembershipCacheEntryV1 = z.infer<typeof SessionListQueryMembershipCacheEntryV1Schema>;
 
 const SessionListCacheEntriesSchema = z.record(z.string(), SessionListCacheEntryV1Schema);
-const SessionListQueryMembershipCacheEntriesSchema = z.record(z.string().min(1), SessionListQueryMembershipCacheEntryV1Schema);
+const SessionListQueryMembershipCacheEntriesSchema = z.record(z.string().check(z.minLength(1)), SessionListQueryMembershipCacheEntryV1Schema);
 const EMPTY_SESSION_LIST_QUERY_MEMBERSHIP_CACHE_ENTRIES = EMPTY_WARM_CACHE_ENTRIES as Record<
     string,
     SessionListQueryMembershipCacheEntryV1
@@ -515,7 +560,7 @@ function buildScopedKey(prefix: string, serverId: string | null | undefined, acc
 
 function loadScopedRecord<T>(
     key: string | null,
-    schema: z.ZodType<T>,
+    schema: z.ZodMiniType<T>,
 ): T | null {
     if (!key) return null;
     const storage = getWarmCacheStorage();
@@ -549,6 +594,11 @@ function loadScopedRecord<T>(
 }
 
 function saveScopedRecord<T extends Record<string, unknown>>(key: string | null, value: T): void {
+    if (isServerProfilePersistenceSuspendedForDemo()) return;
+    persistScopedRecord(key, value);
+}
+
+function persistScopedRecord<T extends Record<string, unknown>>(key: string | null, value: T): void {
     if (!key) return;
     const storage = getWarmCacheStorage();
     if (!storage) return;
@@ -682,6 +732,7 @@ export function scheduleMachineDisplayWarmCacheEntriesSave(
     accountIdRaw: string | null | undefined,
     entries: Record<string, MachineDisplayCacheEntryV1>,
 ): void {
+    if (isServerProfilePersistenceSuspendedForDemo()) return;
     const serverId = normalizeScopePart(serverIdRaw);
     const accountId = normalizeScopePart(accountIdRaw);
     if (!serverId || !accountId) return;
@@ -693,7 +744,8 @@ export function scheduleMachineDisplayWarmCacheEntriesSave(
         const pending = [...pendingMachineDisplayWarmCacheSaves.values()];
         pendingMachineDisplayWarmCacheSaves.clear();
         for (const save of pending) {
-            saveMachineDisplayWarmCacheEntries(save.serverId, save.accountId, save.entries);
+            // These snapshots were admitted before suspension; demo snapshots never enter this queue.
+            persistScopedRecord(buildScopedKey(MACHINE_DISPLAY_WARM_CACHE_PREFIX, save.serverId, save.accountId), save.entries);
         }
     }, 0);
 }

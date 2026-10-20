@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { homeAdministrationGitHubAppPath, homeAdministrationGitHubAppEditPath, homeAdministrationPoliciesPath } from '../governance/homeAdministrationRoutes';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { findTestInstanceByTypeContainingText } from '@/dev/testkit/render/renderScreen';
 
@@ -59,9 +60,9 @@ const surface = {
     owner: { kind: 'home' as const },
     mutationsAvailable: true,
     routes: {
-        detail: (id: string) => `/registrations/${id}`,
-        edit: (id: string) => `/registrations/${id}/edit`,
-        signIn: '/settings/home/home-1/policies',
+        detail: (id: string) => homeAdministrationGitHubAppPath('home-1', id),
+        edit: (id: string) => homeAdministrationGitHubAppEditPath('home-1', id),
+        signIn: homeAdministrationPoliciesPath('home-1'),
     },
 } as const;
 

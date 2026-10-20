@@ -312,7 +312,7 @@ export async function verifySparseSessionListing(provider: "sqlite" | "postgres"
             where: conjoinSessionListWhereInputs(
                 access.where,
                 createSessionListStorageWhere(query.storage),
-                createSessionListScopeWhere({ accountId: viewer.id, scope: query.scope }),
+                await createSessionListScopeWhere({ tx, accountId: viewer.id, scope: query.scope }),
                 audienceWhere,
                 createSessionViewerTagWhere({ accountId: viewer.id, tagIds: query.tagIds }),
             ),
@@ -376,7 +376,7 @@ export async function verifySparseSessionListing(provider: "sqlite" | "postgres"
                 authentication: { env: process.env, authority: "present_user", authenticationEvidence: undefined },
             }),
             createSessionListStorageWhere("active"),
-            createSessionListScopeWhere({ accountId: viewer.id, scope: "assigned_to_me" }),
+            await createSessionListScopeWhere({ tx, accountId: viewer.id, scope: "assigned_to_me" }),
             createSessionViewerTagWhere({ accountId: viewer.id, tagIds: [tag.id] }),
         );
         const attention = createSessionPersonalAttentionQueryInTx(tx, {

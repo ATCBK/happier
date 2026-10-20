@@ -23,7 +23,31 @@ const { useWidgetAreaLayouts } = await import('./useProjectDashboards');
 
 afterEach(standardCleanup);
 
-it('retains the acknowledged Account layout list on a warm mount while the replacement list is unanswered', async () => {
+it('renews one mounted inventory read when the same Account lifetime retires', async () => {
+    const previous = storage.getState();
+    const home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://layout-renewal.test', accountId: 'account' }], route: () => undefined });
+    const server = home.homes.a!;
+    const scope = { serverId: server.id, accountId: 'account' };
+    const surface: WidgetSurfaceRefV1 = { ...scope, owner: { kind: 'corePage', pageId: 'usage', area: 'main' } };
+    const execute = vi.fn<WidgetAreaLayoutsExecute>(async () => ({ ok: true, result: { surface, layouts: [] } }));
+    publishAppliedActiveServerSnapshot({ serverId: server.id, serverUrl: server.serverUrl, generation: 0 });
+    storage.setState({ artifacts: {}, profileScope: scope, profile: AccountProfileSchema.parse({ id: scope.accountId }) });
+    try {
+        const hook = await renderHook(() => useWidgetAreaLayouts({ surface, execute }));
+        await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+        await act(async () => {
+            retireActiveServerAccountScopeLifetime();
+            await Promise.resolve();
+        });
+        await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(2));
+        await act(async () => { await Promise.resolve(); });
+        expect(execute).toHaveBeenCalledTimes(2);
+        await hook.unmount();
+    } finally { retireActiveServerAccountScopeLifetime(); storage.setState(previous); await home.dispose(); }
+});
+
+it.each(['network_error', 'thrown_network_error', 'denied', 'permission_denied', 'thrown_permission_denied'])(
+    'retains only authorized Account inventory across %s and a warm mount with an unanswered read', async errorCode => {
     const previous = storage.getState();
     const home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://layout-retention.test', accountId: 'account' }], route: () => undefined });
     const server = home.homes.a!;
@@ -34,6 +58,7 @@ it('retains the acknowledged Account layout list on a warm mount while the repla
     const boundary = createWorkBoardArtifactBoundary();
     let held = createDeferred<void>();
     let hold = false;
+    let failure = false;
     const transport = { ...boundary.forAccount(scope.accountId), delete: boundary.transport.delete,
         list: async (...args: Parameters<typeof boundary.transport.list>) => { if (hold) await held.promise; return boundary.transport.list(...args); } };
     const owner = createWidgetAreaLayoutArtifactPortV1(transport, { surface, isCurrent: () => true });
@@ -42,24 +67,41 @@ it('retains the acknowledged Account layout list on a warm mount while the repla
     const executor = createActionExecutor(createActionExecutorBoundaryFixture({ widgetAccountScope: () => scope,
         widgetSurfaceActions: { corePage: createWidgetAreaActionPortV1(target => createWidgetSurfaceArtifactPortV1(transport, { surface: target, isCurrent: () => true })) },
         widgetAreaLayouts: { list: () => owner.list(), create: unused, rename: unused, delete: unused, reorder: unused, reset: unused, undo: unused } }));
-    const execute: WidgetAreaLayoutsExecute = (actionId, args) => executor.execute(actionId, args, {
+    // The Action invocation is the transport boundary; successful reads still use the real Artifact/Action owners.
+    const execute: WidgetAreaLayoutsExecute = async (actionId, args) => {
+        if (failure) {
+            if (errorCode === 'thrown_network_error') throw new Error('Home transport unavailable');
+            if (errorCode === 'thrown_permission_denied') throw Object.assign(new Error('Access denied'), { code: 'permission_denied' });
+            return { ok: false, errorCode, error: errorCode };
+        }
+        return executor.execute(actionId, args, {
         surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId, authority: 'present_user', actionCaller: { kind: 'host' },
-    });
+        });
+    };
+    // Host presets (c32df2131d) are served by the Action executor, not Account inventory: only the Account's own layouts are retained or withdrawn.
+    const accountNames = (dashboards: readonly Readonly<{ name: string; isPreset: boolean }>[]) => dashboards.filter(row => !row.isPreset).map(row => row.name);
     try {
         const cold = await renderHook(() => useWidgetAreaLayouts({ surface, execute }));
-        await vi.waitFor(() => expect(cold.getCurrent().state.dashboards.map(row => row.name)).toEqual(['My usage']));
+        await vi.waitFor(() => expect(accountNames(cold.getCurrent().state.dashboards)).toEqual(['My usage']));
+        failure = true;
+        await act(async () => { await expect(cold.getCurrent().reload()).resolves.toBeNull(); });
+        const transient = errorCode === 'network_error' || errorCode === 'thrown_network_error';
+        const expectedNames = transient ? ['My usage'] : [];
+        expect(cold.getCurrent().state.status).toBe('offline');
+        expect(accountNames(cold.getCurrent().state.dashboards)).toEqual(expectedNames);
         await cold.unmount();
+        failure = false;
         hold = true;
         const warm = await renderHook(() => useWidgetAreaLayouts({ surface, execute }));
-        expect(warm.getCurrent().state.dashboards.map(row => row.name)).toEqual(['My usage']);
+        expect(accountNames(warm.getCurrent().state.dashboards)).toEqual(expectedNames);
         await warm.rerender();
-        expect(warm.getCurrent().state.dashboards.map(row => row.name)).toEqual(['My usage']);
+        expect(accountNames(warm.getCurrent().state.dashboards)).toEqual(expectedNames);
         held.resolve();
         await warm.unmount();
         held = createDeferred<void>();
         retireActiveServerAccountScopeLifetime();
         const retired = await renderHook(() => useWidgetAreaLayouts({ surface, execute }));
-        expect(retired.getCurrent().state.dashboards).toEqual([]);
+        expect(accountNames(retired.getCurrent().state.dashboards)).toEqual([]);
         await retired.unmount();
     } finally { held.resolve(); retireActiveServerAccountScopeLifetime(); storage.setState(previous); await home.dispose(); }
 });

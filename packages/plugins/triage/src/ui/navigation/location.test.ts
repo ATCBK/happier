@@ -70,6 +70,11 @@ function hostApiWith(input: Readonly<{
 }
 
 describe('PRs & Issues route owner', () => {
+  it('round trips the Tasks audience with selection and the ordinary saved-view lens', () => {
+    const tasks = lens({ filters: { ...TRIAGE_LIST_NO_FILTERS_V1, tasks: 'agents' }, query: 'auth', selectedViewId: 'work', selection: entryRef() });
+    expect(parseTriageRouteSubPathV1(buildTriageRouteSubPathV1(tasks))).toEqual(tasks);
+    expect(parseTriageRouteSubPathV1('tasks,unknown/q,auth').filters).toEqual(TRIAGE_LIST_NO_FILTERS_V1);
+  });
   it('serializes host replacement and keeps only the newest queued intent', async () => {
     let settleFirst!: (value: { subPath: string }) => void;
     const first = new Promise<{ subPath: string }>((resolve) => { settleFirst = resolve; });

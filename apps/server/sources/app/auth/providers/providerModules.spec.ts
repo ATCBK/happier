@@ -55,6 +55,30 @@ describe("resolveDeploymentProviderSnapshot auth id ownership", () => {
         expect(result.errors.join("\n")).toMatch(/duplicate provider id: duplicate/i);
     });
 
+    it("binds deployment references to the resolved environment secret and isolates missing secrets", () => {
+        const envProvider = { ...oidcEntry("acme"), clientSecret: undefined, clientSecretEnv: "ACME_OIDC_SECRET" };
+        const config = JSON.stringify([envProvider, oidcEntry("valid")]);
+        const snapshotFor = (secret: string | undefined) => resolveDeploymentProviderSnapshot({
+            AUTH_PROVIDERS_CONFIG_JSON: config,
+            ACME_OIDC_SECRET: secret,
+        });
+        const first = snapshotFor("secret");
+        const literal = resolveDeploymentProviderSnapshot({
+            AUTH_PROVIDERS_CONFIG_JSON: JSON.stringify([oidcEntry("acme"), oidcEntry("valid")]),
+        });
+
+        expect(first.errors).toEqual([]);
+        expect(first.modules.map((module) => module.id)).toEqual(["github", "acme", "valid"]);
+        expect(first.references.get("acme")).toEqual(literal.references.get("acme"));
+        expect(snapshotFor("rotated").references.get("acme")).not.toEqual(first.references.get("acme"));
+
+        const missing = snapshotFor(undefined);
+        expect(missing.modules.map((module) => module.id)).toEqual(["github", "valid"]);
+        expect(missing.references.has("acme")).toBe(false);
+        expect(missing.errors).toEqual([expect.stringContaining("ACME_OIDC_SECRET")]);
+        expect(snapshotFor("secret").references.get("acme")).toEqual(first.references.get("acme"));
+    });
+
     it("projects stable built-in and deployment runtime references", () => {
         const env = {
             AUTH_PROVIDERS_CONFIG_JSON: JSON.stringify([oidcEntry("valid")]),
@@ -107,8 +131,21 @@ describe("resolveDeploymentProviderSnapshot auth id ownership", () => {
             { allow: { usersAllowlist: ["alice"] } },
             { fetchUserInfo: true },
             { storeRefreshToken: true },
+            { tokenExchange: { allowedClientIds: ["devbox"] } },
         ]) {
             expect(fingerprintFor(runtimeChange)).not.toBe(baseline);
+        }
+        const exchange = { allowedClientIds: ["devbox"] };
+        expect(fingerprintFor({ tokenExchange: { allowedClientIds: [] } })).toBe(baseline);
+        expect(fingerprintFor({ tokenExchange: { allowedClientIds: ["devbox", "other"] } })).toBe(
+            fingerprintFor({ tokenExchange: { allowedClientIds: ["other", "devbox", "devbox"] } }),
+        );
+        for (const config of [
+            { allowedClientIds: ["other"] },
+            { ...exchange, clientIdClaim: "cid" },
+            { ...exchange, subjectClaim: "uid" },
+        ]) {
+            expect(fingerprintFor({ tokenExchange: config })).not.toBe(fingerprintFor({ tokenExchange: exchange }));
         }
     });
 });

@@ -8,14 +8,77 @@ import {
 } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 
 import { createRepositoryComposerDocumentOwner } from './repositoryComposerDocumentOwner';
+import { getSessionDraftDocumentField } from '@/sync/ops/sessionDrafts/sessionDraftDocumentFields';
 
 const scope = { serverId: 'server-a', accountId: 'account-a' } as const;
+
+function composerValue(snapshot: ReturnType<typeof getSessionDraftSnapshot>, field: 'text' | 'mentions') {
+    return getSessionDraftDocumentField(snapshot?.document ?? null, { kind: 'composer', field })?.value;
+}
 
 afterEach(() => {
     resetSessionDraftRepositoryForTests();
 });
 
 describe('repositoryComposerDocumentOwner', () => {
+    it('keeps a newer attachment edit and its same source handle when an older transfer is accepted', async () => {
+        const ref = { kind: 'session', sessionId: 'source-transfer' } as const;
+        const attachment = {
+            v: 1 as const, instanceId: 'source-image', attachment: { pluginId: 'acme.media', localId: 'image' },
+            key: 'image', value: { caption: 'captured caption' }, presentation: { label: 'Picture', typeLabel: 'Image' },
+            content: { kind: 'stagedMedia' as const, handle: {
+                v: 1 as const, id: 'source-stage', executionTarget: { serverId: 'server-a', machineId: 'machine-a' },
+                owner: { pluginId: 'acme.media', localId: 'image' }, mediaKind: 'image' as const,
+                mimeType: 'image/png' as const, name: 'picture.png', sizeBytes: 4, sha256: 'a'.repeat(64),
+            } },
+        };
+        const owner = createRepositoryComposerDocumentOwner({ scope, ref });
+        owner.replaceDocument({ text: 'submitted text', structuredInputMentions: [], composerAttachments: [attachment] });
+        const captured = owner.captureCurrentness();
+        let completeTransfer!: () => void;
+        const transferred = new Promise<void>((resolve) => { completeTransfer = resolve; });
+        const accepted = transferred.then(() => owner.clearAccepted(captured));
+        const changedAttachment = { ...attachment, value: { caption: 'edited while transferring' } };
+        owner.replaceDocument({ ...owner.read().document, composerAttachments: [changedAttachment] });
+
+        completeTransfer();
+        expect(await accepted).toMatchObject({
+            changes: { text: true, composerAttachments: false },
+            acceptedFieldsCurrent: { text: true, composerAttachments: false },
+        });
+        expect(owner.read().document).toEqual({
+            text: '', structuredInputMentions: [], composerAttachments: [changedAttachment],
+        });
+        expect(owner.read().document.composerAttachments[0]?.content?.handle).toEqual(attachment.content.handle);
+    });
+
+    it('keeps launcher fields independent and clears only their captured input', () => {
+        const sessionId = 'session-launcher-draft';
+        const address = { kind: 'session', sessionId } as const;
+        writeExistingSessionDraft({ scope, sessionId, patch: { text: 'parent draft' } });
+        const createOwner = () => createRepositoryComposerDocumentOwner({ scope, address,
+            ref: { kind: 'participantMessage', sessionId, instanceId: 'launcher' }, launcherDraftKey: 'conversation' });
+        const owner = createOwner();
+        owner.replaceDocument({ text: 'accepted Run input', structuredInputMentions: [], composerAttachments: [] });
+        expect(createOwner().read().document.text).toBe('accepted Run input');
+        const beforeParentEdit = owner.read();
+        const listener = vi.fn();
+        owner.observe(listener);
+        writeExistingSessionDraft({ scope, sessionId, patch: { text: 'newer parent draft' } });
+        expect(owner.read()).toEqual(beforeParentEdit);
+        expect(listener).not.toHaveBeenCalled();
+        const captured = owner.captureCurrentness();
+        owner.replaceDocument({ text: 'typed during send', structuredInputMentions: [], composerAttachments: [] });
+        expect(owner.clearAccepted(captured).changed).toBe(false);
+        expect(createOwner().read().document.text).toBe('typed during send');
+        owner.clearAccepted(owner.captureCurrentness());
+        expect(createOwner().read().document.text).toBe('');
+        expect(composerValue(getSessionDraftSnapshot(scope, address), 'text')).toBe('newer parent draft');
+        owner.replaceDocument({ text: 'discard this launcher only', structuredInputMentions: [], composerAttachments: [] });
+        owner.clear('discarded');
+        expect(composerValue(getSessionDraftSnapshot(scope, address), 'text')).toBe('newer parent draft');
+        expect(createOwner().read().document.text).toBe('');
+    });
     it('retires every mounted mutation path when its exact credential lifetime is replaced', async () => {
         const sessionId = 'session-retired-owner';
         writeExistingSessionDraft({ scope, sessionId, patch: { text: 'owned by the old credential' } });
@@ -43,8 +106,8 @@ describe('repositoryComposerDocumentOwner', () => {
         owner.clear('discarded');
         await Promise.resolve();
 
-        expect(getSessionDraftSnapshot(scope, { kind: 'session', sessionId })
-            ?.document.composer.text.value).toBe('owned by the old credential');
+        expect(composerValue(getSessionDraftSnapshot(scope, { kind: 'session', sessionId }), 'text'))
+            .toBe('owned by the old credential');
     });
 
     it('keeps participant presentation identity while persisting an exact Run draft', () => {
@@ -60,13 +123,13 @@ describe('repositoryComposerDocumentOwner', () => {
             references: [],
             attachments: [],
         })).toMatchObject({ status: 'applied' });
-        expect(getSessionDraftSnapshot(scope, address)?.document.composer.text.value).toBe('run-only draft');
+        expect(composerValue(getSessionDraftSnapshot(scope, address), 'text')).toBe('run-only draft');
         expect(getSessionDraftSnapshot(scope, { kind: 'session', sessionId })).toBeNull();
 
         const currentness = owner.captureCurrentness();
         writeExistingSessionDraft({ scope, sessionId, runId, patch: { text: 'newer run edit' } });
         expect(owner.clearAccepted(currentness).changed).toBe(false);
-        expect(getSessionDraftSnapshot(scope, address)?.document.composer.text.value).toBe('newer run edit');
+        expect(composerValue(getSessionDraftSnapshot(scope, address), 'text')).toBe('newer run edit');
     });
 
     it('keeps an absent empty composer stable when authoring first creates the repository draft', () => {
@@ -109,8 +172,7 @@ describe('repositoryComposerDocumentOwner', () => {
         });
 
         expect(owner.read().document.structuredInputMentions).toEqual([mention]);
-        expect(getSessionDraftSnapshot(scope, { kind: 'session', sessionId })
-            ?.document.composer.mentions.value).toEqual([
+        expect(composerValue(getSessionDraftSnapshot(scope, { kind: 'session', sessionId }), 'mentions')).toEqual([
             expect.objectContaining({ ref: 'vendor:issue-42', tokenText: '@issue', start: 0, end: 6 }),
         ]);
     });
@@ -138,8 +200,7 @@ describe('repositoryComposerDocumentOwner Session revision', () => {
         });
 
         expect(owner.read().document.structuredInputMentions).toEqual([]);
-        expect(getSessionDraftSnapshot(scope, { kind: 'session', sessionId })
-            ?.document.composer.mentions.value).toEqual([
+        expect(composerValue(getSessionDraftSnapshot(scope, { kind: 'session', sessionId }), 'mentions')).toEqual([
             { kind: 'mention', ref: 'first', tokenText: '@same' },
             { kind: 'mention', ref: 'second', tokenText: '@same' },
         ]);
@@ -160,8 +221,7 @@ describe('repositoryComposerDocumentOwner Session revision', () => {
         });
 
         expect(owner.read().document.structuredInputMentions).toEqual([]);
-        expect(getSessionDraftSnapshot(scope, { kind: 'session', sessionId })
-            ?.document.composer.mentions.value).toEqual([staleMention]);
+        expect(composerValue(getSessionDraftSnapshot(scope, { kind: 'session', sessionId }), 'mentions')).toEqual([staleMention]);
     });
 
     it('reports that no accepted fields cleared when every captured mutation was superseded', () => {
@@ -352,7 +412,7 @@ describe('repositoryComposerDocumentOwner Session revision', () => {
             status: 'conflict',
             currentRevision: getSessionDraftSnapshot(scope, { kind: 'session', sessionId })?.revision,
         });
-        expect(getSessionDraftSnapshot(scope, { kind: 'session', sessionId })?.document.composer.text.value)
+        expect(composerValue(getSessionDraftSnapshot(scope, { kind: 'session', sessionId }), 'text'))
             .toBe('newer');
     });
 

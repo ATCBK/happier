@@ -1,4 +1,5 @@
 import { db } from "@/storage/db";
+import { inTx } from "@/storage/inTx";
 import { log } from "@/utils/logging/log";
 import { sessionCacheCounter, databaseUpdatesSkippedCounter, recordPresenceFlushRetry } from "@/app/monitoring/metrics/index";
 import { isRetryableSqliteWriteError } from "@/storage/sqliteRetryClassifier";
@@ -339,18 +340,21 @@ class ActivityCache {
         if (machineUpdates.length > 0) {
             let okCount = 0;
             try {
-                const operations = machineUpdates.map((update) =>
-                    db.machine.updateMany({
-                        where: {
-                            accountId: update.entry.userId,
-                            id: update.machineId,
-                            revokedAt: null,
-                            replacedByMachineId: null,
-                        },
-                        data: { lastActiveAt: new Date(update.timestamp), active: true }
-                    }),
-                );
-                await db.$transaction(operations);
+                // inTx owns the transaction budget: a blocked Machine row cannot
+                // keep this batch (and the rows it already locked) open past it.
+                await inTx(async (tx) => {
+                    for (const update of machineUpdates) {
+                        await tx.machine.updateMany({
+                            where: {
+                                accountId: update.entry.userId,
+                                id: update.machineId,
+                                revokedAt: null,
+                                replacedByMachineId: null,
+                            },
+                            data: { lastActiveAt: new Date(update.timestamp), active: true }
+                        });
+                    }
+                }, { transactionClass: "presence-machine-flush" });
 
                 for (const update of machineUpdates) {
                     update.entry.lastUpdateSent = update.timestamp;

@@ -14,12 +14,13 @@ import type { ActionOperationProjection } from '@/sync/domains/actionOperations/
 import { actionOperationAddressKey } from '@/sync/domains/actionOperations/qualifiedActionOperation';
 import { resolveActionOperationObservation } from '@/sync/domains/actionOperations/actionOperationStore';
 import { canRequestActionOperationStop } from '@/components/inbox/actionOperations/actionOperationPresentation';
+import { t } from '@/text';
 
 /**
  * The one Work projection of a Session (ORC R-09, §3.8): every unit of work the Session leads, read from
  * its sources and counted once.
  *
- * - **Sessions** — the `reportsTo` subtree, from the Session rows the store already holds.
+ * - **Sessions** — the `manager` subtree, from the Session rows the store already holds.
  * - **Agent activity** (`useSessionAgentActivity`) — background runs, in-session agents and the
  *   workflow runs an agent reported.
  * - **Workflow activity** (`useSessionWorkflowActivity`) — the live progress of in-session workflow runs.
@@ -76,12 +77,18 @@ export function resolveWorkMachineNotices(input: Readonly<{
     machineReachable: boolean;
     nothingYet: boolean;
     unavailableReason: string | null;
-}>): Readonly<{ offline: boolean; unavailable: boolean }> {
+    /** The first read of the workflow runs failed and nothing was retained to show. */
+    managedUnavailable: boolean;
+    managedStale?: boolean;
+}>): Readonly<{ offline: boolean; unavailable: boolean; runsUnavailable: boolean; runsStale: boolean }> {
     const offline = !input.machineReachable && !input.nothingYet;
     return {
         offline,
         unavailable: input.unavailableReason !== null && !input.nothingYet
             && !(offline && input.unavailableReason === 'machineOffline'),
+        // The offline line already says why runs cannot be read, and its one Retry asks again.
+        runsUnavailable: input.managedUnavailable && !offline,
+        runsStale: input.managedStale === true && !offline,
     };
 }
 
@@ -132,9 +139,9 @@ export type WorkItem = Readonly<{
     agentId: string | null;
     /** Quiet secondary facts in reading order (engine · machine, "Reports to …", "7 of 12"). */
     facts: readonly string[];
-    /** The item this one belongs under inside the projection (report Sessions or workflow commands). */
+    /** The nearest visible item this belongs under (archived Session intermediates are presented separately). */
     parentKey: string | null;
-    /** 0 for a direct report, 1 for a report of a report, … */
+    /** Visible report depth: 0 under the lead, 1 under another visible report, … */
     level: number;
     status: WorkStatus;
     /** Workflow progress, when a source reported one. */
@@ -171,14 +178,19 @@ export type WorkProjection = Readonly<{
     /** In-session agents (Task subagents, teammates): work the Session runs inside itself. */
     agents: readonly WorkItem[];
     projectCommands: readonly WorkItem[];
+    /**
+     * The Sessions this Session once led that were archived: kept apart from live work and out of every
+     * count, so "Nothing started" is only said when nothing ever was, and the person can bring one back.
+     */
+    archivedSessions: readonly WorkItem[];
     summary: WorkSummary;
 }>;
 
 /** A Session in the store, reduced to what the projection reads. */
 export type WorkReportSessionSource = Readonly<{
     sessionId: string;
-    /** The Session it reports to (`reportsTo.sessionId`), or null for a root. */
-    leadSessionId: string | null;
+    /** The Session it reports to (`manager.sessionId`), or null for a root. */
+    managerSessionId: string | null;
     title: string;
     agentId: string | null;
     facts: readonly string[];
@@ -190,12 +202,14 @@ export type WorkReportSessionSource = Readonly<{
 }>;
 
 export type WorkManagedRunSource = Readonly<{
-    run: Pick<WorkflowRunSummaryV1, 'id' | 'state'>;
+    run: Pick<WorkflowRunSummaryV1, 'id' | 'state' | 'workflowCustodyState'>;
     title: string;
     /** The run's state word (`describeWorkflowRunState`). */
     word: string;
     /** The server's attention predicate returned this run. */
     needsAttention: boolean;
+    /** When the run last changed, as the row says it ("10:42"); a Work row never runs a clock of its own. */
+    time?: string;
 }>;
 
 export type WorkProjectionInput = Readonly<{
@@ -241,6 +255,7 @@ function classifyManagedRun(source: WorkManagedRunSource): WorkStatus {
         kind: 'workflow_run',
         facts: {
             state: source.run.state,
+            workflowCustodyState: source.run.workflowCustodyState,
             inAttentionWindow: source.needsAttention,
             word: source.word,
         },
@@ -261,18 +276,21 @@ function isOutstandingSession(bucket: WorkBucket, stalled: boolean): boolean {
 }
 
 /**
- * The `reportsTo` subtree in depth-first order, each Session under its lead, siblings in source order.
+ * The `manager` subtree in depth-first order, each Session under its lead, siblings in source order.
  *
  * Depth is walked from the root, never read from a Session: a cycle the store transiently holds (an
  * edge seen before its reparent landed) cannot loop, because every Session is visited once. A report's
  * own reports are classified first, so a report whose subtree still has work going is never finished
  * (R-10): this projection counts that subtree and hands the count to the Session facts owner.
  */
-function projectReportSessions(input: WorkProjectionInput): Readonly<{ items: readonly WorkItem[]; stalledKeys: ReadonlySet<string> }> {
+function projectReportSessions(input: WorkProjectionInput): Readonly<{
+    items: readonly WorkItem[]; archived: readonly WorkItem[]; stalledKeys: ReadonlySet<string>;
+}> {
     const childrenByLead = new Map<string, WorkReportSessionSource[]>();
+    const archived: WorkItem[] = [];
     for (const source of input.reportSessions) {
-        const lead = normalizeId(source.leadSessionId);
-        if (!lead || source.archived || source.sessionId === input.sessionId) continue;
+        const lead = normalizeId(source.managerSessionId);
+        if (!lead || source.sessionId === input.sessionId) continue;
         const siblings = childrenByLead.get(lead);
         if (siblings) siblings.push(source);
         else childrenByLead.set(lead, [source]);
@@ -280,12 +298,19 @@ function projectReportSessions(input: WorkProjectionInput): Readonly<{ items: re
     const items: WorkItem[] = [];
     const stalledKeys = new Set<string>();
     const visited = new Set<string>([input.sessionId]);
-    /** Places the reports of `leadSessionId` and returns how many in that subtree are still outstanding. */
-    const walk = (leadSessionId: string, parentKey: string | null, level: number): number => {
+    /** Places the reports of `managerSessionId` and returns how many in that subtree are still outstanding. */
+    const walk = (managerSessionId: string, parentKey: string | null, level: number): number => {
         let outstanding = 0;
-        for (const source of childrenByLead.get(leadSessionId) ?? []) {
+        for (const source of childrenByLead.get(managerSessionId) ?? []) {
             if (visited.has(source.sessionId)) continue;
             visited.add(source.sessionId);
+            if (source.archived) {
+                if (managerSessionId === input.sessionId) archived.push(archivedWorkItem(source));
+                // Archived presentation does not sever manager ancestry. Live descendants keep
+                // their nearest visible lead and contribute to that lead's outstanding work.
+                outstanding += walk(source.sessionId, parentKey, level);
+                continue;
+            }
             const key = `session:${source.sessionId}`;
             const slot = items.length;
             const subtreeOutstanding = walk(source.sessionId, key, level + 1);
@@ -312,7 +337,22 @@ function projectReportSessions(input: WorkProjectionInput): Readonly<{ items: re
         return outstanding;
     };
     walk(input.sessionId, null, 0);
-    return { items, stalledKeys };
+    return { items, archived, stalledKeys };
+}
+
+function archivedWorkItem(source: WorkReportSessionSource): WorkItem {
+    return {
+        key: `session:${source.sessionId}`,
+        kind: 'session',
+        title: source.title,
+        agentId: source.agentId,
+        facts: source.facts,
+        parentKey: null,
+        level: 0,
+        status: { bucket: 'finished', tone: 'neutral', word: t('sessionWork.states.archived') },
+        progress: null,
+        open: { kind: 'session', sessionId: source.sessionId },
+    };
 }
 
 function progressFacts(
@@ -323,7 +363,7 @@ function progressFacts(
 }
 
 export function projectWork(input: WorkProjectionInput, previous?: WorkProjection | null): WorkProjection {
-    const { items: sessions, stalledKeys } = projectReportSessions(input);
+    const { items: sessions, archived: archivedSessions, stalledKeys } = projectReportSessions(input);
 
     const headlineByRunId = new Map<string, SessionWorkflowRunHeadlineV1>();
     for (const run of input.workflowHeadlineRuns) {
@@ -347,7 +387,7 @@ export function projectWork(input: WorkProjectionInput, previous?: WorkProjectio
             kind: 'workflow_run',
             title: source.title,
             agentId: null,
-            facts: progressFacts(progress, input.describeProgress),
+            facts: [...(source.time ? [source.time] : []), ...progressFacts(progress, input.describeProgress)],
             parentKey: null,
             level: 0,
             status: classifyManagedRun(source),
@@ -452,6 +492,7 @@ export function projectWork(input: WorkProjectionInput, previous?: WorkProjectio
         backgroundRuns: backgroundRuns.length === 0 ? EMPTY_ITEMS : backgroundRuns,
         agents: agents.length === 0 ? EMPTY_ITEMS : agents,
         projectCommands: projectCommands.length === 0 ? EMPTY_ITEMS : projectCommands,
+        archivedSessions: archivedSessions.length === 0 ? EMPTY_ITEMS : archivedSessions,
         summary: {
             outstanding,
             needsYou,
@@ -467,6 +508,7 @@ export function projectWork(input: WorkProjectionInput, previous?: WorkProjectio
         backgroundRuns: retainWorkItems(next.backgroundRuns, previous.backgroundRuns),
         agents: retainWorkItems(next.agents, previous.agents),
         projectCommands: retainWorkItems(next.projectCommands, previous.projectCommands),
+        archivedSessions: retainWorkItems(next.archivedSessions, previous.archivedSessions),
         summary: areWorkSummariesEqual(next.summary, previous.summary) ? previous.summary : next.summary,
     };
     return shallow(retained, previous) ? previous : retained;
@@ -498,22 +540,6 @@ export function areWorkSummariesEqual(a: WorkSummary, b: WorkSummary): boolean {
 }
 
 /**
- * Where pressing a Work row or map node goes. A row never answers anything (S-1): a Session or an agent
- * opens its peek, which holds the one set of answer controls; a workflow run has no peek, so a run that
- * needs the person opens the Inbox, where its review waits — and its own page only when this viewer
- * has no Inbox. Everything else opens where it lives.
- */
-export function resolveWorkItemOpenTarget(
-    item: WorkItem,
-    context: Readonly<{ inboxAvailable: boolean }>,
-): WorkOpenTarget | Readonly<{ kind: 'inbox' }> {
-    if (item.open.kind === 'workflow_run' && item.status.bucket === 'needs_you' && context.inboxAvailable) {
-        return { kind: 'inbox' };
-    }
-    return item.open;
-}
-
-/**
  * Context-menu intents retain admitted provenance and never infer a Session from tool text.
  * Stop is a target, not settlement; its mounted consumer uses useActionOperationStopControl.
  */
@@ -533,9 +559,11 @@ export type WorkStateGroups = Readonly<{
     needsYou: readonly WorkItem[];
     working: readonly WorkItem[];
     recent: readonly WorkItem[];
+    /** Archived Sessions this one led: after everything live, never nested under a live lead. */
+    archived: readonly WorkItem[];
 }>;
 
-type WorkStateGroupKey = keyof WorkStateGroups;
+type LiveWorkStateGroupKey = Exclude<keyof WorkStateGroups, 'archived'>;
 
 /**
  * The Work list reads by state on every surface (INT r0.5 §6 I4, lab `convo-W1/W8full`): what needs the
@@ -548,8 +576,8 @@ type WorkStateGroupKey = keyof WorkStateGroups;
  * their identity, so their rows do not re-render.
  */
 export function groupWorkByState(projection: WorkProjection, previous?: WorkStateGroups | null): WorkStateGroups {
-    const groups: Record<WorkStateGroupKey, WorkItem[]> = { needsYou: [], working: [], recent: [] };
-    const placed = new Map<string, Readonly<{ group: WorkStateGroupKey; level: number }>>();
+    const groups: Record<LiveWorkStateGroupKey, WorkItem[]> = { needsYou: [], working: [], recent: [] };
+    const placed = new Map<string, Readonly<{ group: LiveWorkStateGroupKey; level: number }>>();
     for (const item of [...projection.sessions, ...projection.backgroundRuns, ...projection.workflows, ...projection.agents, ...projection.projectCommands]) {
         const group = readSessionWorkStateGroupV1(item.status.bucket);
         const parent = item.parentKey ? placed.get(item.parentKey) : undefined;
@@ -561,9 +589,10 @@ export function groupWorkByState(projection: WorkProjection, previous?: WorkStat
         needsYou: groups.needsYou.length === 0 ? EMPTY_ITEMS : groups.needsYou,
         working: groups.working.length === 0 ? EMPTY_ITEMS : groups.working,
         recent: groups.recent.length === 0 ? EMPTY_ITEMS : groups.recent,
+        archived: projection.archivedSessions,
     };
     if (!previous) return next;
     const retained = { needsYou: retainWorkItems(next.needsYou, previous.needsYou), working: retainWorkItems(next.working, previous.working),
-        recent: retainWorkItems(next.recent, previous.recent) };
+        recent: retainWorkItems(next.recent, previous.recent), archived: retainWorkItems(next.archived, previous.archived) };
     return shallow(retained, previous) ? previous : retained;
 }

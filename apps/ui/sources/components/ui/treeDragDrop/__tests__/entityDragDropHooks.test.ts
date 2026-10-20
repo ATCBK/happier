@@ -13,7 +13,7 @@ it('mounted descriptors read the latest source identity and optional semantic de
             describe: () => ({ title }) });
         useEntityDropTarget(runtime, { id: 'target', scope, acceptedKinds: ['session'], getBounds: () => null,
             listDestinations: enumerate ? () => [{ destination: { title }, label: title }] : undefined,
-            resolve: ({ destination }) => ({ status: 'allowed', effect: { actionId: 'session.reports_to.set',
+            resolve: ({ destination }) => ({ status: 'allowed', effect: { actionId: 'session.manager.set',
                 input: { destination }, preview: { verb: 'Put under', target: title } } }),
             execute: async () => ({ status: 'applied' }) });
     }, { initialProps: { title: 'First', enumerate: true } });
@@ -24,7 +24,7 @@ it('mounted descriptors read the latest source identity and optional semantic de
     expect(runtime.getDestinations('source')[0]).toMatchObject({ destination: { title: 'Latest' }, label: 'Latest' });
     await hook.rerender({ title: 'Latest', enumerate: false });
     expect(runtime.getDestinations('source')[0]).toEqual({ targetId: 'target', admission: {
-        status: 'allowed', effect: { actionId: 'session.reports_to.set', input: { destination: null },
+        status: 'allowed', effect: { actionId: 'session.manager.set', input: { destination: null },
             preview: { verb: 'Put under', target: 'Latest' } },
     } });
 });
@@ -39,7 +39,7 @@ it('a target retargeted to another Account cannot execute before passive registr
     const hook = await renderHook(({ accountId, releaseDuringLayout }: { accountId: string; releaseDuringLayout: boolean }) => {
         useEntityDropTarget(runtime, { id: 'target', scope: { ...scope, accountId }, acceptedKinds: ['session'],
             getBounds: () => ({ x: 0, y: 0, width: 100, height: 100 }),
-            resolve: () => ({ status: 'allowed', effect: { actionId: 'session.reports_to.set', input: {}, preview: { verb: 'Put under', target: 'Lead' } } }),
+            resolve: () => ({ status: 'allowed', effect: { actionId: 'session.manager.set', input: {}, preview: { verb: 'Put under', target: 'Lead' } } }),
             execute: async effect => { effects.push(effect); return { status: 'applied' }; } });
         useLayoutEffect(() => { if (releaseDuringLayout) released = runtime.release(); }, [releaseDuringLayout]);
     }, { initialProps: { accountId: scope.accountId, releaseDuringLayout: false } });

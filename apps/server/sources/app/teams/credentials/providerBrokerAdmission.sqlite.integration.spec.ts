@@ -49,7 +49,8 @@ import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as privacyKit from 'privacy-kit';
 import { openAccountConnectionProviderBroker, admitAccountConnectionProviderBroker } from '@/app/providers/providerBrokerAdmission';
-import { verifyProviderBrokerRouteGrantSignatureV2 } from '@/app/machines/peer/mediation/signProviderBrokerRouteGrantV1';
+import { verifyProviderBrokerRouteGrantSignatureV1, verifyProviderBrokerRouteGrantSignatureV2 } from '@/app/machines/peer/mediation/signProviderBrokerRouteGrantV1';
+import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 
 const TEST_AUTHENTICATION = {
     env: process.env,
@@ -1804,6 +1805,10 @@ describe('Team credential Provider broker admission', () => {
                 kind: 'ephemeral_session_runner',
                 installationId,
                 installationPublicKey: installationPublicKeyBytes,
+                // Installed Machine admission reads the real Account-mode
+                // envelope, as the Runner materialization writer produces it.
+                metadata: encodePlainMachineStoredContent({}),
+                dataEncryptionKey: privacyKit.decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64'),
             },
         });
         const runnerSelection = {
@@ -2301,8 +2306,95 @@ describe('Team credential Provider broker admission', () => {
         })).resolves.toEqual({ ok: false, reasonCode: 'broker_unavailable' });
         await db.machine.update({ where: { id: fallback.id }, data: { revokedAt: null } });
 
-        const beforeDeleteChanges = await db.accountChange.count({
+        // A materialized Runner keeps the selection its creator reviewed, while
+        // an established refresh must use the resource's current policy. Editing
+        // that policy cannot require a different activation selection revision.
+        await db.session.update({ where: { id: session.id }, data: { primaryTeamId: team.id } });
+        const policyEdit = await inTx(tx => updateTeamCredentialResourceInTx(tx, {
+            actorAccountId: custodian.id,
+            authentication: { authenticationAuthority: 'present_user', authenticationEvidence: [] },
+            patch: {
+                resourceId: resource.id,
+                expectedRevision: resource.revision,
+                sessionUsePolicy: 'team_context_required',
+            },
+        }));
+        if (!policyEdit.ok) throw new Error(`expected Runner policy edit: ${policyEdit.error}`);
+        expect(policyEdit.revision).toBe(resource.revision + 1);
+        const refreshRunner = (
+            overrides: Partial<ProviderBrokerOpenRequestV1> = {},
+            authority = runnerOpen.authority,
+        ) => openRunnerTeamCredentialProviderBroker({
+            principal: runnerPrincipal,
+            actorAccountId: requester.id,
+            authentication: {
+                env: process.env,
+                authority: 'account_automation',
+                authenticationEvidence: [{ kind: 'home_method', methodId: 'key_challenge' }],
+                sessionRuntimePrincipal: runnerPrincipal,
+            },
+            request: { ...request, refreshAuthority: authority, ...overrides },
+            initiatorPresence: { state: 'known', machineIds: new Set([worker.id]) },
+            brokerPresence: { state: 'known', machineIds: new Set([primary.id, fallback.id]) },
+            nowMs: authority.payload.expiresAt + 1,
+            grantId: crypto.randomUUID(),
+            signingKey: { keyId: 'runner-home', secretKey: signingKey.secretKey },
+            verifyRefreshAuthority: candidate => verifyProviderBrokerRouteGrantSignatureV1({
+                authority: candidate,
+                nowMs: authority.payload.issuedAt,
+                signingCapability: {
+                    keyId: 'runner-home',
+                    publicKey: privacyKit.encodeBase64(new Uint8Array(signingKey.publicKey), 'base64url'),
+                    expiresAt: null,
+                },
+            }),
+            readPoolSourceEligibility: async () => {
+                throw new Error('Runner refresh must retain its reviewed Machine');
+            },
+            readProviderProjection: async input => {
+                expect(input.brokerMachineId).toBe(reviewedRunnerMachineId);
+                return projection;
+            },
+        });
+        const runnerRefreshed = await refreshRunner();
+        expect(runnerRefreshed).toMatchObject({ ok: true, target: { brokerMachineId: reviewedRunnerMachineId } });
+        if (!runnerRefreshed.ok) throw new Error(`expected Runner policy refresh: ${runnerRefreshed.reasonCode}`);
+        expect(runnerRefreshed.authority.payload.grantId).not.toBe(runnerOpen.authority.payload.grantId);
+        await expect(refreshRunner({}, runnerRefreshed.authority))
+            .resolves.toMatchObject({ ok: true, target: { brokerMachineId: reviewedRunnerMachineId } });
+        await expect(admitTeamCredentialProviderBrokerRequest({
+            authenticatedBrokerAccountId: custodian.id,
+            request: { ...admissionRequest, authority: runnerRefreshed.authority,
+                expectedResourceRevision: policyEdit.revision, requestId: crypto.randomUUID() },
+            observedAt: new Date('2026-09-11T10:01:00.000Z'),
+            brokerPresence: { state: 'known', machineIds: new Set([reviewedRunnerMachineId]) },
+            verifyAuthority: candidate => candidate.payload.grantId === runnerRefreshed.authority.payload.grantId,
+        })).resolves.toMatchObject({ ok: true, brokerMachineId: reviewedRunnerMachineId });
+        // The retained request revision is still the reviewed activation CAS;
+        // replacing it with the latest policy revision cannot authorize a refresh.
+        await expect(refreshRunner({ expectedResourceRevision: policyEdit.revision }))
+            .resolves.toEqual({ ok: false, reasonCode: 'resource_forbidden' });
+        await expect(refreshRunner({ refreshAuthority: undefined }))
+            .resolves.toEqual({ ok: false, reasonCode: 'resource_changed' });
+        await expect(refreshRunner({ modelId: 'forged-model' }))
+            .resolves.toEqual({ ok: false, reasonCode: 'resource_forbidden' });
+        await expect(refreshRunner({ sourceRevision: 'replaced-source' }))
+            .resolves.toEqual({ ok: false, reasonCode: 'invalid_request' });
+        await expect(refreshRunner({ application: { ...application, endpointTemplateId: 'other-endpoint' } }))
+            .resolves.toEqual({ ok: false, reasonCode: 'invalid_request' });
+        await db.session.update({ where: { id: session.id }, data: { primaryTeamId: null } });
+        await expect(refreshRunner()).resolves.toEqual({ ok: false, reasonCode: 'resource_forbidden' });
+        await db.session.update({ where: { id: session.id }, data: { primaryTeamId: team.id } });
+        await db.machine.update({ where: { id: reviewedRunnerMachineId }, data: { revokedAt: new Date() } });
+        await expect(refreshRunner()).resolves.toEqual({ ok: false, reasonCode: 'broker_unavailable' });
+        await db.machine.update({ where: { id: reviewedRunnerMachineId }, data: { revokedAt: null } });
+        await db.account.update({ where: { id: requester.id }, data: { tokenEpoch: { increment: 1 } } });
+        await expect(refreshRunner()).resolves.toEqual({ ok: false, reasonCode: 'operation_not_current' });
+        await db.account.update({ where: { id: requester.id }, data: { tokenEpoch: requester.tokenEpoch } });
+
+        const beforeDeleteChange = await db.accountChange.findFirst({
             where: { accountId: requester.id, entityId: 'teams' },
+            select: { cursor: true },
         });
         const poolIo: MachineDaemonPresenceSocketServer = { in: () => ({ fetchSockets: async () => [] }) };
         await expect(deleteMachinePool({
@@ -2313,17 +2405,21 @@ describe('Team credential Provider broker admission', () => {
         await expect(db.teamCredentialResource.findUniqueOrThrow({
             where: { id: resource.id },
             select: { brokerMachineId: true, brokerPoolId: true, revision: true },
-        })).resolves.toEqual({ brokerMachineId: null, brokerPoolId: null, revision: resource.revision + 1 });
-        expect(await db.accountChange.count({
+        })).resolves.toEqual({ brokerMachineId: null, brokerPoolId: null, revision: policyEdit.revision + 1 });
+        const afterDeleteChange = await db.accountChange.findFirst({
             where: { accountId: requester.id, entityId: 'teams' },
-        })).toBeGreaterThan(beforeDeleteChanges);
+            select: { cursor: true },
+        });
+        // Team invalidations coalesce one entity row; another mutation must
+        // advance its cursor rather than create another retained row.
+        expect(afterDeleteChange?.cursor).toBeGreaterThan(beforeDeleteChange?.cursor ?? 0);
         // Deleting the Pool removes the resource's broker placement, which ends
         // the established operation because the resource names no broker any
         // more — not because its policy revision moved. A request presenting the
         // current revision is refused for the same reason.
         for (const [requestId, expectedResourceRevision] of [
             [crypto.randomUUID(), resource.revision],
-            [crypto.randomUUID(), resource.revision + 1],
+            [crypto.randomUUID(), policyEdit.revision + 1],
         ] as const) {
             await expect(admitTeamCredentialProviderBrokerRequest({
                 authenticatedBrokerAccountId: custodian.id,
@@ -2462,8 +2558,8 @@ describe('Team credential Provider broker admission', () => {
                     expectedCredentialRevision: 1,
                     proof: {
                         challengeId: challenge.challengeId,
-                        publicKey: privacyKit.encodeBase64(new Uint8Array(requesterSigning.publicKey)),
-                        signature: privacyKit.encodeBase64(new Uint8Array(tweetnacl.sign.detached(
+                        publicKey: encodePasswordCredentialFieldV1(new Uint8Array(requesterSigning.publicKey)),
+                        signature: encodePasswordCredentialFieldV1(new Uint8Array(tweetnacl.sign.detached(
                             createPasswordMutationChallengeSigningInputV1(challenge),
                             requesterSigning.secretKey,
                         ))),

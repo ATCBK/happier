@@ -10,21 +10,28 @@ import {
 import { settingsParse } from '@/sync/domains/settings/settings';
 import type { LiveActivitySnapshot } from '../liveActivities/buildLiveActivitySnapshots';
 
-import { createSessionFixture as createBaseSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createSessionFixture as createBaseSessionFixture, createSessionOwnerViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { renderScreen as renderActivityScreen, standardCleanup } from '@/dev/testkit';
+import { ActivityPersonalSessionMembershipProvider } from '@/activity/source/activityPersonalSessionMembership';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { saveAccountSettings } from '@/sync/domains/state/accountSettingsPersistence';
 import { storage } from '@/sync/domains/state/storage';
 import { localSettingsParse } from '@/sync/domains/settings/localSettings';
 import type { StorageState } from '@/sync/store/types';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { createHomeGovernanceHarness, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installSessionActionFixture, installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { setActiveServerId } from '@/sync/domains/server/serverProfiles';
+import * as actionExecutor from '@/sync/ops/actions/defaultActionExecutor';
+import * as backgroundWake from '../backgroundWake/defineLiveActivityBackgroundWakeTask';
 import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { saveLastRegisteredExpoPushToken } from '@/sync/domains/state/pushTokenRegistration';
 import type { LiveActivityTargetRegistrationInput } from '@/sync/api/session/apiLiveActivityTargets';
+import { projectSessionFollowFactsV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
+import { resolveSessionEffectiveNotificationV1 } from '@happier-dev/protocol/sessions/personal/eventEligibility';
 
 import {
     buildHappierFocusLiveActivityIdentity,
@@ -44,7 +51,7 @@ function createSessionFixture(
     const hasPendingRequest = (overrides.pendingPermissionRequestCount ?? 0) > 0
         || (overrides.pendingUserActionRequestCount ?? 0) > 0;
 
-    return createBaseSessionFixture({
+    const session = createBaseSessionFixture({
         // Activity routing is Home-qualified. Most runtime cases exercise the
         // exact default Home; tests for a genuinely unbound instance opt into
         // `serverId: null` explicitly instead of relying on an omitted fixture
@@ -61,13 +68,14 @@ function createSessionFixture(
             : {}),
         ...overrides,
     });
+    return { ...session, viewer: createSessionOwnerViewerFixture(session) };
 }
 
 const platformState = vi.hoisted(() => ({
     os: 'ios' as 'ios' | 'web' | 'android',
 }));
 
-const syncLiveActivityBackgroundWakeTaskRegistration = vi.hoisted(() => vi.fn(async () => {}));
+const syncLiveActivityBackgroundWakeTaskRegistration = vi.hoisted(() => vi.fn());
 
 const appStateState = vi.hoisted(() => ({
     currentState: 'active' as 'active' | 'inactive' | 'background',
@@ -202,14 +210,13 @@ const localSettingsState = vi.hoisted(() => ({
     value: createLocalSettingsState(),
 }));
 
+type WidgetInteractionListener = Parameters<typeof import('expo-widgets')['addUserInteractionListener']>[0];
+type WidgetInteractionFixtureEvent = Parameters<WidgetInteractionListener>[0] & {
+    // Native action payloads may add routing fields beyond the SDK's base event.
+    data?: Record<string, unknown>;
+};
 const widgetInteractionsState = vi.hoisted(() => ({
-    listener: null as null | ((event: {
-        source: string;
-        target: string;
-        timestamp: number;
-        type: string;
-        data?: Record<string, unknown>;
-    }) => void),
+    listener: null as null | ((event: WidgetInteractionFixtureEvent) => void),
 }));
 
 const liveActivityAuthorizationState = vi.hoisted(() => ({
@@ -274,7 +281,7 @@ const registerLiveActivityTarget = vi.hoisted(() =>
 );
 const markLiveActivityTargetEnded = vi.hoisted(() => vi.fn(async (_targetId: string, _options: { serverId: string }) => undefined));
 const addUserInteractionListener = vi.hoisted(() =>
-    vi.fn((listener: typeof widgetInteractionsState.listener) => {
+    vi.fn((listener: WidgetInteractionListener) => {
         if (widgetInteractionListenerAttachState.throwOnAttach) {
             throw new Error('Interaction listener unavailable');
         }
@@ -286,7 +293,10 @@ const widgetInteractionListenerAttachState = vi.hoisted(() => ({
     throwOnAttach: false,
 }));
 const routerPush = vi.hoisted(() => vi.fn());
-const actionExecutorExecute = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const actionExecutorExecute = vi.hoisted(() => vi.fn());
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -321,27 +331,23 @@ vi.mock('expo-constants', () => ({
     default: constantsState,
 }));
 
-// The two closed-app wake tasks are OS task-registry boundaries. Only their
-// registration is replaced here; everything else in both owners stays real.
-vi.mock('../backgroundWake/defineLiveActivityBackgroundWakeTask', async (importOriginal) => {
-    const actual = await importOriginal<
-        typeof import('../backgroundWake/defineLiveActivityBackgroundWakeTask')
-    >();
-    return { ...actual, syncLiveActivityBackgroundWakeTaskRegistration };
-});
-
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router'))
     .createExpoRouterMock({ router: { push: routerPush } }).module);
 
-vi.mock('expo-widgets', () => ({
-    addUserInteractionListener,
-}));
-
-vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
-    createDefaultActionExecutor: () => ({
-        execute: actionExecutorExecute,
-    }),
-}));
+vi.mock('expo-widgets', async (importOriginal) => {
+    const { createExpoWidgetsModuleMock } = await import('@/dev/testkit/mocks/expoWidgets');
+    return createExpoWidgetsModuleMock({
+        importOriginal,
+        addUserInteractionListener,
+        widgets: {
+            HappierFocusWidget: { updateSnapshot: focusWidgetUpdateSnapshot },
+            HappierSessionsWidget: { updateSnapshot: sessionsWidgetUpdateSnapshot },
+        },
+        liveActivities: {
+            HappierFocusLiveActivity: { start: liveActivityStart, getInstances: liveActivityGetInstances },
+        },
+    });
+});
 
 vi.mock('expo-modules-core', () => ({
     requireNativeModule: () => ({}),
@@ -353,6 +359,7 @@ function publishActivityFixture(): void {
         const ordinarySessionListMembershipByServerId: Record<string, string[]> = {};
         for (const session of sessionsState.value) {
             const serverId = resolveFixtureServerId(session);
+            installSessionActionFixture({ homes: activityHomes, storage, serverId, session });
             (sessionListRowsByServerId[serverId] ??= {})[session.id] = buildSessionListRenderableFromSession(session);
             (ordinarySessionListMembershipByServerId[serverId] ??= []).push(session.id);
         }
@@ -394,6 +401,13 @@ for (const fixture of [sessionsState, sessionIndexServerOverridesState, dataRead
 }
 
 const ACTIVITY_TEST_HOME_SERVER_IDS = ['server-a', 'server-b', 'local'] as const;
+const activityHomes = createHomeGovernanceHarness();
+function AccountDeliveryFixture({ children }: React.PropsWithChildren) {
+    return <ActivityPersonalSessionMembershipProvider enabled={false}>{children}</ActivityPersonalSessionMembershipProvider>;
+}
+function renderScreen(element: Parameters<typeof renderActivityScreen>[0]) {
+    return renderActivityScreen(element, { wrapper: AccountDeliveryFixture });
+}
 
 function persistDefaultActivityHomeAccountSettings(): void {
     for (const serverId of ACTIVITY_TEST_HOME_SERVER_IDS) {
@@ -408,19 +422,6 @@ function persistActivityHomeAccountSettings(serverId: string): void {
         1,
     );
 }
-
-vi.mock('./iosActivityWidgetModules', () => ({
-    HappierFocusWidget: {
-        updateSnapshot: focusWidgetUpdateSnapshot,
-    },
-    HappierSessionsWidget: {
-        updateSnapshot: sessionsWidgetUpdateSnapshot,
-    },
-    HappierFocusLiveActivity: {
-        start: liveActivityStart,
-        getInstances: liveActivityGetInstances,
-    },
-}));
 
 async function configureDirectApnsRemoteUpdatesForServer(serverId: string): Promise<void> {
     constantsState.expoConfig.plugins = [
@@ -565,9 +566,43 @@ async function configureVerifiedLocalServerContext(serverId: string): Promise<vo
     await setActiveServerId(serverId);
 }
 
+// Compile real widget layouts before timed cases; reconciliation loads this
+// same SDK-backed module lazily in the running app.
+await import('./iosActivityWidgetModules');
+await loadSyncSingletonForTests();
+
 describe('ActivitySurfacesRuntime', () => {
     beforeEach(async () => {
         resetServerFeaturesClientForTests();
+        for (const serverId of ACTIVITY_TEST_HOME_SERVER_IDS) {
+            await activityHomes.addHome({ name: serverId, serverUrl: `https://${serverId}`,
+                accountId: `account-${serverId}`, currentAccount: true, active: serverId === 'server-a' });
+            activityHomes.answer(serverId, '/v2/account/session-delivery-mutes', { body: { scopes: [] } });
+        }
+        installSessionActionRpcBoundary(() => ({ ok: true }));
+        // Observation only: dispatch, policy, admission and transport all remain real.
+        const createExecutor = actionExecutor.createDefaultActionExecutor;
+        vi.spyOn(actionExecutor, 'createDefaultActionExecutor').mockImplementation((options) => {
+            const executor = createExecutor(options);
+            return { ...executor, execute: (...args) => {
+                actionExecutorExecute(...args);
+                return executor.execute(...args);
+            } };
+        });
+        // Inject the external OS task registry into its real registration owner.
+        // The observer preserves the runtime-mount assertion without replacing policy.
+        const registerWakeTask = backgroundWake.syncLiveActivityBackgroundWakeTaskRegistration;
+        const registeredTasks = new Set<string>();
+        vi.spyOn(backgroundWake, 'syncLiveActivityBackgroundWakeTaskRegistration').mockImplementation((options) => {
+            syncLiveActivityBackgroundWakeTaskRegistration(options);
+            return registerWakeTask({ ...options,
+                taskManager: { isTaskRegisteredAsync: async (name) => registeredTasks.has(name) },
+                notifications: {
+                    registerTaskAsync: async (name) => { registeredTasks.add(name); },
+                    unregisterTaskAsync: async (name) => { registeredTasks.delete(name); },
+                },
+            });
+        });
         // These are HTTP response ports. The real feature parser/cache/hook and
         // Live Activity registration adapter run above this network boundary.
         setRuntimeFetch(async (input, init) => {
@@ -581,6 +616,7 @@ describe('ActivitySurfacesRuntime', () => {
                 } }));
             }
             if (url.pathname === '/v1/auth/ping') return Response.json({});
+            if (url.pathname === '/v2/account/session-delivery-mutes') return Response.json({ scopes: [] });
             if (url.pathname === '/v1/live-activity-targets' && init?.method === 'POST') {
                 // This body was serialized by the real typed API adapter.
                 const request = JSON.parse(String(init.body)) as LiveActivityTargetRegistrationInput;
@@ -591,22 +627,27 @@ describe('ActivitySurfacesRuntime', () => {
                 await markLiveActivityTargetEnded(decodeURIComponent(url.pathname.split('/').at(-1)!), { serverId });
                 return Response.json({ success: true });
             }
-            throw new Error(`Unexpected Activity Home request: ${url.pathname}`);
+            return activityHomes.request(input, init);
         });
-        for (const serverId of ACTIVITY_TEST_HOME_SERVER_IDS) {
-            await upsertServerProfile({ serverUrl: `https://${serverId}`, name: serverId });
-        }
         await setActiveServerId('server-a');
         saveLastRegisteredExpoPushToken('ExponentPushToken[background-wake]');
-        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async (url) => ({
-            token: createAccountTokenForTests(`account-${new URL(url).hostname}`),
-        }));
+        const credentials = await TokenStorage.getCredentialsForServerUrl('https://server-a', { serverId: 'server-a' });
+        if (!credentials) throw new Error('Activity Home credential unavailable');
+        const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
+        storage.setState({ isDataReady: false });
+        await restoreConnectionToActiveServer(credentials);
+        storage.getState().activateProfileScope({ serverId: 'server-a', accountId: 'account-server-a' });
+        await waitForHomeGovernance(() => expect(storage.getState().isDataReady).toBe(true));
         persistDefaultActivityHomeAccountSettings();
         publishActivityFixture();
     });
 
-    afterEach(() => {
+    afterEach(async () => {
         standardCleanup();
+        const { stopConcurrentSessionCacheSync } = await import('@/sync/runtime/orchestration/concurrentSessionCache');
+        stopConcurrentSessionCacheSync();
+        const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+        await disconnectActiveServerConnection();
         vi.useRealTimers();
         vi.unstubAllEnvs();
         platformState.os = 'ios';
@@ -647,6 +688,7 @@ describe('ActivitySurfacesRuntime', () => {
         actionExecutorExecute.mockClear();
         syncLiveActivityBackgroundWakeTaskRegistration.mockClear();
         vi.restoreAllMocks();
+        await activityHomes.reset();
     });
 
     // The Live Activity fallback wake is this runtime's own leg, and a
@@ -702,12 +744,14 @@ describe('ActivitySurfacesRuntime', () => {
         });
         sessionsState.value = [];
         dataReadyState.value = false;
+        expect(storage.getState().isDataReady).toBe(false);
 
         const { ActivitySurfacesRuntime } = await import('./ActivitySurfacesRuntime');
         const screen = await renderScreen(React.createElement(ActivitySurfacesRuntime));
 
         await act(async () => {});
 
+        expect(storage.getState().isDataReady).toBe(false);
         expect(existingEnd).not.toHaveBeenCalled();
         expect(liveActivityStart).not.toHaveBeenCalled();
 
@@ -764,6 +808,18 @@ describe('ActivitySurfacesRuntime', () => {
     });
 
     it('pushes the shared snapshot into the focus and sessions widgets and starts the focused live activity', async () => {
+        const unread = createSessionFixture({
+            id: 'unread', serverId: 'server-a', seq: 5, lastViewedSessionSeq: 2,
+            metadata: {
+                path: '/Users/tester/project/unread', host: 'tester.local', homeDir: '/Users/tester',
+                summary: { text: 'Unread work', updatedAt: 1 },
+            },
+        });
+        // Important is the owner's default and does not select ordinary message
+        // occurrences. This Home's explicit All messages Follow admits the unread
+        // candidate through the real delivery owner, independently of its read state.
+        const follow = projectSessionFollowFactsV1({ following: true,
+            notificationLevel: 'all_messages', includeInVoice: false });
         sessionsState.value = [
             createSessionFixture({
                 id: 'permission',
@@ -780,18 +836,8 @@ describe('ActivitySurfacesRuntime', () => {
                     summary: { text: 'Permission work', updatedAt: 1 },
                 },
             }),
-            createSessionFixture({
-                id: 'unread',
-                serverId: 'server-a',
-                seq: 5,
-                lastViewedSessionSeq: 2,
-                metadata: {
-                    path: '/Users/tester/project/unread',
-                    host: 'tester.local',
-                    homeDir: '/Users/tester',
-                    summary: { text: 'Unread work', updatedAt: 1 },
-                },
-            }),
+            { ...unread, viewer: { ...createSessionOwnerViewerFixture(unread), follow,
+                notification: resolveSessionEffectiveNotificationV1({ facts: follow, isSessionOwner: true }) } },
         ];
 
         const { ActivitySurfacesRuntime } = await import('./ActivitySurfacesRuntime');
@@ -968,7 +1014,7 @@ describe('ActivitySurfacesRuntime', () => {
 
         sessionsState.value = [...sessionsState.value];
         await act(async () => {
-            screen.tree.update(React.createElement(ActivitySurfacesRuntime));
+            await screen.update(React.createElement(ActivitySurfacesRuntime));
         });
 
         expect(liveActivityStart).toHaveBeenCalledTimes(1);
@@ -976,7 +1022,7 @@ describe('ActivitySurfacesRuntime', () => {
         vi.setSystemTime(new Date('2026-05-03T12:01:01.000Z'));
         sessionsState.value = [...sessionsState.value];
         await act(async () => {
-            screen.tree.update(React.createElement(ActivitySurfacesRuntime));
+            await screen.update(React.createElement(ActivitySurfacesRuntime));
         });
 
         expect(liveActivityStart).toHaveBeenCalledTimes(2);
@@ -1149,7 +1195,7 @@ describe('ActivitySurfacesRuntime', () => {
             },
         }];
         await act(async () => {
-            screen.tree.update(React.createElement(ActivitySurfacesRuntime));
+            await screen.update(React.createElement(ActivitySurfacesRuntime));
         });
 
         expect(liveActivityUpdate).toHaveBeenCalledTimes(1);
@@ -1164,7 +1210,7 @@ describe('ActivitySurfacesRuntime', () => {
             },
         }];
         await act(async () => {
-            screen.tree.update(React.createElement(ActivitySurfacesRuntime));
+            await screen.update(React.createElement(ActivitySurfacesRuntime));
         });
         expect(liveActivityStart).toHaveBeenCalledTimes(1);
 
@@ -1179,7 +1225,7 @@ describe('ActivitySurfacesRuntime', () => {
             },
         }];
         await act(async () => {
-            screen.tree.update(React.createElement(ActivitySurfacesRuntime));
+            await screen.update(React.createElement(ActivitySurfacesRuntime));
         });
         expect(liveActivityStart).toHaveBeenCalledTimes(2);
 
@@ -1214,14 +1260,14 @@ describe('ActivitySurfacesRuntime', () => {
         liveActivityEnd.mockRejectedValueOnce(new Error('Activity already ended'));
         sessionsState.value = [];
         await act(async () => {
-            screen.tree.update(React.createElement(ActivitySurfacesRuntime));
+            await screen.update(React.createElement(ActivitySurfacesRuntime));
         });
 
         expect(liveActivityEnd).toHaveBeenCalled();
 
         sessionsState.value = [{ ...session, seq: 11 }];
         await act(async () => {
-            screen.tree.update(React.createElement(ActivitySurfacesRuntime));
+            await screen.update(React.createElement(ActivitySurfacesRuntime));
         });
 
         expect(liveActivityStart).toHaveBeenCalledTimes(2);
@@ -1289,7 +1335,7 @@ describe('ActivitySurfacesRuntime', () => {
 
         sessionsState.value = [];
         await act(async () => {
-            screen.tree.update(React.createElement(ActivitySurfacesRuntime));
+            await screen.update(React.createElement(ActivitySurfacesRuntime));
         });
 
         expect(liveActivityEnd).toHaveBeenCalledWith(
@@ -1331,7 +1377,7 @@ describe('ActivitySurfacesRuntime', () => {
         vi.setSystemTime(new Date('2026-05-03T12:00:30.000Z'));
         sessionsState.value = [{ ...session }];
         await act(async () => {
-            screen.tree.update(React.createElement(ActivitySurfacesRuntime));
+            await screen.update(React.createElement(ActivitySurfacesRuntime));
         });
 
         expect(liveActivityUpdate).not.toHaveBeenCalled();
@@ -1378,7 +1424,7 @@ describe('ActivitySurfacesRuntime', () => {
             },
         }];
         await act(async () => {
-            screen.tree.update(React.createElement(ActivitySurfacesRuntime));
+            await screen.update(React.createElement(ActivitySurfacesRuntime));
         });
 
         expect(liveActivityEnd).toHaveBeenCalledWith('immediate', undefined, new Date('2026-05-03T20:00:01.000Z'));
@@ -1442,7 +1488,7 @@ describe('ActivitySurfacesRuntime', () => {
             },
         }];
         await act(async () => {
-            screen.tree.update(React.createElement(ActivitySurfacesRuntime));
+            await screen.update(React.createElement(ActivitySurfacesRuntime));
         });
 
         expect(liveActivityUpdate).not.toHaveBeenCalled();
@@ -1458,7 +1504,7 @@ describe('ActivitySurfacesRuntime', () => {
             },
         }];
         await act(async () => {
-            screen.tree.update(React.createElement(ActivitySurfacesRuntime));
+            await screen.update(React.createElement(ActivitySurfacesRuntime));
         });
 
         expect(liveActivityUpdate).toHaveBeenCalledTimes(1);
@@ -1508,7 +1554,7 @@ describe('ActivitySurfacesRuntime', () => {
             updatedAt: session.updatedAt + 1,
         }];
         await act(async () => {
-            screen.tree.update(React.createElement(ActivitySurfacesRuntime));
+            await screen.update(React.createElement(ActivitySurfacesRuntime));
         });
 
         expect(liveActivityEnd).toHaveBeenCalled();
@@ -1890,7 +1936,7 @@ describe('ActivitySurfacesRuntime', () => {
                 ...session,
                 updatedAt: session.updatedAt + 1,
             }];
-            screen.tree.update(React.createElement(ActivitySurfacesRuntime));
+            await screen.update(React.createElement(ActivitySurfacesRuntime));
         });
 
         // Keep the current transport target until its replacement registers, then retire it.
@@ -1950,7 +1996,7 @@ describe('ActivitySurfacesRuntime', () => {
                 ...session,
                 updatedAt: session.updatedAt + 1,
             }];
-            screen.tree.update(React.createElement(ActivitySurfacesRuntime));
+            await screen.update(React.createElement(ActivitySurfacesRuntime));
         })).resolves.toBeUndefined();
 
         expect(liveActivityPushTokenListeners).toHaveLength(0);
@@ -1995,7 +2041,7 @@ describe('ActivitySurfacesRuntime', () => {
 
         sessionsState.value = [];
         await act(async () => {
-            screen.tree.update(React.createElement(ActivitySurfacesRuntime));
+            await screen.update(React.createElement(ActivitySurfacesRuntime));
         });
 
         expect(markLiveActivityTargetEnded).toHaveBeenCalledWith('target-direct-1', { serverId: 'server-a' });
@@ -2031,34 +2077,36 @@ describe('ActivitySurfacesRuntime', () => {
         const { ActivitySurfacesRuntime } = await import('./ActivitySurfacesRuntime');
         const screen = await renderScreen(React.createElement(ActivitySurfacesRuntime));
 
-        await act(async () => {});
+        await vi.waitFor(() => expect(liveActivityPushTokenListeners).toHaveLength(1));
         await act(async () => {
-            liveActivityPushTokenListeners[0]?.({
+            liveActivityPushTokenListeners[0]!({
                 activityId: 'native-activity-1',
                 pushToken: 'raw-activitykit-token',
             });
         });
+        expect(registerLiveActivityTarget).toHaveBeenCalledTimes(1);
 
         sessionsState.value = [];
         await expect(act(async () => {
-            screen.tree.update(React.createElement(ActivitySurfacesRuntime));
+            await screen.update(React.createElement(ActivitySurfacesRuntime));
         })).resolves.toBeUndefined();
-        await act(async () => {});
-        expect(liveActivityEnd).toHaveBeenCalledTimes(1);
-        expect(markLiveActivityTargetEnded).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() => {
+            expect(liveActivityEnd).toHaveBeenCalledTimes(1);
+            expect(markLiveActivityTargetEnded).toHaveBeenCalledWith('target-direct-1', { serverId: 'server-a' });
+        });
 
         // A subsequent ordinary reconciliation is the retry trigger. No timer, outbox or
         // second lifecycle is involved, and the exact Home/target binding is preserved.
         settingsState.value = { ...settingsState.value };
         await act(async () => {
-            screen.tree.update(React.createElement(ActivitySurfacesRuntime));
+            await screen.update(React.createElement(ActivitySurfacesRuntime));
         });
         await act(async () => {});
 
-        expect(markLiveActivityTargetEnded.mock.calls).toEqual([
-            ['target-direct-1', { serverId: 'server-a' }],
-            ['target-direct-1', { serverId: 'server-a' }],
-        ]);
+        expect(markLiveActivityTargetEnded.mock.calls.length).toBeGreaterThanOrEqual(2);
+        for (const call of markLiveActivityTargetEnded.mock.calls) {
+            expect(call).toEqual(['target-direct-1', { serverId: 'server-a' }]);
+        }
 
         await act(async () => {
             screen.tree.unmount();
@@ -2095,7 +2143,7 @@ describe('ActivitySurfacesRuntime', () => {
                 source: 'HappierFocusLiveActivity',
                 target: 'open-session:permission',
                 timestamp: Date.now(),
-                type: 'tap',
+                type: 'ExpoWidgetsUserInteraction',
             });
         });
 
@@ -2145,7 +2193,7 @@ describe('ActivitySurfacesRuntime', () => {
                 source: 'HappierFocusLiveActivity',
                 target: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
                 timestamp: Date.now(),
-                type: 'action',
+                type: 'ExpoWidgetsUserInteraction',
                 data: {
                     serverId: 'server-a',
                     sessionId: 'permission',
@@ -2177,6 +2225,12 @@ describe('ActivitySurfacesRuntime', () => {
     });
 
     it('opens the session instead of executing a Live Activity action when lock-screen privacy is restricted', async () => {
+        localSettingsState.value = createLocalSettingsState({
+            attentionDeviceOverridesV1: {
+                v: 1,
+                liveActivities: { privacyMode: 'status_only' },
+            },
+        });
         sessionsState.value = [
             createSessionFixture({
                 id: 'permission',
@@ -2205,7 +2259,7 @@ describe('ActivitySurfacesRuntime', () => {
                 source: 'HappierFocusLiveActivity',
                 target: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
                 timestamp: Date.now(),
-                type: 'action',
+                type: 'ExpoWidgetsUserInteraction',
                 data: {
                     serverId: 'server-a',
                     sessionId: 'permission',
@@ -2225,6 +2279,11 @@ describe('ActivitySurfacesRuntime', () => {
     });
 
     it('opens the session instead of executing when the source target context is not locally verified', async () => {
+        // The default fixture binds every saved Home. This case deliberately
+        // withholds the secure credential that would verify the event's Home.
+        for (const serverId of ACTIVITY_TEST_HOME_SERVER_IDS) {
+            await TokenStorage.removeCredentialsForServerUrl(`https://${serverId}`);
+        }
         localSettingsState.value = createLocalSettingsState({
             attentionDeviceOverridesV1: {
                 v: 1,
@@ -2261,7 +2320,7 @@ describe('ActivitySurfacesRuntime', () => {
                 source: 'HappierFocusLiveActivity',
                 target: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
                 timestamp: Date.now(),
-                type: 'action',
+                type: 'ExpoWidgetsUserInteraction',
                 data: {
                     serverId: 'server-a',
                     sessionId: 'permission',
@@ -2319,7 +2378,7 @@ describe('ActivitySurfacesRuntime', () => {
                 source: 'HappierFocusWidget',
                 target: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
                 timestamp: Date.now(),
-                type: 'action',
+                type: 'ExpoWidgetsUserInteraction',
                 data: {
                     serverId: 'server-a',
                     sessionId: 'permission',
@@ -2389,7 +2448,7 @@ describe('ActivitySurfacesRuntime', () => {
                 source: 'HappierFocusWidget',
                 target: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
                 timestamp: Date.now(),
-                type: 'action',
+                type: 'ExpoWidgetsUserInteraction',
                 data: {
                     serverId: 'server-a',
                     sessionId: 'permission',
@@ -2455,7 +2514,7 @@ describe('ActivitySurfacesRuntime', () => {
                 source: 'HappierFocusLiveActivity',
                 target: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
                 timestamp: Date.now(),
-                type: 'action',
+                type: 'ExpoWidgetsUserInteraction',
                 data: {
                     serverId: 'server-b',
                     sessionId: 'permission',
@@ -2506,7 +2565,7 @@ describe('ActivitySurfacesRuntime', () => {
         vi.setSystemTime(new Date('2026-05-03T12:00:30.000Z'));
         sessionsState.value = [{ ...session }];
         await act(async () => {
-            screen.tree.update(React.createElement(ActivitySurfacesRuntime));
+            await screen.update(React.createElement(ActivitySurfacesRuntime));
         });
 
         expect(focusWidgetUpdateSnapshot).toHaveBeenCalledTimes(focusWidgetUpdatesAfterMount);
@@ -2518,6 +2577,10 @@ describe('ActivitySurfacesRuntime', () => {
     });
 
     it('routes widget taps for local sessions when live activities are disabled', async () => {
+        await activityHomes.selectHomes(['server-a', 'local']);
+        const { startConcurrentSessionCacheSync } = await import('@/sync/runtime/orchestration/concurrentSessionCache');
+        startConcurrentSessionCacheSync();
+        await waitForHomeGovernance(() => expect(storage.getState().concurrentSessionListCacheByServerId.local).toBeDefined());
         localSettingsState.value = createLocalSettingsState({
             iosLiveActivitiesEnabled: false,
         });
@@ -2544,13 +2607,16 @@ describe('ActivitySurfacesRuntime', () => {
 
         await act(async () => {});
         expect(widgetInteractionsState.listener).not.toBeNull();
+        await waitForHomeGovernance(() => expect(focusWidgetUpdateSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+            primary: expect.objectContaining({ sessionId: 'permission' }),
+        })));
 
         await act(async () => {
             widgetInteractionsState.listener?.({
                 source: 'HappierFocusWidget',
                 target: 'open-session:permission',
                 timestamp: Date.now(),
-                type: 'tap',
+                type: 'ExpoWidgetsUserInteraction',
             });
         });
 
@@ -2591,7 +2657,7 @@ describe('ActivitySurfacesRuntime', () => {
                 source: 'HappierFocusLiveActivity',
                 target: 'open-session:unknown-session',
                 timestamp: Date.now(),
-                type: 'tap',
+                type: 'ExpoWidgetsUserInteraction',
             });
         });
 

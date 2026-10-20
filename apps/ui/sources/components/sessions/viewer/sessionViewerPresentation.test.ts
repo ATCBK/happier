@@ -26,14 +26,26 @@ describe('Session viewer local presentation', () => {
         expect(state.mode).toBe('floating');
     });
 
-    it('keeps phone in reading flow, restores expanded dock and never admits desktop geometry there', () => {
+    it('retains placement independently of phone projection and never admits desktop geometry there', () => {
         const phone = { ...desktop, phone: true };
         const opened = resolveSessionViewerPresentation(CLOSED_SESSION_VIEWER, { kind: 'viewer.open', source: 'browser' }, phone);
-        expect(opened.state.mode).toBe('docked');
+        expect(opened.state.mode).toBe('floating');
         const expanded = resolveSessionViewerPresentation(opened.state, { kind: 'viewer.expand' }, phone);
         expect(expanded.state.mode).toBe('expanded');
-        expect(resolveSessionViewerPresentation(expanded.state, { kind: 'viewer.restore' }, phone).state.mode).toBe('docked');
+        expect(resolveSessionViewerPresentation(expanded.state, { kind: 'viewer.restore' }, phone).state.mode).toBe('floating');
         expect(resolveSessionViewerPresentation(opened.state, { kind: 'viewer.corner.set', corner: 'tr' }, phone).result.status).toBe('unavailable');
+    });
+
+    it('floats a docked desktop viewer back at its retained placement, never on a phone', () => {
+        const rect = { x: 20, y: 30, width: 240, height: 180 };
+        const docked: SessionViewerPresentationState = { ...CLOSED_SESSION_VIEWER, source: 'computer', mode: 'docked', rect, width: 240 };
+        expect(resolveSessionViewerPresentation(docked, { kind: 'viewer.float' }, desktop)).toEqual({
+            state: { ...docked, mode: 'floating' }, result: { status: 'applied' },
+        });
+        expect(resolveSessionViewerPresentation(docked, { kind: 'viewer.float' }, { ...desktop, phone: true }).result.status).toBe('unavailable');
+        const floating = { ...docked, mode: 'floating' as const };
+        expect(resolveSessionViewerPresentation(floating, { kind: 'viewer.float' }, desktop).result.status).toBe('unchanged');
+        expect(resolveSessionViewerPresentation(CLOSED_SESSION_VIEWER, { kind: 'viewer.float' }, desktop).result.status).toBe('unchanged');
     });
 
     it('refuses unavailable sources and invalid size without losing the current presentation', () => {

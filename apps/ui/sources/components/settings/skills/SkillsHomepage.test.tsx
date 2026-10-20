@@ -90,6 +90,10 @@ it('offers first-run choice only while Account rules remain undecided and separa
         expect(screen.findByTestId('skills.home.choose')).toBeNull();
         await screen.update(<SkillsHomepage library={library([])} />);
         expect(screen.findByTestId('skills.home.empty.add')).not.toBeNull();
+        // The canonical list always carries the built-in skill: a library of only that one is still empty.
+        await screen.update(<SkillsHomepage library={library([skill('happier:happier', { provenance: { kind: 'first_party' }, rules: [] })])} />);
+        expect(screen.findByTestId('skills.home.empty.add')).not.toBeNull();
+        expect(screen.findByTestId('skills.home.choose')).toBeNull();
         const retry = vi.fn();
         await screen.update(<SkillsHomepage library={library([], { status: 'unavailable', errorCode: 'skill_content_unavailable', retry })} />);
         expect(screen.findByTestId('skills.home.empty.add')).toBeNull();
@@ -124,11 +128,16 @@ it('shows a few addable skills found on the machines from the last known scan, w
         // Needs a look joins the machine copy that wins over a library skill (Compare) and an unreadable item (Try again).
         const retry = vi.fn();
         await screen.update(<SkillsHomepage library={library([skill('on'), skill('masked')], { retry,
-            unavailableItems: [{ skillId: 'broken', title: 'broken-skill', reason: 'skill_content_unavailable' }] })} />);
+            unavailableItems: [{ skillId: 'broken', title: 'broken-skill', reason: 'skill_content_unavailable' },
+                { skillId: '736cb1a6-6067-4fe9-bce1-cb7a33e4feaf', title: null, reason: 'skill_content_unavailable' }] })} />);
         await vi.waitFor(() => expect(screen.findByTestId('skills.home.needs.masked')).not.toBeNull());
+        // One message per state: the mask is said by the row's description, not again by a status chip.
+        expect(screen.getTextContent().match(/copy wins/g) ?? []).toHaveLength(1);
         await act(async () => screen.pressByTestId('skills.home.needs.masked'));
         expect(navigation.push).toHaveBeenLastCalledWith('/settings/skills/found');
         expect(screen.findByTestId('skills.home.needs.broken')).not.toBeNull();
+        // A skill with no readable title is never named by its id.
+        expect(screen.getTextContent()).not.toContain('736cb1a6');
         expect(screen.findByTestId('skills.home.needs.on')).toBeNull();
         await screen.update(<SkillsHomepage library={library([])} />);
         // An empty library offers Add and Write, and anticipates the found skills in one line.

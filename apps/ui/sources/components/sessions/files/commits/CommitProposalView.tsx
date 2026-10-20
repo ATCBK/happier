@@ -33,8 +33,9 @@ export type CommitProposalActions = CommitPlanOutcomeActions & Readonly<{
 export type CommitProposalViewProps = Readonly<{
     /** The projected proposal; null before one exists. */
     proposal: CommitProposal | null;
-    /** none: nothing requested · writing: the model is grouping · ready: a proposal exists. */
-    phase: 'none' | 'writing' | 'ready';
+    /** Restoration settles before none; writing is model work, ready retains a usable proposal. */
+    phase: 'none' | 'restoring' | 'unavailable' | 'writing' | 'ready';
+    onRetryRestore?: () => void;
     /** Output progress is independent of whether usable proposal groups already exist. */
     isGenerating?: boolean;
     branch: string | null;
@@ -104,14 +105,14 @@ export const CommitProposalView = React.memo(function CommitProposalView(props: 
         if (scrolledTo.current !== scrollTarget) scrollToGroup(scrollTarget);
     }, [props.focusGroupId, scrollTarget, scrollToGroup]);
 
-    const choices = React.useMemo<CommitMoveChoice[] | null>(() => (proposal && !proposal.locked
+    const choices = React.useMemo<CommitMoveChoice[] | null>(() => (proposal?.editable
         ? proposal.groups.filter((group) => group.editable).map((group) => ({ number: group.number, groupId: group.id, message: group.message }))
         : null), [proposal]);
 
     // ⌥1–9 move the focused change into that commit, ⌥N into a new one after its commit, ⌥0 leave it out.
     const onMove = actions.onMove;
     const onShortcut = React.useCallback((key: number | 'new' | 'leftOut') => {
-        if (!proposal || !focused || !onMove || proposal.locked) return;
+        if (!proposal?.editable || !focused || !onMove) return;
         const [groupId, ...rest] = focused.split(':');
         const path = rest.join(':');
         const group = groupId === 'leftOut' ? null : proposal.groups.find((candidate) => candidate.id === groupId) ?? null;
@@ -142,7 +143,12 @@ export const CommitProposalView = React.memo(function CommitProposalView(props: 
                         />
                     </View>
                 ) : null}
-                {props.phase === 'writing' ? (
+                {props.phase === 'restoring' ? (
+                    <SurfaceStateCard testID="commit-proposal-restoring" kind="loading" title={t('common.loading')} />
+                ) : props.phase === 'unavailable' ? (
+                    <SurfaceStateCard testID="commit-proposal-unavailable" kind="error" title={t('common.requestFailed')}
+                        action={props.onRetryRestore ? { label: t('common.retry'), onPress: props.onRetryRestore } : undefined} />
+                ) : props.phase === 'writing' ? (
                     <SurfaceStateCard testID="commit-proposal-writing" kind="loading" title={t('commitProposal.none.writing')} />
                 ) : (
                     <SurfaceStateCard
@@ -168,7 +174,7 @@ export const CommitProposalView = React.memo(function CommitProposalView(props: 
     const total = proposal.groups.length;
     const outcome = proposal.outcome;
     const remaining = total - proposal.landedCount;
-    const editing = !proposal.locked;
+    const editing = proposal.editable;
     const canCreate = editing && remaining > 0 && Boolean(actions.onCreate) && proposal.emptyGroupIds.length === 0;
     const pausedForHook = outcome?.kind === 'hookChanged';
     const hasLanded = proposal.landedCount > 0;
@@ -189,7 +195,8 @@ export const CommitProposalView = React.memo(function CommitProposalView(props: 
                 </Text>
                 <Text style={styles.subtitle}>
                     {phone
-                        ? t('commitProposal.proposedByPhone', { committed: proposal.committedFileCount, total: proposal.totalFileCount })
+                        // The move hint belongs only to a proposal that can still be edited.
+                        ? t(editing && remaining > 0 && actions.onMove ? 'commitProposal.proposedByPhone' : 'commitProposal.filesInCommits', { committed: proposal.committedFileCount, total: proposal.totalFileCount })
                         : `${t('commitProposal.proposedBy', { who, committed: proposal.committedFileCount, total: proposal.totalFileCount })} ${editing && actions.onMove ? t('commitProposal.moveHint', { max: Math.min(9, total) }) : ''}`}
                 </Text>
             </View>

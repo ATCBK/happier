@@ -413,7 +413,7 @@ describe('resolveExecutablePluginRuntimeRegistry managed-services production own
             generationAuthority: fixture.generationAuthority,
         });
         try {
-            const occurrenceId = runtime.readPluginOccurrenceId(pluginId);
+            const occurrenceId = runtime.readPluginOccurrenceId?.(pluginId);
             const declaredAgent = runtime.contributes.agents.find(candidate => candidate.pluginId === pluginId);
             if (!occurrenceId || !declaredAgent) throw new Error('Expected admitted credential-file Agent');
             const services = await runtime.createAgentInvocationServices({
@@ -576,7 +576,7 @@ describe('resolveExecutablePluginRuntimeRegistry managed-services production own
         >> | null = null;
 
         try {
-            const occurrenceId = runtime.readPluginOccurrenceId(pluginId);
+            const occurrenceId = runtime.readPluginOccurrenceId?.(pluginId);
             const declaredAgent = runtime.contributes.agents.find(candidate => candidate.pluginId === pluginId);
             if (!occurrenceId || !declaredAgent) throw new Error('Expected admitted bounded Agent');
             const services = await runtime.createAgentInvocationServices({

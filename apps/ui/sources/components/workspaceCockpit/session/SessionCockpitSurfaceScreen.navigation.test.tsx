@@ -18,7 +18,9 @@ const sessionMachineTargetCalls = vi.hoisted(() => [] as unknown[]);
 const canonicalSessionPluginRuntime = vi.hoisted(() => ({ values: [] as object[] }));
 const cockpitNavigatorState = vi.hoisted(() => ({
     activeSurface: 'chat',
+    pathname: '/session/session-1',
     goBack: null as null | (() => void),
+    unhandledActions: [] as string[],
     hardwareBackHandlers: [] as Array<() => boolean>,
     /** Hardware Back exists only on Android; React Native Web reports BackHandler as unsupported. */
     platformOS: 'web' as 'web' | 'android',
@@ -107,7 +109,7 @@ vi.mock('@/components/ui/text/Text', () => ({
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({
-        pathname: () => '/session/session-1',
+        pathname: () => cockpitNavigatorState.pathname,
         navigation: { addListener: () => () => {} },
     }).module;
 });
@@ -120,12 +122,14 @@ vi.mock('@react-navigation/native', async () => {
     };
 });
 
-vi.mock('@react-navigation/bottom-tabs', () => ({
+vi.mock('@react-navigation/bottom-tabs', async () => {
+    const { TabRouter, CommonActions } = await vi.importActual<typeof import('@react-navigation/native')>('@react-navigation/native');
+    return ({
     createBottomTabNavigator: () => ({
         Navigator: ({ children, initialRouteName, tabBar }: React.PropsWithChildren<Readonly<{
             initialRouteName?: string;
             tabBar?: (props: {
-                state: { index: number; routes: Array<{ key: string; name: string }> };
+                state: import('@react-navigation/native').TabNavigationState<Record<string, undefined>>;
                 navigation: { emit: () => { defaultPrevented: boolean }; navigate: (name: string) => void };
             }) => React.ReactNode;
         }>>) => {
@@ -161,6 +165,17 @@ vi.mock('@react-navigation/bottom-tabs', () => ({
                 emit: () => ({ defaultPrevented: false }),
                 goBack,
                 navigate,
+                reset: (state: Parameters<typeof CommonActions.reset>[0]) => {
+                    // Run RESET through the actual navigation library, including its route admission.
+                    const router = TabRouter({ backBehavior: 'history' });
+                    const options = { routeNames: routes.map((route) => route.name), routeParamList: {}, routeGetIdList: {} };
+                    const current = router.getInitialState(options);
+                    const restored = router.getStateForAction(current, CommonActions.reset(state), options);
+                    if (!restored) { cockpitNavigatorState.unhandledActions.push('RESET'); return; }
+                    const rehydrated = router.getRehydratedState(restored, options);
+                    historyRef.current = rehydrated.history.map((entry) => rehydrated.routes.find((route) => route.key === entry.key)!.name);
+                    setActiveSurface(rehydrated.routes[rehydrated.index]!.name);
+                },
             };
             const activeIndex = Math.max(0, routes.findIndex((route) => route.name === activeSurface));
             return React.createElement(React.Fragment, null, [
@@ -174,14 +189,17 @@ vi.mock('@react-navigation/bottom-tabs', () => ({
                     );
                 }),
                 React.createElement(React.Fragment, { key: 'tab-bar' }, tabBar?.({
-                    state: { index: activeIndex, routes },
+                    state: { stale: false, type: 'tab', key: 'session-tabs', index: activeIndex, routes,
+                        routeNames: routes.map((route) => route.name),
+                        history: historyRef.current.map((name) => ({ type: 'route' as const, key: name })), preloadedRouteKeys: [] },
                     navigation,
                 })),
             ]);
         },
         Screen: () => null,
     }),
-}));
+});
+});
 
 vi.mock('react-native-safe-area-context', () => ({
     useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
@@ -386,6 +404,7 @@ function createCockpitPluginProjection(input: Readonly<{
         target: binding.target,
         renderer: { kind: 'reactNative' as const, contributionId: 'review-panel' },
         display: { developerFallback: 'Review' },
+        headerActions: [],
         availability: { state: 'available' as const, reason: 'available', diagnostics: [] },
         hostOrigin: {
             machineId: 'machine-1',
@@ -526,11 +545,52 @@ describe('SessionCockpitSurfaceScreen navigation surface', () => {
         sessionMachineTargetCalls.length = 0;
         canonicalSessionPluginRuntime.values = [];
         cockpitNavigatorState.activeSurface = 'chat';
+        cockpitNavigatorState.pathname = '/session/session-1';
         cockpitNavigatorState.goBack = null;
+        cockpitNavigatorState.unhandledActions = [];
         cockpitNavigatorState.hardwareBackHandlers = [];
         cockpitNavigatorState.platformOS = 'web';
         const { transcriptNavigationPaneStore } = await import('@/components/sessions/transcript/navigation/transcriptNavigationPaneStore');
         transcriptNavigationPaneStore.set('session-1', null);
+    });
+
+    it('elects a demanded inline runner for visible classic chat independently of native scene and keyboard focus', async () => {
+        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+        const { SessionCockpitSurfaceScreen } = await import('./SessionCockpitSurfaceScreen');
+        const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+        const screen = await renderScreen(<AppPaneProvider>
+            <DestinationInstanceHost tabId="visual-session" ref={{ kind: 'session', params: { id: 'session-1', serverId: 'server-1' } }}
+                pathname="/session/session-1" focused={false} visible navigation={{ push: () => {}, replace: () => {}, back: () => {} }}>
+            <CockpitNavigatorFocusContext.Provider value={false}>
+                <SessionCockpitSurfaceScreen experience="classic" sessionId="session-1" routeServerId="server-1"
+                    scopeId="session:session-1" surface="chat" surfaceFocusedOverride={false} surfaceVisibleOverride />
+            </CockpitNavigatorFocusContext.Provider>
+            </DestinationInstanceHost>
+        </AppPaneProvider>);
+        const resolve = screen.tree.findByType('SessionView' as never).props.resolveBoardPrimaryHost as
+            import('@/components/sessions/board/sessionBoardHostVisibility').SessionBoardPlacementPrimaryMountResolver;
+        expect(resolve('visual', undefined, { drawnBySelectedBoardView: false, inlineTranscriptDemanded: true })).toBe('inlineTranscript');
+        const pane = screen.tree.findByType('SessionView' as never).props.pane as
+            import('@/components/appShell/panes/hooks/useAppPaneScope').AppPaneScopeApi;
+        await act(async () => { pane.openRight({ tabId: 'board' }); });
+        const boardResolve = screen.tree.findByType('SessionView' as never).props.resolveBoardPrimaryHost as typeof resolve;
+        const bodyFacts = { drawnBySelectedBoardView: true, inlineTranscriptDemanded: true, bodyEligibleHosts: ['sidebar'] as const };
+        expect(boardResolve('visual', undefined, bodyFacts)).toBe('sidebar');
+        expect(boardResolve('visual', undefined, { ...bodyFacts, inlineTranscriptPreferred: true })).toBe('inlineTranscript');
+        expect(boardResolve('visual', undefined, { ...bodyFacts, bodyEligibleHosts: [] })).toBe('inlineTranscript');
+        await act(async () => { pane.closeRight(); });
+        expect(screen.tree.findByType('SessionView' as never).props.resolveBoardPrimaryHost('visual', undefined, bodyFacts)).toBe('inlineTranscript');
+        await screen.update(<AppPaneProvider>
+            <DestinationInstanceHost tabId="visual-session" ref={{ kind: 'session', params: { id: 'session-1', serverId: 'server-1' } }}
+                pathname="/session/session-1" focused={false} visible={false} navigation={{ push: () => {}, replace: () => {}, back: () => {} }}>
+            <CockpitNavigatorFocusContext.Provider value={false}>
+                <SessionCockpitSurfaceScreen experience="classic" sessionId="session-1" routeServerId="server-1"
+                    scopeId="session:session-1" surface="chat" surfaceFocusedOverride={false} surfaceVisibleOverride={false} />
+            </CockpitNavigatorFocusContext.Provider>
+            </DestinationInstanceHost>
+        </AppPaneProvider>);
+        const hiddenResolve = screen.tree.findByType('SessionView' as never).props.resolveBoardPrimaryHost as typeof resolve;
+        expect(hiddenResolve('visual', undefined, { drawnBySelectedBoardView: false, inlineTranscriptDemanded: true })).toBeNull();
     });
 
     it('presents pane opens and repeated Details reveals through the retained phone navigator', async () => {
@@ -561,6 +621,75 @@ describe('SessionCockpitSurfaceScreen navigation surface', () => {
         });
         expect(cockpitNavigatorState.activeSurface).toBe('git');
         expect(chat().props.composerDraft).toBe('keep my draft');
+    });
+
+    it('keeps the bare Details destination selected over retained Work URL state', async () => {
+        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+        const { SessionCockpitChromeRegistryProvider } = await import('./SessionCockpitChromeRegistry');
+        const { SessionCockpitShell } = await import('./SessionCockpitShell');
+        cockpitNavigatorState.pathname = '/session/session-1/details';
+        const render = (paneUrlState: import('@/components/sessions/panes/url/sessionPaneUrlState').SessionPaneUrlState | null) => (
+            <AppPaneProvider><SessionCockpitChromeRegistryProvider>
+                <SessionCockpitShell surface="tabs" routeServerId="server-1" scopeId="session:session-1" sessionId="session-1"
+                    terminalTabAvailable={false} paneUrlState={paneUrlState} />
+            </SessionCockpitChromeRegistryProvider></AppPaneProvider>
+        );
+        const screen = await renderScreen(render({ rightTabId: 'agents' }));
+        expect(cockpitNavigatorState.activeSurface).toBe('tabs');
+        const pane = screen.tree.findAllByType('SessionView' as never)[0]!.props.pane as import('@/components/appShell/panes/hooks/useAppPaneScope').AppPaneScopeApi;
+        await act(async () => pane.setRightTab('agents'));
+        expect(cockpitNavigatorState.activeSurface).toBe('agents');
+        await screen.update(render(null));
+        expect(cockpitNavigatorState.activeSurface, 'A retained-sidebar echo must not undo the explicit return to Work').toBe('agents');
+    });
+
+    it('retains contributed Details through a phone wide phone viewport round trip', async () => {
+        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+        const { SessionCockpitChromeRegistryProvider } = await import('./SessionCockpitChromeRegistry');
+        const { SessionCockpitShell } = await import('./SessionCockpitShell');
+        const render = (experience: 'cockpit' | 'classic') => (
+            <AppPaneProvider><SessionCockpitChromeRegistryProvider>
+                <SessionCockpitShell experience={experience} surface="chat" routeServerId="server-1"
+                    scopeId="session:session-1" sessionId="session-1" terminalTabAvailable={false} />
+            </SessionCockpitChromeRegistryProvider></AppPaneProvider>
+        );
+        const screen = await renderScreen(render('cockpit'));
+        const pane = () => screen.tree.findAllByType('SessionView' as never)[0]!.props.pane as import('@/components/appShell/panes/hooks/useAppPaneScope').AppPaneScopeApi;
+        await act(async () => pane().openDetailsTab({ key: 'plugin-example:details', kind: 'plugin', title: 'Example details',
+            resource: { kind: 'plugin', pluginId: 'example.plugin', surfaceId: 'details' } }));
+        expect(cockpitNavigatorState.activeSurface).toBe('tabs');
+        expect(pane().scopeState?.details.isOpen).toBe(true);
+        await screen.update(render('classic'));
+        expect(pane().scopeState?.details.isOpen).toBe(true);
+        await screen.update(render('cockpit'));
+        expect(cockpitNavigatorState.activeSurface).toBe('tabs');
+        expect(pane().scopeState?.details.isOpen).toBe(true);
+        expect(pane().scopeState?.details.activeTabKey).toBe('plugin-example:details');
+        // A subsequent explicit return to Chat still retires its pane presentation.
+        await act(async () => cockpitNavigatorState.goBack?.());
+        expect(cockpitNavigatorState.activeSurface).toBe('chat');
+        expect(pane().scopeState?.details.isOpen).toBe(false);
+        await screen.unmount();
+    });
+
+    it.each([true, false])('restores phone Details without an unhandled RESET when the admitted catalog changes while wide (Board initially %s)', async (initialBoard) => {
+        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+        const { SessionCockpitChromeRegistryProvider } = await import('./SessionCockpitChromeRegistry');
+        const { SessionCockpitShell } = await import('./SessionCockpitShell');
+        const render = (experience: 'cockpit' | 'classic') => (
+            <AppPaneProvider><SessionCockpitChromeRegistryProvider>
+                <SessionCockpitShell experience={experience} surface="tabs" routeServerId="server-1"
+                    scopeId="session:session-1" sessionId="session-1" terminalTabAvailable={false} />
+            </SessionCockpitChromeRegistryProvider></AppPaneProvider>
+        );
+        await primeSessionBoardFeature(initialBoard);
+        const screen = await renderScreen(render('cockpit'));
+        await screen.update(render('classic'));
+        await act(async () => primeSessionBoardFeature(!initialBoard));
+        await screen.update(render('cockpit'));
+        expect(cockpitNavigatorState.unhandledActions).toEqual([]);
+        expect(cockpitNavigatorState.activeSurface).toBe('tabs');
+        await screen.unmount();
     });
 
     it('presents a changed pane URL even when the persisted initial surface is Chat, without trapping phone Back', async () => {

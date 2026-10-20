@@ -16,21 +16,21 @@ describe('plugin execution origin Action front door', () => {
       const executor = createActionExecutor({ clientActionExecute: async request => {
         requests.push(request); return { ok: true, result: { status: 'applied' } };
       }, isActionApprovalRequired: () => false });
-      expect(await executor.execute('plugins.execution_origin.set', { pluginId: 'acme.plugin', origin, contextualTarget },
+      expect(await executor.execute('plugins.execution_origin.set', { pluginId: 'acme.plugin', origin, contextualTarget, clientId: 'app-b' },
         { surface, authority: 'account_automation' })).toEqual({ ok: true, result: { status: 'applied' } });
       expect(requests).toEqual([expect.objectContaining({ actionId: 'plugins.execution_origin.set',
-        input: { pluginId: 'acme.plugin', origin, contextualTarget } })]);
+        input: { pluginId: 'acme.plugin', origin, contextualTarget, clientId: 'app-b' } })]);
     }
-    expect(getActionSpec('plugins.execution_origin.set').inputSchema.safeParse({ pluginId: 'acme.plugin', origin }).success).toBe(false);
+    expect(getActionSpec('plugins.execution_origin.set').inputSchema.safeParse({ pluginId: 'acme.plugin', origin }).success).toBe(true);
     expect(getActionSpec('plugins.execution_origin.set').inputSchema.safeParse({ pluginId: 'acme.plugin', origin,
       contextualTarget: { ...contextualTarget, accountId: 'foreign' } }).success).toBe(false);
   });
   it('discovers and mutates the exact plugin preference through the client owner', async () => {
     for (const [rawId, input, output] of [
-      ['plugins.execution_origin.list', { pluginId: 'acme.plugin' }, { status: 'available', settingsVersion: 7, storedOrigin: null,
-        selectedOrigin: origin, candidates: [{ origin, version: '1.0.0', selectable: true }] }],
-      ['plugins.execution_origin.set', { pluginId: 'acme.plugin', origin, expectedSettingsVersion: 7 }, { status: 'applied', settingsVersion: 8 }],
-      ['plugins.execution_origin.clear', { pluginId: 'acme.plugin', expectedSettingsVersion: 7 }, { status: 'applied', settingsVersion: 8 }],
+      ['plugins.execution_origin.list', { pluginId: 'acme.plugin' }, { status: 'available', storedTarget: null, storedOrigin: null,
+        selectedOrigin: origin, selectionSource: 'auto', candidates: [{ origin, version: '1.0.0', selectable: true }] }],
+      ['plugins.execution_origin.set', { pluginId: 'acme.plugin', origin }, { status: 'applied' }],
+      ['plugins.execution_origin.clear', { pluginId: 'acme.plugin' }, { status: 'applied' }],
     ] as const) {
       const id = ActionIdSchema.parse(rawId);
       const spec = getActionSpec(id);
@@ -50,7 +50,7 @@ describe('plugin execution origin Action front door', () => {
   it('rejects cross-plugin origins and keeps mutations under shared confirmation policy', () => {
     const settings = ActionsSettingsV1Schema.parse({ v: 1 });
     const id = ActionIdSchema.parse('plugins.execution_origin.set');
-    expect(getActionSpec(id).inputSchema.safeParse({ pluginId: 'other.plugin', origin, expectedSettingsVersion: 7 }).success).toBe(false);
+    expect(getActionSpec(id).inputSchema.safeParse({ pluginId: 'other.plugin', origin }).success).toBe(false);
     expect(getActionSpec(id)).toMatchObject({ safety: 'safe', sideEffectClass: 'write' });
     expect(isApprovalRequiredByActionsSettings(id, settings, { surface: 'ui' })).toBe(false);
     expect(isApprovalRequiredByActionsSettings(id, settings, { surface: 'agent' })).toBe(false);

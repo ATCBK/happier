@@ -3,10 +3,12 @@ import { isTerminalAutomationRunStateV3 } from '@happier-dev/protocol/automation
 import { readSessionAwarenessWorkStatusV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 import type { SessionAwarenessPresentationFactsV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 import type { WorkflowInvocationLifecycleV1, WorkflowRunStateV1, WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
-import type { WorkerUpdateV1 } from '@happier-dev/protocol/sessions/relations/workerUpdateV1';
+import { classifyWorkerUpdateEventV1, type WorkerUpdateV1 } from '@happier-dev/protocol/sessions/relations/workerUpdateV1';
 import type { ActionOperationSnapshotV1, ActionOperationStateV1 } from '@happier-dev/protocol/actions/operations/v1';
+import type { PluginWorkItemCategoryV1 } from '@happier-dev/protocol/plugins/contributions/workItems';
 
 import {
+    HAPPIER_WORK_STATUS_BUCKETS,
     HAPPIER_WORK_STATUS_SEMANTIC_TONE,
     type HappierWorkStatusBucket,
     type HappierWorkStatusPresentation,
@@ -33,14 +35,17 @@ export const WORK_STATUS_PILL_VARIANT = HAPPIER_WORK_STATUS_SEMANTIC_TONE satisf
 
 /**
  * The state word of a worker update, as its card heads it: "<worker> finished its turn" (lab
- * `cards-T1`/`T2`). Lower-case and descriptive, because it continues the worker's name. A wake that
- * needs the person says so whatever the owner's last state was. A workflow state with no card word of
- * its own keeps the run owner's word.
+ * `cards-T1`/`T2`). Lower-case and descriptive, because it continues the worker's name. The source
+ * outcome distinguishes failure from a current request. A workflow state with no card word of its
+ * own keeps the run owner's word.
  */
 export function describeWorkerUpdateState(update: WorkerUpdateV1): string {
-    if (update.wake === 'needs_you' || update.ownerState === 'needs_input') return t('sessionWork.workerUpdate.state.needsYou');
-    if (update.wake === 'stalled' || update.ownerState === 'stalled') return t('sessionWork.workerUpdate.state.stalled');
+    const event = classifyWorkerUpdateEventV1(update);
+    if (event === 'needs_you') return t('sessionWork.workerUpdate.state.needsYou');
+    if (event === 'stalled') return t('sessionWork.workerUpdate.state.stalled');
     switch (update.ownerState) {
+        case 'needs_input': return t('sessionWork.workerUpdate.state.needsYou');
+        case 'stalled': return t('sessionWork.workerUpdate.state.stalled');
         case 'settled': return t('sessionWork.workerUpdate.state.settled');
         case 'published': return t('sessionWork.workerUpdate.state.published');
         case 'succeeded': return t('sessionWork.workerUpdate.state.finished');
@@ -69,13 +74,23 @@ type WorkflowFacts = Readonly<{
 }>;
 
 export type WorkStatusInput =
+    | Readonly<{ kind: 'task'; facts: Readonly<{
+        category: PluginWorkItemCategoryV1 | null;
+        word?: string;
+        /** Already classified by the same canonical owner; shared column priority selects the visible work. */
+        linkedStatuses: readonly WorkStatusPresentation[];
+    }> }>
     | Readonly<{ kind: 'action_operation'; facts: Readonly<{
         state: ActionOperationStateV1;
         observation: 'available' | 'reconnecting' | 'unavailable';
         setupReview?: ActionOperationSnapshotV1['setupReview'];
         word: string;
     }> }>
-    | Readonly<{ kind: 'worker_update'; facts: Readonly<{ update: WorkerUpdateV1 }> }>
+    | Readonly<{ kind: 'worker_update'; facts: Readonly<{
+        update: WorkerUpdateV1;
+        /** A needs-you notice the transcript has moved past: told in the past tense, no longer asking. */
+        earlier?: boolean;
+    }> }>
     | Readonly<{ kind: 'workflow_run'; facts: WorkflowFacts & Readonly<{ state: WorkStatusRunState; cancelRequested?: boolean }> }>
     | Readonly<{ kind: 'workflow_step'; facts: WorkflowFacts & Readonly<{ lifecycle: WorkStatusStepLifecycle; runStopPending?: boolean }> }>
     | Readonly<{ kind: 'session'; facts: Readonly<{
@@ -189,6 +204,17 @@ function presentWorkflow(shape: StatusShape, facts: WorkflowFacts): WorkStatusPr
 /** Maps owner facts into shared presentation. Words and lifecycle decisions stay with their owners. */
 export function resolveWorkStatusTone(input: WorkStatusInput): WorkStatusPresentation {
     switch (input.kind) {
+        case 'task': {
+            for (const bucket of HAPPIER_WORK_STATUS_BUCKETS) {
+                const linked = input.facts.linkedStatuses.find(status => status.bucket === bucket);
+                if (linked) return linked;
+            }
+            const category = input.facts.category;
+            const bucket = category === 'started' ? 'working'
+                : category === 'completed' || category === 'canceled' ? 'finished' : 'idle';
+            return { bucket, tone: 'neutral', word: input.facts.word
+                ?? (category === null ? t('common.unknown') : t(`workStatus.buckets.${bucket}`)) };
+        }
         case 'action_operation': {
             const { state, observation, setupReview, word } = input.facts;
             if (state === 'succeeded' || state === 'failed' || state === 'cancelled') {
@@ -200,9 +226,14 @@ export function resolveWorkStatusTone(input: WorkStatusInput): WorkStatusPresent
         case 'worker_update': {
             const { update } = input.facts;
             const word = describeWorkerUpdateState(update);
+            const event = classifyWorkerUpdateEventV1(update);
+            const asksNow = event === 'needs_you';
+            if (input.facts.earlier && asksNow && update.ownerState !== 'failed' && update.ownerState !== 'dispatch_failed') {
+                return { bucket: 'finished', tone: 'neutral', word: t('sessionWork.workerUpdate.state.neededYou') };
+            }
             const failed = update.ownerState === 'failed' || update.ownerState === 'dispatch_failed';
-            if (update.wake === 'needs_you') return { bucket: 'needs_you', tone: failed ? 'danger' : 'attention', word };
-            if (update.wake === 'stalled') return { bucket: 'offline', tone: 'neutral', word };
+            if (asksNow) return { bucket: 'needs_you', tone: 'attention', word };
+            if (event === 'stalled') return { bucket: 'offline', tone: 'neutral', word };
             if (update.workerKind === 'workflow_run') return presentWorkflow(RUN_STATUS[update.ownerState], { word });
             if (update.ownerState === 'needs_input') return { bucket: 'needs_you', tone: 'attention', word };
             if (update.ownerState === 'stalled') return { bucket: 'offline', tone: 'neutral', word };

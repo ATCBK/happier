@@ -180,9 +180,11 @@ async function speakWithLocalNeuralTts(ctx: LocalVoiceTtsRequest): Promise<void>
     let selectedVoiceId = localNeural.voiceId;
     let selectedName = selectedVoiceId;
     if (preparation?.preference) {
+        const controller = new AbortController();
+        const clearStopper = ctx.registerPlaybackStopper(() => controller.abort());
         try {
             const catalog = await readLocalNeuralVoiceCatalog({ config: ctx.tts.localNeural,
-                sessionId: ctx.sessionId, originMachineId, resolvedExecution });
+                sessionId: ctx.sessionId, originMachineId, resolvedExecution, signal: controller.signal });
             if (!current()) return;
             const selected = resolveSessionVoicePreference({
                 providerContributionId: BUILT_IN_LOCAL_NEURAL_VOICE_PROVIDER_ID,
@@ -201,6 +203,8 @@ async function speakWithLocalNeuralTts(ctx: LocalVoiceTtsRequest): Promise<void>
         } catch (error) {
             reportTtsFailure(ctx, error);
             return;
+        } finally {
+            clearStopper();
         }
     }
     if (!current()) return;

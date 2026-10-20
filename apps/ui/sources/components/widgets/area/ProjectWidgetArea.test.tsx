@@ -82,6 +82,70 @@ await import('@/components/projects/detail/ProjectOverviewWidgets');
 await import('@/components/appShell/plugins/AppShellPluginUiProjection');
 await import('@/components/ui/treeDragDrop/ui/EntityReleasePreview');
 
+it('mounts following Usage widgets with the Project scope without requiring a Source or an online checkout', async () => {
+  const fallback = createHomeHubArtifactHttpBoundary('viewer');
+  let area: ReturnType<typeof createLayoutArtifactHttpBoundary<WidgetAreaLayoutV1>> | undefined;
+  const connection = await restoreServerAccountForTest({
+    serverUrl: 'https://project-usage-mount.test', accountId: 'viewer',
+    request: (input, init) => new URL(String(input)).pathname.startsWith('/v1/artifacts') && area
+      ? area.request(input, init) : fallback.request(input, init),
+  });
+  const restoreLoader = await installRealActionExecutorModuleLoader();
+  try {
+    const surface: WidgetSurfaceRefV1 = { serverId: connection.home.id, accountId: 'viewer',
+      owner: { kind: 'project', projectId: 'mounted-project' } };
+    const { normalizeUsageQuery } = await import('@happier-dev/protocol/inputs/usageQuery');
+    const { readBuiltinWidgetDescriptorV1 } = await import('@happier-dev/protocol/widgets');
+    const paths = new Set(readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_daily' })!.inputs!.fields.map(field => field.path));
+    const query = normalizeUsageQuery({ period: { startMs: 1000 } });
+    const instance = (id: string) => ({ v: 1 as const, id,
+      definition: { kind: 'builtin' as const, id: 'usage_daily' },
+      bindings: { ...Object.fromEntries(Object.entries(query).filter(([path, value]) => value !== undefined && paths.has(path)).map(([path, value]) =>
+        [path, { kind: 'value' as const, value }])), projects: { kind: 'context' as const, slot: 'projects' } },
+    });
+    const saved = WidgetAreaLayoutV1Schema.parse({ v: 1, surface, items: [
+      { kind: 'widget', instance: instance('single'), area: 'main' },
+      { kind: 'group', id: 'group', width: 'full', area: 'main', children: [
+        { kind: 'widget', instance: instance('group-child') },
+      ] },
+    ] });
+    area = createLayoutArtifactHttpBoundary('viewer', {
+      artifactId: buildWidgetSurfaceArtifactIdV1(surface), kind: 'widget-area-layout.v1',
+      defaultLayout: saved, parseLayout: value => WidgetAreaLayoutV1Schema.parse(value),
+      buildHeader: buildWidgetSurfaceArtifactHeaderV1,
+    });
+    area.seed(saved);
+    const { ProjectWidgetArea, useProjectWidgetAreaBinding } = await import('./ProjectWidgetArea');
+    const { UsageWidgetBody } = await import('@/components/settings/usage/widgets/UsageWidgetBody');
+    const { ConfiguredWidgetRefusal } = await import('@/components/widgets/InstalledWidgetSurface');
+    const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+    const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+    function MountedProject() {
+      const binding = useProjectWidgetAreaBinding({ serverId: connection.home.id, projectName: 'Project',
+        projectRef: { id: 'offline-checkout', serverId: connection.home.id, machineId: 'offline-machine',
+          rootPath: '/repo', projectKey: 'mounted-project', createdAtMs: 1 } });
+      return <ProjectWidgetArea {...binding} projectName="Project" testID="project-usage" />;
+    }
+    const screen = await renderScreen(<AppShellPluginUiProjectionValueProvider value={{
+      pluginUiProjection: null, pluginBrowserProjection: null, phase: 'current', interactionEnabled: true,
+      machineId: null, serverId: connection.home.id, platform: 'web',
+      accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' },
+      reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {},
+    }}><InjectedAuthProvider credentials={connection.credentials}><MountedProject /></InjectedAuthProvider></AppShellPluginUiProjectionValueProvider>);
+    await vi.waitFor(() => {
+      const bodies = screen.findAllByType(UsageWidgetBody);
+      expect(bodies.map(body => ({ id: body.props.testID, projects: body.props.input.projects })),
+        JSON.stringify(screen.findAllByType(ConfiguredWidgetRefusal).map(node => node.props.resolution)))
+        .toEqual([
+          { id: 'project-usage.widget.single.body', projects: ['mounted-project'] },
+          { id: 'project-usage.widget.group-child.body', projects: ['mounted-project'] },
+        ]);
+    });
+    expect(area.writes).toEqual([]);
+    await screen.unmount();
+  } finally { restoreLoader(); await connection.dispose(); }
+});
+
 it('opens a foreign-Home Source dashboard as that Home viewer and refuses its revoked access without touching personal layouts', async () => {
   let document: ReturnType<typeof createLayoutArtifactHttpBoundary<WidgetAreaLayoutV1>> | undefined;
   let artifactId = '';
@@ -823,6 +887,16 @@ it.each(['stacked', 'phone'] as const)(
         buildHeader: buildWidgetSurfaceArtifactHeaderV1,
       });
       area.seed(saved);
+      // Adding a checkout-bound widget admits the checkout against the Account's Project rows.
+      const activeCheckout = {
+        id: 'checkout',
+        serverId: connection.home.id,
+        machineId: 'machine',
+        rootPath: '/repo',
+        projectKey: 'anchor',
+        createdAtMs: 1,
+      };
+      area.setWorkspaceRefs([activeCheckout]);
       const { useProjectWidgetAreaBinding } =
         await import('./ProjectWidgetArea');
       const { ProjectOverviewDocument } =
@@ -835,14 +909,7 @@ it.each(['stacked', 'phone'] as const)(
         useProjectWidgetAreaBinding({
           serverId: connection.home.id,
           projectName: 'Project',
-          activeCheckout: {
-            id: 'checkout',
-            serverId: connection.home.id,
-            machineId: 'machine',
-            rootPath: '/repo',
-            projectKey: 'anchor',
-            createdAtMs: 1,
-          },
+          activeCheckout,
         }),
       );
       if (composition === 'phone') windowSize.width = 390;

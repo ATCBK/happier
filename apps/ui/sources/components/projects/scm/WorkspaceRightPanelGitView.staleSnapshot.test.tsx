@@ -7,6 +7,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { projectManager } from '@/sync/runtime/orchestration/projectManager';
 import { EMPTY_SCM_CAPABILITIES } from '@/scm/core/snapshotMappers';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { ScmLogListResponseSchema } from '@happier-dev/protocol/scm';
 
 // Unrelated external Markdown package; fail if this Git path ever invokes it.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
@@ -83,6 +84,18 @@ function createSnapshot(isRepo: boolean): ScmWorkingSnapshot {
     };
 }
 
+function answerCurrentSnapshot() {
+    rpc.mockImplementation(async request => {
+        if (request.method === RPC_METHODS.SCM_STATUS_SNAPSHOT) {
+            return { success: true, snapshot: createSnapshot(true) };
+        }
+        if (request.method === RPC_METHODS.SCM_LOG_LIST) {
+            return ScmLogListResponseSchema.parse({ success: true, entries: [] });
+        }
+        throw new Error(`Unexpected SCM read: ${request.method}`);
+    });
+}
+
 async function render() {
     const { WorkspaceRightPanelGitView } = await import('./WorkspaceRightPanelGitView');
     return renderScreen(
@@ -123,7 +136,7 @@ describe('WorkspaceRightPanelGitView (stale snapshot)', () => {
 
         // The affordance is actionable, not just decorative.
         rpc.mockClear();
-        rpc.mockResolvedValue({ success: true, snapshot: createSnapshot(true) });
+        answerCurrentSnapshot();
         await screen.pressByTestIdAsync('workspace-rightpanel-git-stale-action');
         expect(rpc).toHaveBeenCalledWith(expect.objectContaining({ serverId: 's1', machineId: 'm1',
             method: RPC_METHODS.SCM_STATUS_SNAPSHOT, payload: expect.objectContaining({ cwd: rootPath }) }));
@@ -142,7 +155,7 @@ describe('WorkspaceRightPanelGitView (stale snapshot)', () => {
 
     it('stays quiet when the snapshot is current', async () => {
         storage.getState().updateWorkspaceScmSnapshot(scope(), createSnapshot(true));
-        rpc.mockResolvedValue({ success: true, snapshot: createSnapshot(true) });
+        answerCurrentSnapshot();
 
         const screen = await render();
 

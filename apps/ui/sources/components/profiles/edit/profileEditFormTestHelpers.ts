@@ -28,7 +28,7 @@ export async function publishProfileEditFormPrivateRowFixture(profile: AIBackend
     const record = ProfileRecordV1Schema.parse({ v: 1, id: profile.id,
         definition: { kind: 'legacy', profile: definition }, enabled: true, promptStack: [], secretBindings: {} });
     profiles.resetProfileCatalogSnapshotsForTests();
-    profiles.applyProfileCatalogSnapshot(scope, { status: 'ready', source: 'destination', records: [{ record, revision: 1 }],
+    profiles.applyProfileCatalogSnapshot(scope, { status: 'ready', source: 'destination', authority: 'active', records: [{ record, revision: 1 }],
         control: null, controlRevision: 'absent', referenceGuardRevision: 'absent', diagnostics: [] }, true);
     return () => profiles.resetProfileCatalogSnapshotsForTests();
 }

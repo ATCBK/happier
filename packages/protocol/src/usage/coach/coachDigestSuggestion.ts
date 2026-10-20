@@ -23,7 +23,7 @@ export function createUsageCoachDigestSuggestion(
     const lookbackMs = period.endMs - period.startMs;
     if (lookbackMs <= 0) return undefined;
     const query = normalizeUsageQuery(value);
-    return UsageCoachDigestSuggestionSchema.parse({
+    return {
         kind: 'recurring_automation', queryKey: getUsageQueryKey(query), query, lookbackMs,
         actionId: 'workflow.trigger.add', requiredInputs: ['project', 'trigger'],
         target: { kind: 'inline', definition: {
@@ -41,5 +41,5 @@ export function createUsageCoachDigestSuggestion(
             ],
             finalOutput: result('digest'),
         } },
-    });
+    };
 }

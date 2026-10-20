@@ -1,7 +1,8 @@
 import { useLocalSetting } from '@/sync/domains/state/storage';
+import { useGlassContentOverWallpaper } from '@/components/ui/glass/GlassSurface';
 
 import type { WidgetFramePlacement, WidgetFrameStyle } from './WidgetFrame';
-import { resolveWidgetFrameStyle } from './widgetFrameStyle';
+import { resolveWidgetFrameStyle, WIDGET_FRAME_PLACEMENT_DEFAULTS } from './widgetFrameStyle';
 
 const SURFACE_SETTING = {
     home: 'widgetFrameStyleHome',
@@ -18,4 +19,20 @@ export function useWidgetFrameSurfaceDefault(placement: WidgetFramePlacement): W
 export function useWidgetFrameStyle(placement: WidgetFramePlacement, override?: WidgetFrameStyle | null): WidgetFrameStyle {
     const surfaceDefault = useWidgetFrameSurfaceDefault(placement);
     return resolveWidgetFrameStyle({ placement, surfaceDefault, override: override ?? null });
+}
+
+/**
+ * How a widget area (a Project or plugin page) frames one widget. A frame the person chose applies as set,
+ * Plain included. A widget with no choice follows the area's default: where the page's content stands on
+ * the Wallpaper picture itself that default is the card (Elements, atmosphere amendment A1), since a
+ * frameless default would put its text on raw pixels; elsewhere it is the placement's default. Home needs
+ * no branch here: its default is already the card, and its Appearance choice is the person's own.
+ */
+export function useWidgetAreaFrame(placement: WidgetFramePlacement, override?: WidgetFrameStyle | null): Readonly<{
+    style: WidgetFrameStyle;
+    /** What "no choice" resolves to here; the frame menu's way back. */
+    areaDefault: WidgetFrameStyle;
+}> {
+    const areaDefault = useGlassContentOverWallpaper() ? 'card' : WIDGET_FRAME_PLACEMENT_DEFAULTS[placement];
+    return { style: resolveWidgetFrameStyle({ placement, surfaceDefault: areaDefault, override: override ?? null }), areaDefault };
 }

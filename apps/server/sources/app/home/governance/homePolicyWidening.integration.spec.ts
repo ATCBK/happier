@@ -47,6 +47,7 @@ async function actionEnabled(env: NodeJS.ProcessEnv, methodId: string, actionId:
 
 async function authenticationOptions(owner: string, env: NodeJS.ProcessEnv): Promise<HomeAuthenticationOptionsV1> {
     const projection = await inTx(async (tx) => await readHomeGovernanceProjectionInTx(tx, {
+        emailDeliveryReady: false,
         viewerAccountId: owner,
         teamsEnabled: false,
         env,
@@ -150,6 +151,7 @@ describe("Home policy in both directions", () => {
         const owner = await createOwner();
         await expect(inTx(async (tx) => {
             const applied = await setHomeGovernancePolicyInTx(tx, {
+                emailDeliveryReady: false,
                 actorAccountId: owner,
                 env: MTLS_CAPABLE_ENV,
                 patch: { expectedRevision: 0, confirmWidening: true, authenticationPolicy: { v: 1, admission: "closed" } },
@@ -186,7 +188,7 @@ describe("Home policy in both directions", () => {
         expect(options.storagePolicy).toEqual({ running: "required_e2ee", pending: "optional", fixedBy: null });
 
         // The editor replaces the whole document, so the stored value must come back as stored.
-        const projection = await inTx(async (tx) => await readHomeGovernanceProjectionInTx(tx, { viewerAccountId: owner, teamsEnabled: false, env }));
+        const projection = await inTx(async (tx) => await readHomeGovernanceProjectionInTx(tx, { emailDeliveryReady: false, viewerAccountId: owner, teamsEnabled: false, env }));
         if (projection.status !== "ok") throw new Error("projection rejected");
         expect(projection.result.policy.authentication).toMatchObject({ status: "narrowed", storagePolicy: "optional", anonymousSignup: null });
 

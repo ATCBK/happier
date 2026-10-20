@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
 
-import type { PluginUiSurfacePlacementProjection } from '@/sync/domains/plugins/ui/projection';
+import { EMPTY_PLUGIN_UI_PROJECTION, type PluginUiSurfacePlacementProjection } from '@/sync/domains/plugins/ui/projection';
+import { createPluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
 import { readPluginSurfaceMountBinding } from '@/components/plugins/surfaces/pluginSurfaceMountBinding';
 import {
     buildPluginAppPageRoutePath,
@@ -56,6 +57,35 @@ function createPagePlacement(
 }
 
 describe('plugin app page catalog (EU-5b)', () => {
+    it('localizes a declared description before any renderer loads, preserving omission', () => {
+        const description = { key: 'notes.purpose', fallback: 'Review incoming work.' };
+        const [page] = resolvePluginAppPages({
+            placements: [createPagePlacement({ display: { title: 'Notes', description } })],
+            localize: createPluginLocalizedTextResolver({ locale: 'fr', projection: {
+                ...EMPTY_PLUGIN_UI_PROJECTION,
+                translationsByPluginId: { [NOTES_PLUGIN_ID]: {
+                    id: `translations:${NOTES_PLUGIN_ID}`, pluginId: NOTES_PLUGIN_ID, contributionKind: 'translations',
+                    locales: ['fr'],
+                    bundles: { fr: { 'notes.purpose': 'Relire le travail entrant.' } },
+                } },
+            } }),
+        });
+        expect(page?.description).toBe('Relire le travail entrant.');
+        expect(resolvePluginAppPages({ placements: [createPagePlacement()] })[0]).not.toHaveProperty('description');
+    });
+
+    it('carries a declared toolbar header style before any renderer loads, preserving omission', () => {
+        const [toolbarPage] = resolvePluginAppPages({
+            placements: [createPagePlacement({ display: { title: 'Notes', headerStyle: 'toolbar' } })],
+        });
+        expect(toolbarPage?.headerStyle).toBe('toolbar');
+        expect(resolvePluginAppPages({ placements: [createPagePlacement()] })[0]).not.toHaveProperty('headerStyle');
+        const [unknown] = resolvePluginAppPages({
+            placements: [createPagePlacement({ display: { title: 'Notes', headerStyle: 'banner' } })],
+        });
+        expect(unknown).not.toHaveProperty('headerStyle');
+    });
+
     it('projects a declared page into a qualified, host-generated destination', () => {
         const pages = resolvePluginAppPages({ placements: [createPagePlacement()] });
 

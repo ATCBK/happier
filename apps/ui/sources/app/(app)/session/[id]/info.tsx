@@ -83,7 +83,7 @@ import { resolveSessionActionDefaultBackendTitle } from '@/sync/domains/session/
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { createSessionActionTarget } from '@/components/sessions/actions/sessionActionContext';
 import { useAccountSessionFollowEditorHost } from '@/components/sessions/follow/useAccountSessionFollowEditorHost';
-import { SessionFollowSourcesEditor } from '@/components/sessions/follow/SessionFollowSourcesEditor';
+import { SessionSetupSections } from '@/components/sessions/work/SessionSetupSections';
 import { executeSessionAction } from '@/components/sessions/actions/sessionActionExecution';
 import {
     SESSION_ACTION_ARCHIVE_ID,
@@ -139,8 +139,11 @@ import { PluginInlineSurfaceHost } from '@/components/plugins/surfaces';
 import { evaluatePluginUiPolicy } from '@/sync/domains/plugins/ui/policy';
 import { usePluginUiSessionPolicyEvaluationContext } from '@/components/sessions/model/usePluginUiSessionPolicyEvaluationContext';
 import { WorkspaceSyncRelationshipList } from '@/components/workspaces/sync/WorkspaceSyncRelationshipList';
+import { openWorkspaceSyncAddMachine } from '@/components/workspaces/sync/openWorkspaceSyncAddMachine';
+import { openWorkspaceSyncRelationshipDetails } from '@/components/workspaces/sync/openWorkspaceSyncRelationshipDetails';
 import { resolveSessionWorkspaceDisplayPresentation } from '@/sync/domains/session/listing/sessionWorkspaceDisplayPresentation';
-import { getMachineDisplayName, isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { getSessionMachineLabel } from '@/utils/sessions/machineDisplayNames';
 import { machinePageHref } from '@/components/settings/machines/collection/machineCollectionModel';
 
 type RawJsonSectionId = 'agentState' | 'metadata' | 'sessionStatus' | 'session';
@@ -417,7 +420,11 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
             .find((machine) => machine.id === currentExecutionMachineId)
         : null;
     const currentExecutionMachineLabel = currentExecutionMachineId
-        ? getMachineDisplayName(currentExecutionMachine) ?? currentExecutionMachineId
+        ? getSessionMachineLabel({
+            machineId: currentExecutionMachineId,
+            machine: currentExecutionMachine,
+            session: { machineId: metadata?.machineId, host: metadata?.host },
+        })
         : null;
     const handoffAvailability = resolveSessionHandoffUiAvailability({
         sessionId: session.id,
@@ -435,6 +442,16 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     const newSessionSeedDirectory = readSessionDirectoryKind(metadata) === 'managed'
         ? null
         : reachableMachineTarget?.basePath ?? metadata?.path ?? null;
+
+    // The empty Workspace sync section offers the one thing sync starts with: another machine for this folder.
+    const workspaceSyncSource = workspaceDisplay.workspaceScope;
+    const workspaceSyncRefId = workspaceDisplay.workspaceRefId;
+    const addMachineToWorkspace = React.useMemo(() => workspaceSyncSource
+        ? () => openWorkspaceSyncAddMachine(
+            { ...workspaceSyncSource, ...(workspaceSyncRefId ? { id: workspaceSyncRefId } : {}) },
+            (summary) => openWorkspaceSyncRelationshipDetails(summary, workspaceSyncRefId),
+        )
+        : undefined, [workspaceSyncRefId, workspaceSyncSource]);
 
     const vendorResumeLabelKey = core?.resume.uiVendorResumeIdLabelKey ?? null;
     const vendorResumeCopiedKey = core?.resume.uiVendorResumeIdCopiedKey ?? null;
@@ -611,9 +628,12 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     const canStopSession = sessionActionTarget.isActive && sessionActionTarget.canStop;
     const canArchiveSession = sessionActionTarget.canArchive;
     const visibleSessionActionIds = React.useMemo(
-        () => contentUnavailable
-            ? new Set<string>()
-            : new Set(listVisibleSessionActionIds({ target: sessionActionTarget, surface: 'sessionInfo' })),
+        () => {
+            const actionIds = listVisibleSessionActionIds({ target: sessionActionTarget, surface: 'sessionInfo' });
+            return new Set(contentUnavailable
+                ? actionIds.filter((actionId) => actionId === SESSION_ACTION_ARCHIVE_ID || actionId === SESSION_ACTION_DELETE_ID)
+                : actionIds);
+        },
         [contentUnavailable, sessionActionTarget],
     );
     const canRenameSession = visibleSessionActionIds.has(SESSION_ACTION_RENAME_ID);
@@ -798,21 +818,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
         });
         handleExitAfterSessionMutation();
     }, [handleExitAfterSessionMutation, hideInactiveSessions, sessionActionTarget]);
-    const [stoppingSession, performStop] = useHappyAction(handleStopAndMaybeArchive);
-
-    const handleStopSession = useCallback(async () => {
-        const confirmed = await Modal.confirm(
-            t('sessionInfo.stopSession'),
-            t('sessionInfo.stopSessionConfirm'),
-            {
-                cancelText: t('common.cancel'),
-                confirmText: t('sessionInfo.stopSession'),
-                destructive: true,
-            },
-        );
-        if (!confirmed) return;
-        await performStop();
-    }, [performStop]);
+    const [stoppingSession, handleStopSession] = useHappyAction(handleStopAndMaybeArchive);
 
     const handleArchive = useCallback(async () => {
         await executeSessionAction({
@@ -820,8 +826,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
             target: sessionActionTarget,
             context: { hideInactiveSessions },
         });
-        handleExitAfterSessionMutation();
-    }, [handleExitAfterSessionMutation, hideInactiveSessions, sessionActionTarget]);
+    }, [hideInactiveSessions, sessionActionTarget]);
     const [archivingSession, performArchive] = useHappyAction(handleArchive);
 
     // A launcher only, exactly like the Session header: strategy is chosen
@@ -893,6 +898,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
         await executeSessionAction({
             actionId: SESSION_ACTION_DELETE_ID,
             target: sessionActionTarget,
+            context: { presentUserConfirmation: { actionId: 'session.delete' } },
         });
         handleExitAfterSessionMutation();
     });
@@ -1047,25 +1053,14 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                     </View>
                 ))}
 
-                {/* Activity: what the agent is doing, and whether you hear about it. */}
-                {!contentUnavailable ? followEditor.editor : null}
+                {/* How this agent is set up (coordination lab P1i): Role, Instructions, Memory, Context, Voice,
+                    Triggers, Roles and Notes. Who hears about it, and what it follows, is its People pane. */}
+                {!contentUnavailable && scopedMutationServerId ? (
+                    <SessionSetupSections session={session} serverId={scopedMutationServerId} />
+                ) : null}
+
+                {/* Activity: what the agent is doing. */}
                 {!contentUnavailable ? <ItemGroup title={t('sessionInfo.activity')} description={t('sessionPages.info.activityDescription')}>
-                    {visibleSessionActionIds.has('ui.session.follow') ? (
-                        <View ref={followEditor.anchorRef} collapsable={false}>
-                            <Item
-                                pressableRef={followEditor.triggerRef}
-                                testID="session-info-follow"
-                                title={t('session.follow.editor.title')}
-                                onPress={() => {
-                                    void executeSessionAction({
-                                        actionId: 'ui.session.follow',
-                                        target: sessionActionTarget,
-                                        context: { operations: { openFollowEditor: followEditor.openEditor } },
-                                    });
-                                }}
-                            />
-                        </View>
-                    ) : null}
                     <Item
                         title={t('sessionInfo.sessionStatus')}
                         detail={sessionStatus.statusText}
@@ -1088,11 +1083,6 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                         </>
                     ) : null}
                 </ItemGroup> : null}
-                {!contentUnavailable ? <SessionFollowSourcesEditor
-                    destination={session}
-                    serverId={scopedMutationServerId}
-                    destinationMachineId={currentExecutionMachineId}
-                /> : null}
 
                 {/* Continue: new work from where this session is. */}
                 {!contentUnavailable ? <ItemGroup title={t('sessionPages.info.continueTitle')} description={t('sessionPages.info.continueDescription')}>
@@ -1238,7 +1228,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                     />
                 </ItemGroup> : null}
 
-                {!contentUnavailable ? <WorkspaceSyncRelationshipList workspaceRefId={workspaceDisplay.workspaceRefId} /> : null}
+                {!contentUnavailable ? <WorkspaceSyncRelationshipList workspaceRefId={workspaceDisplay.workspaceRefId} onAddMachine={addMachineToWorkspace} /> : null}
 
                 {/* Environment: the machine, folder and agent this session runs with. */}
                 {metadata && (
@@ -1519,7 +1509,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                 )}
 
                 {/* Leaving: quiet buttons; the irreversible one stands apart at the end. */}
-                {!contentUnavailable && (showStop || showArchive || showDelete) ? (
+                {showStop || showArchive || showDelete ? (
                     <ItemGroup surface="none" accessibilityLabel={t('sessionPages.info.leaveLabel')}>
                         <View testID="session-info-leave-actions" style={infoStyles.leaveActions}>
                             {showStop && stopInfoItemProps ? (

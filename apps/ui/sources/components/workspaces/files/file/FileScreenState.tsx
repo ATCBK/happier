@@ -1,4 +1,6 @@
 import { Image, View } from 'react-native';
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import { Modal } from '@/modal';
 
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -74,7 +76,19 @@ export function FileBinaryState({
             }}
         >
             {typeof imagePreviewUri === 'string' && imagePreviewUri.trim().length > 0 ? (
-                <View
+                <HappierPressable
+                    testID="file-image-preview"
+                    accessibilityRole="button"
+                    accessibilityLabel={`${t('common.open')}: ${filePath}`}
+                    disabled={!workspaceScope}
+                    onPress={async () => {
+                        if (!workspaceScope) return;
+                        const { AttachmentImagePreviewModal } = await import('@/components/sessions/attachments/preview/AttachmentImagePreviewModal');
+                        Modal.show({
+                            component: AttachmentImagePreviewModal,
+                            props: { images: [{ kind: 'session-image', sessionId: '', workspaceScope, filePath, title: getBasename(filePath) }] },
+                        });
+                    }}
                     style={{
                         width: '100%',
                         maxWidth: 720,
@@ -93,7 +107,7 @@ export function FileBinaryState({
                         style={{ width: '100%', height: '100%' }}
                         accessibilityLabel={t('files.binaryFile')}
                     />
-                </View>
+                </HappierPressable>
             ) : null}
             <Text
                 style={{

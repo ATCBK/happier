@@ -27,7 +27,6 @@ export function useNewSessionProfileBackendReconciliation(params: Readonly<{
     applyPermissionMode: (mode: PermissionMode, source: 'user' | 'auto') => void;
     resolveDefaultPermissionMode: (profile: AIBackendProfile | null) => PermissionMode;
     prepareSecretPromptForProfileSelection: (prevProfileId: string | null) => void;
-    hasUserTouchedProfileSelectionRef: React.MutableRefObject<boolean>;
     agentType: string;
     resolveProfileAuthoringIntent?: (profileId: string) => Readonly<{
         preferredAgentTargetKey: string | null;
@@ -79,7 +78,6 @@ export function useNewSessionProfileBackendReconciliation(params: Readonly<{
         const prevSelectedProfileId = params.selectedProfileId;
         const requestId = latestSelectionRequestIdRef.current + 1;
         latestSelectionRequestIdRef.current = requestId;
-        params.hasUserTouchedProfileSelectionRef.current = true;
         pendingProfileSelectionRef.current = { profileId, prevProfileId: prevSelectedProfileId, requestId };
         const profile = params.profileMap.get(profileId) || getBuiltInProfile(profileId);
         const authoringIntent = params.resolveProfileAuthoringIntent?.(profileId) ?? null;
@@ -103,7 +101,6 @@ export function useNewSessionProfileBackendReconciliation(params: Readonly<{
     }, [
         params.machineAgentsById,
         params.getCompatibleProfileBackendEntries,
-        params.hasUserTouchedProfileSelectionRef,
         params.prepareSecretPromptForProfileSelection,
         params.profileMap,
         params.resolveProfileAuthoringIntent,
@@ -185,9 +182,11 @@ export function useNewSessionProfileBackendReconciliation(params: Readonly<{
         }
 
         const compatibleBackendEntries = params.getCompatibleProfileBackendEntries(profile);
-        const currentSelectable = isCurrentCompatibleBackendSelectable(compatibleBackendEntries);
+        // Inventory refresh or sign-in readiness must not replace compatible
+        // authored intent. Only an incompatible profile needs another Agent.
+        const currentCompatible = compatibleBackendEntries.some((entry) => entry.backendTargetKey === params.selectedBackendTargetKey);
 
-        if (compatibleBackendEntries.length > 0 && !currentSelectable) {
+        if (compatibleBackendEntries.length > 0 && !currentCompatible) {
             const nextEntry = resolveNextCompatibleBackendEntry(compatibleBackendEntries);
             if (nextEntry) {
                 params.setBackendTarget(nextEntry.backendTarget);
@@ -200,7 +199,6 @@ export function useNewSessionProfileBackendReconciliation(params: Readonly<{
         params.selectedProfileId,
         params.setBackendTarget,
         params.useProfiles,
-        isCurrentCompatibleBackendSelectable,
         resolveNextCompatibleBackendEntry,
     ]);
 

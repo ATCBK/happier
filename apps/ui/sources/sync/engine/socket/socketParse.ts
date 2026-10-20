@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { ExternalSessionTranscriptInvalidationV1 } from '@happier-dev/protocol';
 import { EphemeralUpdateSchema, UpdateContainerSchema } from '@happier-dev/protocol/updates';
 import type { UpdateContainer, EphemeralUpdate } from '@happier-dev/protocol/updates';
@@ -7,35 +7,35 @@ export type ExternalSessionTranscriptUpdatedEphemeralUpdate =
     ExternalSessionTranscriptInvalidationV1;
 
 const LegacySharingUpdateBodySchema = z.discriminatedUnion('t', [
-    z.object({
+    z.looseObject({
         t: z.literal('session-shared'),
         sessionId: z.string(),
-        shareId: z.string().optional(),
-    }).passthrough(),
-    z.object({
+        shareId: z.optional(z.string()),
+    }),
+    z.looseObject({
         t: z.literal('session-share-updated'),
         sessionId: z.string(),
-        shareId: z.string().optional(),
-    }).passthrough(),
-    z.object({
+        shareId: z.optional(z.string()),
+    }),
+    z.looseObject({
         t: z.literal('session-share-revoked'),
         sessionId: z.string(),
-        shareId: z.string().optional(),
-    }).passthrough(),
-    z.object({
+        shareId: z.optional(z.string()),
+    }),
+    z.looseObject({
         t: z.literal('public-share-created'),
         sessionId: z.string(),
-        publicShareId: z.string().optional(),
-    }).passthrough(),
-    z.object({
+        publicShareId: z.optional(z.string()),
+    }),
+    z.looseObject({
         t: z.literal('public-share-updated'),
         sessionId: z.string(),
-        publicShareId: z.string().optional(),
-    }).passthrough(),
-    z.object({
+        publicShareId: z.optional(z.string()),
+    }),
+    z.looseObject({
         t: z.literal('public-share-deleted'),
         sessionId: z.string(),
-    }).passthrough(),
+    }),
 ]);
 
 export function parseUpdateContainer(update: unknown): UpdateContainer | null {

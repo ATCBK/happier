@@ -3,7 +3,7 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createReadStream } from 'node:fs';
-import { afterEach, beforeEach, describe, it } from 'vitest';
+import { requireVitestContractRunner } from './vitestContractRunner.js';
 import { projectMcpToolLaunchPolicyV1 } from '@happier-dev/protocol/mcp/servers/tools/resolveMcpToolDecisionV1';
 import { AgentSessionConfigurationSnapshotV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import type { AgentContribution } from '../agents.js';
@@ -146,6 +146,7 @@ function configuration(mode: AgentPermissionIntent): AgentSessionConfigurationSn
 /** Register K7/K8/K8b/K8c/K9 using actual leaf invocation and actual server receipts.
  * Boundary fixtures characterize wiring; only the separate real-vendor probes admit declarations. */
 export function runAgentMcpToolPolicyContract(input: AgentMcpToolPolicyContractInput): void {
+    const { afterEach, beforeEach, describe, it } = requireVitestContractRunner();
     const tools = 'tools' in input.agent.capabilities ? input.agent.capabilities.tools : undefined;
     const declared = tools?.mcpToolControl;
     const control = declared ?? input.candidateControl;

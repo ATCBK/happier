@@ -174,10 +174,10 @@ describe('NewSessionModelSelectionContent', () => {
 
         const trigger = screen.findAll((row) => (
             row.props.testID === 'new-session-model-dropdown-trigger'
-            && row.props.title === 'newSession.selectModelTitle'
+            && row.props.title === 'Model A'
             && typeof row.props.onPress === 'function'
         )).at(-1);
-        expect(trigger?.props.subtitle).toBe('Model A');
+        expect(trigger?.props.subtitle).toBeUndefined();
         expect(trigger?.props.detail).toBeUndefined();
         expect(captured.pickerProps).toBeNull();
 
@@ -223,10 +223,10 @@ describe('NewSessionModelSelectionContent', () => {
 
         const trigger = screen.findAll((row) => (
             row.props.testID === 'new-session-model-dropdown-trigger'
-            && row.props.title === 'newSession.selectModelTitle'
+            && row.props.title === 'Shared Provider model'
             && typeof row.props.onPress === 'function'
         )).at(-1);
-        expect(trigger?.props.subtitle).toBe('Shared Provider model');
+        expect(trigger?.props.subtitle).toBeUndefined();
         expect(trigger?.props.detail).toContain('Personal');
         expect(trigger?.props.detail).not.toContain('Work');
         expect(trigger?.props.accessibilityLabel).toContain('Personal');
@@ -269,10 +269,10 @@ describe('NewSessionModelSelectionContent', () => {
 
         const trigger = screen.findAll((row) => (
             row.props.testID === 'new-session-model-dropdown-trigger'
-            && row.props.title === 'newSession.selectModelTitle'
+            && row.props.title === 'Previous model'
             && typeof row.props.onPress === 'function'
         )).at(-1);
-        expect(trigger?.props.subtitle).toBe('Previous model');
+        expect(trigger?.props.subtitle).toBeUndefined();
         expect(trigger?.props.detail).toBe('settingsProviders.errors.notFoundDescription');
         expect(trigger?.props.accessibilityLabel).toBe(
             'newSession.selectModelTitle. Gateway, Retired connection, Previous model. settingsProviders.errors.notFoundDescription',

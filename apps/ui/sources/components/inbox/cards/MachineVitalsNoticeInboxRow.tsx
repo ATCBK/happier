@@ -9,7 +9,7 @@ import {
 } from '@/components/machines/vitals/machineVitalsPresentation';
 import { formatAlertSustain } from '@/components/machines/vitals/machineAlertsPresentation';
 import { resolveMachineResourceToneColor } from '@/components/machines/summary/machineSummaryStripModel';
-import { machinePageHref, machineResourceAlertTab } from '@/components/machines/page/machinePageHref';
+import { machineVitalsNoticeHref, machineVitalsNoticeTab } from '@/components/machines/page/machinePageHref';
 import { beginMachinePageTabIntent } from '@/components/machines/page/machinePageIntent';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -18,7 +18,7 @@ import { Modal } from '@/modal';
 import type { OpenUsageNoticeArtifact } from '@/sync/domains/artifacts/usageNoticeArtifacts';
 import { useMachine } from '@/sync/store/hooks';
 import { t } from '@/text';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 
 import { InboxRelativeTime } from '../InboxRelativeTime';
 import { InboxWorkRow } from '../InboxWorkRow';
@@ -29,16 +29,6 @@ export function readMachineVitalsNotice(
 ): MachineVitalsNotificationV1 | null {
   const notice = entry.header.notice;
   return notice.topic === 'resource_limit' ? notice : null;
-}
-
-/** The Inbox opens a notice where its push would. */
-export function machineVitalsNoticeHref(notice: MachineVitalsNotificationV1): string {
-  return machinePageHref({ door: 'rail', target: { machineId: notice.machineId }, tab: machineVitalsNoticeTab(notice) });
-}
-
-/** The tab a notice opens: Storage prepared for the disk it names, or Processes sorted for memory or CPU. */
-export function machineVitalsNoticeTab(notice: MachineVitalsNotificationV1) {
-  return machineResourceAlertTab(notice.kind, notice.kind === 'disk_nearly_full' ? notice.volumeId : null);
 }
 
 /** The notice's title and its one line of evidence, as the lab's Inbox · Machines lines say them. */
@@ -142,7 +132,7 @@ export const MachineVitalsNoticeInboxRow = React.memo(
     const name =
       props.notice.machineName ??
       (machine
-        ? getMachineDisplayName(machine)
+        ? getMachineSentenceName(machine)
         : t('machineVitals.inbox.aMachine'));
     const { title, detail } = describeMachineVitalsNotice(props.notice, name);
     const recovered = props.notice.phase === 'recovered';

@@ -4,6 +4,8 @@ import { BrowserContextMessageMetaV1Schema, BrowserContextMessagePayloadV1Schema
 import { HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1, readHappierStructuredInputV1FromMeta } from '@happier-dev/protocol/runtime/input/structuredInputV1';
 import { sanitizeSessionUserMessageSendMeta } from '@happier-dev/protocol/sessions/userMessageRpc';
 import { SessionMediaMessageMetaV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMediaV1';
+import type { SessionAttachmentDescriptorV1 } from '@happier-dev/protocol/messages/structured/sessionAttachmentsInputV1';
+import { buildReviewCommentsV1MessageMeta } from '@happier-dev/protocol/messages/structured/reviewCommentsInput';
 import type { ComposerAttachmentDraftV1, ComposerAttachmentInputV1, HappierStructuredInputV1, SessionMediaItemV1 } from '@happier-dev/protocol';
 
 type MetadataRecord = Record<string, unknown>;
@@ -15,6 +17,9 @@ export type SessionStructuredInputAdmissionErrorCode =
   | 'session_structured_input_attachment_preparation_unexpected'
   | 'session_structured_input_session_media_invalid'
   | 'session_structured_input_browser_context_invalid'
+  | 'session_structured_input_session_attachment_invalid'
+  | 'session_structured_input_session_attachment_preparation_required'
+  | 'session_attachment_upload_checkpoint_stale'
   | 'session_structured_input_dispatch_resolution_forbidden';
 
 /**
@@ -47,6 +52,27 @@ function asRecord(value: unknown): MetadataRecord | null {
 
 function throwAdmissionFailure(code: SessionStructuredInputAdmissionErrorCode): never {
   throw new SessionStructuredInputAdmissionError(code);
+}
+
+/** Project authored review context before SessionMedia chooses its metadata slot. */
+function projectRawIngressReviewCommentsV1(
+  meta: MetadataRecord | null,
+  sourceMeta: MetadataRecord = meta ?? {},
+): MetadataRecord | null {
+  const sourceEnvelope = asRecord(sourceMeta[HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]);
+  const envelope = meta ? asRecord(meta[HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]) : null;
+  if (sourceEnvelope?.reviewComments === undefined && envelope?.reviewComments === undefined) return meta;
+
+  const source = RawIngressStructuredInputV1Schema.safeParse(sourceEnvelope);
+  if (!source.success) throwAdmissionFailure('session_structured_input_attachment_invalid');
+  const { reviewComments: _discardedReviewComments, ...persistedEnvelope } = envelope ?? {};
+  const projected = {
+    ...(meta ?? {}),
+    ...(envelope ? { [HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]: persistedEnvelope } : {}),
+  };
+  return source.data.reviewComments
+    ? buildReviewCommentsV1MessageMeta({ payload: source.data.reviewComments, metaOverrides: projected })
+    : projected;
 }
 
 function readSelectedRawAttachments(meta: MetadataRecord): readonly ComposerAttachmentDraftV1[] {
@@ -151,11 +177,21 @@ function validatePreparedAttachments(params: Readonly<{
 export function validateComposerAttachmentRejoinCorrespondenceV1(params: Readonly<{
   meta: MetadataRecord;
   preparedComposerAttachments: readonly ComposerAttachmentInputV1[];
+  preparedSessionAttachments?: readonly SessionAttachmentDescriptorV1[];
 }>): void {
   validatePreparedAttachments({
     selected: readSelectedRawAttachments(params.meta),
     prepared: params.preparedComposerAttachments,
   });
+  const raw = RawIngressStructuredInputV1Schema.safeParse(params.meta[HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]);
+  const selected = raw.success ? raw.data.sessionAttachments ?? [] : [];
+  const prepared = params.preparedSessionAttachments ?? [];
+  if (selected.length !== prepared.length || selected.some((handle, index) => {
+    const issued = prepared[index]?.attachmentHandle;
+    return !issued || issued.v !== handle.v || issued.sessionId !== handle.sessionId || issued.id !== handle.id;
+  })) {
+    throwAdmissionFailure('session_structured_input_session_attachment_invalid');
+  }
 }
 
 function readSessionMediaMetadata(meta: MetadataRecord): readonly unknown[] {
@@ -273,9 +309,10 @@ export function preserveComposerAttachmentSelectionAcrossSessionInputTransformV1
   transformedMeta: MetadataRecord | null;
 }>): MetadataRecord | null {
   const selected = readSelectedRawAttachments(params.sourceMeta);
+  const transformedMeta = projectRawIngressReviewCommentsV1(params.transformedMeta, params.sourceMeta);
   const sourceEnvelope = asRecord(params.sourceMeta[HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]);
-  const transformedEnvelope = params.transformedMeta
-    ? asRecord(params.transformedMeta[HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1])
+  const transformedEnvelope = transformedMeta
+    ? asRecord(transformedMeta[HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1])
     : null;
 
   // Dispatch-only values are never a raw transform result. Keep the existing
@@ -289,7 +326,7 @@ export function preserveComposerAttachmentSelectionAcrossSessionInputTransformV1
   const transformedHasComposerAttachments = transformedEnvelope
     && Object.prototype.hasOwnProperty.call(transformedEnvelope, 'composerAttachments');
   if (!sourceHasComposerAttachments && !transformedHasComposerAttachments) {
-    return params.transformedMeta;
+    return transformedMeta;
   }
 
   if (!sourceHasComposerAttachments) {
@@ -298,13 +335,13 @@ export function preserveComposerAttachmentSelectionAcrossSessionInputTransformV1
     const { composerAttachments: _discardedComposerAttachments, ...transformedWithoutComposerAttachments } =
       transformedEnvelope ?? {};
     return {
-      ...(params.transformedMeta ?? {}),
+      ...(transformedMeta ?? {}),
       [HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]: transformedWithoutComposerAttachments,
     };
   }
 
   return {
-    ...(params.transformedMeta ?? {}),
+    ...(transformedMeta ?? {}),
     [HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]: {
       ...(transformedEnvelope ?? {}),
       v: 1,
@@ -325,7 +362,10 @@ export function admitSessionStructuredInputV1(params: Readonly<{
   admissionPolicy?: SessionStructuredInputAdmissionPolicyV1;
   preparedComposerAttachments?: readonly ComposerAttachmentInputV1[];
 }>): AdmittedSessionStructuredInputV1 {
-  const rawMeta = { ...params.meta };
+  const rawMeta = projectRawIngressReviewCommentsV1(params.meta) ?? params.meta;
+  if (asRecord(rawMeta[HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1])?.sessionAttachments !== undefined) {
+    throwAdmissionFailure('session_structured_input_session_attachment_preparation_required');
+  }
   const selected = readSelectedRawAttachments(rawMeta);
   const prepared = validatePreparedAttachments({
     selected,

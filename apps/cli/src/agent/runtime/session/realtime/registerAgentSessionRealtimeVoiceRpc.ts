@@ -7,7 +7,7 @@ import {
 import { raceWithTimeout } from '@happier-dev/plugin-sdk/async';
 import { AgentSessionRealtimeInspectRequestV1Schema, AgentSessionRealtimeStartRequestV1Schema, AgentSessionRealtimeStartResultV1Schema, AgentSessionRealtimeStopRequestV1Schema, AgentSessionRealtimeWatchRequestV1Schema } from '@happier-dev/protocol/voice/realtime/agentSession';
 import type { PluginContributionIdentityV1, VoiceProviderContribution } from '@happier-dev/protocol';
-import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 import type { RpcHandlerContext, RpcHandlerRegistrar } from '@/api/rpc/types';
 

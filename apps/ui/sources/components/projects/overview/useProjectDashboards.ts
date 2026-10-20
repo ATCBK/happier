@@ -10,9 +10,10 @@ import {
 import type { AnchoredListPositionV1 } from '@happier-dev/protocol/actions/anchoredListOrderV1';
 import type { ActionExecuteResult, ActionId } from '@happier-dev/protocol';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { isPluginUiResourceReadAuthorityLost } from '@happier-dev/plugin-ui/advanced';
 
 import { randomUUID } from '@/platform/randomUUID';
-import { storage, useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { storage, useActiveServerAccountScope, useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { widgetAreaLayoutBaseSurface } from '@/components/widgets/area/widgetAreaLayoutSelection';
@@ -21,7 +22,6 @@ import { resumeActionExecutionResult } from '@/components/approvals/actionApprov
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 import { t } from '@/text';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 export type ProjectDashboardsState = Readonly<{
@@ -94,7 +94,7 @@ export function useWidgetAreaLayouts(
   const surfaceKey = surface ? JSON.stringify([
     surface.serverId, surface.accountId, buildWidgetSurfaceArtifactIdV1(surface), surface.artifactId ?? null,
   ]) : null;
-  const activeLifetime = captureActiveServerAccountScopeLifetime();
+  const activeLifetime = useActiveServerAccountScopeLifetime();
   const lifetime = activeLifetime && areServerAccountScopesEqual(activeLifetime.scope, scope) ? activeLifetime : null;
   const retained = React.useMemo(() => {
     if (!lifetime) return null;
@@ -162,7 +162,8 @@ export function useWidgetAreaLayouts(
       outcome = await run('widgets.area.layout.list', { surface });
     } catch (error) {
       if (!isCurrent() || current !== generation.current || interest.controller.signal.aborted) return null;
-      throw error;
+      outcome = { ok: false, errorCode: error instanceof Error && 'code' in error && typeof error.code === 'string'
+        ? error.code : 'widget_area_unavailable', error: t('errors.operationFailed') };
     }
     const parsed = outcome.ok
       ? WidgetInstanceActionOutputSchemasV1[
@@ -170,10 +171,15 @@ export function useWidgetAreaLayouts(
         ].safeParse(outcome.result)
       : null;
     if (!isCurrent() || current !== generation.current) return null;
+    const authorityLost = !outcome.ok && isPluginUiResourceReadAuthorityLost({
+      freshness: 'unknown', pending: 'idle', subscription: 'ended',
+      error: { code: outcome.errorCode, message: outcome.error ?? outcome.errorCode ?? '' },
+    });
+    if (authorityLost && surfaceKey) retained?.delete(surfaceKey);
     if (parsed?.success && surfaceKey) retained?.set(surfaceKey, { status: 'ready', dashboards: parsed.data.layouts });
     setInventory((previous) => ({ observation, state: parsed?.success
       ? { status: 'ready', dashboards: parsed.data.layouts }
-      : { status: 'offline', dashboards: previous.observation === observation ? previous.state.dashboards : [] },
+      : { status: 'offline', dashboards: !authorityLost && previous.observation === observation ? previous.state.dashboards : [] },
     }));
     return parsed?.success ? parsed.data.layouts : null;
   }, [interest, isCurrent, observation, run, surface, surfaceKey, retained]);

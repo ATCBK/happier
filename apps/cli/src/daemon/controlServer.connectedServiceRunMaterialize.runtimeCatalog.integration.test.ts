@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol';
 import { ConnectedServiceBindingsV2IngressSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
@@ -146,7 +147,7 @@ describe('createDaemonControlApp connected-service run materialization bridge', 
                     method: 'POST',
                     url: '/connected-service-run/materialize',
                     headers: token ? { 'x-happier-daemon-token': token } : {},
-                    payload: {
+                    payload: { activationId: randomUUID(),
                         runId: 'run_1',
                         runnerPid: 4242,
                         agentId: 'codex',
@@ -169,7 +170,7 @@ describe('createDaemonControlApp connected-service run materialization bridge', 
                 method: 'POST',
                 url: '/connected-service-run/materialize',
                 headers: { 'x-happier-daemon-token': scopedToken },
-                payload: {
+                payload: { activationId: randomUUID(),
                     runId: 'run_1',
                     runnerPid: 4242,
                     agentId: 'codex',
@@ -212,7 +213,7 @@ describe('createDaemonControlApp connected-service run materialization bridge', 
                 method: 'POST',
                 url: '/connected-service-run/materialize',
                 headers: { 'x-happier-daemon-token': scopedToken },
-                payload: {
+                payload: { activationId: randomUUID(),
                     runId: 'run_1',
                     runnerPid: 4242,
                     agentId: 'codex',
@@ -231,12 +232,13 @@ describe('createDaemonControlApp connected-service run materialization bridge', 
                 },
             });
             expect(materializeConnectedServicesForExecutionRun).toHaveBeenCalledWith({
+                activationId: expect.any(String),
                 runId: 'run_1',
                 runnerPid: 4242,
                 agentId: 'codex',
                 connectedServices: EMITTED_RUN_BINDINGS,
                 cwd: '/tmp/project',
-            });
+            }, expect.any(AbortSignal));
         } finally {
             await app.close();
         }
@@ -254,7 +256,7 @@ describe('createDaemonControlApp connected-service run materialization bridge', 
                 method: 'POST',
                 url: '/connected-service-run/materialize',
                 headers: { 'x-happier-daemon-token': scopedToken },
-                payload: {
+                payload: { activationId: randomUUID(),
                     runId: 'run_1',
                     runnerPid: 4242,
                     agentId: 'codex',
@@ -329,7 +331,7 @@ describe('createDaemonControlApp connected-service run materialization bridge', 
         }
     });
 
-    it('release is a bounded no-op success when no release handler is wired', async () => {
+    it('reports unavailable cleanup when no release handler is wired', async () => {
         const app = createApp();
         try {
             const response = await app.inject({
@@ -339,7 +341,7 @@ describe('createDaemonControlApp connected-service run materialization bridge', 
                 payload: { runId: 'run_1', runnerPid: 4242, activationId },
             });
             expect(response.statusCode).toBe(200);
-            expect(response.json()).toEqual({ ok: true, released: false });
+            expect(response.json()).toEqual({ ok: false, errorCode: 'connected_service_run_cleanup_unavailable' });
         } finally {
             await app.close();
         }

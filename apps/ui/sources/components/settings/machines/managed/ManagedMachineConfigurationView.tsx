@@ -10,10 +10,13 @@ import { isMachineProvisionerCredentialPurposeRequiredV1 } from '@happier-dev/pr
 import { QualifiedConnectedAccountRefSchema, type QualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualifiedConnectedAccountPersistence';
 import { qualifiedPurposeKey } from '@happier-dev/protocol/connect/connectedAccountPurposeBindings';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
+import { readInputPath } from '@happier-dev/protocol/inputs';
 import { isMachineRetainedWakeEligibleV1, resolveMachineRetentionPolicyV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
 import { useMachineListForServer } from '@/sync/domains/state/storage';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ItemList } from '@/components/ui/lists/ItemList';
+import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useViewportClass } from '@/utils/platform/useViewportClass';
@@ -119,10 +122,12 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     const optionsAbort = React.useRef<AbortController | null>(null);
     const reviewed = React.useRef<ManagedConfigurationFactsV1 | null>(null);
     const catalogProvisioner = catalog.provisioners.find(row => buildQualifiedPluginContributionKey(row.contribution) === props.provisioner);
+    // A retained catalog remains readable while the selected controller answers, but cannot admit credential-bearing work.
+    const catalogCurrent = !catalog.loading && catalog.error === null;
     const openAccountSetup = (purposeId: string) => {
         const binding = catalog.binding;
         const purpose = catalogProvisioner?.credentialPurposes?.find(entry => entry.purpose.purpose === purposeId)?.purpose;
-        if (!draft || !binding?.isCurrent() || !catalogController || !catalogProvisioner || !purpose || busy) return;
+        if (!catalogCurrent || !draft || !binding?.isCurrent() || !catalogController || !catalogProvisioner || !purpose || busy) return;
         const selected = draft.credentials?.find(entry => qualifiedPurposeKey(entry.purpose) === qualifiedPurposeKey(purpose))?.account ?? null;
         setAccountSetup({ request: { scope: binding.scope, machineId: catalogController.machineId, purpose },
             controller: catalogController, occurrenceId: catalogProvisioner.occurrenceId, selected,
@@ -131,10 +136,10 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     };
     const initialConnectConsumed = React.useRef(false);
     React.useEffect(() => {
-        if (initialConnectConsumed.current || !props.initialConnectPurpose || !draft || !catalogProvisioner) return;
+        if (initialConnectConsumed.current || !props.initialConnectPurpose || !catalogCurrent || !draft || !catalogProvisioner) return;
         initialConnectConsumed.current = true;
         openAccountSetup(props.initialConnectPurpose);
-    }, [props.initialConnectPurpose, draft, catalogProvisioner, catalogController]);
+    }, [props.initialConnectPurpose, catalogCurrent, draft, catalogProvisioner, catalogController]);
     // Only this occurrence's controller-qualified catalog authorizes purpose choices. Account inventory is display-only.
     const credentialPurposes = React.useMemo(() => catalogProvisioner?.credentialPurposes?.filter(({ purpose }) =>
         isMachineProvisionerCredentialPurposeRequiredV1(catalogProvisioner.descriptor, purpose.purpose,
@@ -201,7 +206,7 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     const presetQuery = useMachinePresetQuery({ serverId: props.serverId, homeId: catalog.homeId, presetId: props.presetId,
         binding: catalog.binding, resolution: catalog.resolution, read: readPreset, refreshRevision: readRevision, onApprovalPending,
         onAccessLost: clearProtectedPreset, onInvalidated: retry });
-    const fieldOptions = useInputFieldOptions({ requests: fieldRequests, enabled: presetQuery.sameScope && !!draft && credentialsReady && optionsInput.kind === 'ready',
+    const fieldOptions = useInputFieldOptions({ requests: fieldRequests, enabled: catalogCurrent && presetQuery.sameScope && !!draft && credentialsReady && optionsInput.kind === 'ready',
         serverId: catalog.binding?.serverId ?? props.serverId, machineId: controller?.machineId, accountLifetime: catalog.binding });
     const teamDenied = !!props.presetId && (preset?.owner.kind === 'team' || !!teamId) && team.kind === 'bound'
         && (team.state.kind === 'ready' && !team.state.team.capabilities.viewTeam
@@ -282,7 +287,7 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
 
     React.useEffect(() => {
         const binding = catalog.binding;
-        if (!presetQuery.sameScope || !binding || !catalog.homeId || !catalog.client || !controller) return;
+        if (!catalogCurrent || !presetQuery.sameScope || !binding || !catalog.homeId || !catalog.client || !controller) return;
         if (!catalogProvisioner || !catalogController || !credentialsReady) {
             setDraft(current => current && current.optionStatus !== 'unavailable'
                 ? { ...current, optionStatus: 'unavailable', check: undefined } : current);
@@ -313,7 +318,7 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
                 : optionsInput.kind === 'unavailable' ? optionsInput.error : null);
         }).catch(() => { if (!abort.signal.aborted) { setError('unavailable'); setDraft(current => current ? { ...current, optionStatus: 'unavailable' } : current); } });
         return () => abort.abort();
-    }, [presetQuery.sameScope, catalog.binding, catalog.homeId, catalog.client, catalogProvisioner, catalogController, controller?.machineId, controller?.installationId,
+    }, [catalogCurrent, presetQuery.sameScope, catalog.binding, catalog.homeId, catalog.client, catalogProvisioner, catalogController, controller?.machineId, controller?.installationId,
         draft?.credentials, draft?.provisioner, credentialsReady, optionsInput, selectorKey, readRevision]);
 
     const effectiveDraft = React.useMemo(() => presetQuery.sameScope && draft && accountSettings.settings
@@ -344,11 +349,11 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
         && machine.installationId === receiptController?.installationId));
     const controllerName = knownControllerName ?? t('common.unknown');
     const activeBinding = catalog.binding;
-    const mayCreate = !!catalogProvisioner && !!catalogController && !!facts && facts.optionStatus === 'current' && draft?.check?.available === true
+    const mayCreate = catalogCurrent && !!catalogProvisioner && !!catalogController && !!facts && facts.optionStatus === 'current' && draft?.check?.available === true
         && credentialsReady
         && (!preset || preset.archivedAt === undefined) && accountSettings.settings?.managedMachineCreationEnabled === true && !!activeBinding?.isCurrent() && !busy;
     // A retained recipe can still be saved, but explicit field edits must satisfy the declared input schema.
-    const maySave = !!catalogProvisioner && !!catalogController && !!facts
+    const maySave = catalogCurrent && !!catalogProvisioner && !!catalogController && !!facts
         && credentialsReady && (!credentialPurposes?.length || facts.optionStatus === 'current')
         && (draft?.optionsSelectors === undefined || selectors !== null && facts.optionStatus === 'current') && !!activeBinding?.isCurrent() && teamWritable && !busy;
     const presetRetention = draft?.override?.retention ?? draft?.preset?.retention;
@@ -366,7 +371,7 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
         else { setBusy(false); setError(code); }
     } };
     const repair = async (action: NonNullable<ManagedPrerequisiteV1['repairAction']>) => {
-        if (!activeBinding?.isCurrent() || !catalogController || !catalogProvisioner || busy) return;
+        if (!catalogCurrent || !activeBinding?.isCurrent() || !catalogController || !catalogProvisioner || busy) return;
         const abort = new AbortController(); mutationAbort.current = abort;
         setBusy(true); setError(null);
         try {
@@ -442,7 +447,13 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     const receipt: ManagedReceiptModel = {
         ...(receiptFacts ? buildManagedConfigurationReceipt({ launch: receiptFacts.launch, reviewedFacts: receiptFacts, providerTitle: title, controllerName, homeName, mark: receiptMark, localized,
             credentialPresentations: credentialAccounts.presentationsByKey, keepEditedBelow: Boolean(keepPolicy && defaultPolicy) })
-            : { caption: t('managedMachines.receipt.yourNewMachine'), mark: receiptMark, name: draft?.name ?? title, spec: title, facts: [], cost: { kind: 'unpriced' as const, provider: title } }),
+            // Before choices exist the receipt still tells the truth: a local VM bills nobody, and an unnamed draft
+            // names its kind under the provider rather than repeating the provider twice.
+            : { caption: t('managedMachines.receipt.yourNewMachine'), mark: receiptMark, name: draft?.name ?? title,
+                spec: (draft?.name ?? title) === title ? presentation.kindTitle ?? title : title, facts: [],
+                cost: provisioner?.descriptor.billing.location === 'local' && knownControllerName
+                    ? { kind: 'local' as const, computer: knownControllerName, meters: [] }
+                    : { kind: 'unpriced' as const, provider: title } }),
         onRename: !preset || props.presetOnly ? () => { void rename(); } : undefined,
         keep: keepPolicy && defaultPolicy ? { policy: keepPolicy, defaultPolicy, inherited: !draft?.override && (!props.presetOnly || !draft?.preset?.retention && draft?.preset?.wakeOnAcceptedMessage === undefined), categoryLabel: retentionCategoryTitle(defaultPolicy.category),
             finiteOnly, deadline: !props.presetOnly,
@@ -494,13 +505,13 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
         initialTarget={accountSetup.target} targetSelection={{ ...scope.selection,
             resolveExecutionTarget: () => {
                 const target = scope.selection?.resolveExecutionTarget();
-                return catalog.binding?.isCurrent() && target?.machine.id === accountSetup.controller.machineId
+                return catalogCurrent && catalog.binding?.isCurrent() && target?.machine.id === accountSetup.controller.machineId
                     && target.machine.installationId === accountSetup.controller.installationId
                     && catalogProvisioner?.occurrenceId === accountSetup.occurrenceId ? target : null;
             },
         }}
         onClose={() => setAccountSetup(null)} onSelected={account => {
-            if (!catalog.binding?.isCurrent() || !catalogProvisioner || catalogProvisioner.occurrenceId !== accountSetup.occurrenceId
+            if (!catalogCurrent || !catalog.binding?.isCurrent() || !catalogProvisioner || catalogProvisioner.occurrenceId !== accountSetup.occurrenceId
                 || catalogController?.machineId !== accountSetup.controller.machineId
                 || catalogController.installationId !== accountSetup.controller.installationId)
                 throw new Error('connected_account_purpose_unavailable');
@@ -510,23 +521,28 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     if (props.presetId && (teamDenied || presetQuery.state.error && isMachinePresetAccessLost(presetQuery.state.error)))
         return <SurfaceStateCard kind="denied" title={t('machinePresets.accessLost')} testID="managed-config.error"
             action={{ label: t('managedMachines.actions.tryAgain'), onPress: retry }} />;
-    if (!presetQuery.sameScope || !provisioner) return <>
+    // Before the provisioner is known the page keeps its own header (and with it the one way back), so the
+    // state reads as this page's state rather than a loose section under the host's floating Back.
+    if (!presetQuery.sameScope || !provisioner) return <ItemList pageColumn="wide">
+        <PageHeader title={props.presetOnly ? t('machinePresets.title') : t('managedMachines.picker.newMachine')} actions={scope.chip} />
         {creationDisabledNotice}
-        <ItemGroup title={t('managedMachines.config.managedFrom')} action={scope.chip} surface="none">
+        <ItemGroup surface="none">
             <SurfaceStateCard kind={catalog.loading ? 'loading' : catalog.error ? 'error' : 'empty'} size="line"
                 title={t(catalog.loading ? 'managedMachines.providers.loading' : 'managedMachines.providers.unavailable')}
                 diagnosticCode={catalog.error} testID="managed-config.catalog" />
         </ItemGroup>
-    </>;
+    </ItemList>;
     // Choices the provider returned without a native size, image, place or duration (those have their own sections).
     const otherChoices = draft ? draft.choices.filter(choice => !choice.nativeFacts?.size && !choice.nativeFacts?.image
         && !choice.nativeFacts?.location && !choice.nativeFacts?.duration) : [];
     const retainedChoice = draft?.selected && !draft.choices.some(choice => choice.id === draft.selected?.id && pluginJsonValuesEqual(choice.launch, draft.selected?.launch))
         ? draft.selected : undefined;
     const repairs = draft?.check?.prerequisites?.filter(prerequisite => prerequisite.status !== 'available' && prerequisite.repairAction) ?? [];
+    // Nothing to choose from yet is not "no choices" while the recipe still waits on a required field: the field says what it needs.
+    const awaitsRequiredInput = recipeFields.some(field => field.required && isBlankInput(readInputPath(fieldInput, field.path)));
     const choiceState = !draft ? null : facts?.optionStatus === 'unavailable' ? <SurfaceStateCard kind="warning" size="line" title={t('managedMachines.options.unavailable')} />
         : draft.optionStatus === 'loading' ? <SurfaceStateCard kind="loading" size="line" title={t('managedMachines.options.loading', { provider: title })} />
-        : draft.optionStatus === 'current' && draft.choices.length === 0 ? <SurfaceStateCard kind="empty" size="line" title={t('managedMachines.options.empty', { provider: title })} />
+        : draft.optionStatus === 'current' && draft.choices.length === 0 ? (awaitsRequiredInput ? null : <SurfaceStateCard kind="empty" size="line" title={t('managedMachines.options.empty', { provider: title })} />)
         : draft.check?.available === false ? <SurfaceStateCard kind="warning" size="line" title={t('managedMachines.providers.unavailable')} />
         : null;
     const kindTitle = presentation.kindTitle;
@@ -683,4 +699,9 @@ function ManagedConfiguratorNativeChoices(props: Readonly<{
             description={t('managedMachines.config.locationDescription')}
             onChange={id => props.onChange('location', id)} testID="managed-config.locations" /> : null}
     </>;
+}
+
+/** A required field with nothing entered: absent, empty text, or an empty list. */
+function isBlankInput(value: unknown): boolean {
+    return value === undefined || value === null || value === '' || Array.isArray(value) && value.length === 0;
 }

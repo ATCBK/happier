@@ -1,4 +1,8 @@
 import type {
+  CreateElicitationRequest,
+  CreateElicitationResponse,
+} from '@agentclientprotocol/sdk';
+import type {
   SessionPermissionFollowUpPromptIntent as SessionPermissionFollowUpPromptIntentV1,
 } from '@happier-dev/plugin-sdk/sessions';
 import type { SessionInputCausalPermissionAuthorityV1 } from '@happier-dev/protocol';
@@ -16,12 +20,14 @@ export type AcpPermissionDecisionResult = Readonly<{
 export type AcpPermissionCausalAuthority = SessionInputCausalPermissionAuthorityV1;
 
 export type AcpPermissionCallContext = Readonly<{
+  /** Cancellation of this exact native ACP request, independent of its turn. */
+  signal?: AbortSignal;
   /** Host-only child Run policy input; never an admitted user-input authority. */
   mcpToolPolicy?: Readonly<{
     permissionMode: string;
     readContext: () => import('@/mcp/runtime/resolveMcpToolIdentity').McpToolPolicyContext | null;
   }>;
-  origin?: 'host_acp_fs_write';
+  origin?: 'host_acp_fs_write' | 'host_occurrence_question';
   /** Request lifetime is independent of the causal turn's permission authority. */
   lifetime?: 'turn' | 'occurrence';
   /**
@@ -35,6 +41,8 @@ export type AcpPermissionCallContext = Readonly<{
    * must fail closed rather than inherit mutable Session mode.
    */
   causalPermissionAuthority?: AcpPermissionCausalAuthority | null;
+  /** Host-private current caller mode; the original admitted ceiling remains immutable. */
+  callerPermissionMode?: string | null;
 }>;
 
 /**
@@ -77,11 +85,20 @@ export interface AcpPermissionHandler {
   ): Promise<AcpPermissionDecisionResult>;
 
   /**
+   * Handle an ACP `elicitation/create` request through the canonical session
+   * interactions service.
+   */
+  handleElicitation?(
+    request: CreateElicitationRequest,
+    context?: AcpPermissionCallContext,
+  ): Promise<CreateElicitationResponse>;
+
+  /**
    * Abort one exact provider permission occurrence and settle its durable host
    * projection before returning. Execution-run wrappers use this instead of
    * the session-wide abort below so retiring one child cannot affect siblings.
    */
-  abortPendingRequestAndFlush?(requestId: string, reason: string): Promise<void>;
+  abortPendingRequestAndFlush?(requestId: string, reason: string, options?: Readonly<{ preserveQuestions?: boolean }>): Promise<void>;
 
-  abortPendingRequestsAndFlush?(reason: string): Promise<void>;
+  abortPendingRequestsAndFlush?(reason: string, options?: Readonly<{ preserveQuestions?: boolean }>): Promise<void>;
 }

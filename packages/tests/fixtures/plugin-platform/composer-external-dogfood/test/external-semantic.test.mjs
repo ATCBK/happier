@@ -100,6 +100,19 @@ test('external fixture projects Action, settings, placement, and approval contra
   }]);
 });
 
+test('external fixture declares a runnable Discussion control through its real UI artifact', async () => {
+  const { manifest } = await loadDogfoodPlugin();
+  const control = manifest.contributes.composerControls.find(({ id }) => id === 'discussion-helper');
+  assert.ok(control, 'The installed fixture must offer a Discussion composer entry, not only standalone helpers');
+  assert.deepEqual(control.scopes, ['discussion']);
+  assert.equal(control.interaction.kind, 'surface');
+  const renderer = manifest.contributes.ui.renderers.find(({ id }) => id === control.interaction.renderer.renderer);
+  assert.ok(renderer, 'The Discussion control must resolve through the declared UI renderer');
+  assert.equal(renderer.kind, 'reactNative');
+  assert.equal(renderer.artifact, 'issue-surface-native');
+  assert.ok(renderer.requiredHostMethods.includes('readDiscussionComposer'));
+});
+
 test('external Action invocation observes current settings, host surface, and cancellation', async () => {
   const { activate, manifest } = await loadDogfoodPlugin();
   const settingsState = {
@@ -149,7 +162,7 @@ test('external Action invocation observes current settings, host surface, and ca
 
 test('external Composer declaration projects every independent r1.0 family', async () => {
   const { manifest } = await loadDogfoodPlugin();
-  assert.deepEqual(manifest.contributes.ui.renderers, [{
+  assert.deepEqual(manifest.contributes.ui.renderers.filter(({ id }) => id === 'issue-surface'), [{
     id: 'issue-surface',
     kind: 'reactNative',
     artifact: 'issue-surface-native',
@@ -168,7 +181,7 @@ test('external Composer declaration projects every independent r1.0 family', asy
     icon: 'error',
     triggers: ['@', '$'],
   }]);
-  assert.deepEqual(manifest.contributes.composerControls, [{
+  assert.deepEqual(manifest.contributes.composerControls.filter(({ id }) => id === 'issue-control'), [{
     id: 'issue-control',
     label: 'Issue',
     icon: 'error',
@@ -255,7 +268,7 @@ test('external Composer declaration projects every independent r1.0 family', asy
       },
     },
   );
-  assert.deepEqual(manifest.contributes.composerControls[0].state, {
+  assert.deepEqual(manifest.contributes.composerControls.find(({ id }) => id === 'issue-control')?.state, {
     resource: 'issue-control-state',
   });
 });

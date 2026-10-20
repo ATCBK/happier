@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { MachineVitalsAlertEpisodeV1Schema, MachineVitalsAlertEpisodeV1StoredReadSchema,
   MachineVitalsMinuteRecordV1Schema, MachineVitalsMinuteRecordV1StoredReadSchema,
   type MachineVitalsAlertEpisodeV1, type MachineVitalsMinuteRecordV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1';
@@ -22,7 +22,7 @@ export async function createMinuteHistoryStore(input: Readonly<{
   const retentionMs = 7 * 86_400_000;
   // Active episodes are custody, not display history. Carry them forward in the
   // same stream before deleting their day, without changing their original fire time.
-  const checkpointSchema = z.object({ kind: z.literal('alert_checkpoint'), at: z.number().int().nonnegative(),
+  const checkpointSchema = z.object({ kind: z.literal('alert_checkpoint'), at: z.number().check(z.int(), z.nonnegative()),
     episode: MachineVitalsAlertEpisodeV1StoredReadSchema });
   type Row = MachineVitalsMinuteRecordV1 | MachineVitalsAlertEpisodeV1 | z.infer<typeof checkpointSchema>;
   const timestamp = (record: Row) => 'kind' in record ? record.at : record.t;

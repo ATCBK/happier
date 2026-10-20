@@ -18,13 +18,13 @@ import {
     subscribeAccountEncryptionModeCacheInvalidation,
 } from '@/sync/api/account/apiAccountEncryptionMode';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { useLocalSetting } from '@/sync/store/hooks';
+import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 import { getPreferredLanguage } from '@/text';
 import { useAppShellColumn } from '@/components/navigation/shell/appRail/appShellColumnContext';
 import type { PluginSurfaceTargetKind } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
 import type { PluginSurfaceTargetUndeclaredReason } from '@/sync/domains/plugins/ui/scope/resolveResourceScope';
 
-import { projectPluginUiTheme } from './pluginUiThemeProjection';
+import { usePluginUiTheme } from './pluginUiThemeProjection';
 
 /**
  * The single owner of the public `SurfaceContext` snapshot (§3.2, UI-D11).
@@ -217,7 +217,7 @@ export function usePluginSurfaceEnvironment(
         speed: spinnerSpeed,
         pause: spinnerPause,
     }), [spinnerStyle, spinnerSpeed, spinnerPause]);
-    const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme, spinner), [theme, spinner]);
+    const pluginTheme = usePluginUiTheme(theme, spinner);
     return React.useMemo(() => Object.freeze({
         platform: resolvedPlatform,
         locale,
@@ -267,6 +267,9 @@ export function createPluginSurfaceContext(input: Readonly<{
     translations: Readonly<Record<string, string>>;
     /** Exact target-scoped snapshot; an admitted empty `points` array is valid. */
     targetedContributions?: SurfaceContext['targetedContributions'];
+    pendingApproval?: SurfaceContext['pendingApproval'];
+    machineConnectionPending?: SurfaceContext['machineConnectionPending'];
+    machineExecutionReady?: SurfaceContext['machineExecutionReady'];
 }>): SurfaceContext {
     return Object.freeze({
         mount: input.mount,
@@ -287,6 +290,9 @@ export function createPluginSurfaceContext(input: Readonly<{
         theme: input.environment.theme,
         translations: input.translations,
         ...(input.targetedContributions ? { targetedContributions: input.targetedContributions } : {}),
+        ...(input.pendingApproval === undefined ? {} : { pendingApproval: input.pendingApproval }),
+        ...(input.machineConnectionPending === undefined ? {} : { machineConnectionPending: input.machineConnectionPending }),
+        ...(input.machineExecutionReady === undefined ? {} : { machineExecutionReady: input.machineExecutionReady }),
     });
 }
 

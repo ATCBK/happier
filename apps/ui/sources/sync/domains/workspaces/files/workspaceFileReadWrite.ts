@@ -13,6 +13,7 @@ export async function workspaceWriteFile(params: Readonly<{
     path: string;
     content: string;
     expectedHash?: string | null;
+    signal?: AbortSignal | null;
 }>): Promise<WorkspaceWriteFileResponse> {
     return await writeWorkspaceFile(
         {
@@ -23,5 +24,6 @@ export async function workspaceWriteFile(params: Readonly<{
         params.path,
         params.content,
         params.expectedHash,
+        { signal: params.signal },
     );
 }

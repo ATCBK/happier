@@ -1,4 +1,5 @@
-import { z } from "zod";
+import { lazyZodSchema } from '@happier-dev/protocol/lazyZodSchema';
+import { z } from "zod/mini";
 import { minLength } from "zod/mini";
 import { SessionMetadataInactiveModelIntentOwnerPatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { SessionTeamCredentialBindingIntentsV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingIntentV1';
@@ -38,17 +39,17 @@ export function registerSessionAgentTransitionRoute(
     env: NodeJS.ProcessEnv = process.env,
 ) {
     const currentViewSchema = z.union([
-        z.object({
+        z.strictObject({
             kind: z.literal("legacy_v0"),
-            expectedMetadataVersion: z.number().int().min(0),
-            metadataCiphertext: z.string().min(1),
-            expectedAgentStateVersion: z.number().int().min(0),
+            expectedMetadataVersion: z.number().check(z.int(), z.minimum(0)),
+            metadataCiphertext: z.string().check(z.minLength(1)),
+            expectedAgentStateVersion: z.number().check(z.int(), z.minimum(0)),
             agentStateCiphertext: z.null(),
-        }).strict(),
-        z.object({
+        }),
+        z.strictObject({
             kind: z.literal("envelope_tuple_v1"),
             ownerPatch: SessionMetadataInactiveModelIntentOwnerPatchV1Schema,
-        }).strict(),
+        }),
     ]);
 
     app.post("/v2/sessions/:sessionId/agent-transition/cutover", {
@@ -58,33 +59,33 @@ export function registerSessionAgentTransitionRoute(
         ],
         schema: {
             params: z.object({ sessionId: z.string() }),
-            body: z.object({
+            body: z.strictObject({
                 v: z.literal(1),
                 currentView: currentViewSchema,
-                divider: z.object({
-                    localId: z.string().min(1),
+                divider: z.strictObject({
+                    localId: z.string().check(z.minLength(1)),
                     content: SessionStoredMessageContentSchema,
-                }).strict(),
+                }),
                 // The target Agent's Team slot bindings. The cutover is the
                 // transition's one Session switch mutation, so the witness the
                 // Home admits Team credential use through is written here, in the
                 // current-view transaction (lane 10 child 01 principle 3).
-                teamCredentialBindings: z.optional(SessionTeamCredentialBindingIntentsV1Schema.check(minLength(1))),
-            }).strict(),
+                teamCredentialBindings: z.optional(lazyZodSchema(() => SessionTeamCredentialBindingIntentsV1Schema.check(minLength(1)))),
+            }),
             response: {
-                200: z.object({
+                200: z.strictObject({
                     success: z.literal(true),
-                    dividerSeq: z.number().int().min(0),
-                }).strict(),
-                400: z.object({ error: z.literal("Invalid parameters") }).strict(),
-                403: z.object({ error: z.literal("Forbidden") }).strict(),
+                    dividerSeq: z.number().check(z.int(), z.minimum(0)),
+                }),
+                400: z.strictObject({ error: z.literal("Invalid parameters") }),
+                403: z.strictObject({ error: z.literal("Forbidden") }),
                 404: z.union([
-                    z.object({ error: z.literal("Session not found") }).strict(),
+                    z.strictObject({ error: z.literal("Session not found") }),
                     // The server owner disabled `sessions.agentSwitching`. The
                     // shared gate answers before this handler runs.
-                    z.object({ error: z.literal("not_found") }).strict(),
+                    z.strictObject({ error: z.literal("not_found") }),
                 ]),
-                409: z.object({
+                409: z.strictObject({
                     effect: z.enum(["none", "current_view_committed"]),
                     error: z.enum([
                         "archived",
@@ -93,11 +94,11 @@ export function registerSessionAgentTransitionRoute(
                         "divider-conflict",
                         "divider-rejected",
                     ]),
-                }).strict(),
-                500: z.object({
+                }),
+                500: z.strictObject({
                     effect: z.enum(["none", "current_view_committed"]),
                     error: z.literal("internal"),
-                }).strict(),
+                }),
             },
         },
     }, async (request, reply) => {

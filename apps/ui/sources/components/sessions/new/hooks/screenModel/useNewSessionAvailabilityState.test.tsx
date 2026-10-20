@@ -30,6 +30,97 @@ afterEach(async () => {
 afterAll(() => network.dispose());
 
 describe('machine launch readiness', () => {
+    it.each([false, true])('loads Windows Terminal facts on picker demand or selected launch (selected: %s)', async (selected) => {
+        const machine = createMachineFixture({ id: `windows-terminal-demand-${selected}`, active: true, activeAt: Date.now(),
+            metadata: { ...createMachineFixture().metadata!, platform: 'win32' } });
+        const home = await network.addHome(`https://windows-terminal-demand-${selected}.example.test`, 'windows-terminal-owner');
+        storage.getState().applyMachines([machine], false, { sourceServerId: home.id });
+        network.respond('capabilities.detect', { protocolVersion: 1, results: {} });
+        const hook = await renderHook((windowsTerminalRequested: boolean) => useNewSessionAvailabilityState({
+            selectedMachineId: machine.id, selectedMachine: machine, capabilityServerId: home.id, windowsTerminalRequested,
+            externalSessionsFeatureEnabled: false, settings: { ...settingsDefaults, sessionTerminalHost: 'none', sessionUseTmux: false },
+            resumeSessionId: null, backendNewSessionOptionStateByTargetKey: {}, resolvedBackendEntries: [], selectedBackendEntry: null,
+            setBackendTarget: vi.fn(), machines: [machine], allProfiles: [],
+        }), { initialProps: selected });
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent().selectedMachineCapabilities.status).toBe('loaded'));
+            expect(network.requests.filter(({ method }) => method === 'capabilities.detect').map(({ payload }) => payload)).toEqual([
+                { requests: selected ? [{ id: 'tool.windowsTerminal' }] : [] },
+            ]);
+            if (!selected) {
+                await act(async () => hook.getCurrent().onWindowsTerminalIntent());
+                await vi.waitFor(() => expect(network.requests.filter(({ method }) => method === 'capabilities.detect').map(({ payload }) => payload)).toEqual([
+                    { requests: [] }, { requests: [{ id: 'tool.windowsTerminal' }] },
+                ]));
+            }
+        } finally { await hook.unmount(); }
+    });
+
+    it.each([false, true])('requests only selected launch facts (external dependency: %s)', async (hasDependency) => {
+        const { publishProjectedAgentUiBehaviorDescriptors, clearProjectedAgentUiBehaviorDescriptors } = await import('@/agents/registry/agentUiBehaviorProjection');
+        const machine = createMachineFixture({ id: `selected-dependencies-${hasDependency}`, active: true, activeAt: Date.now() });
+        const home = await network.addHome(`https://selected-dependencies-${hasDependency}.example.test`, 'selected-dependencies-owner');
+        storage.getState().applyMachines([machine], false, { sourceServerId: home.id });
+        const agentId = 'acme.tools/agent';
+        publishProjectedAgentUiBehaviorDescriptors({ machineId: machine.id, descriptorsByAgentId: {
+            [agentId]: { kind: 'plugin.ui.v1', pluginId: 'acme.tools', agentId, version: 1,
+                behavior: { newSession: { relevantInstallableDepKeys: hasDependency ? ['acme.tool'] : [] } } },
+        } });
+        network.respond('capabilities.detect', { protocolVersion: 1, results: {} });
+        const hook = await renderHook(() => useNewSessionAvailabilityState({
+            selectedMachineId: machine.id, selectedMachine: machine, capabilityServerId: home.id,
+            runtimeCarrierAgentId: agentId, externalSessionsFeatureEnabled: false,
+            settings: { ...settingsDefaults, sessionTerminalHost: hasDependency ? 'tmux' : 'none', sessionUseTmux: hasDependency },
+            pluginProjectionV2: { familiesById: { managedDependencies: { entriesById: Object.fromEntries(
+                ['acme.tool', 'unrelated.tool'].map((key) => [key, { id: key, key, capabilityId: `dep.${key}`,
+                    sourceKind: 'github_release_binary', display: { name: key },
+                    defaultPolicy: { autoInstallWhenNeeded: true, autoUpdateMode: 'auto' }, experimental: false }]),
+            ) } } },
+            resumeSessionId: null, backendNewSessionOptionStateByTargetKey: {}, resolvedBackendEntries: [], selectedBackendEntry: null,
+            setBackendTarget: vi.fn(), machines: [machine], allProfiles: [],
+        }));
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent().selectedMachineCapabilities.status).toBe('loaded'));
+            const requests = network.requests.filter(({ method }) => method === 'capabilities.detect');
+            expect(requests.map(({ payload }) => payload)).toEqual([{
+                requests: hasDependency ? [{ id: 'tool.tmux' }, { id: 'dep.acme.tool' }] : [],
+            }]);
+            expect(hook.getCurrent().wizardInstallableDeps.map(({ entry }) => entry.key)).toEqual(hasDependency ? ['acme.tool'] : []);
+        } finally {
+            await hook.unmount();
+            clearProjectedAgentUiBehaviorDescriptors();
+        }
+    });
+
+    it('keeps current cached Agent resume facts without probing a passive embedded composer', async () => {
+        const { PluginProjectionV2Schema } = await import('@happier-dev/protocol');
+        const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
+        const { useDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/useDaemonMergedProjectionInputs');
+        const home = await network.addHome('https://passive-availability.example.test', 'passive-owner');
+        const machine = createMachineFixture({ id: 'passive-availability', active: true, activeAt: Date.now() });
+        storage.getState().applyMachines([machine], false, { sourceServerId: home.id });
+        const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, familiesById: {}, agentsById: {
+            'acme.resume/resume': { id: 'acme.resume/resume', identity: { pluginId: 'acme.resume', localId: 'resume' },
+                capabilities: { surfaces: ['terminal'], sessions: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true } } },
+        } });
+        network.respond(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, { protocolVersion: 1, projection });
+        const warmer = await renderHook(() => useDaemonMergedProjectionInputs({ machineId: machine.id, serverId: home.id }));
+        await vi.waitFor(() => expect(warmer.getCurrent().phase).toBe('ready'));
+        expect(warmer.getCurrent().inputs?.pluginProjectionV2?.agentsById['acme.resume/resume']?.capabilities?.sessions?.open).toContain('resume');
+        const requestsBefore = network.requests.length;
+        const hook = await renderHook(() => useNewSessionAvailabilityState({
+            selectedMachineId: machine.id, selectedMachine: machine, capabilityServerId: home.id,
+            machineProbesEnabled: false, runtimeCarrierAgentId: 'acme.resume/resume',
+            externalSessionsFeatureEnabled: false, settings: settingsDefaults, resumeSessionId: null,
+            backendNewSessionOptionStateByTargetKey: {}, resolvedBackendEntries: [], selectedBackendEntry: null,
+            setBackendTarget: vi.fn(), machines: [machine], allProfiles: [],
+        }));
+        expect(hook.getCurrent().showResumePicker).toBe(true);
+        expect(network.requests.slice(requestsBefore)).toEqual([]);
+        await hook.unmount();
+        await warmer.unmount();
+    });
+
     it('checks the new registry namespace after hydration without rechecking unrelated publications', async () => {
         vi.useFakeTimers();
         network.respond('capabilities.detect', { protocolVersion: 1, results: {

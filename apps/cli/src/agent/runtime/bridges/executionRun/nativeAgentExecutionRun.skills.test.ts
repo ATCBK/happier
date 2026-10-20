@@ -10,6 +10,7 @@ import { createPublicAcpSession, type PublicAcpComposerDependencies } from '@/ag
 import { withTempDir } from '@/testkit/fs/tempDir';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { createVoiceSessionContextLease } from './testkit/nativeSessionContext';
+import { projectRuntimeTranscriptEvent } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
 import { createNativeAgentSessionExecutionRunHostRuntime, createNativeAgentSessionInteractionHostRuntime,
   type NativeAgentSessionContextLeaseFactory } from './nativeAgentExecutionRun';
 
@@ -25,6 +26,7 @@ it.each(['finite', 'retained'] as const)('records only the acknowledged %s Run d
   const account = { accountId: 'run-account', serverHttpBaseUrl: 'https://run-home.example' };
   for (const delivery of ['acknowledged', 'refused', 'absent', 'index'] as const) {
     usageBoundary.requests = [];
+    const skillObservationEffects: Promise<unknown>[] = [];
     const messages: unknown[] = [];
     const skills = { pluginRoot: '/private/run', skillsRoot: '/private/run/skills', nativeDisables: [],
       items: [{ skillId: 'library:child-review', name: 'child-review', digest: `sha256:${'a'.repeat(64)}` }] };
@@ -61,13 +63,24 @@ it.each(['finite', 'retained'] as const)('records only the acknowledged %s Run d
       const lease = createVoiceSessionContextLease({ services, signal, async dispose() {} });
       return { ...lease, context: { ...lease.context, session: { ...lease.context.session, id: 'child-runtime-session' } },
         ...(delivery === 'acknowledged' || delivery === 'refused' ? { skills } : {}),
-        ...(delivery === 'index' ? { skillIndex: 'Use skills.read for child-review' } : {}), usageAccount: account };
+        ...(delivery === 'index' ? { skillIndex: 'Use skills.read for child-review' } : {}),
+        ...(delivery === 'acknowledged' || delivery === 'refused' ? {
+          // The current Session Run tool binding supplies this real transcript
+          // projection, rather than an account field on the context lease.
+          observeSkillUse: async (event: Extract<AgentSessionRuntimeEvent, { kind: 'skill-usage' }>) => {
+            const effect = projectRuntimeTranscriptEvent({ session: { sessionId: 'child-runtime-session' },
+              event, skillDelivery: skills, usageAccount: account });
+            skillObservationEffects.push(effect);
+            await effect;
+          },
+        } : {}),
+      };
     };
     const common = { runtime, createSessionContext,
       lease: { pluginId: 'acme.run', pluginVersion: '1.0.0', agentId: 'acme.run/default', localAgentId: 'default',
         occurrenceId: `${kind}-${delivery}`, isCurrent: () => true },
       options: { cwd: '/repo', runId: 'child-run', scope: 'session_owned' as const, backendId: 'acme.run/default',
-        permissionMode: 'read_only', start: { intent: 'review', runClass: kind === 'finite' ? 'bounded' as const : 'long_lived' as const,
+        permissionMode: 'read_only', start: { intent: 'review' as const, runClass: kind === 'finite' ? 'bounded' as const : 'long_lived' as const,
           retentionPolicy: 'resumable' as const } },
     };
     const host = kind === 'finite' ? createNativeAgentSessionExecutionRunHostRuntime({ ...common, supportsResume: false })
@@ -78,7 +91,7 @@ it.each(['finite', 'retained'] as const)('records only the acknowledged %s Run d
       await host.provisionRuntime();
       await host.deliverInput('child-run', { text: 'Use the child skill' });
       await host.waitForTurnCompletion?.();
-      await Promise.resolve();
+      await Promise.all(skillObservationEffects);
       expect(usageBoundary.requests).toEqual(delivery === 'acknowledged'
         ? [{ skillIds: ['library:child-review'], account }] : []);
       expect(messages).not.toContainEqual(expect.objectContaining({ type: 'skill-usage' }));
@@ -110,6 +123,7 @@ it.each(['finite', 'retained'] as const)('publishes actual Codex ACP skill refus
       // The managed executable and committed Session event are genuine external boundaries.
       const dependencies: PublicAcpComposerDependencies = {
         pluginId: 'happier.agent.codex', agentId: 'codex', signal: controller.signal, isCurrent: () => true,
+        systemTools: { async resolve() { throw new Error('Unexpected system tool resolution'); } },
         managedDependencies: { async resolve(request) {
           expect(request.dependencyId).toBe('codex-acp');
           return { command: process.execPath, args: [script], env: {}, release() {} };
@@ -138,7 +152,7 @@ it.each(['finite', 'retained'] as const)('publishes actual Codex ACP skill refus
           occurrenceId: `codex-acp-${kind}`, isCurrent: () => true },
         options: { cwd: directory, runId: `child-${kind}`, scope: 'session_owned' as const, backendId: 'codex',
           permissionMode: 'read_only', isolation: { env: { HAPPIER_CODEX_BACKEND_MODE: 'acp' } },
-          start: { intent: 'review', runClass: kind === 'finite' ? 'bounded' as const : 'long_lived' as const,
+          start: { intent: 'review' as const, runClass: kind === 'finite' ? 'bounded' as const : 'long_lived' as const,
             retentionPolicy: 'resumable' as const } },
         createSessionContext,
       };

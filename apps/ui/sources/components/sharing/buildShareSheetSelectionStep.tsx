@@ -9,6 +9,7 @@ import { Text } from '@/components/ui/text/Text';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { t } from '@/text';
 import { ShareGrantRow, ShareLevelControl, ShareRowAction } from './ShareGrantRow';
+import { ShareConnectedPeoplePrompt } from './ShareConnectedPeoplePrompt';
 import { useSharePresentationHost } from './sharePresentationHost';
 import {
     SHARE_ACCESS_LEVEL_ORDER,
@@ -54,6 +55,8 @@ export function SharePrincipalVisual(props: Readonly<{ principal: SharePrincipal
 /** One help block: the level legend, then the domain rules and members-only link explanation. */
 export function ShareHelp<TRow extends ShareGrantRowModel>(props: Readonly<{
     adapter: ShareSheetAdapter<TRow>; testID: string;
+    /** Inside the Details disclosure the row already carries the info mark; the note does not repeat it. */
+    markNote?: boolean;
 }>): React.ReactElement {
     const { theme } = useUnistyles();
     const host = useSharePresentationHost();
@@ -62,7 +65,7 @@ export function ShareHelp<TRow extends ShareGrantRowModel>(props: Readonly<{
         return presentation?.help ? [{ label: presentation.label, text: presentation.help }] : [];
     });
     return <HappierShareHelp host={host} testID={props.testID} levels={lines}
-        noteIcon={<Icon name="info" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />}
+        noteIcon={props.markNote === false ? undefined : <Icon name="info" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />}
         note={[...(props.adapter.notes ?? []), ...(props.adapter.linkPath ? [t('shareSheet.membersOnlyLink')] : [])].join(' ')} />;
 }
 
@@ -96,7 +99,9 @@ export function shareSheetStepId(namespace: string, directoryKind?: ShareDirecto
 export function buildShareSheetSelectionStep<TRow extends ShareGrantRowModel>(input: ShareSheetStepInput<TRow>): SelectionListStep {
     const { model, actions, adapter, idPrefix } = input;
     const ns = adapter.namespace;
-    const context: ShareSheetSectionContext = { idPrefix, editable: model.editable, onExpand: input.onExpand,
+    // Collapsed, the Browse entries share one group instead of trailing three empty headings.
+    const suggestionsShown = input.directoryKind !== undefined || input.revealSuggestions !== false;
+    const context: ShareSheetSectionContext = { idPrefix, editable: model.editable, onExpand: input.onExpand, revealSuggestions: suggestionsShown,
         ...(input.directoryKind ? { directoryKind: input.directoryKind } : {}) };
     const adapterSections = input.directoryKind && !adapter.showLeadingOnDirectorySteps ? {} : adapter.sections?.(context) ?? {};
     const subtitle = (principal: SharePrincipalPresentation, row?: TRow, extra?: readonly (string | undefined)[]) =>
@@ -174,13 +179,17 @@ export function buildShareSheetSelectionStep<TRow extends ShareGrantRowModel>(in
 
     const sections: SelectionListSectionDescriptor[] = [];
     sections.push(...adapterSections.leading ?? []);
+    // While a query is typed the results are what the person is looking at: they lead, and who already has
+    // access follows them instead of pushing them below the fold.
+    const searching = !input.directoryKind && model.directory.query.trim().length > 0;
+    const roster: SelectionListSectionDescriptor[] = [];
     if (!input.directoryKind) {
         // Last-good rows stay while the owner cannot be reached, but must not read as the current answer.
-        sections.push({ kind: 'static', id: 'current',
+        roster.push({ kind: 'static', id: 'current',
             title: model.stale ? t('shareSheet.whoHasAccessStale') : t('shareSheet.whoHasAccess'), options: current });
-        sections.push(...adapterSections.afterAccess ?? []);
+        roster.push(...adapterSections.afterAccess ?? []);
         const publicLink = adapter.publicLink;
-        if (publicLink) sections.push({ kind: 'static', id: 'public-link', options: [{
+        if (publicLink) roster.push({ kind: 'static', id: 'public-link', options: [{
             id: 'public-link', testID: `${idPrefix}${ns}-public-link`, label: t('session.sharing.publicLink'),
             icon: () => <ShareHandoffIcon name="link" />,
             accessibilityLabel: `${t('session.sharing.publicLink')}, ${publicLink.stateLabel}`,
@@ -189,8 +198,7 @@ export function buildShareSheetSelectionStep<TRow extends ShareGrantRowModel>(in
             ...(publicLink.renderContent ? { expandedContentInset: 'row', expandedContent: () => publicLink.renderContent!(context) } : {}),
         }] });
     }
-    // Collapsed, the Browse entries share one group instead of trailing three empty headings.
-    const suggestionsShown = input.directoryKind !== undefined || input.revealSuggestions !== false;
+    if (!searching) sections.push(...roster);
     const collapsedControls: SelectionListOption[] = [];
     if (model.editable) for (const kind of SHARE_DIRECTORY_KINDS) {
         if (input.directoryKind && input.directoryKind !== kind) continue;
@@ -211,21 +219,30 @@ export function buildShareSheetSelectionStep<TRow extends ShareGrantRowModel>(in
             ...(source.status === 'loading' || source.status === 'refreshing' ? { subtitle: t('common.loading') } : {}),
             testID: `${idPrefix}${ns}-browse:${kind}`,
             openStep: buildShareSheetSelectionStep({ ...input, directoryKind: kind }) });
-        if (!suggestionsShown) collapsedControls.push(...controls);
+        if (!suggestionsShown) { if (!adapter.browseOnlyWhileAdding) collapsedControls.push(...controls); }
         else if (controls.length) sections.push({ kind: 'static', id: `directory-controls:${kind}`, options: controls });
     }
     if (collapsedControls.length) sections.push({ kind: 'static', id: 'directory-controls', options: collapsedControls });
     if (input.directoryKind) {
+        // A settled people directory with no one to add says who appears there and where to connect with someone.
+        const directory = model.directory.sections.find(section => section.kind === input.directoryKind);
+        if (directory && input.directoryKind === 'account' && model.directory.query.trim() === '' && directory.status === 'idle'
+            && !directory.hasMore && candidateOptions(directory.candidates).length === 0) sections.push({ kind: 'static',
+            id: 'directory-empty', options: [{ id: 'directory-empty', label: t('shareSheet.noConnectedPeople'), disabled: true,
+                content: <ShareConnectedPeoplePrompt testID={`${idPrefix}${ns}-directory-empty`} /> }] });
         return { id: shareSheetStepId(ns, input.directoryKind), inputPlaceholder: t('shareSheet.addPlaceholder'),
             disableInputFilter: true, emptyStateLabel: t('common.noMatches'), sections };
     }
     sections.push(...adapterSections.trailing ?? []);
+    if (searching) sections.push(...roster);
 
     // Compact popovers disclose help; full and inline sheets show it directly in the body footer.
     if (input.presentation === 'compact' && (Object.values(adapter.levels).some(level => level.help) || adapter.notes?.length)) {
+        // A disclosure row, not a heading: it carries its mark so it reads as something to open.
         sections.push({ kind: 'static', id: 'help', options: [{ id: 'access-help', testID: `${idPrefix}${ns}-help`, label: t('common.details'),
+            icon: () => <ShareHelpIcon />,
             onSelect: () => input.onExpand('access-help'), expandedContentInset: 'none',
-            expandedContent: () => <ShareHelp adapter={adapter} testID={`${idPrefix}${ns}-help-content`} /> }] });
+            expandedContent: () => <ShareHelp adapter={adapter} markNote={false} testID={`${idPrefix}${ns}-help-content`} /> }] });
     }
 
     const handoffs: SelectionListOption[] = [];
@@ -239,13 +256,18 @@ export function buildShareSheetSelectionStep<TRow extends ShareGrantRowModel>(in
         icon: () => <ShareHandoffIcon name="copy" />, onSelect: adapter.sendCopy });
     if (handoffs.length) sections.push({ kind: 'static', id: 'handoffs', options: handoffs });
 
-    return { id: shareSheetStepId(ns), ...(model.editable ? { inputPlaceholder: t('shareSheet.addPlaceholder') } : {}),
+    return { id: shareSheetStepId(ns), ...(model.editable ? { inputPlaceholder: adapter.searchPlaceholder ?? t('shareSheet.addPlaceholder') } : {}),
         autoFocusFirstOption: false, disableInputFilter: true, emptyStateLabel: t('common.noMatches'), sections };
 }
 
 export function ShareHandoffIcon(props: Readonly<{ name: 'link' | 'copy' }>): React.ReactElement {
     const { theme } = useUnistyles();
     return <Icon name={props.name} size={ICON_SIZE.sm} color={theme.colors.text.secondary} />;
+}
+
+function ShareHelpIcon(): React.ReactElement {
+    const { theme } = useUnistyles();
+    return <Icon name="info" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />;
 }
 
 function ShareDirectoryIcon(): React.ReactElement {

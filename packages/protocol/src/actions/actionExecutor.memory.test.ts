@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
-import { getActionSpec } from './actionSpecs.js';
+import { getActionSpec, SearchConversationsResultV1Schema } from './actionSpecs.js';
 import { MemorySettingsV1Schema } from '../memory/memorySettings.js';
 import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
 import { MemorySearchQueryV1Schema, MemorySearchResultV1Schema, negotiateMemorySearchV1 } from '../memory/memorySearch.js';
@@ -49,6 +49,22 @@ function createDeps(): ActionExecutorDeps {
 }
 
 describe('createActionExecutor (memory)', () => {
+  it('admits Project memory search across Action surfaces while keeping conversation fanout Session-only', async () => {
+    const query = { v: 1, query: 'decision', scope: { type: 'project',
+      projectRef: { serverId: 'home', projectKey: 'payments' } }, mode: 'auto' };
+    expect(getActionSpec('search.conversations').inputSchema.safeParse({ query }).success).toBe(false);
+    for (const surface of ['ui', 'voice', 'agent', 'mcp', 'cli'] as const) {
+      const deps = createDeps();
+      deps.daemonMemorySearch = async request => {
+        expect(request.query).toEqual(query);
+        return { v: 1, ok: true, hits: [], project: { state: 'partial' } };
+      };
+      expect(await createActionExecutor(deps).execute('memory.search', { machineId: 'machine', query },
+        { surface, serverId: 'home', authority: 'account_automation' })).toMatchObject({
+        ok: true, result: { project: { state: 'partial' } },
+      });
+    }
+  });
   it.each(['agent', 'mcp', 'cli', 'ui'] as const)('opens a native memory window through the %s Action without fabricating Session seqs', async surface => {
     const deps = createDeps();
     const source = { type: 'external_transcript' as const, agentId: 'pi', sourceKey: 'local', nativeSessionId: 'native' };
@@ -103,14 +119,25 @@ describe('createActionExecutor (memory)', () => {
     expect(cleared).toBe(true);
   });
 
-  it('relays conversation search to the existing mounted-client Action boundary', async () => {
+  it('returns mounted conversation search coverage and rejects malformed client replies', async () => {
     const deps = createDeps();
     const input = { query: { v: 1, query: 'needle', scope: { type: 'global' }, mode: 'deep' }, mode: 'auto' };
-    deps.clientActionExecute = async ({ actionId, input: admitted }) => ({ ok: true, result: { actionId, input: admitted } });
+    const result = SearchConversationsResultV1Schema.parse({ hits: [], machines: [
+      { machineId: 'offline-machine', status: 'offline', standardSearchEnabled: true },
+    ] });
+    // The remote mounted-client transport is the boundary; Protocol admission and result validation stay real.
+    deps.clientActionExecute = async ({ actionId, input: admitted }) => {
+      expect(actionId).toBe('search.conversations');
+      expect(admitted).toEqual(input);
+      return { ok: true, result };
+    };
     expect(getActionSpec('search.conversations').executionPlacement).toBe('client');
     expect(await createActionExecutor(deps).execute('search.conversations', input, { surface: 'agent' })).toEqual({
-      ok: true, result: { actionId: 'search.conversations', input },
+      ok: true, result,
     });
+    deps.clientActionExecute = async ({ actionId, input: admitted }) => ({ ok: true, result: { actionId, input: admitted } });
+    expect(await createActionExecutor(deps).execute('search.conversations', input, { surface: 'agent' }))
+      .toMatchObject({ ok: false, errorCode: 'invalid_action_output' });
   });
 
   it.each(['cli', 'mcp'] as const)('searches both corpora through the existing %s Action surface', async (surface) => {

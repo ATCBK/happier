@@ -291,7 +291,7 @@ export const SelectableRow = React.forwardRef<React.ElementRef<typeof Pressable>
     const rowStyle = (pressed: boolean) => ([
         styles.row,
         rowVariantStyle,
-        Platform.OS === 'web' && disabled ? ({ cursor: 'not-allowed' } satisfies ViewStyle) : null,
+        Platform.OS === 'web' && disabled ? ({ cursor: 'not-allowed' } satisfies React.CSSProperties) : null,
         pressed && !disabled
             ? (variant === 'selectable' ? styles.rowSelectablePressed : styles.rowPressed)
             : null,

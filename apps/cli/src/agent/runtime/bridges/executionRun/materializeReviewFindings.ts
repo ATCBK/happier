@@ -1,5 +1,7 @@
+import { EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
 import { ReviewFindingsV1Schema } from '@happier-dev/protocol/messages/structured/reviewFindingsV1';
 import { ReviewFindingsV2Schema } from '@happier-dev/protocol/messages/structured/reviewFindingsV2';
+import type { ReviewCommentPrincipalHeaderV1 } from '@happier-dev/protocol';
 import type { ExecutionRunStructuredMeta } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
 import type { ReviewRunCommentService, ReviewRunMaterialization } from '@/agent/executionRuns/profiles/review/reviewComments';
 import { buildReviewFindingsV2Payload } from '@/agent/reviews/normalize/buildReviewFindingsV2Payload';
@@ -24,8 +26,9 @@ export async function materializeReviewFindings(args: Readonly<{
   expectFindings: boolean;
   reviewComments?: ReviewRunCommentService;
   workflowRunId?: string;
+  workflowScope?: NonNullable<ReviewCommentPrincipalHeaderV1['workflowScope']>;
 }>): Promise<MaterializedReviewFindings> {
-  if (args.run.intent !== 'review' || args.structuredMeta?.kind === 'scm_diff_summary.v1'
+  if (args.run.intent !== 'review' || args.structuredMeta?.kind === EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary
     || args.structuredMeta?.kind === 'review_follow_up.v1') {
     return { toolResult: args.toolResult, structuredMeta: args.structuredMeta };
   }
@@ -53,7 +56,8 @@ export async function materializeReviewFindings(args: Readonly<{
   }
   const materialization: ReviewRunMaterialization = args.reviewComments
     ? await args.reviewComments.materialize({ run: args.run, findings: parsed.data.findings, reviewedFingerprint,
-      ...(args.workflowRunId ? { workflowRunId: args.workflowRunId } : {}) })
+      ...(args.workflowRunId ? { workflowRunId: args.workflowRunId } : {}),
+      ...(args.workflowScope ? { workflowScope: args.workflowScope } : {}) })
     : { engineId: args.run.backendId, status: parsed.data.findings.length ? 'failed' : 'materialized',
       commentIds: [], comments: [], failures: parsed.data.findings.map((finding) => ({ findingId: finding.id,
         errorCode: 'review_comment_materialization_unavailable' })) };

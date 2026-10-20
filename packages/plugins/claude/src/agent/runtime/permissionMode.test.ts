@@ -10,7 +10,7 @@ describe('Claude runtime permission mode mapping', () => {
     it('maps canonical cross-provider permission modes to Claude provider modes', () => {
         expect(mapToClaudePermissionMode('yolo')).toBe('bypassPermissions');
         expect(mapToClaudePermissionMode('safe-yolo')).toBe('auto');
-        expect(mapToClaudePermissionMode('read-only')).toBe('dontAsk');
+        expect(mapToClaudePermissionMode('read-only')).toBe('plan');
     });
 
     it('preserves Claude-native modes and lets plan agent mode win', () => {

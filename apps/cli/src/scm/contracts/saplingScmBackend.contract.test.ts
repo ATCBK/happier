@@ -4,7 +4,7 @@ import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRu
 
 import { resolveDefaultScmBackendRegistry } from '../scmBackendCatalog';
 import type { ScmBackend } from '../types';
-import { runScmBackendContractSuite } from './scmBackendContractHarness';
+import { runScmBackendContractSuite } from '@/testkit/scm/scmBackendContractHarness';
 
 /**
  * Sapling-side execution of the shared SCM backend contract harness. Required by

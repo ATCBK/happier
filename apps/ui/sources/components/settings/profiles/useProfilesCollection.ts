@@ -32,6 +32,7 @@ import { requireUpdatedProfileOperation, useAccountSettingsScope, useDeleteAiLau
 import { t } from '@/text';
 import { getSecretSatisfaction } from '@/utils/secrets/secretSatisfaction';
 import { getStorage } from '@/sync/domains/state/storageStore';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 export type ProfileMigrationStatus = ReturnType<typeof resolveProfileMigrationStatus>;
 
@@ -160,7 +161,7 @@ export function useProfilesCollection(): ProfilesCollection {
                 Modal.alert(t('common.error'), result.authoringMemoryCleanup.reason);
             }
         } catch (error) {
-            if (error !== null && typeof error === 'object' && 'code' in error && error.code === 'approval_canceled') return false;
+            if (error !== null && typeof error === 'object' && 'code' in error && isActionApprovalDeclinedErrorCode(error.code)) return false;
             Modal.alert(t('common.error'), error instanceof Error ? error.message : t('common.error'));
             return false;
         }

@@ -7,6 +7,9 @@ const percent = () => z.number().check(z.gte(0), z.lte(100));
 const rate = () => z.nullable(nonnegative());
 const unavailable = () => z.strictObject({ reported: z.literal(false), reason: z.enum(['platform', 'container', 'unavailable']) });
 
+export const MachineMemoryPressureSourceV1Schema = lazyDefinition(() => z.enum(['kernel_level', 'psi', 'events', 'none']));
+export type MachineMemoryPressureSourceV1 = z.infer<typeof MachineMemoryPressureSourceV1Schema>;
+
 export const MachineVitalsHostFactsV1Schema = lazyDefinition(() => z.strictObject({
     logicalCores: nonnegative(), effectiveCores: z.optional(nonnegative()),
     performanceCores: z.optional(nonnegative()), efficiencyCores: z.optional(nonnegative()), sockets: z.optional(nonnegative()),
@@ -26,7 +29,7 @@ export const MachineVitalsSampleV1Schema = lazyDefinition(() => z.strictObject({
     })]),
     memory: z.union([unavailable(), z.strictObject({
         reported: z.literal(true), totalBytes: nonnegative(), availableBytes: nonnegative(), usedBytes: nonnegative(),
-        pressure: z.strictObject({ level: z.enum(['calm', 'elevated', 'critical', 'not_reported']), source: z.enum(['kernel_level', 'psi', 'events', 'none']) }),
+        pressure: z.strictObject({ level: z.enum(['calm', 'elevated', 'critical', 'not_reported']), source: MachineMemoryPressureSourceV1Schema }),
         composition: z.optional(z.array(z.strictObject({ kind: z.enum(['apps', 'wired', 'compressed', 'kernel', 'system', 'cached_files']), bytes: nonnegative() }))),
         swap: z.optional(z.strictObject({ kind: z.enum(['swap', 'page_file']), totalBytes: nonnegative(), usedBytes: nonnegative(), swapping: z.boolean() })),
         limitSource: z.optional(z.literal('cgroup')), lowMemorySignal: z.optional(z.boolean()),

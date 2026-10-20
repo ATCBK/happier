@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { homeAdministrationGitHubAppCreatePath, homeAdministrationGitHubAppPath, homeAdministrationGitHubAppEditPath, homeAdministrationPoliciesPath } from '../governance/homeAdministrationRoutes';
+import { teamGitHubAppPath, teamGitHubAppEditPath, teamAuthenticationPath, teamDirectoryPath, teamIdentityProviderSetupPath } from '../../teams/teamsRoutes';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
@@ -67,13 +69,13 @@ describe('ManagedGitHubAppsSection', () => {
                 owner: { kind: 'team', teamId: 'team-1' },
                 mutationsAvailable: true,
                 routes: {
-                    detail: (id) => `/teams/team-1/github-apps/${id}`,
-                    edit: (id) => `/teams/team-1/github-apps/${id}/edit`,
-                    signIn: '/teams/team-1/sign-in',
-                    directory: '/teams/team-1/directory',
+                    detail: (id) => teamGitHubAppPath({ serverId, teamId: 'team-1' }, id),
+                    edit: (id) => teamGitHubAppEditPath({ serverId, teamId: 'team-1' }, id),
+                    signIn: teamAuthenticationPath({ serverId, teamId: 'team-1' }),
+                    directory: teamDirectoryPath({ serverId, teamId: 'team-1' }),
                 },
             }}
-            createPath="/teams/team-1/github-apps/new"
+            createPath={teamIdentityProviderSetupPath({ serverId, teamId: 'team-1' }, 'github_app_identity')}
             createAvailable={false}
         />, { wrapper: SettingsPage });
 
@@ -81,7 +83,7 @@ describe('ManagedGitHubAppsSection', () => {
         expect(screen.findByTestId('home-github-app-add')?.props.disabled).toBe(true);
         await screen.pressByTestIdAsync('home-github-app:registration-1');
         expect(pushMock).toHaveBeenCalledTimes(1);
-        expect(pushMock).toHaveBeenCalledWith('/teams/team-1/github-apps/registration-1');
+        expect(pushMock).toHaveBeenCalledWith(teamGitHubAppPath({ serverId, teamId: 'team-1' }, 'registration-1'));
         expect(harness.requestsFor(listPath)).toEqual([expect.objectContaining({
             serverId,
             input: { owner: { kind: 'team', teamId: 'team-1' } },
@@ -96,12 +98,12 @@ describe('ManagedGitHubAppsSection', () => {
                 owner: { kind: 'home' },
                 mutationsAvailable: true,
                 routes: {
-                    detail: (id) => `/github-apps/${id}`,
-                    edit: (id) => `/github-apps/${id}/edit`,
-                    signIn: '/sign-in',
+                    detail: (id) => homeAdministrationGitHubAppPath(serverId, id),
+                    edit: (id) => homeAdministrationGitHubAppEditPath(serverId, id),
+                    signIn: homeAdministrationPoliciesPath(serverId),
                 },
             }}
-            createPath="/github-apps/new"
+            createPath={homeAdministrationGitHubAppCreatePath(serverId)}
         />, { wrapper: SettingsPage });
 
         await vi.waitFor(() => expect(screen.findByTestId('managed-github-apps-unavailable')).not.toBeNull());

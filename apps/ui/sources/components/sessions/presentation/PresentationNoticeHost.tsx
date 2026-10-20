@@ -20,6 +20,7 @@ import { resolveOverlayPointerEvents } from '@/components/ui/overlays/resolveOve
 import { useOptionalSafeAreaInsets } from '@/hooks/ui/useOptionalSafeAreaInsets';
 import { FLOATING_OVERLAY_METRICS } from '@/components/ui/overlays/floatingOverlayMetrics';
 import { tryRenderWebPortal } from '@/components/ui/popover/portal';
+import { NOTICE_Z_INDEX } from '@/components/ui/overlays/overlayLayers';
 
 import {
     readPresentationNotice,
@@ -55,7 +56,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         left: 16,
         right: 16,
         alignItems: 'center',
-        zIndex: 200,
+        zIndex: NOTICE_Z_INDEX,
     },
     notice: {
         maxWidth: 560,
@@ -127,7 +128,10 @@ export const PresentationNoticeHost = React.memo(function PresentationNoticeHost
     // it goes; a newer notice replaces the words in place.
     const lastShownRef = React.useRef(notice);
     if (notice) lastShownRef.current = notice;
-    const motion = useOverlayMotionAnimation({ visible: notice !== null, preset: NOTICE_MOTION });
+    // The motion owner moves the card's frame on web by transform, never by opacity on an ancestor of its
+    // glass paint, so the frost keeps sampling whatever is beneath (an open dialog included).
+    const frameRef = React.useRef<React.ComponentRef<typeof Animated.View>>(null);
+    const motion = useOverlayMotionAnimation({ visible: notice !== null, preset: NOTICE_MOTION, elementRef: frameRef });
     const { present } = useOverlayPresence(notice !== null, motion.exitMs);
     // The notice floats over whatever the app is showing, so it consumes the
     // window's own safe region. Without it the card sits under the notch, the
@@ -181,6 +185,7 @@ export const PresentationNoticeHost = React.memo(function PresentationNoticeHost
             importantForAccessibility={leaving ? 'no-hide-descendants' : 'auto'}
         >
             <Animated.View
+                ref={frameRef}
                 style={[styles.notice, motion.style, noticePointerEvents.webStyle]}
                 pointerEvents={noticePointerEvents.nativePointerEvents}
                 accessibilityRole={shown.severity === 'error' ? 'alert' : 'text'}

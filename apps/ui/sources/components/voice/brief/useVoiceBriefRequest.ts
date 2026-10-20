@@ -1,26 +1,36 @@
 import * as React from 'react';
 
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useVoiceAttemptControl, VOICE_ATTEMPT_IDLE_TARGET_GLOBAL, type VoiceAttemptControlProjection } from '@/components/voice/attempt/useVoiceAttemptControl';
 import { useVoiceSurfaceModel } from '@/components/voice/surface/useVoiceSurfaceModel';
 import { useInboxModel } from '@/hooks/inbox/useInboxModel';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
+import { captureActiveServerAccountScopeCurrentness, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { storage } from '@/sync/domains/state/storage';
 import { buildVoiceBrief } from '@/voice/context/buildVoiceBrief';
 import { voiceHooks } from '@/voice/context/voiceHooks';
 import { useVoiceSessionSnapshot } from '@/voice/session/voiceSession';
-import { getVoiceSessionAttemptId, getVoiceSessionSnapshot, subscribeToVoiceSessionSnapshot } from '@/voice/session/voiceSessionStore';
+import { getVoiceSessionAttemptId, getVoiceSessionPresentedAttemptId, getVoiceSessionSnapshot, subscribeToVoiceSessionSnapshot } from '@/voice/session/voiceSessionStore';
 import type { VoiceSessionStatus } from '@/voice/session/types';
 
-import { registerVoiceBriefHomeRequest, registerVoiceBriefOperations, voiceBriefOperationResult, type VoiceBriefOperation, type VoiceBriefOperationOutcome } from './voiceBriefActionRuntime';
+import { registerVoiceBriefHomeRequest, registerVoiceBriefOperations, resumeVoiceBriefHomeRequest, voiceBriefOperationResult, type VoiceBriefOperation, type VoiceBriefOperationOutcome } from './voiceBriefActionRuntime';
 
 const SURFACE_PROPS = Object.freeze({ variant: 'sidebar' as const });
 type Delivery = 'waiting' | 'sent' | 'refused' | 'stopped';
 type PendingBrief = { attemptId: string | null; accountLifetime: ReturnType<typeof captureActiveServerAccountScopeCurrentness> };
 
+function observeBriefControlResult(result: void | Promise<boolean>, settle: (accepted: boolean) => void): 'waiting' | 'settled' {
+    if (result) {
+        void result.then(settle, () => settle(false));
+        return 'waiting';
+    }
+    settle(true);
+    return 'settled';
+}
+
 function briefNeedsRecovery(delivery: Delivery, voice: Pick<VoiceAttemptControlProjection, 'availability' | 'live'>,
     status: VoiceSessionStatus, retryRequired: boolean, started: boolean): boolean {
-    return (delivery !== 'stopped' && status === 'error')
+    return (delivery !== 'stopped' && (status === 'error' || retryRequired))
         || (delivery === 'waiting' && (voice.availability !== 'ready' || (!voice.live && (retryRequired || started))));
 }
 
@@ -50,6 +60,7 @@ export function useVoiceBriefRequest(onClose?: () => void) {
     const voice = useVoiceAttemptControl(VOICE_ATTEMPT_IDLE_TARGET_GLOBAL);
     const surface = useVoiceSurfaceModel(SURFACE_PROPS);
     const snapshot = useVoiceSessionSnapshot();
+    const { execute: executeAction, isCurrent: isActionCurrent, ready: actionReady } = useMountedActionExecution(getActiveServerAccountScope(), { openOnRequest: true });
     const [delivery, setDelivery] = React.useState<Delivery>('waiting');
     const [retryRequired, setRetryRequired] = React.useState(false);
     const pending = React.useRef<PendingBrief | null>(null);
@@ -93,6 +104,7 @@ export function useVoiceBriefRequest(onClose?: () => void) {
             return { ok: false, errorCode: 'voice_brief_unavailable' };
         }
         if (owner.attemptId !== getVoiceSessionAttemptId()) return { ok: false, errorCode: 'stale_voice_attempt' };
+        if (operation === 'request') initialized.current = true;
         if (operation === 'close') {
             if (!owner.onClose) return { ok: false, errorCode: 'voice_brief_unavailable' };
             pending.current = null;
@@ -103,10 +115,13 @@ export function useVoiceBriefRequest(onClose?: () => void) {
             const stop = owner.surface?.canBargeIn ? owner.surface.onBargeIn
                 : owner.surface?.canCancelTurn ? owner.surface.onCancelTurn : null;
             if (!stop) return { ok: false, errorCode: 'voice_brief_stop_unavailable' };
-            pending.current = null;
-            setDelivery('stopped');
-            stop();
-            return voiceBriefOperationResult('stopped');
+            const status = observeBriefControlResult(stop(), (accepted) => {
+                if (!accepted || !isActionCurrent() || !owner.accountLifetime.isCurrent()
+                    || owner.attemptId !== getVoiceSessionAttemptId()) return;
+                pending.current = null;
+                setDelivery('stopped');
+            });
+            return voiceBriefOperationResult(status === 'waiting' ? 'waiting' : 'stopped');
         }
         const unavailable = briefNeedsRecovery(owner.delivery, owner.voice, getVoiceSessionSnapshot().status, owner.retryRequired, started.current);
         const retryAvailable = owner.voice.primaryAction === 'start' || owner.voice.primaryAction === 'setup' || owner.voice.recoveryAvailable;
@@ -115,15 +130,22 @@ export function useVoiceBriefRequest(onClose?: () => void) {
             return { ok: false, errorCode: 'voice_brief_not_retryable' };
         }
         if (operation === 'request' && pending.current) return voiceBriefOperationResult(deliverWhenConnected() ?? 'waiting');
-        pending.current = { attemptId: getVoiceSessionAttemptId(), accountLifetime: captureActiveServerAccountScopeCurrentness() };
+        const request = { attemptId: getVoiceSessionAttemptId(), accountLifetime: captureActiveServerAccountScopeCurrentness() };
+        pending.current = request;
+        const settleControl = (accepted: boolean) => {
+            if (accepted || pending.current !== request || !isActionCurrent() || !request.accountLifetime.isCurrent()) return;
+            pending.current = null;
+            setRetryRequired(true);
+            setDelivery('refused');
+        };
         setDelivery('waiting');
         setRetryRequired(false);
         if (owner.voice.primaryAction === 'start') {
             started.current = true;
-            owner.voice.onPrimaryAction();
+            observeBriefControlResult(owner.voice.onPrimaryAction(), settleControl);
         } else if (operation === 'retry' && owner.voice.recoveryAvailable) {
             const recovery = getVoiceSessionSnapshot().errorRecoveryAction;
-            owner.voice.onRecover();
+            observeBriefControlResult(owner.voice.onRecover(), settleControl);
             // Settings/OS repairs do not admit audio; returning still requires an explicit Retry.
             if (recovery !== 'retry' && recovery !== 'reconnect' && !getVoiceSessionAttemptId()) {
                 pending.current = null;
@@ -132,27 +154,47 @@ export function useVoiceBriefRequest(onClose?: () => void) {
         } else if (operation === 'retry' && owner.voice.primaryAction === 'setup') {
             pending.current = null;
             setRetryRequired(true);
-            owner.voice.onPrimaryAction();
+            observeBriefControlResult(owner.voice.onPrimaryAction(), settleControl);
         } else if (!owner.voice.canStop) {
             pending.current = null;
             setRetryRequired(true);
         }
         return voiceBriefOperationResult(deliverWhenConnected() ?? 'waiting');
-    }, [deliverWhenConnected]);
+    }, [deliverWhenConnected, isActionCurrent]);
 
     React.useLayoutEffect(() => registerVoiceBriefOperations(execute), [execute]);
+    const dispatch = React.useCallback(async (operation: VoiceBriefOperation) => {
+        const expectedAttemptId = getVoiceSessionPresentedAttemptId();
+        const result = await executeAction(`ui.voice_global.brief.${operation}`, expectedAttemptId ? { expectedAttemptId } : {});
+        if (!result.ok && (operation === 'request' || operation === 'retry') && isActionCurrent() && !pending.current) {
+            setRetryRequired(true);
+            setDelivery('refused');
+        }
+        return result;
+    }, [executeAction, isActionCurrent]);
     React.useEffect(() => {
-        if (initialized.current) return;
-        initialized.current = true;
-        execute('request');
-    }, [execute]);
+        if (!actionReady || initialized.current) return;
+        let active = true;
+        // Effect replay retires mounted Action interest. Admit only from the surviving mount.
+        void Promise.resolve().then(() => {
+            if (!active || initialized.current) return;
+            initialized.current = true;
+            const resumed = resumeVoiceBriefHomeRequest();
+            if (!resumed) return dispatch('request');
+            if (!resumed.ok) {
+                setRetryRequired(true);
+                setDelivery('refused');
+            }
+        });
+        return () => { active = false; };
+    }, [actionReady, dispatch]);
 
     const waitingUnavailable = briefNeedsRecovery(delivery, voice, snapshot.status, retryRequired, started.current);
     return {
-        brief, voice, delivery, waitingUnavailable,
+        brief, voice, delivery, waitingUnavailable, actionReady,
         canStopReply: surface?.canCancelTurn === true || surface?.canBargeIn === true,
-        retry: () => execute('retry'),
-        stopReply: () => execute('stop'),
-        closeBrief: () => execute('close'),
+        retry: () => dispatch('retry'),
+        stopReply: () => dispatch('stop'),
+        closeBrief: () => dispatch('close'),
     };
 }

@@ -1,5 +1,6 @@
 import axios from 'axios';
-import { z } from 'zod';
+import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import { WorkflowActionFailureV1Schema, WorkflowHttpErrorDetailsV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { AutomationDefinitionListRequestSchema, AutomationDefinitionListResponseSchema, AutomationDefinitionDetailSchema, AutomationDefinitionCreateRequestSchema, AutomationDefinitionReconcileRequestSchema, AutomationDeleteResponseSchema, AutomationV3RunMutationResponseSchema, type AutomationV3RunMutationResponse, type AutomationDeleteResponse } from '@happier-dev/protocol/automations/automationApiV3';
 import type { AutomationDefinitionListResponse, AutomationDefinitionListRequest, AutomationDefinitionDetail, AutomationDefinitionCreateRequest, AutomationDefinitionReconcileRequest } from '@happier-dev/protocol';
 
@@ -13,6 +14,38 @@ import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/
 
 // The incumbent Automation HTTP owner budget applies to every definition operation.
 const AUTOMATION_HTTP_TIMEOUT_MS = 15_000;
+
+function unresolvedMutationReceipt(cause: unknown): never {
+  throw Object.assign(new Error('workflow_outcome_unresolved', { cause }), { code: 'workflow_outcome_unresolved' });
+}
+
+function parseMutationReceipt<T>(raw: unknown, parse: (raw: unknown) => T): T {
+  try { return parse(raw); } catch (cause) { return unresolvedMutationReceipt(cause); }
+}
+
+/** All Account Automation transports retain only closed, content-free server refusals. */
+function automationHttpError(status: number, body: unknown) {
+  const record = body !== null && typeof body === 'object' ? body : {};
+  const codeSchema = WorkflowHttpErrorDetailsV1Schema.shape.code;
+  const nativeCode = ['code', 'errorCode', 'error'].map(key => codeSchema.safeParse(Reflect.get(record, key)))
+    .find(parsed => parsed.success && parsed.data !== undefined);
+  const code = nativeCode?.success ? nativeCode.data : undefined;
+  if (isAuthenticationStatus(status) && code === undefined) {
+    return createAuthenticationHttpStatusError(status, 'Authentication failed while accessing automation');
+  }
+  const message = `Workflow request failed (HTTP ${status}${code ? `; ${code}` : ''})`;
+  // The family already owns these semantic aliases; retain its native input.
+  if (code === 'automation_disabled' || code === 'automation_not_found') return createHttpStatusError(status, message, code);
+  const semanticCode = code === 'version_mismatch' || code === 'automation_template_version_conflict'
+    || code === 'automation_trigger_revision_conflict' ? 'currentness_conflict'
+    : code;
+  if (semanticCode && WorkflowActionFailureV1Schema.safeParse({ ok: false, errorCode: semanticCode, error: message }).success) {
+    return createHttpStatusError(status, message, semanticCode);
+  }
+  return Object.assign(createHttpStatusError(status, message, 'workflow_http_error'), {
+    details: WorkflowHttpErrorDetailsV1Schema.parse({ status, ...(code ? { code } : {}) }),
+  });
+}
 
 export async function listAutomationDefinitions(params: Readonly<Partial<AutomationDefinitionListRequest> & {
   token: string;
@@ -38,16 +71,8 @@ export async function listAutomationDefinitions(params: Readonly<Partial<Automat
     },
   );
 
-  if (isAuthenticationStatus(response.status)) {
-    throw createAuthenticationHttpStatusError(response.status, 'Authentication failed while listing automations');
-  }
   if (response.status < 200 || response.status >= 300) {
-    const errorCode = typeof response.data?.error === 'string' ? response.data.error : undefined;
-    throw createHttpStatusError(
-      response.status,
-      `Failed to list automations (${response.status})`,
-      errorCode,
-    );
+    throw automationHttpError(response.status, response.data);
   }
   return AutomationDefinitionListResponseSchema.parse(response.data);
 }
@@ -57,15 +82,31 @@ export async function runAutomationNowReceipt(params: Readonly<{
   token: string;
   automationId: string;
   idempotencyKey?: string | null;
+  authorization?: ExternalActionExecutionAuthorizationV1;
+  requiresRequesterCustody?: boolean;
+  signal?: AbortSignal;
 }>): Promise<AutomationV3RunMutationResponse> {
+  const path = `/v3/automations/${encodeURIComponent(params.automationId)}/run-now`;
+  const root = params.authorization?.binding;
+  const requester = params.authorization?.requesterHttpProjection;
+  if ((params.requiresRequesterCustody && !root) || root && (root.actionId !== 'workflow.trigger.run_now'
+    || (root.automationId !== undefined && root.automationId !== params.automationId)
+    || root.idempotencyKey !== (params.idempotencyKey ?? undefined)
+    || !requester || requester.accountId !== root.accountId)) {
+    throw Object.assign(new Error('credential_scope_denied'), { code: 'credential_scope_denied' });
+  }
+  const headers = root && requester ? await requester.createRequestHeaders({
+    effectActionId: root.actionId, method: 'POST', path, ...(params.signal ? { signal: params.signal } : {}),
+  }) : { Authorization: `Bearer ${params.token}`,
+    ...(params.idempotencyKey ? { 'Idempotency-Key': params.idempotencyKey } : {}) };
+  if (!headers) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
   const response = await axios.post(
-    `${resolveServerHttpBaseUrl()}/v3/automations/${encodeURIComponent(params.automationId)}/run-now`,
+    `${requester?.serverHttpBaseUrl ?? resolveServerHttpBaseUrl()}${path}`,
     undefined,
     {
-      headers: {
-        Authorization: `Bearer ${params.token}`,
-        ...(params.idempotencyKey ? { 'Idempotency-Key': params.idempotencyKey } : {}),
-      },
+      // Axios POST otherwise invents a form content type for this bodyless route.
+      headers: { ...headers, 'Content-Type': false },
+      ...(params.signal ? { signal: params.signal } : {}),
       timeout: AUTOMATION_HTTP_TIMEOUT_MS,
       validateStatus: () => true,
     },
@@ -73,16 +114,9 @@ export async function runAutomationNowReceipt(params: Readonly<{
     throw Object.assign(new Error('workflow_outcome_unresolved', { cause }), { code: 'workflow_outcome_unresolved' });
   });
 
-  if (isAuthenticationStatus(response.status)) {
-    throw createAuthenticationHttpStatusError(response.status, 'Authentication failed while running automation');
-  }
   if (response.status < 200 || response.status >= 300) {
-    const errorCode = typeof response.data?.error === 'string' ? response.data.error : undefined;
-    throw createHttpStatusError(
-      response.status,
-      errorCode === 'automation_disabled' ? 'Automation is paused' : `Failed to run automation (${response.status})`,
-      errorCode,
-    );
+    if (response.status >= 500) return unresolvedMutationReceipt(automationHttpError(response.status, response.data));
+    throw automationHttpError(response.status, response.data);
   }
   try {
     return AutomationV3RunMutationResponseSchema.parse(response.data);
@@ -101,16 +135,14 @@ async function requestAutomationDefinition(params: Readonly<{
     headers: { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), Authorization: `Bearer ${params.token}`,
       ...(params.body === undefined ? {} : { 'Content-Type': 'application/json' }) },
     ...(params.body === undefined ? {} : { data: params.body }), timeout: AUTOMATION_HTTP_TIMEOUT_MS, validateStatus: () => true,
+  }).catch((cause: unknown) => {
+    if (params.method === 'GET') throw cause;
+    return unresolvedMutationReceipt(cause);
   });
-  if (isAuthenticationStatus(response.status)) throw createAuthenticationHttpStatusError(response.status, 'Authentication failed while accessing automation');
   if (response.status === 404 && params.method === 'GET') return null;
   if (response.status < 200 || response.status >= 300) {
-    const parsedError = z.object({ error: z.string(), details: z.unknown().optional() }).passthrough().safeParse(response.data);
-    const code = parsedError.success ? parsedError.data.error : undefined;
-    throw Object.assign(createHttpStatusError(response.status, `Automation operation failed (${response.status})`, code),
-      { code: code === 'version_mismatch' || code === 'automation_template_version_conflict'
-          || code === 'automation_trigger_revision_conflict' ? 'currentness_conflict' : code ?? 'content_unavailable',
-        ...(parsedError.success && parsedError.data.details !== undefined ? { details: parsedError.data.details } : {}) });
+    if (params.method !== 'GET' && response.status >= 500) return unresolvedMutationReceipt(automationHttpError(response.status, response.data));
+    throw automationHttpError(response.status, response.data);
   }
   return response.data;
 }
@@ -120,13 +152,13 @@ export async function getAutomationDefinition(params: Readonly<{ token: string; 
   return raw === null ? null : AutomationDefinitionDetailSchema.parse(raw);
 }
 export async function createAutomationDefinition(params: Readonly<{ token: string; input: AutomationDefinitionCreateRequest }>): Promise<AutomationDefinitionDetail> {
-  return AutomationDefinitionDetailSchema.parse(await requestAutomationDefinition({ token: params.token,
-    method: 'POST', body: AutomationDefinitionCreateRequestSchema.parse(params.input) }));
+  return parseMutationReceipt(await requestAutomationDefinition({ token: params.token,
+    method: 'POST', body: AutomationDefinitionCreateRequestSchema.parse(params.input) }), raw => AutomationDefinitionDetailSchema.parse(raw));
 }
 export async function reconcileAutomationDefinition(params: Readonly<{ token: string; automationId: string; input: AutomationDefinitionReconcileRequest }>): Promise<AutomationDefinitionDetail> {
-  return AutomationDefinitionDetailSchema.parse(await requestAutomationDefinition({ token: params.token, automationId: params.automationId,
-    method: 'PUT', body: AutomationDefinitionReconcileRequestSchema.parse(params.input) }));
+  return parseMutationReceipt(await requestAutomationDefinition({ token: params.token, automationId: params.automationId,
+    method: 'PUT', body: AutomationDefinitionReconcileRequestSchema.parse(params.input) }), raw => AutomationDefinitionDetailSchema.parse(raw));
 }
 export async function deleteAutomationDefinition(params: Readonly<{ token: string; automationId: string }>): Promise<AutomationDeleteResponse> {
-  return AutomationDeleteResponseSchema.parse(await requestAutomationDefinition({ ...params, method: 'DELETE' }));
+  return parseMutationReceipt(await requestAutomationDefinition({ ...params, method: 'DELETE' }), raw => AutomationDeleteResponseSchema.parse(raw));
 }

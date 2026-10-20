@@ -20,14 +20,17 @@ import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { useMachinesSettingsViewModel, type MachinesSettingsViewModel } from '../machinesSettingsViewModel';
+import { useActiveActionOperations } from '@/sync/domains/actionOperations/useActionOperations';
+import { readManagedInstallationPrompt } from '../managed/managedCreationPresentation';
 import { MachinePoolsSection } from '../sections/MachinePoolsSection';
-import { machinePoolDraftTitle } from '../pools/machinePoolDraftTitle';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import {
     MACHINES_ADD_ROUTE,
     MACHINES_THIS_COMPUTER_ROUTE,
     buildMachineCollection,
     isMachineCollectionRowSelected,
     machineCollectionHref,
+    managedMachineConsentKey,
     machineCollectionRowKey,
     machinesIndexHref,
     partitionMachineCollectionRailRows,
@@ -39,7 +42,7 @@ import {
 import { recordMachineCollectionVisit, readLastVisitedMachine } from './machineCollectionVisit';
 import { useMachineAddOptions, type MachineAddOption } from './useMachineAddOptions';
 import { useMachineAddDraftRow } from '@/components/machines/add/useMachineAddFlow';
-import { CollectionDraftRow, CollectionList, CollectionListGroupLabel, collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
+import { CollectionDraftRow, CollectionList, CollectionListGroupLabel, CollectionSkeletonRows, collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
 import { CollectionIndexRow } from '@/components/ui/lists/collection/CollectionIndexRow';
 import { useRevealSelectedRow } from '@/components/ui/lists/collection/useRevealSelectedRow';
 import { HappierCollectionListMark } from '@happier-dev/plugin-ui/presentation';
@@ -205,12 +208,13 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
     const selectedKey = rail ? resolveSelectedMachineCollectionKey(pathname, { serverId: readParam(params.serverId) }) : null;
 
     const [query, setQuery] = React.useState(() => readLastVisitedMachine()?.query ?? '');
-    const total = React.useMemo(
+    const unfiltered = React.useMemo(
         () => buildMachineCollection({ groups: viewModel.visibleMachineGroups,
             groupedByHome: viewModel.showMachinesGroupedByServer, managedByServerId: viewModel.managedByServerId,
-            presetsByServerId: viewModel.presetsByServerId }).count,
+            presetsByServerId: viewModel.presetsByServerId }),
         [viewModel.visibleMachineGroups, viewModel.showMachinesGroupedByServer, viewModel.managedByServerId, viewModel.presetsByServerId, viewModel.reachabilityRevision],
     );
+    const total = unfiltered.count;
     const searchable = total > SEARCH_THRESHOLD;
     const teamServerIds = React.useMemo(() => Object.entries(viewModel.presetsByServerId ?? {})
         .filter(([, presets]) => presets.some(preset => preset.owner.kind === 'team')).map(([serverId]) => serverId), [viewModel.presetsByServerId]);
@@ -220,15 +224,23 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
         for (const row of [...teams.rows, ...teams.archivedRows]) (names[row.address.serverId] ??= {})[row.team.id] = row.team.name;
         return names;
     }, [teams.rows, teams.archivedRows]);
+    // A creation waiting on the user's consent says so on its row; its page asks the question.
+    const activeOperations = useActiveActionOperations();
+    const awaitingConsentKey = activeOperations.flatMap(operation => {
+        const prompt = readManagedInstallationPrompt(operation);
+        const reference = operation.snapshot.domainRef;
+        return prompt && reference?.kind === 'managedMachine' ? [managedMachineConsentKey(operation.serverId, reference.id)] : [];
+    }).sort().join('\n');
+    const awaitingConsent = React.useMemo(() => new Set(awaitingConsentKey ? awaitingConsentKey.split('\n') : []), [awaitingConsentKey]);
     const collection = React.useMemo(() => buildMachineCollection({
-        nowMs,
+        nowMs, awaitingConsent,
         groups: viewModel.visibleMachineGroups,
         groupedByHome: viewModel.showMachinesGroupedByServer,
         query: searchable ? query : '',
         managedByServerId: viewModel.managedByServerId,
         presetsByServerId: viewModel.presetsByServerId,
         teamNamesByServerId,
-    }), [nowMs, query, searchable, viewModel.showMachinesGroupedByServer, viewModel.visibleMachineGroups, viewModel.managedByServerId, viewModel.presetsByServerId, viewModel.reachabilityRevision, teamNamesByServerId]);
+    }), [nowMs, awaitingConsent, query, searchable, viewModel.showMachinesGroupedByServer, viewModel.visibleMachineGroups, viewModel.managedByServerId, viewModel.presetsByServerId, viewModel.reachabilityRevision, teamNamesByServerId]);
 
     // The column is an open surface: its online machines' summaries stay live while it shows (one batched demand).
     const demandKeys = React.useMemo(() => rail ? collection.sections.flatMap(section => section.rows)
@@ -266,7 +278,7 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
                     serverId={row.serverId}
                     machineId={row.kind === 'machine' ? row.machineId : row.enrolledMachineId ?? null}
                     online={row.online}
-                    quietWord={row.reason ?? (!row.online && row.kind === 'managed' ? row.presence : !row.online ? t('machineDetailPage.offline') : row.ownership)}
+                    quietWord={row.reason ?? (!row.online && row.kind === 'managed' ? row.presenceWord ?? row.presence : !row.online ? t('machineDetailPage.offline') : row.ownership)}
                 />
             )}
             icon={(
@@ -347,8 +359,12 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
         />
     );
 
-    const loading = viewModel.isLoadingMachines && total === 0;
+    // The first load holds until the list can be read whole: every listed machine has its name and the created
+    // machines have answered once. Otherwise rows land as "Loading…" and groups and counts jump as each read arrives.
+    const loading = (viewModel.isLoadingMachines && total === 0) || collection.namesPending || viewModel.managedFirstAnswerPending;
     const empty = !loading && total === 0;
+    // The header counts machines, the same rows its groups count; recipes and retired creations are not machines.
+    const machineCount = unfiltered.machineCount;
     const managedReadFailures = readManagedMachineReadFailures(viewModel);
     const renderManagedReadFailures = () => managedReadFailures.map(group => {
         const entry = viewModel.managedInventory?.entries[group.serverId];
@@ -480,7 +496,7 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
         <CollectionList
             testID="settings.machines.rail"
             title={t('settings.machines')}
-            count={loading ? null : total}
+            count={loading ? null : machineCount}
             headerAction={<AddMachineMenu options={addOptions} replaceInCollection={replaceConfiguration} />}
             search={searchable ? {
                 value: query,
@@ -504,7 +520,7 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
             {renderManagedReadFailures()}
             {managedReadApprovals}
             {loading ? (
-                <Item title={t('common.loading')} density="compact" showChevron={false} mode="info" />
+                <CollectionSkeletonRows count={Math.max(3, Math.min(unfiltered.machineCount, 6))} />
             ) : unreadableGroup ? (
                 renderUnreadable(unreadableGroup, true)
             ) : empty && managedReadFailures.length > 0 ? null : empty ? (
@@ -539,9 +555,12 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
                     ) : renderRailSectionRows(section)}
                 </React.Fragment>
             ))}
-            {thisComputerRow}
-            <MachinePoolsSection groups={viewModel.visibleMachineGroups} variant="rail" selectedKey={selectedKey} />
-            {presetSections}
+            {/* The column fills top-down: what follows the machines waits for them, so nothing lands above them and moves. */}
+            {loading ? null : <>
+                {thisComputerRow}
+                <MachinePoolsSection groups={viewModel.visibleMachineGroups} variant="rail" selectedKey={selectedKey} />
+                {presetSections}
+            </>}
         </CollectionList>
     );
 });
@@ -688,7 +707,7 @@ export function MachinePresetCollectionSectionView(props: Readonly<{
             <EmptyState testID={`settings.machines.presets.empty.${props.section.serverId}`} layout="line"
                 title={awaiting ? t('machinePresets.loading') : props.query.trim() ? t('common.noMatches') : t('machinePresets.empty')}
                 lineLoading={awaiting}
-                lineDensity={props.rail ? 'compact' : undefined} lineRowStyle={props.rail ? collectionListStyles.row : undefined} />) : null}
+                />) : null}
     </>;
     if (!props.rail) return <ItemGroup title={title} action={add}>{rows}</ItemGroup>;
     return <><CollectionListGroupLabel title={title} trailing={add} />
@@ -733,6 +752,7 @@ const MachineDraftRow = React.memo(function MachineDraftRow(props: Readonly<{ se
 
 /** The pool being added, at the top of the rail while its editor is open. */
 const MachinePoolDraftRow = React.memo(function MachinePoolDraftRow() {
+    const machinePoolDraftTitle = useCollectionDraftTitle();
     const { theme } = useUnistyles();
     return (
         <CollectionDraftRow

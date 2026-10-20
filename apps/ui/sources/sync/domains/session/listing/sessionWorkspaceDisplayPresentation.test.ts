@@ -8,10 +8,10 @@ describe('resolveSessionWorkspaceDisplayPresentation', () => {
         ['~/', '/home/alice///'],
         ['~\\', 'C:\\Users\\alice\\\\'],
         ['C:/Users\\alice//', 'C:\\Users\\alice\\'],
-    ])('presents the machine home as No folder: %s', (path, homeDir) => {
+    ])('presents a path Session at the machine home as the Home folder, never No folder: %s', (path, homeDir) => {
         const presentation = resolveSessionWorkspaceDisplayPresentation({ serverId: 'server-1',
             metadata: { machineId: 'machine-1', path, homeDir }, workspaceRefs: [] });
-        expect(presentation.displayTitle).toBe('No folder');
+        expect(presentation.displayTitle).toBe('Home folder');
         expect(presentation.directoryKind).toBe('path');
     });
 

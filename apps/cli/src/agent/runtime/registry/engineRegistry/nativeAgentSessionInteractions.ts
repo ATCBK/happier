@@ -12,7 +12,6 @@ import type {
     HostSessionQuestionsResult as PluginSessionQuestionsResult,
 } from '@/agent/runtime/state/currentSessionUiTypes';
 import {
-    type InteractionTransientQuestionAnswerV1,
     type InteractionTransientQuestionV1,
     type InteractionTransientRequestV1,
     type InteractionTransientRequesterV1,
@@ -20,13 +19,19 @@ import {
     type PluginMachineMaterializationRefV1,
 } from '@happier-dev/protocol';
 import type { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
+import { toStructuredQuestionPermissionInput } from '@/agent/permissions/structuredQuestionPermissionInput';
+import { normalizeQuestionAnswers, type QuestionAnswerWireValue } from '@/agent/permissions/structuredQuestionAnswers';
 import { NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE } from '@happier-dev/protocol/sessions/permissions/v1';
 import { isWorkflowInteractionCapacityError } from '@/agent/permissions/interactionPersistenceError';
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 import { createPluginInteractionsService } from '@/plugins/runtime/invocation/services/interactions';
 import type { AgentInvocationTurnAdmissionWitness } from '@/plugins/runtime/invocation/services/types';
 import type { StoredCredentials } from '@/persistence';
-import { createPluginSessionsInventory } from '@/session/services/pluginSessionsInventory';
+import {
+    bindPluginSessionsSubagentObservation,
+    createPluginSessionsInventory,
+    readPluginSessionsSubagentObservation,
+} from '@/session/services/pluginSessionsInventory';
 import { createPluginSessionHandleCapabilitiesFactory } from '@/session/services/pluginSessionHandleCapabilities';
 import type { PluginSourceCustodyV1 } from '@happier-dev/protocol';
 import { executePluginSessionMessageAction } from '@/session/services/executePluginSessionMessageAction';
@@ -46,9 +51,6 @@ type InteractionResult =
     | PluginSessionQuestionsResult
     | PluginSessionConfirmationResult;
 
-type QuestionAnswerWireValue = string | readonly string[];
-type QuestionAnswersWire = Readonly<Record<string, QuestionAnswerWireValue>>;
-
 function unavailable(
     request: { kind: InteractionResult['kind'] },
     requestId: string,
@@ -60,59 +62,17 @@ function unavailable(
     }) as InteractionResult;
 }
 
-function resolveChoiceSelection(
-    raw: string,
-    question: Extract<InteractionTransientQuestionV1, { type: 'singleChoice' | 'multipleChoice' }>,
-) {
-    const value = raw.trim();
-    const byId = question.choices.find((choice) => choice.id === value);
-    if (byId) return Object.freeze({ kind: 'choice', choiceId: byId.id });
-    const byLabel = question.choices.filter((choice) => choice.label === value);
-    if (byLabel.length === 1) return Object.freeze({ kind: 'choice', choiceId: byLabel[0]!.id });
-    if (byLabel.length > 1) return null;
-    return question.allowCustom && value.length > 0
-        ? Object.freeze({ kind: 'custom', value })
-        : null;
-}
-
-function normalizeQuestionAnswers(
-    questions: readonly InteractionTransientQuestionV1[],
-    rawAnswers: QuestionAnswersWire,
-): Readonly<Record<string, InteractionTransientQuestionAnswerV1>> | null {
-    const byId = new Map(questions.map((question) => [question.id, question]));
-    if (Object.keys(rawAnswers).some((questionId) => !byId.has(questionId))) return null;
-    const output = Object.create(null) as Record<string, InteractionTransientQuestionAnswerV1>;
-    for (const question of questions) {
-        const rawAnswer = rawAnswers[question.id];
-        if (rawAnswer === undefined) {
-            if (question.required) return null;
-            continue;
-        }
-        const values = Array.isArray(rawAnswer) ? rawAnswer : [rawAnswer];
-        if (question.type === 'text') {
-            if (values.length !== 1) return null;
-            output[question.id] = Object.freeze({ kind: 'text', value: values[0]! });
-            continue;
-        }
-        if (question.type === 'singleChoice') {
-            if (values.length !== 1) return null;
-            const answer = resolveChoiceSelection(values[0]!, question);
-            if (!answer) return null;
-            output[question.id] = Object.freeze({ kind: 'singleChoice', answer });
-            continue;
-        }
-        const choices = values.map((value) => resolveChoiceSelection(value, question));
-        if (choices.length === 0 || choices.some((choice) => choice === null)) return null;
-        const dedupeKeys = choices.map((choice) => choice!.kind === 'choice'
-            ? `choice:${choice!.choiceId}`
-            : `custom:${choice!.value}`);
-        if (new Set(dedupeKeys).size !== dedupeKeys.length) return null;
-        output[question.id] = Object.freeze({
-            kind: 'multipleChoice',
-            answers: choices as [NonNullable<typeof choices[number]>, ...NonNullable<typeof choices[number]>[]],
-        });
-    }
-    return Object.freeze(output);
+function interactionQuestions(
+    request: Exclude<InteractionTransientRequestV1, { kind: 'approval' }>,
+): readonly InteractionTransientQuestionV1[] {
+    return request.kind === 'questions' ? request.questions : [{
+        id: 'confirmation',
+        prompt: request.message,
+        type: 'singleChoice',
+        required: true,
+        allowCustom: false,
+        choices: [{ id: 'confirm', label: 'Confirm' }, { id: 'decline', label: 'Cancel' }],
+    }];
 }
 
 function toPermissionInput(request: InteractionTransientRequestV1): unknown {
@@ -121,35 +81,10 @@ function toPermissionInput(request: InteractionTransientRequestV1): unknown {
         // transient owner retains the approval envelope and persistence ceiling.
         return request.subject.input;
     }
-    if (request.kind === 'questions') {
-        return Object.freeze({
-            ...(request.title ? { title: request.title } : {}),
-            questions: request.questions.map((question) => Object.freeze({
-                id: question.id,
-                question: question.prompt,
-                ...(question.required ? { required: true } : {}),
-                ...(question.type === 'text'
-                    ? {
-                        selection: 'text' as const,
-                        ...(question.initialValue === undefined
-                            ? {}
-                            : { presentation: { initialValue: question.initialValue } }),
-                    }
-                    : {
-                        selection: question.type === 'singleChoice' ? 'single' as const : 'multiple' as const,
-                        options: question.choices.map((choice) => Object.freeze({
-                            id: choice.id,
-                            label: choice.label,
-                            ...(choice.description ? { description: choice.description } : {}),
-                        })),
-                        ...(question.allowCustom ? { allowCustom: true } : {}),
-                    }),
-            })),
-        });
-    }
-    return Object.freeze({
-        title: request.title === 'Confirmation' ? undefined : request.title,
-        message: request.message,
+    return toStructuredQuestionPermissionInput({
+        ...(request.title && (request.kind !== 'confirmation' || request.title !== 'Confirmation')
+            ? { title: request.title } : {}),
+        questions: interactionQuestions(request),
     });
 }
 
@@ -270,18 +205,20 @@ async function presentBoundPermissionRequest(
         && Object.hasOwn(permissionContext, 'turnId');
     const toolName = request.kind === 'approval'
         ? request.subject.name
-        : request.kind === 'questions' ? 'AskUserQuestion' : 'AgentConfirmation';
+        : 'AskUserQuestion';
     let result: Awaited<ReturnType<ProviderEnforcedPermissionHandler['handleToolCall']>>;
     try {
         result = await params.permissionHandler.handleToolCall(
-            request.requestId,
+            request.kind === 'approval' ? request.subject.toolCallId ?? request.requestId : request.requestId,
             toolName,
             toPermissionInput(request),
             {
                 ...(request.kind === 'approval' && request.allowedPersistenceScopes?.includes('session') !== true
                     ? { source: NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE }
                     : {}),
-                ...(permissionContext?.origin ? { origin: permissionContext.origin } : {}),
+                ...(request.kind === 'questions' && permissionContext?.lifetime === 'occurrence'
+                    ? { origin: 'host_occurrence_question' as const }
+                    : permissionContext?.origin ? { origin: permissionContext.origin } : {}),
                 ...(permissionContext?.lifetime ? { lifetime: permissionContext.lifetime } : {}),
                 ...(hasTurnId && permissionContext
                     ? { turnId: permissionContext.turnId }
@@ -289,6 +226,8 @@ async function presentBoundPermissionRequest(
                 ...(hasCausalPermissionAuthority && permissionContext
                     ? { causalPermissionAuthority: permissionContext.causalPermissionAuthority }
                     : {}),
+                ...(permissionContext?.callerPermissionMode !== undefined
+                    ? { callerPermissionMode: permissionContext.callerPermissionMode } : {}),
                 owner: permissionContext?.owner ?? {
                     kind: 'plugin',
                     pluginId: request.requester.pluginId,
@@ -324,42 +263,43 @@ async function presentBoundPermissionRequest(
             persistence: canPersistSession ? 'session' : 'once',
         });
     }
-    if (request.kind === 'questions') {
-        if (decision === 'abort' || decision === 'denied') {
-            return Object.freeze({ requestId: request.requestId, kind: 'questions', status: 'userCancelled' });
-        }
-        if (
-            decision !== 'approved'
-            || !result.answers
-            || typeof result.answers !== 'object'
-            || Array.isArray(result.answers)
-        ) {
-            return unavailable(request, request.requestId);
-        }
-        const answerEntries = Object.entries(result.answers);
-        const allLegacyScalars = answerEntries.every((entry) => typeof entry[1] === 'string');
-        const allStructuredArrays = answerEntries.every((entry) => (
-            Array.isArray(entry[1]) && entry[1].every((value) => typeof value === 'string')
-        ));
-        if (!allLegacyScalars && !allStructuredArrays) {
-            return unavailable(request, request.requestId);
-        }
-        const answers = normalizeQuestionAnswers(
-            request.questions,
-            Object.fromEntries(answerEntries) as Record<string, QuestionAnswerWireValue>,
-        );
-        return answers
-            ? Object.freeze({ requestId: request.requestId, kind: 'questions', status: 'answered', answers })
-            : unavailable(request, request.requestId);
+    if (decision === 'abort' || decision === 'denied') {
+        return request.kind === 'confirmation'
+            ? Object.freeze({ requestId: request.requestId, kind: 'confirmation', status: decision === 'denied' ? 'declined' : 'userCancelled' })
+            : Object.freeze({ requestId: request.requestId, kind: 'questions', status: 'userCancelled' });
     }
-    if (decision === 'abort') return Object.freeze({ requestId: request.requestId, kind: 'confirmation', status: 'userCancelled' });
-    if (decision !== 'approved' && decision !== 'denied') {
+    if (
+        decision !== 'approved'
+        || !result.answers
+        || typeof result.answers !== 'object'
+        || Array.isArray(result.answers)
+    ) {
+        return unavailable(request, request.requestId);
+    }
+    const answerEntries = Object.entries(result.answers);
+    const allLegacyScalars = answerEntries.every((entry) => typeof entry[1] === 'string');
+    const allStructuredArrays = answerEntries.every((entry) => (
+        Array.isArray(entry[1]) && entry[1].every((value) => typeof value === 'string')
+    ));
+    if (!allLegacyScalars && !allStructuredArrays) {
+        return unavailable(request, request.requestId);
+    }
+    const answers = normalizeQuestionAnswers(
+        interactionQuestions(request),
+        Object.fromEntries(answerEntries) as Record<string, QuestionAnswerWireValue>,
+    );
+    if (!answers) return unavailable(request, request.requestId);
+    if (request.kind === 'questions') {
+        return Object.freeze({ requestId: request.requestId, kind: 'questions', status: 'answered', answers });
+    }
+    const answer = answers.confirmation;
+    if (answer?.kind !== 'singleChoice' || answer.answer.kind !== 'choice') {
         return unavailable(request, request.requestId);
     }
     return Object.freeze({
         requestId: request.requestId,
         kind: 'confirmation',
-        status: decision === 'approved' ? 'approved' : 'declined',
+        status: answer.answer.choiceId === 'confirm' ? 'approved' : 'declined',
     });
 }
 
@@ -497,6 +437,23 @@ export function createNativeAgentCurrentExecutionRunUiServices(
     });
 }
 
+/** Native Session custody owns live capabilities; invocation services retain external operations. */
+export function bindNativeAgentSessionServices(operationServices: PluginServices, sessionServices: PluginServices): PluginServices {
+    const sessions = Object.freeze({
+        ...sessionServices.sessions,
+        external: operationServices.sessions.external,
+    });
+    const subagentObservation = readPluginSessionsSubagentObservation(sessionServices.sessions);
+    if (subagentObservation) bindPluginSessionsSubagentObservation(sessions, subagentObservation);
+    return Object.freeze({
+        ...operationServices,
+        availability: (serviceId: PluginServiceId) => serviceId === 'sessions'
+            ? sessionServices.availability('sessions')
+            : operationServices.availability(serviceId),
+        sessions,
+    });
+}
+
 export function createNativeAgentSessionServices(params: NativeAgentSessionInteractionParams): PluginServices {
     const base = createUnavailablePluginServices();
     const permissionHandler = readPermissionHandler(params);
@@ -589,6 +546,9 @@ export function createNativeAgentSessionServices(params: NativeAgentSessionInter
                                         ...(permissionHandler ? { permissionHandler } : {}),
                                         interactions,
                                         readPermissionMode: params.readPermissionMode ?? (() => 'unavailable'),
+                                        ...(params.readActiveTurnAdmissionWitness
+                                            ? { readActiveTurnAdmissionWitness: params.readActiveTurnAdmissionWitness }
+                                            : {}),
                                         ...(params.media ? { media: params.media } : {}),
                                         ...(params.signal ? { signal: params.signal } : {}),
                                         isCurrent: params.isCurrent!,

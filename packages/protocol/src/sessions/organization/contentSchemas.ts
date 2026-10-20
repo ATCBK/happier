@@ -15,7 +15,7 @@ function measureJsonUtf8Bytes(value: unknown): number | null {
   }
 }
 
-const CycleSafeJsonValueSchema = lazyZodSchema(() => z.pipe(z.transform((value) => {
+const CycleSafeJsonValueSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
   try {
     JSON.stringify(value);
     return value;

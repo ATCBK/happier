@@ -116,7 +116,7 @@ import {
 } from './sessions.repositoryTreeExpansion';
 import { resolveWorkspaceTargetForSessionFromState } from '@/sync/domains/session/resolveWorkspaceTargetForSessionFromState';
 import { preserveSessionRuntimeLocalMetadata } from '@/sync/domains/session/preserveSessionRuntimeLocalMetadata';
-import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { readSessionOwnerMetadataView, SESSION_OWNER_METADATA_PROJECTION } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import { createKeyedTimeoutScheduler } from '@/utils/time/keyedTimeoutScheduler';
 import {
@@ -393,11 +393,11 @@ export type SessionsDomain = {
     updateSessionModelMode: (sessionId: string, mode: SessionModelMode, context?: SessionModelOptionsContext) => void;
     upsertSessionReviewCommentDraft: (sessionId: string, draft: ReviewCommentDraft) => void;
     setSessionReviewCommentDraftIncluded: (sessionId: string, commentId: string, included: boolean) => void;
-    deleteSessionReviewCommentDraft: (sessionId: string, commentId: string) => void;
+    deleteSessionReviewCommentDraft: (sessionId: string, commentId: string, expectedDraft?: ReviewCommentDraft) => void;
     clearSessionReviewCommentDrafts: (sessionId: string) => void;
     upsertWorkspaceReviewCommentDraft: (workspaceCacheKey: string, draft: ReviewCommentDraft) => void;
     setWorkspaceReviewCommentDraftIncluded: (workspaceCacheKey: string, commentId: string, included: boolean) => void;
-    deleteWorkspaceReviewCommentDraft: (workspaceCacheKey: string, commentId: string) => void;
+    deleteWorkspaceReviewCommentDraft: (workspaceCacheKey: string, commentId: string, expectedDraft?: ReviewCommentDraft) => void;
     clearWorkspaceReviewCommentDrafts: (workspaceCacheKey: string) => void;
     createSessionActionDraft: (
         scope: ServerAccountScope,
@@ -564,6 +564,7 @@ function resolveOrderedSessionApply(
             metadata: previousSession.metadata,
             metadataVersion: previousSession.metadataVersion,
             ownerMetadataView: previousSession.ownerMetadataView,
+            [SESSION_OWNER_METADATA_PROJECTION]: previousSession[SESSION_OWNER_METADATA_PROJECTION],
             composerOptionsInput: previousSession.composerOptionsInput,
         });
     }
@@ -1322,6 +1323,11 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
 
                 const nextSession: Session = {
                     ...session,
+                    // Turn facts travel through the shell Session to transcript consumers.
+                    // Reuse equal hydration echoes so reference-based subscribers stay local.
+                    sessionTurns: areSessionValuesDeepEqual(previousSession?.sessionTurns, session.sessionTurns)
+                        ? previousSession?.sessionTurns
+                        : session.sessionTurns,
                     metadata: (
                         session.metadataLayoutVersion === undefined
                         || session.metadataLayoutVersion === 0
@@ -2455,9 +2461,11 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             saveSessionReviewCommentsDrafts(merged, sessionLocalStateScope);
             return { ...state, reviewCommentsDraftsBySessionId: merged };
         }),
-        deleteSessionReviewCommentDraft: (sessionId: string, commentId: string) => set((state) => {
+        deleteSessionReviewCommentDraft: (sessionId: string, commentId: string, expectedDraft?: ReviewCommentDraft) => set((state) => {
             const existing = state.reviewCommentsDraftsBySessionId[sessionId] ?? [];
-            const next = existing.filter((d) => d.id !== commentId);
+            const next = existing.filter((draft) => draft.id !== commentId
+                || (expectedDraft !== undefined && !areSessionValuesDeepEqual(draft, expectedDraft)));
+            if (next.length === existing.length) return state;
             const merged = { ...state.reviewCommentsDraftsBySessionId };
             if (next.length > 0) merged[sessionId] = next;
             else delete merged[sessionId];
@@ -2498,11 +2506,13 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             saveWorkspaceReviewCommentsDrafts(merged, sessionLocalStateScope);
             return { ...state, reviewCommentsDraftsByWorkspaceCacheKey: merged };
         }),
-        deleteWorkspaceReviewCommentDraft: (workspaceCacheKey: string, commentId: string) => set((state) => {
+        deleteWorkspaceReviewCommentDraft: (workspaceCacheKey: string, commentId: string, expectedDraft?: ReviewCommentDraft) => set((state) => {
             const key = String(workspaceCacheKey ?? '').trim();
             if (!key) return state;
             const existing = state.reviewCommentsDraftsByWorkspaceCacheKey[key] ?? [];
-            const next = existing.filter((d) => d.id !== commentId);
+            const next = existing.filter((draft) => draft.id !== commentId
+                || (expectedDraft !== undefined && !areSessionValuesDeepEqual(draft, expectedDraft)));
+            if (next.length === existing.length) return state;
             const merged = { ...state.reviewCommentsDraftsByWorkspaceCacheKey };
             if (next.length > 0) merged[key] = next;
             else delete merged[key];

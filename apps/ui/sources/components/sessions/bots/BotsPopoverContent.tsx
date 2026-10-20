@@ -2,11 +2,12 @@ import * as React from 'react';
 import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useShallow } from 'zustand/react/shallow';
-import { HAPPIER_FRESHNESS_LINE_METRICS, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { readSessionLiveManagedSessionCountV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 
 import {
+  RAIL_POPOVER_ROSTER_LIST_STYLE,
   RailPopoverRoster,
-  resolveRailPopoverRosterListMaxHeight,
 } from '@/components/navigation/shell/sidebarFooter/RailPopoverRoster';
 import {
   buildSessionListFilterQueryHomes,
@@ -14,6 +15,7 @@ import {
   resolveSessionListViewContextDefaults,
 } from '@/components/sessions/shell/search/sessionListViewFilters';
 import { SessionItem } from '@/components/sessions/shell/SessionItem';
+import { useSessionListIdentityDisplay } from '@/components/sessions/shell/SessionListIdentity';
 import { filterCollapsedSessionListItems } from '@/components/sessions/shell/filterCollapsedSessionListItems';
 import { selectSessionReportSubtree } from '@/components/sessions/work/reportSubtree';
 import { nestSessionListReports } from '@/sync/domains/session/listing/nestSessionListReports';
@@ -24,7 +26,6 @@ import {
 } from '@/components/sessions/shell/sessionListRowViewModels';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
-import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
 import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
@@ -37,9 +38,11 @@ import {
 } from '@/hooks/session/sessionListRuntimeClock';
 import { useSessionListSelectionState } from '@/hooks/session/useSessionListSelectionState';
 import { useVisibleSessionListPaneState } from '@/hooks/session/useVisibleSessionListPaneState';
+import { resolveSessionListRenderableMeaningfulActivityAt } from '@/sync/domains/session/listing/sessionListRenderableSorting';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
-import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
+import { useHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
+import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { useSessionListQueryHomeSupportByServerId, useSessionListQuerySourceState } from '@/sync/domains/session/listing/useSessionListQuerySourceState';
 import { buildSessionListIndexNodeId, type SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 import { storage, useLocalSettingMutable, useSessionListRowRenderablesForItems } from '@/sync/domains/state/storage';
@@ -54,8 +57,9 @@ import {
   useAskHappierOfferVisible,
   useAskHappierOpener,
 } from './useAskHappierOffer';
-import { classifyBotActivity } from './botActivity';
+import { classifyBotActivity, compareBotRosterOrder } from './botActivity';
 import { BOTS_GLYPH } from './botsGlyph';
+import { BotRosterReadiness } from './BotRosterReadiness';
 import { openNewBotDraft } from './newBotDraft';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
@@ -109,7 +113,7 @@ function readRosterCounts(
   let working = 0;
   for (const row of rows) {
     const activity = classifyBotActivity(
-      row.sessionStatus?.awareness.operational.primary,
+      row.sessionStatus?.awareness,
     );
     if (activity === 'needsYou') needsYou += 1;
     else if (activity === 'working') working += 1;
@@ -121,17 +125,19 @@ function useRosterRows(items: readonly SessionIndexItem[]) {
   const renderables = useSessionListRowRenderablesForItems(items);
   const relativeNowMs = useSessionListRelativeNowMs(true);
   const runtimeNowMs = useSessionListRuntimeNowMs(true);
+  // The rows draw the identity the person chose for the Sessions list, not a roster-only mark.
+  const identityDisplay = useSessionListIdentityDisplay();
   return React.useMemo(() => items.map((item, index) => buildSessionListRowViewModel({
     item, adjacency: resolveSessionListRowViewModelAdjacency(items, index),
     unscopedSelectionIsUnique: false, reachableSessionDisplayById: NO_REACHABLE_DISPLAY,
     rowRenderableByKey: renderables, relativeNowMs, runtimeNowMs,
-    workingTextMode: 'static', identityDisplay: 'avatar', hasMultipleMachines: false,
+    workingTextMode: 'static', identityDisplay, hasMultipleMachines: false,
     pinnedSessionKeys: NO_PINNED_KEYS, sessionTags: NO_TAGS, selectedSessionId: null,
     showServerBadge: false, showPinnedServerBadge: false,
-  })), [items, relativeNowMs, renderables, runtimeNowMs]);
+  })), [identityDisplay, items, relativeNowMs, renderables, runtimeNowMs]);
 }
 
-/** Only an expanded lead mounts its exact-Home subtree query. Shared rows and reportsTo own membership. */
+/** Only an expanded lead mounts its exact-Home subtree query. Shared rows and manager own membership. */
 function BotRosterReports(props: Readonly<{
   lead: SessionListRenderableSession;
   item: SessionIndexItem;
@@ -149,13 +155,13 @@ function BotRosterReports(props: Readonly<{
   const cursor = state?.phase === 'ready' && (state.hasNext || state.attentionHasNext)
     ? `${state.nextCursor}:${state.attentionNextCursor}` : '';
   React.useEffect(() => {
-    if (cursor) fireAndForget(query.loadNext(), { tag: 'BotsRoster.reports.loadNext' });
+    if (cursor) fireAndForget(query.loadNext(), { tag: 'BotsRoster.managedSessions.loadNext' });
   }, [cursor, query]);
   return <>
     {support[serverId] === true && !query.coverageComplete ? <SurfaceFreshnessLine
-      testID={`bots-roster.reports:${props.lead.id}.partial`}
+      testID={`bots-roster.managedSessions:${props.lead.id}.partial`}
       reason={t('bots.partial')}
-      action={{ label: t('common.retry'), onPress: () => fireAndForget(query.refresh(), { tag: 'BotsRoster.reports.retry' }) }}
+      action={{ label: t('common.retry'), onPress: () => fireAndForget(query.refresh(), { tag: 'BotsRoster.managedSessions.retry' }) }}
     /> : null}
   </>;
 }
@@ -188,14 +194,27 @@ export function BotsPopoverContent(
     queryHomes,
     sessionListSurfaceDataActive: true,
   });
-  const botItems = React.useMemo(
+  const listedBotItems = React.useMemo(
     () =>
       (pane.visibleSessionListIndex ?? []).filter(
         (item): item is SessionIndexItem => item.type === 'session',
       ),
     [pane.visibleSessionListIndex],
   );
-  const botRows = useRosterRows(botItems);
+  const listedBotRows = useRosterRows(listedBotItems);
+  const { botItems, botRows } = React.useMemo(() => {
+    const order = listedBotRows
+      .map((row, index) => ({
+        index,
+        activity: classifyBotActivity(row.sessionStatus?.awareness),
+        activityAtMs: row.session ? resolveSessionListRenderableMeaningfulActivityAt(row.session) : 0,
+      }))
+      .sort(compareBotRosterOrder);
+    return {
+      botItems: order.map(({ index }) => listedBotItems[index]!),
+      botRows: order.map(({ index }) => listedBotRows[index]!),
+    };
+  }, [listedBotItems, listedBotRows]);
   const descendants = storage(useShallow(state => {
     const records: Record<string, Session> = {};
     for (const item of botItems) {
@@ -254,14 +273,8 @@ export function BotsPopoverContent(
       ? (presentation.unavailableHomes.find((home) => home.reason === 'offline')
           ?.serverId ?? null)
       : null;
-  const offlineHomeLabel = React.useMemo(
-    () => {
-      if (!offlineHome) return null;
-      const profile = getServerProfileById(offlineHome);
-      return resolveHomeDisplayLabel(profile, offlineHome);
-    },
-    [offlineHome],
-  );
+  useServerProfilesGeneration();
+  const offlineHomeLabel = useHomeDisplayLabel(offlineHome ? getServerProfileById(offlineHome) : null);
   // Still paging (a Home loading or a cursor left): the roster is not settled yet.
   const paging = query?.active === true && Object.values(query.statesByServerId).some((state) => state !== undefined
     && (state.phase === 'idle' || state.phase === 'loading'
@@ -400,15 +413,11 @@ export function BotsPopoverContent(
   return (
     <RailPopoverRoster
       testID="bots-roster"
+      maxHeight={props.maxHeight}
       title={t('bots.title')}
       actions={footerActions}
       summary={
         <View style={styles.summary}>
-          <View style={{ width: HAPPIER_FRESHNESS_LINE_METRICS.glyphPx - 1, height: HAPPIER_FRESHNESS_LINE_METRICS.glyphPx - 1 }}>
-            {paging || presentation?.kind === 'refreshing' ? (
-              <ActivitySpinner testID="bots-roster.refreshing" size={HAPPIER_FRESHNESS_LINE_METRICS.glyphPx - 1} />
-            ) : null}
-          </View>
           {counts.needsYou > 0 ? (
             <StatusDot color={theme.colors.state.warning.foreground} />
           ) : null}
@@ -420,7 +429,7 @@ export function BotsPopoverContent(
         </View>
       }
     >
-      {offlineHomeLabel ? (
+      {offlineHome ? (
         <View style={styles.line}>
           <SurfaceFreshnessLine
             testID="bots-roster.offline"
@@ -439,14 +448,17 @@ export function BotsPopoverContent(
         </View>
       ) : null}
       <ScrollView
-        style={{
-          maxHeight: resolveRailPopoverRosterListMaxHeight(props.maxHeight),
-        }}
+        style={RAIL_POPOVER_ROSTER_LIST_STYLE}
         keyboardShouldPersistTaps="always"
         testID="bots-roster.list"
       >
-        {rows.map((row, index) =>
-          row.session ? (
+        {rows.map((row, index) => {
+          const isLast = index === rows.length - 1;
+          // A quiet top-level Bot carries its readiness under its row (lab K3-R); busy ones say what they do.
+          const readinessServerId = !items[index]!.reportsDepth
+            && classifyBotActivity(row.sessionStatus?.awareness) === 'quiet'
+            ? items[index]!.serverId ?? null : null;
+          return row.session ? (
             <React.Fragment key={row.sessionKey ?? items[index]!.sessionId}>
             <SessionItem
               rowViewModel={row}
@@ -454,22 +466,26 @@ export function BotsPopoverContent(
               serverId={items[index]!.serverId ?? undefined}
               compact
               embedded
-              embeddedIsLast={index === rows.length - 1}
+              embeddedIsLast={isLast || readinessServerId !== null}
               showTalkAction
+              quietWhenOffline
               actionMenuSurface="botsRoster"
               reportsDepth={items[index]!.reportsDepth}
-              reportsDisclosure={(row.session.reports?.total ?? 0) > 0
+              reportsDisclosure={readSessionLiveManagedSessionCountV1(row.session.managedSessions) > 0
                 ? (collapsed[buildSessionListIndexNodeId(items[index]!)] ?? (row.session.metadata?.bot?.kind === 'bot')) ? 'collapsed' : 'expanded'
                 : undefined}
               onSetReportsCollapsed={setCollapsed}
               onOpened={close}
             />
-            {(row.session.reports?.total ?? 0) > 0 && collapsed[buildSessionListIndexNodeId(items[index]!)] === false
+            {readinessServerId ? (
+              <BotRosterReadiness serverId={readinessServerId} sessionId={row.session.id} separator={!isLast} />
+            ) : null}
+            {readSessionLiveManagedSessionCountV1(row.session.managedSessions) > 0 && collapsed[buildSessionListIndexNodeId(items[index]!)] === false
               ? <BotRosterReports lead={row.session} item={items[index]!} />
               : null}
             </React.Fragment>
-          ) : null,
-        )}
+          ) : null;
+        })}
         {loading ? (
           <EmptyState
             layout="line"

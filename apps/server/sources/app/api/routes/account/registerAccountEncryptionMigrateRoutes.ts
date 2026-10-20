@@ -1,7 +1,11 @@
 import { InactiveAccountError } from "@/app/auth/accountStatus";
+import { DiscussionAccountEncryptionInventoryV1Schema } from '@happier-dev/protocol/discussions/accountEncryptionMigration';
+import { readDiscussionAccountEncryptionInventoryInTx, migrateDiscussionAccountEncryptionInTx,
+    matchDiscussionAccountEncryptionMigrationPostStateInTx } from '@/app/discussions/accountEncryptionMigration';
+import { readSessionAccessAuthenticationFromRequest } from '@/app/session/access/sessionAccessAuthentication';
 import { type Fastify } from "../../types";
-import { z } from "zod";
-import { afterTx, inTx, type Tx } from "@/storage/inTx";
+import { z } from "zod/mini";
+import { afterTx, inTx, transactionResult, type Tx } from "@/storage/inTx";
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { AccountEncryptionMigrateRequestSchema, AccountEncryptionMigrateSuccessResponseSchema, AccountEncryptionMigrateBadRequestResponseSchema, AccountEncryptionMigrateForbiddenResponseSchema, AccountEncryptionMigrateNotFoundResponseSchema, AccountEncryptionMigrateConflictResponseSchema, AccountEncryptionMigrateInternalResponseSchema, AccountEncryptionMigrateAutomationsInventoryResponseSchema, AccountEncryptionMigrateInvalidParamsReasonSchema, AccountEncryptionMigrateTransitionPrepareRequestSchema, AccountEncryptionMigrateTransitionPrepareResponseSchema, AccountEncryptionMigrateTransitionAuthorizeRequestSchema, AccountEncryptionMigrateTransitionAuthorizeResponseSchema, AccountEncryptionMigrateCollectionInventoryPageRequestSchema, AccountEncryptionMigrateCollectionInventoryPageSchema, AccountEncryptionMigrateCollectionStageBatchRequestSchema, AccountEncryptionMigrateCollectionStageBatchResponseSchema, AccountEncryptionMigrateTransitionCancelRequestSchema, AccountEncryptionMigrateTransitionCancelResponseSchema, AccountEncryptionMigrateTransitionActivateRequestSchema, AccountEncryptionMigrateTransitionActivateResponseSchema, ACCOUNT_ENCRYPTION_MIGRATE_REQUEST_MAX_UTF8_BYTES, createAccountEncryptionMigrateProofSigningInputV1, createAccountEncryptionMigrateRequestBindingDigestV1, createAccountEncryptionMigrateTransitionAuthorizationBindingDigestV1, createAccountEncryptionMigrateTransitionAuthorizationProofSigningInputV1, type AccountEncryptionMigrateKeyProof, type AccountEncryptionMigrateRequest, type AccountEncryptionMigrateTransitionAuthorizeRequest } from '@happier-dev/protocol/account/encryptionMigrate';
 import { ArtifactQuotaExceededV1Schema } from '@happier-dev/protocol/artifacts/artifactActionsV1';
@@ -136,6 +140,7 @@ import {
 import { matchProjectTrustAccountMigrationPostStateInTx, migrateProjectTrustForAccountModeInTx } from '@/app/projects/trust/projectTrustEncryptionMigration';
 import { matchProfileRowsAccountMigrationPostStateInTx, migrateProfileRowsForAccountModeInTx } from '@/app/account/profiles/profileRowsEncryptionMigration';
 import { matchPromptLibraryAccountMigrationPostStateInTx, migratePromptLibraryForAccountModeInTx } from '@/app/account/prompts/promptLibraryEncryptionMigration';
+import { matchAccountFollowRulesAccountMigrationPostStateInTx, migrateAccountFollowRulesForAccountModeInTx } from '@/app/session/follow/accountFollowRuleEncryptionMigration';
 import { matchConfiguredAgentCatalogAccountMigrationPostStateInTx, migrateConfiguredAgentCatalogForAccountModeInTx } from '@/app/account/agents/configuredAgentRowsEncryptionMigration';
 import { matchMcpServerCatalogAccountMigrationPostStateInTx, migrateMcpServerCatalogForAccountModeInTx } from '@/app/account/mcp/serverCatalogEncryptionMigration';
 import { matchProviderConnectionsAccountMigrationPostStateInTx, migrateProviderConnectionsForAccountModeInTx } from '@/app/account/providers/providerConnectionsEncryptionMigration';
@@ -144,13 +149,11 @@ import { matchNotificationChannelCatalogAccountMigrationPostStateInTx, migrateNo
 import { matchConnectedPresentationAccountMigrationPostStateInTx, migrateConnectedPresentationForAccountModeInTx,
     matchConnectedAcknowledgementsAccountMigrationPostStateInTx, migrateConnectedAcknowledgementsForAccountModeInTx } from '@/app/account/connectedAccounts/presentationRowsEncryptionMigration';
 
-const AccountEncryptionMigrationReplayHintSchema = z
-    .object({
-        settingsVersion: z.number().int().nonnegative(),
-        sourceAccountVersion: z.number().int().nonnegative(),
+const AccountEncryptionMigrationReplayHintSchema = z.strictObject({
+        settingsVersion: z.number().check(z.int(), z.nonnegative()),
+        sourceAccountVersion: z.number().check(z.int(), z.nonnegative()),
         accountEncryptionMigrationReplayBinding: z.string(),
-    })
-    .strict();
+    });
 
 type VerifiedMigrationKeyProof = Readonly<{
     publicKeyHex: string;
@@ -285,6 +288,7 @@ class AccountEncryptionMigrationDomainRejectedError extends Error {
             | "todos"
             | "workspace"
             | "artifacts"
+            | "discussions"
             | "review_comments"
             | "session_organization"
             | "pets"
@@ -293,6 +297,7 @@ class AccountEncryptionMigrationDomainRejectedError extends Error {
             | "plugin_settings"
             | "authoring_memory"
             | "prompt_library"
+            | "session_follow_rules"
             | "acp_catalog"
             | "mcp_server_catalog"
             | "provider_connections"
@@ -517,6 +522,12 @@ async function authorizeAccountEncryptionTransitionFromHttpRequestInTx(
 }
 
 export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
+    app.get('/v1/account/encryption/migrate/discussions/inventory', {
+        preHandler: [app.authenticate, requirePresentUser],
+        schema: { response: { 200: DiscussionAccountEncryptionInventoryV1Schema, 403: PresentUserRequiredResponseSchema } },
+    }, async (request, reply) => reply.send(await inTx(tx => readDiscussionAccountEncryptionInventoryInTx(tx, {
+        accountId: request.userId, authentication: readSessionAccessAuthenticationFromRequest(request),
+    }), { isolationLevel: 'Serializable' })));
     app.get("/v1/account/encryption/migrate/automations/inventory", {
         preHandler: app.authenticate,
         schema: { response: {
@@ -884,6 +895,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
             machines,
             todos,
             artifacts,
+            discussions,
             sessions,
             reviewComments,
             sessionOrganization,
@@ -891,6 +903,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
             authoringMemory,
             profileRows,
             promptLibrary,
+            sessionFollowRules,
             acpCatalog,
             mcpServerCatalog,
             providerConnections,
@@ -932,7 +945,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
             if (!keyProof) {
                 return reply
                     .code(400)
-                    .send({ error: "invalid-params", reason: AccountEncryptionMigrateInvalidParamsReasonSchema.enum.key_proof_required });
+                    .send({ error: "invalid-params", reason: AccountEncryptionMigrateInvalidParamsReasonSchema.def.entries.key_proof_required });
             }
         }
 
@@ -952,7 +965,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                         type: "invalid-params" as const,
                         reason:
                             AccountEncryptionMigrateInvalidParamsReasonSchema
-                                .enum.restore_required,
+                                .def.entries.restore_required,
                     };
                 }
                 const account = fence.account;
@@ -1141,6 +1154,9 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                             directive: replayRequest.artifacts,
                             preparedBlobs: preparedArtifactBlobs,
                         });
+                    const discussionsPostState = await matchDiscussionAccountEncryptionMigrationPostStateInTx(tx, {
+                        accountId: userId, toMode, directive: replayRequest.discussions,
+                    });
                     const sessionsPostState =
                         await matchSessionAccountEncryptionMigrationPostStateInTx({
                             tx,
@@ -1165,6 +1181,9 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                     });
                     const promptLibraryPostState = await matchPromptLibraryAccountMigrationPostStateInTx(tx, {
                         accountId: userId, toMode, directive: replayRequest.promptLibrary,
+                    });
+                    const sessionFollowRulesPostState = await matchAccountFollowRulesAccountMigrationPostStateInTx(tx, {
+                        accountId: userId, toMode, directive: replayRequest.sessionFollowRules,
                     });
                     const mcpServerCatalogPostState = await matchMcpServerCatalogAccountMigrationPostStateInTx(tx, {
                         accountId: userId, toMode, directive: replayRequest.mcpServerCatalog,
@@ -1240,11 +1259,13 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                         || todosPostState.status !== "matched"
                         || workspacePostState.status !== 'matched'
                         || artifactsPostState.status !== "matched"
+                        || discussionsPostState.status !== 'matched'
                         || sessionsPostState.status !== "matched"
                         || sessionDraftsPostState.status !== "matched"
                         || authoringMemoryPostState.status !== "matched"
                         || profileRowsPostState.status !== 'matched'
                         || promptLibraryPostState.status !== 'matched'
+                        || sessionFollowRulesPostState.status !== 'matched'
                         || acpCatalogPostState.status !== 'matched'
                         || mcpServerCatalogPostState.status !== 'matched'
                         || providerConnectionsPostState.status !== 'matched'
@@ -1279,6 +1300,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                         profileRowsResult: replayRequest.profileRows ? { rows: profileRowsPostState.rows,
                             referenceGuardRevision: profileRowsPostState.referenceGuardRevision, transferControl: profileRowsPostState.transferControl } : undefined,
                         promptLibraryRows: replayRequest.promptLibrary ? promptLibraryPostState.rows : undefined,
+                        sessionFollowRules: replayRequest.sessionFollowRules ? { rules: sessionFollowRulesPostState.rules } : undefined,
                         acpCatalogResult: replayRequest.acpCatalog ? { row: acpCatalogPostState.row } : undefined,
                         mcpServerCatalogResult: replayRequest.mcpServerCatalog ? mcpServerCatalogPostState.row : undefined,
                         providerConnectionsResult: replayRequest.providerConnections ? { row: providerConnectionsPostState.row } : undefined,
@@ -1368,7 +1390,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                         type: "invalid-params" as const,
                         reason:
                             AccountEncryptionMigrateInvalidParamsReasonSchema
-                                .enum.restore_required,
+                                .def.entries.restore_required,
                     };
                 }
                 // Outside first-key enrollment, an external proof is admitted
@@ -1389,7 +1411,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                         type: "invalid-params" as const,
                         reason:
                             AccountEncryptionMigrateInvalidParamsReasonSchema
-                                .enum.key_proof_required,
+                                .def.entries.key_proof_required,
                     };
                 }
 
@@ -1419,7 +1441,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                     ) {
                         return {
                             type: "invalid-params" as const,
-                            reason: AccountEncryptionMigrateInvalidParamsReasonSchema.enum.restore_required,
+                            reason: AccountEncryptionMigrateInvalidParamsReasonSchema.def.entries.restore_required,
                         };
                     }
                     publicKeyHexUpdate =
@@ -1513,7 +1535,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                                 type: "invalid-params" as const,
                                 reason:
                                     AccountEncryptionMigrateInvalidParamsReasonSchema
-                                        .enum.key_proof_required,
+                                        .def.entries.key_proof_required,
                             };
                     }
                     const externalAuth =
@@ -1533,13 +1555,13 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                             type: "invalid-params" as const,
                             reason:
                                 AccountEncryptionMigrateInvalidParamsReasonSchema
-                                    .enum.key_proof_required,
+                                    .def.entries.key_proof_required,
                         };
                     }
                     if (currentPasswordCredential && externalAuth.provider !== "email_password") {
                         return {
                             type: "invalid-params" as const,
-                            reason: AccountEncryptionMigrateInvalidParamsReasonSchema.enum.key_proof_required,
+                            reason: AccountEncryptionMigrateInvalidParamsReasonSchema.def.entries.key_proof_required,
                         };
                     }
                 }
@@ -1561,6 +1583,12 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                 });
                 if (promptLibraryMigration.status !== 'applied') {
                     throw new AccountEncryptionMigrationDomainRejectedError('prompt_library', promptLibraryMigration.status);
+                }
+                const sessionFollowRulesMigration = await migrateAccountFollowRulesForAccountModeInTx(tx, {
+                    accountId: userId, toMode, directive: sessionFollowRules,
+                });
+                if (sessionFollowRulesMigration.status !== 'applied') {
+                    throw new AccountEncryptionMigrationDomainRejectedError('session_follow_rules', sessionFollowRulesMigration.status);
                 }
                 const acpCatalogMigration = await migrateConfiguredAgentCatalogForAccountModeInTx(tx, {
                     accountId: userId, toMode, directive: acpCatalog,
@@ -1694,7 +1722,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                             payload:
                                 buildSessionMetadataRecipientUpdate(
                                     publication.sessionId,
-                                    publication.cursor,
+                                    publication.cursor.resolveCursor(),
                                     randomKeyNaked(12),
                                     publication.projection,
                                 ),
@@ -1778,6 +1806,13 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                         "artifacts",
                         artifactMigration.status,
                     );
+                }
+
+                const discussionMigration = await migrateDiscussionAccountEncryptionInTx(tx, {
+                    accountId: userId, fromMode: currentMode, toMode, directive: discussions,
+                });
+                if (discussionMigration.status !== 'applied') {
+                    throw new AccountEncryptionMigrationDomainRejectedError('discussions', discussionMigration.status);
                 }
 
                 const connectedServicesMigration =
@@ -1935,15 +1970,15 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                 afterTx(tx, () => {
                     eventRouter.emitUpdate({
                         userId,
-                        payload: buildAccountSettingsChangedUpdate(nextSettingsVersion, finalized.cursor, randomKeyNaked(12)),
+                        payload: buildAccountSettingsChangedUpdate(nextSettingsVersion, finalized.resolveResult().cursor, randomKeyNaked(12)),
                         recipientFilter: { type: "user-machine-scoped-only" },
                     });
                 });
 
-                return {
+                return transactionResult(() => ({
                     type: "success" as const,
                     mode: toMode,
-                    accountVersion: finalized.version,
+                    accountVersion: finalized.resolveResult().version,
                     settingsVersion: nextSettingsVersion,
                     sessionDraftRecords: sessionDrafts
                         ? sessionDraftMigration.records
@@ -1952,6 +1987,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                     profileRowsResult: profileRows ? { rows: profileRowsMigration.rows,
                         referenceGuardRevision: profileRowsMigration.referenceGuardRevision, transferControl: profileRowsMigration.transferControl } : undefined,
                     promptLibraryRows: promptLibrary ? promptLibraryMigration.rows : undefined,
+                    sessionFollowRules: sessionFollowRules ? { rules: sessionFollowRulesMigration.rules } : undefined,
                     acpCatalogResult: acpCatalog ? { row: acpCatalogMigration.row } : undefined,
                     mcpServerCatalogResult: mcpServerCatalog ? mcpServerCatalogMigration.row : undefined,
                     providerConnectionsResult: providerConnections ? { row: providerConnectionsMigration.row } : undefined,
@@ -1964,7 +2000,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                     workspaceExecutionConfigRows: workspaceExecutionConfig ? workspaceExecutionConfigMigration.rows : undefined,
                     projectRows: projectRows ? projectRowsMigration.rows : undefined,
                     projectTrustRows: projectTrust ? projectTrustMigration.rows : undefined,
-                };
+                }));
             });
 
             if (result.type === "internal-error") return reply.code(500).send({ error: "internal" });
@@ -1984,7 +2020,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                         error: "invalid-params",
                         reason:
                             AccountEncryptionMigrateInvalidParamsReasonSchema
-                                .enum.migration_inventory_changed,
+                                .def.entries.migration_inventory_changed,
                     },
                 );
             }
@@ -1998,6 +2034,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                 ...(result.authoringMemoryRows ? { authoringMemory: { rows: result.authoringMemoryRows } } : {}),
                 ...(result.profileRowsResult ? { profileRows: result.profileRowsResult } : {}),
                 ...(result.promptLibraryRows ? { promptLibrary: { rows: result.promptLibraryRows } } : {}),
+                ...(result.sessionFollowRules ? { sessionFollowRules: result.sessionFollowRules } : {}),
                 ...(result.acpCatalogResult ? { acpCatalog: result.acpCatalogResult } : {}),
                 ...(result.mcpServerCatalogResult ? { mcpServerCatalog: result.mcpServerCatalogResult } : {}),
                 ...(result.providerConnectionsResult ? { providerConnections: result.providerConnectionsResult } : {}),
@@ -2034,7 +2071,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                     error: "invalid-params",
                     reason:
                         AccountEncryptionMigrateInvalidParamsReasonSchema
-                            .enum.migration_inventory_changed,
+                            .def.entries.migration_inventory_changed,
                 });
             }
             if (
@@ -2054,7 +2091,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                         error: "invalid-params",
                         reason:
                             AccountEncryptionMigrateInvalidParamsReasonSchema
-                                .enum.migration_inventory_changed,
+                                .def.entries.migration_inventory_changed,
                     });
                 }
                 return reply.code(400).send({
@@ -2078,7 +2115,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                 }
                 return reply.code(400).send({
                     error: "invalid-params",
-                    reason: AccountEncryptionMigrateInvalidParamsReasonSchema.enum.migration_inventory_changed,
+                    reason: AccountEncryptionMigrateInvalidParamsReasonSchema.def.entries.migration_inventory_changed,
                 });
             }
             if (
@@ -2086,12 +2123,12 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                 instanceof AccountEncryptionMigrationDomainRejectedError
             ) {
                 if (error.domain === 'workspace') {
-                    return reply.code(400).send({ error: 'invalid-params', reason: AccountEncryptionMigrateInvalidParamsReasonSchema.enum.migration_inventory_changed });
+                    return reply.code(400).send({ error: 'invalid-params', reason: AccountEncryptionMigrateInvalidParamsReasonSchema.def.entries.migration_inventory_changed });
                 }
                 if (error.status === "migration_incomplete") {
                     return reply.code(400).send({
                         error: "invalid-params",
-                        reason: AccountEncryptionMigrateInvalidParamsReasonSchema.enum.migration_inventory_changed,
+                        reason: AccountEncryptionMigrateInvalidParamsReasonSchema.def.entries.migration_inventory_changed,
                     });
                 }
                 if (error.status === "migration_too_large") {
@@ -2148,7 +2185,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                 return reply.code(400).send({
                     error: "invalid-params",
                     reason:
-                        AccountEncryptionMigrateInvalidParamsReasonSchema.enum
+                        AccountEncryptionMigrateInvalidParamsReasonSchema.def.entries
                             .migration_inventory_changed,
                 });
             }
@@ -2159,7 +2196,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                 return reply.code(400).send({
                     error: "invalid-params",
                     reason:
-                        AccountEncryptionMigrateInvalidParamsReasonSchema.enum
+                        AccountEncryptionMigrateInvalidParamsReasonSchema.def.entries
                             .migration_inventory_changed,
                 });
             }
@@ -2173,7 +2210,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                 return reply.code(400).send({
                     error: "invalid-params",
                     reason:
-                        AccountEncryptionMigrateInvalidParamsReasonSchema.enum
+                        AccountEncryptionMigrateInvalidParamsReasonSchema.def.entries
                             .migration_inventory_changed,
                     });
             }
@@ -2185,7 +2222,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                 return reply.code(400).send({
                     error: "invalid-params",
                     reason:
-                        AccountEncryptionMigrateInvalidParamsReasonSchema.enum
+                        AccountEncryptionMigrateInvalidParamsReasonSchema.def.entries
                             .migration_inventory_changed,
                 });
             }
@@ -2197,7 +2234,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                 return reply.code(400).send({
                     error: "invalid-params",
                     reason:
-                        AccountEncryptionMigrateInvalidParamsReasonSchema.enum
+                        AccountEncryptionMigrateInvalidParamsReasonSchema.def.entries
                             .migration_inventory_changed,
                 });
             }
@@ -2209,7 +2246,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                 return reply.code(400).send({
                     error: "invalid-params",
                     reason:
-                        AccountEncryptionMigrateInvalidParamsReasonSchema.enum
+                        AccountEncryptionMigrateInvalidParamsReasonSchema.def.entries
                             .migration_inventory_changed,
                 });
             }
@@ -2238,7 +2275,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                 return reply.code(400).send({
                     error: "invalid-params",
                     reason:
-                        AccountEncryptionMigrateInvalidParamsReasonSchema.enum
+                        AccountEncryptionMigrateInvalidParamsReasonSchema.def.entries
                             .migration_inventory_changed,
                 });
             }

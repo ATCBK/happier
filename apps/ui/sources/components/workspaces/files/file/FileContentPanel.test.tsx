@@ -398,7 +398,7 @@ describe('FileContentPanel', () => {
         expect(inputs[0]!.props.value).toBe('Clarify this paragraph.');
     });
 
-    it('uses a gesture-handler ScrollView for no-wrap file content on Android', async () => {
+    it('uses native nested scrolling for no-wrap file content on Android', async () => {
         const { FileContentPanel } = await import('./FileContentPanel');
 
         const screen = await renderScreen(<FileContentPanel
@@ -415,10 +415,9 @@ describe('FileContentPanel', () => {
             wrapLines={false}
         />);
 
-        const scrollView = screen.tree.root.findByType('GestureHandlerScrollView' as any);
+        const scrollView = screen.tree.root.findByType('ScrollView');
         expect(scrollView.props.horizontal).toBe(true);
         expect(scrollView.props.nestedScrollEnabled).toBe(true);
-        expect(scrollView.props.disallowInterruption).toBe(true);
     });
 
     it('disables virtualization when review comment mode is active', async () => {

@@ -35,6 +35,13 @@ export function resolveAgentSessionStartBlockLine(params: Readonly<{
         testID: 'new-session-agent-blocker.action',
     };
     const recovery = block === 'signedOut' ? params.connectedServicesRecoveryAction ?? null : null;
+    if (block === 'signedOut' && agent.signIn.connectedAccountFailure) {
+        return {
+            text: t('connectedServices.diagnostics.status.connected_service_credential_reconnect_required'),
+            detail: t('connectedServices.diagnostics.body.connected_service_credential_reconnect_required'),
+            action: recovery ?? { ...setUp, label: t('connectedServices.detail.actions.reconnect'), disabled: true },
+        };
+    }
     return {
         // The line says the cause once and short (it stays one line on a phone, where the machine chip sits
         // right below it); which machine, and what to do about it, is its detail.

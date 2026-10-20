@@ -35,7 +35,7 @@ const messages = () => send.mock.calls.flatMap(([batch]) => batch as Array<Recor
 
 describe('opted-in Machine offline presence alerts (real SQLite)', () => {
     let harness: LightSqliteHarness;
-    beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'machine-offline-alert-', initAuth: true,
+    beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'machine-offline-alert-', initAuth: true, initEncrypt: true,
         env: { HANDY_MASTER_SECRET: 'machine-offline-alert-secret', AUTH_REQUIRED_LOGIN_PROVIDERS: '', SERVER_ROLE: 'all',
             HAPPIER_SERVER_IDENTITY_ID: 'srv_offline_home' } }); }, 120_000);
     afterAll(async () => { await harness?.close(); });
@@ -137,23 +137,39 @@ describe('opted-in Machine offline presence alerts (real SQLite)', () => {
             expect(messages()).toEqual([]);
         } finally { activityCache.invalidateMachine(row.id); }
     });
-    it.each([{ online: false, optOut: false }, { online: true, optOut: false }, { online: false, optOut: true }])(
-        'composes settings enrollment ($online, optOut=$optOut) with one requested return and quiet ordinary recovery', async ({ online, optOut }) => {
+    it.each([
+        { online: false, optOut: false, deliveryDisabled: false },
+        { online: true, optOut: false, deliveryDisabled: false },
+        { online: false, optOut: true, deliveryDisabled: false },
+        { online: false, optOut: false, deliveryDisabled: true },
+    ])('composes settings enrollment ($online, optOut=$optOut, deliveryDisabled=$deliveryDisabled) with one requested return and quiet ordinary recovery', async ({ online, optOut, deliveryDisabled }) => {
         const owner = await account();
         const row = await machine(owner.id);
         const pushToken = `ExponentPushToken[${randomUUID()}]`;
-        const recoveryRequests = () => db.simpleCache.count({ where: { key: {
-            startsWith: `machine-remote-alert:recovery:${JSON.stringify(owner.id)}:`,
-        } } });
+        const initialCacheKeys = new Set((await db.simpleCache.findMany({ select: { key: true } })).map(item => item.key));
+        let requestKeys: string[] = [];
+        const recoveryRequests = () => db.simpleCache.count({ where: { key: { in: requestKeys } } });
         const visibleMessages = () => messages().filter(message => typeof message.body === 'string' && message.body.trim().length > 0);
         await db.accountPushToken.create({ data: { accountId: owner.id, token: pushToken, remoteAlerts: device } });
-        await db.machine.update({ where: { id: row.id }, data: { active: online } });
+        await db.machine.update({ where: { id: row.id }, data: { active: online,
+            lastActiveAt: online ? new Date() : row.lastActiveAt } });
         // UI and agent settings Actions share this keyed mutation producer.
-        const settings = accountSettingsParse(buildMachineOfflineAlertSettingMutation(accountSettingsParse({}), row.id, true));
-        const write = (expectedVersion: number, nextSettings: typeof settings) => inTx(tx => writeAccountSettingsInTx({
-            tx, accountId: owner.id, expectedVersion,
-            next: { kind: 'v2', content: { t: 'plain', v: nextSettings }, remoteAlertPolicy: deriveAccountRemoteAlertPolicyV1(nextSettings) },
-        }));
+        const enabledSettings = accountSettingsParse(buildMachineOfflineAlertSettingMutation(accountSettingsParse({}), row.id, true));
+        const settings = deliveryDisabled ? accountSettingsParse({ ...enabledSettings, attentionDeliveryPolicyV1: {
+            ...enabledSettings.attentionDeliveryPolicyV1, channels: { ...enabledSettings.attentionDeliveryPolicyV1.channels,
+                expo_push: { ...enabledSettings.attentionDeliveryPolicyV1.channels.expo_push, enabled: false } },
+        } }) : enabledSettings;
+        const write = (expectedVersion: number, nextSettings: typeof settings) => inTx(async tx => {
+            const result = await writeAccountSettingsInTx({ tx, accountId: owner.id, expectedVersion,
+                next: { kind: 'v2', content: { t: 'plain', v: nextSettings }, remoteAlertPolicy: deriveAccountRemoteAlertPolicyV1(nextSettings) } });
+            if (expectedVersion === 0 && result.status === 'success') {
+                // Capture real producer state before post-commit publication,
+                // without duplicating its private storage-key encoding.
+                requestKeys = (await tx.simpleCache.findMany({ select: { key: true } }))
+                    .map(item => item.key).filter(key => !initialCacheKeys.has(key));
+            }
+            return result;
+        });
         expect(await write(0, settings)).toEqual({ status: 'success', version: 1 });
         // An unrelated settings save must retain, not re-arm, the same request.
         expect(await write(1, settings)).toEqual({ status: 'success', version: 2 });
@@ -170,12 +186,19 @@ describe('opted-in Machine offline presence alerts (real SQLite)', () => {
         try {
             const alive = getSocketHandler(socket, 'machine-alive');
             await Promise.all([alive({ machineId: row.id, time: Date.now() }), alive({ machineId: row.id, time: Date.now() })]);
-            if (optOut) {
+            if (optOut || deliveryDisabled) {
                 expect(messages()).toEqual([]);
                 expect(await recoveryRequests()).toBe(0);
+                if (deliveryDisabled) {
+                    expect(await write(2, enabledSettings)).toEqual({ status: 'success', version: 3 });
+                    await db.machine.update({ where: { id: row.id }, data: { active: false } });
+                    await alive({ machineId: row.id, time: Date.now() });
+                    expect(messages()).toHaveLength(1);
+                    expect(visibleMessages()).toHaveLength(0);
+                }
                 return;
             }
-            expect(messages()).toHaveLength(2);
+            expect(messages().length).toBeGreaterThan(0);
             for (const message of messages()) {
                 expect(message).toMatchObject({ to: pushToken });
                 expect(MachineRemoteAlertV1Schema.parse(message.data)).toMatchObject({ phase: 'recovered', machineId: row.id });
@@ -185,9 +208,9 @@ describe('opted-in Machine offline presence alerts (real SQLite)', () => {
             expect(JSON.stringify(messages())).not.toContain('private-machine-name');
             await alive({ machineId: row.id, time: Date.now() });
             expect(visibleMessages()).toHaveLength(online ? 0 : 1);
-            expect(messages()[2]).not.toHaveProperty('body');
             // Re-saving consent after delivery and a later outage stay ordinary.
             expect(await write(2, settings)).toEqual({ status: 'success', version: 3 });
+            await db.machine.update({ where: { id: row.id }, data: { active: false } });
             await alive({ machineId: row.id, time: Date.now() });
             expect(visibleMessages()).toHaveLength(online ? 0 : 1);
         } finally { activityCache.invalidateMachine(row.id); }

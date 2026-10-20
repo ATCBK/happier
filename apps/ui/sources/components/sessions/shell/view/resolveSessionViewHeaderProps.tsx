@@ -1,5 +1,6 @@
 import { Typography } from '@/constants/Typography';
 import * as React from 'react';
+import type { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { Platform, Pressable, View } from 'react-native';
 
 import { SessionHeaderActionMenu } from '@/components/sessions/actions/SessionHeaderActionMenu';
@@ -95,9 +96,9 @@ type ResolveSessionViewHeaderPropsInput = Readonly<{
     session: Session | null;
     currentMachineId?: unknown;
     sessionId: string;
-    sessionInfoHref: string;
-    sessionRunsHref: string;
-    sessionAutomationsHref: string;
+    sessionInfoHref: `/session/${string}`;
+    sessionRunsHref: `/session/${string}`;
+    sessionAutomationsHref: `/session/${string}`;
     paneScopeId: string;
     windowWidth: number;
     actionRailVisible?: boolean;
@@ -116,10 +117,7 @@ type ResolveSessionViewHeaderPropsInput = Readonly<{
         target: SessionAddress;
         compact: boolean;
     }>;
-    router: Readonly<{
-        push: (path: string) => void;
-        navigate: (path: string, options: { dangerouslySingular: () => string }) => void;
-    }>;
+    router: Readonly<Pick<ReturnType<typeof useRouter>, 'push' | 'navigate'>>;
     actionIconColor: string;
     headerTintColor: string;
     statusErrorColor: string;
@@ -347,9 +345,11 @@ export function resolveSessionViewHeaderProps(input: ResolveSessionViewHeaderPro
         ? input.workspaceSubtitle
         : undefined;
     // A no-folder session names where it runs (its machine), never its private folder.
-    const subtitle = readSessionDirectoryKind(ownerMetadata) === 'managed'
+    const locationSubtitle = readSessionDirectoryKind(ownerMetadata) === 'managed'
         ? getSessionSubtitle(session)
         : workspaceSubtitle ?? fallbackSubtitle;
+    // Until a session is named it is titled after its folder; a subtitle repeating that says nothing.
+    const subtitle = locationSubtitle === title ? undefined : locationSubtitle;
     const subtitleEllipsizeMode = subtitle
         ? input.workspaceSubtitleEllipsizeMode ?? 'head' as const
         : undefined;

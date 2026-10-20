@@ -13,6 +13,8 @@ import type { RpcActionExecutorContext } from '@/rpc/handlers/_actionDispatchAda
 import {  workflowInvocationKey, WORKFLOW_CANCEL_REQUESTED_ABORT_REASON, WorkflowRuntimeInterruption, type WorkflowStepExecutor } from './coordinator';
 import { createInMemoryWorkflowCoordinatorStore } from './workflowCoordinator.testkit';
 import { createWorkflowProducerBinding } from './workflowScopeBinding';
+import { createCoordinatorWorkspaceResolver } from './resolveWorkflowWorkspace';
+import { createGitWorkflowWorkspaceTestDependencies } from './workflowWorkspace.testkit';
 import {
   createWorkflowDetachedExecutionRunStepExecutor,
   createWorkflowStepExecutorDispatcher,
@@ -144,6 +146,63 @@ function baseParams(overrides: Record<string, unknown> = {}) {
 }
 
 describe('workflow detached Execution Run step executor', () => {
+  it('holds the same Workflow invocation on native setup observation until its original Run accepts input', async () => {
+    const store = createInMemoryWorkflowCoordinatorStore();
+    const scm = createGitWorkflowWorkspaceTestDependencies();
+    const location = await scm.inspectLocation({ candidatePath: process.cwd() });
+    const params = baseParams({ execution: { agentTarget: CLAUDE_TARGET, permissionMode: 'default', conversation: { kind: 'fresh' } },
+      workspace: { machineId: 'machine-1', directory: process.cwd(),
+        checkoutRootPath: location?.inspection.rootPath ?? process.cwd() } });
+    let release!: () => void;
+    const consent = new Promise<void>(resolve => { release = resolve; });
+    let localInputId = '';
+    let starts = 0;
+    const executeStep = createWorkflowDetachedExecutionRunStepExecutor({ workDepth: 0, buildActionContext,
+      resolveSharedRunConversation: async () => null, resolveProducerConversation: async () => null,
+      actionExecutor: { execute: async (actionId, value, context) => {
+        if (actionId === 'execution.run.start') {
+          starts++;
+          localInputId = String(requireActionInput(value).localInputId);
+          const sink = readExecutionRunWorkflowObservationSink(context?.executionRunWorkflowObservationSink);
+          if (!sink) throw new Error('Missing production Workflow observation binding');
+          await sink.commit({ kind: 'project_setup', runId: 'native', localInputId,
+            operation: { version: 1, operationId: 'original-startup', revision: 2, actionId: 'execution.run.start',
+              scope: { accountId: 'requester', machineId: 'machine-1' }, state: 'running', title: 'Run',
+              cancellation: 'supported', createdAt: 1, startedAt: 1,
+              setupReview: { kind: 'pendingApproval', code: 'project_setup_consent_required', reviewedEffectDigest: 'setup',
+                reviewedEffect: { commands: [] } },
+              domainRef: { kind: 'projectCommand', purpose: 'setup', serverId: 'home', machineId: 'machine-1',
+                workspaceRefId: 'workspace', cwd: params.workspace.directory } } });
+          await consent;
+          await sink.commit({ kind: 'input_accepted', runId: 'native', localInputId, acceptedAtMs: Date.now() });
+          return { ok: true, result: { runId: 'native', callId: 'call', sidechainId: 'side' } };
+        }
+        if (actionId === 'execution.run.get') return { ok: true, result: completedRun('native', localInputId, { done: true }) };
+        throw new Error(`Unexpected Action ${actionId}`);
+      } },
+    });
+    const coordinator = createWorkflowCoordinator({ store, executeStep,
+      isAcceptedAuthorizationCurrent: async () => true,
+      resolveWorkspace: createCoordinatorWorkspaceResolver({ store, projectWorkspace: params.workspace,
+        scm }) });
+    const running = coordinator.run({ runId: params.runId, definition: { version: 1, inputs: [], defaults: params.execution,
+      blocks: [params.step] }, inputs: {}, executionTarget: { kind: 'detached_run' }, authorization: params.authorization });
+    void running.catch(() => undefined);
+    try {
+      await expect.poll(() => store.list().find(row => row.blockId === params.step.id)?.lifecycle).toBe('needs_attention');
+      const held = store.list().find(row => row.blockId === params.step.id);
+      expect(held).toMatchObject({ reason: 'project_setup_consent_required', attempt: 0,
+        workspace: { descriptor: { machineId: 'machine-1' } }, execution: { kind: 'action',
+          input: { runId: 'native' }, awaitedOperations: [{ operationId: 'original-startup', machineId: 'machine-1' }] } });
+      expect(held?.review).toBeUndefined();
+      release();
+      await expect(running).resolves.toMatchObject({ state: 'succeeded' });
+      expect(store.list().find(row => row.blockId === params.step.id)).toMatchObject({ recordId: held?.recordId,
+        lifecycle: 'completed', execution: { kind: 'detached_run', runId: 'native', localInputId } });
+      expect(starts).toBe(1);
+    } finally { release(); await running; }
+  });
+
   it('gives slow preparation the full observation budget after late native acceptance', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);

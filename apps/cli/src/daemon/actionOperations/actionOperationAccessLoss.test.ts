@@ -32,7 +32,7 @@ describe('finite operation authenticated access-loss custody', () => {
       const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain',
         authorizeRequest: request => authorizeMachineRpcRequest(request, boundary) });
       const tracked = new Map<number, TrackedSession>();
-      registerMachineAccessLossReceiver(rpc, { machineId: 'machine', resolveInstallationId: () => 'installation',
+      registerMachineAccessLossReceiver(rpc, { serverId: 'home', machineId: 'machine', resolveInstallationId: () => 'installation',
         cleanupRequesterMachineSessions: createRequesterMachineSessionAccessLossCleanup({ serverId: 'home', machineId: 'machine',
           pidToTrackedSession: tracked, stopSession: createStopSession({ pidToTrackedSession: tracked }) }),
         cleanupRequesterMachineActionOperations: input => runtime.cleanupRequesterMachineOperations({ ...input, serverId: 'home' }) });

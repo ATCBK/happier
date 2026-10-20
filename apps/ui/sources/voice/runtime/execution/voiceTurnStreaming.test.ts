@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createSessionFixture, createSessionMessagesFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import type { Message } from '@happier-dev/session-core/messages';
 import {
     createRetainedVoiceAgentRpcBoundary, createStandaloneVoicePolicyHarness, prepareStandaloneVoicePolicyHarness,
 } from '@/dev/testkit/harness/standaloneVoicePolicyHarness';
 import {
-    ExecutionRunTurnStreamStartRequestSchema, ExecutionRunTurnStreamReadRequestSchema,
+    ExecutionRunTurnStreamStartRequestSchema, ExecutionRunTurnStreamStartV2RequestSchema, ExecutionRunTurnStreamReadRequestSchema,
     ExecutionRunTurnStreamStartResponseSchema, ExecutionRunTurnStreamReadResponseSchema,
     type ExecutionRunTurnStreamEvent,
 } from '@happier-dev/protocol/execution/runs/streaming';
@@ -31,10 +32,11 @@ afterEach(async () => {
     finally { disposeStreamingFixture = undefined; }
 });
 
-async function createStreamingFixture(options: Readonly<{ streaming?: boolean; target?: boolean; persistent?: boolean; staleRpc?: boolean }> = {}) {
+async function createStreamingFixture(options: Readonly<{ streaming?: boolean; target?: boolean; targetWithoutTerminal?: boolean; persistent?: boolean; staleRpc?: boolean }> = {}) {
     const starts: Array<ReturnType<typeof ExecutionRunTurnStreamStartRequestSchema.parse>> = [];
     const reads: Array<ReturnType<typeof ExecutionRunTurnStreamReadRequestSchema.parse>> = [];
     let events: ExecutionRunTurnStreamEvent[] = [{ t: 'done', assistantText: 'assistant reply', actions: [] }];
+    let beforeRead: (() => void) | undefined;
     let nextStartError: Readonly<{ error: string; errorCode: string }> | null = null;
     let transcript: NonNullable<ReturnType<typeof ExecutionRunEnsureOrStartRequestSchema.parse>['start']>['transcript'];
     const rpc = await createRetainedVoiceAgentRpcBoundary({ runId: 'streaming-run',
@@ -45,8 +47,11 @@ async function createStreamingFixture(options: Readonly<{ streaming?: boolean; t
             }
         },
         async handleOtherRpc(method, input) {
-            if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START) {
-                const request = ExecutionRunTurnStreamStartRequestSchema.parse(input);
+            if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START
+                || method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2) {
+                const request = method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2
+                    ? ExecutionRunTurnStreamStartV2RequestSchema.parse(input)
+                    : ExecutionRunTurnStreamStartRequestSchema.parse(input);
                 starts.push(request);
                 if (rpc.readRetainedRun()?.runId !== request.runId) {
                     return { ok: false, error: 'execution_run_not_found', errorCode: 'execution_run_not_found' };
@@ -60,6 +65,7 @@ async function createStreamingFixture(options: Readonly<{ streaming?: boolean; t
             }
             if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ) {
                 reads.push(ExecutionRunTurnStreamReadRequestSchema.parse(input));
+                beforeRead?.();
                 return ExecutionRunTurnStreamReadResponseSchema.parse({
                     streamId: 'streaming-turn', events, nextCursor: events.length, done: true,
                 });
@@ -69,8 +75,8 @@ async function createStreamingFixture(options: Readonly<{ streaming?: boolean; t
         },
     });
     const target = createSessionFixture({ id: 'streaming-target', active: true, activeAt: Date.now(), metadata: {
-        ...createSessionFixture().metadata!, flavor: 'claude', summary: { text: 'STREAMING_TARGET_SENTINEL', updatedAt: 1 },
-        path: '/private/STREAMING_PATH_SENTINEL', agentRuntimeCapabilitiesV1: { localControl: { supported: true } },
+        ...createSessionFixture().metadata!, flavor: options.targetWithoutTerminal ? 'codex' : 'claude', summary: { text: 'STREAMING_TARGET_SENTINEL', updatedAt: 1 },
+        path: '/private/STREAMING_PATH_SENTINEL', agentRuntimeCapabilitiesV1: { localControl: options.targetWithoutTerminal ? null : { supported: true } },
     } });
     const fixture = await createStandaloneVoicePolicyHarness({
         mode: 'off', sessions: [
@@ -120,6 +126,7 @@ async function createStreamingFixture(options: Readonly<{ streaming?: boolean; t
     return {
         starts, reads, rpc, transport, controlSessionId, fixture, storage,
         setEvents(value: ExecutionRunTurnStreamEvent[]) { events = value; },
+        beforeRead(callback: () => void) { beforeRead = callback; },
         rejectNextStart(error: string, errorCode: string) { nextStartError = { error, errorCode }; },
         setPrivacy(currentUiContextMode: 'automatic' | 'on_demand' | 'off') {
             const voice = storage.getState().settings.voice;
@@ -176,6 +183,47 @@ async function mountAutomaticUiContext() {
 }
 
 describe('Voice streaming through retained initialization, execution transport and daemon RPC', () => {
+    it.each([
+        { streaming: true, anchor: 'none' },
+        { streaming: false, anchor: 'none' },
+        { streaming: true, anchor: 'missing' },
+        { streaming: false, anchor: 'missing' },
+        { streaming: true, anchor: 'admitted' },
+        { streaming: false, anchor: 'admitted' },
+        { streaming: true, anchor: 'answered' },
+        { streaming: false, anchor: 'answered' },
+    ] as const)('recovers only current anchored text after delayed history hydration (streaming=$streaming, anchor=$anchor)', async ({ streaming, anchor }) => {
+        const f = await createStreamingFixture({ streaming });
+        f.setEvents([{ t: 'done', assistantText: '', actions: [] }]);
+        const oldReply = { id: 'old-reply', kind: 'agent-text', text: 'An earlier answer.', seq: 16, localId: null, createdAt: 1 } satisfies Message;
+        const user = { id: 'current-user', kind: 'user-text', text: 'My new question.', seq: 17, localId: 'voice-input', createdAt: 2 } satisfies Message;
+        const reply = { id: 'current-reply', kind: 'agent-text', text: 'The current answer.', seq: 18, localId: null, createdAt: 3 } satisfies Message;
+        // The external daemon/read boundary releases persisted history only after
+        // the wrapper has captured its baseline and admitted the current input.
+        f.beforeRead(() => {
+            const messages = [oldReply, ...(anchor === 'admitted' || anchor === 'answered' ? [user] : []), ...(anchor === 'answered' ? [reply] : [])];
+            f.storage.setState({ sessionMessages: { ...f.storage.getState().sessionMessages,
+                [f.fixture.sessionId]: createSessionMessagesFixture({
+                    messageIdsOldestFirst: messages.map(message => message.id),
+                    messagesById: Object.fromEntries(messages.map(message => [message.id, message])),
+                }),
+            } });
+        });
+        await expect(f.transport.sendTurn(f.controlSessionId, user.text, anchor === 'none'
+            ? undefined : { userTranscript: { mode: 'persist', localId: user.localId } })).resolves.toEqual({
+            assistantText: anchor === 'answered' ? reply.text : '', actions: [],
+        });
+    });
+
+    it('delivers a carrier Voice Agent turn when its coding target has no terminal-control surface', async () => {
+        const f = await createStreamingFixture({ target: true, targetWithoutTerminal: true });
+        await expect(f.transport.sendTurn(f.controlSessionId, 'hello')).resolves.toEqual({
+            assistantText: 'assistant reply', actions: [],
+        });
+        expect(f.starts).toEqual([expect.objectContaining({ runId: 'streaming-run' })]);
+        expect(f.rpc.readRetainedRun()?.status).toBe('running');
+    });
+
     it('admits provider resume from the current bound publication while the retained RPC Session is stale', async () => {
         const f = await createStreamingFixture({ persistent: true, staleRpc: true });
         const { voiceSessionBindingStore, bindVoiceRuntimeAttemptBinding, createVoiceRuntimeAttemptBindingOwner } = await import('@/voice/binding/voiceConversationBindingStore');

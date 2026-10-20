@@ -173,7 +173,7 @@ function authoredPlugin(params: Readonly<{
             && selected.primary === 'executionRuns');
         const surfaces = [
             ...(value.externalSessions ? ['externalSessions'] : []),
-            ...(value.terminal || value.externalSessions?.terminal ? ['terminal'] : []),
+            ...(value.terminal ? ['terminal'] : []),
         ];
         const declared = selected ?? {
             id: localId, title: localId, runtime: custom ? { kind: 'custom' } : { kind: 'acp', transport: ACP_TRANSPORT },
@@ -201,10 +201,10 @@ function authoredPlugin(params: Readonly<{
             agents: entries.map(({ definition }) => definition),
             ...(entries.some(({ definition }) => {
                 const runtime = definition.runtime;
-                return runtime.kind === 'acp' && 'transport' in runtime
-                    && runtime.transport.kind === 'stdio'
-                    && runtime.transport.executable.kind === 'systemTool'
-                    && runtime.transport.executable.id === 'fixture-acp';
+                const transport = runtime?.kind === 'acp' && 'transport' in runtime ? runtime.transport : undefined;
+                return transport?.kind === 'stdio'
+                    && transport.executable.kind === 'systemTool'
+                    && transport.executable.id === 'fixture-acp';
             }) ? {
                 systemTools: [{ id: 'fixture-acp', title: 'Fixture ACP', executableNames: ['fixture-acp'] }],
             } : {}),

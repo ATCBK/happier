@@ -13,6 +13,7 @@ import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFram
 import { formatTokenCount, formatUsageCost } from '@/utils/format/usageNumbers';
 import { t } from '@/text';
 import { usageMeterFill } from '../usageAccent';
+import { USAGE_BREAKDOWN_DIMENSION_HEADING } from '../usageBreakdownTitle';
 import { getAgentIdentityColor } from '@/agents/catalog/catalog';
 import { useUsageDrill, type UsageDrillField } from '../usageDrill';
 import {
@@ -36,29 +37,6 @@ const DEFAULT_DIMENSIONS: readonly UsageAnalyticsBreakdownDimension[] = [
   'agent',
   'model',
 ];
-
-const DIMENSION_TITLE: Readonly<
-  Record<
-    UsageAnalyticsBreakdownDimension,
-    | 'usage.board.page.dimensionAgent'
-    | 'usage.board.page.dimensionModel'
-    | 'usage.board.page.dimensionSession'
-    | 'usage.board.page.dimensionProject'
-    | 'usage.board.page.dimensionWorkspace'
-    | 'usage.board.page.dimensionBackendMode'
-    | 'usage.board.page.dimensionSource'
-    | 'usage.board.page.dimensionMachine'
-  >
-> = {
-  agent: 'usage.board.page.dimensionAgent',
-  model: 'usage.board.page.dimensionModel',
-  session: 'usage.board.page.dimensionSession',
-  project: 'usage.board.page.dimensionProject',
-  workspace: 'usage.board.page.dimensionWorkspace',
-  backendMode: 'usage.board.page.dimensionBackendMode',
-  source: 'usage.board.page.dimensionSource',
-  machine: 'usage.board.page.dimensionMachine',
-};
 
 /** The dimensions that are also scope filters: choosing one of their rows narrows to it. */
 const DRILL_FIELD: Readonly<
@@ -104,6 +82,8 @@ export function UsageBreakdownsWidget(props: UsageBodyProps) {
       ? view?.pageCost.amountUsd ?? null
       : accounting.totals.tokens.total
     : null;
+  // One ranked dimension is the card's own title (`readUsageBreakdownsInstanceTitle`); a heading would say it twice.
+  const namedByCard = props.query.breakdown.length === 1;
   const blocks = dimensions.flatMap((dimension) => {
     const entries = accounting?.breakdowns?.[dimension];
     if (!entries?.length) return [];
@@ -131,7 +111,7 @@ export function UsageBreakdownsWidget(props: UsageBodyProps) {
     ];
   });
   if (!accounting)
-    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} />;
+    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} onRetry={props.model.refresh} />;
   if (blocks.length === 0)
     return (
       <UsageBodyInsufficient
@@ -144,15 +124,14 @@ export function UsageBreakdownsWidget(props: UsageBodyProps) {
     <View style={styles.body} testID={`${props.testID}.breakdowns`}>
       {blocks.map((block) => {
         const lead = leadingUsageRows(block.rows, expanded.includes(block.dimension));
-        const long = block.rows.length > lead.rows.length || expanded.includes(block.dimension);
         return (
         <View key={block.dimension} style={styles.block}>
-            <Text style={styles.heading} accessibilityRole="header">
-              {t(DIMENSION_TITLE[block.dimension])}
-            </Text>
+            {namedByCard ? null : <Text style={styles.heading} accessibilityRole="header">
+              {t(USAGE_BREAKDOWN_DIMENSION_HEADING[block.dimension])}
+            </Text>}
           <RankedRows
             theme={chartTheme}
-            label={t(DIMENSION_TITLE[block.dimension])}
+            label={t(USAGE_BREAKDOWN_DIMENSION_HEADING[block.dimension])}
             rows={lead.rows.map((row, index) => ({
               ...row,
               color: block.dimension === 'agent' ? getAgentIdentityColor(theme, row.id) : usageMeterFill(theme, index === 0),
@@ -213,15 +192,12 @@ export function UsageBreakdownsWidget(props: UsageBodyProps) {
                 }
               : {})}
           />
-          {long ? <UsageShowAllRows total={block.rows.length} complete={block.truncated === 0} expanded={lead.hidden === 0}
+          <UsageShowAllRows label={`${t(`usage.widgets.${props.id}`)}: ${t(USAGE_BREAKDOWN_DIMENSION_HEADING[block.dimension])}`}
+            total={block.rows.length} hidden={lead.hidden} complete={block.truncated === 0} expanded={expanded.includes(block.dimension)}
+            unlisted={block.truncated > 0 && lead.hidden === 0 ? t('usage.board.page.moreRows', { count: block.truncated }) : null}
             testID={`${props.testID}.${block.dimension}.more`}
             onToggle={() => setExpanded(current => current.includes(block.dimension)
-              ? current.filter(entry => entry !== block.dimension) : [...current, block.dimension])} /> : null}
-          {block.truncated > 0 ? (
-            <Text style={styles.more}>
-              {t('usage.board.page.moreRows', { count: block.truncated })}
-            </Text>
-          ) : null}
+              ? current.filter(entry => entry !== block.dimension) : [...current, block.dimension])} />
         </View>
         );
       })}
@@ -241,9 +217,5 @@ const styles = StyleSheet.create((theme) => ({
   heading: {
     ...Typography.variant('body', 'semiBold'),
     color: theme.colors.text.secondary,
-  },
-  more: {
-    ...Typography.variant('meta'),
-    color: theme.colors.text.tertiary,
   },
 }));

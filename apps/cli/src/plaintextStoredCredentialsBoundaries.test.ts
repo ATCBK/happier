@@ -32,7 +32,7 @@ describe('plain-account stored credential boundaries', () => {
 
     await expect(updateActivePluginAccountSettings(
       {
-        operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }],
+        operations: [{ op: 'set', key: 'sessionUseTmux', value: true }],
       },
       {
         accountSettingsUpdateDeps: {
@@ -45,7 +45,7 @@ describe('plain-account stored credential boundaries', () => {
       },
     )).resolves.toMatchObject({
       status: 'applied',
-      settings: { reviewPromptLikedApp: true },
+      settings: { sessionUseTmux: true },
     });
     expect(mocks.readCredentials).not.toHaveBeenCalled();
   });

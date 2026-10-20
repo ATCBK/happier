@@ -37,7 +37,7 @@ type FollowTargetHostOperationDependencies = Readonly<{
         agent: ConfiguredExternalSessionSourceAgentContribution,
         signal: AbortSignal,
     ): Promise<ConfiguredExternalSessionSourceAccountProjection>;
-    readAccountRevision(): string;
+    readAccountRevision(agent: ConfiguredExternalSessionSourceAgentContribution): string;
     readAgentSettings(): unknown;
     readActiveServerId(): string | null;
 }>;
@@ -84,9 +84,11 @@ function createDefaultDependencies(): FollowTargetHostOperationDependencies {
                 signal,
             });
         },
-        readAccountRevision: () =>
+        readAccountRevision: (agent) =>
             resolveActiveAccountConfiguredExternalSessionSourceRevision(
                 getActiveAccountSettingsSnapshot(),
+                agent.richDefinition?.definition.surfaces?.externalSession.sources,
+                configuration.activeServerId,
             ),
         readAgentSettings: () => getActiveAccountSettingsSnapshot()?.settings,
         readActiveServerId: () => configuration.activeServerId,
@@ -148,7 +150,7 @@ export function createExternalSessionFollowTargetHostOperation(params: Readonly<
                             runtimeContext.pluginId !== request.pluginId
                             || runtimeContext.agentId !== request.contributionId
                             || runtimeContext.occurrenceId !== request.occurrenceId
-                            || dependencies.readAccountRevision()
+                            || dependencies.readAccountRevision(runtimeContext.agent)
                                 !== request.accountRevision
                             || !requestIsCurrent(request, runtimeContext)
                         ) {
@@ -169,7 +171,7 @@ export function createExternalSessionFollowTargetHostOperation(params: Readonly<
                             throw admissionSignal.reason;
                         }
                         if (
-                            dependencies.readAccountRevision()
+                            dependencies.readAccountRevision(runtimeContext.agent)
                                 !== request.accountRevision
                             || !requestIsCurrent(request, runtimeContext)
                         ) {
@@ -184,6 +186,8 @@ export function createExternalSessionFollowTargetHostOperation(params: Readonly<
                         });
                         return await resolveConfiguredExternalSessionFollowTarget({
                             agents: [runtimeContext.agent],
+                            resolveCatalogEntry: async agentId => agentId === runtimeContext.agentId
+                                ? runtimeContext.agent.catalogEntry ?? null : null,
                             account,
                             agentSettings: dependencies.readAgentSettings(),
                             activeServerId: dependencies.readActiveServerId(),
@@ -191,10 +195,10 @@ export function createExternalSessionFollowTargetHostOperation(params: Readonly<
                             basis,
                             readCurrentBasis: () => Object.freeze({
                                 accountSettingsRevision:
-                                    dependencies.readAccountRevision(),
+                                    dependencies.readAccountRevision(runtimeContext.agent),
                             }),
                             isCurrent: () => (
-                                dependencies.readAccountRevision()
+                                dependencies.readAccountRevision(runtimeContext.agent)
                                     === request.accountRevision
                                 && requestIsCurrent(request, runtimeContext)
                             ),

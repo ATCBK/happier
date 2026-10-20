@@ -7,7 +7,9 @@ import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-
 import {
     SESSION_DRAFT_V2_SOCKET_EVENT,
     SessionDraftChangeHintV1Schema,
+    SessionDraftListResponseV2Schema,
     SessionDraftPrivatePayloadV2Schema,
+    type SessionDraftAddressV2,
 } from '@happier-dev/protocol';
 
 import { db } from '@/storage/db';
@@ -85,14 +87,7 @@ function plainContent(address: { kind: 'newSession'; draftId: string } | { kind:
     };
 }
 
-type SessionDraftAddressV2Fixture =
-    | { kind: 'newSession'; draftId: string }
-    | { kind: 'session'; sessionId: string }
-    | { kind: 'run'; sessionId: string; runId: string }
-    | { kind: 'discussion'; sessionId: string; discussionId: string }
-    | { kind: 'newDiscussion'; sessionId: string };
-
-function plainContentV2(address: SessionDraftAddressV2Fixture) {
+function plainContentV2(address: Exclude<SessionDraftAddressV2, { kind: 'projectOpen' }>) {
     if (address.kind === 'newSession' || address.kind === 'session') return plainContent(address);
     if (address.kind === 'run') {
         return {
@@ -161,6 +156,33 @@ describe('sessionDraftService (SQLite integration)', () => {
     });
 
     afterAll(async () => harness.close());
+
+    it('converts both Discussion draft families with complete coverage and exact replay in both directions', async () => {
+        const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const addresses = [{ kind: 'discussion' as const, discussionId: randomUUID() }, { kind: 'newDiscussion' as const },
+            { kind: 'newDiscussion' as const, draftId: randomUUID() }];
+        const contents = addresses.map(address => ({ t: 'plain' as const,
+            v: SessionDraftPrivatePayloadV2Schema.parse(plainContentV2(address).v) }));
+        for (const [index, address] of addresses.entries()) {
+            expect(await mutateSessionDraft({ accountId: account.id, address, expectedRevision: 'absent', content: contents[index]!, epoch: 'v2' }))
+                .toMatchObject({ status: 'updated' });
+        }
+        expect(await inTx(tx => migrateNewSessionDraftsForAccountModeInTx(tx, { accountId: account.id, toMode: 'e2ee' })))
+            .toEqual({ status: 'requires_upgrade' });
+        const directive = { v: 2 as const, items: addresses.map((address, index) => ({ address, expectedRevision: 0,
+            content: { t: 'encrypted' as const, v: 2 as const, c: `discussion-ciphertext-${index}` } })) };
+        expect(await inTx(tx => migrateNewSessionDraftsForAccountModeInTx(tx, { accountId: account.id, toMode: 'e2ee',
+            directive: { ...directive, items: directive.items.slice(0, 1) } }))).toEqual({ status: 'migration_incomplete' });
+        expect(await inTx(tx => migrateNewSessionDraftsForAccountModeInTx(tx, { accountId: account.id, toMode: 'e2ee', directive })))
+            .toMatchObject({ status: 'applied', records: expect.arrayContaining(addresses.map(address => expect.objectContaining({ address, revision: 1 }))) });
+        expect(await inTx(tx => matchNewSessionDraftsAccountMigrationPostStateInTx(tx, { accountId: account.id, toMode: 'e2ee', directive })))
+            .toMatchObject({ status: 'matched', records: expect.arrayContaining(addresses.map(address => expect.objectContaining({ address, revision: 1 }))) });
+        const reverse = { v: 2 as const, items: addresses.map((address, index) => ({ address, expectedRevision: 1, content: contents[index]! })) };
+        expect(await inTx(tx => migrateNewSessionDraftsForAccountModeInTx(tx, { accountId: account.id, toMode: 'plain', directive: reverse })))
+            .toMatchObject({ status: 'applied', records: expect.arrayContaining(contents.map(content => expect.objectContaining({ content, revision: 2 }))) });
+        expect(await inTx(tx => matchNewSessionDraftsAccountMigrationPostStateInTx(tx, { accountId: account.id, toMode: 'plain', directive: reverse })))
+            .toMatchObject({ status: 'matched' });
+    });
 
     it('keeps Project Open drafts Account-owned across CAS, V1 filtering, Session deletion and mode conversion', async () => {
         const account = await db.account.create({ data: { publicKey: `pk-${randomUUID()}`, encryptionMode: 'plain' } });
@@ -442,8 +464,6 @@ describe('sessionDraftService (SQLite integration)', () => {
         const sessionAddresses = [
             { kind: 'session', sessionId: session.id },
             { kind: 'run', sessionId: session.id, runId: 'run-a' },
-            { kind: 'discussion', sessionId: session.id, discussionId: 'discussion-a' },
-            { kind: 'newDiscussion', sessionId: session.id },
         ] as const;
         for (const address of sessionAddresses) {
             expect(await mutateSessionDraft({
@@ -567,8 +587,8 @@ describe('sessionDraftService (SQLite integration)', () => {
         });
         const sessionAddress = { kind: 'session' as const, sessionId: session.id };
         const runAddress = { kind: 'run' as const, sessionId: session.id, runId: `run-${randomUUID()}` };
-        const discussionAddress = { kind: 'discussion' as const, sessionId: session.id, discussionId: `d-${randomUUID()}` };
-        const newDiscussionAddress = { kind: 'newDiscussion' as const, sessionId: session.id };
+        const discussionAddress = { kind: 'discussion' as const, discussionId: `d-${randomUUID()}` };
+        const newDiscussionAddress = { kind: 'newDiscussion' as const };
 
         for (const address of [sessionAddress, runAddress, discussionAddress, newDiscussionAddress]) {
             expect(await mutateSessionDraft({
@@ -586,7 +606,9 @@ describe('sessionDraftService (SQLite integration)', () => {
         expect(v1List.items.map((item) => item.address)).toEqual([sessionAddress]);
         expect(v1List.nextAfter).toBeUndefined();
 
-        const v2List = await listSessionDrafts({ accountId: owner.id, limit: 10, epoch: 'v2' });
+        const v2List = SessionDraftListResponseV2Schema.parse(
+            await listSessionDrafts({ accountId: owner.id, limit: 10, epoch: 'v2' }),
+        );
         expect(v2List.items.map((item) => item.address)).toEqual(expect.arrayContaining([
             sessionAddress,
             runAddress,
@@ -859,11 +881,13 @@ describe('sessionDraftService (SQLite integration)', () => {
         const addresses = [
             { kind: 'session' as const, sessionId: session.id },
             { kind: 'run' as const, sessionId: session.id, runId: 'r1' },
-            { kind: 'discussion' as const, sessionId: session.id, discussionId: 'd1' },
-            { kind: 'newDiscussion' as const, sessionId: session.id },
+        ];
+        const accountAddresses = [
+            { kind: 'discussion' as const, discussionId: 'd1' },
+            { kind: 'newDiscussion' as const },
         ];
         const siblingAddress = { kind: 'run' as const, sessionId: sibling.id, runId: 'r1' };
-        for (const address of [...addresses, siblingAddress]) {
+        for (const address of [...addresses, ...accountAddresses, siblingAddress]) {
             await mutateSessionDraft({ accountId: owner.id, address, expectedRevision: 'absent', content: plainContentV2(address) });
         }
 
@@ -877,6 +901,10 @@ describe('sessionDraftService (SQLite integration)', () => {
         }
         expect(await readSessionDraft({ accountId: owner.id, address: siblingAddress }))
             .toMatchObject({ status: 'present', record: { revision: 0 } });
+        for (const address of accountAddresses) {
+            expect(await readSessionDraft({ accountId: owner.id, address }))
+                .toMatchObject({ status: 'present', record: { address, revision: 0 } });
+        }
     });
 
     it('excludes V2 Session-bound rows from the Account encryption-mode transition', async () => {

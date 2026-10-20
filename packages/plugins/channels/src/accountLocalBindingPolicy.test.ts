@@ -1,5 +1,7 @@
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import { describe, expect, it, vi } from 'vitest';
+import { isConversationPendingEndpointRetarget } from './connectionLifecycle.js';
+import { PLUGIN_COLLECTION_REVISION_MAX } from '@happier-dev/plugin-sdk/collections';
 
 import {
   asChannelStateRow,
@@ -7,6 +9,9 @@ import {
   readConversationConnectionUpdateRow,
   readConversationIngressAttentionPage,
   updateConversationBindingPolicyInAccountCollection,
+  updateConversationConnectionInAccountCollection,
+  withConversationConnectionLifecycle,
+  type ChannelStateBindingCollection,
   type ChannelStateRow,
 } from './accountLocalBindingPolicy.js';
 import {
@@ -20,6 +25,7 @@ import {
 } from './testkit/currentConnectionFixture.js';
 
 import { assertChannelsTestCollectionQueryLimit } from './testkit/collectionQueryBound.js';
+import { MemoryCollection } from './testkit/memoryCollection.js';
 const CONNECTION_ID = 'connection-frozen-old-selection';
 
 describe('asChannelStateRow', () => {
@@ -40,12 +46,8 @@ const replacementAuthority = {
   providerSetupInput: {},
   credentialRef: null,
   transportOrigin: {
-    serverIdentityId: 'server-example',
-    materializationRef: {
-      pluginId: 'happier.channel.example',
-      machineId: 'machine-example',
-      materializationId: 'materialization-example',
-    },
+    serverIdentityId: 'srv_example',
+    machineId: 'machine-example',
   },
   providerConnectionKey: 'provider:connection-frozen-old-selection',
   providerConfig: {},
@@ -60,12 +62,8 @@ const oldAuthority = {
     contributionId: 'old-contribution',
   },
   transportOrigin: {
-    serverIdentityId: 'server-old',
-    materializationRef: {
-      pluginId: 'happier.channel.example',
-      machineId: 'machine-old',
-      materializationId: 'materialization-old',
-    },
+    serverIdentityId: 'srv_old',
+    machineId: 'machine-old',
   },
 } as const satisfies ConversationConnectionFixtureAuthority;
 
@@ -87,6 +85,7 @@ function connectionRow(
       ...connection,
       payload: {
         ...connection.payload,
+        configurationRevision: 4,
         ...payloadOverrides,
         pendingOldTransportStop,
       },
@@ -113,6 +112,74 @@ function frozenOldStop(overrides: Readonly<Record<string, JsonValue>> = {}): Jso
   };
 }
 
+describe('connection configuration revision', () => {
+  it('reads and edits Account-local configuration with the logical revision while CAS uses the latest physical row', async () => {
+    const collection = new MemoryCollection<Record<string, JsonValue>>();
+    // The persistence boundary fixture requires the explicit limit these owners supply.
+    const accountCollection = collection as unknown as ChannelStateBindingCollection;
+    const row = connectionRow(null, { configurationRevision: 2, maximumObservationAgeMs: 60_000 });
+    collection.rows.set(row.rowId, row);
+    const projection = await readConversationConnectionManagementRows({ collection: accountCollection });
+    expect(projection.connections[0]?.revision).toBe(2);
+    const result = await updateConversationConnectionInAccountCollection({
+      collection: accountCollection, connectionId: CONNECTION_ID, expectedRevision: 2,
+      enabled: true, maximumObservationAgeMs: 120_000, now: () => 100,
+    });
+    expect(result).toMatchObject({ kind: 'updated', revision: 3 });
+    expect(await collection.get(CONNECTION_ID)).toMatchObject({
+      revision: row.revision + 1, value: { payload: { configurationRevision: 3, maximumObservationAgeMs: 120_000 } },
+    });
+    await expect(updateConversationConnectionInAccountCollection({
+      collection: accountCollection, connectionId: CONNECTION_ID, expectedRevision: 2,
+      enabled: false, maximumObservationAgeMs: 120_000,
+    })).rejects.toMatchObject({ code: 'channels_connection_update_conflict' });
+  });
+
+  it('retains exact physical compare-and-swap conflict refusal for Account-local edits', async () => {
+    const collection = new MemoryCollection<Record<string, JsonValue>>({ conflictNextBatch: true });
+    const accountCollection = collection as unknown as ChannelStateBindingCollection;
+    const row = connectionRow(null, { configurationRevision: 2, maximumObservationAgeMs: 60_000 });
+    collection.rows.set(row.rowId, row);
+    await expect(updateConversationConnectionInAccountCollection({
+      collection: accountCollection, connectionId: CONNECTION_ID, expectedRevision: 2,
+      enabled: true, maximumObservationAgeMs: 120_000,
+    })).rejects.toMatchObject({ code: 'channels_connection_update_conflict' });
+    expect(await collection.get(CONNECTION_ID)).toEqual(row);
+  });
+
+  it('preserves the migrated configuration revision through later status writes', () => {
+    // V8→V9 migration captures the physical basis before this owner runs.
+    const retained = connectionRow(null, { configurationRevision: 4 });
+    const current = readConversationConnectionUpdateRow({ row: retained, connectionId: CONNECTION_ID });
+    const first = withConversationConnectionLifecycle({
+      row: retained, current,
+      lifecycle: { ...current.lifecycle, providerReadiness: { code: 'providerCredentialInvalid' } },
+      updatedAt: 100,
+    });
+    expect(first.payload).toMatchObject({ configurationRevision: retained.revision });
+    const persisted = { ...retained, revision: 17, value: first };
+    const next = readConversationConnectionUpdateRow({ row: persisted, connectionId: CONNECTION_ID });
+    const recovered = withConversationConnectionLifecycle({
+      row: persisted, current: next,
+      lifecycle: { ...next.lifecycle, providerReadiness: null }, updatedAt: 200,
+    });
+    expect(recovered.payload).toMatchObject({ configurationRevision: retained.revision });
+  });
+
+  it.each([null, 0, 1.5, PLUGIN_COLLECTION_REVISION_MAX + 1])('fails closed for invalid retained configuration revision %j', (configurationRevision) => {
+    const row = connectionRow(null, { configurationRevision });
+    expect(() => readConversationConnectionUpdateRow({ row, connectionId: CONNECTION_ID }))
+      .toThrow(expect.objectContaining({ code: 'channels_connection_update_corrupt' }));
+  });
+
+  it('refuses an unmigrated row rather than capturing a first-write revision', () => {
+    const row = connectionRow(null);
+    const { configurationRevision: _revision, ...payload } = row.value.payload as Record<string, JsonValue>;
+    expect(() => readConversationConnectionUpdateRow({ row: { ...row, value: { ...row.value, payload } }, connectionId: CONNECTION_ID }))
+      .toThrow(expect.objectContaining({ code: 'channels_connection_update_corrupt' }));
+  });
+});
+
 describe('readConversationConnectionUpdateRow frozen provider selection', () => {
   it('enumerates the 33rd connection after a short first Collection page', async () => {
     const rows = Array.from({ length: 33 }, (_unused, index) => {
@@ -135,21 +202,30 @@ describe('readConversationConnectionUpdateRow frozen provider selection', () => 
     expect(result.connections.map(row => row.connectionId)).toEqual(rows.map(row => row.rowId));
   });
 
-  it.each(['current', 'retired'] as const)('rejects source-only %s transport custody with a typed corrupt result', (slot) => {
+  it.each(['current', 'retired'] as const)('reads closed placement in the %s transport slot', (slot) => {
     const sourceOrigin = {
-      serverIdentityId: 'server-example',
-      sourceRef: {
-        pluginId: replacementAuthority.providerPluginId,
-        machineId: 'machine-example',
-        sourceCustody: { kind: 'development', registeredRootId: 'provider-root' },
-      },
+      serverIdentityId: 'srv_example',
+      machineId: 'machine-example',
     } as const;
     const row = slot === 'current'
       ? connectionRow(frozenOldStop(), { transportOrigin: sourceOrigin })
       : connectionRow(frozenOldStop({ transportOrigin: sourceOrigin }));
 
-    expect(() => readConversationConnectionUpdateRow({ row, connectionId: CONNECTION_ID }))
-      .toThrow(expect.objectContaining({ code: 'channels_connection_update_corrupt' }));
+    const current = readConversationConnectionUpdateRow({ row, connectionId: CONNECTION_ID });
+    const pending = current.lifecycle.pendingOldTransportStop;
+    expect(slot === 'current' ? current.transportOrigin : pending !== null && !isConversationPendingEndpointRetarget(pending) ? pending.transportOrigin : null)
+      .toEqual(sourceOrigin);
+  });
+
+  const malformedTransportOrigins: readonly JsonValue[] = [
+    { serverIdentityId: 'srv_example', sourceRef: { pluginId: 'happier.channel.example', machineId: 'machine-example', sourceCustody: { kind: 'development' } } },
+    { serverIdentityId: 'srv_example', sourceRef: { pluginId: 'happier.channel.example', machineId: 'machine-example', sourceCustody: { kind: 'development', registeredRootId: 'provider-root', claimedAuthority: true } } },
+    { ...replacementAuthority.transportOrigin, sourceRef: { pluginId: 'happier.channel.example', machineId: 'machine-example', sourceCustody: { kind: 'development', registeredRootId: 'provider-root' } } },
+  ];
+  it.each(malformedTransportOrigins)('refuses malformed or mixed execution custody before provider selection: %j', (transportOrigin) => {
+    expect(() => readConversationConnectionUpdateRow({
+      row: connectionRow(frozenOldStop(), { transportOrigin }), connectionId: CONNECTION_ID,
+    })).toThrow(expect.objectContaining({ code: 'channels_connection_update_corrupt' }));
   });
 
   it('retains the old slot selection independently from the replacement row selection', () => {
@@ -161,10 +237,12 @@ describe('readConversationConnectionUpdateRow frozen provider selection', () => 
     expect(current.providerContributionSelection).toEqual({
       contributionId: 'replacement-contribution',
     });
-    expect(current.lifecycle.pendingOldTransportStop?.providerContributionSelection).toEqual({
+    const pending = current.lifecycle.pendingOldTransportStop;
+    if (pending === null || isConversationPendingEndpointRetarget(pending)) throw new Error('Expected frozen provider stop.');
+    expect(pending.providerContributionSelection).toEqual({
       contributionId: 'old-contribution',
     });
-    expect(current.lifecycle.pendingOldTransportStop?.predecessorCheckpointedPollInvocation).toEqual({
+    expect(pending.predecessorCheckpointedPollInvocation).toEqual({
       connectionRevision: 3,
       authorityEpoch: 7,
       transportOrigin: oldAuthority.transportOrigin,
@@ -410,6 +488,7 @@ describe('Channels ingress conflict Account projections', () => {
         bindingId: 'binding-1',
         updatedAt: 21,
         category: 'informational',
+        reason: 'messageTooLarge',
       }],
     });
   });

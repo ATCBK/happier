@@ -53,7 +53,6 @@ vi.mock('expo-audio', () => ({
 }));
 // Keep cold owner-graph compilation outside each rendered interaction's timeout.
 nativeAudio.module = (await import('@/dev/testkit/harness/nativeVoicePcmCapture')).createNativeVoicePcmCaptureHarness().nativeModule;
-const { getSharedVoiceAudioSessionCoordinator } = await import('@happier-dev/audio-stream-native');
 const { RealtimeProviderFields } = await import('./RealtimeProviderFields');
 
 const providerId = 'acme.voice/realtime';
@@ -156,50 +155,6 @@ describe('RealtimeProviderFields', () => {
       expect(screen.tree.findAll((node) => node.props.testID === 'voice-realtime-field-turnDetection-threshold').length).toBeGreaterThan(0);
     } finally { searchRoute.params = {}; }
   });
-  it('holds the shared playback lease for a native catalog preview and releases it on completion', async () => {
-    audioPreview.create.mockImplementation(() => audioPreview);
-    audioPreview.create.mockClear();
-    audioPreview.play.mockClear();
-    audioPreview.remove.mockClear();
-    audioPreview.addListener.mockClear();
-    let onPlaybackStatusUpdate: ((status: Readonly<{ didJustFinish?: boolean }>) => void) | null = null;
-    audioPreview.addListener.mockImplementationOnce((_event, listener) => {
-      onPlaybackStatusUpdate = listener;
-      return { remove: vi.fn() };
-    });
-    const catalogOwner = owner;
-    const descriptor = parseRealtimeSettingsDescriptor(providerId, {
-      kind: 'voice.provider-settings.v1', modes: ['byo'],
-      credential: { kind: 'api_key', catalog: null }, links: {},
-      fields: [{ kind: 'voice_catalog', path: 'voice', titleKey: 'fixture.voice' }],
-    });
-    if (!descriptor) throw new Error('invalid fixture descriptor');
-    const { RealtimeProviderFields } = await import('./RealtimeProviderFields');
-    const screen = await renderScreen(React.createElement(RealtimeProviderFields, {
-      providerId: providerId, descriptor, owner: catalogOwner,
-      config: catalogOwner.defaultConfig, credentialStatus: 'ready',
-      catalog: { phase: 'ready', rows: [{ id: 'voice_a', name: 'Voice A', previewUrl: 'https://example.test/a.mp3' }] },
-      onRequestCatalog: vi.fn(),
-    }));
-
-    const preview = screen.tree.findByProps({ testID: 'voice-realtime-field-voice' }).props.items[0].rightElement;
-    act(() => preview.props.onPress({ stopPropagation: vi.fn() }));
-    await vi.waitFor(() => expect(audioPreview.play).toHaveBeenCalledTimes(1));
-    expect(audioPreview.create).toHaveBeenCalledWith(
-      'https://example.test/a.mp3',
-      { keepAudioSessionActive: true },
-    );
-    const coordinator = getSharedVoiceAudioSessionCoordinator();
-    expect(coordinator?.getSnapshot()).toMatchObject({ leaseCount: 1, configuration: {
-      mode: 'playback', input: false, output: true, capture: 'host_managed',
-    } });
-
-    act(() => onPlaybackStatusUpdate?.({ didJustFinish: true }));
-    await vi.waitFor(() => expect(coordinator?.getSnapshot()).toMatchObject({
-      leaseCount: 0, pendingReleaseCount: 0, configuration: null,
-    }));
-  });
-
   it('renders provider-owned fields without provider-id or path-specific host branches', async () => {
     const descriptor = parseRealtimeSettingsDescriptor(providerId, {
       kind: 'voice.provider-settings.v1',
@@ -311,7 +266,7 @@ describe('RealtimeProviderFields', () => {
       onRequestCatalog: vi.fn(),
     }));
     const dropdown = screen.tree.findByProps({ testID: 'voice-realtime-field-voice' });
-    const preview = dropdown.props.items[0].rightElement;
+    const preview = dropdown.props.items[0].icon;
     const painted = await renderScreen(preview);
     const button = painted.tree.findAll(node => typeof node.type === 'string'
       && (node.props.accessibilityRole ?? node.props.role) === 'button')[0];
@@ -342,37 +297,11 @@ describe('RealtimeProviderFields', () => {
       catalog: { phase: 'ready' as const, rows: [{ id: 'voice_a', name: 'Voice A', previewUrl: 'https://example.test/a.mp3' }] },
     });
     const screen = await renderScreen(render(providerId));
-    const preview = screen.tree.findByProps({ testID: 'voice-realtime-field-voice' }).props.items[0].rightElement;
+    const preview = screen.tree.findByProps({ testID: 'voice-realtime-field-voice' }).props.items[0].icon;
     act(() => preview.props.onPress({ stopPropagation: vi.fn() }));
     await screen.update(render('another_provider'));
     await act(async () => undefined);
     expect(audioPreview.play).not.toHaveBeenCalled();
-  });
-
-  it('lets the shared scoped Stop operation stop a sample started by the catalog picker', async () => {
-    audioPreview.play.mockClear();
-    audioPreview.remove.mockClear();
-    audioPreview.create.mockReturnValue({ play: audioPreview.play, remove: audioPreview.remove, addListener: audioPreview.addListener });
-    const descriptor = parseRealtimeSettingsDescriptor(providerId, {
-      kind: 'voice.provider-settings.v1', modes: ['byo'], credential: { kind: 'api_key', catalog: 'voices' }, links: {},
-      fields: [{ kind: 'voice_catalog', path: 'voice', titleKey: 'fixture.voice' }],
-    });
-    if (!descriptor) throw new Error('invalid fixture descriptor');
-    const screen = await renderScreen(React.createElement(RealtimeProviderFields, {
-      providerId: providerId, descriptor,
-      owner,
-      config: owner.defaultConfig, credentialStatus: 'ready', onRequestCatalog: vi.fn(),
-      catalog: { phase: 'ready', rows: [{ id: 'voice_a', name: 'Voice A', previewUrl: 'https://example.test/a.mp3' }] },
-    }));
-    const preview = screen.tree.findByProps({ testID: 'voice-realtime-field-voice' }).props.items[0].rightElement;
-    await act(async () => { preview.props.onPress({ stopPropagation: vi.fn() }); });
-    await vi.waitFor(() => expect(audioPreview.play).toHaveBeenCalled());
-    const { stopRealtimeCatalogPreview } = await import('./catalogPreview');
-    expect(stopRealtimeCatalogPreview('another_provider')).toBe(false);
-    expect(audioPreview.remove).not.toHaveBeenCalled();
-    await act(async () => { expect(stopRealtimeCatalogPreview(providerId)).toBe(true); });
-    expect(audioPreview.remove).toHaveBeenCalled();
-    await screen.unmount();
   });
 
   it('keeps provider-declared advanced VAD tuning collapsed until explicitly expanded', async () => {

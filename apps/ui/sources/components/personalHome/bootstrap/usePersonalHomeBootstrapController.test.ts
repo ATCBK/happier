@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { createDeferred, flushHookEffects, renderHook } from '@/dev/testkit';
+import { createManualSystemTaskRunner } from '@/dev/testkit/harness/manualSystemTaskRunner';
+import { buildLocalRelayRuntimeSystemTaskSpec } from '@/components/systemTasks/specs/localControl/buildLocalRelayRuntimeSystemTaskSpec';
+import { waitForSystemTaskResult } from '@/components/systemTasks/createSystemTaskRunner';
 
 import {
     usePersonalHomeBootstrapController,
@@ -40,6 +43,17 @@ const completedProfile = {
     id: 'local', name: 'Personal Home', serverUrl: 'http://127.0.0.1:43123',
     createdAt: 1, updatedAt: 1, lastUsedAt: 1, source: 'desktop-personal-home' as const,
 };
+
+async function failIssuedRestart(native: ReturnType<typeof createManualSystemTaskRunner>) {
+    const taskId = await native.runner.start(buildLocalRelayRuntimeSystemTaskSpec('relay.runtime.restart.v1'));
+    const resultPromise = waitForSystemTaskResult(native.runner, taskId);
+    native.emitResult(taskId, {
+        protocolVersion: 1, taskId, ok: false,
+        error: { code: 'restart_readback_unavailable', message: 'restart readback unavailable' },
+    });
+    const result = await resultPromise;
+    if (!result?.ok) throw new Error(result?.error.message ?? 'restart result missing');
+}
 
 describe('usePersonalHomeBootstrapController', () => {
     it('uses optimistic completion only to release the shell and waits for verified Home facts before daemon setup', async () => {
@@ -298,7 +312,8 @@ describe('usePersonalHomeBootstrapController', () => {
         await flushHookEffects();
     });
 
-    it('keeps a partially completed existing-runtime failure on its retryable decision surface', async () => {
+    it('keeps an issued existing-runtime operation failure retryable across successful facts refreshes', async () => {
+        const native = createManualSystemTaskRunner();
         let current = facts({
             relayRuntime: {
                 relayUrl: 'http://127.0.0.1:43123',
@@ -323,10 +338,10 @@ describe('usePersonalHomeBootstrapController', () => {
                 localHomeAuth: 'present',
                 anonymousSignup: 'disabled',
             });
-            throw new Error('restart readback unavailable');
+            await failIssuedRestart(native);
         });
 
-        const hook = await renderHook(() => usePersonalHomeBootstrapController({ readFacts }));
+        const hook = await renderHook((read: typeof readFacts) => usePersonalHomeBootstrapController({ readFacts: read }), { initialProps: readFacts });
         await flushHookEffects();
         expect(hook.getCurrent().snapshot.action).toBe('choose-existing-runtime');
 
@@ -342,6 +357,55 @@ describe('usePersonalHomeBootstrapController', () => {
             action: 'choose-existing-runtime',
             detail: { retryable: true },
         });
+        const operationError = hook.getCurrent().error;
+        expect(operationError?.message).toBe('restart readback unavailable');
+        expect(native.bridge.start).toHaveBeenCalledTimes(1);
+
+        // Real runtime readers change when process errors settle. Successful status facts
+        // do not prove that the issued mutation's unfinished work succeeded.
+        const refreshedRead = vi.fn(async () => current);
+        await hook.rerender(refreshedRead);
+        await flushHookEffects();
+        expect(refreshedRead).toHaveBeenCalledTimes(1);
+        expect(hook.getCurrent().error).toBe(operationError);
+        expect(hook.getCurrent().snapshot).toMatchObject({
+            phase: 'blocked', action: 'choose-existing-runtime', detail: { retryable: true },
+        });
+        expect(native.bridge.start).toHaveBeenCalledTimes(1);
+
+        await act(async () => {
+            await hook.getCurrent().execute(async () => {});
+        });
+        expect(hook.getCurrent().error).toBeNull();
+    });
+
+    it.each(['home', 'authentication'] as const)('retires an operation failure when authoritative %s facts retire its target', async (retirement) => {
+        const native = createManualSystemTaskRunner();
+        const initial = facts({ anonymousSignup: 'disabled' });
+        const readFacts = vi.fn(async () => initial);
+        const hook = await renderHook((read: typeof readFacts) => usePersonalHomeBootstrapController({ readFacts: read }), { initialProps: readFacts });
+        await act(async () => {
+            await hook.getCurrent().execute(async () => await failIssuedRestart(native));
+        });
+        expect(hook.getCurrent().error?.message).toBe('restart readback unavailable');
+
+        const retired = retirement === 'home'
+            ? facts({ localHomeIdentity: 'home-2', anonymousSignup: 'disabled' })
+            : facts({ localHomeAuth: 'missing', anonymousSignup: 'disabled' });
+        await hook.rerender(vi.fn(async () => retired));
+        await flushHookEffects();
+        expect(hook.getCurrent().facts).toBe(retired);
+        expect(hook.getCurrent().error).toBeNull();
+        expect(native.bridge.start).toHaveBeenCalledTimes(1);
+    });
+
+    it('clears a facts-read failure when a subsequent authoritative read succeeds', async () => {
+        const failedRead = vi.fn(async (): Promise<PersonalHomeFacts> => { throw new Error('status unavailable'); });
+        const hook = await renderHook((read: () => Promise<PersonalHomeFacts>) => usePersonalHomeBootstrapController({ readFacts: read }), { initialProps: failedRead });
+        expect(hook.getCurrent().error?.message).toBe('status unavailable');
+        await hook.rerender(vi.fn(async () => facts({ anonymousSignup: 'disabled' })));
+        await flushHookEffects();
+        expect(hook.getCurrent().error).toBeNull();
     });
 
     it('re-runs the snapshot operation through the shared executor on explicit retry', async () => {

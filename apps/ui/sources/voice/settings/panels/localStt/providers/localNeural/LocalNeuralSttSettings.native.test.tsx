@@ -124,4 +124,23 @@ describe('LocalNeuralSttSettings native model download accessory', () => {
     expect(nativeDialogs.prompt).not.toHaveBeenCalled();
     expect(setCfg).toHaveBeenLastCalledWith({ ...cfg, localNeural: { ...cfg.localNeural, language: 'fr-CA' } });
   });
+
+  it('offers and removes a resumable download through the existing remove row', async () => {
+    const scratch = `${filesystem.root}/.${packId}.scratch/model.onnx`;
+    filesystem.files.set(scratch, new Uint8Array([1, 2, 3]));
+    nativeDialogs.alert.mockImplementationOnce((_title, _message, buttons) => {
+      buttons?.find(button => button.style !== 'cancel')?.onPress?.();
+    });
+    const { tree } = await renderScreen(<LocalNeuralSttSettings
+      cfg={{ provider: 'local_neural', localNeural: { assetId: packId, language: null, execution: 'device' } }}
+      setCfg={vi.fn()} popoverBoundaryRef={null}
+    />);
+    const removeRow = () => tree.root.findAll(node =>
+      node.props.title === t('settingsVoice.local.localNeuralStt.removeModelFiles.title'))
+      .find(node => typeof node.props.onPress === 'function');
+    await vi.waitFor(() => expect(removeRow()).toBeDefined());
+    await act(async () => { removeRow()!.props.onPress(); });
+    await vi.waitFor(() => expect(filesystem.files.has(scratch)).toBe(false));
+    await vi.waitFor(() => expect(removeRow()).toBeUndefined());
+  });
 });

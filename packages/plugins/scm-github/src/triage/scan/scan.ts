@@ -15,6 +15,7 @@ import {
   isGithubSuccessStatus,
 } from '../errors.js';
 import { decodeGithubSearchItem, projectGithubEntry } from '../mapping/entry.js';
+import { readGithubChecksSurface } from '../detail/reads.js';
 import { createGithubRepositoryReader, type GithubRepositoryReaderV1 } from '../repositories.js';
 import {
   GITHUB_SEARCH_RESULT_CEILING_V1,
@@ -114,10 +115,16 @@ const CONTINUATION_UNRECOGNIZED_FAILURE: GithubTriageFailureV1 = Object.freeze({
   code: 'github_scan_continuation_unrecognized',
 });
 
+const CANCELLED_SCAN = Object.freeze({
+  kind: 'failed' as const,
+  failure: Object.freeze({ class: 'transient' as const, code: 'github_request_cancelled' }),
+});
+
 /** This call's own non-sticky page-shape facts, plus the rows it could not map. */
 type ScanHealth = {
   reasons: Set<GithubTriageScanPartialReasonV1>;
   omittedItemCount: number;
+  checksFailure: GithubTriageFailureV1 | null;
 };
 
 /**
@@ -141,6 +148,9 @@ function resolvePartialEvidence(
         ? { kind: 'partial', reason, omittedItemCount: health.omittedItemCount }
         : { kind: 'partial', reason },
     );
+  }
+  if (health.checksFailure !== null) {
+    return Object.freeze({ kind: 'partial', reason: health.checksFailure.code });
   }
   return null;
 }
@@ -227,8 +237,23 @@ export async function runGithubTriageScan(
   }
 
   const observations: GithubTriageScanObservationV1[] = [];
+  // Search does not carry checks. Use the same current-head/checks reader as the detail panel, once per
+  // PR in this invocation. Keep classified failures until fact/health projection; provider responses stay source-local.
+  const checks = new Map<string, ReturnType<typeof readGithubChecksSurface>>();
+  const readChecks = (view: NonNullable<ReturnType<typeof decodeGithubSearchItem>>) => {
+    if (view.kindId !== 'pull-request') return null;
+    const key = JSON.stringify([view.owner, view.name, view.number]);
+    let pending = checks.get(key);
+    if (pending === undefined) {
+      pending = readGithubChecksSurface({
+        route: { owner: view.owner, name: view.name }, entryNumber: view.number,
+      }, dependencies);
+      checks.set(key, pending);
+    }
+    return pending;
+  };
   const laneFailures: GithubTriageFailureV1[] = [];
-  const health: ScanHealth = { reasons: new Set(), omittedItemCount: 0 };
+  const health: ScanHealth = { reasons: new Set(), omittedItemCount: 0, checksFailure: null };
 
   const failLane = (lane: GithubScanLaneStateV1, failure: GithubTriageFailureV1): void => {
     lane.ended = true;
@@ -271,10 +296,7 @@ export async function runGithubTriageScan(
 
   while (githubScanFrontierHasOpenLane(frontier)) {
     if (dependencies.signal.aborted) {
-      return Object.freeze({
-        kind: 'failed',
-        failure: Object.freeze({ class: 'transient', code: 'github_request_cancelled' }),
-      });
+      return CANCELLED_SCAN;
     }
     if (frontier.remainingBudget < frontier.nativePageSize) {
       health.reasons.add('projection-budget');
@@ -370,31 +392,33 @@ export async function runGithubTriageScan(
     // three reads. At most one page of rows is outstanding, and the walk already
     // bounds a page to GitHub's own maximum page size, so this batch cannot exceed
     // the concurrency GitHub documents for its REST API.
-    for (const view of views) {
-      if (view === null || view.repositoryId !== null) continue;
-      // Its failure is read below, on the awaited memoized promise; this call only
-      // starts it.
-      void repositories.read({ owner: view.owner, name: view.name })
-        .catch(() => undefined);
+    const identified = await Promise.all(views.map(async (view) => {
+      if (view === null) return null;
+      if (view.repositoryId !== null) return { view, repositoryId: view.repositoryId };
+      const read = await repositories.read({ owner: view.owner, name: view.name });
+      return read.kind === 'readable' ? { view, repositoryId: read.repositoryId } : null;
+    }));
+    // Keep the identity and check phases separate: each is bounded by GitHub's native page size, while
+    // overlapping both could exceed its documented 100 concurrent requests. No new local limit is needed.
+    for (const row of identified) {
+      if (row !== null) void readChecks(row.view)?.catch(() => undefined);
     }
-    for (const view of views) {
-      if (view === null) {
+    for (const row of identified) {
+      if (row === null) {
         health.omittedItemCount += 1;
         frontier.walkHealth.add('undecodable-items');
         continue;
       }
-      let repositoryId = view.repositoryId;
-      if (repositoryId === null) {
-        const read = await repositories.read({ owner: view.owner, name: view.name });
-        if (read.kind !== 'readable') {
-          health.omittedItemCount += 1;
-          frontier.walkHealth.add('undecodable-items');
-          continue;
-        }
-        repositoryId = read.repositoryId;
-      }
+      const { view, repositoryId } = row;
+      const checksRead = await readChecks(view);
+      const checksFailure = checksRead === null ? null : checksRead.ok
+        ? checksRead.value.surface.checkRunsFailure ?? checksRead.value.surface.commitStatusFailure
+        : checksRead.failure;
+      health.checksFailure ??= checksFailure;
       const projection = projectGithubEntry(view, repositoryId, {
         additionsDeletions: view.kindId === 'pull-request' ? 'detailOnly' : null,
+        checks: checksFailure !== null ? 'unavailable'
+          : checksRead?.ok ? checksRead.value.surface.rowState : null,
       });
       if (projection === null) {
         health.omittedItemCount += 1;
@@ -444,5 +468,5 @@ export async function runGithubTriageScan(
     }
   }
 
-  return settle();
+  return dependencies.signal.aborted ? CANCELLED_SCAN : settle();
 }

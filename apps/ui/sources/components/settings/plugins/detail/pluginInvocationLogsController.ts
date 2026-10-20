@@ -380,8 +380,7 @@ export function usePluginInvocationLogsController(params: Readonly<{
             abortActive();
             commit(initialState(stateRef.current.correlationId));
         }
-        if (!autoLoad) return undefined;
-        void refresh();
+        if (autoLoad) void refresh();
         return () => {
             abortActive();
         };

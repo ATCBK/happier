@@ -91,6 +91,12 @@ const voiceExamples = {
   'session.terminals.detach': '{"scopeId":"home:session","terminalId":"terminal-main"}',
   'session.terminals.reorder': '{"scopeId":"home:session","tabId":"tab-main","index":0}',
 } satisfies Record<SessionTerminalActionId, string>;
+/** What the confirmation says before a pane close ends a shell, in the words a person uses (not the Action title again). */
+const closeSummaries = {
+  'session.terminals.close': 'Close this terminal. Anything running in it stops.',
+  'session.terminals.close_tab': 'Close this terminal tab. Anything running in it stops.',
+  'session.terminals.close_others': 'Close the other terminal tabs. Anything running in them stops.',
+} as const;
 function row<const T extends SessionTerminalActionId>(actionId: T, title: string) {
   // Creation and restart request pane/controller intents. The physical Machine
   // Action admits every launch with the original verified caller provenance.
@@ -98,6 +104,7 @@ function row<const T extends SessionTerminalActionId>(actionId: T, title: string
     || actionId === 'session.terminals.close_others';
   return {
     id: actionId, approval: { result: 'required' }, title,
+    ...(mutatesProcess ? { approvalPresentation: { summary: () => closeSummaries[actionId as keyof typeof closeSummaries] } } : {}),
     description: 'Operate on the invoking mounted client terminal pane for a Home-qualified Session or an accepted requester Project checkout. Open, split and run_script return a pane member intent, not a ready shell. Restart requests the mounted controller, not a completed process restart. The Machine open/restart Actions own physical launch approval with the original caller provenance. Project shells retain their exact accepted workspace. A headless host returns unsupported_action. Closing stops owned shell terminals; attached agent terminals and borrowed views are only removed from the pane.',
     safety: mutatesProcess ? 'danger' : 'safe',
     sideEffectClass: actionId === 'session.terminals.list' ? 'read' : mutatesProcess ? 'danger' : 'external',

@@ -52,7 +52,8 @@ describe('daemon skill store', () => {
             expect((await stat(f.cachePath(item))).mode & 0o777).toBe(0o555);
             expect((await stat(join(f.cachePath(item), 'SKILL.md'))).mode & 0o777).toBe(0o444);
             expect((await stat(join(f.cachePath(item), 'scripts', 'run.sh'))).mode & 0o777).toBe(0o555);
-            expect((await lstat(join(first.skillsRoot, 'guide'))).isSymbolicLink()).toBe(true);
+            expect((await lstat(join(first.skillsRoot, 'guide'))).isDirectory()).toBe(true);
+            expect((await lstat(join(first.skillsRoot, 'guide', 'SKILL.md'))).isSymbolicLink()).toBe(true);
         }
     });
     it('updates links and session manifest in the same folder and serializes concurrent writes', async () => {
@@ -63,6 +64,14 @@ describe('daemon skill store', () => {
         expect(await readdir(initial.skillsRoot)).toEqual(['guide']);
         expect(await readFile(join(initial.skillsRoot, 'guide', 'SKILL.md'), 'utf8')).toBe('Updated guide');
         expect(JSON.parse(await readFile(join(initial.pluginRoot, 'session.json'), 'utf8'))).toMatchObject({ items: [{ skillId: next.skillId, name: next.name, digest: next.digest }] });
+    });
+    it('delivers each skill under its own name so a sibling reference resolves to the sibling skill', async () => {
+        const f = await fixture();
+        const { skillsRoot } = await f.ensure('session-one', [skill('prisma-cli', 'Set up with [the ORM guide](../prisma-orm-setup/SKILL.md)'), skill('prisma-orm-setup')]);
+        expect(await readdir(skillsRoot)).toEqual(['prisma-cli', 'prisma-orm-setup']);
+        // The relative link as written in prisma-cli's SKILL.md, followed by the operating system from where that file is delivered.
+        expect(await readFile(join(skillsRoot, 'prisma-cli', '..', 'prisma-orm-setup', 'SKILL.md'), 'utf8')).toBe('Use prisma-orm-setup');
+        expect(await readFile(`${skillsRoot}/prisma-cli/../prisma-orm-setup/SKILL.md`, 'utf8')).toBe('Use prisma-orm-setup');
     });
     it('uses read-only real copies on Windows', async () => {
         const f = await fixture('win32');

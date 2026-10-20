@@ -17,22 +17,20 @@ import {
   Item,
   ItemGroup,
   List,
-  type ListHeaderContext,
-  LoadingState,
-  Markdown,
   Menu,
   PageHeader,
   Progress,
   Row,
-  ScrollArea,
   Stack,
   Status,
   Text,
   defineUiSurface,
   usePluginTheme,
+  usePluginHostReadiness,
   usePluginTranslation,
   useSurfaceContext,
 } from '@happier-dev/plugin-ui';
+import { Collection, rankHappierQueryMatches, type CollectionRowActions, useHappierCollection } from '@happier-dev/plugin-ui/components';
 
 // The manifest remains the one owner of the action id.
 import {
@@ -96,11 +94,23 @@ function isPluginSummary(value: unknown): value is InspectorPluginSummary {
     && typeof (value as { enabled?: unknown }).enabled === 'boolean';
 }
 
+/**
+ * Reads both diagnostic shapes the daemon returns: an Action failure's `{ code, message }`, and an
+ * installed plugin's canonical diagnostic record, which keeps its code and words under `data` and
+ * says whether it still applies. A resolved record is history, not a reason the row needs you.
+ */
 function readPluginDiagnostics(value: unknown): readonly InspectorPluginDiagnostic[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((entry: unknown) => {
     if (!entry || typeof entry !== 'object') return [];
-    const record = entry as Readonly<Record<string, unknown>>;
+    const outer = entry as Readonly<Record<string, unknown>>;
+    const resolution = outer.resolution && typeof outer.resolution === 'object'
+      ? (outer.resolution as Readonly<Record<string, unknown>>).state
+      : undefined;
+    if (resolution === 'resolved') return [];
+    const record = outer.data && typeof outer.data === 'object'
+      ? outer.data as Readonly<Record<string, unknown>>
+      : outer;
     const code = typeof record.code === 'string' ? record.code : undefined;
     const message = typeof record.message === 'string' ? record.message : undefined;
     return code === undefined && message === undefined ? [] : [{
@@ -186,25 +196,24 @@ const INSPECTOR_INVENTORY_ILLUSTRATION_RESOURCE = {
   localId: INSPECTOR_INVENTORY_ILLUSTRATION_RESOURCE_ID,
 } as const;
 
-/**
- * Inspector owns its plugin-specific match semantics; the public List owns
- * query state and filters the supplied inventory before virtualization.
- */
-function matchesInspectorPlugin(
-  plugin: InspectorPluginSummary,
-  search: string,
-): boolean {
-  const normalizedSearch = search.trim().toLocaleLowerCase();
-  return normalizedSearch === '' || [
-    inspectorPluginLabel(plugin),
-    plugin.pluginId,
-    inspectorPluginStatus(plugin),
-  ].some((value) => value.toLocaleLowerCase().includes(normalizedSearch));
+function inspectorPluginByline(plugin: InspectorPluginSummary): string {
+  return `${plugin.pluginId}${plugin.version ? ` · v${plugin.version}` : ''} · ${inspectorPluginStatus(plugin)}`;
 }
+
+function inspectorPluginSearchText(plugin: InspectorPluginSummary) {
+  return {
+    label: inspectorPluginLabel(plugin),
+    subtitle: inspectorPluginByline(plugin),
+    exactSearchText: plugin.pluginId,
+  };
+}
+
+const NO_PLUGINS: readonly InspectorPluginSummary[] = [];
+const noOpenRow = () => {};
 
 export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderSurfaceContext): React.ReactElement {
   const [plugins, setPlugins] = React.useState<readonly InspectorPluginSummary[] | null>(null);
-  const [selectedPluginId, setSelectedPluginId] = React.useState<string | null>(null);
+  const [search, setSearch] = React.useState('');
   const [loading, setLoading] = React.useState(false);
   const inventoryRead = React.useRef<Promise<void> | null>(null);
   const [error, setError] = React.useState<InspectorSurfaceError | null>(null);
@@ -214,6 +223,7 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
   const [selfCheckSettlement, setSelfCheckSettlement] = React.useState<InspectorSelfCheckSettlement>('not-run');
   const [quickActionsContextMenuOpen, setQuickActionsContextMenuOpen] = React.useState(false);
   const surfaceContext = useSurfaceContext();
+  const readiness = usePluginHostReadiness();
   const theme = usePluginTheme();
   // §3.2: built-in and external authors use the same public translation seam,
   // including bounded interpolation of host-projected plugin messages.
@@ -238,6 +248,7 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
   }, [canOpenSurface, hostApi, text]);
 
   const refreshPluginList = React.useCallback((afterReload = false): Promise<void> => {
+    if (readiness.pending) return Promise.resolve();
     if (inventoryRead.current && !afterReload) return inventoryRead.current;
     if (!hostApi) {
       setError({ kind: 'inventory', code: 'host_api_unavailable',
@@ -272,12 +283,12 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
     });
     inventoryRead.current = read;
     return read;
-  }, [hostApi, text]);
+  }, [hostApi, readiness.pending, text]);
 
   React.useEffect(() => {
     void refreshPluginList();
     return () => { inventoryRead.current = null; };
-  }, [refreshPluginList]);
+  }, [refreshPluginList, readiness.revision]);
 
   const reloadPlugin = React.useCallback(async (pluginId: string) => {
     if (!hostApi) {
@@ -346,32 +357,39 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
           }
     : null;
   const selfCheckStatus = readInspectorSelfCheckStatus(selfCheckSettlement, text);
-  const renderPluginRow = React.useCallback((plugin: InspectorPluginSummary) => (
-    <List.Item
-      testID={`inspector-plugin-${plugin.pluginId}`}
-      accessibilityLabel={inspectorPluginLabel(plugin)}
-      showDivider
-    >
-      <Row gap="small" wrap align="center" justify="space-between" style={{ flexDirection: rowDirection }}>
-        <Stack gap="xsmall" style={{ flex: 1, minWidth: 0 }}>
-          <Text value={inspectorPluginLabel(plugin)} variant="label" />
-          <Text
-            value={`${plugin.pluginId}${plugin.version ? ` · v${plugin.version}` : ''} · ${inspectorPluginStatus(plugin)}`}
-            variant="micro"
-            tone="secondary"
-          />
-          {(plugin.diagnostics ?? []).length > 0 ? (
-            <Markdown
-              value={(plugin.diagnostics ?? [])
-                .map((diagnostic) => `- ${diagnostic.message ?? diagnostic.code ?? 'diagnostic'}`)
-                .join('\n')}
-              testID={`inspector-diagnostics-${plugin.pluginId}`}
-            />
-          ) : null}
-        </Stack>
-      </Row>
-    </List.Item>
-  ), [rowDirection]);
+  // Each row reloads its own plugin: one tap, one development plugin at a time.
+  const useInspectorRowActions = React.useCallback((plugin: InspectorPluginSummary): CollectionRowActions => {
+    const label = inspectorPluginLabel(plugin);
+    const reloading = reloadingPluginId === plugin.pluginId;
+    return {
+      busy: reloading,
+      accessory: (
+        <Button
+          testID={`inspector-reload-${plugin.pluginId}`}
+          variant="secondary"
+          // One per row: the small step keeps a column of them quieter than the rows they serve.
+          size="small"
+          disabled={reloadingPluginId !== null}
+          title={reloading
+            ? text('plugins.inspector.surface.reloading', 'Reloading…')
+            : text('plugins.inspector.surface.reload', 'Reload')}
+          accessibilityLabel={`${text('plugins.inspector.surface.reload', 'Reload')} ${label}`}
+          onPress={() => { void reloadPlugin(plugin.pluginId); }}
+        />
+      ),
+    };
+  }, [reloadPlugin, reloadingPluginId, text]);
+  const visiblePlugins = React.useMemo(
+    () => rankHappierQueryMatches(plugins ?? NO_PLUGINS, search, inspectorPluginSearchText),
+    [plugins, search],
+  );
+  const collection = useHappierCollection({
+    items: visiblePlugins,
+    keyOf: keyForInspectorPlugin,
+    selection: 'none',
+    openKey: null,
+    onOpenChange: noOpenRow,
+  });
 
   // The page header's secondary actions: one quiet ⋯ menu beside the Run-on chip, never loose text links.
   const quickMenus = (
@@ -409,7 +427,8 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
     <Action.Execute
       testID="inspector-self-check-action"
       action={INSPECTOR_SELF_CHECK_ACTION_ID}
-      variant="primary"
+      // A diagnostic the user runs rarely: a quiet control, never the view's one filled button.
+      variant="secondary"
       title={text('plugins.inspector.surface.selfCheck', 'Run Inspector self-check')}
       accessibilityLabel={text(
         'plugins.inspector.surface.executeSelfCheck',
@@ -445,13 +464,9 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
         description="Inspect installed plugins, diagnostics, and reload state."
         descriptionKey="plugins.inspector.description"
         leading={<BrandMark size="medium" externallyLabelled />}
-        meta={[
-          ...(locationLabel ? [{ key: 'location', text: locationLabel, testID: 'inspector-location' }] : []),
-          ...(plugins ? [{
-            key: 'count',
-            text: text('plugins.inspector.surface.pluginCount', '{count} plugins', { count: plugins.length }),
-          }] : []),
-        ]}
+        // The header is the same height while the inventory loads and once it has: the plugin count
+        // lives beside the inventory it counts, not on a line that appears after the title.
+        meta={locationLabel ? [{ key: 'location', text: locationLabel, testID: 'inspector-location' }] : undefined}
         actions={quickMenus}
       />
       <ItemGroup
@@ -486,6 +501,14 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
           'plugins.inspector.surface.inventoryDescription',
           'Search admitted plugins, inspect diagnostics, and reload one development plugin at a time.',
         )}
+        action={(
+          // Held (a blank line) until the inventory answers, so the count arrives without moving the section.
+          <Text
+            testID="inspector-plugin-count"
+            value={plugins ? text('plugins.inspector.surface.pluginCount', '{count} plugins', { count: plugins.length }) : '\u00A0'}
+            tone="secondary"
+          />
+        )}
         surface="none"
       />
     </>
@@ -495,33 +518,32 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
     <Stack gap="medium">
         {onPage ? pageAnatomyHeader : (
           <>
-            <Row gap="medium" wrap align="center" justify="space-between" style={{ flexDirection: rowDirection }}>
-              <Stack gap="small" style={{ flex: 1, minWidth: 0 }}>
-                <Row gap="small" wrap align="center" style={{ flexDirection: rowDirection }}>
-                  <BrandMark size="small" showName />
-                  <Image
-                    resource={INSPECTOR_INVENTORY_ILLUSTRATION_RESOURCE}
-                    size="small"
-                    accessibilityLabel={text(
-                      'plugins.inspector.surface.inventoryIllustration',
-                      'Plugin inventory illustration',
-                    )}
-                    fallback="PI"
-                    testID="inspector-inventory-illustration"
+            {/*
+              * A pane placement sits under the host's pane header, which already names the
+              * Inspector; repeating its mark, name and a large title here said it three times.
+              * The pane opens on what it is for, with the quick actions beside it.
+              */}
+            <Row gap="medium" align="center" justify="space-between" style={{ flexDirection: rowDirection }}>
+              <Row gap="small" align="center" style={{ flex: 1, minWidth: 0, flexDirection: rowDirection }}>
+                <Image
+                  resource={INSPECTOR_INVENTORY_ILLUSTRATION_RESOURCE}
+                  size="small"
+                  accessibilityLabel={text(
+                    'plugins.inspector.surface.inventoryIllustration',
+                    'Plugin inventory illustration',
+                  )}
+                  fallback="PI"
+                  testID="inspector-inventory-illustration"
+                />
+                <Stack style={{ flex: 1, minWidth: 0 }}>
+                  <Text
+                    testID="inspector-pane-description"
+                    valueKey="plugins.inspector.description"
+                    fallback="Inspect installed plugins, diagnostics, and reload state."
+                    tone="secondary"
                   />
-                </Row>
-                <Heading
-                  level={1}
-                  valueKey="plugins.inspector.title"
-                  fallback="Plugin Inspector"
-                  testID="inspector-title"
-                />
-                <Text
-                  valueKey="plugins.inspector.description"
-                  fallback="Inspect installed plugins, diagnostics, and reload state."
-                  tone="secondary"
-                />
-              </Stack>
+                </Stack>
+              </Row>
               {quickMenus}
             </Row>
 
@@ -610,26 +632,25 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
           </Stack>
         ) : null}
 
-        {error ? (
-          <Banner
-            testID="inspector-error"
-            tone="danger"
-            title={errorCopy?.title ?? error.message}
-            description={error.message}
-            action={errorCopy ? (
-              <Button
-                testID="inspector-error-retry"
-                title={errorCopy.retry}
-                variant="secondary"
-                onPress={retryError}
-              />
-            ) : undefined}
-          />
-        ) : null}
-        {loading && !plugins ? (
-          <LoadingState
-            title={text('plugins.inspector.surface.loading', 'Loading…')}
-          />
+        {error && !(error.kind === 'inventory' && readiness.pending) ? (
+          // In the page column with the sections around it (an untitled page section), not across the pane.
+          <ItemGroup surface="none">
+            <Banner
+              testID="inspector-error"
+              tone="danger"
+              title={errorCopy?.title ?? error.message}
+              // The cause only when it adds something: a message that restates the headline is dropped.
+              description={errorCopy && error.message.trim() !== errorCopy.title ? error.message : undefined}
+              action={errorCopy ? (
+                <Button
+                  testID="inspector-error-retry"
+                  title={errorCopy.retry}
+                  variant="secondary"
+                  onPress={retryError}
+                />
+              ) : undefined}
+            />
+          </ItemGroup>
         ) : null}
         {loading && plugins ? (
           <Progress
@@ -637,31 +658,18 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
             label={text('plugins.inspector.surface.refreshing', 'Refreshing plugin inventory')}
           />
         ) : null}
-        {plugins && plugins.length === 0 && !loading ? (
-          <EmptyState
-            title={text('plugins.inspector.surface.empty', 'No plugins installed.')}
-          />
-        ) : null}
     </Stack>
   );
 
-  const surfaceFooter = (
-    <Card tone="muted" padding="medium" testID="inspector-component-gallery">
+  // On the page the gallery is the last page section, in the page column like every section above it.
+  // The pane keeps its compact muted card.
+  const galleryTitle = text('plugins.inspector.surface.componentGallery', 'Component gallery');
+  const galleryDescription = text(
+    'plugins.inspector.surface.componentGalleryDescription',
+    'Reference controls for validating the public Plugin UI interaction families.',
+  );
+  const gallerySpecimens = (
       <Stack gap="medium">
-        <Stack gap="xsmall">
-          <Text
-            value={text('plugins.inspector.surface.componentGallery', 'Component gallery')}
-            variant="label"
-          />
-          <Text
-            value={text(
-              'plugins.inspector.surface.componentGalleryDescription',
-              'Reference controls for validating the public Plugin UI interaction families.',
-            )}
-            variant="micro"
-            tone="secondary"
-          />
-        </Stack>
         <Row gap="small" wrap align="center">{contextMenuSpecimen}</Row>
         <List accessibilityLabel={text('plugins.inspector.surface.quickActions', 'Inspector quick actions')}>
           <List.Section title={text('plugins.inspector.surface.inventoryActions', 'List and icon actions')}>
@@ -716,70 +724,77 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
           </ActionPanel.Section>
         </ActionPanel>
       </Stack>
+  );
+  const surfaceFooter = onPage ? (
+    <ItemGroup testID="inspector-component-gallery" title={galleryTitle} description={galleryDescription} surface="none">
+      {gallerySpecimens}
+    </ItemGroup>
+  ) : (
+    <Card tone="muted" padding="medium" testID="inspector-component-gallery">
+      <Stack gap="medium">
+        <Stack gap="xsmall">
+          <Text value={galleryTitle} variant="label" />
+          <Text value={galleryDescription} variant="micro" tone="secondary" />
+        </Stack>
+        {gallerySpecimens}
+      </Stack>
     </Card>
   );
 
-  if (plugins && plugins.length > 0) {
-    return (
-      <List<InspectorPluginSummary>
-        testID="inspector-surface"
-        style={{ flex: 1 }}
-        contentContainerStyle={{ padding: theme.spacing.medium }}
-        items={plugins}
-        keyForItem={keyForInspectorPlugin}
-        renderItem={renderPluginRow}
-        accessibilityLabel={text('plugins.inspector.surface.inventory', 'Installed plugins')}
-        search={{
-          testID: 'inspector-plugin-search',
-          label: text('plugins.inspector.surface.search', 'Search installed plugins'),
-          placeholder: text('plugins.inspector.surface.searchPlaceholder', 'Search by name or plugin ID'),
-          filter: matchesInspectorPlugin,
-        }}
-        selection={{
-          selectedKey: selectedPluginId,
-          onSelectedKeyChange: setSelectedPluginId,
-        }}
-        header={({ selectedItem }: ListHeaderContext<InspectorPluginSummary>) => (
-          <Stack gap="small">
-            {surfaceHeader}
-            {selectedItem ? (
-              <Button
-                testID={`inspector-reload-selected-${selectedItem.pluginId}`}
-                disabled={reloadingPluginId !== null}
-                title={reloadingPluginId === selectedItem.pluginId
-                  ? text('plugins.inspector.surface.reloading', 'Reloading…')
-                  : `${text('plugins.inspector.surface.reload', 'Reload')} ${inspectorPluginLabel(selectedItem)}`}
-                onPress={() => { void reloadPlugin(selectedItem.pluginId); }}
-              />
-            ) : null}
-          </Stack>
-        )}
-        empty={(
-          <EmptyState
-            testID="inspector-plugin-search-empty"
-            title={text('plugins.inspector.surface.noMatches', 'No matching plugins')}
-            description={text(
-              'plugins.inspector.surface.noMatchesDescription',
-              'Try a different name or plugin ID.',
-            )}
-          />
-        )}
-        footer={<Stack gap="small">{surfaceFooter}</Stack>}
-      />
-    );
-  }
-
+  // One scrolling page (or pane): the header, the inventory rows and the gallery move together, so the
+  // rows get the room instead of sitting between fixed header and footer chrome.
   return (
-    <ScrollArea
+    <Collection<InspectorPluginSummary>
       testID="inspector-surface"
-      style={{ flex: 1 }}
-      contentContainerStyle={{ padding: theme.spacing.medium }}
-    >
-      <Stack gap="small">
-        {surfaceHeader}
-        {surfaceFooter}
-      </Stack>
-    </ScrollArea>
+      model={collection}
+      presentation="list"
+      detail="none"
+      scroll="page"
+      minListWidth={280}
+      minDetailWidth={0}
+      preferredListRatio={1}
+      accessibilityLabel={text('plugins.inspector.surface.inventory', 'Installed plugins')}
+      loading={plugins === null && (loading || !error || readiness.pending)}
+      anatomy={{
+        glyph: () => null,
+        title: inspectorPluginLabel,
+        byline: inspectorPluginByline,
+        reason: (plugin) => {
+          const diagnostics = readPluginDiagnostics(plugin.diagnostics);
+          return diagnostics.length === 0 ? null : (
+            <Text
+              testID={`inspector-diagnostics-${plugin.pluginId}`}
+              value={diagnostics.flatMap((diagnostic) => diagnostic.message ?? diagnostic.code ?? []).join(' · ')}
+              tone="danger"
+            />
+          );
+        },
+        accessibilityLabel: inspectorPluginLabel,
+        testID: (plugin) => `inspector-plugin-${plugin.pluginId}`,
+        columnTitles: { title: text('plugins.inspector.surface.inventory', 'Installed plugins') },
+      }}
+      useRowActions={useInspectorRowActions}
+      {...(plugins && plugins.length > 0 ? { search: {
+        testID: 'inspector-plugin-search',
+        label: text('plugins.inspector.surface.search', 'Search installed plugins'),
+        placeholder: text('plugins.inspector.surface.searchPlaceholder', 'Search by name or plugin ID'),
+        value: search,
+        onValueChange: setSearch,
+      } } : {})}
+      // On the page the page header owns the page edge, top included (as the rows below it do), so the loaded
+      // header sits exactly where the host's loading header stood; the pane pads its stack.
+      header={<Stack style={onPage ? undefined : { paddingHorizontal: theme.spacing.medium, paddingTop: theme.spacing.medium }}>{surfaceHeader}</Stack>}
+      empty={plugins === null ? null : plugins.length === 0 ? (
+        <EmptyState title={text('plugins.inspector.surface.empty', 'No plugins installed.')} />
+      ) : (
+        <EmptyState
+          testID="inspector-plugin-search-empty"
+          title={text('plugins.inspector.surface.noMatches', 'No matching plugins')}
+          description={text('plugins.inspector.surface.noMatchesDescription', 'Try a different name or plugin ID.')}
+        />
+      )}
+      footer={onPage ? surfaceFooter : <Stack style={{ padding: theme.spacing.medium }}>{surfaceFooter}</Stack>}
+    />
   );
 }
 

@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
-import { createDeferred, renderScreen } from '@/dev/testkit';
+import { createDeferred, invokeTestInstanceHandler, renderScreen } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -19,7 +19,9 @@ const navigation = vi.hoisted(() => ({ replace: vi.fn(), back: vi.fn(), dispatch
 const alerts = vi.hoisted(() => vi.fn<(title: string, message?: string, buttons?: AlertButton[]) => void>());
 const routeParams = vi.hoisted(() => ({ agentType: 'claude', cloneFromProfileId: undefined as string | undefined }));
 // Platform navigation, native styling and modal presentation are external boundaries.
-vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
+    useWindowDimensions: () => ({ width: 1440, height: 1000, scale: 1, fontScale: 1 }),
+}));
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
     params: () => routeParams,
@@ -117,10 +119,42 @@ async function setupAcknowledgedSave(options: Readonly<{ initialRecord?: Profile
 }
 
 describe('Profile editor acknowledged save', () => {
+    it('isolates draft title publication and retirement between profile destinations', async () => {
+        await setupAcknowledgedSave({ useProfiles: true });
+        const { ProfileSettingsLayout } = await import('./ProfileSettingsLayout');
+        const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+        const { WorkspaceRouteOutlet } = await import('@/components/appShell/workspace/WorkspaceRouteOutlet');
+        const { router } = await import('expo-router');
+        storage.setState(state => ({ settings: { ...state.settings, useProfiles: true } }));
+        const renderDestination = async (id: string) => {
+            const screen = await renderScreen(<DestinationInstanceHost tabId={id} ref={{ kind: 'settings', params: {} }}
+                pathname="/settings/profiles/new" navigation={router} focused visible>
+                <WorkspaceRouteOutlet.Provider value={<ProfileDetailScreen target={{ kind: 'draft', cloneFrom: null }} />}>
+                    <ProfileSettingsLayout />
+                </WorkspaceRouteOutlet.Provider>
+            </DestinationInstanceHost>);
+            await act(async () => { invokeTestInstanceHandler(screen.findHostByTestId('settings-profiles-layout'), 'onLayout', {
+                nativeEvent: { layout: { x: 0, y: 0, width: 1440, height: 1000 } },
+            }); });
+            return screen;
+        };
+        const first = await renderDestination('first-profile');
+        await act(async () => { first.changeTextByTestId('profile-slim-name', 'First profile'); });
+        const second = await renderDestination('second-profile');
+        await act(async () => { second.changeTextByTestId('profile-slim-name', 'Second profile'); });
+        const titles = (screen: typeof first) => screen.findAll(node => node.props.testID === 'settings.profiles.rail.draft'
+            && typeof node.props.title === 'string').map(node => node.props.title);
+        expect(titles(first)).toContain('First profile');
+        expect(titles(first)).not.toContain('Second profile');
+        expect(titles(second)).toContain('Second profile');
+        await act(async () => { second.unmount(); });
+        expect(titles(first)).toContain('First profile');
+    });
+
     it('keeps the collection rail loading before inventory arrives and retains it during refresh', async () => {
         const source = { ...createEmptyCustomProfile(), name: 'Research' };
         const save = await setupAcknowledgedSave({ holdInitialCatalog: true, initialRecord: { v: 1, id: source.id,
-            definition: { kind: 'inline', profile: source }, enabled: true, promptStack: [], secretBindings: {} } });
+            definition: { kind: 'inline', profile: source }, enabled: true, promptStack: [], skillSeeds: [], secretBindings: {} } });
         const screen = await renderScreen(<ProfileCollectionRail />);
         expect(screen.tree.findByTestId('settings.profiles.rail.loading')).not.toBeNull();
         expect(screen.tree.findByType(CollectionList).props.count).toBeUndefined();
@@ -152,7 +186,7 @@ describe('Profile editor acknowledged save', () => {
     it('keeps the header to Save and the menu: whether pickers offer the profile is a menu action', async () => {
         const source = { ...createEmptyCustomProfile(), name: 'Research' };
         const record: ProfileRecordV1 = { v: 1, id: source.id, definition: { kind: 'inline', profile: source },
-            enabled: true, promptStack: [], secretBindings: {} };
+            enabled: true, promptStack: [], skillSeeds: [], secretBindings: {} };
         await setupAcknowledgedSave({ initialRecord: record });
         const screen = await renderScreen(<ProfileDetailScreen target={{ kind: 'profile', profileId: source.id }} />);
         await vi.waitFor(() => expect(screen.findAll((node) => node.props.testID === 'settings.profiles.detail.menu').length).toBeGreaterThan(0));
@@ -216,7 +250,7 @@ describe('Profile editor acknowledged save', () => {
         const source = createEmptyCustomProfile();
         source.name = 'Research';
         const record: ProfileRecordV1 = { v: 1, id: source.id, definition: { kind: 'inline', profile: source },
-            enabled: false, promptStack: [], secretBindings: { API_KEY: null } };
+            enabled: false, promptStack: [], skillSeeds: [], secretBindings: { API_KEY: null } };
         const save = await setupAcknowledgedSave({ initialRecord: record, holdInitialCatalog: true });
         routeParams.cloneFromProfileId = source.id;
         const screen = await renderScreen(editor === 'detail'
@@ -243,7 +277,7 @@ describe('Profile editor acknowledged save', () => {
     it('initializes a clone from the retained source after its pending refresh settles', async () => {
         const source = { ...createEmptyCustomProfile(), name: 'Research' };
         const save = await setupAcknowledgedSave({ initialRecord: { v: 1, id: source.id,
-            definition: { kind: 'inline', profile: source }, enabled: true, promptStack: [], secretBindings: {} } });
+            definition: { kind: 'inline', profile: source }, enabled: true, promptStack: [], skillSeeds: [], secretBindings: {} } });
         const refresh = save.refreshWhilePending();
         const screen = await renderScreen(<ProfileDetailScreen target={{ kind: 'draft', cloneFrom: source.id }} />);
         expect(screen.tree.findByTestId('settings.profiles.detail.notFound') === null).toBe(true);
@@ -264,7 +298,7 @@ describe('Profile editor acknowledged save', () => {
     it('keeps a saved-profile lookup loading until hydration can prove whether it exists', async () => {
         const source = { ...createEmptyCustomProfile(), name: 'Research' };
         const save = await setupAcknowledgedSave({ holdInitialCatalog: true, initialRecord: { v: 1, id: source.id,
-            definition: { kind: 'inline', profile: source }, enabled: true, promptStack: [], secretBindings: {} } });
+            definition: { kind: 'inline', profile: source }, enabled: true, promptStack: [], skillSeeds: [], secretBindings: {} } });
         const screen = await renderScreen(<ProfileDetailScreen target={{ kind: 'profile', profileId: source.id }} />);
         expect(screen.tree.findByTestId('settings.profiles.detail.loading')).not.toBeNull();
         expect(screen.tree.findByTestId('settings.profiles.detail.notFound') === null).toBe(true);

@@ -3,6 +3,7 @@ import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/s
 import { t } from '@/text';
 import type { FileTargetAnchor } from '@/utils/url/sessionFileDeepLink';
 import type { ReviewCommentSource } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
+import { SCM_COMPARISON_VIEWS, type ScmComparisonView } from '@happier-dev/protocol/scm';
 
 export const SESSION_DETAILS_SCM_REVIEW_TAB_KEY = 'scmReview:working';
 export const SESSION_DETAILS_SCM_STASH_TAB_KEY = 'scmStash';
@@ -91,8 +92,8 @@ export type SessionScmReviewComparison = import('@/sync/domains/scm/diffSummary/
 export type SessionScmReviewTurnEvidence = 'agent_reported' | 'checkpoint';
 
 /** The views of one comparison: Files, Walkthrough, and Commits (pending changes only). */
-export type SessionScmReviewView = 'files' | 'walkthrough' | 'commits';
-export const SESSION_SCM_REVIEW_VIEWS: readonly SessionScmReviewView[] = ['files', 'walkthrough', 'commits'];
+export type SessionScmReviewView = ScmComparisonView;
+export const SESSION_SCM_REVIEW_VIEWS = SCM_COMPARISON_VIEWS;
 
 export type SessionScmReviewTarget = Readonly<{
     comparison?: SessionScmReviewComparison;

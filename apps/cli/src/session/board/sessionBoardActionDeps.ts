@@ -24,6 +24,7 @@ import {
   type SessionTransportEncryptionMaterial,
 } from '@/session/transport/encryption/sessionEncryptionContext';
 import { resolveExternalActionServerRequestHeaders, type ExternalActionHomeBinding } from '@/api/externalActionExecutionAuthorization';
+import { areServerProfileIdentifiersEquivalent } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 
 /** This carrier's issuance witness only: whether axios itself coded the failure. */
 function readAxiosFailureCode(error: unknown): string | null {
@@ -68,10 +69,12 @@ export function createSessionBoardActionDeps(options: Readonly<{
   ) {
     throw new Error('fixed_action_server_target_incomplete');
   }
-  const serverId = options.serverId ?? configuration.activeServerId;
+  const profileId = options.serverId ?? configuration.activeServerId;
+  const isSameHome = (identifier: string) => areServerProfileIdentifiersEquivalent(options.serverIdentityId ?? profileId, identifier, id =>
+    id === profileId || id === options.serverIdentityId ? options.serverIdentityId : undefined);
   const serverUrl = options.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
   const sessionBoardPrepareItem: NonNullable<ActionExecutorDeps['sessionBoardPrepareItem']> = async ({ input, context, signal }) => {
-    if (context.serverId && context.serverId !== serverId) return createSessionBoardFailureV1('server_target_mismatch');
+    if (context.serverId && !isSameHome(context.serverId)) return createSessionBoardFailureV1('server_target_mismatch');
     if (signal?.aborted) return createSessionBoardFailureV1('cancelled');
     const parsed = SessionBoardItemUpsertInputV1Schema.safeParse(input);
     if (!parsed.success) return createSessionBoardFailureV1('session_board_invalid');
@@ -99,6 +102,7 @@ export function createSessionBoardActionDeps(options: Readonly<{
     context: Parameters<NonNullable<ActionExecutorDeps['sessionBoardAction']>>[0]['context'],
     signal?: AbortSignal,
   ) {
+    const serverId = context.serverId ?? profileId;
     if (actionId === 'session.board.get') return createSessionBoardFailureV1('unsupported_action');
     const declared = bindSessionBoardMutationRequestV1({ sessionId, mutation: SessionBoardMutationV1Schema.parse(input) });
     const mutation = declared.body;
@@ -144,7 +148,10 @@ export function createSessionBoardActionDeps(options: Readonly<{
       : settlement.result;
   }
   const sessionBoardAction: NonNullable<ActionExecutorDeps['sessionBoardAction']> = async ({ actionId, input, context, signal }) => {
-    if (context.serverId && context.serverId !== serverId) return createSessionBoardFailureV1('server_target_mismatch');
+    if (context.serverId && !isSameHome(context.serverId)) return createSessionBoardFailureV1('server_target_mismatch');
+    // Echo the admitted address expected by this caller's strict result reader.
+    // The generic widget port uses the portable Home; Session MCP may use its profile.
+    const serverId = context.serverId ?? profileId;
     if (signal?.aborted) return createSessionBoardFailureV1('cancelled');
     const parsed = SESSION_BOARD_ACTION_INPUT_SCHEMAS_V1[actionId].safeParse(input);
     if (!parsed.success) return createSessionBoardFailureV1('session_board_invalid');
@@ -152,7 +159,10 @@ export function createSessionBoardActionDeps(options: Readonly<{
     const sessionId = common.sessionId ?? context.defaultSessionId;
     if (!sessionId) return createSessionBoardFailureV1('session_board_invalid');
     const resolveAuthorizationHeaders = (request: Readonly<{ method: 'GET'; path: string }>) => {
-      const authorization = resolveExternalActionServerRequestHeaders({ context, effectActionId: actionId,
+      // A composed read spends its admitted root, not a second Board Action.
+      // Mutation effects remain explicit in put(); these headers only serve GETs.
+      const effectActionId = context.externalActionExecutionAuthorization?.binding.actionId ?? actionId;
+      const authorization = resolveExternalActionServerRequestHeaders({ context, effectActionId,
         method: request.method, path: request.path, daemonToken: options.credentials.token, serverIdentityId: options.serverIdentityId,
         ...(options.externalActionMachineRequestPrivateKey ? { privateKey: options.externalActionMachineRequestPrivateKey } : {}),
         ...(options.externalActionMachineInstallationId ? { installationId: options.externalActionMachineInstallationId } : {}),

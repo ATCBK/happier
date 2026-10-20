@@ -75,6 +75,8 @@ export type CommitProposal = Readonly<{
     application: ScmCommitPlanApplication | null;
     /** An accepted run holds the proposal (applying, paused for a hook, or an unresolved outcome). */
     locked: boolean;
+    /** Moves are available only while an unlanded proposal remains; completion does not retain an application lock. */
+    editable: boolean;
     applying: boolean;
     landedCount: number;
     /** The group the accepted run is on now. */
@@ -208,7 +210,7 @@ export function buildCommitProposal(input: CommitProposalInput): CommitProposal 
             rewrittenMessage: state === 'landed' && actualMessage !== null && actualMessage.trim() !== group.message.trim() ? actualMessage : null,
             committedAtMs: state === 'landed' ? step?.publication?.committedAtMs ?? null : null,
             signed: state === 'landed' && step?.publication?.signed === true,
-            editable: !locked && state !== 'landed',
+            editable: !locked && application?.status !== 'complete' && state !== 'landed',
         };
     });
     const landedCount = groups.filter((group) => group.state === 'landed').length;
@@ -220,6 +222,7 @@ export function buildCommitProposal(input: CommitProposalInput): CommitProposal 
         totalFileCount: input.comparison.inventory.files.length,
         application,
         locked,
+        editable: !locked && application?.status !== 'complete' && (landedCount === 0 || landedCount < groups.length),
         applying: application?.status === 'applying',
         landedCount,
         currentGroupId: locked ? currentStep?.groupId ?? null : null,

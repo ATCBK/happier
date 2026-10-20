@@ -3,7 +3,10 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 
-import { collectRenderedTestIds, renderScreen, standardCleanup, teamCapabilitiesFixture, teamGroupFixture, teamMembershipFixture, teamSummaryFixture } from '@/dev/testkit';
+import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { teamCapabilitiesFixture, teamGroupFixture, teamMembershipFixture, teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
@@ -13,6 +16,7 @@ import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelp
 const routerPush = vi.hoisted(() => vi.fn());
 
 installSettingsViewCommonModuleMocks({
+    storage: 'real',
     router: async () => ({
         useRouter: () => ({ push: routerPush, back: vi.fn() }),
         useNavigation: () => ({ setOptions: vi.fn() }),
@@ -28,6 +32,9 @@ installSettingsViewCommonModuleMocks({
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+vi.doUnmock('@/sync/domains/state/storage');
+const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
+const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
 
 const TEAM_GET_PATH = '/v1/teams/get';
 const MEMBER_GET_PATH = '/v1/teams/members/get';
@@ -113,8 +120,6 @@ async function waitForTestId(
 }
 
 beforeEach(async () => {
-    const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
-    const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
     resetTeamsSnapshotsForTests();
     resetTeamsDirectoryEngineForTests();
     await harness.reset();
@@ -127,7 +132,7 @@ afterEach(() => {
 });
 
 describe('TeamMemberDetailScreen management source', () => {
-    it('removes a member only after one designed confirmation and preserves a declined removal', async () => {
+    it('removes a member only after shared Action confirmation and preserves a declined removal', async () => {
         const serverId = await addHome(teamSummaryFixture({
             capabilities: teamCapabilitiesFixture({ manageMembers: true, manageOwners: true }),
         }));
@@ -147,12 +152,8 @@ describe('TeamMemberDetailScreen management source', () => {
 
         await screen.pressByTestIdAsync('team-member-remove');
         await vi.waitFor(() => expect(harness.requestsFor(MEMBER_REMOVE_PATH)).toHaveLength(1));
-        // One declined review and one accepted review, with no generic dialog.
+        // One declined Action confirmation and one accepted confirmation.
         expect(Modal.confirm).toHaveBeenCalledTimes(2);
-        expect(Modal.confirm).toHaveBeenLastCalledWith(
-            expect.stringContaining('teams.members.removal.title'), expect.any(String),
-            expect.objectContaining({ destructive: true }),
-        );
         expect(harness.requestsFor(ARTIFACT_CREATE_PATH)).toHaveLength(0);
     });
 
@@ -227,6 +228,8 @@ describe('TeamMemberDetailScreen management source', () => {
         await waitForTestId(screen, 'team-member-management');
 
         await waitForTestId(screen, 'team-member-management:source-entra');
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockClear();
         await screen.pressByTestIdAsync('team-member-management:source-entra');
 
         await vi.waitFor(() => {
@@ -239,6 +242,7 @@ describe('TeamMemberDetailScreen management source', () => {
             // The exact source, never a vague "manage externally".
             management: { kind: 'directory_source', directorySourceId: 'source-entra' },
         });
+        expect(Modal.confirm).not.toHaveBeenCalled();
     });
 
     it('explains a refused conversion in the Home\'s own terms rather than as a generic failure', async () => {

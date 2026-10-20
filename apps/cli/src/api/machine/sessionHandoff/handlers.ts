@@ -15,7 +15,7 @@ import {
   exportSessionHandoffState,
 } from '../../../session/handoff/exportSessionHandoffState';
 import { importSessionHandoffAgentBundle, resolveExistingSessionHandoffState } from '../../../session/handoff/agentBundle/import';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { SessionHandoffExistingStateCheckRequestV3Schema, type SessionHandoffExistingStateCheckRequestV3 } from '@happier-dev/protocol/sessions/control/handoff/handoffSchemas';
 import { resolveLinkedExternalSessionAuthorityV1 } from '@happier-dev/protocol/sessions/external/linked-metadata';
 import {

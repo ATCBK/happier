@@ -30,18 +30,23 @@ describe('session role Action Home routing', () => {
             expect(serverId).toBe(selectedHome);
             expect(sessionId).toBe('worker');
             if (method === 'session.notes.set') {
-                expect(RoleActionInputSchemasV1[method].parse(payload)).toEqual({ sessionId: 'worker', notes: 'Notes for B' });
-                return RoleActionOutputSchemasV1[method].parse({ updated: true });
+                expect(RoleActionInputSchemasV1['session.notes.set'].parse(payload)).toEqual({ sessionId: 'worker', notes: 'Notes for B' });
+                return RoleActionOutputSchemasV1['session.notes.set'].parse({ updated: true });
             }
             if (method === 'session.role.set') {
-                expect(RoleActionInputSchemasV1[method].parse(payload)).toEqual({ sessionId: 'worker', roleId: 'builder' });
-                return RoleActionOutputSchemasV1[method].parse({ updated: true });
+                const parsed = RoleActionInputSchemasV1['session.role.set'].parse(payload);
+                expect(parsed).toEqual('answersWorkerQuestions' in parsed
+                    ? { sessionId: 'worker', answersWorkerQuestions: false }
+                    : { sessionId: 'worker', roleId: 'builder' });
+                return RoleActionOutputSchemasV1['session.role.set'].parse({ updated: true });
             }
             throw new Error('Unexpected Session RPC');
         });
         expect(await roleActions.setSessionNotes('worker', 'Notes for B', { serverId: selectedHome }))
             .toEqual({ ok: true, result: { updated: true } });
         expect(await roleActions.setSessionRole('worker', 'builder', { serverId: selectedHome }))
+            .toEqual({ ok: true, result: { updated: true } });
+        expect(await roleActions.setSessionAnswersWorkerQuestions('worker', false, { serverId: selectedHome }))
             .toEqual({ ok: true, result: { updated: true } });
     });
 

@@ -4,6 +4,7 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
 import { validateServerConfigText } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type {
     HomeReachabilityV1,
     HomeSettingEntryV1,
@@ -43,6 +44,7 @@ import { t } from '@/text';
 import { useHomeRuntimeExecutor, type HomeRuntimeExecutor } from '../runtime/homeRuntimeExecutor';
 import { HomeDeploymentFixedNote } from './HomeDeploymentFixedNote';
 import { HomeSettingFieldRow, type HomeSettingStage } from './HomeSettingFieldRow';
+import { buildHomeSettingWrite, type HomeSettingDraftValue } from './homeSettingDraft';
 import { HomeAdministrationSection } from './HomeAdministrationSection';
 import type { HomeAdministrationContext } from './homeAdministrationContext';
 import { homeAdministrationPoliciesPath } from './homeAdministrationRoutes';
@@ -350,12 +352,12 @@ const ReachPage = React.memo(function ReachPage(props: Readonly<{ context: HomeA
         wasPendingRef.current = context.approvalPending;
     }, [context.approvalPending, reload]);
 
-    const writeSetting = React.useCallback(async (key: string, value: unknown): Promise<string | null> => {
+    const writeSettings = React.useCallback(async (values: Readonly<Record<string, unknown>>): Promise<string | null> => {
         if (!reads.settings) return null;
         const outcome = await setHomeSettings({
             scope: context.scope,
             expectedRevision: reads.settings.revision,
-            values: { [key]: value },
+            values,
         });
         if (outcome.kind === 'succeeded') {
             reads.adoptSettings(outcome.value);
@@ -373,6 +375,34 @@ const ReachPage = React.memo(function ReachPage(props: Readonly<{ context: HomeA
         if (invalid) return invalid.reason === 'out_of_bounds' ? t('homeGovernance.reach.httpsRequired') : t('homeGovernance.reach.invalidAddress');
         return homeGovernanceFailureNotice(outcome.failure).body;
     }, [context, reads]);
+    const writeSetting = React.useCallback(
+        async (key: string, value: unknown) => await writeSettings({ [key]: value }),
+        [writeSettings],
+    );
+
+    // Custom relay servers save as each entry is left or removed, through the registry draft path.
+    const [relayUrlsDraft, setRelayUrlsDraft] = React.useState<HomeSettingDraftValue | undefined>(undefined);
+    const relayUrlsDraftRef = React.useRef<HomeSettingDraftValue | undefined>(undefined);
+    const [relayUrlsFailure, setRelayUrlsFailure] = React.useState<string | null>(null);
+    const stageRelayUrls: HomeSettingStage = React.useCallback((_key, next) => {
+        relayUrlsDraftRef.current = next ?? undefined;
+        setRelayUrlsDraft(next ?? undefined);
+        setRelayUrlsFailure(null);
+    }, []);
+    const commitRelayUrls = React.useCallback((key: string) => {
+        const staged = relayUrlsDraftRef.current;
+        if (disabled || !staged || !reads.settings) return;
+        const write = buildHomeSettingWrite(reads.settings.entries, { [key]: staged });
+        // A refused entry is said under its own field; nothing is sent until every entry parses.
+        if (!write.ok || !write.changed) return;
+        void writeSettings(write.values).then((failure) => {
+            setRelayUrlsFailure(failure);
+            if (!failure) {
+                relayUrlsDraftRef.current = undefined;
+                setRelayUrlsDraft(undefined);
+            }
+        });
+    }, [disabled, reads.settings, writeSettings]);
 
     const savePublicLinks: HomeSettingStage = React.useCallback((_key, next) => {
         const entry = entryFor(reads.settings, PUBLIC_SUBPATH_KEY);
@@ -396,14 +426,6 @@ const ReachPage = React.memo(function ReachPage(props: Readonly<{ context: HomeA
     }, [writeSetting]);
 
     const setIroh = React.useCallback(async (enabled: boolean) => {
-        if (!enabled) {
-            const confirmed = await Modal.confirm(
-                t('homeGovernance.reach.irohOffTitle'),
-                t('homeGovernance.reach.irohOffBody'),
-                { cancelText: t('common.cancel'), confirmText: t('homeGovernance.reach.irohOffConfirm'), destructive: true },
-            );
-            if (!confirmed) return;
-        }
         setIrohBusy(true);
         try {
             const outcome = await setHomeIrohMode({ scope: context.scope, mode: enabled ? 'enabled' : 'disabled' });
@@ -415,6 +437,7 @@ const ReachPage = React.memo(function ReachPage(props: Readonly<{ context: HomeA
                 context.requestApproval?.(outcome.artifactId);
                 return;
             }
+            if (isActionApprovalDeclinedErrorCode(outcome.failure.code)) return;
             const notice = outcome.failure.code === 'home_iroh_needs_public_address'
                 ? { title: t('homeGovernance.reach.irohNeedsAddressTitle'), body: t('homeGovernance.reach.irohNeedsAddressBody') }
                 : homeGovernanceFailureNotice(outcome.failure);
@@ -477,9 +500,7 @@ const ReachPage = React.memo(function ReachPage(props: Readonly<{ context: HomeA
         title: t('homeGovernance.reach.relay'),
         subtitle: relayEntry?.fixed ? undefined : relayPending
             ? t('homeGovernance.reach.appliesAfterRestartPending')
-            : relayCustomCount > 0
-                ? t('homeGovernance.reach.relayCustom', { count: relayCustomCount })
-                : t('homeGovernance.reach.appliesAfterRestart'),
+            : t('homeGovernance.reach.appliesAfterRestart'),
         subtitleLines: 0,
         subtitleAccessory: relayEntry?.fixed ? <HomeDeploymentFixedNote keys={[relayEntry.key]} testID="home-reach-relay" /> : undefined,
     };
@@ -604,12 +625,32 @@ const ReachPage = React.memo(function ReachPage(props: Readonly<{ context: HomeA
                                     ]}
                                     value={relayPolicy}
                                     onChange={(tabId) => {
-                                        if (tabId !== relayPolicy && !disabled) void writeSetting(RELAY_POLICY_KEY, tabId);
+                                        if (tabId === relayPolicy || disabled) return;
+                                        // Relays off cannot keep custom relays: the direct-connection runtime refuses both.
+                                        void writeSettings(tabId === 'disabled' && relayCustomCount > 0 && relayUrlsEntry && !relayUrlsEntry.fixed
+                                            ? { [RELAY_POLICY_KEY]: tabId, [RELAY_URLS_KEY]: null }
+                                            : { [RELAY_POLICY_KEY]: tabId });
                                     }}
                                     disabled={disabled}
                                 />
                             ) : <Item {...relayRow} mode="info" showChevron={false} detail={relayPolicy === 'disabled' ? t('homeGovernance.reach.relayOff') : t('homeGovernance.reach.relayAutomatic')} />}
                     </SettingAnchor>
+                ) : null}
+                {irohAvailable && relayPolicy === 'automatic' && relayUrlsEntry ? (
+                    <HomeSettingFieldRow
+                        testID="home-reach-relay-servers"
+                        entry={relayUrlsEntry}
+                        title={t('homeGovernance.reach.relayServers')}
+                        subtitle={relayUrlsEntry.fixed ? undefined : relayUrlsEntry.applied?.pending === true
+                            ? `${t('homeGovernance.reach.relayServersDescription')} ${t('homeGovernance.reach.appliesAfterRestartPending')}`
+                            : `${t('homeGovernance.reach.relayServersDescription')} ${t('homeGovernance.reach.appliesAfterRestart')}`}
+                        staged={relayUrlsDraft}
+                        readOnly={!isOwner}
+                        disabled={disabled}
+                        error={relayUrlsFailure}
+                        onStage={stageRelayUrls}
+                        onCommit={commitRelayUrls}
+                    />
                 ) : null}
             </ItemGroup>
         </>

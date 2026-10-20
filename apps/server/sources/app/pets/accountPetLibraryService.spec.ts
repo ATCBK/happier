@@ -105,29 +105,19 @@ function createDeferred<T>(): {
 function createPrismaQuotaReadPauseHooks(): {
     hooks: NonNullable<PrismaAccountPetLibraryPersistenceOptions["hooks"]>;
     waitForFirstQuotaRead: Promise<void>;
-    waitForSecondQuotaRead: Promise<void>;
     releaseQuotaReads(): void;
 } {
     const firstQuotaRead = createDeferred<void>();
-    const secondQuotaRead = createDeferred<void>();
     const releaseQuotaReads = createDeferred<void>();
-    let quotaReadCount = 0;
 
     return {
         waitForFirstQuotaRead: firstQuotaRead.promise,
-        waitForSecondQuotaRead: secondQuotaRead.promise,
         releaseQuotaReads() {
             releaseQuotaReads.resolve();
         },
         hooks: {
             async afterQuotaRead() {
-                quotaReadCount += 1;
-                if (quotaReadCount === 1) {
-                    firstQuotaRead.resolve();
-                }
-                if (quotaReadCount === 2) {
-                    secondQuotaRead.resolve();
-                }
+                firstQuotaRead.resolve();
                 await releaseQuotaReads.promise;
             },
         },
@@ -871,19 +861,43 @@ describe("account pet library services", () => {
             }),
         });
 
+        const secondAdmissionAttempt = createDeferred<void>();
+        const originalTransaction = db.$transaction;
+        let admissionAttempts = 0;
+        // Observe the real contender's transaction acquisition request. SQLite
+        // can block BEGIN before its callback or Account admission SQL runs.
+        db.$transaction = new Proxy(originalTransaction, {
+            apply(target, receiver, args: unknown[]) {
+                const operation = args[0];
+                if (typeof operation !== "function") return Reflect.apply(target, receiver, args);
+                const pending = Reflect.apply(target, receiver, args);
+                admissionAttempts += 1;
+                if (admissionAttempts === 2) secondAdmissionAttempt.resolve();
+                return pending;
+            },
+        });
+
         const firstCreate = firstServices.createAccountPetForAccount({
             accountId: "account-1",
             request: requestFor(WEBP_BYTES),
         });
-        await quotaHooks.waitForFirstQuotaRead;
-        const secondCreate = secondServices.createAccountPetForAccount({
-            accountId: "account-1",
-            request: requestFor(WEBP_BYTES),
-        });
-        await quotaHooks.waitForSecondQuotaRead;
-        quotaHooks.releaseQuotaReads();
-
-        const [first, second] = await Promise.all([firstCreate, secondCreate]);
+        let secondCreate: ReturnType<typeof secondServices.createAccountPetForAccount> | undefined;
+        let first: Awaited<typeof firstCreate>;
+        let second: Awaited<typeof firstCreate>;
+        try {
+            await quotaHooks.waitForFirstQuotaRead;
+            secondCreate = secondServices.createAccountPetForAccount({
+                accountId: "account-1",
+                request: requestFor(WEBP_BYTES),
+            });
+            await secondAdmissionAttempt.promise;
+            quotaHooks.releaseQuotaReads();
+            [first, second] = await Promise.all([firstCreate, secondCreate]);
+        } finally {
+            quotaHooks.releaseQuotaReads();
+            await Promise.allSettled([firstCreate, ...(secondCreate ? [secondCreate] : [])]);
+            db.$transaction = originalTransaction;
+        }
         const results = [first, second];
         const successCount = results.filter((result) => result.ok).length;
         const quotaFailures = results.filter((result) => !result.ok && result.errorCode === "quota_exceeded");

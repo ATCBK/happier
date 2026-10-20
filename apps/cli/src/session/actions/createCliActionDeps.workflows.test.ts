@@ -5,7 +5,7 @@ import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import tweetnacl from 'tweetnacl';
-import { ARTIFACT_PLAIN_DATA_KEY_MARKER, createActionExecutor, encodePlainArtifactStoredContent, ExecutionRunGetResponseSchema, sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1, validateWorkflowDefinition, WorkflowActionFailureV1Schema, WorkflowRunRecipientCensusResponseV1Schema, type ActionId } from '@happier-dev/protocol';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, createActionExecutor, encodePlainArtifactStoredContent, ExecutionRunGetResponseSchema, materializeWorkflowAcceptedSnapshotV1, sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1, validateWorkflowDefinition, WorkflowActionFailureV1Schema, WorkflowRunRecipientCensusResponseV1Schema, WorkflowRunSummaryV1Schema, type ActionId } from '@happier-dev/protocol';
 import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER,
   verifyExternalActionMachineRequestV1, type ActionExecutorContext } from '@happier-dev/protocol';
 import { PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1, PluginInstallationManifestPublisherHeaderV1Schema,
@@ -25,7 +25,7 @@ import { WorkflowActionInputSchemasV1, WorkflowActionOutputSchemasV1 } from '@ha
 import { AccountSettingsSchema } from '@happier-dev/protocol/account/settings/accountSettings';
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryRecordV1Schema, PromptLibraryRowsListResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { getActiveAccountSettingsSnapshot, readAccountRoleOverridesFromSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
@@ -53,6 +53,7 @@ vi.mock('@/session/transport/rpc/sessionRpc', async (importOriginal) => ({
 vi.mock('@/session/transport/rpc/machineRpc', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/session/transport/rpc/machineRpc')>(),
   callMachineRpc: machineRpc,
+  callExactMachineRpc: machineRpc,
 }));
 
 vi.mock('axios', () => ({
@@ -72,6 +73,9 @@ import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { logger } from '@/ui/logger';
+import { createDeferred } from '@/testkit/async/deferred';
+import { SessionTurnsProjectionV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
+import { DEFAULT_SESSION_AUTO_FOLLOW_PREFERENCES_V1, DEFAULT_SESSION_FOLLOW_CREATION_POLICIES_V1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); });
 afterAll(async () => {
@@ -79,7 +83,85 @@ afterAll(async () => {
 });
 
 describe('createCliActionDeps workflow boundary', () => {
-  it('keeps fresh Workflow materialization in the admitted Account holder', async () => {
+  it.each([
+    { surface: 'ui', authority: 'present_user' },
+    { surface: 'cli', authority: 'account_automation' },
+    { surface: 'voice', authority: 'account_automation' },
+  ] as const)('inherits the authorized origin Session selection for a $surface Panel without inventing an Agent caller', async ({ surface, authority }) => {
+    const lease = await pluginReloadController.acquireRuntimeRegistry({
+      resolveRuntimeRegistry: () => resolveExecutablePluginRuntimeRegistry({ contributes: createResolvedContributionRegistry({}) }),
+    });
+    await lease.release();
+    const token = `e30.${Buffer.from(JSON.stringify({ sub: 'account-1' })).toString('base64url')}.signature`;
+    const credentials = { token, encryption: null, credentialProvenance: 'stored_session' as const };
+    const sessionId = 'c123456789012345678901234';
+    const connectedServices = { v: 2 as const, bindingsByServiceId: {
+      'happier.agent.codex/openai-codex': { source: 'connected' as const, selection: 'profile' as const, profileId: 'origin-account' },
+    } };
+    const baseGet = http.get.getMockImplementation()!;
+    http.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/v2/account/settings')) return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
+      if (url.endsWith('/v2/account/settings/history')) return { status: 200, data: { snapshots: [] } };
+      if (url.includes('/v1/artifacts?')) return { status: 200, data: [] };
+      if (url.endsWith(PROMPT_LIBRARY_ROWS_ROUTE_V1)) return { status: 200, data: PromptLibraryRowsListResponseV1Schema.parse({
+        status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1,
+          content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })),
+      }) };
+      if (url.endsWith(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session: createSessionRecordFixture({
+        id: sessionId, active: true, encryptionMode: 'plain', metadata: JSON.stringify({ machineId: 'machine-1', path: tmpdir(),
+          flavor: 'codex', modelOverrideV1: { v: 1, modelId: 'parent-model', updatedAt: 1 }, connectedServices }),
+      }) } };
+      return baseGet(url);
+    });
+    const deps = createCliActionDeps({ token, credentials, serverId: 'profile', serverHttpBaseUrl: 'https://panel-origin.test',
+      serverIdentityId: 'srv_panel_home', resolveServerFeaturesSnapshot: () => enabledFeatures as never,
+      sessionId: 'cli-global', mode: 'plain', ctx: null,
+      machineActionDirectTargetTransport: { machineId: 'machine-1', invoke: async method => {
+        if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return {
+          protocolVersion: 1, projection: { v: 2, generation: 1, agentsById: { codex: {
+            id: 'codex', identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
+            capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+          } } },
+        };
+        if (method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 1, results: {
+          'cli.codex': { ok: true, data: { installed: true, version: '1', latestVersion: null,
+            update: { supported: false, command: null }, signIn: { status: 'signedOut', loginSupport: 'unsupported' },
+            platform: { supported: true }, install: { available: false, mode: 'none', sizeBytes: null, guideUrl: null }, dependencies: [] } },
+          'tool.executionRuns': { ok: true, data: { available: true, features: { detachedScope: true }, backends: { codex: { available: true } } } },
+        } };
+        throw new Error(`Unexpected Panel Machine RPC ${method}`);
+      } },
+    });
+    const executor = createActionExecutor(deps);
+    signedRootAction.mockImplementation(async request => executor.execute(request.actionId, request.input, { surface: 'cli' }));
+    const result = await executor.execute('workflow.run.start', {
+      runId: '77777777-7777-4777-8777-777777777778', source: { kind: 'catalog', workflow: 'builtin:plan-with-a-panel' },
+      inputs: { request: 'Plan the change', engines: ['agent:happier.agent.codex/codex'] }, roleOverrides: [],
+    }, { surface, authority, serverId: 'profile', defaultSessionId: sessionId,
+      externalActionTarget: { kind: 'machine', machineId: 'machine-1', project: { machineId: 'machine-1', directory: tmpdir() } } });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { admission: 'created' } });
+    const admission = http.post.mock.calls.find(([, body]) => body.operation === 'admit')?.[1];
+    expect(admission).toBeDefined();
+    const accepted = openWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId: admission.runId },
+      envelope: parseWorkflowStoredContentEnvelopeV1(admission.acceptedEnvelope),
+    });
+    expect(accepted.kind).toBe('available');
+    if (accepted.kind !== 'available') throw new Error('accepted_snapshot_unavailable');
+    const synthesis = accepted.content.materializedLeaves.find(leaf => leaf.blockId === 'synthesis');
+    expect(synthesis?.kind).toBe('step');
+    if (synthesis?.kind !== 'step') throw new Error('synthesis_step_unavailable');
+    expect(synthesis.selection).toMatchObject({
+      agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+      modelSelection: { ref: { modelId: 'parent-model' } }, connectedServices,
+    });
+  });
+  it.each([false, true])('keeps fresh Workflow materialization in the admitted Account holder (maintenance pending: %s)', async pendingMaintenance => {
+    // Real daemon publication with no SCM plugin: a plain directory is valid.
+    const lease = await pluginReloadController.acquireRuntimeRegistry({
+      resolveRuntimeRegistry: () => resolveExecutablePluginRuntimeRegistry({ contributes: createResolvedContributionRegistry({}) }),
+    });
+    await lease.release();
     const token = `e30.${Buffer.from(JSON.stringify({ sub: 'account-1' })).toString('base64url')}.signature`;
     const credentials = { token, encryption: null, credentialProvenance: 'stored_session' as const };
     const rawSettings = { workDepthLimit: 2 };
@@ -91,25 +173,54 @@ describe('createCliActionDeps workflow boundary', () => {
       serverHttpBaseUrl: 'https://workflow-custody.example.invalid', isCurrent: async () => true });
     setActiveAccountSettingsSnapshot({ ...source, scopeKey: 'other-account' });
     const ambient = getActiveAccountSettingsSnapshot();
+    const maintenance = createDeferred<void>();
+    const maintenanceIssued = createDeferred<void>();
+    let destinationsObserved = false;
+    const post = http.post.getMockImplementation()!;
+    http.post.mockImplementation(async (url: string, body: Readonly<Record<string, unknown>>) =>
+      url.endsWith('/v2/sessions/lookup-by-tags')
+        ? { status: 200, data: { sessions: [] } } : post(url, body));
     const get = http.get.getMockImplementation()!;
     http.get.mockImplementation(async (url: string) => {
-      if (url.endsWith('/v2/account/settings')) return { status: 200, data: { version: 1, content: { t: 'plain', v: rawSettings } } };
+      const path = new URL(url).pathname;
+      if (path === '/v2/sessions' || path === '/v2/sessions/archived') {
+        return { status: 200, data: { sessions: [], nextCursor: null, hasNext: false } };
+      }
+      if (url.endsWith('/v2/account/settings')) {
+        if (destinationsObserved) {
+          maintenanceIssued.resolve();
+          if (pendingMaintenance) await maintenance.promise;
+        }
+        return { status: 200, data: { version: 1, content: { t: 'plain', v: rawSettings } } };
+      }
       if (url.includes('/v1/artifacts?')) return { status: 200, data: [] };
-      if (url.endsWith(PROMPT_LIBRARY_ROWS_ROUTE_V1)) return { status: 200, data: PromptLibraryRowsListResponseV1Schema.parse({
-        status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1, content: { t: 'plain', v:
-          key === 'role-overrides' ? { key, value: { v: 1, overrides: { scout: { roleId: 'scout',
-            instructionsOverride: 'Use the admitted Workflow Account.' } } } } : emptyPromptLibraryRecordV1(key) } })),
-      }) };
+      if (url.endsWith(PROMPT_LIBRARY_ROWS_ROUTE_V1)) {
+        destinationsObserved = true;
+        return { status: 200, data: PromptLibraryRowsListResponseV1Schema.parse({
+          status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1, content: { t: 'plain', v:
+            key === 'role-overrides' ? { key, value: { v: 1, overrides: { scout: { roleId: 'scout',
+              instructionsOverride: 'Use the admitted Workflow Account.' } } } } : emptyPromptLibraryRecordV1(key) } })),
+        }) };
+      }
       return get(url);
     });
     const deps = createCliActionDeps({ token, credentials, savedSecretOperationContext: operationContext,
       serverId: 'profile', serverHttpBaseUrl: operationContext.serverHttpBaseUrl, resolveServerFeaturesSnapshot: () => enabledFeatures as never,
       sessionId: 'cli-global', mode: 'plain', ctx: null });
-    await deps.workflowAction!({ actionId: 'workflow.run.start', input: {
+    let admissionCompleted = false;
+    const admission = deps.workflowAction!({ actionId: 'workflow.run.start', input: {
       runId: '77777777-7777-4777-8777-777777777777', source: { kind: 'inline', definition: { version: 1, defaults: {},
         blocks: [{ kind: 'wait', id: 'review', document: { text: 'Review', references: [], attachments: [] } }] } },
-    }, context: { surface: 'ui', authority: 'present_user', externalActionTarget: { kind: 'machine', machineId: 'machine-1',
-      project: { machineId: 'machine-1', directory: '/missing-live5-workspace' } } } });
+    }, context: { surface: 'ui', authority: 'present_user', callerPermissionMode: 'default', externalActionTarget: { kind: 'machine', machineId: 'machine-1',
+      project: { machineId: 'machine-1', directory: tmpdir() } } } })
+      .then(result => { admissionCompleted = true; return result; });
+    try {
+      if (pendingMaintenance) {
+        await maintenanceIssued.promise;
+        await vi.waitFor(() => expect(admissionCompleted).toBe(true));
+      }
+      expect(await admission).toMatchObject({ admission: 'created' });
+    } finally { maintenance.resolve(); await admission; }
     expect(getActiveAccountSettingsSnapshot()).toBe(ambient);
     const captured = operationContext.readSnapshot();
     expect(captured).not.toBeNull();
@@ -117,6 +228,11 @@ describe('createCliActionDeps workflow boundary', () => {
     expect(readAccountRoleOverridesFromSnapshot(captured)).toMatchObject({ status: 'ready', overrides: {
       scout: { roleId: 'scout', instructionsOverride: 'Use the admitted Workflow Account.' },
     } });
+    // An originless Account start has no bound Session. Resolving cli-global
+    // as a tag scans the Account's Session history and cannot supply defaults.
+    expect(http.post.mock.calls.filter(([url]) => String(url).includes('/v2/sessions/'))).toEqual([]);
+    expect(http.get.mock.calls.filter(([url]) => String(url).includes('/v2/sessions'))).toEqual([]);
+    WorkflowActionOutputSchemasV1['workflow.run.start'].parse(await admission);
   });
   it('reports unreadable Account role overrides before Start admission through the real Action wiring', async () => {
     const diagnostic = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
@@ -208,6 +324,53 @@ describe('createCliActionDeps workflow boundary', () => {
       } } };
       throw new Error(`unexpected_post:${String(body.operation)}`);
     });
+  });
+
+  it.each(['machine', 'exact'] as const)('lists a retained Run through Project-scoped CLI Action wiring (%s selection)', async selection => {
+    const runId = '11111111-1111-4111-8111-111111111111';
+    const project = { machineId: 'machine-1', directory: '/repo' };
+    const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition: { version: 1, defaults: {},
+      blocks: [{ kind: 'wait', id: 'review', document: { text: 'Review', references: [], attachments: [] } }] },
+      context: { source: { kind: 'inline' }, inputs: {}, machineId: project.machineId, executionTarget: { kind: 'session' },
+        workspaceTarget: { project: { ...project, checkoutRootPath: project.directory } },
+        origin: { kind: 'direct' }, authorization: { principal: { kind: 'host' } } },
+      admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true } });
+    if (!accepted.ok) throw new Error(`snapshot_fixture_failed:${accepted.error.code}`);
+    const snapshot = {
+      run: WorkflowRunSummaryV1Schema.parse({ sourceArtifactId: null, ownerAccountId: 'account-1', visibleTeamId: null,
+        id: runId, origin: { kind: 'direct' }, state: 'queued', revision: 0, machineId: project.machineId,
+        workflowCustodyState: 'pending', originDeliveryAckRevision: null,
+        availability: { pause: true, resumeBoundary: false, restoreWorkspace: false, cancel: true, inspectExecution: false, disabledReasons: [] },
+        createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }),
+      acceptedEnvelope: serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({
+        mode: 'plain', binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId }, acceptedSnapshot: accepted.snapshot })),
+      checkpointEnvelope: null, resultEnvelope: null,
+      keyCensus: WorkflowRunRecipientCensusResponseV1Schema.parse({ runId, ownerAccountId: 'account-1', visibleTeamId: null,
+        encryptionMode: 'plain', access: 'owner', ownerAccountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null },
+        dataEncryptionKey: null, callerDataEncryptionKey: null, recipients: [] }),
+    };
+    const requests: unknown[] = [];
+    http.post.mockImplementation(async (_url: string, body: Readonly<Record<string, unknown>>) => {
+      if (body.operation === 'get') return { data: snapshot };
+      if (body.operation === 'invocations.list') return { data: { invocations: [] } };
+      if (body.operation !== 'list') throw new Error(`unexpected:${String(body.operation)}`);
+      requests.push(body.request);
+      return { data: { runs: [snapshot.run], acceptedEnvelopesByRunId: { [runId]: snapshot.acceptedEnvelope },
+        keyCensusByRunId: { [runId]: snapshot.keyCensus } } };
+    });
+    const deps = createCliActionDeps({ token: 'token', credentials: { token: 'token', encryption: null },
+      resolveServerFeaturesSnapshot: () => enabledFeatures as never, sessionId: 'cli-global', mode: 'plain', ctx: null });
+    const actions = createActionExecutor({ ...deps, isActionApprovalRequired: () => false });
+    const context = { surface: 'cli' as const, authority: 'present_user' as const,
+      externalActionTarget: { kind: 'machine' as const, machineId: project.machineId, project } };
+    await expect(actions.execute('workflow.run.get', { runId }, context))
+      .resolves.toMatchObject({ ok: true, result: { run: { id: runId } } });
+    const input = selection === 'machine' ? { machineId: project.machineId } : { runIds: [runId] };
+    const listed = await actions.execute('workflow.run.list', input, context);
+    expect(listed).toMatchObject({ ok: true, result: { runs: [{ id: runId, where: project }] } });
+    if (!listed.ok) throw new Error(listed.errorCode);
+    WorkflowActionOutputSchemasV1['workflow.run.list'].parse(listed.result);
+    expect(requests).toEqual([{ ...input, machineId: project.machineId }]);
   });
 
   it.each(['session', 'detached', 'wrong_run', 'invalid_response', 'transport_failure', 'wrong_machine'] as const)(
@@ -341,6 +504,15 @@ describe('createCliActionDeps workflow boundary', () => {
     const authenticatedReads: string[] = [];
     const get = http.get.getMockImplementation()!;
     http.get.mockImplementation(async (url: string, options: { headers: Record<string, string> }) => {
+      if (url.endsWith('/v2/account/session-follow-preferences')) {
+        // Fresh Session-channel admission already opens the exact requester's
+        // Account custody. A Run does not grant a restricted Session this read.
+        expect(url).toBe('https://session-home.test/v2/account/session-follow-preferences');
+        expect(options.headers.Authorization).toBe(`Bearer ${credentials.token}`);
+        expect(options.headers[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]).toBeUndefined();
+        return { status: 200, data: { ...DEFAULT_SESSION_AUTO_FOLLOW_PREFERENCES_V1,
+          ...DEFAULT_SESSION_FOLLOW_CREATION_POLICIES_V1, runReportPolicy: { preset: 'quiet' } } };
+      }
       if (viaSession && url.includes('/v1/artifacts?')) return { status: 200, data: [] };
       if (url.includes(`/v2/sessions/${sessionId}`)) return { status: 200,
         data: { session: createSessionRecordFixture({ id: sessionId, share: null, encryptionMode: 'plain',
@@ -418,6 +590,7 @@ describe('createCliActionDeps workflow boundary', () => {
         expect(accepted).toMatchObject({ kind: 'available', content: { startedBy: 'agent', workDepth: 1,
           workspaceTarget: { project: { machineId: 'machine-1', directory } },
           materializedLeaves: [{ kind: 'wait', blockId: 'review' }],
+          resultDelivery: { reportPolicy: { preset: 'quiet' } },
         } });
         if (accepted.kind !== 'available') throw new Error('accepted_snapshot_unavailable');
         WorkflowAcceptedSnapshotV1Schema.parse(accepted.content);
@@ -600,6 +773,7 @@ describe('createCliActionDeps workflow boundary', () => {
         sequence: '0', parentRecordId: null, memberOrdinal: '0', attempt: '0' },
       progress: { kind: 'happier.workflow-progress.v1', blockKind: 'step', invocationPath: { blockId: definition.blocks[0]!.id, scope: [] },
         attempt: '0', logicalInvocationRecordId: recordId,
+        workspace: { descriptor: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' } },
         execution: targetKind === 'detached_run' ? { kind: 'detached_run', runId: 'native-run', localInputId: 'input-1', runtimeSelection: {} }
           : { kind: 'session', sessionId, localInputId: 'input-1' },
         recovery: { conversation: 'same_conversation', input: { kind: 'original' } } },
@@ -621,6 +795,13 @@ describe('createCliActionDeps workflow boundary', () => {
       const input = { id: 'input-row', seq: 7, localId: 'input-1', createdAt: 1, updatedAt: 1,
         content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Work' } } } };
       http.get.mockImplementation(async (url: string) => {
+        if (url.endsWith(`/v1/sessions/${sessionId}/turns`)) return { status: 200,
+          data: SessionTurnsProjectionV1Schema.parse({ v: 1, sessionId, updatedAt: 2, latestTurnId: 'turn-1', turns: [{
+            turnId: 'turn-1', agentId: 'codex', status: 'completed', startedAt: 1, updatedAt: 2, terminalAt: 2,
+            transcriptAnchors: { startUserMessageSeq: 7, userMessageSeqs: [7], startSeqInclusive: 7,
+              endSeqInclusive: 9, finalAssistantMessageSeq: null },
+          }] }),
+        };
         if (url.includes('/messages/by-local-id/')) return { status: 200, data: { message: input } };
         if (url.includes('/messages?')) return { status: 200, data: { messages: [input,
           { id: 'started', seq: 8, localId: null, createdAt: 2, content: { t: 'plain', v: { role: 'agent',
@@ -649,7 +830,8 @@ describe('createCliActionDeps workflow boundary', () => {
     });
     const deps = createCliActionDeps({ token: 'token', credentials: { token: 'token', encryption: null },
       sessionId: 'cli-global', mode: 'plain', ctx: null, resolveServerFeaturesSnapshot: () => enabledFeatures as never });
-    expect(await deps.workflowAction!({ actionId: 'workflow.run.invocations.get', input: { runId, invocationId: recordId }, context: {} }))
+    const inspected = await deps.workflowAction!({ actionId: 'workflow.run.invocations.get', input: { runId, invocationId: recordId }, context: {} });
+    expect(inspected, JSON.stringify(inspected))
       .toMatchObject({ invocation: { recoveryAvailability: { retry: { kind: 'available' }, continueSameConversation: { kind: 'available' } } } });
     expect(machineRpc.mock.calls.every(([input]) => input.machineId === 'machine-1')).toBe(true);
     expect(await deps.workflowAction!({ actionId: 'workflow.run.invocations.list', input: { runId }, context: {} }))

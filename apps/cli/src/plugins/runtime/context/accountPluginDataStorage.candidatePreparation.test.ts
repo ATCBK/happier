@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
+import { readFileSync } from 'node:fs';
+import tweetnacl from 'tweetnacl';
+import { PLUGIN_MANIFEST as CHANNELS_MANIFEST, collectionMigrations as channelsMigrations } from '@happier-dev/plugins-channels/manifest';
 import {
     accountSettingsParse,
     FeaturesResponseSchema,
@@ -10,6 +14,13 @@ import {
     PluginCollectionCandidatePreparationStageRequestV1Schema,
     type PluginAccountCollectionContributionV1,
     type PluginDataCollectionsCapabilities,
+    PluginManifestV2Schema,
+    compilePluginJsonSchema,
+    isValidPluginJsonSchemaValue,
+    encodePluginCollectionLogicalValueV1,
+    decodePluginCollectionLogicalRowV1,
+    createAccountScopedCryptoMaterialSnapshotV1,
+    convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1,
 } from '@happier-dev/protocol';
 import { PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
 
@@ -163,7 +174,7 @@ function createCandidateHost(
 
 function createCandidate(params: Readonly<{
     post: (url: string, body: string) => Promise<Readonly<{ status: number; data: unknown }>>;
-    migrate: (value: Readonly<Record<string, JsonValue>>) => Readonly<Record<string, JsonValue>> | Promise<Readonly<Record<string, JsonValue>>>;
+    migrate: (value: Readonly<Record<string, JsonValue>>, context: Readonly<{ currentRevision: number }>) => Readonly<Record<string, JsonValue>> | Promise<Readonly<Record<string, JsonValue>>>;
     signal?: AbortSignal;
     resolveServerFeaturesSnapshot?: () => CliServerFeaturesSnapshot | undefined;
 }>) {
@@ -188,7 +199,161 @@ function createCandidate(params: Readonly<{
     });
 }
 
+describe.each([7, 8])('Channels V%s to current through Account Data candidate preparation', version => {
+    const retained = JSON.parse(readFileSync(new URL(`../../../../../../packages/plugins/channels/src/testkit/fixtures/channelStateV${version}.json`, import.meta.url), 'utf8'));
+    const targetManifest = PluginManifestV2Schema.parse(CHANNELS_MANIFEST);
+    const sourceManifest = PluginManifestV2Schema.parse({ ...CHANNELS_MANIFEST, contributes: {
+        ...CHANNELS_MANIFEST.contributes, accountCollections: [retained.collection],
+    } });
+    const sourceDeclaration = sourceManifest.contributes.accountCollections![0]!;
+    const targetDeclaration = targetManifest.contributes.accountCollections!.find(item => item.id === 'channel-state')!;
+    const source = normalizePluginAccountCollectionContractV1({ pluginId: 'happier.channels', contribution: sourceDeclaration });
+    const target = normalizePluginAccountCollectionContractV1({ pluginId: 'happier.channels', contribution: targetDeclaration });
+    const sourceValidator = compilePluginJsonSchema(sourceDeclaration.schema);
+    const targetValidator = compilePluginJsonSchema(targetDeclaration.schema);
+    const machineKey = new Uint8Array(32).fill(7);
+    const encryptedCredentials = { token: 'channels-candidate-encrypted', encryption: {
+        type: 'dataKey' as const, machineKey, publicKey: tweetnacl.box.keyPair.fromSecretKey(machineKey).publicKey,
+    } } satisfies StoredCredentials;
+
+    it.each(['plain', 'e2ee'] as const)('preserves physical revision and retained custody in %s', async mode => {
+        const selectedCredentials = mode === 'plain' ? credentials : encryptedCredentials;
+        const material = mode === 'plain' ? null : { type: 'dataKey' as const, machineKey };
+        const snapshot = material === null ? null : createAccountScopedCryptoMaterialSnapshotV1({
+            accountEncryptionMode: 'e2ee', material, dataKeyPublicKey: encryptedCredentials.encryption.publicKey,
+        });
+        const vector = retained.retainedEndpointVectors;
+        const logical = version === 8 ? retained.connection : { ...retained.connection, payload: { ...retained.connection.payload,
+            authorityEpoch: vector.acceptedCurrentAuthorityEpoch, transport: vector.transport,
+            replayContinuity: 'none',
+            pendingOldTransportStop: vector.pendingOldTransportStop,
+        } };
+        let currentLogical = logical;
+        const staged: JsonValue[] = [];
+        const host = createAccountPluginDataStorageHost({
+            contracts: [target], readCredentials: async () => selectedCredentials,
+            isCurrentAccount: () => true, resolveAccountScopeKey: () => `channels-preparation-${mode}`,
+            resolveBaseUrl: () => 'https://data.example.test',
+            resolveAccountEncryptionCurrentness: async () => mode === 'plain' ? currentEncryption() : {
+                mode: 'e2ee' as const, version: 1, signingKeyFingerprint: null,
+                contentKeyFingerprint: convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(snapshot!.contentPublicKeyFingerprint),
+                updatedAt: 1, recipientEnvelopeReadiness: { status: 'available' as const },
+            },
+            randomBytes: length => new Uint8Array(length).fill(3),
+            http: {
+                get: async () => ({ status: 200, data: { mode, updatedAt: 1 } }),
+                post: async (url, body) => {
+                    if (url.endsWith(PLUGIN_COLLECTION_CANDIDATE_PREPARATION_SOURCE_PAGE_HTTP_PATH_V1)) {
+                        const rows = [currentLogical, ...(version === 7 ? [retained.eventObligation] : []), retained.checkpoint].map(value => {
+                            const encoded = encodePluginCollectionLogicalValueV1({ contract: source,
+                                isValidLogicalValue: candidate => isValidPluginJsonSchemaValue(sourceValidator, candidate),
+                                value, encryptionMode: mode, material, randomBytes: length => new Uint8Array(length).fill(4),
+                            });
+                            if (encoded.status !== 'encoded') throw new Error(`Pinned source fixture failed encoding: ${encoded.reason}`);
+                            return { rowId: encoded.rowId, revision: 12, content: encoded.content, projection: encoded.projection, alreadyStaged: false };
+                        });
+                        return { status: 200, data: { rows } };
+                    }
+                    const request = PluginCollectionCandidatePreparationStageRequestV1Schema.parse(JSON.parse(body));
+                    for (const item of request.items) {
+                        const decoded = decodePluginCollectionLogicalRowV1({ contract: target,
+                            parseStoredLogicalValue: value => isValidPluginJsonSchemaValue(targetValidator, value) ? value : null,
+                            row: { rowId: item.source.rowId, revision: 12, ...item.target }, encryptionMode: mode, material,
+                        });
+                        if (decoded.status !== 'decoded') throw new Error(`Staged target failed decoding: ${decoded.reason}`);
+                        staged.push(decoded.value);
+                        expect(item.target.content.t).toBe(mode === 'plain' ? 'plain' : 'encrypted');
+                    }
+                    return { status: 200, data: { results: request.items.map(() => ({ status: 'staged' })) } };
+                },
+            },
+        });
+        const candidate = host.createCollectionMigrationCandidate({
+            binding: { source: { pluginId: 'happier.channels', collectionId: source.collectionId,
+                schemaVersion: source.schemaVersion, contractDigest: source.contractDigest },
+                target: { pluginId: 'happier.channels', collectionId: target.collectionId,
+                    schemaVersion: target.schemaVersion, contractDigest: target.contractDigest },
+                candidate: { releaseVersion: '0.0.0', artifactDigest: `sha256:${'c'.repeat(64)}` } },
+            sourceContract: source, targetContract: target, declarations: targetManifest.contributes.accountCollections!, runtime: channelsMigrations,
+            signal: new AbortController().signal, isOccurrenceCurrent: () => true,
+        });
+        await expect(candidate.prepare()).resolves.toBeUndefined();
+        if (version === 8) {
+            expect(staged).toEqual([{ ...logical, payload: { ...logical.payload, configurationRevision: 12 } }, retained.checkpoint]);
+            return;
+        }
+        const { kind: _transportKind, ...endpoint } = vector.transport;
+        expect(staged).toEqual([{ ...logical, payload: { ...logical.payload,
+            configurationRevision: 12,
+            transportOrigin: { serverIdentityId: 'srv_v7fixture', machineId: 'machine-v7' },
+            pendingOldTransportStop: { kind: 'endpointRetarget', ...endpoint,
+                targetMaterialization: logical.payload.transportOrigin.materializationRef,
+                transferAuthorityEpoch: vector.acceptedCurrentAuthorityEpoch },
+        } }, { ...retained.eventObligation, payload: { ...retained.eventObligation.payload, target: {
+            ...retained.eventObligation.payload.target, executionOrigin: { serverIdentityId: 'srv_v7fixture', machineId: 'machine-v7' },
+        } } }, retained.checkpoint]);
+        currentLogical = { ...logical, payload: { ...logical.payload, pendingOldTransportStop: {
+            ...logical.payload.pendingOldTransportStop, predecessorCheckpointedPollInvocation: {
+                ...logical.payload.pendingOldTransportStop.predecessorCheckpointedPollInvocation,
+                transportOrigin: { ...logical.payload.pendingOldTransportStop.transportOrigin,
+                    materializationRef: { ...logical.payload.pendingOldTransportStop.transportOrigin.materializationRef, materializationId: 'mismatched-custody' } },
+            },
+        } } };
+        await expect(candidate.prepare()).rejects.toMatchObject({ code: 'plugin_collection_invalid_value' });
+        expect(staged).toHaveLength(3);
+    });
+});
+
 describe('Account Data Collection candidate preparation', () => {
+    it('rejects invalid source revisions before migration callbacks or staging', async () => {
+        let migrationRan = false;
+        let staged = false;
+        const candidate = createCandidate({
+            post: async url => {
+                if (url.endsWith(PLUGIN_COLLECTION_CANDIDATE_PREPARATION_SOURCE_PAGE_HTTP_PATH_V1)) {
+                    return { status: 200, data: { rows: [sourceRow('task-invalid-revision', 0, 'Retained', false)] } };
+                }
+                staged = true;
+                throw new Error('Invalid source revision cannot stage');
+            },
+            migrate: value => { migrationRan = true; return { ...value, status: 'open' }; },
+        });
+        await expect(candidate.prepare()).rejects.toMatchObject({ code: 'plugin_collection_protocol_invalid' });
+        expect({ migrationRan, staged }).toEqual({ migrationRan: false, staged: false });
+    });
+
+    it('supplies the physical retained row revision to the pure migration callback', async () => {
+        const staged: unknown[] = [];
+        const candidate = createCandidate({
+            post: async (url, body) => {
+                if (url.endsWith(PLUGIN_COLLECTION_CANDIDATE_PREPARATION_SOURCE_PAGE_HTTP_PATH_V1)) {
+                    return { status: 200, data: { rows: [sourceRow('task-revision', 14, 'Retained', false)] } };
+                }
+                const request = PluginCollectionCandidatePreparationStageRequestV1Schema.parse(JSON.parse(body));
+                staged.push(...request.items);
+                return { status: 200, data: { results: [{ status: 'staged' }] } };
+            },
+            migrate: (value, context) => ({ ...value, status: context?.currentRevision === 14 ? 'open' : 'closed' }),
+        });
+        await expect(candidate.prepare()).resolves.toBeUndefined();
+        expect(staged).toMatchObject([{ source: { revision: 14 }, target: { projection: { status: 'open' } } }]);
+    });
+
+    it('returns the existing typed invalid-value failure when a declared migration rejects retained data', async () => {
+        let staged = false;
+        const candidate = createCandidate({
+            post: async (url) => {
+                if (url.endsWith(PLUGIN_COLLECTION_CANDIDATE_PREPARATION_SOURCE_PAGE_HTTP_PATH_V1)) {
+                    return { status: 200, data: { rows: [sourceRow('task-rejected', 4, 'Retained', false)] } };
+                }
+                staged = true;
+                throw new Error('Rejected source data must not be staged');
+            },
+            migrate: () => { throw new Error('Source authority mismatch'); },
+        });
+        await expect(candidate.prepare()).rejects.toMatchObject({ code: 'plugin_collection_invalid_value' });
+        expect(staged).toBe(false);
+    });
     it('retires an exact persisted candidate binding without requiring its target callback or generation', async () => {
         const post = vi.fn(async (url: string, body: string) => {
             expect(url).toBe(`https://data.example.test${PLUGIN_COLLECTION_CANDIDATE_PREPARATION_RETIRE_HTTP_PATH_V1}`);
@@ -311,8 +476,8 @@ describe('Account Data Collection candidate preparation', () => {
         await expect(candidate.prepare()).resolves.toBeUndefined();
 
         expect(migrate).toHaveBeenCalledTimes(2);
-        expect(migrate).toHaveBeenNthCalledWith(1, { id: 'task-current', title: 'Prepare me' });
-        expect(migrate).toHaveBeenNthCalledWith(2, { id: 'task-next', title: 'Prepare this too' });
+        expect(migrate).toHaveBeenNthCalledWith(1, { id: 'task-current', title: 'Prepare me' }, { currentRevision: 4 });
+        expect(migrate).toHaveBeenNthCalledWith(2, { id: 'task-next', title: 'Prepare this too' }, { currentRevision: 5 });
         const stageCall = post.mock.calls.find(([url]) => (
             String(url).endsWith(PLUGIN_COLLECTION_CANDIDATE_PREPARATION_STAGE_HTTP_PATH_V1)
         ));
@@ -599,11 +764,14 @@ describe('Account Data Collection candidate preparation', () => {
             encryption: null,
         } satisfies StoredCredentials;
         let activeCredentials: StoredCredentials = accountA;
+        const encodedBodies: string[] = [];
+        const adapterBodies: unknown[] = [];
         const post = vi.fn(async (
             url: string,
-            _body: string,
+            body: string,
             config: Readonly<Record<string, unknown>>,
         ) => {
+            adapterBodies.push(body);
             if (url.endsWith(PLUGIN_COLLECTION_CANDIDATE_PREPARATION_SOURCE_PAGE_HTTP_PATH_V1)) {
                 return {
                     status: 200,
@@ -621,6 +789,13 @@ describe('Account Data Collection candidate preparation', () => {
             }
             throw new Error(`Unexpected candidate-preparation request: ${url}`);
         });
+        const transport = axios.create({
+            adapter: async config => {
+                if (typeof config.data !== 'string') throw new Error('Expected preencoded Account Data bytes');
+                const response = await post(config.url ?? '', config.data, { ...config });
+                return { ...response, config, headers: {}, statusText: '' };
+            },
+        });
         const host = createAccountPluginDataStorageHost({
             contracts: [targetContract],
             readCredentials: async () => activeCredentials,
@@ -630,7 +805,10 @@ describe('Account Data Collection candidate preparation', () => {
             resolveAccountEncryptionCurrentness: currentEncryption,
             http: {
                 get: async () => ({ status: 200, data: { mode: 'plain', updatedAt: 1 } }),
-                post,
+                post: async (url, body, config) => {
+                    encodedBodies.push(body);
+                    return await transport.post(url, body, config);
+                },
             },
             randomBytes: (length) => new Uint8Array(length).fill(7),
         });
@@ -651,9 +829,17 @@ describe('Account Data Collection candidate preparation', () => {
             isOccurrenceCurrent: () => true,
         });
 
-        await expect(candidate.prepare()).resolves.toBeUndefined();
-        activeCredentials = accountB;
+        const parse = vi.spyOn(JSON, 'parse');
+        try {
+            await expect(candidate.prepare()).resolves.toBeUndefined();
+            activeCredentials = accountB;
 
-        await expect(candidate.retire()).resolves.toBeUndefined();
+            await expect(candidate.retire()).resolves.toBeUndefined();
+            expect(encodedBodies).toHaveLength(3);
+            expect(adapterBodies).toEqual(encodedBodies);
+            expect(parse.mock.calls.filter(([value]) => encodedBodies.includes(value))).toHaveLength(0);
+        } finally {
+            parse.mockRestore();
+        }
     });
 });

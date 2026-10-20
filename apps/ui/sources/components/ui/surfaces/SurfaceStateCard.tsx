@@ -35,7 +35,7 @@ const DEFAULT_ICONS: Partial<Record<SurfaceStateKind, IconName>> = {
     warning: 'warning-circle',
 };
 
-/** In a line the glyph is the only tint: a failure shows the warning mark, nothing else changes. */
+/** In a line the glyph is the only tint: a failure shows the warning mark in rose (failed), a warning in amber (needs you). */
 const LINE_ICONS: Partial<Record<SurfaceStateKind, IconName | null>> = {
     empty: null,
     success: 'check-circle',
@@ -221,9 +221,11 @@ export function SurfaceStateCard(props: Readonly<{
 
     if (size === 'line') {
         const lineIconName = props.iconName ?? kindIconName ?? LINE_ICONS[props.kind];
-        const lineTint = props.kind === 'error' || props.kind === 'warning'
-            ? theme.colors.state.warning.foreground
-            : theme.colors.text.tertiary;
+        const lineTint = props.kind === 'error'
+            ? theme.colors.state.danger.foreground
+            : props.kind === 'warning'
+                ? theme.colors.state.warning.foreground
+                : theme.colors.text.tertiary;
         const lineGlyph = props.kind === 'loading' ? (
             <ActivitySpinner
                 testID={props.testID ? `${props.testID}-loading-spinner` : undefined}
@@ -325,13 +327,13 @@ export function SurfaceStateCard(props: Readonly<{
 function useSurfaceStateBindings(testID: string | undefined, animationEnabled: boolean): HappierSurfaceStateBindings {
     const { theme } = useUnistyles();
     return React.useMemo<HappierSurfaceStateBindings>(() => ({
-        renderText: ({ role, metrics, testID: textTestID, onPress, children }) => {
+        renderText: ({ role, metrics, align, testID: textTestID, onPress, children }) => {
             if (role === 'quietLink') {
                 return <Text testID={textTestID} accessibilityRole="link" onPress={onPress} style={stylesheet.quietLink}>{children}</Text>;
             }
             const roleStyle = role === 'lineAction' ? stylesheet.lineAction : role === 'quiet' ? stylesheet.quiet
                 : role === 'live' ? stylesheet.liveText : stylesheet.lineText;
-            return <Text testID={textTestID} style={[roleStyle, metrics]}>{children}</Text>;
+            return <Text testID={textTestID} style={[roleStyle, metrics, role === 'quiet' && align === 'start' ? { textAlign: 'auto' } : null]}>{children}</Text>;
         },
         renderButton: ({ action, emphasis, tone, compact, fullWidth, testID: buttonTestID }) => (
             <RoundButton

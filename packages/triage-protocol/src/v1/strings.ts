@@ -1,20 +1,12 @@
-import type { ProtocolComposableSchema } from '@happier-dev/plugin-sdk/protocol';
-
-import { defineProtocolUtf8String } from '@happier-dev/plugin-sdk/protocol';
-
-import {
-    TRIAGE_COMPOSITE_IDENTIFIER_PATTERN_V1,
-    TRIAGE_SINGLE_LINE_STRING_PATTERN_V1,
-} from './bounds.js';
-
 /**
- * @internal The one constructor for every V1 string.
+ * @internal The one constructor for bounded V1 row-display and identifier strings.
  *
- * Every string this protocol carries — display text, identifier, location, and
+ * Projected strings — display text, identifier, location, and
  * source-private token alike — is bounded, non-empty, and single-line. Routing
  * one constructor through `TRIAGE_SINGLE_LINE_STRING_PATTERN_V1` keeps that a
  * property of the protocol rather than of whichever module happened to declare
- * a field, and it is what makes the worst-case JSON expansion in
+ * a field. Task write body documents use their own multiline input schema.
+ * For bounded projections it is what makes the worst-case JSON expansion in
  * `maximumEncodedResult.test.ts` a factor of two instead of six
  * (`CONTRACT.md` §2.1).
  *
@@ -22,15 +14,7 @@ import {
  * other half — how untrusted provider text reaches that shape — and a source
  * consumes it rather than restating the rule.
  */
-export function defineTriageSingleLineStringV1(
-    maxUtf8Bytes: number,
-): ProtocolComposableSchema<string, string> {
-    return defineProtocolUtf8String({
-        maxUtf8Bytes,
-        minLength: 1,
-        pattern: TRIAGE_SINGLE_LINE_STRING_PATTERN_V1,
-    });
-}
+export { defineTriageSingleLineStringV1 } from '@happier-dev/plugin-sdk/protocol';
 
 /**
  * @internal The one constructor for a V1 string that carries a source-owned
@@ -45,12 +29,4 @@ export function defineTriageSingleLineStringV1(
  * one constructor is what keeps a later composite field from acquiring a
  * similar-but-different grammar.
  */
-export function defineTriageCompositeIdentifierStringV1(
-    maxUtf8Bytes: number,
-): ProtocolComposableSchema<string, string> {
-    return defineProtocolUtf8String({
-        maxUtf8Bytes,
-        minLength: 1,
-        pattern: TRIAGE_COMPOSITE_IDENTIFIER_PATTERN_V1,
-    });
-}
+export { defineTriageCompositeIdentifierStringV1 } from '@happier-dev/plugin-sdk/protocol';

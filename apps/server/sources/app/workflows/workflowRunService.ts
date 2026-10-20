@@ -1,4 +1,3 @@
-import { AutomationRunStateV3Schema } from '@happier-dev/protocol/automations/automationRunStateV3';
 import { decodeKeysetCursorV1, encodeKeysetCursorV1, readKeysetCursorIdV1, readKeysetCursorTextV1 } from '@happier-dev/protocol/pagination/keysetCursorV1';
 import { measureExternalActionResultResponseEnvelopeUtf8BytesV1 } from '@happier-dev/protocol/actions/externalActionLimits';
 import { projectWorkflowBigIntV1, type WorkflowInvocationLifecycleV1, type WorkflowRunOriginV1, type WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
@@ -11,30 +10,33 @@ import { WorkflowDirectRunAdmissionIdV1Schema, WorkflowInvocationRecordIdSchema 
 import { isWorkflowDraftPublicationLifecycleV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { type WorkflowRunRecipientKeyEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
 import { type WorkflowRunWaitConditionV1 } from '@happier-dev/protocol/workflows/actionsV1';
-import { resolveWorkflowRunAdmissionVisibilityInTx, storeWorkflowRunInitialKeyEnvelopesInTx, resolveWorkflowRunRecipientAccountIdsInTx } from "./workflowRunAccess";
+import { resolveWorkflowRunAdmissionVisibilityInTx, storeWorkflowRunInitialKeyEnvelopesInTx, resolveWorkflowRunRecipientAccountIdsInTx, assertWorkflowDiscussionAdmissionInTx } from "./workflowRunAccess";
 import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContext";
+import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 
-import { markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { markAccountsChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import { acquireWorkflowPublicationLocksInTx } from "./acquireWorkflowPublicationLocksInTx";
+import { invalidateRunFollowDestinationsInTx } from '@/app/session/follow/sessionFollowEdgeService';
 import { markAccountChangesForSessionAccounts } from "@/app/session/changeTracking/markAccountChangesForSessionAccounts";
 import { emitAutomationRunUpdatedToMachineOnly } from "@/app/automations/automationChangePublisher";
 import { publishManagedRunWakeInTx, publishManagedContextWakeInTx } from '@/app/machines/managed/managedWake';
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
+import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { automationRunCustodyTerminalWhere, readAutomationLiveCauseRunIdsTx } from "@/app/automations/automationCrudService";
-import { AUTOMATION_RUN_TERMINAL_STATES } from "@/app/automations/automationTypes";
+import { AUTOMATION_RUN_TERMINAL_STATES, projectAutomationRunState } from "@/app/automations/automationTypes";
 import { automationRunCauseSelect, automationRunWithoutExecutionWhere } from "@/app/automations/automationPersistenceSelect";
 import { decodeAutomationRunCause } from "@/app/automations/automationRunCauseCodec";
 import { applyAutomationRunTerminalEffectsTx } from "@/app/automations/automationRunSucceeded";
 import { readRetainedAutomationRunExecutionInputForWorkflowAdmission, validateAutomationStoredContentEnvelopeOuterForMode } from "@/app/automations/automationStoredContentRead";
 import { db } from "@/storage/db";
-import { afterTx, inTx, type Tx } from "@/storage/inTx";
+import { afterTx, inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import { isPrismaErrorCode, prismaRuntime } from "@/storage/prisma";
 
 import { assertWorkflowStoredEnvelopeOuterForMode, WorkflowStoredContentError } from "./runs/storedContent";
 import { workflowRunAttentionWhere, workflowRunAttentionSql, workflowRunSqlIdentifier } from "./workflowRunAttention";
 import { admitWorkflowRunLifecycleAutomationRunsTx } from "@/app/automations/automationRunLifecycleAdmission";
 import {
-    WorkflowRunAccessError, resolveWorkflowRunAccessInTx, readWorkflowRunKeyProjectionInTx,
+    WorkflowRunAccessError, resolveWorkflowRunAccessInTx, readWorkflowRunKeyProjectionInTx, readWorkflowRunKeyProjectionsInTx,
     resolveWorkflowRunVisibilityScopesInTx, type WorkflowRunAccess,
 } from "./workflowRunAccess";
 import type { WorkflowRunRecipientCensusResponseV1 } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
@@ -47,14 +49,9 @@ const MAX_DATABASE_BIGINT = 9_223_372_036_854_775_807n;
 const WORKFLOW_PAGE_DATABASE_BATCH_ROWS = 128;
 
 function automationPreviousStateForWorkflowTerminalEffects(state: WorkflowRunState) {
-    const automationState = state === "pause_requested" || state === "paused" || state === "interrupted" || state === "waiting_for_review"
-        // These are Workflow-only control states. Automation terminal effects
-        // observe the underlying physical Run as having been active.
-        ? "running"
-        : state;
-    const parsed = AutomationRunStateV3Schema.safeParse(automationState);
-    if (!parsed.success) throw new WorkflowRunServiceError("currentness_conflict");
-    return parsed.data;
+    const projected = projectAutomationRunState(state);
+    if (projected === null) throw new WorkflowRunServiceError("currentness_conflict");
+    return projected;
 }
 
 export class WorkflowRunServiceError extends Error {
@@ -88,8 +85,8 @@ const workflowRunProjectionSelect = {
     visibleTeamId: true,
     originKind: true,
     automationId: true,
-    // Soft-deleted definitions retain their scope; active catalog membership is not Run ownership.
-    automation: { select: { scopeSessionId: true } },
+    automationScopeCaptured: true,
+    automationScopeSessionId: true,
     originSessionId: true,
     state: true,
     revision: true,
@@ -185,7 +182,8 @@ function projectRun(row: WorkflowRunRow): WorkflowRunSummaryV1 {
         ...(row.attentionRequired === undefined ? {} : { attentionRequired: row.attentionRequired }),
         heldCount: state === "cancelled" ? 0 : row._count.workflowInvocations,
         origin,
-        ...(origin.kind === "automation" ? { automationScopeSessionId: row.automation?.scopeSessionId ?? null } : {}),
+        ...(origin.kind === "automation" && row.automationScopeCaptured
+            ? { automationScopeSessionId: row.automationScopeSessionId } : {}),
         state,
         revision: row.revision,
         machineId,
@@ -201,11 +199,22 @@ function projectRun(row: WorkflowRunRow): WorkflowRunSummaryV1 {
 
 async function loadAccountModeTx(tx: Tx, accountId: string, runId?: string): Promise<"plain" | "e2ee"> {
     if (runId) await acquireWorkflowPublicationLocksInTx(tx, { accountId, runIds: [runId] });
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId, "content");
     if (fence.status !== "ready") {
         throw new WorkflowRunServiceError("content_unavailable");
     }
     return fence.account.currentness.encryptionMode;
+}
+
+async function readAccountModeTx(tx: Tx, accountId: string): Promise<"plain" | "e2ee"> {
+    const account = await tx.account.findUnique({
+        where: { id: accountId },
+        select: { publicKey: true, encryptionMode: true, contentPublicKey: true, contentPublicKeySig: true },
+    });
+    if (!account) throw new WorkflowRunServiceError("content_unavailable");
+    const currentness = deriveAccountEncryptionCurrentnessFromRow(account);
+    if (currentness.status !== "ready") throw new WorkflowRunServiceError("content_unavailable");
+    return currentness.currentness.encryptionMode;
 }
 
 async function loadCurrentWorkflowAccountModeTx(
@@ -215,7 +224,7 @@ async function loadCurrentWorkflowAccountModeTx(
     runId: string,
 ): Promise<"plain" | "e2ee"> {
     await acquireWorkflowPublicationLocksInTx(tx, { accountId, runIds: [runId] });
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId, "content");
     if (fence.status !== "ready") throw new WorkflowRunServiceError("content_unavailable");
     const current = projectAutomationAccountCurrentnessWitnessV1({
         mode: fence.account.currentness.encryptionMode,
@@ -268,12 +277,17 @@ async function reconcileWorkflowRunAttentionAndHintTx(tx: Tx, accountId: string,
     }
 }
 
-async function markWorkflowRunChangedTx(tx: Tx, accountId: string, runId: string, deliveryBefore?: OriginDeliverySignal | null, inputDeliverable = false): Promise<number> {
+async function markWorkflowRunChangedTx(tx: Tx, accountId: string, runId: string, deliveryBefore?: OriginDeliverySignal | null, inputDeliverable = false): Promise<AccountChangePublication> {
     const recipients = await resolveWorkflowRunRecipientAccountIdsInTx(tx, runId);
     const cursors = await markAccountsChanged(tx, { accountIds: [accountId, ...recipients], kind: "account", entityId: `workflow-run:${runId}` });
-    const ownerCursor = cursors.find(cursor => cursor.accountId === accountId)?.cursor ?? 0;
+    const ownerCursor = cursors.find(cursor => cursor.accountId === accountId);
+    if (!ownerCursor) throw new Error("Workflow owner is missing from its publication audience");
     if (deliveryBefore !== undefined) await reconcileWorkflowRunAttentionAndHintTx(tx, accountId, runId, deliveryBefore, inputDeliverable);
     await admitWorkflowRunLifecycleAutomationRunsTx(tx, runId);
+    const run = await tx.automationRun.findUnique({ where: { id: runId }, select: { state: true, workflowCustodyState: true } });
+    if (run?.workflowCustodyState !== null && run && ['succeeded', 'failed', 'cancelled', 'interrupted'].includes(run.state)) {
+        await invalidateRunFollowDestinationsInTx(tx, { kind: 'workflow_run', runId });
+    }
     return ownerCursor;
 }
 
@@ -288,14 +302,16 @@ export type AdmitWorkflowRunInput = Readonly<{
     visibleTeamId?: string | null;
     authentication?: TeamOperationAuthenticationContext;
     recipientKeyEnvelopes?: readonly WorkflowRunRecipientKeyEnvelopeV1[];
-    resultDelivery?: Readonly<{ kind: "originating_session" }>;
+    resultDelivery?: Readonly<{ kind: "originating_session" | "originating_discussion" }>;
+    discussionTargetSessionIds?: readonly string[];
+    discussionAuthentication?: SessionAccessAuthentication;
 }>;
 
 function isExactWorkflowAdmission(row: WorkflowRunListRow, params: AdmitWorkflowRunInput): boolean {
     const sameOrigin = row.originKind === "direct"
         && row.automationId === null
         && row.originSessionId === (params.origin.originSessionId ?? null);
-    const sameDelivery = params.resultDelivery === undefined
+    const sameDelivery = params.resultDelivery?.kind !== 'originating_session'
         ? row.originDeliveryAckRevision === null
         : row.originDeliveryAckRevision !== null;
     return row.workflowCustodyState !== null
@@ -334,6 +350,13 @@ export async function admitWorkflowRunTx(tx: Tx, params: AdmitWorkflowRunInput):
         if (!WorkflowDirectRunAdmissionIdV1Schema.safeParse(params.runId).success) {
             throw new WorkflowRunServiceError("invalid_input");
         }
+        const discussionOrigin = params.origin.discussion;
+        if (params.resultDelivery?.kind === 'originating_discussion' && !discussionOrigin
+            || params.discussionTargetSessionIds !== undefined && !discussionOrigin) throw new WorkflowRunServiceError('invalid_input');
+        if (discussionOrigin) await withWorkflowRunAccess(() => assertWorkflowDiscussionAdmissionInTx(tx, {
+            accountId: params.accountId, origin: discussionOrigin, targetSessionIds: params.discussionTargetSessionIds ?? [],
+            authentication: params.discussionAuthentication, publishes: params.resultDelivery?.kind === 'originating_discussion',
+        }));
         await withWorkflowRunAccess(() => acquireWorkflowPublicationLocksInTx(tx, {
             accountId: params.accountId, runIds: [params.runId], machineIds: [params.machineId],
             sessionIds: params.origin.originSessionId ? [params.origin.originSessionId] : [],
@@ -356,7 +379,7 @@ export async function admitWorkflowRunTx(tx: Tx, params: AdmitWorkflowRunInput):
         if (params.origin.originSessionId) {
             const session = await tx.session.findFirst({ where: { id: params.origin.originSessionId, accountId: params.accountId }, select: { id: true } });
             if (!session) throw new WorkflowRunServiceError("invalid_input");
-        } else if (params.resultDelivery !== undefined) {
+        } else if (params.resultDelivery?.kind === 'originating_session') {
             throw new WorkflowRunServiceError("invalid_input");
         }
         const visibleTeamId = await withWorkflowRunAccess(() => resolveWorkflowRunAdmissionVisibilityInTx(tx, {
@@ -388,7 +411,7 @@ export async function admitWorkflowRunTx(tx: Tx, params: AdmitWorkflowRunInput):
                     executionInputEnvelope: params.acceptedEnvelope,
                     workflowCheckpointEnvelope: null,
                     workflowCustodyState: "pending",
-                    originDeliveryAckRevision: params.resultDelivery ? 0 : null,
+                    originDeliveryAckRevision: params.resultDelivery?.kind === 'originating_session' ? 0 : null,
                     assignments: { create: { machineId: params.machineId, priority: 0 } },
                 },
                 select: workflowRunSelect,
@@ -405,14 +428,16 @@ export async function admitWorkflowRunTx(tx: Tx, params: AdmitWorkflowRunInput):
 export async function admitWorkflowRun(params: AdmitWorkflowRunInput): Promise<{ kind: "created" | "existing"; run: WorkflowRunSummaryV1 }> {
     try {
         return await inTx(async (tx) => await admitWorkflowRunTx(tx, params), {
-            // Source Run lifecycle and cross-Account watcher census must serialize with watcher registration.
-            isolationLevel: "Serializable",
+            // Ordered publication locks/replay and mode/control/row predicates fence this mutation.
+            isolationLevel: "ReadCommitted",
+            transactionClass: "workflow-admit-run",
         });
     } catch (error) {
         if (!isPrismaErrorCode(error, "P2002")) throw error;
         return await inTx(async (tx) => await admitWorkflowRunTx(tx, params), {
-            // Source Run lifecycle and cross-Account watcher census must serialize with watcher registration.
-            isolationLevel: "Serializable",
+            // Ordered publication locks/replay and mode/control/row predicates fence this mutation.
+            isolationLevel: "ReadCommitted",
+            transactionClass: "workflow-admit-run-rejoin",
         });
     }
 }
@@ -552,8 +577,9 @@ export async function resolveAutomationWorkflowAcceptedSnapshot(params: Readonly
             run: projectRun(row as WorkflowRunRow),
         };
     }, {
-        // Source Run lifecycle and cross-Account watcher census must serialize with watcher registration.
-        isolationLevel: "Serializable",
+        // Ordered publication locks/replay and mode/control/row predicates fence this mutation.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "workflow-resolve-automation-accepted-snapshot",
     });
 }
 
@@ -595,8 +621,9 @@ export async function initializeWorkflowRunExecution(params: Readonly<{
         await markWorkflowRunChangedTx(tx, params.accountId, params.runId);
         return { run: projectRun(parent as WorkflowRunRow), initialization: "created" as const };
     }, {
-        // Source Run lifecycle and cross-Account watcher census must serialize with watcher registration.
-        isolationLevel: "Serializable",
+        // Ordered publication locks/replay and mode/control/row predicates fence this mutation.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "workflow-initialize-run-execution",
     });
 }
 
@@ -734,8 +761,9 @@ export async function admitWorkflowInvocations(params: Readonly<{
         await markWorkflowRunChangedTx(tx, params.accountId, params.runId, deliveryBefore);
         return { invocations: created.map(projectInvocation), parentRevision: params.expectedRevision + 1, disposition: "created" as const };
     }, {
-        // Source Run lifecycle and cross-Account watcher census must serialize with watcher registration.
-        isolationLevel: "Serializable",
+        // Ordered publication locks/replay and mode/control/row predicates fence this mutation.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "workflow-admit-invocations",
     });
 }
 
@@ -748,9 +776,12 @@ export async function getWorkflowRun(params: Readonly<{ accountId: string; runId
     return await inTx(async (tx) => {
         const keyCensus = await withWorkflowRunAccess(() => readWorkflowRunKeyProjectionInTx(tx, { actorAccountId: params.accountId, runId: params.runId }));
         const mode = keyCensus.encryptionMode;
-        const row = await tx.automationRun.findFirst({ where: workflowRunIdentityWhere({ ...params, accountId: keyCensus.ownerAccountId }), select: workflowRunSelect });
+        const row = await tx.automationRun.findFirst({ where: {
+            id: params.runId, accountId: keyCensus.ownerAccountId, workflowCustodyState: { not: null },
+        }, select: workflowRunSelect });
         if (!row) throw new WorkflowRunServiceError("run_not_found");
-        assertWorkflowStoredEnvelopeOuterForMode({ raw: row.workflowAcceptedSnapshotEnvelope!, mode, binding: { v: 1, purpose: "accepted_snapshot", accountId: keyCensus.ownerAccountId, runId: params.runId } });
+        if (row.workflowAcceptedSnapshotEnvelope === null) throw new WorkflowRunServiceError("content_unavailable");
+        assertWorkflowStoredEnvelopeOuterForMode({ raw: row.workflowAcceptedSnapshotEnvelope, mode, binding: { v: 1, purpose: "accepted_snapshot", accountId: keyCensus.ownerAccountId, runId: params.runId } });
         if (row.workflowCheckpointEnvelope !== null) assertWorkflowStoredEnvelopeOuterForMode({ raw: row.workflowCheckpointEnvelope, mode, binding: { v: 1, purpose: "checkpoint", accountId: keyCensus.ownerAccountId, runId: params.runId } });
         if (row.resultEnvelope !== null) assertWorkflowStoredEnvelopeOuterForMode({ raw: row.resultEnvelope, mode, binding: { v: 1, purpose: "final_result", accountId: keyCensus.ownerAccountId, runId: params.runId } });
         const attentionRequired = await tx.automationRun.findFirst({
@@ -758,9 +789,9 @@ export async function getWorkflowRun(params: Readonly<{ accountId: string; runId
         }) !== null;
         const root = await tx.workflowRunInvocation.findFirst({ where: { runId: params.runId,
             parentRecordId: null, sequence: 0n, memberOrdinal: 0n, attempt: 0n }, select: invocationSelect });
-        return { run: projectRun({ ...row, attentionRequired } as WorkflowRunRow), acceptedEnvelope: row.workflowAcceptedSnapshotEnvelope!, checkpointEnvelope: row.workflowCheckpointEnvelope, resultEnvelope: row.resultEnvelope, keyCensus,
+        return { run: projectRun({ ...row, attentionRequired } as WorkflowRunRow), acceptedEnvelope: row.workflowAcceptedSnapshotEnvelope, checkpointEnvelope: row.workflowCheckpointEnvelope, resultEnvelope: row.resultEnvelope, keyCensus,
             rootProgress: projectWorkflowRootProgress(root, keyCensus) };
-    }, { isolationLevel: "ReadCommitted" });
+    }, { isolationLevel: "ReadCommitted", transactionClass: "workflow-get-run" });
 }
 
 type PageOptions = Readonly<{ cursor?: string; limit?: number; pageByteLimit: number }>;
@@ -775,17 +806,15 @@ export async function pullWorkflowRunOriginDelivery(params: PageOptions & Readon
     const afterDate = decoded?.status === "ok" ? readKeysetCursorTextV1(decoded.parts[0]) : null;
     const afterId = decoded?.status === "ok" ? readKeysetCursorIdV1(decoded.parts[1]) : null;
     if (params.cursor && (!afterDate || !afterId)) throw new WorkflowRunServiceError("invalid_input");
-    return await inTx(async (tx) => {
+    type RawDeliveryCandidate = Readonly<{ row: WorkflowRunFullRow; attentionRequired: boolean }>;
+    const rawPage = await inReadSnapshot(async (tx) => {
         const session = await tx.session.findFirst({ where: { id: params.originSessionId, accountId: params.accountId }, select: { id: true } });
         if (!session) throw new WorkflowRunServiceError("run_not_found");
-        const mode = await loadAccountModeTx(tx, params.accountId);
+        const mode = await readAccountModeTx(tx, params.accountId);
         const wanted = params.limit ?? Number.POSITIVE_INFINITY;
         let pageAfterDate = afterDate;
         let pageAfterId = afterId;
-        type DeliverySnapshot = { run: WorkflowRunSummaryV1; acceptedEnvelope: string; checkpointEnvelope: string | null; resultEnvelope: string | null; invocations: never[]; hasOriginInputCandidates: boolean };
-        let collected: DeliverySnapshot[] = [];
-        let collectedBytes = 2;
-        const cursorFor = (snapshot: DeliverySnapshot) => encodeKeysetCursorV1({ queryKey, parts: [snapshot.run.createdAt, snapshot.run.id] });
+        const collected: RawDeliveryCandidate[] = [];
         for (;;) {
             const batchSize = Math.min(wanted - collected.length, WORKFLOW_PAGE_DATABASE_BATCH_ROWS);
             const rows = await tx.automationRun.findMany({
@@ -802,36 +831,36 @@ export async function pullWorkflowRunOriginDelivery(params: PageOptions & Readon
                 },
                 orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: batchSize + 1,
                 select: { ...workflowRunSelect, workflowInvocations: { where: { lifecycle: { in: [...ORIGIN_INPUT_CANDIDATE_LIFECYCLES] } }, take: 1, select: { id: true } } },
-            });
+            }) as WorkflowRunFullRow[];
             const candidates = rows.slice(0, batchSize);
             const attentionIds = new Set(candidates.length === 0 ? [] : (await tx.automationRun.findMany({
                 where: { accountId: params.accountId, id: { in: candidates.map((row) => row.id) }, AND: [workflowRunAttentionWhere()] }, select: { id: true },
             })).map((row) => row.id));
-            const snapshots: DeliverySnapshot[] = candidates.map((row) => {
-                assertWorkflowStoredEnvelopeOuterForMode({ raw: row.workflowAcceptedSnapshotEnvelope!, mode, binding: { v: 1, purpose: "accepted_snapshot", accountId: params.accountId, runId: row.id } });
-                if (row.workflowCheckpointEnvelope !== null) assertWorkflowStoredEnvelopeOuterForMode({ raw: row.workflowCheckpointEnvelope, mode, binding: { v: 1, purpose: "checkpoint", accountId: params.accountId, runId: row.id } });
-                if (row.resultEnvelope !== null) assertWorkflowStoredEnvelopeOuterForMode({ raw: row.resultEnvelope, mode, binding: { v: 1, purpose: "final_result", accountId: params.accountId, runId: row.id } });
-                // Candidate progress uses the existing byte-paged invocation owner, so even
-                // a Run with many valid parallel inputs never exceeds a grouped snapshot page.
-                return { run: projectRun({ ...row, attentionRequired: attentionIds.has(row.id) } as WorkflowRunRow), acceptedEnvelope: row.workflowAcceptedSnapshotEnvelope!, checkpointEnvelope: row.workflowCheckpointEnvelope, resultEnvelope: row.resultEnvelope, invocations: [], hasOriginInputCandidates: row.workflowInvocations.length > 0 };
-            });
             const batchHasMore = rows.length > batchSize;
-            const bounded = appendBoundedPage({ existing: collected, existingBytes: collectedBytes, candidates: snapshots,
-                byteLimit: params.pageByteLimit, serializeMembers: (snapshot) => [JSON.stringify(snapshot)],
-                emptyPage: (nextCursor) => ({ runs: [], nextCursor: nextCursor ?? null }), nextCursorFor: cursorFor,
-                hasMoreAfter: (index) => index < snapshots.length - 1 || batchHasMore });
-            collected = bounded.rows;
-            collectedBytes = bounded.bytes;
-            if (bounded.shortened || collected.length >= wanted || !batchHasMore) {
-                const last = collected.at(-1);
-                return { runs: collected, nextCursor: (bounded.shortened || batchHasMore) && last ? cursorFor(last) : null };
-            }
+            collected.push(...candidates.map(row => ({ row, attentionRequired: attentionIds.has(row.id) })));
+            if (collected.length >= wanted || !batchHasMore) return { mode, candidates: collected, hasMore: batchHasMore };
             const last = candidates.at(-1);
-            if (!last) return { runs: collected, nextCursor: null };
+            if (!last) return { mode, candidates: collected, hasMore: false };
             pageAfterDate = last.createdAt.toISOString();
             pageAfterId = last.id;
         }
-    }, { isolationLevel: "ReadCommitted" });
+    }, { transactionClass: "workflow-pull-run-origin-delivery" });
+    type DeliverySnapshot = { run: WorkflowRunSummaryV1; acceptedEnvelope: string; checkpointEnvelope: string | null; resultEnvelope: string | null; invocations: never[]; hasOriginInputCandidates: boolean };
+    const snapshots: DeliverySnapshot[] = rawPage.candidates.map(({ row, attentionRequired }) => {
+        assertWorkflowStoredEnvelopeOuterForMode({ raw: row.workflowAcceptedSnapshotEnvelope!, mode: rawPage.mode, binding: { v: 1, purpose: "accepted_snapshot", accountId: params.accountId, runId: row.id } });
+        if (row.workflowCheckpointEnvelope !== null) assertWorkflowStoredEnvelopeOuterForMode({ raw: row.workflowCheckpointEnvelope, mode: rawPage.mode, binding: { v: 1, purpose: "checkpoint", accountId: params.accountId, runId: row.id } });
+        if (row.resultEnvelope !== null) assertWorkflowStoredEnvelopeOuterForMode({ raw: row.resultEnvelope, mode: rawPage.mode, binding: { v: 1, purpose: "final_result", accountId: params.accountId, runId: row.id } });
+        // Candidate progress uses the existing byte-paged invocation owner, so even
+        // a Run with many valid parallel inputs never exceeds a grouped snapshot page.
+        return { run: projectRun({ ...row, attentionRequired } as WorkflowRunRow), acceptedEnvelope: row.workflowAcceptedSnapshotEnvelope!, checkpointEnvelope: row.workflowCheckpointEnvelope, resultEnvelope: row.resultEnvelope, invocations: [], hasOriginInputCandidates: row.workflowInvocations.length > 0 };
+    });
+    const cursorFor = (snapshot: DeliverySnapshot) => encodeKeysetCursorV1({ queryKey, parts: [snapshot.run.createdAt, snapshot.run.id] });
+    const bounded = appendBoundedPage({ existing: [], existingBytes: 2, candidates: snapshots,
+        byteLimit: params.pageByteLimit, serializeMembers: (snapshot) => [JSON.stringify(snapshot)],
+        emptyPage: (nextCursor) => ({ runs: [], nextCursor: nextCursor ?? null }), nextCursorFor: cursorFor,
+        hasMoreAfter: (index) => index < snapshots.length - 1 || rawPage.hasMore });
+    const last = bounded.rows.at(-1);
+    return { runs: bounded.rows, nextCursor: (bounded.shortened || rawPage.hasMore) && last ? cursorFor(last) : null };
 }
 
 /** Acknowledgement suppresses only the owner's already-composed snapshot and never changes Run custody. */
@@ -847,7 +876,7 @@ export async function ackWorkflowRunOriginDelivery(params: Readonly<{ accountId:
             data: { originDeliveryAckRevision: params.revision, updatedAt: row.updatedAt },
         });
         return { acknowledgedRevision: (await tx.automationRun.findUniqueOrThrow({ where: { id: params.runId }, select: { originDeliveryAckRevision: true } })).originDeliveryAckRevision! };
-    });
+    }, { transactionClass: "workflow-ack-run-origin-delivery" });
 }
 
 /**
@@ -891,21 +920,15 @@ export function appendBoundedPage<T>(params: Readonly<{
     return { rows: kept, bytes, shortened: false };
 }
 
-/** U11 extends filtered visibility here; unfiltered reads always remain caller-owned. */
+/** Every collection filter narrows the same owner-or-live-Team audience. */
 export type WorkflowRunCallerScope = Readonly<{ accountId: string; sourceArtifactId?: string }>;
-function workflowRunCallerScopeWhere(scope: WorkflowRunCallerScope): Prisma.AutomationRunWhereInput {
-    return { accountId: scope.accountId, ...(scope.sourceArtifactId ? { sourceArtifactId: scope.sourceArtifactId } : {}) };
-}
-
 async function workflowRunCallerScopeWhereTx(tx: Tx, scope: WorkflowRunCallerScope): Promise<Prisma.AutomationRunWhereInput> {
-    if (!scope.sourceArtifactId) return workflowRunCallerScopeWhere(scope);
-    const sourceArtifactId = scope.sourceArtifactId;
     const visibility = await withWorkflowRunAccess(() => resolveWorkflowRunVisibilityScopesInTx(tx, {
-        actorAccountId: scope.accountId, sourceArtifactIds: [sourceArtifactId],
+        actorAccountId: scope.accountId, ...(scope.sourceArtifactId ? { sourceArtifactIds: [scope.sourceArtifactId] } : {}),
     }));
-    return { sourceArtifactId: scope.sourceArtifactId, OR: [
+    return { ...(scope.sourceArtifactId ? { sourceArtifactId: scope.sourceArtifactId } : {}), OR: [
         { accountId: scope.accountId },
-        { visibleTeamId: { in: visibility[0]?.visibleTeamIds ? [...visibility[0].visibleTeamIds] : [] } },
+        ...visibility.map(scope => ({ sourceArtifactId: scope.sourceArtifactId, visibleTeamId: { in: [...scope.visibleTeamIds] } })),
     ] };
 }
 
@@ -913,7 +936,7 @@ export async function listWorkflowRuns(params: PageOptions & Readonly<{
     accountId: string; runId?: string; origin?: "automation" | "direct"; states?: readonly WorkflowRunState[]; attention?: "required";
     runIds?: readonly string[];
     invocationProvenance?: readonly Readonly<{ runId: string; invocationRecordIds: readonly string[] }>[];
-    originSessionId?: string; targetSessionId?: string; automationId?: string; machineId?: string; sourceArtifactId?: string;
+    originSessionId?: string; targetSessionId?: string; underSessionId?: string; automationId?: string; machineId?: string; sourceArtifactId?: string;
 }>) {
     if (params.limit !== undefined && (!Number.isSafeInteger(params.limit) || params.limit <= 0)) throw new WorkflowRunServiceError("invalid_input");
     // The exact-Run selection is part of the cursor binding like every other
@@ -925,7 +948,7 @@ export async function listWorkflowRuns(params: PageOptions & Readonly<{
     // Bind its selection to the same storage cursor to reject cross-filter replay.
     const queryKey = JSON.stringify({ accountId: params.accountId, sourceArtifactId: params.sourceArtifactId ?? null, runId: params.runId ?? null,
         runIds: params.runIds ? [...params.runIds].sort() : null, invocationProvenance: params.invocationProvenance ?? null,
-        origin: params.origin ?? null, states: [...(params.states ?? [])].sort(), attention: params.attention ?? null, originSessionId: params.originSessionId ?? null, targetSessionId: params.targetSessionId ?? null, automationId: params.automationId ?? null, machineId: params.machineId ?? null });
+        origin: params.origin ?? null, states: [...(params.states ?? [])].sort(), attention: params.attention ?? null, originSessionId: params.originSessionId ?? null, targetSessionId: params.targetSessionId ?? null, underSessionId: params.underSessionId ?? null, automationId: params.automationId ?? null, machineId: params.machineId ?? null });
     const decoded = params.cursor ? decodeKeysetCursorV1(params.cursor, queryKey) : null;
     const afterDate = decoded?.status === "ok" ? readKeysetCursorTextV1(decoded.parts[0]) : null;
     const afterId = decoded?.status === "ok" ? readKeysetCursorIdV1(decoded.parts[1]) : null;
@@ -1000,8 +1023,12 @@ export async function listWorkflowRuns(params: PageOptions & Readonly<{
                     where: { ...callerScope, id: { in: candidateRows.map((row) => row.id) }, AND: [workflowRunAttentionWhere()] },
                     select: { id: true },
                 })).map((row) => row.id));
-            const candidates = await Promise.all(candidateRows.map(async (candidate) => {
-                const keyCensus = await withWorkflowRunAccess(() => readWorkflowRunKeyProjectionInTx(tx, { actorAccountId: params.accountId, runId: candidate.id }));
+            const pageKeys = await withWorkflowRunAccess(() => readWorkflowRunKeyProjectionsInTx(tx, {
+                actorAccountId: params.accountId, runIds: candidateRows.map(candidate => candidate.id),
+            }));
+            const candidates = candidateRows.map((candidate) => {
+                const keyCensus = pageKeys.get(candidate.id);
+                if (!keyCensus) throw new WorkflowRunServiceError("run_not_found");
                 const root = rootsByRunId.get(candidate.id);
                 const rootProgress = projectWorkflowRootProgress(root, keyCensus);
                 const projectPrivateInvocation = (row: (typeof selectedInvocations)[number]) => {
@@ -1035,7 +1062,7 @@ export async function listWorkflowRuns(params: PageOptions & Readonly<{
                     if (!(error instanceof WorkflowStoredContentError)) throw error;
                     return { ...row, workflowAcceptedSnapshotEnvelope: null };
                 }
-            }));
+            });
             const batchHasMore = rows.length > batchSize;
             const bounded = appendBoundedPage({
                 existing: collected,
@@ -1067,7 +1094,7 @@ export async function listWorkflowRuns(params: PageOptions & Readonly<{
             pageAfterDate = last.createdAt.toISOString();
             pageAfterId = last.id;
         }
-    }, { isolationLevel: "ReadCommitted" });
+    }, { isolationLevel: "ReadCommitted", transactionClass: "workflow-list-runs" });
     const last = page.rows.at(-1);
     return {
         runs: page.rows.map(projectRun),
@@ -1119,7 +1146,7 @@ export async function summarizeWorkflowRuns(params: Readonly<{
                     FIRST_VALUE(${id("runId")}) OVER (PARTITION BY ${id("sourceArtifactId")} ORDER BY attention DESC, ${id("createdAt")} DESC, ${id("runId")} DESC) AS ${id("needsYouRunId")}
                 FROM facts
             ) SELECT * FROM ranked WHERE ordinal <= ${params.recent} ORDER BY ${id("sourceArtifactId")}, ordinal`);
-    }, { isolationLevel: "ReadCommitted" });
+    }, { isolationLevel: "ReadCommitted", transactionClass: "workflow-summarize-runs" });
     const bySource = new Map<string, SummaryRow[]>();
     for (const row of rows) {
         const group = bySource.get(row.sourceArtifactId) ?? [];
@@ -1209,7 +1236,20 @@ export async function listWorkflowRunsForRecovery(params: PageOptions & Readonly
                         {
                             state: { notIn: [...AUTOMATION_RUN_TERMINAL_STATES] },
                             workflowCustodyState: "pending",
-                            workflowInvocations: { some: { lifecycle: "cancel_requested" } },
+                            workflowInvocations: { some: { OR: [
+                                { lifecycle: "cancel_requested" },
+                                // Root/child facts commit before parent custody.
+                                // Keep cancellation reachable if the final parent
+                                // write failed after every active row settled.
+                                { parentRecordId: null, lifecycle: "cancelled" },
+                            ] } },
+                        },
+                        {
+                            // Child settlement and root publication are separate
+                            // writes. Retain interrupted custody after the final
+                            // child leaves the active index so projection can heal.
+                            state: "interrupted",
+                            workflowCustodyState: "pending",
                         },
                     ],
                     ...(pageAfterDate && pageAfterId ? {
@@ -1245,7 +1285,7 @@ export async function listWorkflowRunsForRecovery(params: PageOptions & Readonly
             pageAfterDate = last.createdAt.toISOString();
             pageAfterId = last.id;
         }
-    }, { isolationLevel: "ReadCommitted" });
+    }, { isolationLevel: "ReadCommitted", transactionClass: "workflow-list-runs-for-recovery" });
     const last = page.rows.at(-1);
     return {
         candidates: page.rows.map((row) => ({
@@ -1359,8 +1399,9 @@ export async function publishWorkflowInvocationDraft(input: WorkflowReviewMutati
         await markWorkflowRunChangedTx(tx, current.ownerAccountId, input.runId, current.deliveryBefore);
         return { invocation: { index: projectInvocation(row), contentEnvelope: row.contentEnvelope }, parentRevision: current.run.revision };
     }, {
-        // Source Run lifecycle and cross-Account watcher census must serialize with watcher registration.
-        isolationLevel: "Serializable",
+        // Ordered publication locks/replay and mode/control/row predicates fence this mutation.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "workflow-publish-invocation-draft",
     });
 }
 
@@ -1388,14 +1429,15 @@ export async function completeWorkflowInvocationReview(input: WorkflowReviewMuta
         const live = current.run.state === "claimed" || current.run.state === "running" || current.run.state === "pause_requested";
         const machineId = run.assignments[0]?.machineId;
         if (machineId && (wake || live)) afterTx(tx, () => emitAutomationRunUpdatedToMachineOnly({
-            accountId: current.ownerAccountId, machineId, run: run as WorkflowRunFullRow, cursor,
+            accountId: current.ownerAccountId, machineId, run: run as WorkflowRunFullRow, cursor: cursor.resolveCursor(),
             ...(live ? { workflowControl: "review_resolved" } : {}),
         }));
         return { run: projectRun(run as WorkflowRunRow), invocation: { index: projectInvocation(row as InvocationRow), contentEnvelope: row.contentEnvelope },
             disposition: input.mode === "use_result" ? "completed" as const : "generation_requested" as const };
     }, {
-        // Source Run lifecycle and cross-Account watcher census must serialize with watcher registration.
-        isolationLevel: "Serializable",
+        // Ordered publication locks/replay and mode/control/row predicates fence this mutation.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "workflow-complete-invocation-review",
     });
 }
 
@@ -1553,7 +1595,7 @@ export async function listWorkflowRunInvocations(params: PageOptions & Readonly<
             pageAfterSequence = last.sequence;
             pageAfterId = last.id;
         }
-    }, { isolationLevel: "ReadCommitted" });
+    }, { isolationLevel: "ReadCommitted", transactionClass: "workflow-list-run-invocations" });
 }
 
 export async function getWorkflowRunInvocation(params: Readonly<{ accountId: string; runId: string; invocationId: string }>) {
@@ -1566,7 +1608,7 @@ export async function getWorkflowRunInvocation(params: Readonly<{ accountId: str
         if (!row) throw new WorkflowRunServiceError("run_not_found");
         assertWorkflowStoredEnvelopeOuterForMode({ raw: row.contentEnvelope, mode, binding: { v: 1, purpose: "invocation_progress", accountId: keyCensus.ownerAccountId, runId: params.runId, recordId: row.id, sequence: row.sequence.toString(), parentRecordId: row.parentRecordId, memberOrdinal: row.memberOrdinal.toString(), attempt: row.attempt.toString() } });
         return { invocation: { index: projectInvocation(row), contentEnvelope: row.contentEnvelope, parentRevision: run.revision }, keyCensus };
-    }, { isolationLevel: "ReadCommitted" });
+    }, { isolationLevel: "ReadCommitted", transactionClass: "workflow-get-run-invocation" });
 }
 
 /** Reads the greatest persisted attempt for one direct-member slot. */
@@ -1609,7 +1651,7 @@ export async function getCurrentWorkflowRunInvocation(params: Readonly<{
             },
         });
         return { invocation: { index: projectInvocation(row), contentEnvelope: row.contentEnvelope }, parentRevision: run.revision, keyCensus };
-    }, { isolationLevel: "ReadCommitted" });
+    }, { isolationLevel: "ReadCommitted", transactionClass: "workflow-get-current-run-invocation" });
 }
 
 /** The parent predicate shared by allocation and the final input-admission fact. */
@@ -1661,8 +1703,6 @@ export async function commitWorkflowInvocationFact(params: WorkflowInvocationFac
                 : params.resolution !== "observed_terminal_execution" || !observedSettlement)))) {
             throw new WorkflowRunServiceError("invalid_input");
         }
-        const resolvesObservedTerminal = params.resolution === "observed_terminal_execution"
-            && (observation ? observedSettlement : (params.lifecycle === "completed" || params.lifecycle === "needs_attention"));
         const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness, params.runId);
         if (!observation && params.lifecycle === "admitting") {
             // Lock the same parent row as Pause/Cancel before authorizing input, including exact revalidation.
@@ -1682,8 +1722,14 @@ export async function commitWorkflowInvocationFact(params: WorkflowInvocationFac
                 ? { revision: params.expectedRevision, state: "interrupted" }
                 : { claimedByMachineId: params.machineId, attempt: params.parentAttempt }),
         } satisfies Prisma.AutomationRunWhereInput;
-        const run = await tx.automationRun.findFirst({ where: parentWhere, select: { id: true, updatedAt: true } });
+        const run = await tx.automationRun.findFirst({ where: parentWhere, select: { id: true, updatedAt: true, state: true } });
         if (!run) throw new WorkflowRunServiceError("currentness_conflict");
+        // Active interrupted Runs retain an explicit recovery choice. A terminal
+        // parent instead only needs the exact stopped child fact to retire custody.
+        const resolvesObservedTerminal = params.resolution === "observed_terminal_execution"
+            && (observation ? observedSettlement : params.lifecycle === "completed" || params.lifecycle === "needs_attention"
+                || ((params.lifecycle === "failed" || params.lifecycle === "cancelled")
+                    && AUTOMATION_RUN_TERMINAL_STATES.some(state => state === run.state)));
         // Revalidate custody under the same parent lock as controls/recovery,
         // preserving the revision and timestamps of this row-only fact.
         const locked = await tx.automationRun.updateMany({
@@ -1736,8 +1782,11 @@ export async function commitWorkflowInvocationFact(params: WorkflowInvocationFac
         await markWorkflowRunChangedTx(tx, params.accountId, params.runId, deliveryBefore, current.lifecycle !== "admitting" && params.lifecycle === "admitting");
         return await acknowledge(updated);
     }, {
-        // Source Run lifecycle and cross-Account watcher census must serialize with watcher registration.
-        isolationLevel: "Serializable",
+        // Ordered publication locks fence the audience before the mode/parent
+        // locks and row CAS. ReadCommitted observes cursor writes that finish
+        // during acquisition instead of aborting on an unrelated publication.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "workflow-invocation-fact",
     });
 }
 
@@ -1778,8 +1827,9 @@ export async function recordWorkflowRunOriginInputWithdrawn(params: Readonly<{
         await markWorkflowRunChangedTx(tx, params.accountId, params.runId, deliveryBefore);
         return { index: projectInvocation(updated) };
     }, {
-        // Source Run lifecycle and cross-Account watcher census must serialize with watcher registration.
-        isolationLevel: "Serializable",
+        // Ordered publication locks/replay and mode/control/row predicates fence this mutation.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "workflow-record-run-origin-input-withdrawn",
     });
 }
 
@@ -1939,8 +1989,9 @@ export async function transitionWorkflowRun(params: Readonly<{ accountId: string
         await markWorkflowRunChangedTx(tx, params.accountId, params.runId, deliveryBefore);
         return projectRun(row as WorkflowRunRow);
     }, {
-        // Source Run lifecycle and cross-Account watcher census must serialize with watcher registration.
-        isolationLevel: "Serializable",
+        // Ordered publication locks/replay and mode/control/row predicates fence this mutation.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "workflow-transition-run",
     });
 }
 
@@ -1981,12 +2032,13 @@ async function controlWorkflowRun(params: Readonly<{
             await publishManagedRunWakeInTx(tx, { accountId: ownerAccountId, runId: params.runId, cursor });
             const machineId = row.assignments[0]?.machineId;
             if (machineId) afterTx(tx, () => emitAutomationRunUpdatedToMachineOnly({ accountId: ownerAccountId,
-                machineId, run: row as WorkflowRunFullRow, cursor }));
+                machineId, run: row as WorkflowRunFullRow, cursor: cursor.resolveCursor() }));
         }
         return projectRun(row as WorkflowRunRow);
     }, {
-        // Source Run lifecycle and cross-Account watcher census must serialize with watcher registration.
-        isolationLevel: "Serializable",
+        // Ordered publication locks/replay and mode/control/row predicates fence this mutation.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "workflow-control-run",
     });
 }
 
@@ -2119,7 +2171,7 @@ export async function cancelWorkflowRunTx(
             accountId: params.accountId,
             machineId,
             run: row as WorkflowRunFullRow,
-            cursor,
+            cursor: cursor.resolveCursor(),
             workflowControl: "cancel_requested",
         }));
     }
@@ -2135,8 +2187,9 @@ export async function cancelWorkflowRun(params: Readonly<{ accountId: string; ru
         await loadAccountModeTx(tx, access.ownerAccountId, params.runId);
         return await cancelWorkflowRunTx(tx, { ...params, accountId: access.ownerAccountId });
     }, {
-        // Source Run lifecycle and cross-Account watcher census must serialize with watcher registration.
-        isolationLevel: "Serializable",
+        // Ordered publication locks/replay and mode/control/row predicates fence this mutation.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "workflow-cancel-run",
     });
 }
 
@@ -2153,7 +2206,6 @@ async function readWorkflowRunWaitObservation(accountId: string, runId: string) 
                 id: runId,
                 accountId: keyCensus.ownerAccountId,
                 workflowCustodyState: { not: null },
-                workflowAcceptedSnapshotEnvelope: { not: null },
             },
             select: workflowRunWaitSelect,
         });
@@ -2168,7 +2220,7 @@ async function readWorkflowRunWaitObservation(accountId: string, runId: string) 
         }
         const attention = await tx.automationRun.findFirst({ where: { id: runId, accountId: keyCensus.ownerAccountId, AND: [workflowRunAttentionWhere()] }, select: { id: true } });
         return { run: projectRun({ ...row, attentionRequired: attention !== null } as WorkflowRunRow), resultEnvelope: row.resultEnvelope, attention: attention !== null, keyCensus };
-    }, { isolationLevel: "ReadCommitted" });
+    }, { isolationLevel: "ReadCommitted", transactionClass: "workflow-read-run-wait-observation" });
 }
 
 export async function waitWorkflowRun(params: Readonly<{
@@ -2351,11 +2403,12 @@ export async function recoverWorkflowInvocations(params: Readonly<{
         const updatedParent = await tx.automationRun.findUniqueOrThrow({ where: { id: params.runId }, select: workflowRunSelect });
         const cursor = await markWorkflowRunChangedTx(tx, params.accountId, params.runId, deliveryBefore);
         afterTx(tx, () => emitAutomationRunUpdatedToMachineOnly({ accountId: params.accountId, machineId: params.machineId,
-            run: updatedParent as WorkflowRunFullRow, cursor }));
+            run: updatedParent as WorkflowRunFullRow, cursor: cursor.resolveCursor() }));
         return { disposition: "accepted" as const, run: projectRun(updatedParent as WorkflowRunRow), invocations: created.map(projectInvocation) };
     }, {
-        // Source Run lifecycle and cross-Account watcher census must serialize with watcher registration.
-        isolationLevel: "Serializable",
+        // Ordered publication locks/replay and mode/control/row predicates fence this mutation.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "workflow-recover-invocations",
     });
 }
 
@@ -2407,7 +2460,8 @@ export async function deleteWorkflowRun(params: Readonly<{ accountId: string; ru
         await markWorkflowRunChangedTx(tx, params.accountId, params.runId);
         return { deleted: true as const, runId: params.runId };
     }, {
-        // Source Run lifecycle and cross-Account watcher census must serialize with watcher registration.
-        isolationLevel: "Serializable",
+        // Ordered publication locks/replay and mode/control/row predicates fence this mutation.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "workflow-delete-run",
     });
 }

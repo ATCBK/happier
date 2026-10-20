@@ -27,6 +27,11 @@ export function ProfileSkillSeedsSection(props: Readonly<{
     const { seeds, library, onChange } = props;
     const [menuOpen, setMenuOpen] = React.useState(false);
     const byId = React.useMemo(() => new Map(library.items.map(item => [item.skillId, item])), [library.items]);
+    // The library knows these skills but cannot open them: they are in it, so never "Not in your library".
+    const unreadableById = React.useMemo(
+        () => new Map((library.unavailableItems ?? []).filter(item => item.reason !== 'not_found').map(item => [item.skillId, item])),
+        [library.unavailableItems],
+    );
     const candidates = React.useMemo(
         () => library.items.filter(item => !seeds.includes(item.skillId)),
         [library.items, seeds],
@@ -83,16 +88,20 @@ export function ProfileSkillSeedsSection(props: Readonly<{
         >
             {seeds.map(skillId => {
                 const item = byId.get(skillId);
+                const unreadable = item === undefined ? unreadableById.get(skillId) : undefined;
                 // A failed or pending read says nothing about membership: only a ready library can say "not in it".
-                const gone = item === undefined && ready;
-                const title = item?.name ?? t(gone ? 'capabilities.profileSeeds.missing' : 'capabilities.profileSeeds.pending');
-                const rowName = item?.name ?? title;
+                const gone = item === undefined && unreadable === undefined && ready;
+                // A skill we cannot name keeps a neutral name, never a raw id; its state reads beneath it.
+                const title = item?.name ?? unreadable?.title ?? t('capabilities.profileSeeds.pending');
+                const rowName = title;
+                const description = item?.description
+                    ?? (unreadable ? t('capabilities.profileSeeds.unreadableItem') : gone ? t('capabilities.profileSeeds.missing') : null);
                 return (
                     <CapabilityRow
                         key={skillId}
                         testID={`profile-skill-seeds:row:${skillId}`}
                         title={title}
-                        description={item?.description ?? null}
+                        description={description}
                         action={(
                             <IconButton
                                 testID={`profile-skill-seeds:row:${skillId}:remove`}

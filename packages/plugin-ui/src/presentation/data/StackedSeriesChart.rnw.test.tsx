@@ -27,6 +27,141 @@ function animates(element: Element): boolean {
 }
 
 describe('neutral series dataset', () => {
+  it.each(['web', 'android'] as const)('lets the caller control exact-value Details on %s without a competing disclosure state', async platform => {
+    const onValuesExpandedChange = vi.fn();
+    const render = (valuesExpanded: boolean) => <HappierUiPlatformProvider platform={{ platform, colorScheme: 'light' }}>
+      <StackedSeriesChart theme={theme} label="Sales" width={160} viewportHeight={36}
+        series={series} variant="bar" size="full" testID="controlled-details"
+        valuesExpanded={valuesExpanded} onValuesExpandedChange={onValuesExpandedChange} />
+    </HappierUiPlatformProvider>;
+    const mount = mountThroughReactNativeWeb(render(true));
+    try {
+      expect(find(mount.container, 'controlled-details-values')?.textContent).toContain('0.00004');
+      expect(find(mount.container, 'controlled-details-values-toggle').getAttribute('aria-expanded')).toBe('true');
+      act(() => find(mount.container, 'controlled-details-values-toggle').click());
+      expect(onValuesExpandedChange).toHaveBeenLastCalledWith(false);
+      expect(find(mount.container, 'controlled-details-values')).toBeTruthy();
+      await mount.render(render(false));
+      expect(find(mount.container, 'controlled-details-values')).toBeNull();
+      expect(find(mount.container, 'controlled-details-values-toggle').getAttribute('aria-expanded')).toBe('false');
+      act(() => find(mount.container, 'controlled-details-values-toggle').click());
+      expect(onValuesExpandedChange).toHaveBeenLastCalledWith(true);
+      expect(find(mount.container, 'controlled-details-values')).toBeNull();
+      await mount.render(render(true));
+      expect(find(mount.container, 'controlled-details-values')?.textContent).toContain('0.00004');
+    } finally { mount.unmount(); }
+  });
+  it.each(['inline', 'tile'] as const)('keeps a dense %s history exact without requiring a Details toggle', size => {
+    const points = Array.from({ length: 45_000 }, (_, x) => ({ id: `p${x}`, x, y: x === 0 ? 0.00004 : x }));
+    const input = [{ id: 'used', label: 'Used', points }];
+    const warm = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Allowance" width={320}
+      series={[{ ...input[0]!, points: points.slice(0, 2) }]} variant="line" size={size} />);
+    warm.unmount();
+    const before = process.memoryUsage();
+    const started = performance.now();
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Allowance" width={320}
+      series={input} variant="line" size={size} testID="compact-dense" />);
+    const after = process.memoryUsage();
+    console.info('compact-dense-history-mount', JSON.stringify({ size, elapsedMs: performance.now() - started,
+      heapUsedDelta: after.heapUsed - before.heapUsed, rssDelta: after.rss - before.rss, elements: mount.container.querySelectorAll('*').length }));
+    try {
+      expect(mount.container.querySelectorAll('button').length).toBeLessThanOrEqual(1);
+      const control = find(mount.container, 'compact-dense-history-control');
+      expect(control).toBeTruthy();
+      expect(control.getAttribute('aria-label')).toContain('0.00004');
+      act(() => control.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })));
+      expect(control.getAttribute('aria-label')).toContain('Used 44,999');
+      expect(mount.container.querySelector('path')!.getAttribute('d')!.match(/ L/gu)).toHaveLength(44_999);
+    } finally { mount.unmount(); }
+  }, 180_000);
+  it('keeps dense exact history selectable without a mounted hit target per subpixel sample', () => {
+    const points = Array.from({ length: 45_000 }, (_, x) => ({ id: `p${x}`, x, y: x === 22_500 ? 0.00004 : x / 450 }));
+    const warm = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Allowance" width={320}
+      series={[{ id: 'used', label: 'Used', points: points.slice(0, 2) }]} variant="line" size="full" />);
+    warm.unmount();
+    let exactCount = 0;
+    let middleValue: number | null = null;
+    const before = process.memoryUsage();
+    const started = performance.now();
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Allowance" width={320}
+      series={[{ id: 'used', label: 'Used', points }]} variant="line" size="full" testID="dense"
+      renderPlotOverlay={plot => { exactCount = plot.buckets.length; middleValue = plot.buckets[22_500]!.values[0]!.value; return null; }} />);
+    const after = process.memoryUsage();
+    console.info('dense-history-mount', JSON.stringify({ points: points.length, elapsedMs: performance.now() - started,
+      heapUsedDelta: after.heapUsed - before.heapUsed, rssDelta: after.rss - before.rss,
+      elements: mount.container.querySelectorAll('*').length }));
+    try {
+      expect(mount.container.querySelectorAll('[data-testid^="dense-bucket-"]').length).toBeLessThanOrEqual(320);
+      expect(exactCount).toBe(45_000);
+      expect(middleValue).toBe(0.00004);
+      expect(mount.container.querySelector('path')!.getAttribute('d')!.match(/ L/gu)).toHaveLength(44_999);
+      const control = find(mount.container, 'dense-history-control');
+      expect(control).toBeTruthy();
+      act(() => control.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })));
+      expect(find(mount.container, 'dense-readout').textContent).toContain('Used · 99.9977777777778');
+      act(() => control.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })));
+      expect(control.getAttribute('aria-label')).toContain('44998');
+      act(() => control.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })));
+      expect(find(mount.container, 'dense-readout').textContent).toContain('Used · 0');
+    } finally { mount.unmount(); }
+  }, 180_000);
+  it('keeps every dense exact fact in Details, including an unavailable sample, zero and an older tiny value', () => {
+    const points = Array.from({ length: 400 }, (_, x) => ({ id: `p${x}`, x,
+      y: x === 0 ? 0.00004 : x === 1 ? null : x === 2 ? 0 : x }));
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Allowance" width={160}
+      series={[{ id: 'used', label: 'Used', points }]} coordinateFormatter={x => `time ${x}`}
+      variant="line" size="full" testID="facts" />);
+    try {
+      const control = find(mount.container, 'facts-history-control');
+      act(() => control.dispatchEvent(new MouseEvent('click', { detail: 1, clientX: 100, bubbles: true })));
+      expect(control.getAttribute('aria-label')).toContain('time 249');
+      act(() => find(mount.container, 'facts-values-toggle').click());
+      expect(find(mount.container, 'facts-values').querySelectorAll('[data-testid^="facts-values-row-"]')).toHaveLength(400);
+      expect(find(mount.container, 'facts-values-row-0').getAttribute('aria-label')).toContain('Used: 0.00004');
+      expect(find(mount.container, 'facts-values-row-0').textContent).toContain('time 0');
+      expect(find(mount.container, 'facts-values-row-1').getAttribute('aria-label')).toContain('Used: —');
+      expect(find(mount.container, 'facts-values-row-2').getAttribute('aria-label')).toContain('Used: 0');
+      expect(find(mount.container, 'facts-values-row-399').textContent).toContain('time 399');
+    } finally { mount.unmount(); }
+  });
+  it('keeps the existing full-size native value controls outside a subpixel line plot', () => {
+    const points = Array.from({ length: 400 }, (_, x) => ({ id: `p${x}`, x, y: x }));
+    const mount = mountThroughReactNativeWeb(<HappierUiPlatformProvider platform={{ platform: 'android', colorScheme: 'light' }}>
+      <StackedSeriesChart theme={theme} label="Allowance" width={160} viewportHeight={36}
+        series={[{ id: 'used', label: 'Used', points }]} variant="line" size="full" testID="native-dense" />
+    </HappierUiPlatformProvider>);
+    try {
+      expect(mount.container.querySelectorAll('*').length).toBeLessThan(100);
+      expect(find(mount.container, 'native-dense-history-control')).toBeNull();
+      act(() => find(mount.container, 'native-dense-values-toggle').click());
+      const values = find(mount.container, 'native-dense-values');
+      expect(values.querySelectorAll('button')).toHaveLength(400);
+      const last = find(values, 'native-dense-bucket-p399');
+      expect(last.style.minHeight).toBe('48px');
+      expect(last.getAttribute('aria-label')).toContain('Used 399');
+    } finally { mount.unmount(); }
+  });
+  it('keeps keyboard focus on the selected exact sample when resizing between dense and separate hit targets', async () => {
+    const points = Array.from({ length: 400 }, (_, x) => ({ id: `p${x}`, x, y: x }));
+    const input = [{ id: 'used', label: 'Used', points }];
+    const render = (width: number) => <StackedSeriesChart theme={theme} label="Allowance" width={width}
+      series={input} variant="line" size="full" testID="resizing" />;
+    const mount = mountThroughReactNativeWeb(render(160));
+    try {
+      const dense = find(mount.container, 'resizing-history-control');
+      act(() => dense.focus());
+      act(() => dense.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })));
+      await mount.render(render(800));
+      expect(document.activeElement).toBe(find(mount.container, 'resizing-bucket-p399'));
+      await mount.render(render(160));
+      expect(document.activeElement).toBe(find(mount.container, 'resizing-history-control'));
+      expect(document.activeElement!.getAttribute('aria-label')).toContain('Used 399');
+      const details = find(mount.container, 'resizing-values-toggle');
+      act(() => details.focus());
+      await mount.render(render(800));
+      expect(document.activeElement).toBe(details);
+    } finally { mount.unmount(); }
+  });
   it('draws an observed upper edge on the area scale without stacking it onto the mean or filling it', () => {
     const input = [
       { id: 'mean', label: 'Mean', fillOpacity: 0.2, points: [10, 10, null, 10, 10].map((y, x) => ({ id: String(x), x, y })) },
@@ -118,26 +253,21 @@ describe('neutral series dataset', () => {
       } finally { native.unmount(); adapter.unmount(); }
     }
   });
-  it('marks a gap as a quiet dashed rule along the baseline and draws a lone sample as a dot, never a column', () => {
+  it('draws a gap as a plain break, never a mark, and a lone sample as a dot, never a column', () => {
     const draw = (values: (number | null)[]) => mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Memory, last hour"
       series={[{ id: 'memory', label: 'Memory', points: values.map((y, x) => ({ id: String(x), x, y })) }]}
       width={200} viewportHeight={100} plotInset={0} minimumMaximum={10} variant="area" size="tile" testID="gap" />);
-    const solid = draw([2, 8, 4, 9, 3]);
     const gappy = draw([2, 8, null, null, 3]);
     try {
-      expect(solid.container.querySelectorAll('[data-testid^="gap-gap-"]')).toHaveLength(0);
-      // One rule across the two missing buckets, from the last sample before to the first after.
-      const rules = [...gappy.container.querySelectorAll('[data-testid^="gap-gap-"]')];
-      expect(rules).toHaveLength(1);
-      expect(rules[0]!.getAttribute('stroke-dasharray')).toBeTruthy();
-      expect(rules[0]!.getAttribute('x1')).toBe('50');
-      expect(rules[0]!.getAttribute('x2')).toBe('200');
+      // Nothing is drawn across the two missing buckets: no baseline rule, dashed or otherwise.
+      expect(gappy.container.querySelectorAll('[data-testid^="gap-gap-"]')).toHaveLength(0);
+      expect(gappy.container.querySelectorAll('line')).toHaveLength(0);
       // The lone sample after the gap is a dot, not a filled column to the baseline.
       expect(gappy.container.querySelectorAll('[data-testid^="gap-lone-"]')).toHaveLength(1);
       expect([...gappy.container.querySelectorAll('path')].some((path) => /^M200 [\d.]+ L200 /.test(path.getAttribute('d') ?? ''))).toBe(false);
-    } finally { gappy.unmount(); solid.unmount(); }
+    } finally { gappy.unmount(); }
   });
-  it('draws a run too short to read as an area as a line only, keeping the gap marks between runs', () => {
+  it('draws a run too short to read as a solid area as a line only, with no mark between runs', () => {
     const draw = (values: (number | null)[]) => mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Memory, last hour"
       series={[{ id: 'memory', label: 'Memory', points: values.map((y, x) => ({ id: String(x), x, y })) }]}
       width={200} viewportHeight={100} plotInset={0} minimumMaximum={10} variant="area" size="tile" testID="short" />);
@@ -151,8 +281,7 @@ describe('neutral series dataset', () => {
       expect(filled(mixed)).toHaveLength(1);
       const lines = [...mixed.container.querySelectorAll('path')].filter((path) => path.getAttribute('fill') === 'none' && path.getAttribute('stroke') !== 'none');
       expect(lines.length).toBeGreaterThanOrEqual(2);
-      // The dashed gap marks stay between runs.
-      expect(mixed.container.querySelectorAll('[data-testid^="short-gap-"]').length).toBe(2);
+      expect(mixed.container.querySelectorAll('line')).toHaveLength(0);
     } finally { mixed.unmount(); long.unmount(); }
   });
   it('tones only geometry above the threshold and keeps missing samples as separate paths', () => {
@@ -364,7 +493,7 @@ describe('neutral series dataset', () => {
     const mount = mountThroughReactNativeWeb(render(['b', 'c']));
     try {
       const retained = find(mount.container, 'orders-bar-0-0');
-
+      
       expect(Number.parseFloat(retained.style.height)).toBe(150);
       await mount.render(render(['a', 'b', 'c']));
       // The day that stays is the same mark and does not replay; the day that joins rises whole, at its final height.
@@ -411,7 +540,7 @@ describe('neutral series dataset', () => {
   it('offers every exact series value in the shared table alternative', () => {
     const labelled = series.map((entry) => ({ ...entry, points: entry.points.map((point) => point.id === 'mon' ? { ...point, x: 2.3456789, label: 'Noon' } : point) }));
     const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Orders" series={labelled}
-      variant="line" size="full" valuesLabel="Show values" valuesCollapseLabel="Hide values" testID="orders" />);
+      width={200} variant="line" size="full" valuesLabel="Show values" valuesCollapseLabel="Hide values" testID="orders" />);
     try {
       expect(find(mount.container, 'orders-values-toggle')).toBeTruthy();
       act(() => find(mount.container, 'orders-values-toggle').click());
@@ -421,6 +550,15 @@ describe('neutral series dataset', () => {
       expect(find(mount.container, 'orders-values-row-0').textContent).toContain('2.3456789');
       expect(find(mount.container, 'orders-values-row-1').getAttribute('aria-label')).toContain('Sold: —');
       expect(find(mount.container, 'orders-values-row-2').getAttribute('aria-label')).toContain('Sold: 0');
+    } finally { mount.unmount(); }
+  });
+  it('names what the default Details toggle does once it is open', () => {
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Orders" series={series} variant="line" size="full" testID="orders" />);
+    try {
+      expect(find(mount.container, 'orders-values-toggle').textContent).toBe('Details');
+      act(() => find(mount.container, 'orders-values-toggle').click());
+      expect(find(mount.container, 'orders-values-toggle').textContent).toBe('Collapse');
+      expect(find(mount.container, 'orders-values-toggle').getAttribute('aria-label')).toBe('Collapse');
     } finally { mount.unmount(); }
   });
   it('selects every series value by press and keyboard, preserving the semantic bucket across resize and reordering', async () => {
@@ -481,6 +619,21 @@ describe('neutral series dataset', () => {
       expect(edge!.getAttribute('fill')).toBe('none');
       expect(edge!.getAttribute('stroke')).toBe(theme.colors.accent);
       expect(edge!.getAttribute('d')).toBe('M0 80 L200 40');
+    } finally { mount.unmount(); }
+  });
+  it('keeps the wash under each run of a washed history that gaps break, with the edge line over it', () => {
+    const input = [{ id: 'cpu', label: 'CPU', color: theme.colors.accent, fillOpacity: 0.08,
+      points: [2, 4, 6, 4, 2, null, 2, 4, 6, 4].map((y, x) => ({ id: String(x), x, y })) }];
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="CPU, last hour" series={input}
+      width={180} viewportHeight={100} plotInset={0} minimumMaximum={10} variant="area" size="tile" testID="cpu" />);
+    try {
+      const paths = [...mount.container.querySelectorAll('svg path')];
+      const washes = paths.filter(path => path.getAttribute('fill') === theme.colors.accent);
+      expect(washes).toHaveLength(2);
+      expect(washes.every(path => path.getAttribute('fill-opacity') === '0.08' && path.getAttribute('d')?.endsWith('Z'))).toBe(true);
+      // Each run is edged by its own line; nothing bridges the missing sample.
+      expect(paths.filter(path => path.getAttribute('fill') === 'none' && path.getAttribute('stroke') === theme.colors.accent)).toHaveLength(2);
+      expect(mount.container.querySelectorAll('line')).toHaveLength(0);
     } finally { mount.unmount(); }
   });
   it('holds a supplied value domain so a zoomed line keeps its honest floor', () => {
@@ -584,6 +737,34 @@ describe('few-bucket bar columns', () => {
       width={200} viewportHeight={60} variant="area" size="tile" testID="ends" />);
     try {
       expect([0, 1, 2, 3].map((index) => find(mount.container, `ends-axis-${index}`)?.textContent)).toEqual(['t0', undefined, undefined, 't3']);
+    } finally { mount.unmount(); }
+  });
+});
+
+describe('default series colour', () => {
+  it('draws unnamed series in the host data accent ramp, never the action ink', () => {
+    const dataTheme = { ...theme, colors: { ...theme.colors, accent: '#111111', dataAccent: '#2BACCC' } };
+    const input = [
+      { id: 'copper', label: 'Copper', points: [{ id: 'mon', x: 'Mon', y: 4 }] },
+      { id: 'silver', label: 'Silver', points: [{ id: 'mon', x: 'Mon', y: 3 }] },
+    ];
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={dataTheme} label="Metals" width={160} viewportHeight={60}
+      series={input} variant="bar" size="full" testID="palette" />);
+    try {
+      const first = getComputedStyle(find(mount.container, 'palette-bar-0-0')).backgroundColor;
+      const second = getComputedStyle(find(mount.container, 'palette-bar-0-1')).backgroundColor;
+      expect(first).toBe('rgb(43, 172, 204)');
+      expect(second).not.toBe(first);
+      expect(second).not.toMatch(/^rgb\(17, 17, 17\)$/u);
+    } finally { mount.unmount(); }
+  });
+  it('keeps the accent for a host snapshot that names no data accent', () => {
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Metals" width={160} viewportHeight={60}
+      series={[{ id: 'copper', label: 'Copper', points: [{ id: 'mon', x: 'Mon', y: 4 }] }]} variant="bar" size="full" testID="fallback" />);
+    try {
+      const probe = document.createElement('div'); probe.style.backgroundColor = theme.colors.accent; document.body.append(probe);
+      expect(getComputedStyle(find(mount.container, 'fallback-bar-0-0')).backgroundColor).toBe(getComputedStyle(probe).backgroundColor);
+      probe.remove();
     } finally { mount.unmount(); }
   });
 });

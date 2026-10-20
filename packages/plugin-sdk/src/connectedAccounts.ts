@@ -68,6 +68,8 @@ import type {
 import type { JsonValue, PluginContributionRef } from './identity.js';
 import type { AgentAccountUsageMeter } from './agentRuntime/accountUsage.js';
 import type { Disposable } from './lifecycle.js';
+import type { ConnectedAccountMaterialization } from './connected-accounts/materialization.js';
+export type { ConnectedAccountMaterialization } from './connected-accounts/materialization.js';
 
 export {
     addSafeEpochMilliseconds,
@@ -396,19 +398,6 @@ export const isAuthenticateResult: (
     value: unknown,
 ) => value is CloudConnectAuthenticateResultV1 = canonicalIsAuthenticateResult;
 
-export type ConnectedAccountMaterialization =
-    | Readonly<{
-        kind: 'httpHeaders';
-        headers: Readonly<Record<string, string>>;
-    }>
-    | Readonly<{
-        kind: 'environment';
-        env: Readonly<Record<string, string>>;
-    }>
-    | Readonly<{
-        kind: 'files';
-        files: Readonly<Record<string, Uint8Array>>;
-    }>;
 export type ConnectedAccountMaterializationOptions = Readonly<{
     signal?: AbortSignal;
     /** Use this declared service's machine login only when no explicit purpose binding exists. */

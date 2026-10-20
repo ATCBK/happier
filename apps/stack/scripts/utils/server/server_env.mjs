@@ -46,6 +46,9 @@ export function buildServerRuntimeEnv({
     HAPPIER_PUBLIC_SERVER_URL: publicServerUrl,
     PUBLIC_URL: publicServerUrl,
     METRICS_ENABLED: baseEnv.METRICS_ENABLED ?? 'false',
+    ...(!String(baseEnv.HAPPIER_WEBAPP_URL ?? '').trim() && serveUi
+      ? { HAPPIER_WEBAPP_URL: publicServerUrl }
+      : {}),
   };
   const serverLogLevel = resolveStackServerLogLevel({ baseEnv });
   if (serverLogLevel) {

@@ -34,11 +34,11 @@ function setMotionLevel(visualEffectsLevel: 'subtle' | 'minimal') {
     storage.setState({ settings: { ...storage.getState().settings, visualEffectsLevel, animatedNumbers: true, contextGaugeStyle: 'gauge' } });
 }
 
-async function render(element: React.ReactElement): Promise<ReactTestRenderer> {
-    return (await renderScreen(element)).tree;
+async function render(element: React.ReactElement) {
+    return await renderScreen(element);
 }
 
-function findSweepProps(tree: ReactTestRenderer): Record<string, any> {
+function findSweepProps(tree: Pick<ReactTestRenderer, 'root'>): Record<string, unknown> {
     // The animated progress circle carries `animatedProps` (identity-mocked
     // createAnimatedComponent passes it straight to the Circle host).
     const circles = tree.root.findAll((node) => String(node.type) === 'Circle' && node.props.animatedProps != null);
@@ -112,9 +112,7 @@ describe('ContextGauge (tier 2 ring)', () => {
         act(() => {
             pressable().props.onPressIn();
         });
-        act(() => {
-            tree.update(element());
-        });
+        await tree.update(element());
         // The outermost animated frame is the press frame; the ring animates inside it.
         const frames = pressable().findAll((node) => String(node.type) === 'Animated.View');
         const style = [frames[0]!.props.style].flat(Infinity).reduce<Record<string, unknown>>(

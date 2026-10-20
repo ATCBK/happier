@@ -11,6 +11,7 @@ import { hasCurrentSessionScopedMachineAccessInTx } from "@/app/api/socket/sessi
 import { readCurrentSessionInputMachineTargetInTx } from "@/app/session/messages/sessionInputAdmission";
 import { getActivePrismaRuntime } from "@/storage/db";
 import { markSessionProjectionRecipientsChanged, type SessionRecipientCursor } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
+import { sessionRecipientPublicationResult, type SessionRecipientPublicationResult } from "@/app/session/changeTracking/sessionRecipientPublicationResult";
 import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import {
     updateSessionRuntimeActivityProjection,
@@ -18,19 +19,21 @@ import {
     writeSessionRuntimeActivityProjectionInTx,
     type SessionRuntimeActivityProjectionUpdate,
     type SessionRuntimeActivityProjectionInTxResult,
-    type TerminalTurnPendingRequestProjection,
     applyLatestSessionTurnEndInTx,
 } from "@/app/session/sessionWriteService";
-import {
-    fenceExactCurrentPublisherAuthorityInTx,
-    readExactCurrentPublisherAuthorityInTx,
-} from "@/app/session/pending/hasExactCurrentPublisherAuthorityInTx";
+import { readExactCurrentPublisherAuthorityInTx } from "@/app/session/pending/hasExactCurrentPublisherAuthorityInTx";
 import { SESSION_TRANSCRIPT_PUBLICATION_SELECT } from "@/app/session/sessionTranscriptPublicationPolicy";
-import { inTx } from "@/storage/inTx";
-import type { InTxOptions, Tx } from "@/storage/inTx";
+import { inReadSnapshot, inTx, transactionResult } from "@/storage/inTx";
+import { afterTx } from '@/storage/inTx';
+import { isProjectedSessionStalledV1 } from '@happier-dev/protocol/sessions/awareness/runtime';
+import { resolveActivityStalledEventIdentityV1 } from '@happier-dev/protocol/activity/eventIdentity';
+import { listSessionPersonalEventRecipientsInTx } from '@/app/session/personal/eventEligibility';
+import { scheduleSessionPersonalEvent } from '@/app/session/personal/publishPersonalEvent';
+import { scheduleSessionActivityRemoteAlerts } from '@/app/activity/remoteAlerts/submitSessionActivityRemoteAlerts';
+import { isServerFeatureEnabledForHome } from '@/app/features/catalog/serverFeatureGate';
+import type { InTxOptions, ResolvedTransactionResult, Tx } from "@/storage/inTx";
 import { AsyncLock } from "@/utils/runtime/lock";
 import {
-    clearPendingActivationAuthorizationForPublisherActivityData,
     mapPendingActivationAuthorization,
     type PendingActivationTarget,
 } from "@/app/session/pending/pendingActivationAuthorization";
@@ -75,7 +78,6 @@ export type CloseSessionPublisherResult =
         recipientCursors: readonly SessionRecipientCursor[];
         badgeAttentionChanged: boolean;
         projection?: SessionRuntimeActivityProjectionUpdate;
-        pendingRequestProjection?: TerminalTurnPendingRequestProjection;
         turnProjection?: Readonly<{
             latestTurnId: string | null;
             latestTurnStatus: PrimaryTurnStatusV1 | null;
@@ -195,6 +197,7 @@ function writeSessionPublisherAuthorityProjection(
 class RegistrationContentionError extends Error {}
 
 const MAX_PUBLISHER_GENERATION = 9_223_372_036_854_775_807n;
+type PresenceInTxResult<T> = T | SessionRecipientPublicationResult<T>;
 
 const sessionActivityBadgeSelect = {
     ...SESSION_TRANSCRIPT_PUBLICATION_SELECT,
@@ -242,13 +245,13 @@ export async function expireSessionPublisherCandidates(params: Readonly<{
     candidates: readonly ExpireSessionPublisherCandidate[];
 }>): Promise<readonly ExpireSessionPublisherResult[]> {
     if (params.candidates.length === 0) return [];
-    return await inTx(async (tx): Promise<readonly ExpireSessionPublisherResult[]> => {
+    return await inTx(async (tx) => {
         await acquireSessionAccountCursorLocksInTx(tx, params.candidates.map(candidate => candidate.sessionId));
-        const results: ExpireSessionPublisherResult[] = [];
+        const results: PresenceInTxResult<ExpireSessionPublisherResult>[] = [];
         for (const candidate of params.candidates) {
             const session = await tx.session.findUnique({
                 where: { id: candidate.sessionId },
-                select: { ...sessionActivityBadgeSelect, lastActiveAt: true },
+                select: { ...sessionActivityBadgeSelect, lastActiveAt: true, latestTurnId: true },
             });
             if (
                 !session
@@ -275,8 +278,23 @@ export async function expireSessionPublisherCandidates(params: Readonly<{
             }
 
             const recipientCursors = await markSessionProjectionRecipientsChanged({ tx, sessionId: candidate.sessionId });
+            // This successful existing CAS is custody of the original stalled
+            // transition. Never append a synthetic Message or advance a Follow cursor.
+            if (session.latestTurnId && isProjectedSessionStalledV1({ ...session, active: false })
+                && await isServerFeatureEnabledForHome('sessions.following', { tx })) {
+                const stalledOccurrence = { turnId: session.latestTurnId, publisherFence: candidate.observedFence.getTime() };
+                const personal = { sessionId: candidate.sessionId, event: 'source_unavailable' as const,
+                    followEvent: { kind: 'stalled' as const } };
+                const recipients = await listSessionPersonalEventRecipientsInTx(tx, personal);
+                for (const recipient of recipients) scheduleSessionPersonalEvent(tx, recipient.accountId, {
+                    type: 'session-personal-event', sessionId: candidate.sessionId,
+                    eventId: resolveActivityStalledEventIdentityV1(stalledOccurrence),
+                    event: 'source_unavailable', stalledOccurrence,
+                });
+                afterTx(tx, () => scheduleSessionActivityRemoteAlerts({ ...personal, stalledOccurrence }));
+            }
             const authorization = mapPendingActivationAuthorization(session);
-            results.push({
+            results.push(sessionRecipientPublicationResult({
                 status: "expired",
                 sessionId: candidate.sessionId,
                 activeAt: candidate.observedFence,
@@ -298,9 +316,9 @@ export async function expireSessionPublisherCandidates(params: Readonly<{
                         },
                     }
                     : {}),
-            });
+            }));
         }
-        return results;
+        return transactionResult(() => results.map(result => "resolveResult" in result ? result.resolveResult() : result));
     });
 }
 
@@ -342,7 +360,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
         binding: SessionPublisherBinding,
         snapshot: SessionRuntimeActivitySnapshot,
         observedAt?: Date,
-    ): Promise<RegisterSessionPublisherResult> => await inTx(async (tx): Promise<RegisterSessionPublisherResult> => {
+    ): Promise<RegisterSessionPublisherResult> => await inTx(async (tx): Promise<PresenceInTxResult<RegisterSessionPublisherResult>> => {
         await acquireSessionAccountCursorLocksInTx(tx, [binding.sessionId]);
         const session = await tx.session.findUnique({
             where: { id: binding.sessionId },
@@ -373,12 +391,24 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                 deliveryBlockedReason: "delivery_outcome_uncertain",
             },
         });
+        // Only the retiring host's exact pre-dispatch proof permits reuse of
+        // this input. A frozen claim or historical disposal reason is not proof.
+        const undispatched = await tx.sessionPendingMessage.updateMany({
+            where: {
+                sessionId: binding.sessionId,
+                targetExecutionRunId: null,
+                status: "queued",
+                deliveryState: "blocked",
+                deliveryBlockedReason: "host_retired_before_dispatch",
+            },
+            data: { deliveryState: null, deliveryBlockedReason: null, providerAction: null },
+        });
         let pendingState: Readonly<{
             pendingCount: number;
             pendingBlockedCount: number;
             pendingVersion: number;
         }> | undefined;
-        if (inherited.count > 0) {
+        if (inherited.count > 0 || undispatched.count > 0) {
             const [pendingCount, pendingBlockedCount] = await Promise.all([
                 tx.sessionPendingMessage.count({ where: { sessionId: binding.sessionId, targetExecutionRunId: null, status: "queued" } }),
                 tx.sessionPendingMessage.count({
@@ -416,12 +446,11 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                 publisherGeneration,
                 publisherGenerationLastActiveAt: committedFence,
                 runtimeMachineTarget: runtimeMachineTarget ?? getActivePrismaRuntime().DbNull,
-                ...clearPendingActivationAuthorizationForPublisherActivityData(),
             },
         });
         if (updated.count !== 1) throw new RegistrationContentionError();
         const recipientCursors = await markSessionProjectionRecipientsChanged({ tx, sessionId: binding.sessionId });
-        return {
+        return sessionRecipientPublicationResult({
             status: "registered",
             committedFence,
             publisherGeneration,
@@ -442,7 +471,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                 },
             ),
             ...(pendingState ? { pendingState } : {}),
-        };
+        });
     });
 
     const registerPublisher = async (params: Readonly<{
@@ -485,7 +514,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
             if (params.observedAt && params.observedAt.getTime() <= registration.committedFence.getTime()) {
                 return { status: "stale_observation" };
             }
-            const result = await inTx(async (tx): Promise<TouchSessionPublisherResult> => {
+            const result = await inTx(async (tx): Promise<PresenceInTxResult<TouchSessionPublisherResult>> => {
                 await acquireSessionAccountCursorLocksInTx(tx, [registration.binding.sessionId]);
                 const session = await tx.session.findUnique({
                     where: { id: registration.binding.sessionId },
@@ -522,7 +551,6 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                         active: true,
                         lastActiveAt: committedFence,
                         publisherGenerationLastActiveAt: committedFence,
-                        ...clearPendingActivationAuthorizationForPublisherActivityData(),
                     },
                 });
                 if (updated.count !== 1) return { status: "superseded" };
@@ -530,7 +558,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                     tx,
                     sessionId: registration.binding.sessionId,
                 });
-                return {
+                return sessionRecipientPublicationResult({
                     status: "touched",
                     committedFence,
                     activeAt: committedFence,
@@ -539,7 +567,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                         session satisfies SessionActivityBadgeInputs,
                         { ...session, active: true },
                     ),
-                };
+                });
             });
             if (result.status === "touched") {
                 rememberRegistration(params.socket, {
@@ -562,7 +590,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
         authority: PublisherCloseAuthority;
         mutationId: string;
         settleLatestTurn?: boolean;
-    }>): Promise<CloseSessionPublisherResult> => await inTx(async (tx): Promise<CloseSessionPublisherResult> => {
+    }>): Promise<CloseSessionPublisherResult> => await inTx(async (tx): Promise<PresenceInTxResult<CloseSessionPublisherResult>> => {
         await acquireSessionAccountCursorLocksInTx(tx, [params.binding.sessionId], [], {
             includeLifecyclePublications: params.settleLatestTurn !== false,
         });
@@ -680,7 +708,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
             tx,
             sessionId: params.binding.sessionId,
         });
-        return {
+        return sessionRecipientPublicationResult({
             status: "closed",
             activeAt: session.lastActiveAt,
             recipientCursors,
@@ -690,9 +718,6 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                     { ...session, active: false },
                 ),
             ...(activity.status === "applied" ? { projection: activity.projection } : {}),
-            ...(turnResult?.ok && turnResult.pendingRequestProjection
-                ? { pendingRequestProjection: turnResult.pendingRequestProjection }
-                : {}),
             ...(turnResult?.ok && turnResult.didApply
                 ? {
                     turnProjection: {
@@ -703,7 +728,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                     },
                 }
                 : {}),
-        };
+        });
     });
 
     const captureExplicitMachineStop = async (params: Readonly<{
@@ -852,19 +877,30 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
     const runAsCurrentPublisherInTx = async <T>(params: Readonly<{
         socket: object;
         deadlineAtMs?: number;
-        isolationLevel?: InTxOptions["isolationLevel"];
+        prepare?: InTxOptions['prepare'];
         operation: (authority: CurrentSessionPublisherAuthority, tx: Tx) => Promise<T>;
-    }>): Promise<T | null> => await serialize(params.socket, async () => {
-        const registration = registrations.get(params.socket);
-        if (!registration) return null;
-        return await inTx(async (tx) => await params.operation({
-            ...registration.binding,
-            committedFence: new Date(registration.committedFence.getTime()),
-        }, tx), {
-            deadlineAtMs: params.deadlineAtMs,
-            ...(params.isolationLevel === undefined ? {} : { isolationLevel: params.isolationLevel }),
-        });
-    }, { deadlineAtMs: params.deadlineAtMs });
+    }> & (
+        | Readonly<{ authorityMode?: "serialized"; isolationLevel?: InTxOptions["isolationLevel"] }>
+        /** Progress writes recheck publisher authority in this Serializable snapshot,
+         * without joining heartbeat/publication writers on the socket lock. */
+        | Readonly<{ authorityMode: "snapshot"; isolationLevel: "Serializable" }>
+    )): Promise<ResolvedTransactionResult<T> | null> => {
+        const operation = async () => {
+            const registration = registrations.get(params.socket);
+            if (!registration) return null;
+            return await inTx(async (tx) => await params.operation({
+                ...registration.binding,
+                committedFence: new Date(registration.committedFence.getTime()),
+            }, tx), {
+                deadlineAtMs: params.deadlineAtMs,
+                ...(params.prepare ? { prepare: params.prepare } : {}),
+                ...(params.isolationLevel === undefined ? {} : { isolationLevel: params.isolationLevel }),
+            });
+        };
+        return params.authorityMode === "snapshot"
+            ? await operation()
+            : await serialize(params.socket, operation, { deadlineAtMs: params.deadlineAtMs });
+    };
 
     const readCurrentPublisherPrecondition = async (params: Readonly<{
         socket: object;
@@ -872,8 +908,12 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
       await serialize(params.socket, async () => {
         const registration = registrations.get(params.socket);
         if (!registration) return null;
-        const current = await inTx(async (tx) =>
-            await fenceExactCurrentPublisherAuthorityInTx(
+        // This observation confers no mutation authority. Read access and the
+        // exact publisher fence from one snapshot; each consuming mutation
+        // independently fences its commit. Joining Account cursor writers here
+        // needlessly serializes model publication and first-input readiness.
+        const current = await inReadSnapshot(async (tx) =>
+            await readExactCurrentPublisherAuthorityInTx(
                 tx,
                 {
                     ...registration.binding,
@@ -994,7 +1034,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                     const recipientCursors = activity.status === "applied"
                         ? await markSessionProjectionRecipientsChanged({ tx, sessionId: registration.binding.sessionId })
                         : [];
-                    return { ...activity, recipientCursors };
+                    return sessionRecipientPublicationResult({ ...activity, recipientCursors });
                 });
             } finally {
                 registrations.delete(params.socket);

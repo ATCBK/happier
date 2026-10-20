@@ -9,6 +9,8 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
+import { t } from '@/text';
+import { useDeviceType } from '@/utils/platform/responsive';
 
 import { formatGuardClock } from '../guardPresentation';
 import { describeGuardActivityRow, guardWayBackLabel } from './guardActivityPresentation';
@@ -32,11 +34,24 @@ export const MachineActivityRow = React.memo(function MachineActivityRow(props: 
     onPress?: () => void;
 }>) {
     const { theme } = useUnistyles();
+    // A phone has no room for a clock column: the time closes the receipt's text (lab `rg` G7p), and the glyph takes
+    // the rows' mark column, so a way back moved under the words starts where they do.
+    const phone = useDeviceType() === 'phone';
     const model = describeGuardActivityRow(props.entry);
     const tint = model.tone === 'danger' ? theme.colors.state.danger.textForeground
         : model.tone === 'attention' ? theme.colors.state.attention.textForeground : theme.colors.text.secondary;
     const { onWayBack, entry } = props;
     const actions = props.readOnly || !onWayBack ? [] : model.wayBack;
+    // A failed start says why in plain words and what to try; the daemon's diagnostic stays out of sight.
+    const failure = model.undone ? null : model.startFailure;
+    // The cause is one sentence and the next step its own line, so a phone never splits them mid-line.
+    const failureText = failure ? [t(failure.reasonKey), failure.nextStepKey ? t(failure.nextStepKey) : null]
+        .filter((part): part is string => part !== null).join('\n') : null;
+    const reasonParts = [model.reason, failureText].filter((part): part is string => part !== null);
+    const reason = reasonParts.length > 0 ? reasonParts.join('  ·  ') : null;
+    const glyph = <Icon name={model.icon} size={15} color={tint} />;
+    const time = formatGuardClock(model.at);
+    const facts = [model.figure ? '' : null, reason, props.place].filter((part): part is string => part !== null && part !== undefined).join('  ·  ');
     return (
         <Item
             testID={`machine-activity-${model.id}`}
@@ -44,18 +59,21 @@ export const MachineActivityRow = React.memo(function MachineActivityRow(props: 
             onPress={props.onPress}
             showDivider={props.showDivider}
             accessoryLayout="adaptive"
-            leftElement={
-                <View style={styles.lead}>
-                    <Text style={styles.time}>{formatGuardClock(model.at)}</Text>
-                    <Icon name={model.icon} size={15} color={tint} />
-                </View>
-            }
+            {...(phone ? { icon: glyph } : {
+                leftElement: (
+                    <View style={styles.lead}>
+                        <Text style={styles.time} numberOfLines={1}>{time}</Text>
+                        {glyph}
+                    </View>
+                ),
+            })}
             title={model.title}
             titleStyle={model.undone ? styles.struck : undefined}
-            subtitle={model.figure || model.reason || props.place ? (
+            subtitle={model.figure || reason || props.place || phone ? (
                 <Text style={styles.subtitle}>
                     {model.figure ? <Text style={styles.figure}>{model.figure}</Text> : null}
-                    {[model.figure ? '' : null, model.reason, props.place].filter((part): part is string => part !== null && part !== undefined).join('  ·  ')}
+                    {facts}
+                    {phone ? <Text style={styles.time}>{model.figure || facts ? `\n${time}` : time}</Text> : null}
                 </Text>
             ) : undefined}
             rightElement={actions.length > 0 ? (
@@ -82,7 +100,9 @@ const styles = StyleSheet.create((theme) => ({
         ...happierPageTextMetrics('meta'),
         color: theme.colors.text.tertiary,
         fontVariant: ['tabular-nums'],
-        width: 40,
+        // A clock column, never wrapped: a 24-hour time fits the floor, a 12-hour one ("03:48 PM") widens it.
+        minWidth: 40,
+        flexShrink: 0,
     },
     struck: {
         textDecorationLine: 'line-through',

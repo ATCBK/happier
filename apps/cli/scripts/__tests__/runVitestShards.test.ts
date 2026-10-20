@@ -1,6 +1,13 @@
 import { fileURLToPath } from 'node:url';
+import { once } from 'node:events';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { stripVTControlCharacters } from 'node:util';
 
 import { describe, expect, it, vi } from 'vitest';
+import { withTempDir } from '../../src/testkit/fs/tempDir';
+import { spawnTestProcess } from '../../src/testkit/process/spawn';
+import { resolveVitestNodeCommand } from '../../../../scripts/testing/vitestNodeCommand.mjs';
 
 import {
   buildVitestListArgs,
@@ -13,11 +20,18 @@ import {
   runCliVitestShardRuns,
 } from '../runVitestShards.mjs';
 
+const vitestEntrypoint = resolveVitestNodeCommand(fileURLToPath(new URL('../..', import.meta.url))).argsPrefix[0];
+
+function readManagedChildArgs(input: Readonly<{ args?: readonly string[] }>) {
+  const args = input.args ?? [];
+  return args[0] === vitestEntrypoint ? args.slice(1) : args;
+}
+
 const { runManagedChildCommandMock } = vi.hoisted(() => ({
   // The lane collection pass runs `vitest list --filesOnly --json <path>` before any
   // shard, so this stands in for the real writer rather than leaving the file absent.
   runManagedChildCommandMock: vi.fn(async (input: Readonly<{ args?: readonly string[] }>) => {
-    const args = input?.args ?? [];
+    const args = readManagedChildArgs(input);
     const jsonIndex = args.indexOf('--json');
     if (args[0] === 'list' && jsonIndex !== -1 && typeof args[jsonIndex + 1] === 'string') {
       const { writeFile } = await import('node:fs/promises');
@@ -37,6 +51,44 @@ vi.mock('../../../../scripts/testing/process/managedChildLifecycle.mjs', () => (
 }));
 
 describe('runVitestShards', () => {
+  it('runs the selected real Vitest file without a package-manager PATH', async () => {
+    await withTempDir('happier-cli-vitest-executable-', async directory => {
+      const emptyBin = join(directory, 'empty-bin');
+      const config = join(directory, 'vitest.config.mjs');
+      const marker = join(directory, 'selected-ran');
+      await mkdir(emptyBin);
+      await writeFile(config, `export default { root: ${JSON.stringify(directory)}, test: { globals: true, include: ['*.test.mjs'] } };\n`);
+      await writeFile(join(directory, 'selected.test.mjs'), `import { writeFileSync } from 'node:fs';\ntest('package-owned executable', () => { writeFileSync(${JSON.stringify(marker)}, 'ran'); expect(2 + 2).toBe(4); });\n`);
+      await writeFile(join(directory, 'outside.test.mjs'), "test('must remain unselected', () => { throw new Error('The runner widened its selected scope'); });\n");
+      const child = spawnTestProcess(process.execPath, [
+        fileURLToPath(new URL('../runVitestShards.mjs', import.meta.url)),
+        '--config', config, '--unit-checks', '--', 'selected.test.mjs',
+      ], {
+        cwd: directory,
+        // This child OS environment deliberately has no package-manager bins.
+        // The importing package, not an ambient/global Vitest, owns the tool.
+        env: { ...process.env, PATH: emptyBin },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let output = '';
+      child.stdout?.on('data', chunk => { output += chunk.toString(); });
+      child.stderr?.on('data', chunk => { output += chunk.toString(); });
+      try {
+        const [code, signal] = await once(child, 'close');
+        const plainOutput = stripVTControlCharacters(output);
+        expect({ code, signal }, plainOutput).toEqual({ code: 0, signal: null });
+        expect(await readFile(marker, 'utf8')).toBe('ran');
+        expect(plainOutput).toMatch(/Test Files\s+1 passed/);
+        expect(plainOutput).toMatch(/Tests\s+1 passed/);
+      } finally {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill('SIGTERM');
+          await once(child, 'close');
+        }
+      }
+    });
+  });
+
   it('retains the eight-shard default when no unit configuration is supplied', () => {
     expect(resolveVitestShardCount({})).toBe(8);
   });
@@ -151,11 +203,11 @@ describe('runVitestShards', () => {
 
       // Module entry starts the real runner through its process boundary.
       await vi.waitFor(() => {
-        expect(runManagedChildCommandMock.mock.calls.map(([input]) => input.args)).toContainEqual(
+        expect(runManagedChildCommandMock.mock.calls.map(([input]) => readManagedChildArgs(input))).toContainEqual(
           ['run', '--config', 'vitest.integration.config.ts', 'src/backends/catalog.runtimeAdapterConsumption.integration.test.ts'],
         );
       });
-      expect(runManagedChildCommandMock.mock.calls.filter(([input]) => input.args?.[0] === 'run')).toHaveLength(1);
+      expect(runManagedChildCommandMock.mock.calls.filter(([input]) => readManagedChildArgs(input)[0] === 'run')).toHaveLength(1);
     } finally {
       process.argv = prevArgv;
       if (prevShardCount === undefined) delete process.env.HAPPIER_CLI_VITEST_SHARDS;
@@ -173,11 +225,11 @@ describe('runVitestShards', () => {
       vi.resetModules();
       await import('../runVitestShards.mjs');
       await vi.waitFor(() => {
-        expect(runManagedChildCommandMock.mock.calls.map(([input]) => input.args)).toContainEqual(
+        expect(runManagedChildCommandMock.mock.calls.map(([input]) => readManagedChildArgs(input))).toContainEqual(
           expect.arrayContaining(['-s', 'test:import-cycles']),
         );
       });
-      const calls = runManagedChildCommandMock.mock.calls.map(([input]) => input.args ?? []);
+      const calls = runManagedChildCommandMock.mock.calls.map(([input]) => readManagedChildArgs(input));
       expect(calls.filter(args => args[0] === 'run').map(args => args.at(-1))).toEqual(['1/2', '2/2']);
       expect(calls).toContainEqual(['--test', 'scripts/prepack-script.test.mjs', 'scripts/stageManagedRuntimeArchives.test.mjs', 'scripts/runWorkspaceSyncRealIntegration.test.mjs', 'scripts/__tests__/daemonStartupImportBoundary.test.mjs']);
     } finally {
@@ -198,11 +250,11 @@ describe('runVitestShards', () => {
       vi.resetModules();
       await import('../runVitestShards.mjs');
       await vi.waitFor(() => {
-        expect(runManagedChildCommandMock.mock.calls.map(([input]) => input.args)).toContainEqual(
+        expect(runManagedChildCommandMock.mock.calls.map(([input]) => readManagedChildArgs(input))).toContainEqual(
           expect.arrayContaining(['-s', 'test:import-cycles']),
         );
       });
-      const calls = runManagedChildCommandMock.mock.calls.map(([input]) => input.args ?? []);
+      const calls = runManagedChildCommandMock.mock.calls.map(([input]) => readManagedChildArgs(input));
       expect(calls.filter(args => args[0] === 'list')).toHaveLength(0);
       expect(calls.filter(args => args[0] === 'run')).toEqual([['run', '--config', 'vitest.config.ts']]);
       expect(calls).toContainEqual(['--test', 'scripts/prepack-script.test.mjs', 'scripts/stageManagedRuntimeArchives.test.mjs', 'scripts/runWorkspaceSyncRealIntegration.test.mjs', 'scripts/__tests__/daemonStartupImportBoundary.test.mjs']);
@@ -228,11 +280,11 @@ describe('runVitestShards', () => {
       vi.resetModules();
       await import('../runVitestShards.mjs');
       await vi.waitFor(() => {
-        expect(runManagedChildCommandMock.mock.calls.map(([input]) => input.args)).toContainEqual(
+        expect(runManagedChildCommandMock.mock.calls.map(([input]) => readManagedChildArgs(input))).toContainEqual(
           expect.arrayContaining(['-s', 'test:import-cycles']),
         );
       });
-      const calls = runManagedChildCommandMock.mock.calls.map(([input]) => input.args ?? []);
+      const calls = runManagedChildCommandMock.mock.calls.map(([input]) => readManagedChildArgs(input));
       expect(calls.filter(args => args[0] === 'list')).toHaveLength(0);
       expect(calls.filter(args => args[0] === 'run')).toEqual([['run', '--config', 'vitest.config.ts', '--shard', `${part}/2`]]);
     } finally {
@@ -255,14 +307,14 @@ describe('runVitestShards', () => {
       process.exitCode = undefined;
       runManagedChildCommandMock.mockClear();
       // Vitest is the subprocess boundary: an empty run exits 1 without passWithNoTests.
-      runManagedChildCommandMock.mockImplementation(async input => input.args?.[0] === 'run'
+      runManagedChildCommandMock.mockImplementation(async input => readManagedChildArgs(input)[0] === 'run'
         ? { ok: true, code: 1, signal: null }
         : await defaultBoundary(input));
       process.argv = ['node', fileURLToPath(new URL('../runVitestShards.mjs', import.meta.url)), '--config', 'vitest.config.ts', '--unit-checks'];
       vi.resetModules();
       await import('../runVitestShards.mjs');
       await vi.waitFor(() => expect(process.exitCode).toBe(1));
-      const calls = runManagedChildCommandMock.mock.calls.map(([input]) => input.args ?? []);
+      const calls = runManagedChildCommandMock.mock.calls.map(([input]) => readManagedChildArgs(input));
       expect(calls).toEqual([['run', '--config', 'vitest.config.ts']]);
     } finally {
       runManagedChildCommandMock.mockImplementation(defaultBoundary);

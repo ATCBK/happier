@@ -1,8 +1,7 @@
 import type { SessionInitialAccessDraftV1, SessionAuthoringExecutionTargetV2, TemporaryComputerActivationRefV1 } from '@happier-dev/protocol';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import { nullable, optional } from 'zod/mini';
-import type { ZenTaskSource } from '@/sync/domains/todos/todoStoredContent';
+import { array, nullable, optional } from 'zod/mini';
 import type { Settings } from '../settings/settings';
 import { voiceSettingsParse } from '../settings/voiceSettings';
 import {
@@ -167,10 +166,10 @@ export type NewSessionComposerAttachmentSeedV1 = Readonly<{
 }>;
 
 // Retained only to import the predecessor device-local singleton draft.
-const NewSessionDraftExecutionTargetSchema = z.object({
+const NewSessionDraftExecutionTargetSchema = z.strictObject({
     ...SessionExecutionTargetV1Schema.shape,
     selectionOrigin: optional(MachinePoolSelectionOriginV1Schema),
-}).strict();
+});
 
 export interface NewSessionDraft {
     input: string;
@@ -181,7 +180,6 @@ export interface NewSessionDraft {
     instructionsDraft?: SessionInstructionsAuthoringDraft | null;
     /** Original admitted return destination, independent of editable execution placement. */
     authoringOrigin?: PluginUiNewSessionSeedOriginV1;
-    zenTaskSource?: ZenTaskSource;
     /**
      * Host-created attachment requests waiting for the mounted Composer to
      * resolve the current contribution catalog. These remain device-local
@@ -477,7 +475,7 @@ function parsePendingSettingsValue(raw: unknown, storedRead: boolean): Partial<S
             }
             const stored = storedRead ? definition.parseStoredValue(rawValue) : null;
             if (storedRead && !stored?.success) continue;
-            const parsed = definition.parseMutationValue(storedRead ? stored?.data : rawValue);
+            const parsed = definition.parseMutationValue(stored?.success ? stored.data : rawValue);
             if (!parsed.success) continue;
 
             Object.assign(out, { [key]: parsed.data });
@@ -647,8 +645,7 @@ export function loadNewSessionDraft(scope?: ServerAccountScope | null): NewSessi
         }
 
         const input = typeof parsed.input === 'string' ? parsed.input : '';
-        const parsedComposerAttachments = createStoredReadSchema(z.array(ComposerAttachmentDraftV1Schema)
-            .max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1))
+        const parsedComposerAttachments = createStoredReadSchema(z.array(ComposerAttachmentDraftV1Schema).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1)))
             .safeParse((parsed as Record<string, unknown>).composerAttachments);
         const composerAttachments = parsedComposerAttachments.success
             ? parsedComposerAttachments.data
@@ -668,7 +665,7 @@ export function loadNewSessionDraft(scope?: ServerAccountScope | null): NewSessi
             : targetServerId && selectedMachineId
                 ? SessionExecutionTargetV1Schema.parse({ serverId: targetServerId, machineId: selectedMachineId })
                 : null;
-        const parsedCurrentExecutionTarget = createStoredReadSchema(SessionAuthoringExecutionTargetV2Schema).nullable().safeParse(parsed.executionTarget);
+        const parsedCurrentExecutionTarget = nullable(createStoredReadSchema(SessionAuthoringExecutionTargetV2Schema)).safeParse(parsed.executionTarget);
         const executionTarget: SessionAuthoringExecutionTargetV2 | null = parsedCurrentExecutionTarget.success
             ? parsedCurrentExecutionTarget.data
             : legacyExecutionTarget
@@ -680,7 +677,7 @@ export function loadNewSessionDraft(scope?: ServerAccountScope | null): NewSessi
                     : {}),
             }
             : null;
-        const parsedActivationRef = createStoredReadSchema(TemporaryComputerActivationRefV1Schema).nullable().safeParse(parsed.temporaryComputerActivationRef);
+        const parsedActivationRef = nullable(createStoredReadSchema(TemporaryComputerActivationRefV1Schema)).safeParse(parsed.temporaryComputerActivationRef);
         const managedMachineSelection = nullable(ManagedMachineSelectionDraftReadSchema).safeParse(parsed.managedMachineSelection);
         const managedMachineAcquisition = nullable(ManagedMachineAcquisitionDraftReadSchema).safeParse(parsed.managedMachineAcquisition);
         const parsedOrganizationPlacement = createStoredReadSchema(SessionOrganizationPlacementV1Schema).safeParse((parsed as any).organizationPlacement);
@@ -816,7 +813,7 @@ export function loadNewSessionDraft(scope?: ServerAccountScope | null): NewSessi
             ? (parsed as any).auggieAllowIndexing
             : undefined;
         const automationDraft = sanitizeNewSessionAutomationDraft((parsed as any).automationDraft);
-        const initialTriggers = createStoredReadSchema(SessionInitialTriggerV1Schema).array().safeParse(parsed.initialTriggers);
+        const initialTriggers = array(createStoredReadSchema(SessionInitialTriggerV1Schema)).safeParse(parsed.initialTriggers);
         const initialSessionFacts = SessionIdentityAdditionsV1StoredSchema.safeParse(parsed.initialSessionFacts);
         const promptStack = SessionPromptStackV1StoredSchema.safeParse(parsed.promptStack);
         const instructionsDraft = readSessionInstructionsAuthoringDraft(parsed.instructionsDraft);

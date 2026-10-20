@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { renderScreen } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { AppPaneAction } from '@/components/appShell/panes/model/appPaneReducer';
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 
@@ -18,6 +20,7 @@ vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createT
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
+installDisconnectedServerSocketBoundary();
 const { AppPaneProvider, useAppPaneContext } = await import('@/components/appShell/panes/AppPaneProvider');
 const { storage } = await import('@/sync/domains/state/storage');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
@@ -28,6 +31,7 @@ const { readSessionTerminalWorkspaceForScope } = await import('@/components/sess
 
 beforeEach(async () => {
   viewportWidth = 1200;
+  await loadSyncSingletonForTests();
   await homes.reset();
   storage.getState().applyLocalSettings({ appPaneScopesV1: {} });
 });

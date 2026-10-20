@@ -7,6 +7,8 @@ interface CommandMenuRowProps {
     label: string;
     description?: string;
     icon?: React.ReactNode;
+    /** The choice is unavailable: its mark and label dim like a disabled `Item`; the description keeps full strength because it is the reason. */
+    disabled?: boolean;
     testID?: string;
 }
 
@@ -17,17 +19,17 @@ interface CommandMenuRowProps {
  * Renders: [icon?] [label] [description?]
  */
 export const CommandMenuRow = React.memo((props: CommandMenuRowProps) => {
-    const { label, description, icon, testID } = props;
+    const { label, description, icon, disabled, testID } = props;
 
     return (
         <View style={styles.container} testID={testID}>
             {icon != null && (
-                <View style={styles.iconContainer} testID={testID ? `${testID}:icon` : undefined}>
+                <View style={[styles.iconContainer, disabled && styles.dimmed]} testID={testID ? `${testID}:icon` : undefined}>
                     {icon}
                 </View>
             )}
             <View style={styles.textContainer}>
-                <Text style={styles.label} numberOfLines={1}>
+                <Text style={[styles.label, disabled && styles.dimmed]} numberOfLines={1}>
                     {label}
                 </Text>
                 {description != null && (
@@ -60,6 +62,7 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'column',
         gap: theme.space.s2,
     },
+    dimmed: { opacity: 0.5 },
     label: {
         color: theme.colors.text.primary,
         fontSize: 14,

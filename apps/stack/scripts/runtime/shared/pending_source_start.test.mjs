@@ -3,10 +3,34 @@ import test from 'node:test';
 import { writeFile, readFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { beginPendingSourceStart, readPendingSourcePreparation } from './pending_source_start.mjs';
+import { beginPendingSourceStart, readPendingSourcePreparation, SOURCE_START_SUPERSEDED_MARKER } from './pending_source_start.mjs';
+import { fileURLToPath } from 'node:url';
+import { sanitizeStackTestRunnerEnv } from '../../utils/test/test_env.mjs';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { runNodeCapture } from '../../testkit/core/run_node_capture.mjs';
 import { withJsonOwnerFileLock } from '../../utils/proc/jsonOwnerFileLock.mjs';
+
+test('real source runner emits canonical supersession and exits before starting services', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-superseded-runner-' });
+  const stackName = 'fixture-superseded-runner';
+  const stackBaseDir = fixture.path(stackName);
+  const successor = await beginPendingSourceStart({ stackBaseDir });
+  t.after(() => successor.dispose());
+  const envPath = fixture.path(stackName, 'env');
+  await writeFile(envPath, '');
+  const before = await readFile(fixture.path(stackName, 'source-runtime/start.pending.json'), 'utf8');
+  const repoDir = fileURLToPath(new URL('../../../../../', import.meta.url));
+  const result = await runNodeCapture([fileURLToPath(new URL('../../run.mjs', import.meta.url)),
+    '--runtime=source', '--source-start-request-id=older-request'], {
+    env: { ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: fixture.root, repoDir }),
+      HAPPIER_STACK_STORAGE_DIR: fixture.root, HAPPIER_STACK_HOME_DIR: fixture.root,
+      HAPPIER_STACK_STACK: stackName, HAPPIER_STACK_ENV_FILE: envPath },
+  });
+  assert.equal(result.code, 0, result.stderr);
+  assert.ok(result.stdout.split('\n').includes(SOURCE_START_SUPERSEDED_MARKER));
+  assert.equal(await readFile(fixture.path(stackName, 'source-runtime/start.pending.json'), 'utf8'), before);
+  await assert.rejects(readFile(fixture.path(stackName, 'stack.runtime.json')), { code: 'ENOENT' });
+});
 
 test('retiring a completed start cancels its queued background producer without cancelling the serving signal', async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-source-background-retirement-' });

@@ -23,7 +23,7 @@ import type { MachineSpawnReadiness } from '@/sync/domains/machines/identity/res
 import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { getMachineDisplaySubtitle } from '@/sync/domains/machines/machineDisplayRenderable';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import type { NewSessionPromptStore } from '@/components/sessions/new/hooks/screenModel/newSessionPromptStore';
 import { createTemporaryComputerTeamAccessActionChip } from '@/components/sessions/agentInput/definitions/createTemporaryComputerTeamAccessActionChip';
 
@@ -88,6 +88,7 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
     selectedMachineIsWindows: boolean;
     effectiveWindowsRemoteSessionLaunchMode: WindowsRemoteSessionLaunchMode | null;
     windowsTerminalAvailable: boolean;
+    onWindowsTerminalIntent?: () => void;
     setWindowsRemoteSessionLaunchModeOverride: (mode: WindowsRemoteSessionLaunchMode | null) => void;
     temporaryComputerTeamAccess?: Readonly<{
         authorized: boolean;
@@ -123,7 +124,8 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
         scope,
     ]);
     const selectedMachineReadinessStatus = params.selectedMachineSpawnReadiness?.status;
-    const selectedMachineLabel = getMachineDisplaySubtitle(params.selectedMachine ?? undefined, params.selectedMachineId ?? '');
+    // The sentence names the machine, or says "this machine" while its details are locked or loading; never its id.
+    const selectedMachineLabel = getMachineSentenceName(params.selectedMachine);
     // The composer's status line speaks only when the machine cannot take the session: a ready machine
     // is already named by its chip, and healthy state stays quiet (DESIGN "Status and badges", lab
     // `.l12-sr`). A green "Online" beside a blocked-launch badge contradicted it.
@@ -259,6 +261,7 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
         selectedMachineIsWindows: params.selectedMachineIsWindows,
         windowsRemoteSessionLaunchMode: params.effectiveWindowsRemoteSessionLaunchMode,
         windowsTerminalAvailable: params.windowsTerminalAvailable,
+        onWindowsTerminalIntent: params.onWindowsTerminalIntent,
         onWindowsRemoteSessionLaunchModeChange: params.setWindowsRemoteSessionLaunchModeOverride,
         onActionShortcutPress: handleActionShortcutPress,
     });

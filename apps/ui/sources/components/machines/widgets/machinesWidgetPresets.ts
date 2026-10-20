@@ -19,6 +19,48 @@ export type MachinesWidgetPresetMachine = Readonly<{
   machineId: string;
 }>;
 
+/**
+ * The preset's health group is pinned to the first machine that needs the
+ * person, else this computer while it is online, else the fleet's first online machine, else the first that has reported its resources,
+ * else the fleet's first machine. A browser is no machine, so a fleet page opened from one still binds the group:
+ * never three "Machine is still needed" cards. Until the census loads, only positive online evidence can take the pin:
+ * a warm offline row or stale publication cannot lock it before an online machine arrives. A publication can outlive its machine going
+ * away, so "reports" never outranks "is online".
+ */
+export function selectMachinesPresetMachine(input: Readonly<{
+  serverId: string | null;
+  presenceLoaded: boolean;
+  needsYou: readonly Readonly<{ serverId?: string | null; machineId: string }>[];
+  thisComputerMachineId: string | null;
+  /** `JSON.stringify([serverId, machineId])`, as the fleet attention owner publishes them. */
+  reportingMachineKeys: readonly string[];
+  /**
+   * The fleet as the page lists it: its first online machine, its first machine, and which are online
+   * (`JSON.stringify([serverId, machineId])`).
+   */
+  fleet?: Readonly<{ firstOnline: MachinesWidgetPresetMachine | null; first: MachinesWidgetPresetMachine | null; onlineKeys?: readonly string[] }>;
+}>): MachinesWidgetPresetMachine | null {
+  const first = input.needsYou[0];
+  if (first?.serverId) return { serverId: first.serverId, machineId: first.machineId };
+  // This computer leads only while it can report: offline, it would pin the group to "last seen" three times over
+  // while another machine is online.
+  const thisComputerAway = Boolean(input.fleet?.firstOnline && input.fleet.onlineKeys
+    && !input.fleet.onlineKeys.includes(JSON.stringify([input.serverId, input.thisComputerMachineId])));
+  if (input.thisComputerMachineId && input.serverId && !thisComputerAway
+    && (input.presenceLoaded || input.fleet?.onlineKeys?.includes(JSON.stringify([input.serverId, input.thisComputerMachineId])))) {
+    return { serverId: input.serverId, machineId: input.thisComputerMachineId };
+  }
+  if (input.fleet?.firstOnline) return input.fleet.firstOnline;
+  if (!input.presenceLoaded) return null;
+  for (const key of input.reportingMachineKeys) {
+    const parsed: unknown = JSON.parse(key);
+    if (Array.isArray(parsed) && typeof parsed[0] === 'string' && typeof parsed[1] === 'string') {
+      return { serverId: parsed[0], machineId: parsed[1] };
+    }
+  }
+  return input.fleet?.first ?? null;
+}
+
 const widget = (
   id: string,
   definition: MachineBuiltinWidgetIdV1,

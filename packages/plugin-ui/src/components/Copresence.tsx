@@ -8,6 +8,7 @@ import {
   HAPPIER_INSTANT_AGENT_CURSOR_MOTION,
   HappierAgentCursor,
   type HappierAgentPageRect,
+  type HappierAgentPoint,
   type HappierAgentTarget,
 } from '../presentation/copresence/AgentCursor.js';
 import {
@@ -223,6 +224,12 @@ export function PresenceCapsule(props: PresenceCapsuleProps): ReactElement | nul
 export type AgentCursorProps = Readonly<{
   /** Where the agent acts, normalized to the page (0..1); `null` when it is not acting. */
   target: HappierAgentTarget | null;
+  /**
+   * The agent's latest pointer action, kept by you until the next one replaces it. Each new `id` is shown
+   * once (arrive, hold while `target` is live, leave) even when the action began and ended between two
+   * renders, which `target` alone cannot show. Pass it for any stream whose actions can be short.
+   */
+  point?: HappierAgentPoint | null;
   /** Where the page is drawn inside this layer when it does not fill it (a letterboxed stream). */
   pageRect?: HappierAgentPageRect | null;
   renderAgentMark?: (size: number) => ReactNode;
@@ -244,6 +251,7 @@ export function AgentCursor(props: AgentCursorProps): ReactElement {
   return (
     <HappierAgentCursor
       target={props.target}
+      point={props.point}
       pageRect={props.pageRect}
       renderAgentMark={props.renderAgentMark}
       renderGlyph={host.renderGlyph}

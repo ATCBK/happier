@@ -1,4 +1,5 @@
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { ProcessEnvInput } from '@/utils/processEnv/buildScopedProcessEnv';
 import type { ProjectCommandAttachmentV1 } from '@happier-dev/protocol/actions/operations/v1';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { createHash } from 'node:crypto';
@@ -33,12 +34,16 @@ export type ProjectSetupExecutionInput = Readonly<{
     operation: ProjectSetupOperationContext;
     terminalSessions: Pick<TerminalPtySessionManager, 'prepare' | 'ensure' | 'waitForExit' | 'requestStop' | 'observeOutput'>;
     environmentIo: ProjectNativeEnvironmentIoForHost;
-    hostEnvironment?: NodeJS.ProcessEnv;
+    hostEnvironment?: ProcessEnvInput;
     platform?: NodeJS.Platform;
     originRun?: ProjectCommandAttachmentV1['originRun'];
     sourceWorkspace?: ProjectCommandAttachmentV1['sourceWorkspace'];
     script?: ProjectCommandAttachmentV1['script'];
     lastCleanSyncAtMs?: ProjectCommandAttachmentV1['lastCleanSyncAtMs'];
+    /** Containing installed operation revalidates Home/Machine after native preparation. */
+    beforeNativeEffect?: () => Promise<void>;
+    /** A containing finite command produces its environment with the real final launch. */
+    deferEnvironmentToLaunch?: boolean;
 }>;
 
 export type ProjectSetupExecutionOutcome = Readonly<{
@@ -201,6 +206,9 @@ export function createProjectNativeLaunchAdmission(input: Pick<ProjectSetupExecu
 
 export async function authorizePreparedProjectCommand(input: ProjectSetupExecutionInput, plan: PreparedProjectSetupPlan,
     command: PreparedProjectSetupCommand, signal: AbortSignal): Promise<HostAuthorizedPluginExecLaunch> {
+    // Launch production can activate toolchain hooks or a native adapter before
+    // a terminal exists; it is itself an effect, not passive tuple inspection.
+    await input.beforeNativeEffect?.();
     const assertCurrent = () => {
         if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
         if (plan.environmentAdapterLease && !plan.environmentAdapterLease.isCurrent()
@@ -305,6 +313,12 @@ async function executePreparedProjectSetup(input: ProjectSetupExecutionInput): P
     if (prepared.previousSuccess && plan.purpose === 'setup') {
         return finish({ ok: true, result: { kind: 'success', reviewedEffectDigest: plan.reviewedEffectDigest } });
     }
+    if (plan.purpose === 'setup' && plan.commands.length === 0 && input.deferEnvironmentToLaunch) {
+        // Consent and current inputs were checked above. With no setup process,
+        // environment production belongs to the following real launch; it may
+        // require that command to wrap it. No setup completion is claimed here.
+        return finish({ ok: true, result: { kind: 'notRequired', reviewedEffectDigest: plan.reviewedEffectDigest } });
+    }
     const operationId = input.operation.operationAcceptance?.operationId ?? input.operation.actionRequestId;
     if (!operationId || !input.requesterAccountId) return failure('project_setup_operation_unavailable');
     const store = createProjectSetupSuccessStore({ homeDir: preparation.successHomeDir });
@@ -323,6 +337,7 @@ async function executePreparedProjectSetup(input: ProjectSetupExecutionInput): P
         if (fresh.kind !== 'prepared') return fresh.kind === 'refused' ? failure(fresh.code)
             : failure(fresh.kind === 'pendingApproval' ? fresh.code : 'project_setup_effect_changed');
         try {
+            await input.beforeNativeEffect?.();
             await produceProjectLaunchEnvironmentForHost({
                 cwd: fresh.plan.workspace.rootPath, env: projectBaseEnvironment(input, fresh.plan),
                 projectLaunch: createProjectNativeLaunchAdmission(input, fresh.plan), signal,
@@ -359,6 +374,7 @@ async function executePreparedProjectSetup(input: ProjectSetupExecutionInput): P
                 : failure(current.kind === 'pendingApproval' ? current.code : 'project_setup_effect_changed');
             if (fresh.plan.environmentAdapterLease && !fresh.plan.environmentAdapterLease.isCurrent()
                 || (command.kind === 'pluginNative' || command.kind === 'pluginNativeReference') && !command.lease.isCurrent()) return failure('native_adapter_retired');
+            await input.beforeNativeEffect?.();
             const executed = await executeProjectFiniteProcess({ ...admitted, terminalSessions: input.terminalSessions,
                 launch, signal, step, totalSteps: plan.commands.length });
             if (executed.kind !== 'no_launch') kind = executed.kind;

@@ -11,9 +11,12 @@ import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { Text } from '@/components/ui/text/Text';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
-import { WorkerUpdateCard } from './WorkerUpdateCard';
+import { WorkerUpdateCard, describeWorkerFollowLine } from './WorkerUpdateCard';
 import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
+vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
@@ -26,6 +29,9 @@ const readerBoundaries = vi.hoisted(() => ({ fetch: vi.fn(), machineRpc: vi.fn()
 vi.mock('@/utils/system/runtimeFetch', () => ({ runtimeFetch: (...args: unknown[]) => readerBoundaries.fetch(...args) }));
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () =>
     (await import('@/dev/testkit/mocks/serverScopedRpc')).createServerScopedMachineRpcBoundaryMock(readerBoundaries.machineRpc));
+
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
 
 afterEach(async () => { await standardCleanup(); readerBoundaries.fetch.mockReset(); readerBoundaries.machineRpc.mockReset(); vi.restoreAllMocks(); });
 
@@ -238,5 +244,18 @@ describe('WorkerUpdateCard hosted navigation', () => {
         pushes.forEach((push, index) => expect(push).toHaveBeenCalledWith(buildScopedSessionRouteHref({
             sessionId: `child-${index}`, serverId: `server-${index}`,
         })));
+    });
+});
+
+describe('WorkerUpdateCard why / delivery line', () => {
+    it('names the routes that matched, then how the receiver accepted it, and says nothing when unknown', () => {
+        expect(describeWorkerFollowLine([{ kind: 'relation', relation: 'manager' }, { kind: 'rule' }], { status: 'next_turn', reason: null }))
+            .toBe('sessionWork.workerFollow.manager · sessionWork.workerFollow.rule · sessionWork.workerFollow.nextTurn');
+        // A held or muted reason wins over a status: the receiver did not take it in yet.
+        expect(describeWorkerFollowLine([{ kind: 'relation', relation: 'follower' }], { status: 'queued', reason: 'muted' }))
+            .toBe('sessionWork.workerFollow.follower · sessionWork.workerFollow.muted');
+        // Unknown delivery is not promoted to a claim; no route and no delivery shows no line.
+        expect(describeWorkerFollowLine([{ kind: 'rule' }], { status: null, reason: null })).toBe('sessionWork.workerFollow.rule');
+        expect(describeWorkerFollowLine(undefined, undefined)).toBeNull();
     });
 });

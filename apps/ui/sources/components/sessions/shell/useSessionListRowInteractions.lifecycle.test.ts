@@ -1,7 +1,8 @@
 import { act } from 'react-test-renderer';
+import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { renderHook } from '@/dev/testkit';
+import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { getStorage } from '@/sync/domains/state/storage';
 import { DEFAULT_SESSION_FOLDERS_V1 } from '@/sync/domains/session/folders';
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
@@ -27,13 +28,32 @@ function input(): UseSessionListRowInteractionsInput {
 }
 
 describe('Session list canonical carry retirement', () => {
-    afterEach(() => { getStorage().setState({ profileScope: null }); });
+    afterEach(() => { standardCleanup(); getStorage().setState({ profileScope: null }); });
+
+    it('does not re-render mounted drag consumers when the list receives unchanged inputs', async () => {
+        getStorage().setState({ profileScope: scope });
+        let renders = 0;
+        const Row = React.memo(function Row(_props: { onDragStart: (key: string) => void }) {
+            renders += 1;
+            return null;
+        });
+        function List(props: { value: UseSessionListRowInteractionsInput }) {
+            const interactions = useSessionListRowInteractions(props.value);
+            return React.createElement(Row, { onDragStart: interactions.handleDragStart });
+        }
+        const value = input();
+        const screen = await renderScreen(React.createElement(List, { value }));
+        const mounted = renders;
+        await screen.update(React.createElement(List, { value: { ...value } }));
+        expect(renders - mounted).toBe(0);
+        await screen.unmount();
+    });
 
     it('clears the lifted row and retires its source when the realm cancels externally', async () => {
         getStorage().setState({ profileScope: scope });
         const hook = await renderHook(() => useSessionListRowInteractions(input()));
         const runtime = hook.getCurrent().entityDragDrop.runtime;
-        act(() => hook.getCurrent().handleDragStart(sessionKey));
+        act(() => { hook.getCurrent().handleDragStart(sessionKey); });
         expect(hook.getCurrent().draggingSessionKey).toBe(sessionKey);
         const sourceId = runtime.getSnapshot().sourceId!;
         act(() => runtime.cancel('window-blur'));
@@ -59,12 +79,12 @@ describe('Session list canonical carry retirement', () => {
         getStorage().setState({ profileScope: scope });
         const initial = input();
         const hook = await renderHook((props: UseSessionListRowInteractionsInput) => useSessionListRowInteractions(props), { initialProps: initial });
-        act(() => hook.getCurrent().handleDragStart(sessionKey));
+        act(() => { hook.getCurrent().handleDragStart(sessionKey); });
         await hook.rerender({ ...initial, listItems: [items[0]!] });
         expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().phase).toBe('idle');
         expect(hook.getCurrent().activeDragSnapshot).toBeNull();
         await hook.rerender(initial);
-        act(() => hook.getCurrent().handleDragStart(sessionKey));
+        act(() => { hook.getCurrent().handleDragStart(sessionKey); });
         act(() => hook.getCurrent().unregisterTreeRowBounds(sourceRowId));
         expect(hook.getCurrent().entityDragDrop.runtime.getSnapshot().phase).toBe('idle');
         await hook.unmount();

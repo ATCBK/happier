@@ -5,7 +5,7 @@ import { SCM_WORKTREES_ENRICHMENT_MAX_PATHS, type ScmStatusSnapshotRequest, type
     type ScmWorktreesEnrichmentResponse } from '@happier-dev/protocol/scm';
 import { runScmRoute } from '@/scm/rpc/dispatch';
 import { runWithScmBackendRegistryLease } from '@/scm/scmBackendCatalog';
-import { canonicalAbsolutePathsEqual, isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
+import { canonicalAbsolutePathsEqual, isCanonicalAbsolutePathInsideRoot, resolveCanonicalAbsolutePath } from '@/utils/path/expandHomeDirPath';
 import { readWorktreeChangeFingerprint } from '@/scm/readWorktreeChangeFingerprint';
 import type { StorageWorktree } from '@/storage/categories/types';
 import { dirname, join } from 'node:path';
@@ -46,6 +46,29 @@ export async function readStorageWorktrees(input: Readonly<{
     }
     if (!input.cwds.length && !candidates.size) return [];
     return runWithScmBackendRegistryLease(input.registry, async registry => {
+        // One inspection's consumers share the same worktree evidence. A later
+        // review/effect calls this owner again and receives entirely fresh facts.
+        const snapshots = new Map<string, Promise<ScmStatusSnapshotResponse>>();
+        const fingerprints = new Map<string, ReturnType<typeof readWorktreeChangeFingerprint>>();
+        const readSnapshot = (cwd: string) => runScmRoute<ScmStatusSnapshotRequest, ScmStatusSnapshotResponse>({
+            request: { cwd }, workingDirectory: cwd, registry, onNonRepository: () => ({ success: false }),
+            runWithBackend: ({ context, selection }) => {
+                const root = selection.detection.rootPath;
+                const key = root ? resolveCanonicalAbsolutePath(root)?.comparisonKey : undefined;
+                const captured = key ? snapshots.get(key) : undefined;
+                if (captured) return captured;
+                const current = selection.backend.statusSnapshot
+                    ? Promise.resolve(selection.backend.statusSnapshot({ context, request: { cwd } })) : Promise.resolve({ success: false });
+                if (key) snapshots.set(key, current);
+                return current;
+            },
+        });
+        const readFingerprint = (path: string) => {
+            const key = resolveCanonicalAbsolutePath(path)?.comparisonKey ?? path;
+            let current = fingerprints.get(key);
+            if (!current) { current = readWorktreeChangeFingerprint(path); fingerprints.set(key, current); }
+            return current;
+        };
         const worktrees = new Map<string, StorageWorktree>();
         const anchors: string[] = [];
         for (const path of candidates) {
@@ -56,12 +79,7 @@ export async function readStorageWorktrees(input: Readonly<{
         }
         const visited = new Set<string>();
         for (const cwd of new Set([...input.cwds, ...anchors])) {
-            const result = await runScmRoute<ScmStatusSnapshotRequest, ScmStatusSnapshotResponse>({
-                request: { cwd }, workingDirectory: cwd, registry,
-                onNonRepository: () => ({ success: false }),
-                runWithBackend: async ({ context, selection }) => selection.backend.statusSnapshot
-                    ? selection.backend.statusSnapshot({ context, request: { cwd } }) : { success: false },
-            });
+            const result = await readSnapshot(cwd);
             if (!result.success || !result.snapshot?.repo.rootPath) continue;
             const repositoryRoot = result.snapshot.repo.worktrees.find(worktree => worktree.isMain)?.path ?? result.snapshot.repo.rootPath;
             if (visited.has(repositoryRoot)) continue;
@@ -95,11 +113,7 @@ export async function readStorageWorktrees(input: Readonly<{
             }
             await Promise.all(registered.map(async worktree => {
                 const [snapshot, fingerprint] = await Promise.all([
-                    runScmRoute<ScmStatusSnapshotRequest, ScmStatusSnapshotResponse>({ request: { cwd: worktree.path },
-                        workingDirectory: worktree.path, registry, onNonRepository: () => ({ success: false }),
-                        runWithBackend: async ({ context, selection }) => selection.backend.statusSnapshot
-                            ? selection.backend.statusSnapshot({ context, request: { cwd: worktree.path } }) : { success: false },
-                    }), readWorktreeChangeFingerprint(worktree.path),
+                    readSnapshot(worktree.path), readFingerprint(worktree.path),
                 ]);
                 const pr = snapshot.success ? snapshot.snapshot?.pullRequestStatus : undefined;
                 const pullRequestState = readStorageWorktreePullRequestState(pr);
@@ -115,7 +129,7 @@ export async function readStorageWorktrees(input: Readonly<{
             const retention = main?.facts?.retention;
             if (main && retention?.kind === 'main') {
                 const dependentFingerprints = await Promise.all((retention.losses?.dependentWorktrees ?? [])
-                    .map(async path => [path, await readWorktreeChangeFingerprint(path)] as const));
+                    .map(async path => [path, await readFingerprint(path)] as const));
                 const fingerprint = main.fingerprint && dependentFingerprints.every(([, value]) => value.kind === 'available')
                     ? `sha256:${createHash('sha256').update(JSON.stringify([main.fingerprint, retention.fingerprint, dependentFingerprints])).digest('hex')}` : undefined;
                 worktrees.set(main.path, { ...main, fingerprint });

@@ -60,6 +60,7 @@ const PLUGIN_UI_ICON_TOKEN_TO_ICON_NAME: Readonly<Record<PluginUiIconTokenV1, Ic
     waiting: 'clock',
     list: 'list',
     board: 'kanban',
+    filter: 'funnel-simple',
 });
 
 /** Glyph rendered for a missing or non-canonical semantic icon token. */

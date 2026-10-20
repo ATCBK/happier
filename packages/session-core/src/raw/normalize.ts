@@ -7,7 +7,7 @@ import { readEmptyCanonicalTurnDiffToolCallId, shouldSuppressEmptyCanonicalTurnD
 import { SessionForkVisualOriginV1Schema } from '@happier-dev/protocol/sessions/board/forkVisualCopies';
 import { TranscriptRawAgentEventV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 
 import type { MessageMeta } from "../messages/messageMetaTypes.js";
 import { markUnsupportedContentMeta } from "../messages/unsupportedContentMeta.js";

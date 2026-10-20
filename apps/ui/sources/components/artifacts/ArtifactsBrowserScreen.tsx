@@ -17,6 +17,7 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { PageContentColumn } from '@/components/ui/lists/PageContentColumn';
 import { ItemList } from '@/components/ui/lists/ItemList';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
@@ -103,6 +104,7 @@ export function ArtifactsBrowserScreen(): React.ReactElement {
         void sync.fetchArtifactsList().then(() => setLoadFailed(false), () => setLoadFailed(true));
     }, []);
     // The browser opening is the intent to read the list; the sync owner keeps it fresh after that.
+    React.useEffect(() => sync.observeArtifactProvenance(), []);
     React.useEffect(refresh, [refresh]);
     return <ArtifactsBrowser artifacts={artifacts} folders={folders} loaded={loaded} loadFailed={loadFailed} onRetry={refresh} usage={usage} />;
 }
@@ -148,7 +150,7 @@ export function ArtifactsBrowser(props: Readonly<{
         else router.push(artifactViewRoute(key) as never);
     }, [artifacts, besidePage, router]);
     const openRow = artifacts.find((artifact) => artifact.id === openId) ?? null;
-    const paneOpen = besidePage && openRow !== null;
+    const paneOpen = openRow !== null;
 
     const model = useHappierCollection<ArtifactBrowserRow>({
         items: rows,
@@ -226,6 +228,8 @@ export function ArtifactsBrowser(props: Readonly<{
             <ItemList pageColumn="wide">
                 <PageContentColumn>
                     {header}
+                    {/* The page's sheet edge, shared with the header and the List and Grid views (Settings → Folders does the same). */}
+                    <ItemGroup surface="none" header="none">
                     <ArtifactFolderTree
                         ref={folderTree}
                         testID="artifacts:folders"
@@ -236,6 +240,7 @@ export function ArtifactsBrowser(props: Readonly<{
                         onOpenArtifact={openArtifact}
                         onArtifactDeleted={rowCommands.deleted}
                     />
+                    </ItemGroup>
                 </PageContentColumn>
             </ItemList>
         </CoreCollectionScope>

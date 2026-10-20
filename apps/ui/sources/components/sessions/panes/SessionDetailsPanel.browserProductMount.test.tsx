@@ -1,9 +1,9 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DaemonContributionRegistryProjectionDescribeResponseSchema, MACHINE_PLAIN_DATA_KEY_MARKER, PluginProjectionV2Schema, SessionDiscussionOpenedSummaryV1Schema } from '@happier-dev/protocol';
+import { DaemonContributionRegistryProjectionDescribeResponseSchema, MACHINE_PLAIN_DATA_KEY_MARKER, PluginProjectionV2Schema, DiscussionOpenedSummaryV1Schema } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
 import { createMachineFixture, flushHookEffects, renderScreen } from '@/dev/testkit';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -41,7 +41,7 @@ const runtime = installSessionPaneRuntimeTestHarness({
         vi.spyOn(socket, 'emit').mockReturnValue(socket);
         vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload) => {
             if (event !== 'rpc-call') throw new Error(`Unexpected Browser pane transport event: ${event}`);
-            const request = z.object({ method: z.string(), params: z.unknown() }).passthrough().parse(payload);
+            const request = z.looseObject({ method: z.string(), params: z.unknown() }).parse(payload);
             if (request.method === `machine-1:${RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE}`) {
                 return { ok: true, result: DaemonContributionRegistryProjectionDescribeResponseSchema.parse({
                     protocolVersion: 1, projection: PluginProjectionV2Schema.parse({ v: 2, generation: 9, familiesById: {} }),
@@ -287,7 +287,7 @@ describe('SessionDetailsPanel browser product mount', () => {
 
     it('replaces an opened discussion title under the same real tab key', async () => {
         await renderScreen(<runtime.Wrapper />);
-        const { SessionDiscussionDetailsView } = await import('@/components/sessions/conversations/SessionDiscussionDetailsView');
+        const { DiscussionDetailsView } = await import('@/components/discussions/DiscussionDetailsView');
         const tab = createSessionDiscussionDetailsTab({
             kind: 'discussion', address: { serverId: runtime.serverId, sessionId: 's1' }, discussionId: 'discussion-1',
         });
@@ -297,14 +297,17 @@ describe('SessionDetailsPanel browser product mount', () => {
         const input = await renderInput(runtime.pane.scopeState!.details.tabs[0]);
         const renderer = (await renderers()).find(candidate => candidate.id === 'session-discussion');
         const element = renderer?.render(input);
-        if (!React.isValidElement<React.ComponentProps<typeof SessionDiscussionDetailsView>>(element)) throw new Error('Expected discussion destination');
-        const opened = SessionDiscussionOpenedSummaryV1Schema.parse({
-            id: 'discussion-1', sessionId: 's1', creationLocalId: null, title: 'Release readiness',
+        if (!React.isValidElement<React.ComponentProps<typeof DiscussionDetailsView>>(element)) throw new Error('Expected discussion destination');
+        const opened = DiscussionOpenedSummaryV1Schema.parse({
+            id: 'discussion-1', ownerAccountId: runtime.accountScope?.accountId, encryptionMode: 'plain',
+            keyReadiness: true, dataEncryptionKey: null, access: 'owner',
+            anchor: { kind: 'session', sessionId: 's1' }, creationLocalId: null, title: 'Release readiness',
             latestMessage: { id: 'message-1', localId: null, seq: 1, authorAccountId: null,
                 accountActor: null, producerV1: null, createdAt: 1 },
             messageSeq: 1, lastReadSeq: 1, unreadCount: 0, unreadMentionCount: 0,
             recentAuthorAccountIds: [], archivedAt: null,
-            capabilities: { postMessages: true, rename: true, archive: true, restore: false, askAgent: true, sendToSession: true },
+            capabilities: { postMessages: true, rename: true, archive: true, restore: false, askAgent: true, sendToSession: true,
+                manageAccess: true, leave: false },
         });
         await act(async () => element.props.onOpened?.(opened));
         expect(runtime.pane.scopeState?.details.tabs).toHaveLength(1);

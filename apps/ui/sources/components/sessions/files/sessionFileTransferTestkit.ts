@@ -27,7 +27,9 @@ export function transferMachine(overrides: Partial<Machine> = {}): Machine {
         daemonState: MachinePublishedDaemonStateV1Schema.parse({ status: 'running', transfer: {
             supported: { import: true, export: true },
             listenerClasses: {
-                loopback_http: { enabled: false, configured: false, active: false },
+                // Iroh finite transfers require the daemon's declared loopback
+                // application, even while its lazy listener is inactive.
+                loopback_http: { enabled: true, configured: true, active: false },
                 tailscale_serve_https: { enabled: false, configured: false, active: false },
             },
             lifecycle: { mode: 'lazy_idle_shutdown', version: 1 },
@@ -49,7 +51,7 @@ export async function resetTransferFixture(): Promise<void> {
     }
     await setActiveServer({ serverId: 'server-1' });
     storage.setState({
-        sessions: {}, machines: {}, machineListByServerId: {}, sessionListRowsByServerId: {},
+        sessions: {}, machines: {}, machineListByServerId: {}, machineListStatusByServerId: {}, sessionListRowsByServerId: {},
         ordinarySessionListMembershipByServerId: {}, concurrentSessionListCacheByServerId: {}, sessionListIndexByServerId: {},
         profileScope: { serverId: 'server-1', accountId: 'alice' },
     });
@@ -74,6 +76,8 @@ export function installTransferProjection(input: Readonly<{
         sessions: session ? { [sessionId]: session } : {},
         machines: input.globalMachine ? { [input.globalMachine.id]: input.globalMachine } : machine ? { [machine.id]: machine } : {},
         machineListByServerId: { ...state.machineListByServerId, [serverId]: machine ? [machine] : null },
+        // A settled Home inventory wins over the active display-map fallback.
+        machineListStatusByServerId: { ...state.machineListStatusByServerId, [serverId]: 'idle' },
         profileScope: { serverId, accountId: 'alice' },
     }));
 }

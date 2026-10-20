@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { clearTimeout, setTimeout } from 'node:timers';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
@@ -428,6 +429,31 @@ describe('startHappyServer (MCP integration)', () => {
           }),
         ]),
       );
+      const workspacePolicyRaw = await client.callTool({
+        name: 'action_options_resolve',
+        arguments: {
+          actionId: 'workspace.sync.relationship.create',
+          fieldPath: 'contentPolicy',
+          draftInput: {
+            sourceWorkspaceRefId: '46bcce80-a314-400a-98eb-656df965e06e',
+            targetMachineId: '58f6e63a-cd69-4302-83f1-325d10da7ec3',
+            targetPath: '/home/happier/mqa2-c22-sync-target',
+          },
+        },
+      });
+      const workspacePolicy = parseMcpJsonText(workspacePolicyRaw);
+      expect(workspacePolicy).toMatchObject({
+        actionId: 'workspace.sync.relationship.create',
+        fieldPath: 'contentPolicy',
+        options: expect.arrayContaining([
+          expect.objectContaining({
+            value: expect.objectContaining({
+              selection: 'git_worktree',
+              policyDigest: expect.any(String),
+            }),
+          }),
+        ]),
+      });
       const claudeBackendOption = resolvedOptions.options.find((option: any) => option.value === 'agent:happier.agent.claude/claude');
       expect(claudeBackendOption).toBeTruthy();
 

@@ -1,3 +1,4 @@
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { describe, expect, it } from 'vitest';
 import { ActionIdSchema, createActionExecutor } from '@happier-dev/protocol';
 
@@ -73,7 +74,7 @@ describe('workflow eligible Event catalog through Actions', () => {
       { surface: 'cli', authority: 'account_automation' })).resolves.toMatchObject({
       ok: false, errorCode: 'server_scope_mismatch',
     });
-    const disabled = createActionExecutor({
+    const disabled = createActionExecutor({ ...createUnavailableActionTransportDeps(),
       isActionEnabled: () => false,
     });
     await expect(disabled.execute(actionId, { machineId: 'machine-1' }, { surface: 'agent' }))

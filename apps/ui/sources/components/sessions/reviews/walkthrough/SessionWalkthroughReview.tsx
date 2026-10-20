@@ -3,7 +3,10 @@ import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import type { WalkthroughReviewSlots } from '@/components/sessions/files/walkthrough/WalkthroughView';
-import { WalkthroughNotice, WalkthroughNoticeButton } from '@/components/sessions/files/walkthrough/WalkthroughLifecycle';
+import { SessionAgentPendingPrompts } from '@/components/sessions/agents/list/SessionAgentPendingPrompts';
+import { resolveSessionAgentActivityPresentation } from '@/components/sessions/agents/presentation/sessionAgentActivityPresentation';
+import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
+import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import type { WalkthroughPhase } from '@/components/sessions/files/walkthrough/walkthroughReading';
 import { ReviewFindingDecisionControl, type ReviewFindingDecision } from '@/components/sessions/reviews/findings/ReviewFindingRow';
 import { findCommentForFinding, readReviewFindingDecision } from '@/components/sessions/reviews/findings/reviewFindingComment';
@@ -14,6 +17,8 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { decideReviewRunFinding } from '@/sync/domains/reviews/comments/reviewRunComments';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { useSession } from '@/sync/domains/state/storage';
+import { useSessionAgentActivityRoster } from '@/hooks/session/useSessionAgentActivity';
 import { t } from '@/text';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -21,6 +26,32 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import type { WalkthroughFindingView } from './reviewWalkthroughOverlay';
 import type { WalkthroughReviewState } from './useWalkthroughReview';
 import { buildWalkthroughReviewSlots } from './walkthroughReviewSlots';
+
+/** Read the shared attention projection; opening uses the Session's existing answer controls. */
+function WalkthroughReviewPendingInputs(props: Readonly<{
+    scope: ServerAccountScope;
+    sessionId: string;
+    runIds: readonly string[];
+}>) {
+    const session = useSession(props.sessionId, props.scope.serverId);
+    const activity = useSessionAgentActivityRoster({ sessionId: props.sessionId, serverId: props.scope.serverId, session });
+    const [openRunId, setOpenRunId] = React.useState<string | null>(null);
+    return <>{props.runIds.map((runId) => {
+        const entry = activity.readExecutionRunEntry(runId);
+        const subagent = entry ? activity.readSubagentForEntry(entry.id) : null;
+        const presentation = entry ? resolveSessionAgentActivityPresentation({ entry, subagent }) : null;
+        if (!subagent || !presentation?.attention) return null;
+        return <React.Fragment key={runId}>
+            <AttentionBanner presentation="strip" testID={`walkthrough-review-needs-you:${runId}`} tone="warning" iconName="chat-circle-dots"
+                title={`${presentation.title} · ${presentation.attention.description}`}
+                action={{ testID: `walkthrough-review-open-question:${runId}`, label: t('common.open'), onPress: () => setOpenRunId(runId) }} />
+            {openRunId === runId ? <AppSessionTranscriptSourceProvider sessionId={props.sessionId} serverId={props.scope.serverId} navigation="none">
+                <SessionAgentPendingPrompts sessionId={props.sessionId} serverId={props.scope.serverId}
+                    session={session} subagent={subagent} fallback={null} />
+            </AppSessionTranscriptSourceProvider> : null}
+        </React.Fragment>;
+    })}</>;
+}
 
 /**
  * A Session walkthrough's review, drawn (Walkthrough lab WT5): the slots the reading view shows, the
@@ -64,30 +95,32 @@ export function useSessionWalkthroughReviewPresentation(params: Readonly<{
         const reviewedAt = review.reviewedAtMs ? formatAsOfTime(review.reviewedAtMs) : null;
         const seeded = review.narrationMode === 'seeded_narrator';
         const reviewers = summary.engineLabels.join(t('reviewWalkthrough.and'));
-        const notice = summary.state === 'partial' && summary.failedEngineLabels.length > 0 ? (
-            <WalkthroughNotice
+        const readNotice = summary.state === 'unavailable' ? (
+            <AttentionBanner presentation="strip" testID="walkthrough-review-read-unavailable" tone="warning"
+                title={t('common.requestFailed')}
+                action={{ testID: 'walkthrough-review-read-retry', label: t('common.retry'),
+                    onPress: () => { fireAndForget(review.retry(), { tag: 'SessionWalkthroughReview.retry' }); } }} />
+        ) : summary.state === 'partial' && summary.failedEngineLabels.length > 0 ? (
+            <AttentionBanner
+                presentation="strip"
                 testID="walkthrough-notice-partial-review"
                 tone="danger"
-                icon="x-circle"
-                message={(
-                    <Text style={styles.notice}>
-                        <Text style={styles.noticeStrong}>{t('reviewWalkthrough.partial.failed', { engines: summary.failedEngineLabels.join(t('reviewWalkthrough.and')) })}</Text>
-                        {` ${t('reviewWalkthrough.partial.notClean')}`}
-                        {summary.finishedEngineLabels.length > 0
-                            ? ` ${t('reviewWalkthrough.partial.finishedWith', { engines: summary.finishedEngineLabels.join(t('reviewWalkthrough.and')), count: summary.total })}`
-                            : ''}
-                    </Text>
-                )}
-                actions={onRetryReviewEngines && summary.failedEngineIds.length > 0 ? (
-                    <WalkthroughNoticeButton
-                        testID="walkthrough-retry-review-engine"
-                        icon="arrows-clockwise"
-                        label={t('reviewWalkthrough.partial.retry', { engine: summary.failedEngineLabels.join(t('reviewWalkthrough.and')) })}
-                        onPress={() => onRetryReviewEngines(summary.failedEngineIds)}
-                    />
-                ) : undefined}
+                title={t('reviewWalkthrough.partial.failed', { engines: summary.failedEngineLabels.join(t('reviewWalkthrough.and')) })}
+                description={t('reviewWalkthrough.partial.notClean') + (summary.finishedEngineLabels.length > 0
+                    ? ` ${t('reviewWalkthrough.partial.finishedWith', { engines: summary.finishedEngineLabels.join(t('reviewWalkthrough.and')), count: summary.total })}`
+                    : '')}
+                action={onRetryReviewEngines && summary.failedEngineIds.length > 0 ? {
+                    testID: 'walkthrough-retry-review-engine',
+                    icon: 'arrows-clockwise',
+                    label: t('reviewWalkthrough.partial.retry', { engine: summary.failedEngineLabels.join(t('reviewWalkthrough.and')) }),
+                    onPress: () => onRetryReviewEngines(summary.failedEngineIds),
+                } : null}
             />
         ) : null;
+        const notice = <>
+            {scope && sessionId ? <WalkthroughReviewPendingInputs scope={scope} sessionId={sessionId} runIds={review.reviewRunIds} /> : null}
+            {readNotice}
+        </>;
         const findingsOnlyHandover = review.progress.narration?.kind === 'narrator_writing' ? review.progress.narration.narrator : null;
         const slots = buildWalkthroughReviewSlots({
             overlay: review.overlay,
@@ -111,7 +144,7 @@ export function useSessionWalkthroughReviewPresentation(params: Readonly<{
                 : findingsOnlyHandover && summary.engineLabels[0] ? t('reviewWalkthrough.generated.handover', { narrator: modelId, engine: summary.engineLabels[0] })
                     : null;
         return { slots, generatedLabel };
-    }, [modelId, onAskStop, onRetryReviewEngines, phase, phone, renderTriage, review, severityColors]);
+    }, [modelId, onAskStop, onRetryReviewEngines, phase, phone, renderTriage, review, scope, sessionId, severityColors]);
 }
 
 /**
@@ -142,8 +175,6 @@ export function ReviewExplainFindingsButton(props: Readonly<{ running: boolean; 
 }
 
 const styles = StyleSheet.create((theme) => ({
-    notice: { ...Typography.variant('body'),  color: theme.colors.text.secondary,  },
-    noticeStrong: { color: theme.colors.text.primary, ...Typography.default('semiBold') },
     explaining: {
         flexDirection: 'row',
         alignItems: 'center',

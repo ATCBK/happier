@@ -223,29 +223,47 @@ function isDeclarationOutputPath(inputPath) {
   return /\.d\.(?:c|m)?ts$/i.test(inputPath);
 }
 
+function readBundlerCompilerPaths(configPath) {
+  const parsed = ts.getParsedCommandLineOfConfigFile(configPath, {}, {
+    ...ts.sys,
+    onUnRecoverableConfigFileDiagnostic(diagnostic) {
+      throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
+    },
+  });
+  if (parsed.errors.length > 0) {
+    throw new Error(parsed.errors.map(error => ts.flattenDiagnosticMessageText(error.messageText, '\n')).join('\n'));
+  }
+  const pathsBase = parsed.options.baseUrl ?? parsed.options.pathsBasePath ?? dirname(configPath);
+  return Object.fromEntries(Object.entries(parsed.options.paths ?? {}).map(([name, targets]) => [name,
+    targets.map(target => resolve(pathsBase, target)),
+  ]));
+}
+
+function prepareRuntimeBundlerConfig(packageRoot, stagingDir) {
+  const configPath = ts.findConfigFile(packageRoot, ts.sys.fileExists);
+  if (!configPath) return null;
+  const compilerPaths = readBundlerCompilerPaths(configPath);
+  if (!Object.values(compilerPaths).some(targets => targets.some(isDeclarationOutputPath))) return null;
+  const paths = Object.fromEntries(Object.entries(compilerPaths)
+    .map(([name, targets]) => [name, targets.filter(target => !isDeclarationOutputPath(target))])
+    .filter(([, targets]) => targets.length > 0));
+  // Declaration identity aliases are compiler inputs, not executable modules.
+  // Inherit every other transform and retain the authored source alias graph.
+  const runtimeConfigPath = join(stagingDir, 'tsconfig.pkgroll-runtime.json');
+  writeFileSync(runtimeConfigPath, `${JSON.stringify({ extends: configPath, compilerOptions: { paths } }, null, 2)}\n`);
+  return runtimeConfigPath;
+}
+
 function prepareDeclarationBundlerConfig(packageRoot, sourceDir, declarationSourceDir) {
   const configPath = join(packageRoot, 'tsconfig.json');
-  let paths = {};
-  if (existsSync(configPath)) {
-    const parsed = ts.getParsedCommandLineOfConfigFile(configPath, {}, {
-      ...ts.sys,
-      onUnRecoverableConfigFileDiagnostic(diagnostic) {
-        throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
-      },
-    });
-    if (parsed.errors.length > 0) {
-      throw new Error(parsed.errors.map(error => ts.flattenDiagnosticMessageText(error.messageText, '\n')).join('\n'));
-    }
-    const pathsBase = parsed.options.baseUrl ?? parsed.options.pathsBasePath ?? packageRoot;
-    paths = Object.fromEntries(Object.entries(parsed.options.paths ?? {}).map(([name, targets]) => [name,
-      targets.map(target => {
-        const sourceTarget = resolve(pathsBase, target);
+  const paths = existsSync(configPath)
+    ? Object.fromEntries(Object.entries(readBundlerCompilerPaths(configPath)).map(([name, targets]) => [name,
+      targets.map(sourceTarget => {
         const localTarget = relative(sourceDir, sourceTarget);
         return localTarget === '..' || localTarget.startsWith(`..${sep}`) || isAbsolute(localTarget)
           ? sourceTarget : resolve(declarationSourceDir, localTarget);
       }),
-    ]));
-  }
+    ])) : {};
   // Keep authored aliases within the checked declaration graph. Passing the
   // source tsconfig would let Pkgroll resolve aliases back into TypeScript and
   // reconstruct the source compiler program we already checked natively.
@@ -383,9 +401,11 @@ async function runPkgrollBuildInStage(options = {}) {
   ].filter((group) => group.inputs.length > 0);
 
   let manifestWritten = false;
+  let runtimeConfigPath;
   try {
     writeFileSync(stageManifestPath, stageManifestRaw, { encoding: 'utf8', flag: 'wx' });
     manifestWritten = true;
+    runtimeConfigPath = prepareRuntimeBundlerConfig(packageRoot, physicalStagingDir);
     for (const inputGroup of inputGroups) {
       const declarationGroup = inputGroup.kind === 'declarations';
       const groupSrcdist = declarationGroup
@@ -394,6 +414,8 @@ async function runPkgrollBuildInStage(options = {}) {
       const pkgrollArgs = [pkgrollCliPath, '--packagejson=false', '--srcdist', groupSrcdist];
       if (declarationGroup) {
         pkgrollArgs.push('--tsconfig', prepareDeclarationBundlerConfig(packageRoot, sourceDir, declarationSourceDir));
+      } else if (runtimeConfigPath) {
+        pkgrollArgs.push('--tsconfig', runtimeConfigPath);
       }
       if (inputGroup.kind === 'runtime-esm') {
         // Inlined sodium uses CommonJS's module-local directory. Pkgroll
@@ -431,6 +453,7 @@ async function runPkgrollBuildInStage(options = {}) {
       }
     }
   } finally {
+    if (runtimeConfigPath) rmSync(runtimeConfigPath, { force: true });
     if (manifestWritten) rmSync(stageManifestPath, { force: true });
   }
   copyFirstPartyStaticAssets(packageRoot, outputDir);

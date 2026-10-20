@@ -3,6 +3,7 @@ import { createProviderErrorV1, ProviderConnectionIdSchema, serializeModelVisibi
 
 import {
     buildSessionModelPickerSections,
+    buildSessionModelSelectedTriggerPresentation,
     hiddenModelVisibilityKeys,
     withSessionModelSourceSuffixes,
 } from './buildSessionModelPickerSections';
@@ -57,6 +58,45 @@ function providerGroup(input: Readonly<{
 }
 
 describe('buildSessionModelPickerSections', () => {
+    it('keeps a selected Provider model named before its demanded projection arrives, then uses the projected row', () => {
+        const group = providerGroup({ connectionId: 'pc_work', modelId: 'same', connectionName: 'Work' });
+        const input = {
+            agentTargetKey: 'agent:happier.agent.codex/codex', nativeModels: [],
+            hiddenNativeModelKeys: new Set<string>(), selected: group.rows[0]!.ref,
+            fallbackLabel: t('agentInput.model.unavailable'), fieldLabel: t('newSession.selectModelTitle'),
+        };
+        // Closed pickers deliberately have no catalog yet; that is not a failed machine read.
+        expect(buildSessionModelSelectedTriggerPresentation({ ...input,
+            providerGroups: [], providerProjectionAuthoritative: false,
+        })).toEqual({ subtitle: 'same' });
+        expect(buildSessionModelSelectedTriggerPresentation({ ...input,
+            providerGroups: [group], providerProjectionAuthoritative: true,
+        })).toMatchObject({ subtitle: 'Provider same', detail: 'Gateway · Work' });
+        // A settled projection that cannot recover the exact tuple retains its repair presentation.
+        expect(buildSessionModelSelectedTriggerPresentation({ ...input,
+            providerGroups: [], providerProjectionAuthoritative: true,
+        })).toMatchObject({ subtitle: input.fallbackLabel, detail: t('settingsProviders.detail.deletedDescription') });
+    });
+    it('describes a missing native Agent model as unavailable, not as a removed Provider', () => {
+        const selected = {
+            agentTargetKey: 'agent:happier.agent.codex/codex',
+            providerConnectionId: null,
+            modelId: 'gpt-6-luna',
+        } as const;
+        expect(buildSessionModelSelectedTriggerPresentation({
+            agentTargetKey: selected.agentTargetKey,
+            nativeModels: [],
+            providerGroups: [],
+            hiddenNativeModelKeys: new Set<string>(),
+            providerProjectionAuthoritative: true,
+            selected,
+            fallbackLabel: t('agentInput.model.unavailable'),
+            fieldLabel: t('newSession.selectModelTitle'),
+        })).toMatchObject({
+            subtitle: t('agentInput.model.unavailable'),
+            detail: t('agentInput.model.unavailable'),
+        });
+    });
     it('announces an equal-name source once using the same identity as its heading', () => {
         const sections = buildSessionModelPickerSections({
             agentTargetKey: 'agent:happier.agent.codex/codex', hiddenNativeModelKeys: new Set(), nativeModels: [],
@@ -66,6 +106,49 @@ describe('buildSessionModelPickerSections', () => {
         });
         expect(sections[0]?.title).toBe('QA custom live');
         expect(sections[0]?.options[0]?.accessibilityLabel).toBe('QA custom live, Provider same');
+    });
+    it('groups a browsed gateway by the vendor slot that serves each model, and only when asked to', () => {
+        const service = (localId: string) => ({ pluginId: 'happier.connected.' + localId, localId });
+        const slot = (vendor: string, groupId: string) => ({
+            purpose: { consumer: { pluginId: 'happier.provider.gateway', localId: 'gateway' }, purpose: vendor },
+            target: { kind: 'group' as const, service: service(vendor), groupId },
+        });
+        const base = providerGroup({ connectionId: 'pc_gateway', modelId: 'm', connectionName: 'Main' });
+        const row = (modelId: string, gatewaySlots?: ReturnType<typeof slot>[]) => ({
+            ...base.rows[0]!,
+            ref: { ...base.rows[0]!.ref, modelId },
+            descriptor: { id: modelId, name: modelId },
+            ...(gatewaySlots ? { gatewaySlots } : {}),
+        });
+        const group = {
+            ...base,
+            rows: [
+                row('gpt-sol', [slot('openai', 'codex')]),
+                row('fable', [slot('anthropic', 'work')]),
+                // Shared by both vendors: listed once, under the first slot, never duplicated.
+                row('shared', [slot('openai', 'codex'), slot('anthropic', 'work')]),
+                row('manual'),
+            ],
+        };
+        const input = {
+            agentTargetKey: 'agent:happier.agent.codex/codex', hiddenNativeModelKeys: new Set<string>(), nativeModels: [],
+            providerProjectionAuthoritative: true, providerGroups: [group],
+        };
+        const titles: Record<string, string> = { codex: 'ChatGPT · Codex pool', work: 'Claude · Work pool' };
+        const grouped = buildSessionModelPickerSections({
+            ...input,
+            gatewaySlotTitle: (candidate) => candidate.target.kind === 'group' ? titles[candidate.target.groupId] ?? null : null,
+        });
+        expect(grouped.map(section => [section.title, section.options.map(option => option.value?.modelId)])).toEqual([
+            ['ChatGPT · Codex pool', ['gpt-sol', 'shared']],
+            ['Claude · Work pool', ['fable']],
+            ['Gateway · Main', ['manual']],
+        ]);
+        // Without a slot resolver (the unscoped picker) the source stays one section.
+        expect(buildSessionModelPickerSections(input).map(section => section.options.length)).toEqual([4]);
+        // A slot the resolver cannot name does not become a heading; its model stays under the source.
+        const unnamed = buildSessionModelPickerSections({ ...input, gatewaySlotTitle: () => null });
+        expect(unnamed.map(section => section.options.length)).toEqual([4]);
     });
     it('keeps same-name source labels after Favorites move out of their original sections', () => {
         const sections = buildSessionModelPickerSections({
@@ -94,8 +177,8 @@ describe('buildSessionModelPickerSections', () => {
         const options = sections.flatMap(section => section.options);
         expect(options).toHaveLength(2);
         expect(options.map(option => option.value && sessionModelSelectionKey(option.value))).toEqual([
-            sessionModelSelectionKey({ agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: 'pc_work', modelId: 'same' }),
-            sessionModelSelectionKey({ agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: 'pc_lab', modelId: 'same' }),
+            sessionModelSelectionKey({ agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: ProviderConnectionIdSchema.parse('pc_work'), modelId: 'same' }),
+            sessionModelSelectionKey({ agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: ProviderConnectionIdSchema.parse('pc_lab'), modelId: 'same' }),
         ]);
         const suffixed = withSessionModelSourceSuffixes(sections, 'favorites').flatMap(section => section.options);
         expect(suffixed.map(option => option.labelSuffix)).toEqual([

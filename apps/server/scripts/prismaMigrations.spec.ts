@@ -2,15 +2,139 @@ import { describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import { PGlite } from "@electric-sql/pglite";
+import { FollowPolicyV1Schema, resolveFollowDeliveryV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 
 import { applyPostgresMigrations, applySqliteMigrations } from "./prismaMigrations";
 
 const execFileAsync = promisify(execFile);
 const maxMysqlIdentifierLength = 64;
+
+describe('Discussion participant slot development reconciliation', () => {
+    it('preserves existing Session participants while matching the canonical slot schema', async () => {
+        const { DatabaseSync } = await import('node:sqlite');
+        const database = new DatabaseSync(':memory:');
+        const fresh = new DatabaseSync(':memory:');
+        const sql = await readFile(resolve(import.meta.dirname,
+            '../prisma/sqlite/migrations/20261018120000_first_class_discussions/migration.sql'), 'utf8');
+        const create = sql.match(/CREATE TABLE "DiscussionParticipant" \([\s\S]*?\n\);/)?.[0];
+        const indexes = [...sql.matchAll(/CREATE (?:UNIQUE )?INDEX "[^"]+" ON "DiscussionParticipant"[^;]*;/g)]
+            .map(match => match[0]).join('\n');
+        if (!create) throw new Error('Canonical Discussion participant table is missing');
+        const parents = `PRAGMA foreign_keys=ON;
+            CREATE TABLE "Discussion" ("id" TEXT PRIMARY KEY);
+            CREATE TABLE "Session" ("id" TEXT PRIMARY KEY);
+            INSERT INTO "Discussion" VALUES ('discussion-a'), ('discussion-b');
+            INSERT INTO "Session" VALUES ('session-a'), ('session-b');`;
+        const schema = (db: InstanceType<typeof DatabaseSync>) => ({
+            columns: db.prepare('PRAGMA table_info("DiscussionParticipant")').all(),
+            indexes: db.prepare('PRAGMA index_list("DiscussionParticipant")').all().map(index => ({
+                name: index.name, unique: index.unique,
+                columns: db.prepare(`PRAGMA index_info("${index.name}")`).all().map(column => column.name),
+            })).sort((left, right) => String(left.name).localeCompare(String(right.name))),
+            foreignKeys: db.prepare('PRAGMA foreign_key_list("DiscussionParticipant")').all(),
+        });
+        try {
+            database.exec(parents);
+            // The applied U2 development draft, not a released product format.
+            database.exec(`CREATE TABLE "DiscussionParticipant" (
+                "discussionId" TEXT NOT NULL, "sessionId" TEXT NOT NULL,
+                "answerPolicy" TEXT NOT NULL DEFAULT 'when_addressed',
+                "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "updatedAt" DATETIME NOT NULL,
+                PRIMARY KEY ("discussionId", "sessionId"),
+                FOREIGN KEY ("discussionId") REFERENCES "Discussion"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+                FOREIGN KEY ("sessionId") REFERENCES "Session"("id") ON DELETE CASCADE ON UPDATE CASCADE);
+                CREATE INDEX "DiscussionParticipant_sessionId_discussionId_idx" ON "DiscussionParticipant" ("sessionId", "discussionId");
+                INSERT INTO "DiscussionParticipant" VALUES ('discussion-a','session-a','reads_only',123,456),
+                    ('discussion-a','session-b','when_addressed',124,457), ('discussion-b','session-a','drafts_for_approval',125,458);`);
+            const retained = database.prepare('SELECT * FROM "DiscussionParticipant" ORDER BY "discussionId", "sessionId"').all();
+            // Exact disposable proof of the retained-database maintenance delta.
+            // Reconciliation is operational; this is deliberately not a product migration adapter.
+            database.exec(`BEGIN;
+                ALTER TABLE "DiscussionParticipant" RENAME TO "_DiscussionParticipantBeforeSlots";
+                DROP INDEX "DiscussionParticipant_sessionId_discussionId_idx";
+                ${create}
+                INSERT INTO "DiscussionParticipant" ("discussionId", "participantSlotId", "sessionId", "answerPolicy", "createdAt", "updatedAt")
+                    SELECT "discussionId", "sessionId", "sessionId", "answerPolicy", "createdAt", "updatedAt"
+                    FROM "_DiscussionParticipantBeforeSlots";
+                DROP TABLE "_DiscussionParticipantBeforeSlots";
+                ${indexes}
+                COMMIT;`);
+            expect(database.prepare('SELECT "discussionId", "sessionId", "answerPolicy", "createdAt", "updatedAt" FROM "DiscussionParticipant" ORDER BY "discussionId", "sessionId"').all()).toEqual(retained);
+            expect(database.prepare('SELECT "participantSlotId", "sessionId", "modelLaunch", "createdByAccountId", "removedAt" FROM "DiscussionParticipant" ORDER BY "discussionId", "sessionId"').all()).toEqual([
+                { participantSlotId: 'session-a', sessionId: 'session-a', modelLaunch: null, createdByAccountId: null, removedAt: null },
+                { participantSlotId: 'session-b', sessionId: 'session-b', modelLaunch: null, createdByAccountId: null, removedAt: null },
+                { participantSlotId: 'session-a', sessionId: 'session-a', modelLaunch: null, createdByAccountId: null, removedAt: null },
+            ]);
+            fresh.exec(`${parents}\n${create}\n${indexes}`);
+            expect(schema(database)).toEqual(schema(fresh));
+            expect(database.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+            expect(database.prepare('PRAGMA integrity_check').get()).toMatchObject({ integrity_check: 'ok' });
+        } finally { database.close(); fresh.close(); }
+    });
+});
+
+describe('manager Follow migration', () => {
+    it('preserves independent manager and ordinary frontiers while enforcing one manager', async () => {
+        const { DatabaseSync } = await import('node:sqlite');
+        const database = new DatabaseSync(':memory:');
+        try {
+            database.exec('PRAGMA foreign_keys = ON; CREATE TABLE "Session" (id TEXT PRIMARY KEY); INSERT INTO "Session" VALUES (\'worker\'), (\'manager\'), (\'other\');');
+            const migrations = resolve(import.meta.dirname, '../prisma/sqlite/migrations');
+            database.exec(await readFile(join(migrations, '20260905230000_add_session_follow_edges/migration.sql'), 'utf8'));
+            database.exec(await readFile(join(migrations, '20260930120000_add_session_reports_to/migration.sql'), 'utf8'));
+            database.exec(`INSERT INTO "SessionFollowEdge" ("sourceSessionId", "destinationSessionId", "deliveredTranscriptSeq") VALUES ('worker', 'manager', 11);
+                INSERT INTO "SessionFollowEdge" ("sourceSessionId", "destinationSessionId", "mode", "deliveredTranscriptSeq") VALUES ('other', 'manager', 'wake_on_human_change', 4);
+                INSERT INTO "SessionReportsTo" ("sessionId", "leadSessionId", "attachedAt", "deliveredTranscriptSeq", "deliveredTurnId", "deliveredTurnStatus") VALUES ('worker', 'manager', 123456, 7, 'turn', NULL);`);
+            database.exec(await readFile(join(migrations, '20261018213000_merge_manager_follow_relation/migration.sql'), 'utf8'));
+            database.exec(`CREATE TABLE "Discussion" ("id" TEXT PRIMARY KEY, "messageSeq" INTEGER NOT NULL);
+                CREATE TABLE "DiscussionParticipant" ("discussionId" TEXT NOT NULL, "sessionId" TEXT, "removedAt" DATETIME);
+                INSERT INTO "Discussion" VALUES ('discussion', 9);
+                INSERT INTO "DiscussionParticipant" VALUES ('discussion', 'manager', NULL);`);
+            database.exec(await readFile(join(migrations, '20261018230000_session_follow_source_identity/migration.sql'), 'utf8'));
+            database.exec(await readFile(join(migrations, '20261018233000_session_follow_policy/migration.sql'), 'utf8'));
+            expect(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'SessionReportsTo'").all()).toEqual([]);
+            expect(database.prepare('SELECT "sourceSessionId", "relation", "managerSourceSessionId", "attachedAt", "deliveredTranscriptSeq", "deliveredTurnId", "deliveredTurnStatus" FROM "SessionFollowEdge" WHERE "sourceSessionId" IS NOT NULL ORDER BY "relation", "sourceSessionId"').all())
+                .toMatchObject([
+                    { sourceSessionId: 'other', relation: 'follower', managerSourceSessionId: null, deliveredTranscriptSeq: 4 },
+                    { sourceSessionId: 'worker', relation: 'follower', managerSourceSessionId: null, deliveredTranscriptSeq: 11 },
+                    { relation: 'manager', managerSourceSessionId: 'worker', attachedAt: 123456, deliveredTranscriptSeq: 7, deliveredTurnId: 'turn', deliveredTurnStatus: null },
+                ]);
+            const policies = database.prepare('SELECT "sourceSessionId", "relation", "policyJson" FROM "SessionFollowEdge" WHERE "sourceSessionId" IS NOT NULL ORDER BY "relation", "sourceSessionId"').all();
+            for (const row of policies) {
+                const policy = FollowPolicyV1Schema.parse(JSON.parse(String(row.policyJson)));
+                if (row.relation === 'manager') {
+                    expect(policy).toEqual({ preset: 'important' });
+                } else {
+                    expect(policy.preset).toBe('custom');
+                    expect(resolveFollowDeliveryV1({ policies: [policy], event: { kind: 'person_wrote' } }).session)
+                        .toEqual({ nextTurn: row.sourceSessionId === 'worker', wake: row.sourceSessionId === 'other' });
+                    expect(resolveFollowDeliveryV1({ policies: [policy], event: { kind: 'message' } }).session)
+                        .toEqual({ nextTurn: true, wake: false });
+                    for (const event of [{ kind: 'needs_you', type: 'approval' }, { kind: 'finished' },
+                        { kind: 'failed_or_stopped' }, { kind: 'stalled' }, { kind: 'update_posted' }, { kind: 'goal_changed' }] as const) {
+                        expect(resolveFollowDeliveryV1({ policies: [policy], event }).session)
+                            .toEqual({ nextTurn: true, wake: false });
+                    }
+                }
+            }
+            expect(database.prepare('SELECT "sourceKey", "deliveredTranscriptSeq" FROM "SessionFollowEdge" WHERE "sourceDiscussionId" IS NOT NULL').all())
+                .toEqual([{ sourceKey: 'discussion:discussion', deliveredTranscriptSeq: 9 }]);
+            expect(database.prepare('PRAGMA table_info("SessionFollowEdge")').all().map(column => column.name)).not.toContain('mode');
+            expect(() => database.exec(`INSERT INTO "SessionFollowEdge" ("sourceKey", "sourceSessionId", "destinationSessionId") VALUES ('session:manager', 'manager', 'other')`)).toThrow();
+            expect(() => database.exec(`INSERT INTO "SessionFollowEdge" ("sourceKey", "sourceSessionId", "destinationSessionId", "relation", "managerSourceSessionId", "policyJson") VALUES ('session:worker', 'worker', 'other', 'manager', 'worker', '{"preset":"important"}')`)).toThrow();
+            expect(() => database.exec(`INSERT INTO "SessionFollowEdge" ("sourceKey", "sourceSessionId", "destinationSessionId", "relation", "policyJson") VALUES ('session:other', 'other', 'manager', 'manager', '{"preset":"important"}')`)).toThrow();
+            expect(() => database.exec(`INSERT INTO "SessionFollowEdge" ("sourceKey", "sourceSessionId", "destinationSessionId", "relation", "managerSourceSessionId", "policyJson") VALUES ('session:other', 'other', 'worker', 'follower', 'other', '{"preset":"important"}')`)).toThrow();
+            database.exec(`DELETE FROM "SessionFollowEdge" WHERE "relation" = 'manager'`);
+            expect(database.prepare('SELECT "deliveredTranscriptSeq" FROM "SessionFollowEdge" WHERE "sourceSessionId" IS NOT NULL ORDER BY "sourceSessionId"').all())
+                .toMatchObject([{ deliveredTranscriptSeq: 4 }, { deliveredTranscriptSeq: 11 }]);
+            expect(database.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+        } finally { database.close(); }
+    });
+});
 
 function repoRelativePath(repoRoot: string, path: string): string {
     return relative(repoRoot, path).split(sep).join("/");

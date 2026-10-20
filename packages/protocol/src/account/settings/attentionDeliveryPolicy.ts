@@ -2,6 +2,7 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
 import { PUSH_NOTIFICATION_SOUND_IDS } from '../../push/pushNotificationActions.js';
+import type { InboxItemAttentionTypeV1, ResolveFollowDeliveryV1Params } from '../../sessions/follow/sessionFollowPolicyV1.js';
 
 const ATTENTION_DELIVERY_EVENT_DEFINITIONS = [
   { id: 'ready', remoteAlert: true },
@@ -123,7 +124,7 @@ export const AttentionDeliveryEventConfigSchema = lazyZodSchema(() => z.catch(z.
 
 export type AttentionDeliveryEventConfig = z.infer<typeof AttentionDeliveryEventConfigSchema>;
 
-const EventMapSchema = lazyZodSchema(() => z.pipe(z.pipe(z.transform(rekeyEventRecord), z.catch(z.record(z.string(), AttentionDeliveryEventConfigSchema), {})), z.transform((events) => {
+const EventMapSchema = lazyZodSchema(() => z.pipe((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(rekeyEventRecord), z.catch(z.record(z.string(), AttentionDeliveryEventConfigSchema), {})), z.transform((events) => {
     const withDefaults: Record<string, AttentionDeliveryEventConfig> = { ...events };
     for (const id of CANONICAL_EVENT_IDS) {
       withDefaults[id] = AttentionDeliveryEventConfigSchema.parse(withDefaults[id]);
@@ -156,7 +157,7 @@ export const ATTENTION_DELIVERY_CHANNEL_DEFAULT_QUIET_HOURS_BEHAVIOR = {
   home_widget: 'silent',
 } as const satisfies Record<AttentionDeliveryChannelId, AttentionQuietHoursBehavior>;
 
-const ChannelMapSchema = lazyZodSchema(() => z.pipe(z.pipe(z.transform((raw) => (isRecord(raw) ? raw : {})), z.catch(z.record(z.string(), AttentionDeliveryChannelConfigSchema), {})), z.transform((channels) => {
+const ChannelMapSchema = lazyZodSchema(() => z.pipe((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => (isRecord(raw) ? raw : {})), z.catch(z.record(z.string(), AttentionDeliveryChannelConfigSchema), {})), z.transform((channels) => {
     const withDefaults: Record<string, AttentionDeliveryChannelConfig> = { ...channels };
     for (const id of CANONICAL_CHANNEL_IDS) {
       withDefaults[id] = {
@@ -189,7 +190,7 @@ const QuietHoursSchema = lazyZodSchema(() => z.catch(z.looseObject({
 
 const SoundsSchema = lazyZodSchema(() => z.catch(z.looseObject({
     defaultSoundId: z._default(z.string().check(z.trim(), z.minLength(1)), PUSH_NOTIFICATION_SOUND_IDS.soft),
-    eventSoundIds: z._default(z.pipe(z.transform(rekeyEventRecord), z.catch(z.record(z.string(), z.string().check(z.trim(), z.minLength(1))), {})), {}),
+    eventSoundIds: z._default((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(rekeyEventRecord), z.catch(z.record(z.string(), z.string().check(z.trim(), z.minLength(1))), {})), {}),
     volume: z.catch(z._default(z.number().check(z.minimum(0), z.maximum(1)), 1), 1),
   }), {
     defaultSoundId: PUSH_NOTIFICATION_SOUND_IDS.soft,
@@ -246,6 +247,7 @@ export type AttentionDeliveryDecisionReason =
   | 'unsupported_surface'
   | 'feature_disabled'
   | 'privacy_restricted'
+  | 'follow_policy'
   | 'terminal_frontmost';
 
 export type AttentionDeliveryDecision = {
@@ -290,6 +292,8 @@ export type ResolveAttentionDeliveryPolicyDecisionParams = {
   terminalFrontmost?: boolean;
   featureEnabled?: boolean;
   platformSupported?: boolean;
+  follow?: ResolveFollowDeliveryV1Params;
+  inboxItemType?: InboxItemAttentionTypeV1;
 };
 
 export function composeAttentionDeliveryPolicyDeviceOverrides(policy: AttentionDeliveryPolicyV1, overrides: Readonly<{

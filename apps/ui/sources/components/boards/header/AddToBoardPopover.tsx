@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { buildWorkBoardItemKeyV1, type BoardItemRefV1, type WorkBoardV1 } from '@happier-dev/protocol/boards/workBoardV1';
+import { buildWorkBoardItemKeyV1, type BoardItemRefV1 } from '@happier-dev/protocol/boards/workBoardV1';
 import type { WidgetInstanceV1, WidgetSizeV1, WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -15,14 +15,13 @@ import type { WidgetSetupCommandResult } from '@/components/widgets/surface/widg
 import { SelectionList, type SelectionListOption, type SelectionListStep } from '@/components/ui/selectionList';
 import { Text } from '@/components/ui/text/Text';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { joinList } from '@/utils/text/joinList';
 import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
-import { useWorkflowDefinitionLibrary, useWorkflowRunWindow } from '@/components/workflows/library/workflowLibraryReads';
 import { formatWorkflowDefinitionLibraryTitle, formatWorkflowDefinitionContentUnavailableReason } from '@/components/workflows/presentation/workflowProblemPresentation';
 import { describeWorkflowRunState } from '@/components/workflows/presentation/workflowLifecyclePresentation';
 import { formatWorkflowRunDisplayName, resolveWorkflowRunDisplayName } from '@/components/workflows/presentation/workflowRunDisplayName';
 import { Typography } from '@/constants/Typography';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
-import { useMachineListByServerId, useSessionListRowsByServerId } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { describeMachinePresenceLine } from '@/utils/sessions/machinePresenceLine';
@@ -30,8 +29,11 @@ import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachabi
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { getSessionName, getSessionSubtitle } from '@/utils/sessions/sessionUtils';
+import { isSessionContentUnsettled } from '@/sync/domains/session/encryptedContentAvailability';
+import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
 
-import type { BoardHomes } from '../model/useBoardContent';
+import { useBoardAddSources, type BoardHomes } from '../model/useBoardContent';
 
 /**
  * Add to board (lab `boards-B5`, `dashboards` L1): one search across kinds, anchored to the header's
@@ -59,18 +61,36 @@ export type AddToBoardWidgets = Readonly<{
     addInstance: (instance: WidgetInstanceV1, options: Readonly<{ place: boolean; size?: WidgetSizeV1 }>) => Promise<WidgetSetupCommandResult>;
 }>;
 
-export const AddToBoardButton = React.memo(function AddToBoardButton(props: Readonly<{
-    board: WorkBoardV1;
+type AddToBoardControlProps = Readonly<{
+    anchorRef: React.RefObject<View | null>;
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+}>;
+
+/** Only the opener moves into phone navigation; the Board retains the Add surface. */
+export const AddToBoardButton = React.memo(function AddToBoardButton(props: AddToBoardControlProps) {
+    const { theme } = useUnistyles();
+    return <View ref={props.anchorRef} collapsable={false}>
+        <RoundButton
+            testID="board-header.add"
+            size="small"
+            display="secondary"
+            title={t('boards.header.add')}
+            leading={<Icon name="plus" size={ICON_SIZE.sm} color={theme.colors.text.primary} />}
+            expanded={props.open}
+            onPress={() => props.onOpenChange(!props.open)}
+        />
+    </View>;
+});
+
+export const AddToBoardPopover = React.memo(function AddToBoardPopover(props: AddToBoardControlProps & Readonly<{
     homes: BoardHomes;
     /** Keys of everything on the board now (picked, sections and filter). */
     onBoardKeys: ReadonlySet<string>;
     onAdd: (ref: BoardItemRefV1, options: Readonly<{ place: boolean }>) => void;
     widgets: AddToBoardWidgets;
-    open: boolean;
-    onOpenChange: (open: boolean) => void;
 }>) {
-    const { theme } = useUnistyles();
-    const anchorRef = React.useRef<View>(null);
+    const { anchorRef } = props;
     const { onOpenChange } = props;
     const close = React.useCallback(() => onOpenChange(false), [onOpenChange]);
     // The shared Add surface: open on everything, or on the widget picked in the list.
@@ -91,16 +111,7 @@ export const AddToBoardButton = React.memo(function AddToBoardButton(props: Read
     const openGallery = React.useCallback(() => { close(); place.current = false; setGallery({}); }, [close]);
     const closeGallery = React.useCallback(() => { place.current = false; setGallery(null); }, []);
     return (
-        <View ref={anchorRef} collapsable={false}>
-            <RoundButton
-                testID="board-header.add"
-                size="small"
-                display="secondary"
-                title={t('boards.header.add')}
-                leading={<Icon name="plus" size={ICON_SIZE.sm} color={theme.colors.text.primary} />}
-                expanded={props.open}
-                onPress={() => onOpenChange(!props.open)}
-            />
+        <>
             {props.open ? (
                 <Popover
                     open
@@ -118,6 +129,7 @@ export const AddToBoardButton = React.memo(function AddToBoardButton(props: Read
                     {({ maxHeight, maxWidth }) => (
                         <View testID="board-add.popover">
                             <FloatingOverlay
+                                role="panel"
                                 maxHeight={Math.min(maxHeight, POPOVER_MAX_HEIGHT_PX)}
                                 scrollEnabled={false}
                                 surfaceChrome="theme"
@@ -144,7 +156,7 @@ export const AddToBoardButton = React.memo(function AddToBoardButton(props: Read
                 <BoardWidgetGallery widgets={props.widgets} addWidget={addWidget} anchorRef={anchorRef}
                     {...(gallery.entryId ? { initialEntryId: gallery.entryId } : {})} onRequestClose={closeGallery} />
             ) : null}
-        </View>
+        </>
     );
 });
 
@@ -188,14 +200,18 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
     onRequestClose: () => void;
 }>) {
     const { theme } = useUnistyles();
-    const rowsByServerId = useSessionListRowsByServerId(props.homes.mountedServerIds);
-    const machineLists = useMachineListByServerId();
+    const { rowsByServerId, machineLists, library, runs, loading } = useBoardAddSources(props.homes);
+    // The Sessions it offers are named from encrypted content: the undecided ones are demanded like list rows.
+    const undecidedSessions = React.useMemo(() => Object.entries(rowsByServerId).flatMap(([serverId, rows]) => (
+        Object.values(rows ?? {}).filter(row => typeof row.archivedAt !== 'number' && isSessionContentUnsettled(row))
+            .map((row): SessionAddress => ({ serverId, sessionId: row.id }))
+    )), [rowsByServerId]);
+    useSessionContentDemand(undecidedSessions, { tag: 'board.hydrateAddSessions', hydrate: 'unsettled' });
+    const openingGroups = (['sessions', 'workflows', 'runs', 'machines'] as const).filter(group => loading[group]);
     const reachabilityRevision = useMachineReachabilityRevision();
     const machineScopeBindings = useServerCredentialAccountScopeBindings(Object.keys(machineLists));
     const presenceMachines = React.useMemo(() => Object.values(machineLists).flatMap(list => list ?? []), [machineLists]);
     const presenceNowMs = useMachinePresenceNowMs(presenceMachines);
-    const library = useWorkflowDefinitionLibrary();
-    const runs = useWorkflowRunWindow('all');
     const activeServerId = props.homes.activeServerId;
     const refsRef = React.useRef(new Map<string, BoardItemRefV1>());
     const widgetsRef = React.useRef(new Map<string, WidgetAddEntry>());
@@ -227,9 +243,11 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
             <Icon name={name} size={16} color={theme.colors.text.secondary} />
         );
 
-        // Widgets: the Add surface's own entries (its counts and Added), then the surface itself.
+        // Widgets: the Add surface's own entries (its counts and Added), then the surface itself. A short
+        // group leads (lab `dashboards` L1): the built-in families with pages of their own (Machines,
+        // Usage) stay one row away through Gallery, and a search still finds them here.
         const widgetEntries = new Map<string, WidgetAddEntry>();
-        const widgets: SelectionListOption[] = widgetSections.flatMap(section => section.entries).map((entry) => {
+        const widgetOption = (entry: WidgetAddEntry): SelectionListOption => {
             widgetEntries.set(widgetOptionId(entry), entry);
             const where = entry.count ?? (entry.added ? t('boards.add.onBoard') : null);
             const subtitle = [entry.subtitle, where].filter(Boolean).join(' · ');
@@ -240,7 +258,9 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
                 icon: glyph(entry.icon),
                 ...(entry.added ? { rightAccessory: onBoardMark, disabled: true } : {}),
             };
-        });
+        };
+        const widgets = widgetSections.filter(section => !section.family).flatMap(section => section.entries).map(widgetOption);
+        const familyWidgets = widgetSections.filter(section => section.family).flatMap(section => section.entries).map(widgetOption);
         widgets.push({
             id: GALLERY_OPTION_ID,
             label: t('boards.widgets.gallery'),
@@ -294,12 +314,21 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
             id: 'board-add',
             inputPlaceholder: t('boards.add.search'),
             emptyStateLabel: t('boards.add.empty'),
+            // Typed and found nothing: say what was searched and clear it in place, as the Home gallery does.
+            emptyStateForQuery: (query) => ({ label: t('boards.add.noMatch', { query }), clearLabel: t('selectionList.clearInput') }),
             footerHints: [
                 { id: 'add', label: '↵', description: t('boards.add.addHint') },
                 { id: 'add-and-place', label: '⌘↵', description: t('boards.add.addAndPlaceHint') },
             ],
             sections: [
                 { kind: 'static', id: 'widgets', title: t('boards.widgets.group'), options: widgets },
+                {
+                    kind: 'dynamic', id: 'widgets-more',
+                    resolverKey: JSON.stringify(familyWidgets.map(option => [option.id, option.subtitle, option.disabled === true])),
+                    visibleWhen: (input) => input.trim().length > 0,
+                    debounceMs: 0, loadingSkeletonRows: 0, resultTransition: 'none',
+                    resolve: async () => ({ options: familyWidgets }),
+                },
                 { kind: 'static', id: 'sessions', title: t('boards.add.groups.sessions'), options: sessions, virtualization: 'auto' },
                 { kind: 'static', id: 'workflows', title: t('boards.add.groups.workflows'), options: workflows },
                 { kind: 'static', id: 'runs', title: t('boards.add.groups.runs'), options: workflowRuns },
@@ -323,8 +352,14 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
         <SelectionList
             testID="board-add.list"
             rootStep={step}
-            bodyHeader={library.status === 'failed' || runs.status === 'failed' ? (
+            bodyHeader={openingGroups.length > 0 || library.status === 'failed' || runs.status === 'failed' ? (
                 <View style={styles.failures}>
+                    {/* One line names every group still opening and narrows as each settles. */}
+                    {openingGroups.length > 0 ? (
+                        <SurfaceStateCard testID="board-add.loading" size="line" kind="loading"
+                            title={t('surfaceState.opening', { name: joinList(openingGroups.map(group => t(`boards.add.groups.${group}`))) })}
+                            accessibilitySemantics="status" />
+                    ) : null}
                     {library.status === 'failed' ? (
                         <SurfaceStateCard
                             testID="board-add.workflows-failure"
@@ -353,6 +388,8 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
             ) : undefined}
             listAccessibilityLabel={t('boards.add.title')}
             autoFocusInputOnWeb
+            // The panel keeps its size while a search narrows the rows (nothing resizes under the pointer).
+            heightBehavior="fixedToMaxHeight"
             maxHeight={props.maxHeight}
             onSelect={onSelect}
             onCommandSelect={onCommandSelect}

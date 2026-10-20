@@ -6,6 +6,7 @@ import { PluginProjectionV2Schema, SessionCurrentProjectionRecordV1Schema, tryWr
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DEFAULT_MEMORY_SETTINGS } from '@happier-dev/protocol/memory/memorySettings';
+import { MemorySearchQueryV1Schema } from '@happier-dev/protocol/memory/memorySearch';
 import { MetadataSchema } from '@happier-dev/session-core/state';
 import { SessionViewerProjectionV1Schema } from '@happier-dev/protocol/sessions/personal/viewer';
 import { QUIET_SESSION_PERSONAL_ATTENTION_V1 } from '@happier-dev/protocol/sessions/personal/attention';
@@ -16,9 +17,11 @@ import { createAccountTokenForTests, createHomeGovernanceHarness, waitForHomeGov
 import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 import type { SelectionListProps } from '@/components/ui/selectionList';
+import type { SelectionListSectionFailure } from '@/components/ui/selectionList/selectionListSectionFailure';
 import type { SessionOrganizationProjection } from '@/sync/domains/session/organization/types';
 import type { UniversalSearchControllerProps } from './UniversalSearchController';
 import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
+import { t } from '@/text';
 
 const HOME_A = 'srv_fsp_controller_a';
 const HOME_B = 'srv_fsp_controller_b';
@@ -26,6 +29,7 @@ let localHomeB = '';
 let controllerConnection: Awaited<ReturnType<typeof import('@/dev/testkit/harness/serverAccountConnectionHarness').restoreServerAccountForTest>> | undefined;
 const harness = vi.hoisted(() => ({
     routerNavigate: vi.fn(), routerPush: vi.fn(), modalAlert: vi.fn(),
+    pathname: '/', params: {} as Record<string, string>,
 }));
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -41,7 +45,8 @@ vi.mock('@/modal', async () => {
 });
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    return createExpoRouterMock({ router: { push: harness.routerPush, navigate: harness.routerNavigate } }).module;
+    return createExpoRouterMock({ pathname: () => harness.pathname, params: () => harness.params,
+        router: { push: harness.routerPush, navigate: harness.routerNavigate } }).module;
 });
 
 const network = await installSessionOpsNetworkBoundary();
@@ -65,6 +70,14 @@ const { readCurrentAppShellPluginUiProjection } = await import('@/components/app
 const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
 const { ChatFindSeedHost } = await import('@/components/appShell/panes/fileFindSeedHost');
 const { createTranscriptFindModel } = await import('@/components/sessions/transcript/find/useTranscriptFind');
+const { WorkspaceProvider } = await import('@/components/appShell/workspace/WorkspaceProvider');
+const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+const { createWorkspaceState } = await import('@/components/appShell/workspace/workspaceState');
+const { serializeWorkspaceLayout, workspaceLayoutScopeKey } = await import('@/components/appShell/workspace/workspacePersistence');
+const { resolveCompactAppDestinations } = await import('@/components/appShell/destinations/compactAppDestinationCatalog');
+const { useRegisterSessionPaneDriver } = await import('@/components/sessions/panes/useRegisterSessionPaneDriver');
+const { installBrowserRuntimeForTests } = await import('@/dev/testkit/harness/browserRuntimeHarness');
+let browserRuntime: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | undefined;
 
 const fixture = {
     homeSearch: vi.fn<(request: Record<string, unknown>) => Promise<unknown>>(),
@@ -232,7 +245,15 @@ function AmbientPluginProjectionProbe() {
     fixture.observedAmbientProjection = useAppShellPluginUiProjection().pluginUiProjection;
     return null;
 }
-async function renderScreen(element: React.ReactElement<UniversalSearchControllerProps>, destination?: React.ReactNode) {
+function DismissibleSearch(props: Readonly<{ element: React.ReactElement<UniversalSearchControllerProps> }>) {
+    const [open, setOpen] = React.useState(true);
+    return open ? React.cloneElement(props.element, { onRequestClose: () => {
+        setOpen(false);
+        props.element.props.onRequestClose();
+    } }) : null;
+}
+async function renderScreen(element: React.ReactElement<UniversalSearchControllerProps>, destination?: React.ReactNode,
+    wrap?: (content: React.ReactNode) => React.ReactNode | Promise<React.ReactNode>) {
     await prepareControllerFixture();
     // A local profile seed is resolved only after its real Home profile exists.
     if (fixture.portableIdentity) {
@@ -240,7 +261,7 @@ async function renderScreen(element: React.ReactElement<UniversalSearchControlle
         element = React.cloneElement(element, { initialScope: { ...element.props.initialScope, serverId: localHomeB } });
     }
     const ambientWire = fixture.scopedPluginProjections.get(`${HOME_A}:machine-a`);
-    let content: React.ReactNode = element;
+    let content: React.ReactNode = wrap ? <DismissibleSearch element={element} /> : element;
     if (ambientWire) {
         const accountLifetime = captureActiveServerAccountScopeLifetime();
         if (!accountLifetime?.isCurrent()) throw new Error('Ambient plugin fixture requires the real active Account lifetime');
@@ -251,7 +272,7 @@ async function renderScreen(element: React.ReactElement<UniversalSearchControlle
             reloadConnectedAccountProjection: vi.fn(), reloadClientExecutables: vi.fn(),
         }}><AmbientPluginProjectionProbe />{element}</AppShellPluginUiProjectionValueProvider>;
     }
-    if (destination) content = <AppPaneProvider>{content}{destination}</AppPaneProvider>;
+    if (destination) content = <AppPaneProvider>{wrap ? await wrap(<>{content}{destination}</>) : <>{content}{destination}</>}</AppPaneProvider>;
     mountedSearch = await renderScreenWithTestkit(<InjectedAuthProvider credentials={{ token: createAccountTokenForTests('account-a') }}>{content}</InjectedAuthProvider>);
     await flushHookEffects({ cycles: 4, turns: 2 });
     return mountedSearch;
@@ -268,6 +289,7 @@ beforeEach(() => {
     fixture.sessionOrganizationProjection = null; fixture.portableIdentity = false; fixture.singleHome = false;
     fixture.scopedPluginProjections.clear(); fixture.inventoryFailure = false; fixture.inventoryHold = null; fixture.inventorySignals = [];
     fixture.observedAmbientProjection = null;
+    harness.pathname = '/'; harness.params = {};
     vi.clearAllMocks();
 });
 afterEach(async () => {
@@ -278,6 +300,7 @@ afterEach(async () => {
     else await (await import('@/sync/runtime/orchestration/connectionManager')).disconnectActiveServerConnection();
     controllerConnection = undefined;
     retireActiveServerAccountScopeLifetime();
+    browserRuntime?.restore(); browserRuntime = undefined;
 });
 afterAll(() => network.dispose());
 beforeAll(async () => {
@@ -299,6 +322,48 @@ function pluginSearchProjection(input: Readonly<{ pluginId: string; title: strin
 }
 
 describe('UniversalSearchController exact Home scope', () => {
+    it('renders a known indexed reply before document admission finishes, then adds admitted documents', async () => {
+        fixture.featureEnabled = { search: false, 'memory.search': true };
+        fixture.memoryMachine = { serverId: HOME_B, machine: { id: 'machine-b' } };
+        const documents = createDeferred<void>();
+        let documentsReleased = false;
+        fixture.daemonRpc.mockImplementation(async call => {
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET) return { ...DEFAULT_MEMORY_SETTINGS, enabled: true };
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_STATUS) return {
+                v: 1, enabled: true, indexMode: 'deep', hintsIndexReady: false, deepIndexReady: true,
+                activeIndexReady: true, activeIndexSearchable: true, embeddingsEnabled: false,
+                embeddingsMode: 'disabled', embeddingsPresetId: null, embeddingsProviderKind: null,
+                embeddingsModelId: null, embeddingsRuntimeState: 'unavailable', embeddingsUsingFallback: false,
+                tier1DbPath: null, deepDbPath: '/memory/deep.sqlite', tier1DbBytes: null, deepDbBytes: 1,
+                documentSearchSupported: true,
+            };
+            const query = MemorySearchQueryV1Schema.parse(call.payload);
+            if (query.corpora?.includes('documents')) {
+                await documents.promise;
+                return { v: 1, ok: true, documents: { state: 'ready' }, hits: [{ type: 'artifact',
+                    ref: { kind: 'doc', serverId: HOME_B, artifactId: 'orchard-memory' },
+                    revision: { headerVersion: 1, bodyVersion: 1 }, location: 'facts',
+                    summary: 'amber orchard document', score: 0.5 }] };
+            }
+            return { v: 1, ok: true, hits: [{ sessionId: 'session-b', seqFrom: 7, seqTo: 7,
+                createdAtFromMs: 1, createdAtToMs: 1, summary: 'amber orchard, silver meadow', score: 0.5 }] };
+        });
+        const { UniversalSearchController } = await import('./UniversalSearchController');
+        try {
+            const screen = await renderScreen(<UniversalSearchController commands={[]} initialQuery="amber orchard"
+                initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: null, rootPath: null }}
+                presentation="modal" onRequestClose={vi.fn()} />);
+            await act(async () => {
+                await vi.waitFor(() => expect(JSON.stringify(screen.tree.toJSON())).toContain('silver meadow'));
+            });
+            expect(documentsReleased).toBe(false);
+            expect(JSON.stringify(screen.tree.toJSON())).not.toContain('amber orchard document');
+            documentsReleased = true;
+            await act(async () => { documents.resolve(); await flushHookEffects({ cycles: 4, turns: 2 }); });
+            await vi.waitFor(() => expect(JSON.stringify(screen.tree.toJSON())).toContain('amber orchard document'));
+            expect(JSON.stringify(screen.tree.toJSON())).toContain('silver meadow');
+        } finally { documents.resolve(); }
+    });
     it('keeps old-daemon Session hits usable with explicit unavailable document coverage', async () => {
         fixture.featureEnabled = { search: false, 'memory.search': true };
         fixture.memoryMachine = { serverId: HOME_B, machine: { id: 'machine-b' } };
@@ -710,7 +775,13 @@ describe('UniversalSearchController exact Home scope', () => {
         });
     });
 
-    it('keeps a contextual Home B seed through query, result identity, and canonical scoped activation while Home A is focused', async () => {
+    it.each([false, true])('keeps a contextual Home B seed through query, result identity, and canonical scoped activation (workspace: %s)', async (hosted) => {
+        fixture.singleHome = hosted;
+        if (hosted) {
+            browserRuntime = await installBrowserRuntimeForTests({ url: `https://home-b.example.test/session/session-b?serverId=${HOME_B}&bottom=terminal` });
+            browserRuntime.window.sessionStorage.setItem('happier.workspace.windowIdV1', 'main');
+        }
+        let navigation: import('@/components/appShell/workspace/WorkspaceNavigationContext').WorkspaceNavigationContextValue | undefined;
         const model = createTranscriptFindModel({
             readCorpus: () => ({ messages: [{ kind: 'user-text', id: 'matched-message', localId: null,
                 seq: 7, createdAt: 1, text: 'Needle in Home B' }],
@@ -720,7 +791,9 @@ describe('UniversalSearchController exact Home scope', () => {
             reveal: async () => {},
         });
         function Destination() {
-            return <ChatFindSeedHost sessionId="session-b" serverId={HOME_B} active>{input =>
+            // A reused Session keeps the browser profile qualifier, whereas
+            // Search addresses the same Home by its portable identity.
+            return <ChatFindSeedHost sessionId="session-b" serverId={localHomeB} active>{input =>
                 <ApplySeed {...input} />}</ChatFindSeedHost>;
         }
         function ApplySeed(input: import('@/components/appShell/panes/fileFindSeedHost').ChatFindSeedHostInput) {
@@ -729,6 +802,31 @@ describe('UniversalSearchController exact Home scope', () => {
             }, [input.findSeed, input.consumeFindSeed]);
             return null;
         }
+        function Driver(props: React.PropsWithChildren) {
+            const scopeId = useRegisterSessionPaneDriver('session-b', localHomeB);
+            return <>{props.children}<ScopeProbe scopeId={scopeId} /></>;
+        }
+        function ScopeProbe(_props: Readonly<{ scopeId: string }>) { return null; }
+        const wrap = hosted ? async (content: React.ReactNode) => {
+            harness.pathname = '/session/session-b';
+            harness.params = { serverId: localHomeB, bottom: 'terminal' };
+            browserRuntime!.reconfigureUrl(`https://home-b.example.test/session/session-b?serverId=${localHomeB}&bottom=terminal`);
+            const initial = createWorkspaceState({ id: 'retained-session', target: { kind: 'session',
+                params: { id: 'session-b', serverId: localHomeB, bottom: 'terminal' } }, pinned: false, preview: false });
+            const key = workspaceLayoutScopeKey({ serverId: HOME_B, accountId: 'account-1', windowId: 'main' });
+            const settings = storage.getState().localSettings;
+            storage.setState({ localSettings: { ...settings, workspaceLayoutV1: {
+                ...settings.workspaceLayoutV1, [key]: serializeWorkspaceLayout(initial),
+            } } });
+            const catalog = resolveCompactAppDestinations({ builtins: { externalSessions: false, inbox: true, workflows: false, friends: false }, pages: [] });
+            return <WorkspaceProvider enabled catalog={catalog}>{current => {
+                navigation = current;
+                const tab = current.state.tabs['retained-session'];
+                if (!tab) throw new Error('Retained Session missing');
+                return <DestinationInstanceHost tabId={tab.id} ref={tab.target} pathname="/session/session-b" focused visible
+                    navigation={current.navigationForTab(tab.id)}><Driver>{content}</Driver></DestinationInstanceHost>;
+            }}</WorkspaceProvider>;
+        } : undefined;
         fixture.homeSearch.mockResolvedValue({
             v: 1,
             ok: true,
@@ -752,7 +850,7 @@ describe('UniversalSearchController exact Home scope', () => {
                 activeSessionId="ambient-session-a"
                 presentation="modal"
                 onRequestClose={vi.fn()}
-            />, <Destination />,
+            />, <Destination />, wrap,
         );
 
         const rootStep = selectionListProps()?.rootStep;
@@ -774,13 +872,17 @@ describe('UniversalSearchController exact Home scope', () => {
             option?.onSelect?.();
             selectionListProps()?.onSelect?.(option!.id, option!);
             await vi.waitFor(() => {
-                expect(harness.routerNavigate).toHaveBeenCalledWith('/session/session-b?serverId=srv_fsp_controller_b&jumpSeq=7', expect.objectContaining({ dangerouslySingular: expect.any(Function) }));
+                if (hosted) expect(navigation?.state.tabs['retained-session'].target.params.jumpSeq).toBe('7');
+                else expect(harness.routerNavigate).toHaveBeenCalledWith('/session/session-b?serverId=srv_fsp_controller_b&jumpSeq=7', expect.objectContaining({ dangerouslySingular: expect.any(Function) }));
             });
         });
         await flushHookEffects();
         await model.settled();
         expect(model.getSnapshot()).toMatchObject({ open: true, query: 'needle',
             status: { kind: 'results', current: 1, total: 1 } });
+        if (hosted) {
+            expect(Object.keys(navigation!.state.tabs)).toEqual(['retained-session']);
+        }
         model.dispose();
     });
 
@@ -949,11 +1051,68 @@ describe('UniversalSearchController exact Home scope', () => {
         const token = selectionListProps()?.filters?.find((filter) => filter.id === 'source');
         if (!token) throw new Error('Text in files token missing');
         expect(token.options).toBeUndefined();
+        // The token says where the scope searches (lab G1s: "Text in happier · MacBook Pro"), not just what.
+        expect(token.valueLabel).toContain('happier');
+        expect(token.valueLabel).toContain('machine-b');
+        // The phone's chip row names the folder alone (lab G1sp "Text in happier").
+        expect(token.rowValueLabel).toContain('happier');
+        expect(token.rowValueLabel).not.toContain('machine-b');
         expect(token.onClear).toBeTypeOf('function');
         await act(async () => { token.onClear?.(); });
 
         expect(selectionListProps()?.filters?.some((filter) => filter.id === 'source')).toBe(false);
         expect(selectionListProps()?.inputValue).toBe('routeKey');
+    });
+
+    it('preserves a missing folder outcome in both file search sections', async () => {
+        fixture.singleHome = true;
+        fixture.memoryMachine = { serverId: HOME_B, machine: { id: 'machine-b' } };
+        fixture.workspaceRefs = [{ id: 'ws-missing', serverId: HOME_B, machineId: 'machine-b', rootPath: '/missing', label: 'Missing', createdAtMs: 1 }];
+        fixture.daemonRpc.mockImplementation(async ({ method }) => method === RPC_METHODS.DAEMON_WORKSPACE_FILES_LIST
+            ? { ok: false, errorCode: 'root_not_found' } : { ok: false, code: 'root_not_found' });
+        const { UniversalSearchController } = await import('./UniversalSearchController');
+        await renderScreen(<UniversalSearchController commands={[]} initialQuery="needle"
+            initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: 'machine-b', rootPath: '/missing' }}
+            activeSessionId={null} presentation="modal" onRequestClose={vi.fn()} />);
+        await act(async () => { storage.setState({ machines: {
+            'machine-b': createMachineFixture({ id: 'machine-b', active: true, activeAt: Date.now() }),
+        } }); });
+        const causes = new Set<string | undefined>();
+        for (const id of ['files', 'fileContent']) {
+            const section = selectionListProps()?.rootStep.sections.find(item => item.id === id);
+            if (!section || section.kind !== 'dynamic') throw new Error(`Missing section ${id}`);
+            const failure = await section.resolve('needle', new AbortController().signal).then(() => null, (error: unknown) => error as SelectionListSectionFailure);
+            if (!failure) throw new Error(`Section ${id} did not name the missing folder`);
+            expect(failure).toMatchObject({ name: 'SelectionListSectionFailure' });
+            expect(failure.hint).toContain('folder');
+            expect(failure.hint).not.toContain('connection');
+            expect(failure.retryable).toBe(false);
+            causes.add(failure.causeKey);
+        }
+        // Both groups name one cause, so the palette says it once.
+        expect(causes.size).toBe(1);
+        expect(causes.has(undefined)).toBe(false);
+    });
+
+    it('says an empty bounded Files reply searched only part of the folder, never that more results exist', async () => {
+        fixture.singleHome = true;
+        fixture.memoryMachine = { serverId: HOME_B, machine: { id: 'machine-b' } };
+        fixture.workspaceRefs = [{ id: 'ws-big', serverId: HOME_B, machineId: 'machine-b', rootPath: '/big', label: 'Big', createdAtMs: 1 }];
+        fixture.daemonRpc.mockImplementation(async ({ method }) => method === RPC_METHODS.DAEMON_WORKSPACE_FILES_LIST
+            ? { ok: true, paths: ['src/unrelated.ts'], truncated: true } : { ok: false, code: 'root_not_found' });
+        const { UniversalSearchController } = await import('./UniversalSearchController');
+        await renderScreen(<UniversalSearchController commands={[]} initialQuery="needle"
+            initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: 'machine-b', rootPath: '/big' }}
+            activeSessionId={null} presentation="modal" onRequestClose={vi.fn()} />);
+        await act(async () => { storage.setState({ machines: {
+            'machine-b': createMachineFixture({ id: 'machine-b', active: true, activeAt: Date.now() }),
+        } }); });
+        const section = selectionListProps()?.rootStep.sections.find(item => item.id === 'files');
+        if (!section || section.kind !== 'dynamic') throw new Error('Missing Files section');
+        const reply = await section.resolve('needle', new AbortController().signal);
+        expect(reply.options).toHaveLength(0);
+        expect(reply.emptyHint).toBe(t('universalSearch.noMatchesInSearchedResults'));
+        expect(reply.resultHint).toBeUndefined();
     });
 
     // Find lab ST "Machine offline": one line, under Text in files, not the same sentence in every group.

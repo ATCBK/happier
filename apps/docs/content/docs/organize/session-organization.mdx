@@ -69,6 +69,29 @@ when the rail is too short, they move into the rail's More menu. On a phone, or
 when there's no rail, the same list opens as a sheet from the app's
 destinations and the command palette.
 
+## Bot readiness in 0.3 development
+
+A configured Bot is not necessarily ready to answer. Development Action callers
+can request `session.status.get` with `{sessionId, readiness: true}` to inspect
+the selected Machine, Agent and current permission to submit input. The result
+reports ready, unavailable or unknown and its cause. Missing or stale evidence
+stays unknown.
+
+The default checks conversation readiness. A caller can also request a credential
+operation with `operation: 'credential'` and its qualified `credentialPurpose`.
+That checks the operation's selected personal connection through its setup owner.
+A Team operation also supplies that owner's exact `credentialTeamSelection`.
+The diagnostic checks the purpose, service and resource binding against current
+admitted facts, retaining the resource owner's reason and recovery when unavailable.
+Another Account's private setup remains unknown when
+the reader cannot inspect it; Happier does not substitute the viewer's connection.
+An optional integration does not block ordinary conversation.
+
+The diagnostic grants no permission to write or repair. A reported repair opens
+the normal setup flow for its exact target and still needs its own authority.
+People and Bot readiness rendering is still being built; this section describes
+the unreleased diagnostic contract.
+
 ## Selecting several at once
 
 Open a row's menu (right-click on desktop or long-press on touch) and choose

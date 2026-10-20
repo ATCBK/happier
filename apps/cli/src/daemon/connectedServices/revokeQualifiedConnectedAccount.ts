@@ -88,6 +88,17 @@ export async function revokeQualifiedConnectedAccount(input: Readonly<{
     throw new QualifiedConnectedAccountCompatibilityError('connected_account_legacy_operation_unsupported');
   }
   const deleteCredential = input.deleteCredential ?? deleteQualifiedConnectedAccountCredentialV4;
+  const settleLocalDeletion = async (deletion: Parameters<typeof deleteCredential>[0]['deletion']) => {
+    try {
+      await deleteCredential({ token: input.token, deletion });
+      return true;
+    } catch (error) {
+      // The HTTP owner has the dispatch witness. Preserve its uncertainty as
+      // the existing revoke result instead of reporting a definite refusal.
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'outcome_unknown') return false;
+      throw error;
+    }
+  };
   const currentRevision = removalSupport === 'advertised' || input.emergencyRevoke || input.expectedCredentialRevision !== undefined
     ? await input.establishedRuntimeOwner.readCredentialRevision({ account: input.account,
       ...(input.signal ? { signal: input.signal } : {}) }) : undefined;
@@ -106,11 +117,12 @@ export async function revokeQualifiedConnectedAccount(input: Readonly<{
   };
   if (input.emergencyRevoke) {
     assertRemovalAdmission();
-    await deleteCredential({ token: input.token, deletion: {
+    const deleted = await settleLocalDeletion({
       ref: input.account, expectedCredentialRevision: currentRevision!,
       cleanupGroupReferences: removalSupport === 'advertised' ? input.cleanupGroupReferences : true,
       ...(removalSupport === 'advertised' ? { emergencyRevoke: true } : {}),
-    } });
+    });
+    if (!deleted) return Object.freeze({ status: 'outcome_unknown' as const });
     return Object.freeze({ status: 'deleted' as const, remoteStatus: 'remoteNotAttempted' as const });
   }
   if (removalSupport === 'advertised') {
@@ -136,15 +148,13 @@ export async function revokeQualifiedConnectedAccount(input: Readonly<{
     );
   }
   assertRemovalAdmission();
-  await deleteCredential({
-    token: input.token,
-    deletion: Object.freeze({
-      ref: input.account,
-      expectedCredentialRevision: invocation.basis.credentialRevision,
-      cleanupGroupReferences: input.cleanupGroupReferences,
-      ...reviewFields,
-    }),
-  });
+  const deleted = await settleLocalDeletion(Object.freeze({
+    ref: input.account,
+    expectedCredentialRevision: invocation.basis.credentialRevision,
+    cleanupGroupReferences: input.cleanupGroupReferences,
+    ...reviewFields,
+  }));
+  if (!deleted) return Object.freeze({ status: 'outcome_unknown' as const });
   // Generation currentness protects PRE-EFFECT authorization: it is checked
   // above, before the remote revoke leaf runs and before the credential is
   // deleted. Once the delete returns success the revocation is committed, so

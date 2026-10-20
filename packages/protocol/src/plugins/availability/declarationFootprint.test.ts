@@ -37,13 +37,14 @@ it('emits availability aliases more compactly than their canonical schema declar
     ], { cwd: repositoryRoot, encoding: 'utf8' });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
 
-    const [availability, actions, manifest] = await Promise.all([
+    const [availability, actions, manifest, compatibilityProjection] = await Promise.all([
       readFile(join(outputDirectory, 'plugins/availability/v1.d.ts'), 'utf8'),
       readFile(join(outputDirectory, 'plugins/availability/actions.d.ts'), 'utf8'),
       readFile(join(outputDirectory, 'plugins/manifest/v2.d.ts'), 'utf8'),
+      readFile(join(outputDirectory, 'plugins/availability/compatibilityProjectionV1.d.ts'), 'utf8'),
     ]);
     for (const [aliasSource, aliasName, canonicalSource, canonicalName] of [
-      [availability, 'PluginPortableReleaseManifestV1Schema', manifest, 'PluginManifestV2Schema'],
+      [compatibilityProjection, 'PluginPortableReleaseManifestV1Schema', manifest, 'PluginManifestV2Schema'],
       [actions, 'PluginAvailabilityIntentReadActionOutputV1Schema', availability, 'PluginAccountAvailabilityIntentReadResponseV1Schema'],
       [actions, 'PluginAvailabilityReleaseReadActionOutputV1Schema', availability, 'PluginAccountAvailabilityReleaseReadResponseV1Schema'],
     ]) {

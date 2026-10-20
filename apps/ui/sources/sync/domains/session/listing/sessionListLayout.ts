@@ -22,7 +22,7 @@ export type { SessionListLayoutChoice, SessionListGroupingMode, SessionListSecti
 export type SessionListSessionRowDragPolicy = Readonly<{
     canReorderSiblings: boolean;
     canMoveBetweenFolders: boolean;
-    /** The row can be dropped on another Session to report to it (`reportsTo`, R-03). */
+    /** The row can be dropped on another Session to report to it (`manager`, R-03). */
     canPutUnder: boolean;
     canDrag: boolean;
 }>;

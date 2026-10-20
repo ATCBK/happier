@@ -1,8 +1,11 @@
 import * as React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import type { ActionOperationSnapshotV1 } from '@happier-dev/protocol';
+import { ActionOperationCancelV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
+import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createActionOperationStore, type ActionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
 import { actionOperationAddressKey } from '@/sync/domains/actionOperations/qualifiedActionOperation';
 
@@ -11,13 +14,8 @@ import { installSessionHandoffCommonModuleMocks } from './sessionHandoffTestHelp
 const modalShowMock = vi.hoisted(() => vi.fn((..._args: unknown[]) => 'handoff-progress-modal'));
 const modalHideMock = vi.hoisted(() => vi.fn((..._args: unknown[]) => {}));
 const modalUpdateMock = vi.hoisted(() => vi.fn((..._args: unknown[]) => {}));
-type MachineRpcWithServerScope = typeof import(
-    '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc'
-)['machineRpcWithServerScope'];
-const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn(
-    async (_params: unknown) => ({ kind: 'requested' as const }),
-)) as unknown as MachineRpcWithServerScope & ReturnType<typeof vi.fn>;
-const SERVER_ID = 'server-1';
+const SERVER_ID = 'srv_handoff_progress';
+const HOME_URL = 'https://handoff-progress.test';
 
 function merge(store: ActionOperationStore, snapshots: readonly ActionOperationSnapshotV1[]): void {
     store.mergeSnapshots({ serverId: SERVER_ID, snapshots });
@@ -39,13 +37,21 @@ installSessionHandoffCommonModuleMocks({
     },
 });
 
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async (importOriginal) => {
-    const { createServerScopedMachineRpcModuleMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
-    return createServerScopedMachineRpcModuleMock({
-        importOriginal,
-        overrides: { machineRpcWithServerScope: machineRpcWithServerScopeMock },
-    });
+vi.doUnmock('@/sync/domains/state/storage');
+const { installSessionOpsNetworkBoundary } = await import('@/dev/testkit/harness/sessionOpsNetworkBoundary');
+const network = await installSessionOpsNetworkBoundary();
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { createAccountTokenForTests, waitForHomeGovernance } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+const { setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
+const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+const { parseToken } = await import('@/utils/auth/parseToken');
+
+afterEach(async () => {
+    standardCleanup();
+    await serverScopedRpcSocketPool.stopAll();
 });
+afterAll(() => network.dispose());
 
 vi.mock('@/components/ui/buttons/RoundButton', () => ({
     RoundButton: (props: Record<string, unknown>) => React.createElement('RoundButton', props),
@@ -157,7 +163,7 @@ describe('observed session handoff progress presentation', () => {
         modalShowMock.mockClear();
         modalHideMock.mockClear();
         modalUpdateMock.mockClear();
-        machineRpcWithServerScopeMock.mockClear();
+        network.resetRequests();
     });
 
     it('updates only the active modal with request-local blocked-link failure and retains its conflict opener', async () => {
@@ -177,6 +183,25 @@ describe('observed session handoff progress presentation', () => {
     });
 
     it('routes Stop from the observed handoff modal through its exact Home and operation', async () => {
+        await network.addHome(HOME_URL, 'account-1', {
+            credentials: { token: createAccountTokenForTests('account-1', { currentAccount: true }) },
+        });
+        await setServerProfileIdentityForUrl(HOME_URL, SERVER_ID);
+        network.setHttpResponder(async (url) => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/features' || path === '/v1/features/authenticated') {
+                return Response.json(createRootLayoutFeaturesResponse({ capabilities: {
+                    serverIdentity: { serverIdentityId: SERVER_ID },
+                } }));
+            }
+            if (path === '/v2/account/settings') {
+                return Response.json(AccountSettingsV2GetResponseSchema.parse({ content: { t: 'plain', v: {
+                    actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'action.operations.cancel': ['ui'] } },
+                } }, version: 1 }));
+            }
+            return null;
+        });
+        network.respond('actionOperation.cancel.v1', ActionOperationCancelV1ResponseSchema.parse({ kind: 'requested' }));
         const { openObservedSessionHandoffProgressModal } = await import('./openSessionHandoffProgressModal');
         const store = createActionOperationStore();
         openObservedSessionHandoffProgressModal({
@@ -198,11 +223,18 @@ describe('observed session handoff progress presentation', () => {
         const footer = await renderScreen(chrome.footer);
         await footer.pressByTestIdAsync('action-operation-cancel');
 
-        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith({
-            machineId: 'machine-1',
-            method: 'actionOperation.cancel.v1',
-            payload: { operationId: 'handoff-operation-stop' },
-            serverId: SERVER_ID,
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            const cancellations = network.requests.filter(request => request.method === 'actionOperation.cancel.v1');
+            expect(cancellations.map(({ serverUrl, targetId, method, payload }) => ({
+                serverUrl, targetId, method, payload,
+            }))).toEqual([{
+                serverUrl: HOME_URL,
+                targetId: 'machine-1',
+                method: 'actionOperation.cancel.v1',
+                payload: { operationId: 'handoff-operation-stop' },
+            }]);
+            expect(cancellations.map(request => request.token ? parseToken(request.token) : null)).toEqual(['account-1']);
         });
     });
 

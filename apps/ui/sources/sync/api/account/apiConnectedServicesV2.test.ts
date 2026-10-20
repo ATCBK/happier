@@ -23,17 +23,13 @@ describe('apiConnectedServicesV2 legacy read compatibility', () => {
     await activateTestHome();
     const fetchMock = vi.fn(async (input: unknown) => {
       if (String(input) === 'https://api.example.test/health') {
-        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+        return Response.json({ ok: true });
       }
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({
+      return Response.json({
           credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
           sealed: { format: 'account_scoped_v1', ciphertext: 'cipher-1' },
           metadata: { kind: 'oauth', providerEmail: 'user@example.com', providerAccountId: null, expiresAt: 123 },
-        }),
-      };
+      });
     });
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
 
@@ -56,16 +52,12 @@ describe('apiConnectedServicesV2 legacy read compatibility', () => {
     await activateTestHome();
     const fetchMock = vi.fn(async (input: unknown) => {
       if (String(input) === 'https://api.example.test/health') {
-        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+        return Response.json({ ok: true });
       }
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({
+      return Response.json({
           sealed: { format: 'account_scoped_v1', ciphertext: 'cipher-1' },
           metadata: { kind: 'token' },
-        }),
-      };
+      });
     });
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
 

@@ -156,7 +156,8 @@ function installMigrationAccount(input: Readonly<{
       || path === `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`
       || path === ACP_CATALOG_ROWS_ROUTE_V1 || path === MCP_SERVER_CATALOG_ROWS_ROUTE_V1
       || path === CONNECTED_PRESENTATION_ROWS_ROUTE_V1 || path === CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1
-      || path === NOTIFICATION_CHANNELS_ROUTE_V1 || path === REMOTE_HOST_ROWS_ROUTE_V1) {
+      || path === NOTIFICATION_CHANNELS_ROUTE_V1 || path === REMOTE_HOST_ROWS_ROUTE_V1
+      || path === `${PROMPT_LIBRARY_ROWS_ROUTE_V1}/registry-sources`) {
       return { status: 200, data: { status: 'absent' } };
     }
     if (path.endsWith('/reference-guard')) return { status: 200, data: { status: 'ready', revision: guard } };
@@ -248,7 +249,7 @@ describe('migrateProviderSettings', () => {
     expect(released).toBe(2);
   });
   it.each([true, false])('promotes a descriptor-classified literal before preparing transferable records (retained material available: %s)', async retainedMaterialAvailable => {
-    const capturedCredentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64url')}.signature` };
+    const capturedCredentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64url')}.signature`, encryption: null };
     const profileOnlyReference = formatSharedSavedSecretRefV1('secret-profile-only');
     const retainedProfile = ProfileRecordV1Schema.parse({ v: 1, id: 'retained-mask', enabled: false,
       definition: { kind: 'legacy', profile: { id: 'retained-mask', name: 'Retained private attachments',
@@ -486,6 +487,7 @@ describe('migrateProviderSettings', () => {
     });
     let evaluations = 0;
     const candidate = context('pc-deepseek').candidates[0]!;
+    if (candidate.kind !== 'connection') throw new Error('Expected a connection migration fixture');
     const pendingResult = migrateProviderSettings({ credentials: credentials(),
       deps: cacheBoundary,
       acquireRegistryLease: async () => ({ registry: {}, release: async () => undefined }),

@@ -1,8 +1,9 @@
 import type { AccountSettings } from '@happier-dev/protocol';
 
 import { emitReadyIfIdle } from '@/agent/runtime/emitReadyIfIdle';
-import type { SessionClientPort } from '@/api/session/sessionClientPort';
+import type { SessionClientPort, SessionPersonalFollowCommit } from '@/api/session/sessionClientPort';
 import type { TurnAssistantTextSnapshotStore } from '@/api/session/turns/assistantTextSnapshot';
+import type { SessionActivityChangedResult } from '@/daemon/sessions/sessionActivityChangedContract';
 
 import { getSessionNotificationTitle } from './sessionNotificationContext';
 import { resolveReadyNotificationAssistantText } from './resolveReadyNotificationAssistantText';
@@ -22,6 +23,12 @@ type ReadyNotificationPushSender = Parameters<typeof sendReadyWithPushNotificati
 
 export type ReadyNotificationTurnContext = Readonly<{
   assistantPreviewText: string | null;
+  completedTurn?: Readonly<{
+    turnId: string;
+    /** Existing typed completion markers retain their original committed identity. */
+    original?: Readonly<{ localId: string; committedSequence?: number;
+      personalFollow?: SessionActivityChangedResult['personalFollow']; whenCommitted?: Promise<SessionPersonalFollowCommit | null> }>;
+  }>;
 }>;
 
 type ReadyNotificationDispatcherParams = Readonly<{
@@ -49,7 +56,8 @@ export function createReadyNotificationDispatcher(
 ): (context?: ReadyNotificationTurnContext) => Promise<void> {
   return async (context) => {
     if (!params.pushSender) {
-      await enqueueReadySessionEventCommitted(params.session, 'home_required');
+      await enqueueReadySessionEventCommitted(params.session, 'home_required',
+        context?.completedTurn?.original ? undefined : context?.completedTurn?.turnId);
       return;
     }
 
@@ -77,6 +85,7 @@ export function createReadyNotificationDispatcher(
           : null,
       ),
       assistantPreviewText,
+      completedTurn: context?.completedTurn,
       accountSettings: params.accountSettings ?? null,
       settingsSecretsReadKeys: params.settingsSecretsReadKeys,
       includeAssistantPreviewText: params.includeAssistantPreviewText,

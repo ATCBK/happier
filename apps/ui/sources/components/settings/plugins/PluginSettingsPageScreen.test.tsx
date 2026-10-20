@@ -5,23 +5,12 @@ import {
     normalizePluginUiSettingsPageBindingV1,
     type PluginUiHostApiRequestEnvelopeV1,
 } from '@happier-dev/protocol/plugins/ui';
+import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 
 import { createMachineFixture, renderScreen as renderScreenWithProviders, standardCleanup } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { AppShellPluginUiProjectionValueProvider, useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { storage } from '@/sync/domains/state/storageStore';
 import { unionPluginUiProjections } from '@/sync/domains/plugins/ui/projectionUnion';
 import type { PluginSurfaceOpenHandler } from '@/components/plugins/surfaces/openPluginSurface';
-import {
-    PluginSurfaceDestinationNavigationBindingProvider,
-    usePluginSurfaceDestinationNavigationBindingForScope,
-    useRegisterPluginSurfaceDestinationNavigationOwner,
-} from '@/components/plugins/surfaces/pluginSurfaceDestinationNavigation';
-import {
-    usePluginSurfaceCurrentUiContextEligibility,
-    usePluginSurfaceFocusEligibility,
-} from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import {
     EMPTY_PLUGIN_UI_PROJECTION,
     type PluginUiProjectionModel,
@@ -29,8 +18,6 @@ import {
     type PluginUiSurfacePlacementProjection,
 } from '@/sync/domains/plugins/ui/projection';
 import { selectPluginDestinationSurfacePlacements } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
-
-import { usePluginSettingsPageDestinationHandler } from './pluginSettingsPageNavigation';
 
 const hostSpy = vi.hoisted(() => vi.fn());
 const fallbackSpy = vi.hoisted(() => vi.fn());
@@ -189,20 +176,41 @@ function settingsPage(input: Readonly<{
 }
 
 installDisconnectedServerSocketBoundary();
+const { AppShellPluginUiProjectionValueProvider, useAppShellPluginUiProjection } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { storage } = await import('@/sync/domains/state/storageStore');
+const {
+    PluginSurfaceDestinationNavigationBindingProvider,
+    usePluginSurfaceDestinationNavigationBindingForScope,
+    useRegisterPluginSurfaceDestinationNavigationOwner,
+} = await import('@/components/plugins/surfaces/pluginSurfaceDestinationNavigation');
+const {
+    usePluginSurfaceCurrentUiContextEligibility,
+    usePluginSurfaceFocusEligibility,
+} = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
+const { usePluginSettingsPageDestinationHandler } = await import('./pluginSettingsPageNavigation');
 let settingsConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 
 function composeSettingsProjection(raw: PluginUiProjectionModel | null,
     phase = appShellState.phase, interactionEnabled = appShellState.interactionEnabled) {
     if (!raw) return null;
+    const sourceCustody = { kind: 'bundled_first_party' as const,
+        packagedRuntime: { kind: 'cli_version_root' as const, versionRootId: 'settings-page-fixture-root' } };
+    const originFor = (pluginId: string) => PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_account_a',
+        sourceRef: { machineId: 'machine-1', pluginId, sourceCustody } });
     const packages = Object.fromEntries(Object.values(raw.settingsPagesById).map(page => [page.pluginId, {
         id: page.pluginId, displayName: page.pluginId, version: '1.0.0', enabled: true,
         source: { kind: 'bundled' as const, locator: page.pluginId }, occurrenceId: `${page.pluginId}-occurrence-4`,
-        sourceCustody: { kind: 'bundled_first_party' as const,
-            packagedRuntime: { kind: 'cli_version_root' as const, versionRootId: 'settings-page-fixture-root' } },
+        sourceCustody, executionOrigin: originFor(page.pluginId),
+    }]));
+    const pages = Object.fromEntries(Object.values(raw.settingsPagesById).map(page => [page.id, {
+        ...page, occurrenceId: `${page.pluginId}-occurrence-4`, executionOrigin: originFor(page.pluginId),
     }]));
     return unionPluginUiProjections([{ machineId: 'machine-1', serverId: 'server-1', serverIdentityId: 'srv_account_a',
         phase, interactionEnabled,
-        projection: { ...raw, generation: 4, installedPackagesById: packages } }]).pluginUiProjection;
+        selectableExecutionOrigins: phase === 'current' && interactionEnabled
+            ? Object.keys(packages).map(originFor) : [],
+        projection: { ...raw, generation: 4, installedPackagesById: packages, settingsPagesById: pages } }]).pluginUiProjection;
 }
 
 function SettingsProjectionFixture({ children }: React.PropsWithChildren) {
@@ -228,7 +236,7 @@ beforeEach(async () => {
         } });
     const lifetime = captureActiveServerAccountScopeLifetime();
     if (!lifetime || settingsConnection.home.id !== 'server-1') throw new Error('Settings fixture must have its actual applied Home');
-    const machine = createMachineFixture({ id: 'machine-1', active: true, activeAt: 0 });
+    const machine = createMachineFixture({ id: 'machine-1', active: true, activeAt: Date.now() });
     storage.setState({ profileScope: lifetime.scope, settingsScope: lifetime.scope, endpointStatus: 'online', isDataReady: true,
         machines: { 'machine-1': machine }, machineListByServerId: { 'server-1': [machine] },
         machineListStatusByServerId: { 'server-1': 'idle' } });
@@ -762,6 +770,7 @@ function SettingsTargetNavigationScope(props: React.PropsWithChildren): React.Re
             ? Object.values(projection.settingsPagesById)
             : [],
         targetKind: 'app',
+        accountLifetime: captureActiveServerAccountScopeLifetime(),
     });
     const openSettingsPage = usePluginSettingsPageDestinationHandler({
         projection,

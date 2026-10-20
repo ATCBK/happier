@@ -4,14 +4,16 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 
 import {
+    buildAccountStoredContentCompatibilityHttpHeadersV1,
+    CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION,
     computeWorkspaceSyncPolicyDigest,
     SessionHandoffActionResultV1Schema,
     type SessionHandoffActionResultV1,
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-import { createTestAuth } from '../../src/testkit/auth';
-import { seedCliAuthForTestAccount } from '../../src/testkit/cliAuth';
+import { createTestAuth, createTestAuthMtls } from '../../src/testkit/auth';
+import { seedCliAuthForTestAccount, seedCliTokenOnlyAuthForServer } from '../../src/testkit/cliAuth';
 import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
 import { daemonControlPostJson } from '../../src/testkit/daemon/controlServerClient';
 import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
@@ -30,6 +32,9 @@ import { resolveClaudeProjectId } from '../../src/testkit/claudeProjectId.cjs';
 import { createCliActionExecutorFromCredentials } from '../../../../apps/cli/src/session/actions/createCliActionExecutorFromCredentials';
 
 const run = createRunDirs({ runLabel: 'core' });
+const currentContentHeaders = buildAccountStoredContentCompatibilityHttpHeadersV1(
+    CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION,
+);
 const workspaceContentPolicyBase = {
     v: 1,
     selection: 'git_worktree',
@@ -92,6 +97,7 @@ async function listMachineIds(params: Readonly<{
     const response = await fetchJson<Array<{ id?: unknown }>>(`${params.baseUrl}/v1/machines`, {
         headers: {
             Authorization: `Bearer ${params.token}`,
+            ...currentContentHeaders,
         },
         timeoutMs: 5_000,
     }).catch(() => null);
@@ -144,6 +150,7 @@ async function fetchSessionSnapshot(params: Readonly<{
     const response = await fetchJson<SessionSnapshotRow>(`${params.baseUrl}/v2/sessions/${encodeURIComponent(params.sessionId)}`, {
         headers: {
             Authorization: `Bearer ${params.token}`,
+            ...currentContentHeaders,
         },
         timeoutMs: 5_000,
     });
@@ -181,8 +188,8 @@ describe('core e2e: session handoff via server-routed transfer', () => {
         await server?.stop().catch(() => {});
     });
 
-    it('hands off a linked Claude direct session to a second online daemon over forced server-routed transfer', async () => {
-        const testDir = run.testDir('session-handoff-claude-server-routed');
+    it.each(['e2ee', 'keyless plain'] as const)('hands off a linked Claude direct session to a second online daemon over forced server-routed transfer (%s)', async (machineMode) => {
+        const testDir = run.testDir(`session-handoff-claude-server-routed-${machineMode}`);
         const sourceDaemonDir = resolve(join(testDir, 'daemon-source'));
         const targetDaemonDir = resolve(join(testDir, 'daemon-target'));
         const sourceHomeDir = resolve(join(testDir, 'source-home'));
@@ -243,22 +250,34 @@ describe('core e2e: session handoff via server-routed transfer', () => {
             dbProvider: 'sqlite',
             extraEnv: {
                 HAPPIER_E2E_PROVIDER_SKIP_SERVER_SHARED_DEPS_BUILD: '1',
+                ...(machineMode === 'keyless plain' ? {
+                    HAPPIER_FEATURE_AUTH_LOGIN__KEY_CHALLENGE_ENABLED: '0',
+                    AUTH_ANONYMOUS_SIGNUP_ENABLED: '0',
+                    AUTH_SIGNUP_PROVIDERS: '',
+                    HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional',
+                    HAPPIER_FEATURE_ENCRYPTION__DEFAULT_ACCOUNT_MODE: 'plain',
+                    HAPPIER_FEATURE_E2EE__KEYLESS_ACCOUNTS_ENABLED: '1',
+                    HAPPIER_FEATURE_AUTH_MTLS__ENABLED: '1',
+                    HAPPIER_FEATURE_AUTH_MTLS__MODE: 'forwarded',
+                    HAPPIER_FEATURE_AUTH_MTLS__AUTO_PROVISION: '1',
+                    HAPPIER_FEATURE_AUTH_MTLS__TRUST_FORWARDED_HEADERS: '1',
+                    HAPPIER_FEATURE_AUTH_MTLS__IDENTITY_SOURCE: 'san_email',
+                    HAPPIER_FEATURE_AUTH_MTLS__ALLOWED_EMAIL_DOMAINS: 'example.com',
+                    HAPPIER_FEATURE_AUTH_MTLS__ALLOWED_ISSUERS: 'CN=Example Root CA',
+                } : {}),
             },
         });
-        const auth = await createTestAuth(server.baseUrl);
+        const identity = { email: 'handoff@example.com', issuer: 'CN=Example Root CA' };
+        const e2eeAuth = machineMode === 'e2ee' ? await createTestAuth(server.baseUrl) : null;
+        const auth = e2eeAuth ?? await createTestAuthMtls(server.baseUrl, identity);
+        const targetAuth = e2eeAuth ?? await createTestAuthMtls(server.baseUrl, identity);
 
-        const sourceSeed = await seedCliAuthForTestAccount({
-            cliHome: sourceHomeDir,
-            serverUrl: server.baseUrl,
-            auth,
-            mode: 'dataKey',
-        });
-        const targetSeed = await seedCliAuthForTestAccount({
-            cliHome: targetHomeDir,
-            serverUrl: server.baseUrl,
-            auth,
-            mode: 'dataKey',
-        });
+        const sourceSeed = e2eeAuth
+            ? await seedCliAuthForTestAccount({ cliHome: sourceHomeDir, serverUrl: server.baseUrl, auth: e2eeAuth, mode: 'dataKey' })
+            : await seedCliTokenOnlyAuthForServer({ cliHome: sourceHomeDir, serverUrl: server.baseUrl, token: auth.token });
+        const targetSeed = e2eeAuth
+            ? await seedCliAuthForTestAccount({ cliHome: targetHomeDir, serverUrl: server.baseUrl, auth: e2eeAuth, mode: 'dataKey' })
+            : await seedCliTokenOnlyAuthForServer({ cliHome: targetHomeDir, serverUrl: server.baseUrl, token: targetAuth.token });
 
         sourceDaemon = await startTestDaemon({
             testDir: sourceDaemonDir,
@@ -298,15 +317,19 @@ describe('core e2e: session handoff via server-routed transfer', () => {
             },
         });
 
-        ui = createUserScopedSocketCollector(server.baseUrl, auth.token);
+        ui = createUserScopedSocketCollector(server.baseUrl, auth.token, { declareCurrentAccountStoredContentCompatibility: true });
         ui.connect();
         await waitFor(() => ui?.isConnected() === true, {
             timeoutMs: 20_000,
             context: 'user-scoped socket connected for server-routed handoff e2e',
         });
 
-        const sourceMachineRpc = createDataKeyRpcClient(ui, auth.accountMachineKey);
-        const targetMachineRpc = createDataKeyRpcClient(ui, auth.accountMachineKey);
+        const sourceMachineRpc = createMachineRpcClient(ui, e2eeAuth
+            ? { mode: 'dataKey', dataKey: e2eeAuth.accountMachineKey }
+            : { mode: 'plain' });
+        const targetMachineRpc = createMachineRpcClient(ui, e2eeAuth
+            ? { mode: 'dataKey', dataKey: e2eeAuth.accountMachineKey }
+            : { mode: 'plain' });
 
         const machineIds = await waitForMachineIds({
             baseUrl: server.baseUrl,
@@ -367,9 +390,11 @@ describe('core e2e: session handoff via server-routed transfer', () => {
 
         const targetMetadata = await fetchSessionMetadataV2({
             baseUrl: server.baseUrl,
-            token: auth.token,
+            token: targetAuth.token,
             sessionId,
-            machineKeys: [auth.accountMachineKey],
+            ...(e2eeAuth
+                ? { machineKeys: [e2eeAuth.accountMachineKey] }
+                : { accountEncryptionMode: 'plain' as const }),
         });
         const targetWorkspaceRootPath = requireAbsoluteWorkspaceRoot(targetMetadata.path, 'target Session metadata path');
         expect(targetWorkspaceRootPath).toBe(targetWorkspaceDir);

@@ -85,6 +85,21 @@ function fixture() {
 }
 
 describe('Runner broker readiness protocol', () => {
+  it('accepts only safe optional broker refusal reasons without requiring them from existing producers', () => {
+    expect(TeamCredentialResourceReadinessV1Schema.parse({ kind: 'broker_unavailable' }))
+      .toEqual({ kind: 'broker_unavailable' });
+    for (const reason of ['application_unavailable', 'model_unavailable']) {
+      const readiness = { kind: 'broker_unavailable', reason };
+      expect(TeamCredentialResourceReadinessV1Schema.parse(readiness)).toEqual(readiness);
+    }
+    for (const reason of ['source_changed', 'source_unavailable', 'credential_missing', 'private diagnostic']) {
+      expect(TeamCredentialResourceReadinessV1Schema.safeParse({ kind: 'broker_unavailable', reason }).success).toBe(false);
+    }
+    expect(TeamCredentialResourceReadinessV1Schema.safeParse({
+      kind: 'broker_unavailable', reason: 'model_unavailable', modelId: 'private-model',
+    }).success).toBe(false);
+  });
+
   it('accepts only the recursively closed content-free request and keeps admission purposes separate', () => {
     const { request } = fixture();
     expect(RunnerBrokerReadinessRequestV1Schema.parse(request)).toEqual(request);

@@ -8,12 +8,10 @@ import type { ActionExecutorContext, MachineLiveStreamControlLeaseV1, MachineLiv
 import { startMachineLiveStreamFramePump } from './framePump';
 import {
     classifyCaptureTerminalCloseKind,
-    createDaemonMachineLiveStreamCaptureAdapter,
     type MachineLiveStreamCaptureAdapter,
     type MachineLiveStreamCaptureSession,
     type MachineLiveStreamCaptureStartResult,
 } from './captureAdapter';
-import type { MachineLiveStreamCaptureRegistry } from './captureRegistry';
 import { createMachineLiveStreamSession } from './session';
 import {
     createDaemonPeerMediationFlowEvent,
@@ -116,7 +114,6 @@ function hasSameRenewalScope(previous: MachineLiveStreamStartRequestV1, next: Ma
 
 export function createMachineLiveStreamRelayTerminator(input: Readonly<{
     machineId: string;
-    registry?: MachineLiveStreamCaptureRegistry;
     captureAdapter?: MachineLiveStreamCaptureAdapter;
     nowMs: () => number;
     emitEnvelope: (envelope: MachineLiveStreamRelayEnvelopeV1) => void;
@@ -234,13 +231,7 @@ export function createMachineLiveStreamRelayTerminator(input: Readonly<{
                 return { ok: false, reasonCode: 'source_machine_mismatch' };
             }
 
-            const source = input.registry?.resolve({ sourceId: startRequest.sourceId, streamFamily: startRequest.streamFamily }) ?? null;
-            if (source && !source.ok && !input.captureAdapter) {
-                emitObservability({ kind: 'flow.denied', startRequest, reasonCode: source.diagnostic.reasonCode });
-                return { ok: false, reasonCode: source.diagnostic.reasonCode };
-            }
-            // Registered sources share the same occurrence/retirement owner as bootstrap-wired capture.
-            const captureAdapter = input.registry ? createDaemonMachineLiveStreamCaptureAdapter(input.registry) : input.captureAdapter;
+            const captureAdapter = input.captureAdapter;
             if (!captureAdapter) {
                 emitObservability({ kind: 'flow.denied', startRequest, reasonCode: 'capture_source_unavailable' });
                 return { ok: false, reasonCode: 'capture_source_unavailable' };
@@ -333,11 +324,8 @@ export function createMachineLiveStreamRelayTerminator(input: Readonly<{
 
             const active: ActiveRelayStream = {
                 captureSession: null,
-                controlSourceKind: source?.ok ? source.source.capabilities.sourceKind : undefined,
-                controlSource: source?.ok ? {
-                    sourceId: source.source.capabilities.sourceId,
-                    inputMode: source.source.capabilities.inputMode,
-                } : null,
+                controlSourceKind: undefined,
+                controlSource: null,
                 applyTransportControl: (control) => {
                     const result = pump.applyControl(control);
                     if (result.ok && control.kind === 'keyframe_required') requiresKeyframe = true;
@@ -393,6 +381,11 @@ export function createMachineLiveStreamRelayTerminator(input: Readonly<{
                 return { ok: false, reasonCode: active.closedReason ?? 'grant_expired' };
             }
             active.captureSession = capture.session;
+            active.controlSourceKind = capture.sourceCapabilities?.sourceKind;
+            active.controlSource = capture.sourceCapabilities ? {
+                sourceId: capture.sourceCapabilities.sourceId,
+                inputMode: capture.sourceCapabilities.inputMode,
+            } : null;
             relayActive = true;
             input.emitEnvelope(startEnvelope(active.startRequest));
             const observations: MachineLiveStreamFrameV1[] = [];

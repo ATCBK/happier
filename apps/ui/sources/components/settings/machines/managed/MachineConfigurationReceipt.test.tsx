@@ -153,7 +153,7 @@ describe('MachineConfigurationReceipt', () => {
             ? 'It keeps running, and billing, until you delete it.'
             : 'Hetzner still bills stopped servers.',
         onChange: (policy) => { changes.push(policy); },
-        onReset: () => resets.push(1),
+        onReset: () => { resets.push(1); },
       },
     });
     for (const id of ['until-delete', 'unused:stop:3600000', 'unused:delete:3600000']) {
@@ -189,7 +189,7 @@ describe('MachineConfigurationReceipt', () => {
         inherited: false,
         consequence: () => 'Hetzner still bills stopped servers.',
         onChange: vi.fn(),
-        onReset: () => resets.push(1),
+        onReset: () => { resets.push(1); },
       },
     });
     expect(screen.findByTestId('receipt:keep:wake:switch')).not.toBeNull();

@@ -25,7 +25,14 @@ export type SurfaceFinishGradient = Readonly<{
     locations: readonly [number, number];
     start: Readonly<{ x: number; y: number }>;
     end: Readonly<{ x: number; y: number }>;
+    band?: Readonly<{ edge: 'top' | 'bottom'; height: number }>;
 }>;
+
+/**
+ * The surface finish is a quiet edge, like coss's inner line, never a wash: light shades a short band
+ * at the bottom edge, dark lights one at the top, and the middle of a tall card stays flat.
+ */
+const SURFACE_FINISH_BAND_PX = 32;
 
 /** How much of its ink a dark theme's raised control lifts its fill by (berthd's input/32 ≈ white 2.5%). */
 const RAISED_CONTROL_FILL_ALPHA_DARK = 0.025;
@@ -194,9 +201,8 @@ function buildSurfaceFinishGradients(colors: RaisedEdgeThemeColors, ink: string,
                 colors: [top, bottom], locations, start: { x: 0.5, y: 0 }, end: { x: 0.5, y: 1 },
             });
             finishGradient = dark
-                // Preserve the recipe's relative strengths as the default ink gets quieter.
-                ? gradient(at(ink, strength), at(ink, strength * (2 / 9)), [0, 0.7])
-                : gradient(at(ink, 0), at(ink, strength), [0.3, 1]);
+                ? { ...gradient(at(ink, strength), at(ink, 0), [0, 1]), band: { edge: 'top', height: SURFACE_FINISH_BAND_PX } }
+                : { ...gradient(at(ink, 0), at(ink, strength), [0, 1]), band: { edge: 'bottom', height: SURFACE_FINISH_BAND_PX } };
             secondaryFinishGradient = dark
                 ? gradient(at(ink, strength * (8 / 9)), at(ink, 0), [0, 1])
                 : gradient(at(ink, 0), at(ink, 0.025 * scale), [0, 1]);

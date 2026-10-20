@@ -16,6 +16,8 @@ import { buildAccountEncryptionMigrateToPlainRequest } from './buildAccountEncry
 import { fetchAccountEncryptionAcpCatalogMigrationCandidate } from './fetchAccountEncryptionAcpCatalogMigrationCandidate';
 import { fetchAccountEncryptionConnectedAccountCatalogMigrationCandidates } from './fetchAccountEncryptionConnectedAccountCatalogMigrationCandidates';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
+import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { fetchAccountEncryptionSessionFollowRulesMigrationCandidates } from './fetchAccountEncryptionSessionFollowRulesMigrationCandidates';
 
 const address = {
   kind: 'newSession' as const,
@@ -76,6 +78,67 @@ function success(
 }
 
 describe('runAccountEncryptionModeMigration', () => {
+  it('carries the private Follow census through both real request builders and mode adoption', async () => {
+    const definition = { v: 1 as const, enabled: true, policy: { preset: 'important' as const },
+      filter: normalizeSessionListFilterV1({ homeServerIds: ['home'], scope: 'all_accessible' }) };
+    const rows = [{ ruleId: 'personal', receiver: { kind: 'account' as const }, version: 3, content: { t: 'plain' as const, v: definition } },
+      { ruleId: 'coordinator', receiver: { kind: 'session' as const, sessionId: 'coordinator' }, version: 8, content: { t: 'plain' as const, v: definition } }];
+    const credentials = { token: 'account-token', secret: Buffer.from(new Uint8Array(32).fill(17)).toString('base64url') };
+    const census = await fetchAccountEncryptionSessionFollowRulesMigrationCandidates({ credentials: { token: credentials.token }, mode: 'plain',
+      request: async () => Response.json({ rules: rows }), assertCurrent() {} });
+    const common = { expectedAccountVersion: 1, expectedSigningKeyFingerprint: null, expectedContentKeyFingerprint: null,
+      expectedSettingsVersion: 1, settings: settingsParse({}), rawSettings: {}, connectedServiceProfiles: [], automations: [],
+      storageDirectives: { machines: request.machines, todos: request.todos, artifacts: request.artifacts,
+        sessions: request.sessions, reviewComments: request.reviewComments, sessionOrganization: request.sessionOrganization, pets: request.pets } };
+    const encryptedRequest = await buildAccountEncryptionMigrateToE2eeRequest({ ...common, accountId: 'owner', credentials, sessionFollowRules: census,
+      keyProof: { v: 1, publicKey: Buffer.from(new Uint8Array(32).fill(1)).toString('base64'),
+        contentPublicKey: Buffer.from(new Uint8Array(32).fill(2)).toString('base64'), contentPublicKeySig: 'content-signature', sign: () => 'request-signature' },
+      fetchConnectedServiceCredentialPlain: async () => { throw new Error('unexpected credential read'); } });
+    const encryptedRows = encryptedRequest.sessionFollowRules!.items.map(item => ({ ruleId: item.ruleId,
+      receiver: item.receiver, version: item.expectedVersion + 1, content: item.content }));
+    expect(encryptedRows.map(row => row.content.t)).toEqual(['encrypted', 'encrypted']);
+    const activateTargetMode = vi.fn();
+    await runAccountEncryptionModeMigration({ request: encryptedRequest,
+      migrate: async () => success({ mode: 'e2ee', sessionFollowRules: { rules: encryptedRows } }),
+      activateTargetMode, acknowledgeSessionDrafts: vi.fn() });
+    const opened = await fetchAccountEncryptionSessionFollowRulesMigrationCandidates({ credentials, mode: 'e2ee',
+      request: async () => Response.json({ rules: encryptedRows }), assertCurrent() {} });
+    const plainRequest = await buildAccountEncryptionMigrateToPlainRequest({ ...common,
+      expectedSigningKeyFingerprint: 'signing-key', expectedContentKeyFingerprint: 'content-key', credentials: { token: credentials.token }, sessionFollowRules: opened,
+      fetchConnectedServiceCredentialSealed: async () => { throw new Error('unexpected credential read'); },
+      decryptAutomationTemplateRaw: async () => { throw new Error('unexpected automation read'); } });
+    expect(plainRequest.sessionFollowRules).toEqual({ items: rows.map(row => ({ ruleId: row.ruleId,
+      receiver: row.receiver, expectedVersion: row.version + 1, content: row.content })) });
+    await runAccountEncryptionModeMigration({ request: plainRequest,
+      migrate: async () => success({ sessionFollowRules: { rules: rows.map(row => ({ ...row, version: row.version + 2 })) } }),
+      activateTargetMode, acknowledgeSessionDrafts: vi.fn() });
+    expect(activateTargetMode).toHaveBeenCalledTimes(2);
+  });
+  it('requires the complete migrated Follow rule census before activating the target Account mode', async () => {
+    const rule = { ruleId: 'payments', receiver: { kind: 'account' as const }, expectedVersion: 3,
+      content: { t: 'plain' as const, v: { v: 1 as const, enabled: true, policy: { preset: 'important' as const },
+        filter: normalizeSessionListFilterV1({ homeServerIds: ['home'], scope: 'all_accessible' }) } } };
+    const { sessionDrafts: _drafts, ...withoutDrafts } = request;
+    const migrationRequest = { ...withoutDrafts, sessionFollowRules: { items: [rule] } };
+    const activateTargetMode = vi.fn();
+    await expect(runAccountEncryptionModeMigration({ request: migrationRequest,
+      migrate: async () => success(), activateTargetMode, acknowledgeSessionDrafts: async () => {},
+    })).rejects.toThrow();
+    expect(activateTargetMode).not.toHaveBeenCalled();
+    const migrated = { ruleId: rule.ruleId, receiver: rule.receiver, version: 4, content: rule.content };
+    for (const rules of [[{ ...migrated, version: 3 }], [{ ...migrated, receiver: { kind: 'session' as const, sessionId: 'other' } }],
+      [{ ...migrated, content: { t: 'plain' as const, v: { ...rule.content.v, enabled: false } } }], [migrated, migrated]]) {
+      await expect(runAccountEncryptionModeMigration({ request: migrationRequest,
+        migrate: async () => success({ sessionFollowRules: { rules } }), activateTargetMode, acknowledgeSessionDrafts: async () => {},
+      })).rejects.toThrow();
+    }
+    expect(activateTargetMode).not.toHaveBeenCalled();
+    await runAccountEncryptionModeMigration({ request: migrationRequest,
+      migrate: async () => success({ sessionFollowRules: { rules: [{ ruleId: rule.ruleId, receiver: rule.receiver,
+        version: 4, content: rule.content }] } }), activateTargetMode, acknowledgeSessionDrafts: async () => {},
+    });
+    expect(activateTargetMode).toHaveBeenCalledOnce();
+  });
   it('captures original Connected conversion rows without Account keys and retains tombstone authority', async () => {
     const payload = { key: 'configurations', retainedWrapper: { color: 'blue' }, value: { v: 1,
       entries: [{ service: { pluginId: 'happier.connected-account.example', localId: 'cloud' }, modeId: 'native-api',
@@ -351,7 +414,7 @@ describe('runAccountEncryptionModeMigration', () => {
     const { sessionDrafts: _drafts, ...withoutDrafts } = request;
     const content = { t: 'plain' as const, v: {
       v: 1 as const, id: 'profile-a', definition: { kind: 'artifact' as const, artifactId: 'artifact-a' },
-      enabled: true, promptStack: [], secretBindings: {},
+      enabled: true, promptStack: [], secretBindings: {}, skillSeeds: [],
     } };
     const withProfiles = { ...withoutDrafts, profileRows: {
       items: [{ id: 'profile-a', expectedRevision: 7, content }], expectedReferenceGuardRevision: 11,

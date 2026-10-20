@@ -14,6 +14,26 @@ import {
 } from './projection.js';
 
 describe('Claude native transcript semantic projection', () => {
+  it('keeps shell content visible while projecting exact input identity and output semantics', () => {
+    const input = { type: 'user', uuid: 'shell-input', message: { role: 'user', content: '<bash-input> echo hi</bash-input>' } };
+    expect(classifyClaudeNativeTranscriptRow(input)).toMatchObject({ visibility: 'visible', messageRole: 'user',
+      content: { kind: 'message', text: '! echo hi' }, lifecycle: { kind: 'shell_input', text: '! echo hi' } });
+    expect(projectClaudeJsonlLineToDirectMessages({ fileRelPath: 'projects/session.jsonl', lineStartOffsetBytes: 0, lineValue: input }))
+      .toMatchObject([{ messageRole: 'user', userProjection: 'source_fact',
+        raw: { role: 'user', content: { type: 'text', text: '! echo hi' } } }]);
+    expect(projectClaudeTranscriptRowToProviderPayload({ providerSessionId: 'claude-session-1', row: input, suppressPriorEraTurnClosure: false })).toMatchObject({ kind: 'text', text: '! echo hi' });
+    const output = { ...input, uuid: 'shell-output', message: { role: 'user', content: '<bash-stdout>hi\n  literal </bash-stdout> tail &lt;literal&gt;\n</bash-stdout><bash-stderr>warning\n</bash-stderr>' } };
+    expect(classifyClaudeNativeTranscriptRow(output)).toMatchObject({ visibility: 'visible', messageRole: 'agent',
+      content: { kind: 'message', text: 'hi\n  literal </bash-stdout> tail &lt;literal&gt;\nwarning\n' }, lifecycle: { kind: 'shell_output' } });
+    expect(projectClaudeJsonlLineToDirectMessages({ fileRelPath: 'projects/session.jsonl', lineStartOffsetBytes: 4, lineValue: output }))
+      .toMatchObject([{ messageRole: 'agent', raw: { role: 'agent', content: { type: 'acp', agentId: 'claude',
+        data: { type: 'message', message: 'hi\n  literal </bash-stdout> tail &lt;literal&gt;\nwarning\n' } } } }]);
+    expect(projectClaudeTranscriptRowToProviderPayload({ providerSessionId: 'claude-session-1', row: output, suppressPriorEraTurnClosure: false })).toBeNull();
+    const caveat = { ...input, uuid: 'shell-caveat', isMeta: true, message: { role: 'user', content: '<local-command-caveat>Local only</local-command-caveat>' } };
+    expect(classifyClaudeNativeTranscriptRow(caveat)).toMatchObject({ visibility: 'hidden', lifecycle: { kind: 'local_command_caveat' } });
+    expect(classifyClaudeNativeTranscriptRow({ ...input, isMeta: true }).lifecycle).toEqual({ kind: 'none' });
+  });
+
   it.each([
     { type: 'attachment', uuid: 'peer-native', attachment: { type: 'queued_command', prompt: '<cross-session-message from="uds:/tmp/sender.sock" from-name="Sender" from-mode="prompting">Delivered</cross-session-message>' } },
     { type: 'user', uuid: 'peer-sdk-string', origin: { kind: 'peer', from: 'uds:/tmp/sender.sock', name: 'Sender' }, message: { content: 'Delivered' } },

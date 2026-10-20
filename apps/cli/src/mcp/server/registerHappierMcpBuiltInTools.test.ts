@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ActionsSettingsV1Schema, ComputerCaptureResponseV1Schema } from '@happier-dev/protocol';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import * as mini from 'zod/mini';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -15,8 +15,66 @@ import { projectExecutablePluginToolCatalog } from '@/plugins/runtime/toolCatalo
 import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
 describe('registerHappierMcpBuiltInTools', () => {
+  it('contains malformed structured output at the MCP boundary and keeps healthy calls available', async () => {
+    const tool = { name: 'change_title', title: 'Change title', description: 'Change title',
+      inputSchema: z.strictObject({ title: z.string() }), outputSchema: z.strictObject({ success: z.boolean() }) };
+    const server = new McpServer({ name: 'structured-output-test', version: '1.0.0' });
+    const bridge = createActionToolExecutorBridge({ surface: 'mcp',
+      executor: createActionExecutor(createUnavailableActionTransportDeps()) });
+    let response: unknown = 'invalid structured result';
+    registerHappierMcpBuiltInTools(server, {
+      sessionId: 'sess-1', surface: 'mcp',
+      toolInventory: prepareHappierMcpToolInventory({ sessionId: 'sess-1',
+        inventory: { tools: [tool], actionToolNameToId: new Map() } }),
+      // Rename is a server write boundary; dispatch and the MCP transport remain real.
+      deps: { ...bridge, changeTitle: async () => response,
+        resolveActionOptions: args => bridge.resolveActionOptions(args, 'sess-1') },
+    });
+    const client = new Client({ name: 'structured-output-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const malformed = await client.callTool({ name: 'change_title', arguments: { title: 'Bad result' } });
+      expect(malformed).toMatchObject({ isError: true,
+        content: [{ type: 'text', text: expect.stringContaining('"errorCode":"tool_failed"') }] });
+      response = { success: true };
+      expect(await client.callTool({ name: 'change_title', arguments: { title: 'Healthy result' } })).toMatchObject({
+        isError: false, structuredContent: { success: true },
+      });
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it('advertises the real usage output through MCP discovery with resolvable document-local references', async () => {
+    const spec = getActionSpec('usage.query');
+    const inventory = prepareHappierMcpToolInventory({ sessionId: 'cli-global', inventory: {
+      tools: [{ name: 'usage_query', title: spec.title, description: spec.description ?? spec.title,
+        actionId: spec.id, inputSchema: spec.inputSchema, outputSchema: spec.outputSchema }],
+      actionToolNameToId: new Map([['usage_query', spec.id]]),
+    } });
+    const server = new McpServer({ name: 'parity-schema-test', version: '1.0.0' });
+    const meta = inventory.registrations[0]!.meta as { inputSchema: z.ZodMiniType; outputSchema: z.ZodMiniType };
+    server.registerTool('usage_query', meta, async () => ({ content: [] }));
+    const client = new Client({ name: 'parity-schema-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      // The real SDK client compiles advertised output schemas during discovery.
+      const result = await client.listTools();
+      expect(result.tools).toEqual([expect.objectContaining({ name: 'usage_query', outputSchema: expect.any(Object) })]);
+    } finally { await client.close(); await server.close(); }
+  });
+
   it('presents and validates Mini Action inputs and completed outputs without treating parsers as JSON', () => {
     const schema = mini.strictObject({ label: mini.string().check(mini.minLength(1)) });
     const inventory = {
@@ -24,7 +82,7 @@ describe('registerHappierMcpBuiltInTools', () => {
       actionToolNameToId: new Map<string, string>(),
     };
     const prepared = prepareHappierMcpToolInventory({ inventory, sessionId: 'sess-1' });
-    const meta = prepared.registrations[0]!.meta as { inputSchema: z.ZodType; outputSchema: z.ZodType };
+    const meta = prepared.registrations[0]!.meta as { inputSchema: z.ZodMiniType; outputSchema: z.ZodMiniType };
     expect(z.toJSONSchema(meta.inputSchema, { target: 'draft-7', io: 'input' })).toMatchObject({
       type: 'object', properties: { label: { type: 'string', minLength: 1 } }, required: ['label'],
     });
@@ -36,8 +94,8 @@ describe('registerHappierMcpBuiltInTools', () => {
   });
 
   it('keeps tools available when optional output metadata is unrepresentable while refusing unrepresentable inputs', () => {
-    const inputSchema = z.object({ value: z.string() }).strict();
-    const outputSchema = z.object({ data: z.custom<unknown>() }).strict();
+    const inputSchema = z.strictObject({ value: z.string() });
+    const outputSchema = z.strictObject({ data: z.custom<unknown>() });
     const tool = { name: 'opaque_result', title: 'Opaque result', description: 'Read an opaque result', inputSchema, outputSchema };
     const inventory = { tools: [tool, { ...tool, name: 'representable_result', outputSchema: inputSchema }], actionToolNameToId: new Map<string, string>() };
     const prepared = prepareHappierMcpToolInventory({ inventory, sessionId: 'sess-1' });
@@ -188,13 +246,13 @@ describe('registerHappierMcpBuiltInTools', () => {
       const toolInventory = prepareHappierMcpToolInventory({ inventory, sessionId: '', pluginToolCatalog });
       const registrations: Array<Readonly<{
         name: string;
-        meta: { inputSchema?: z.ZodType; outputSchema?: z.ZodType };
+        meta: { inputSchema?: z.ZodMiniType; outputSchema?: z.ZodMiniType };
       }>> = [];
 
       registerHappierMcpBuiltInTools({
         registerTool: (name, meta) => registrations.push({
           name,
-          meta: meta as { inputSchema?: z.ZodType; outputSchema?: z.ZodType },
+          meta: meta as { inputSchema?: z.ZodMiniType; outputSchema?: z.ZodMiniType },
         }),
       }, {
         sessionId: '',
@@ -208,6 +266,15 @@ describe('registerHappierMcpBuiltInTools', () => {
       });
 
       expect(registrations.length).toBeGreaterThan(0);
+      const incompatibleInputs = registrations.flatMap((registration, index) => {
+        const input = registration.meta.inputSchema
+          ? z.toJSONSchema(registration.meta.inputSchema, { target: 'draft-7', io: 'input' })
+          : null;
+        return !input || input.type !== 'object' || ['oneOf', 'anyOf', 'allOf'].some(key => key in input)
+          ? [{ index, name: registration.name, combinators: Object.keys(input ?? {}).filter(key => ['oneOf', 'anyOf', 'allOf'].includes(key)) }]
+          : [];
+      });
+      expect(incompatibleInputs).toEqual([]);
       for (const registration of registrations) {
         expect(() => registration.meta.inputSchema
           ? z.toJSONSchema(registration.meta.inputSchema, { target: 'draft-7', io: 'input' })
@@ -223,14 +290,14 @@ describe('registerHappierMcpBuiltInTools', () => {
 
   it('keeps Action normalization at canonical dispatch instead of applying it in MCP presentation', async () => {
     const registered = new Map<string, {
-      meta: { inputSchema?: z.ZodType };
+      meta: { inputSchema?: z.ZodMiniType };
       handler: (args: unknown) => Promise<unknown>;
     }>();
     const executeActionByToolName = vi.fn(async () => ({ ok: true as const, result: { status: 'updated' } }));
 
     registerHappierMcpBuiltInTools({
       registerTool: (name, meta, handler) => registered.set(name, {
-        meta: meta as { inputSchema?: z.ZodType },
+        meta: meta as { inputSchema?: z.ZodMiniType },
         handler,
       }),
     }, {
@@ -256,6 +323,7 @@ describe('registerHappierMcpBuiltInTools', () => {
       'session_title_set',
       rawInput,
       'sess-1',
+      { actionRequestId: expect.any(String) },
     );
   });
 
@@ -301,7 +369,7 @@ describe('registerHappierMcpBuiltInTools', () => {
     });
 
     expect(registered.has('session_transcript_get')).toBe(true);
-    expect(registered.has('session_discussion_post')).toBe(false);
+    expect(registered.has('discussion_post')).toBe(false);
     await expect(registered.get('session_transcript_get')?.({ limit: 10 })).resolves.toMatchObject({
       isError: false,
     });
@@ -378,8 +446,8 @@ describe('registerHappierMcpBuiltInTools', () => {
 
     const registration = registered.get('acme_review_start');
     const meta = registration?.meta as {
-      inputSchema?: z.ZodType;
-      outputSchema?: z.ZodType;
+      inputSchema?: z.ZodMiniType;
+      outputSchema?: z.ZodMiniType;
       annotations?: unknown;
       _meta?: unknown;
     } | undefined;
@@ -507,6 +575,7 @@ describe('registerHappierMcpBuiltInTools', () => {
           input,
           'sess-1',
           {
+            actionRequestId: expect.any(String),
             approvalOrigin: {
               kind: 'transcript_tool_call',
               sessionId: 'sess-1',
@@ -519,6 +588,7 @@ describe('registerHappierMcpBuiltInTools', () => {
           'agents_models_list',
           input,
           'sess-1',
+          { actionRequestId: expect.any(String) },
         );
       }
     }
@@ -582,7 +652,7 @@ describe('registerHappierMcpBuiltInTools', () => {
       'session_message_send',
       input,
       'sess-home-1',
-      { actionRequestId: 'mcp-targeted-1' },
+      { actionRequestId: expect.any(String) },
     );
   });
 
@@ -659,7 +729,7 @@ describe('registerHappierMcpBuiltInTools', () => {
       { limit: 20, ignoredSecret: 'must-not-be-persisted-in-origin' },
       'sess-1',
       {
-        actionRequestId: 'jsonrpc-request-1',
+        actionRequestId: expect.any(String),
         approvalOrigin: {
           kind: 'transcript_tool_call',
           sessionId: 'sess-1',
@@ -688,33 +758,6 @@ describe('registerHappierMcpBuiltInTools', () => {
     });
 
     expect(handlers.get('session_permission_respond')).toBeUndefined();
-  });
-
-  it('binds an external MCP JSON-RPC request id into the trusted approval origin', async () => {
-    const handlers = new Map<string, (args: unknown, extra?: unknown) => Promise<unknown>>();
-    const executeActionByToolName = vi.fn(async () => ({ ok: true as const, result: { sessions: [] } }));
-
-    registerHappierMcpBuiltInTools({
-      registerTool: (name, _meta, handler) => {
-        handlers.set(name, handler as (args: unknown, extra?: unknown) => Promise<unknown>);
-      },
-    }, {
-      sessionId: 'sess-1',
-      surface: 'mcp',
-      deps: {
-        changeTitle: async () => ({ success: true }),
-        executeActionByToolName,
-      },
-    });
-
-    await handlers.get('session_list')?.({ limit: 20 }, { requestId: 42 });
-
-    expect(executeActionByToolName).toHaveBeenCalledWith(
-      'session_list',
-      { limit: 20 },
-      'sess-1',
-      { actionRequestId: '42' },
-    );
   });
 
   it('keeps an active tool call alive with requested MCP progress notifications', async () => {

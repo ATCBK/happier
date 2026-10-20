@@ -29,7 +29,9 @@ import { EncryptionCache } from '../../../../ui/sources/sync/encryption/encrypti
 import { applyCurrentSessionPresentationCommand } from '../../../../ui/sources/components/sessions/presentation/applyCurrentSessionPresentationCommand';
 import { createNativeAgentRuntimeSessionPlan } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession';
 import { createNativeAgentSessionHostServiceOwners } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionHostServiceOwners';
-import { createExternalContributionFixtures, createLease } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit';
+import { createExternalContributionFixtures, createLease, createNativeAgentLaunchPreparationFixture } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit';
+import { createStablePluginExecService } from '@/plugins/runtime/invocation/services/exec';
+import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 import { buildPluginSessionBindingInput } from '@/plugins/runtime/runtimeCore/plugin/sessionLaunch';
 import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
@@ -46,7 +48,12 @@ import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/action
 import { createCurrentSessionPresentationHost } from './currentSessionPresentationService';
 
 const boundary = vi.hoisted(() => ({ io: vi.fn(), fetch: vi.fn(), patch: vi.fn() }));
-vi.mock('socket.io-client', () => ({ io: boundary.io }));
+vi.mock('socket.io-client', async importOriginal => {
+  const actual = await importOriginal<typeof import('socket.io-client')>();
+  return { ...actual, io: (...args: Parameters<typeof actual.io>) =>
+    typeof args[0] === 'string' && args[0].startsWith('http://127.0.0.1:')
+      ? actual.io(...args) : boundary.io(...args) };
+});
 vi.mock('@/api/connection/createLoopbackReadinessProbe', () => ({
   createLoopbackReadinessProbe: () => async () => ({ status: 'ready' as const }),
 }));
@@ -215,6 +222,7 @@ describe('current-session presentation publication composition', () => {
       });
     ` });
     const permissionHandler = new ProviderEnforcedPermissionHandler(client, { logPrefix: '[PresentationTest]' });
+    const launchPreparation = await createNativeAgentLaunchPreparationFixture();
     const plan = await createNativeAgentRuntimeSessionPlan({
       runtime: createCustomAcpAgentRuntime(),
       identity,
@@ -225,6 +233,14 @@ describe('current-session presentation publication composition', () => {
         backendTarget: { kind: 'backend', backendId: agentId },
       }),
       resolveAcpHostLaunch: async () => ({ command: process.execPath, args: [executable], env: {}, unsetEnv: [], timeouts: {} }),
+      createInvocationServices: async ({ signal }) => ({ ...createUnavailablePluginServices(),
+        exec: createStablePluginExecService({ allowedExecutables: [], signal,
+          isOccurrenceCurrent: () => !controller.signal.aborted,
+          resolveExecutable: async () => { throw new Error('The host-owned ACP fixture already resolved its executable'); },
+          resolvePath: async () => directory,
+          prepareAgentNativeLaunch: launchPreparation.prepare(directory, signal),
+        }),
+      }),
       attestSessionOpen: async ({ phase, request }) => {
         const admitted = AgentRuntimeDaemonSessionOpenRequestV1Schema.parse(request);
         if (phase === 'commit') admittedOpenRequests.push(admitted);
@@ -268,9 +284,14 @@ describe('current-session presentation publication composition', () => {
     const call = (method: string, params: unknown) => client.rpcHandlerManager.handleRequest({
       method: `${session.id}:${method}`, params, authorization: origin,
     });
-    const bound = CurrentSessionPresentationBindResultV1Schema.parse(await call(
-      CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD, { clientId: 'viewer-client', focused: true, draftRevision: 0 },
-    ));
+    const patchesBeforeBind = boundary.patch.mock.calls.length;
+    const bindings = await Promise.all(Array.from({ length: 3 }, async () =>
+      CurrentSessionPresentationBindResultV1Schema.parse(await call(
+        CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD, { clientId: 'viewer-client', focused: true, draftRevision: 0 },
+      ))));
+    const bound = bindings[0]!;
+    expect(bindings).toEqual([bound, bound, bound]);
+    expect(boundary.patch.mock.calls.length - patchesBeforeBind).toBe(1);
     expect(bound.status).toBe('bound');
     if (bound.status !== 'bound') throw new Error('Viewer did not bind');
     expect(parsePlainSessionAgentState(stored.agentState)).toHaveProperty(CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY);

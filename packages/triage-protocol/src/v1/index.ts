@@ -9,6 +9,20 @@
 // projection a source mount asserts against. Everything else reads
 // `Schema.jsonSchema`.
 export * from './bounds.js';
+export { buildTriageEntryRouteSegmentV1, readTriageEntryRouteSegmentV1 } from './entryRoute.js';
+export {
+    triageTaskStatusCategoryV1,
+    TriageEntryRelationsV1Schema, TriageTaskFieldV1Schema,
+    TriageTaskCapabilitiesV1Schema, TriageTaskTransitionV1Schema,
+} from './observations.js';
+export type { TriageEntryStateV1, TriageEntryRelationsV1, TriageTaskFieldV1, TriageTaskCapabilitiesV1 } from './observations.js';
+export {
+    TriageTaskFieldsV1Schema, TriageTaskCreateFieldsV1Schema,
+    TriageTaskCreateInputV1Schema, TriageTaskEditInputV1Schema, TriageTaskTransitionInputV1Schema,
+    TriageTaskCreateConnectedAccountInputV1Schema, TriageTaskEditConnectedAccountInputV1Schema,
+    TriageTaskTransitionConnectedAccountInputV1Schema, TriageTaskWriteResultV1Schema,
+} from './tasks.js';
+export type { TriageTaskFieldsV1, TriageTaskCreateFieldsV1, TriageTaskCreateInputV1, TriageTaskEditInputV1, TriageTaskTransitionInputV1, TriageTaskWriteResultV1 } from './tasks.js';
 export {
     TRIAGE_SOURCE_INSTANCE_ID_PATTERN_V1,
     TriageEntryLocatorV1Schema,
@@ -107,7 +121,9 @@ export type {
 
 export {
     TriageConfiguredSourceConnectedAccountInstanceV1Schema,
+    TriageConfiguredSourceCredentialInstanceV1Schema,
     TriageSourceConnectedAccountBindingV1Schema,
+    TriageSourceCredentialBindingV1Schema,
     isTriageSourceConnectedAccountInstanceV1,
     triageSourceBindingComponentsV1,
     TriageConfiguredSourceInstanceV1JsonSchema,
@@ -119,8 +135,23 @@ export {
     TriageSourceInstanceDraftV1Schema,
     TriageSourceInstanceLocatorV1Schema,
 } from './instances.js';
+
+export {
+    TriageSourceLinkSessionInputV1Schema,
+    TriageSourceLinkSessionResultV1Schema,
+    TriageSourceReadSessionLinksInputV1Schema,
+    TriageSourceReadSessionLinksResultV1Schema,
+} from './sessionLinks.js';
+export type {
+    TriageSourceLinkSessionInputV1,
+    TriageSourceLinkSessionResultV1,
+    TriageSourceReadSessionLinksInputV1,
+    TriageSourceReadSessionLinksResultV1,
+} from './sessionLinks.js';
 export type {
     TriageConfiguredSourceConnectedAccountInstanceV1,
+    TriageConfiguredSourceCredentialInstanceV1,
+    TriageSourceCredentialBindingV1,
     TriageSourceConnectedAccountBindingV1,
     TriageConfiguredSourceInstanceV1,
     TriageListInstancesInputV1,
@@ -227,6 +258,7 @@ export type {
 
 export {
     TriageSourceConnectedAccountInputsV1,
+    TriageSourceCredentialInputsV1,
     TriageSourcesContributionPointV1,
     TriageSourcesContributionProtocolV1,
 } from './contribution.js';

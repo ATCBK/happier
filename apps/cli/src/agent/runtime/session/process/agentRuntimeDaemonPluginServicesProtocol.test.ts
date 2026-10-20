@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import type { PluginInvocableActionId } from '@happier-dev/plugin-sdk/actions';
@@ -13,6 +14,7 @@ import {
     RUNNER_DAEMON_PROVIDER_OPERATION_IDS_V1,
     RUNNER_DAEMON_PLUGIN_SERVICE_OPERATION_V1_SCHEMAS,
     RunnerDaemonManagedProviderCustodyScopeV1Schema,
+    RunnerDaemonManagedProviderBootstrapV1Schema,
     RunnerDaemonPluginServiceOperationV1Schema,
     RunnerDaemonPluginServiceResultV1Schema,
     RunnerDaemonPluginServiceSubscriptionEventV1Schema,
@@ -99,6 +101,7 @@ const retainedRunnerOperationClassification = [
             'plugin_exec.agent_cli.check_readiness_v1',
             'plugin_exec.system_tools.resolve_v1',
             'plugin_exec.launch.authorize_v1',
+            'plugin_exec.resolved_agent_launch.authorize_v1',
             'plugin_exec.launch.release_v1',
         ],
     },
@@ -141,6 +144,41 @@ const retainedRunnerOperationClassification = [
 }>[];
 
 describe('runner daemon PluginServices v1 protocol', () => {
+    it.each([
+        ['command', { command: `/${'c'.repeat(32_768)}` }],
+        ['cwd', { cwd: `/${'d'.repeat(32_768)}` }],
+        ['argument length', { args: ['a'.repeat(65_537)] }],
+        ['argument count', { args: Array.from({ length: 4_097 }, () => 'argument') }],
+    ] as const)('preserves resolved Agent launch tuples beyond unrelated request bounds: %s', (_field, values) => {
+        const operation = {
+            kind: 'plugin_exec.resolved_agent_launch.authorize_v1',
+            requestId: 'request-resolved',
+            invocationId: 'invocation-1',
+            launch: { command: '/native/agent', cwd: '/project', args: ['--session'], env: {}, ...values },
+        };
+        expect(RunnerDaemonPluginServiceOperationV1Schema.parse(operation)).toEqual(operation);
+    });
+
+    it('keeps resolved Agent launch authority and tuple shapes strict', () => {
+        const operation = {
+            kind: 'plugin_exec.resolved_agent_launch.authorize_v1',
+            requestId: 'request-resolved',
+            invocationId: 'invocation-1',
+            launch: { command: '/native/agent', args: ['--session'], env: {} },
+        };
+        for (const invalid of [
+            { ...operation, ambientAuthority: true },
+            { ...operation, launch: { ...operation.launch, projectEnvironment: {} } },
+            { ...operation, launch: { ...operation.launch, command: '' } },
+            { ...operation, launch: { ...operation.launch, args: [1] } },
+        ]) {
+            expect(RunnerDaemonPluginServiceOperationV1Schema.safeParse(invalid).success).toBe(false);
+        }
+    });
+
+    it('rejects malformed managed Provider bootstraps through the schema result', () => {
+        expect(RunnerDaemonManagedProviderBootstrapV1Schema.safeParse({}).success).toBe(false);
+    });
     it('preserves optional CLI version facts and rejects malformed readiness projections', () => {
         expect(RunnerDaemonAgentCliReadinessResultV1Schema.parse({
             launchable: [{ agentId: 'happier.agent.claude/claude', version: '2.1.71' }],
@@ -333,6 +371,12 @@ describe('runner daemon PluginServices v1 protocol', () => {
             RunnerDaemonManagedProviderCustodyScopeV1Schema.safeParse(scope)
                 .success,
         ).toBe(true);
+        expect(RunnerDaemonManagedProviderBootstrapV1Schema.safeParse({
+            v: 1,
+            scope,
+            requestAuth: null,
+            providerPluginHardRevocationRevisionAtAdmission: 0,
+        }).success).toBe(true);
         const { manifestAuthority: _authority, ...withoutAuthority } = scope;
         expect(
             RunnerDaemonManagedProviderCustodyScopeV1Schema.safeParse(
@@ -418,7 +462,8 @@ describe('runner daemon PluginServices v1 protocol', () => {
             { kind: 'plugin_mcp.client.list_prompts_v1', requestId: 'request-27e', invocationId: 'invocation-1', clientId: 'client-1', cursor: 'prompt-cursor' },
             { kind: 'plugin_mcp.client.get_prompt_v1', requestId: 'request-27f', invocationId: 'invocation-1', clientId: 'client-1', name: 'review', args: { scope: 'src' } },
             { kind: 'plugin_mcp.client.close_v1', requestId: 'request-28', invocationId: 'invocation-1', clientId: 'client-1' },
-            { kind: 'plugin_notifications.send_v1', requestId: 'request-29', invocationId: 'invocation-1', request: { clientRequestId: 'client-request-1', categoryId: 'build', title: 'Done' } },
+            { kind: 'plugin_notifications.send_v1', requestId: 'request-29', invocationId: 'invocation-1', request: { clientRequestId: 'client-request-1', categoryId: 'build', title: 'Done',
+                itemId: 'build-1', type: 'update', page: { pageId: 'builds', subPath: '/build-1' }, resolved: true } },
             { kind: 'plugin_notifications.list_channels_v1', requestId: 'request-30', invocationId: 'invocation-1' },
             { kind: 'plugin_notifications.list_categories_v1', requestId: 'request-31', invocationId: 'invocation-1' },
             { kind: 'plugin_notifications.preferences_v1', requestId: 'request-32', invocationId: 'invocation-1', categoryId: 'build' },
@@ -433,6 +478,7 @@ describe('runner daemon PluginServices v1 protocol', () => {
             { kind: 'plugin_exec.agent_cli.check_readiness_v1', requestId: 'request-36', invocationId: 'invocation-1', request: { candidates: ['codex'], requirement: 'any', includeVersion: true } },
             { kind: 'plugin_exec.system_tools.resolve_v1', requestId: 'request-37', invocationId: 'invocation-1', request: { toolId: 'codex', purpose: 'session' } },
             { kind: 'plugin_exec.launch.authorize_v1', requestId: 'request-38', invocationId: 'invocation-1', request: { executable: { kind: 'systemTool', id: 'codex' }, args: ['--version'] } },
+            { kind: 'plugin_exec.resolved_agent_launch.authorize_v1', requestId: 'request-38-resolved', invocationId: 'invocation-1', launch: { command: '/native/agent', args: ['--session'], env: {} } },
             { kind: 'plugin_exec.launch.release_v1', requestId: 'request-38a', invocationId: 'invocation-1', authorizationId: 'authorization-1' },
             { kind: 'plugin_services.close_v1', requestId: 'request-39', invocationId: 'invocation-1' },
         ];
@@ -625,9 +671,9 @@ describe('runner daemon PluginServices v1 protocol', () => {
     it('classifies every retained runner operation without a runtime classifier', () => {
         const schemaKinds = [
             ...RUNNER_DAEMON_PLUGIN_SERVICE_OPERATION_V1_SCHEMAS
-                .map((schema) => schema.shape.kind.value),
+                .map((schema) => schema.shape.kind._zod.def.values[0]),
             ...RUNNER_AGENT_DAEMON_FACET_OPERATION_SCHEMAS
-                .map((schema) => schema.shape.kind.value),
+                .map((schema) => schema.shape.kind._zod.def.values[0]),
         ].sort();
         const flattenedClassifiedKinds = retainedRunnerOperationClassification
             .flatMap((entry) => entry.kinds);

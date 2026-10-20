@@ -8,6 +8,7 @@ import type {
 } from '@/api/types';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { logger } from '@/ui/logger';
+import { AgentStateRequestStore } from '@/agent/permissions/agentStateRequestStore';
 
 import {
     applyAcpPostSendReactions,
@@ -17,6 +18,10 @@ function createReactionPort(overrides?: Partial<Metadata>) {
     let metadata: Metadata = createTestMetadata(overrides);
     let agentState: AgentState = {};
     const publish = vi.fn().mockResolvedValue(undefined);
+    const requestStore = new AgentStateRequestStore({ logPrefix: '[Reaction test]', target: {
+        scopeId: 'session-1', readState: () => agentState,
+        updateState: updater => { agentState = updater(agentState); },
+    } });
 
     return {
         port: {
@@ -24,9 +29,7 @@ function createReactionPort(overrides?: Partial<Metadata>) {
             updateMetadata: (updater: (current: Metadata) => Metadata) => {
                 metadata = updater(metadata);
             },
-            updateAgentState: (updater: (current: AgentState) => AgentState) => {
-                agentState = updater(agentState);
-            },
+            getAgentStateRequestStore: () => requestStore,
             getMetadataSnapshot: () => metadata,
             usageObservationPublisher: { publish },
         },
@@ -65,6 +68,8 @@ describe('postSendReactions', () => {
                     tokens: { total: 9, input: 4, output: 5 },
                 },
                 localId: 'local-1',
+                createdAt: 1,
+                provenance: { kind: 'non_dependent', source: 'external' },
             });
 
             await vi.waitFor(() => {
@@ -105,6 +110,8 @@ describe('postSendReactions', () => {
                 },
             },
             localId: 'local-1',
+            createdAt: 1,
+            provenance: { kind: 'non_dependent', source: 'external' },
         });
 
         expect(getAgentState().requests?.['perm-1']).toMatchObject({
@@ -129,6 +136,8 @@ describe('postSendReactions', () => {
                 id: 'turn-1',
             },
             localId: 'local-1',
+            createdAt: 1,
+            provenance: { kind: 'non_dependent', source: 'external' },
         });
 
         expect(getAgentState()).toEqual({});
@@ -148,6 +157,8 @@ describe('postSendReactions', () => {
                 scope: 'turn_delta',
             },
             localId: 'local-1',
+            createdAt: 1,
+            provenance: { kind: 'non_dependent', source: 'external' },
         });
 
         await vi.waitFor(() => {

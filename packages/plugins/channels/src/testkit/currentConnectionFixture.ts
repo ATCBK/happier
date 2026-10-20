@@ -1,6 +1,9 @@
+import type { PluginMachineExecutionOriginV1 } from '@happier-dev/plugin-sdk/actions';
+import { getConversationConnectionTransportOrigin, type ConversationPendingProviderStopV1 } from '../connectionLifecycle.js';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import type {
   ConversationBindingInputModeV1,
+  ConversationOutboundTextLimitV1,
   ConversationProviderConnectionStopInputV1,
   ConversationTransportKindV1,
 } from '@happier-dev/channels-protocol/v1';
@@ -36,12 +39,14 @@ type ConnectionTransportFixture =
  * distinct authority value rather than letting a fixture infer installed
  * provider state.
  */
-export type ConversationConnectionFixtureAuthority = Readonly<{
+export type ConversationConnectionFixtureAuthority<
+  TOrigin extends ConversationConnectionTransportOriginV1 | PluginMachineExecutionOriginV1 = ConversationConnectionTransportOriginV1 | PluginMachineExecutionOriginV1,
+> = Readonly<{
   providerPluginId: string;
   providerContributionSelection: PersistedConversationProviderContributionSelection;
   providerSetupInput: JsonValue;
   credentialRef: ConversationProviderConnectionStopInputV1['credentialRef'];
-  transportOrigin: ConversationConnectionTransportOriginV1;
+  transportOrigin: TOrigin;
   providerConnectionKey: ConversationProviderConnectionStopInputV1['providerConnectionKey'];
   providerConfig: ConversationProviderConnectionStopInputV1['providerConfig'];
   routingIdentityKey: string;
@@ -49,7 +54,9 @@ export type ConversationConnectionFixtureAuthority = Readonly<{
   authorityEpoch: number;
 }>;
 
-export type CurrentConversationConnectionFixture = Readonly<{
+export type CurrentConversationConnectionFixture<
+  TOrigin extends ConversationConnectionTransportOriginV1 | PluginMachineExecutionOriginV1 = ConversationConnectionTransportOriginV1 | PluginMachineExecutionOriginV1,
+> = Readonly<{
   id: string;
   'record-kind': 'connection';
   v: 1;
@@ -57,18 +64,16 @@ export type CurrentConversationConnectionFixture = Readonly<{
   'created-at': number;
   'updated-at': number;
   payload: Readonly<{
+    configurationRevision: number;
     providerPluginId: string;
     providerContributionSelection: PersistedConversationProviderContributionSelection;
     providerSetupInput: JsonValue;
     credentialRef: ConversationProviderConnectionStopInputV1['credentialRef'];
-    transportOrigin: ConversationConnectionTransportOriginV1;
+    transportOrigin: TOrigin;
     transport: ConnectionTransportFixture;
     overlapSafety: ConversationConnectionOverlapSafetyV1;
     replayContinuity: 'checkpointed' | 'sessionBound' | 'none';
-    outboundTextLimit: Readonly<{
-      maximum: number;
-      unit: 'unicodeCodePoints' | 'utf8Bytes';
-    }>;
+    outboundTextLimit: ConversationOutboundTextLimitV1;
     pairingDeepLinkTemplate?: string;
     sharedEndpointInputModes?: readonly ConversationBindingInputModeV1[];
     providerConnectionKey: ConversationProviderConnectionStopInputV1['providerConnectionKey'];
@@ -87,18 +92,15 @@ export type CurrentConversationConnectionFixture = Readonly<{
   }>;
 }>;
 
-export function createCurrentConversationConnectionFixture(input: Readonly<{
+export function createCurrentConversationConnectionFixture<TOrigin extends ConversationConnectionTransportOriginV1 | PluginMachineExecutionOriginV1>(input: Readonly<{
   connectionId: string;
-  authority: ConversationConnectionFixtureAuthority;
+  authority: ConversationConnectionFixtureAuthority<TOrigin>;
   createdAt?: number;
   updatedAt?: number;
   transport?: ConnectionTransportFixture;
   overlapSafety?: ConversationConnectionOverlapSafetyV1;
   replayContinuity?: 'checkpointed' | 'sessionBound' | 'none';
-  outboundTextLimit?: Readonly<{
-    maximum: number;
-    unit: 'unicodeCodePoints' | 'utf8Bytes';
-  }>;
+  outboundTextLimit?: ConversationOutboundTextLimitV1;
   pairingDeepLinkTemplate?: string;
   sharedEndpointInputModes?: readonly ConversationBindingInputModeV1[];
   enabled?: boolean;
@@ -108,8 +110,23 @@ export function createCurrentConversationConnectionFixture(input: Readonly<{
   providerReadiness?: ConversationConnectionProviderReadinessV1;
   pollFailure?: ConversationConnectionPollFailureV1 | null;
   maximumObservationAgeMs?: number;
-}>): CurrentConversationConnectionFixture {
+  configurationRevision?: number;
+}>): CurrentConversationConnectionFixture<ConversationConnectionTransportOriginV1> {
   const updatedAt = input.updatedAt ?? input.createdAt ?? 1;
+  const pending = input.pendingOldTransportStop;
+  const transport = input.transport;
+  const origin = input.authority.transportOrigin;
+  // Older test inputs may describe endpoint custody with predecessor fields.
+  // The current fixture always emits the consumed V8 endpoint-intent arm.
+  const pendingOldTransportStop = pending !== undefined && pending !== null && !('kind' in pending)
+    && pending.predecessorTransportKind === 'durablePush' && pending.endpointRetarget === 'pending'
+    ? (() => {
+      if (transport?.kind !== 'durablePush' || !('materializationRef' in origin)) throw new Error('Endpoint fixture requires its exact desired materialization.');
+      return { kind: 'endpointRetarget' as const, webhookEndpointId: transport.webhookEndpointId,
+        webhookContributionRef: transport.webhookContributionRef, webhookSourceInstanceId: transport.webhookSourceInstanceId,
+        targetMaterialization: origin.materializationRef, transferAuthorityEpoch: input.authority.authorityEpoch };
+    })()
+    : pending ?? null;
   return {
     id: input.connectionId,
     'record-kind': CHANNEL_STATE_RECORD_KIND.connection,
@@ -118,11 +135,12 @@ export function createCurrentConversationConnectionFixture(input: Readonly<{
     'created-at': input.createdAt ?? 1,
     'updated-at': updatedAt,
     payload: {
+      configurationRevision: input.configurationRevision ?? 1,
       providerPluginId: input.authority.providerPluginId,
       providerContributionSelection: input.authority.providerContributionSelection,
       providerSetupInput: input.authority.providerSetupInput,
       credentialRef: input.authority.credentialRef,
-      transportOrigin: input.authority.transportOrigin,
+      transportOrigin: fixturePlacement(input.authority.transportOrigin),
       transport: input.transport ?? { kind: 'checkpointedPull' },
       overlapSafety: input.overlapSafety ?? 'safe',
       replayContinuity: input.replayContinuity ?? 'checkpointed',
@@ -141,7 +159,7 @@ export function createCurrentConversationConnectionFixture(input: Readonly<{
       authorityEpoch: input.authority.authorityEpoch,
       enabled: input.enabled ?? true,
       deletionState: input.deletionState ?? 'none',
-      pendingOldTransportStop: input.pendingOldTransportStop ?? null,
+      pendingOldTransportStop,
       historyGap: input.historyGap ?? null,
       providerReadiness: input.providerReadiness ?? null,
       pollFailure: input.pollFailure ?? null,
@@ -165,20 +183,20 @@ export function createCurrentConversationPendingOldTransportStopFixture<
 >(input: Readonly<{
   connectionId: string;
   authority: ConversationConnectionFixtureAuthority;
-  predecessorCheckpointedPollInvocation: ConversationCheckpointedPollInvocationBasisV1;
+  predecessorCheckpointedPollInvocation: Omit<ConversationCheckpointedPollInvocationBasisV1, 'transportOrigin'> & { transportOrigin: ConversationConnectionTransportOriginV1 | PluginMachineExecutionOriginV1 };
   authorityEpoch: number;
   reason: TReason;
   predecessorTransportKind: ConversationTransportKindV1;
   endpointRetarget?: ConversationPendingEndpointRetargetV1;
   overlapSafety: ConversationConnectionOverlapSafetyV1;
   acceptedPossibleLoss?: boolean;
-}>): Omit<ConversationPendingOldTransportStopV1, 'stopRequest'> & Readonly<{
-  stopRequest: Omit<ConversationPendingOldTransportStopV1['stopRequest'], 'reason'>
+}>): Omit<ConversationPendingProviderStopV1, 'stopRequest'> & Readonly<{
+  stopRequest: Omit<ConversationPendingProviderStopV1['stopRequest'], 'reason'>
     & Readonly<{ reason: TReason }>;
 }> {
   return {
-    predecessorCheckpointedPollInvocation: input.predecessorCheckpointedPollInvocation,
-    transportOrigin: input.authority.transportOrigin,
+    predecessorCheckpointedPollInvocation: { ...input.predecessorCheckpointedPollInvocation, transportOrigin: fixturePlacement(input.predecessorCheckpointedPollInvocation.transportOrigin) },
+    transportOrigin: fixturePlacement(input.authority.transportOrigin),
     providerContributionSelection: input.authority.providerContributionSelection,
     stopRequest: {
       v: 1,
@@ -195,4 +213,8 @@ export function createCurrentConversationPendingOldTransportStopFixture<
     overlapSafety: input.overlapSafety,
     acceptedPossibleLoss: input.acceptedPossibleLoss ?? false,
   };
+}
+
+function fixturePlacement(origin: ConversationConnectionTransportOriginV1 | PluginMachineExecutionOriginV1): ConversationConnectionTransportOriginV1 {
+  return 'machineId' in origin ? origin : getConversationConnectionTransportOrigin(origin);
 }

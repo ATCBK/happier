@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { z as zMini } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
@@ -8,37 +8,37 @@ import type { DeviceLocalSecretStorage } from '@/daemon/deviceLocalSecretStorage
 import { asHostProtocolZod } from '@/plugins/runtime/protocolComposableZodAdapter';
 import { readProtectedLocalStateFile, writeProtectedLocalStateFileAtomic } from '@/utils/fs/protectedLocalState';
 
-export const NativeUsageCaptureAuthoritySchema = z.object({
-    serverId: z.string().min(1), accountId: z.string().min(1), machineId: z.string().min(1),
-}).strict();
+export const NativeUsageCaptureAuthoritySchema = z.strictObject({
+    serverId: z.string().check(z.minLength(1)), accountId: z.string().check(z.minLength(1)), machineId: z.string().check(z.minLength(1)),
+});
 export type NativeUsageCaptureAuthority = z.infer<typeof NativeUsageCaptureAuthoritySchema>;
 
-const NativeUsagePendingObservationSchema = zMini.catchall(zMini.safeExtend(AgentExternalSessionAccountingObservationSchema, {
-    projectKey: z.string().min(1).optional(),
-    workspaceId: z.string().min(1).optional(),
-}), zMini.never());
+const NativeUsagePendingObservationSchema = (<T extends z.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(zMini.safeExtend(AgentExternalSessionAccountingObservationSchema, {
+    projectKey: z.optional(z.string().check(z.minLength(1))),
+    workspaceId: z.optional(z.string().check(z.minLength(1))),
+}));
 
-export const NativeUsageCaptureSourceSchema = z.object({
-    sourceId: z.string().min(1),
-    accountingSources: z.array(z.string().trim().min(1)).optional(),
+export const NativeUsageCaptureSourceSchema = z.strictObject({
+    sourceId: z.string().check(z.minLength(1)),
+    accountingSources: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
     agent: asHostProtocolZod(PluginContributionIdentityV1Schema),
     source: ExternalSessionsSourceSchema,
-    sourceKey: z.string().min(1),
-    root: z.string().nullable(),
-    rootKind: z.enum(['default', 'configured', 'materialized', 'override']).optional(),
+    sourceKey: z.string().check(z.minLength(1)),
+    root: z.nullable(z.string()),
+    rootKind: z.optional(z.enum(['default', 'configured', 'materialized', 'override'])),
     supported: z.boolean(),
     consented: z.boolean(),
-    cursor: z.string().optional(),
+    cursor: z.optional(z.string()),
     pending: z.array(NativeUsagePendingObservationSchema),
     coverage: z.optional(AgentExternalSessionAccountingCoverageSchema),
-    asOf: z.number().int().nonnegative().optional(),
-    error: z.string().optional(),
-}).strict();
+    asOf: z.optional(z.number().check(z.int(), z.nonnegative())),
+    error: z.optional(z.string()),
+});
 export type NativeUsageCaptureSource = z.infer<typeof NativeUsageCaptureSourceSchema>;
-export const NativeUsageCaptureStateSchema = z.object({
+export const NativeUsageCaptureStateSchema = z.strictObject({
     v: z.literal(1), authority: NativeUsageCaptureAuthoritySchema,
     sources: z.array(NativeUsageCaptureSourceSchema),
-}).strict();
+});
 export type NativeUsageCaptureState = z.infer<typeof NativeUsageCaptureStateSchema>;
 const StoredNativeUsageCaptureStateSchema = createStoredReadSchema(NativeUsageCaptureStateSchema);
 export type NativeUsageCaptureStore = Readonly<{

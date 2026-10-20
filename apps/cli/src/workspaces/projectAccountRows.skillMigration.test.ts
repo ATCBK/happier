@@ -27,7 +27,7 @@ import { ProfileRecordV1Schema } from '@happier-dev/protocol/profiles/profileRec
 import { resolveRunnerSkills } from '@/prompts/skills/runtime/resolveRunnerSkills';
 import { publishRunnerSkillNotice } from '@/prompts/skills/runtime/publishRunnerSkillNotice';
 import { readSessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { removeSkillRulesV1 } from '@happier-dev/protocol/prompts/library/skillRulesActionsV1';
 
 afterEach(() => { resetActiveAccountSettingsSnapshotForTests(); withdrawActiveProjectAccountRowsSnapshot(); });
@@ -98,7 +98,7 @@ for (const failure of ['ready', 'preserved', 'shared', 'first-launch', 'first-sh
             : emptyPromptLibraryRecordV1(rowKey) } })) };
       else if (url.pathname === '/v1/account/entity-rows/prompt-library/skill-rules') {
         const mutation = PromptLibraryRowMutationV1Schema.parse(raw);
-        if (mutation.content.t !== 'plain') throw new Error('Expected plain rules mutation');
+        if (!mutation.content || mutation.content.t !== 'plain') throw new Error('Expected plain rules mutation');
         if (failure === 'rules-conflict') result = { status: 'conflict', revision: rulesRevision };
         else {
           effects.push('rules');
@@ -169,7 +169,7 @@ for (const failure of ['ready', 'preserved', 'shared', 'first-launch', 'first-sh
           }
           if (failure !== 'rules-conflict') return;
         }
-        const read = await readProjectAccountRows({ credentials, serverId });
+        const read = await readProjectAccountRows({ credentials, serverId, publication: 'installed' });
         if (failure === 'shared') {
           expect(effects).toEqual([]);
           expect(await resolveSessionProjectPromptStack({ credentials, serverId, machineId: 'machine', directory: '/repo',
@@ -301,6 +301,8 @@ for (const failure of ['ready', 'preserved', 'shared', 'first-launch', 'first-sh
           const firstStore = createCliPromptLibraryStore({ credentials });
           expect(await removeSkillRulesV1({ serverId, ...firstStore,
             readCatalog: async () => ({ catalog: await firstStore.readPromptLibraryCatalog() }),
+            listSkills: async () => { throw new Error('Removal does not read the skill inventory'); },
+            ruleWriteContext: () => { throw new Error('Removal does not author reach rules'); },
           }, 'skill')).toBe(true);
           const firstViewerRules = structuredClone(ruleRecord);
           const firstViewerRevision = rulesRevision;

@@ -32,6 +32,7 @@ import {
 } from '@happier-dev/cli-common/workspaces';
 import {
   assertResolvedRuntimeDependencyMatchesDeclaration,
+  collectBundledPrepublicationAuthorPackageNames,
   resolveInstalledRuntimePackage,
 } from '@happier-dev/cli-common/workspaceRuntimeDependencies';
 import { isLoopbackHostname } from '@happier-dev/protocol/server/urls/loopbackHostname';
@@ -162,7 +163,6 @@ function resolveProjectRoot(pathLike: string): string {
   return resolve(trimmed);
 }
 
-const PREPUBLICATION_AUTHOR_PACKAGE_VERSION = '0.0.0';
 const TRANSIENT_PNPM_WORKSPACE_FILE_NAME = 'pnpm-workspace.yaml';
 const PLUGIN_AUTHOR_TYPECHECK_BUILD_INFO_PATH =
   'node_modules/.cache/happier/plugin-author.typecheck.tsbuildinfo';
@@ -234,7 +234,7 @@ export async function materializePrepublicationAuthorWorkspacePackages(params: R
   let installRoot: string | undefined;
   try {
     const bundles = remapWorkspaceBundleDestinations({ materializationRoot, bundles: params.bundles });
-    materializePrepublicationWorkspacePackageRoots({
+    const materializedPackageNames = materializePrepublicationWorkspacePackageRoots({
       bundles,
       rootPackageNames: params.packageNames,
     });
@@ -279,7 +279,7 @@ export async function materializePrepublicationAuthorWorkspacePackages(params: R
     return Object.freeze({
       packageRootsByName: resolveMaterializedPrepublicationAuthorPackageRoots(
         installRoot,
-        params.packageNames,
+        materializedPackageNames,
       ),
       cleanup: async () => {
         try {
@@ -304,10 +304,25 @@ async function materializeSourceCliBundledPrepublicationPackages(
   packageNames: readonly string[],
   projectRoot: string,
 ): Promise<PluginAuthorBundledPrepublicationMaterialization> {
+  const repoRoot = findRepoRoot(runtimeRoot);
+  // Source execution does not prepare dist. The repository publisher owns
+  // compilation and its shared lock; author materialization must consume its
+  // current output rather than copying a previous SDK build into a new cache.
+  // This dynamically loaded repository build program is an untyped boundary.
+  const publisher: unknown = await import(pathToFileURL(join(runtimeRoot, 'scripts', 'buildSharedDeps.mjs')).href);
+  if (!isRecord(publisher) || typeof publisher.syncSharedDepsForSourceDev !== 'function') {
+    throw new Error('The source Happier CLI public author package publisher is unavailable');
+  }
+  await publisher.syncSharedDepsForSourceDev({
+    repoRoot,
+    workspaceNames: packageNames.map((name) => name.slice('@happier-dev/'.length)),
+    publishBundledPluginArtifacts: false,
+    prepareBundledPluginCompilerInputs: false,
+  });
   return await materializePrepublicationAuthorWorkspacePackages({
     projectRoot,
     bundles: resolveWorkspaceBundlesFromPackageJson({
-      repoRoot: findRepoRoot(runtimeRoot),
+      repoRoot,
       hostPackageDir: runtimeRoot,
     }),
     packageNames,
@@ -372,22 +387,7 @@ async function readRequestedBundledPrepublicationPackages(params: Readonly<{
   if (params.registryOrigin || params.args[0] !== 'install') return [];
   try {
     const packageJson = JSON.parse(await readFile(join(params.projectRoot, 'package.json'), 'utf8')) as unknown;
-    if (!isRecord(packageJson)) return [];
-    const requested = new Set<string>();
-    for (const field of ['dependencies', 'devDependencies', 'optionalDependencies'] as const) {
-      const dependencies = packageJson[field];
-      if (!isRecord(dependencies)) continue;
-      for (const [packageName, specifier] of Object.entries(dependencies)) {
-        if (
-          packageName.startsWith('@happier-dev/')
-          && typeof specifier === 'string'
-          && specifier.trim() === PREPUBLICATION_AUTHOR_PACKAGE_VERSION
-        ) {
-          requested.add(packageName);
-        }
-      }
-    }
-    return [...requested].sort((left, right) => left.localeCompare(right));
+    return collectBundledPrepublicationAuthorPackageNames(packageJson);
   } catch {
     // Let the managed package materializer report malformed or missing author
     // package metadata through its normal diagnostic path.
@@ -487,15 +487,14 @@ async function prepareBundledPrepublicationResolution(params: Readonly<{
     return null;
   }
   try {
+    for (const packageName of requestedPackageNames) {
+      if (!materialization.packageRootsByName.has(packageName)) {
+        throw new Error(`The running Happier CLI could not materialize declared public author package '${packageName}'`);
+      }
+    }
     const cleanupWorkspaceConfig = await writeTransientBundledPrepublicationWorkspaceConfig({
       projectRoot: params.projectRoot,
-      packageRootsByName: new Map(requestedPackageNames.map((packageName) => {
-        const packageRoot = materialization.packageRootsByName.get(packageName);
-        if (!packageRoot) {
-          throw new Error(`The running Happier CLI could not materialize declared public author package '${packageName}'`);
-        }
-        return [packageName, packageRoot] as const;
-      })),
+      packageRootsByName: materialization.packageRootsByName,
     });
     return Object.freeze({
       args: withTransientBundledAuthorPackageInstallArgs(params.args),
@@ -801,9 +800,12 @@ export async function runManagedPluginPnpm(
  * `plugins dev` leaves a directory that looks materialized and resolves nothing
  * the author declared. The probe therefore stats the one dependency every
  * scaffold declares, which exists only once its bytes are really in place.
+ * First-party source workspaces retain their installed-declaration validation
+ * through the same owner used by managed dependency preparation.
  */
 export async function isPluginAuthorRootMaterialized(projectRoot: string): Promise<boolean> {
   try {
+    if (prepareSourceWorkspacePluginDependencies(resolveProjectRoot(projectRoot))) return true;
     return (await stat(join(
       resolveProjectRoot(projectRoot),
       'node_modules',

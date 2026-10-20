@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 // Tail-reset discontinuity (live defect 2026-07-12): a large catch-up gap resolves
 // `tail_reset_latest_page`, which merges ONLY the newest page on top of the previously
 // materialized history (C6/D2b fetch-then-merge). That leaves a hole between the old

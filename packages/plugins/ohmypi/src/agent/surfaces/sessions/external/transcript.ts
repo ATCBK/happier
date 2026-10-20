@@ -1,8 +1,11 @@
 import { stat } from 'node:fs/promises';
+import { parseTimestampMs } from '@happier-dev/plugin-sdk';
+import type { AgentExternalSessionTranscriptItem } from '@happier-dev/plugin-sdk/sessions/external';
 
 import {
   readJsonlAfterCursor,
   readJsonlFileBackwardPage,
+  createExternalSessionUnsupportedTranscriptItem,
 } from '@happier-dev/plugin-sdk/sessions/file-stores';
 import type {
   JsonlScannerFileSystem as JsonlScannerFileSystemV1,
@@ -12,6 +15,7 @@ import {
   decodeOhMyPiTranscriptCursor,
   encodeOhMyPiTranscriptCursor,
   parseOhMyPiJsonlLine,
+  buildOhMyPiSessionFileQualifier,
   projectOhMyPiSessionSnapshotToDirectMessages,
 } from '../../../transcripts/snapshot.js';
 import {
@@ -21,7 +25,15 @@ import {
 import type { OhMyPiExternalSessionSource } from './source.js';
 
 type OhMyPiRawTranscriptItem =
-  ReturnType<typeof projectOhMyPiSessionSnapshotToDirectMessages>['items'][number];
+  ReturnType<typeof projectOhMyPiSessionSnapshotToDirectMessages>['items'][number]
+  & Pick<AgentExternalSessionTranscriptItem, 'messageRole'>;
+
+type TranscriptDiagnostic = Readonly<{
+  code: string;
+  severity: 'benign' | 'required';
+  count: number;
+  positions: readonly number[];
+}>;
 
 export type OhMyPiRawTranscriptPage = Readonly<{
   items: readonly OhMyPiRawTranscriptItem[];
@@ -29,6 +41,7 @@ export type OhMyPiRawTranscriptPage = Readonly<{
   tailCursor?: string | null;
   hasMore?: boolean;
   truncated?: boolean;
+  diagnostics?: readonly TranscriptDiagnostic[];
 }>;
 
 type PagingParams = Readonly<{
@@ -75,19 +88,6 @@ export class OhMyPiExternalSessionIncompleteBranchError extends Error {
   ) {
     super(message);
     this.name = 'OhMyPiExternalSessionIncompleteBranchError';
-  }
-}
-
-/**
- * External Sessions must never advance beyond a native message after publishing
- * only the siblings its projection happened to recognize. Pages have no
- * per-record diagnostic channel, so an incomplete message is a typed failure
- * there; read-after records the same condition as a skipped diagnostic.
- */
-export class OhMyPiExternalSessionUnsupportedRecordError extends Error {
-  constructor(message = 'Oh My Pi external-session transcript contains an unsupported record.') {
-    super(message);
-    this.name = 'OhMyPiExternalSessionUnsupportedRecordError';
   }
 }
 
@@ -202,7 +202,8 @@ function classifyOhMyPiTranscriptRecord(
   if (record.type === 'title' && record.v === 1 && typeof record.title === 'string') {
     return { kind: 'preamble' };
   }
-  if (record.type === 'session_info' && typeof record.name === 'string') {
+  if ((record.type === 'session_info' && typeof record.name === 'string')
+    || (record.type === 'model_change' && typeof record.provider === 'string' && typeof record.modelId === 'string')) {
     const id = typeof record.id === 'string' && record.id.length > 0 ? record.id : null;
     const parentId = record.parentId === null
       ? null
@@ -217,8 +218,7 @@ function classifyOhMyPiTranscriptRecord(
     };
   }
   if (
-    typeof record.type !== 'string'
-    || typeof record.id !== 'string'
+    typeof record.id !== 'string'
     || record.id.length === 0
     || (
       record.parentId !== undefined
@@ -301,6 +301,8 @@ function projectCompleteOhMyPiExternalMessage(params: Readonly<{
 }>): readonly OhMyPiRawTranscriptItem[] | null {
   const record = asRecord(params.value);
   if (record?.type === 'message' && !isCompleteOhMyPiExternalMessage(params.value)) return null;
+  if (record?.type !== 'message'
+    && !((record?.type === 'compaction' || record?.type === 'branch_summary') && typeof record.summary === 'string')) return null;
   return projectOhMyPiSessionSnapshotToDirectMessages({
     sessionFilePath: params.sessionFilePath,
     sessionId: params.sessionId,
@@ -309,6 +311,12 @@ function projectCompleteOhMyPiExternalMessage(params: Readonly<{
       params.value,
     ],
   }).items;
+}
+
+function unsupportedItem(sessionFilePath: string, position: number, value: unknown): OhMyPiRawTranscriptItem {
+  const id = `omp:${buildOhMyPiSessionFileQualifier(sessionFilePath)}:offset:${position}`;
+  return { ...createExternalSessionUnsupportedTranscriptItem({ agentId: 'ohMyPi', id, localId: id,
+    createdAtMs: parseTimestampMs(asRecord(value)?.timestamp) ?? 0 }), localId: id };
 }
 
 function measureItemBytes(item: OhMyPiRawTranscriptItem): number {
@@ -423,9 +431,11 @@ export async function pageOhMyPiSessionTranscript(params: Readonly<{
   if (cursor && (cursor.sourceSize === undefined || before.size < cursor.sourceSize)) {
     throw new OhMyPiExternalSessionSourceChangedError();
   }
+  const endOffsetBytes = cursor?.position ?? before.size;
   const scan = await readJsonlFileBackwardPage({
     filePath: resolved.filePath,
-    endOffsetBytes: cursor?.position ?? before.size,
+    endOffsetBytes,
+    includeMalformedRecords: true,
     maxBytes: params.maxBytes,
     maxItems: Math.max(64, Math.trunc(params.maxItems) * 8),
     ...(params.scannerFileSystem ? { fileSystem: params.scannerFileSystem } : {}),
@@ -445,10 +455,14 @@ export async function pageOhMyPiSessionTranscript(params: Readonly<{
   ) {
     throw new OhMyPiExternalSessionSourceChangedError();
   }
+  if (!scan.reachedStart && scan.nextEndOffsetBytes >= endOffsetBytes) {
+    return { items: [], nextCursor: null, hasMore: false, truncated: true };
+  }
 
   const maxItems = Math.max(1, Math.trunc(params.maxItems));
   const maxBytes = Math.max(1024, Math.trunc(params.maxBytes));
   const selectedNewestFirst: OhMyPiRawTranscriptItem[] = [];
+  const unsupportedPositions: number[] = [];
   let usedBytes = 0;
   let targetEntryId = cursor?.leafEntryId ?? null;
   let pendingItemEndExclusive = cursor?.itemEndExclusive;
@@ -475,21 +489,21 @@ export async function pageOhMyPiSessionTranscript(params: Readonly<{
       if (targetEntryId === null) break;
       continue;
     }
-    if (classification.kind !== 'entry') continue;
-    if (targetEntryId !== null && classification.id !== targetEntryId) continue;
-    matchedEntry = true;
-    if (targetEntryId === null && initialLeafEntryId === null) {
-      initialLeafEntryId = classification.id;
+    if (classification.kind === 'preamble') continue;
+    if (classification.kind === 'entry') {
+      if (targetEntryId !== null && classification.id !== targetEntryId) continue;
+      matchedEntry = true;
+      if (targetEntryId === null && initialLeafEntryId === null) {
+        initialLeafEntryId = classification.id;
+      }
     }
 
-    const projected = projectCompleteOhMyPiExternalMessage({
+    const nativeItems = classification.kind === 'entry' ? projectCompleteOhMyPiExternalMessage({
       sessionFilePath: resolved.filePath,
       sessionId: params.providerSessionId,
       value: scanned.value,
-    });
-    if (projected === null) {
-      throw new OhMyPiExternalSessionUnsupportedRecordError();
-    }
+    }) : null;
+    const projected = nativeItems ?? [unsupportedItem(resolved.filePath, scanned.startOffsetBytes, scanned.value)];
     const itemEndExclusive = Math.min(
       projected.length,
       pendingItemEndExclusive ?? projected.length,
@@ -504,20 +518,21 @@ export async function pageOhMyPiSessionTranscript(params: Readonly<{
       if (wouldExceedBound) {
         consumedWholeEntry = false;
         nextPosition = scanned.endOffsetBytes;
-        targetEntryId = classification.id;
+        if (classification.kind === 'entry') targetEntryId = classification.id;
         nextItemEndExclusive = itemIndex + 1;
         stoppedForOutputBound = true;
         break;
       }
       selectedNewestFirst.push(item);
+      if (nativeItems === null) unsupportedPositions.push(scanned.startOffsetBytes);
       usedBytes += itemBytes;
     }
     if (!consumedWholeEntry) break;
 
     pendingItemEndExclusive = undefined;
-    targetEntryId = classification.parentId;
+    if (classification.kind === 'entry') targetEntryId = classification.parentId;
     nextPosition = scanned.startOffsetBytes;
-    if (targetEntryId === null) {
+    if (classification.kind === 'entry' && targetEntryId === null) {
       break;
     }
     if (selectedNewestFirst.length >= maxItems) {
@@ -562,6 +577,10 @@ export async function pageOhMyPiSessionTranscript(params: Readonly<{
       leafEntryId: initialLeafEntryId,
     }),
     truncated: false,
+    ...(unsupportedPositions.length > 0 ? { diagnostics: [{
+      code: 'external_sessions_transcript_unsupported_record', severity: 'benign', count: unsupportedPositions.length,
+      positions: unsupportedPositions.slice(0, 200),
+    }] } : {}),
   };
 }
 
@@ -626,6 +645,7 @@ export async function readAfterOhMyPiSessionTranscript(params: Readonly<{
       | 'unsupported_record_skipped';
     position: number;
   }> = [];
+  const unsupportedPositions: number[] = [];
   let leafEntryId = cursor.leafEntryId;
   let nextPosition = cursor.position;
   let nextItemStartIndex: number | undefined = cursor.itemStartIndex;
@@ -636,12 +656,6 @@ export async function readAfterOhMyPiSessionTranscript(params: Readonly<{
     const lineStartOffset = read.lineStartOffsets[index] ?? nextPosition;
     const nextLineStartOffset = read.lineStartOffsets[index + 1] ?? read.nextCursor.offset;
     const parsed = parseOhMyPiJsonlLine(line);
-    if (parsed === null) {
-      skippedRecords.push({ code: 'malformed_record_skipped', position: lineStartOffset });
-      nextPosition = nextLineStartOffset;
-      nextItemStartIndex = undefined;
-      continue;
-    }
     const classification = classifyOhMyPiTranscriptRecord(parsed);
     if (classification.kind === 'known_non_transcript') {
       skippedRecords.push({ code: 'non_transcript_record_skipped', position: lineStartOffset });
@@ -657,32 +671,23 @@ export async function readAfterOhMyPiSessionTranscript(params: Readonly<{
       nextItemStartIndex = undefined;
       continue;
     }
-    if (classification.kind === 'unsupported' || classification.kind === 'preamble') {
-      skippedRecords.push({ code: 'unsupported_record_skipped', position: lineStartOffset });
+    if (classification.kind === 'preamble') {
+      skippedRecords.push({ code: 'non_transcript_record_skipped', position: lineStartOffset });
       nextPosition = nextLineStartOffset;
       nextItemStartIndex = undefined;
       continue;
     }
-    if (classification.parentId !== leafEntryId) {
+    if (classification.kind === 'entry' && classification.parentId !== leafEntryId) {
       throw new OhMyPiExternalSessionSourceChangedError(
         'Oh My Pi external-session branch changed after the cursor.',
       );
     }
-    const projected = projectCompleteOhMyPiExternalMessage({
+    const nativeItems = classification.kind === 'entry' ? projectCompleteOhMyPiExternalMessage({
       sessionFilePath: resolved.filePath,
       sessionId: params.providerSessionId,
       value: parsed,
-    });
-    const record = asRecord(parsed);
-    const isCompleteMessage = record?.type === 'message'
-      && isCompleteOhMyPiExternalMessage(parsed);
-    if (projected === null || (projected.length === 0 && !isCompleteMessage)) {
-      skippedRecords.push({ code: 'unsupported_record_skipped', position: lineStartOffset });
-      leafEntryId = classification.id;
-      nextPosition = nextLineStartOffset;
-      nextItemStartIndex = undefined;
-      continue;
-    }
+    }) : null;
+    const projected = nativeItems ?? [unsupportedItem(resolved.filePath, lineStartOffset, parsed)];
     const itemStartIndex = index === 0 ? (cursor.itemStartIndex ?? 0) : 0;
     if (projected.length === 0) {
       if (itemStartIndex !== 0) {
@@ -690,7 +695,7 @@ export async function readAfterOhMyPiSessionTranscript(params: Readonly<{
           'Oh My Pi external-session item continuation is outside its source record.',
         );
       }
-      leafEntryId = classification.id;
+      if (classification.kind === 'entry') leafEntryId = classification.id;
       nextPosition = nextLineStartOffset;
       nextItemStartIndex = undefined;
       continue;
@@ -715,10 +720,11 @@ export async function readAfterOhMyPiSessionTranscript(params: Readonly<{
         break;
       }
       items.push(item);
+      if (nativeItems === null) unsupportedPositions.push(lineStartOffset);
       usedBytes += itemBytes;
     }
     if (!consumedWholeEntry) break;
-    leafEntryId = classification.id;
+    if (classification.kind === 'entry') leafEntryId = classification.id;
     nextPosition = nextLineStartOffset;
     nextItemStartIndex = undefined;
     if (items.length >= Math.max(1, Math.trunc(params.maxItems))) {
@@ -753,12 +759,15 @@ export async function readAfterOhMyPiSessionTranscript(params: Readonly<{
       ...(nextItemStartIndex !== undefined ? { itemStartIndex: nextItemStartIndex } : {}),
     }),
     truncated: stoppedForOutputBound || read.truncated,
-    ...(read.diagnostics?.length
+    ...(read.diagnostics?.length || unsupportedPositions.length > 0
       ? {
-          diagnostics: read.diagnostics.map((diagnostic) => ({
+          diagnostics: [...(read.diagnostics ?? []).map((diagnostic) => ({
             ...diagnostic,
             severity: 'required' as const,
-          })),
+          })), ...(unsupportedPositions.length > 0 ? [{
+            code: 'external_sessions_transcript_unsupported_record', severity: 'benign' as const,
+            count: unsupportedPositions.length, positions: unsupportedPositions.slice(0, 200),
+          }] : [])],
         }
       : {}),
     ...(skippedRecords.length > 0 ? { skippedRecords } : {}),

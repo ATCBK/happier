@@ -1,11 +1,10 @@
 import * as React from 'react';
-import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import { CONNECTED_SERVICES_SETTINGS } from './connectedServicesSettings';
 
 import { Switch } from '@/components/ui/forms/Switch';
 import { Item } from '@/components/ui/lists/Item';
 import { SegmentedChoiceItem, type SegmentedChoiceOption } from '@/components/ui/lists/SegmentedChoiceItem';
-import { Modal } from '@/modal';
 import { getPreferredLanguage, t } from '@/text';
 import type { AgentCore } from '@happier-dev/agents';
 import type { AgentId } from '@/agents/catalog/catalog';
@@ -79,7 +78,7 @@ export function ProviderStateSharingRows({
     capability,
     settings,
 }: ProviderStateSharingRowsProps) {
-    const writeSetting = useSettingActionWriter();
+    const { setSetting } = useSettingActionFeedback();
     const locale = getPreferredLanguage();
     const resolvedCapability = capability ?? UNSUPPORTED_PROVIDER_STATE_SHARING_CAPABILITY;
     const policy = resolveConnectedServicesProviderStateSharingPolicyV1(settings, agentId);
@@ -91,11 +90,8 @@ export function ProviderStateSharingRows({
         configMode?: ConnectedServicesProviderConfigSharingModeV1;
         stateMode?: ConnectedServicesProviderStateSharingModeV1;
     }>) => {
-        try {
-            const result = await writeSetting(CONNECTED_SERVICES_SETTINGS.settings.sharingPerAgent, { agentId, ...override });
-            if (!result.ok) await Modal.alert(t('common.error'), t('common.unavailable'));
-        } catch { await Modal.alert(t('common.error'), t('common.unavailable')); }
-    }, [agentId, writeSetting]);
+        await setSetting(CONNECTED_SERVICES_SETTINGS.settings.sharingPerAgent, { agentId, ...override });
+    }, [agentId, setSetting]);
 
     const configModeOptions = React.useMemo(
         () => buildProviderConfigModeChoices()

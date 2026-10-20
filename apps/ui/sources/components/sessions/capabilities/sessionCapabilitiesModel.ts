@@ -1,7 +1,7 @@
 import type { SpawnCapabilitiesPreviewOutputV1, SessionCapabilitiesGetOutputV1 } from '@happier-dev/protocol/actions/specs/sessionCapabilities';
 import type { SessionSkillPlanV1 } from '@happier-dev/protocol/prompts/library/skills/resolveSessionSkillPlanV1';
 import { applySessionSelectionV1, readSessionCapabilityOverrideV1, type SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
-import { resolveReachV1, type ReachContextV1 } from '@happier-dev/protocol/reach/resolveReachV1';
+import type { ReachContextV1 } from '@happier-dev/protocol/reach/resolveReachV1';
 import type { ReachRulesV1 } from '@happier-dev/protocol/reach/reachRuleV1';
 import type { CapabilityApplyTimingV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
 import type { CapabilityCost } from '@/components/capabilities/facts/CapabilityFacts';
@@ -19,6 +19,15 @@ export type SessionCapabilityRowModel = Readonly<{
     scope: string;
     action: Readonly<{ kind: 'fix'; status: CapabilityStatus }> | Readonly<{ kind: 'turn_on' | 'remove' | 'none' }>;
     dimmed: boolean; readOnlyReason: 'viewer' | 'new_sessions_only' | 'masked' | 'native_disable_unsupported' | null;
+}>;
+/**
+ * What this device last saw of one Session's sheet, kept in memory by the Session's chip while it lives, so a reopened
+ * sheet holds the size it had and still shows the cost facts it knew while the re-read runs. Not persisted and never
+ * the authority: any fresh read replaces it.
+ */
+export type SessionCapabilitiesLastKnown = Readonly<{
+    rows: Readonly<{ skills: number; mcp: number }>;
+    costs: ReadonlyMap<string, CapabilityCost>;
 }>;
 export type SessionCapabilityAddItem = Readonly<{ kind: 'skill' | 'mcp_server'; id: string; title: string; readOnlyReason: SessionCapabilityRowModel['readOnlyReason'] }>;
 export type SessionCapabilitiesModel = Readonly<{
@@ -63,8 +72,9 @@ export function buildSessionCapabilitiesModel(input: SessionCapabilitiesModelInp
         const rules = input.rules(item.kind, item.id);
         const override = input.selection ? readSessionCapabilityOverrideV1(input.selection, item.kind, item.id)
             : item.sessionOverride === 'added' ? 'on' : item.sessionOverride === 'removed' ? 'off' : 'inherit';
-        const reach = input.selection && input.context && rules !== null ? resolveReachV1(rules, input.context) : null;
-        const selected = input.selection ? applySessionSelectionV1({ reach: reach ?? { enabled: item.selected, decidedBy: item.decidedBy },
+        // The Machine preview owns reach (including its normalized workspace). Both
+        // chip and sheet overlay the same optimistic Session selection on that fact.
+        const selected = input.selection ? applySessionSelectionV1({ reach: { enabled: item.selected, decidedBy: item.decidedBy },
             selectable: item.selectable, forceIncluded: override === 'on', forceExcluded: override === 'off',
             managedEnabled: item.kind !== 'mcp_server' || input.selection.mcp?.managedServersEnabled !== false }).selected : item.selected;
         const timing = input.view?.applyTiming[item.kind === 'mcp_server' ? 'mcp' : 'skills'];
@@ -85,14 +95,16 @@ export function buildSessionCapabilitiesModel(input: SessionCapabilitiesModelInp
         // Per-turn cost is what MCP servers add every turn; skills cost only when an Agent loads them.
         if (selected && item.kind === 'mcp_server') { if (cost?.tokensPerTurn === undefined) costKnown = false; else perTurn += cost.tokensPerTurn; }
         const change = override === 'on' ? 'added' : override === 'off' ? 'turned_off' : null;
-        const decidedBy = reach ? reach.decidedBy : item.decidedBy;
+        const decidedBy = item.decidedBy;
         const decidingRule = decidedBy ? rules?.find(rule => rule.id === decidedBy.ruleId) : null;
         const row: SessionCapabilityRowModel = { key: `${item.kind}:${item.id}`, id: item.id, kind: item.kind, title: item.title ?? item.name,
             mark: item.kind === 'mcp_server' ? { mcpServerId: item.id } : 'none',
             line2: status ? { kind: 'status', status } : change ? { kind: 'change', change } : cost ? { kind: 'cost', cost } : null,
             scope: override === 'on' ? t('capabilities.session.thisSession') : rules === null || (decidedBy && !decidingRule) ? ''
                 : shortWhereItsOn(decidingRule ? [decidingRule] : [], input.names),
-            action: readOnlyReason ? { kind: 'none' } : status?.fix ? { kind: 'fix', status } : selected ? { kind: 'remove' } : { kind: 'turn_on' },
+            // An item's own fix (Sign in, Add key) is an Account action, so a row read-only for this session keeps it.
+            action: readOnlyReason !== 'viewer' && status?.fix ? { kind: 'fix', status } : readOnlyReason ? { kind: 'none' }
+                : selected ? { kind: 'remove' } : { kind: 'turn_on' },
             dimmed: !selected, readOnlyReason };
         (item.kind === 'skill' ? skills : mcp).push(row);
     }
@@ -118,10 +130,16 @@ export function buildSessionCapabilitiesModel(input: SessionCapabilitiesModelInp
         ? { ...timing, skills: input.nativeSkills?.applyTiming ?? timing.mcp } : timing;
     const notice = sessionCapabilityApplyNotice({ pendingApply, applyTiming,
         change: input.change ?? null, machineOnline: input.machineOnline !== false, machineName: input.machineName ?? '', turnSettled: input.turnSettled === true });
+    // A group whose rows can't change in this running session says so once, where its trailing words sit (INV-2).
+    const newSessionsOnly = (rows: readonly SessionCapabilityRowModel[]) => rows.length > 0 && rows.every(row => row.readOnlyReason === 'new_sessions_only');
+    const trailing = (rows: readonly SessionCapabilityRowModel[], words: string) => newSessionsOnly(rows)
+        ? t('capabilities.session.apply.newSessionsOnly', { item: '', machine: '' }) : words;
     return { chipLabel: t('capabilities.session.counts', { skills: skillCount, mcp: mcpCount }), counts: { skills: skillCount, mcp: mcpCount }, attention,
-        groups: [{ kind: 'skills', title: t('capabilities.skills.title'), trailing: t('capabilities.session.loadedWhenUsed'), rows: skills,
+        groups: [{ kind: 'skills', title: t('capabilities.skills.title'), trailing: trailing(skills, t('capabilities.session.loadedWhenUsed')), rows: skills,
             nativeRow: nativeRows?.length && input.nativeSkills ? { machineName: input.nativeSkills.machineName, agentName: input.nativeSkills.agentName, rows: nativeRows } : null },
-            { kind: 'mcp', title: t('capabilities.session.mcpServers'), trailing: t('capabilities.session.toolsEveryTurn'), rows: mcp, nativeRow: null }],
+            { kind: 'mcp', title: t('capabilities.session.mcpServers'), trailing: trailing(mcp, t('capabilities.session.toolsEveryTurn')), rows: mcp, nativeRow: null }],
         addItems, applyNotice: notice, pendingNote: notice?.text ?? null, costKnown: costKnown && perTurn > 0,
-        costLine: costKnown && perTurn > 0 ? t('capabilities.facts.tokensPerTurn', { count: formatTokenCount(perTurn) }) : t('capabilities.session.costUnknown'), state: input.state };
+        // Before the first preview there is nothing to be unknown about: the footer waits silently.
+        costLine: costKnown && perTurn > 0 ? t('capabilities.facts.tokensPerTurn', { count: formatTokenCount(perTurn) })
+            : input.view === null && input.state === 'resolving' ? '' : t('capabilities.session.costUnknown'), state: input.state };
 }

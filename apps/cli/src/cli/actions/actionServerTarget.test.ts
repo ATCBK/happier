@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { reloadConfiguration } from '@/configuration';
-import { readStoredCredentials, readStoredCredentialsForServerId, writeCredentialsTokenOnlyForServerId } from '@/persistence';
+import { readStoredCredentials, readStoredCredentialsForServerId, updateSettings, writeCredentialsTokenOnlyForServerId } from '@/persistence';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
@@ -29,6 +29,7 @@ it('reads the daemon-established Home identity for a separately resolved CLI Act
     await writeCredentialsTokenOnlyForServerId(profile.id, { token });
     const deps = { readCredentialsFn: readStoredCredentials,
       readCredentialsForServerIdFn: readStoredCredentialsForServerId, getServerProfileFn: getServerProfile };
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => { throw new Error('Fixture Home has not published its descriptor yet'); }));
     await expect(resolveActionCliCredentialTarget({ requestedServerId: profile.id, requireServerIdentityId: true, deps }))
       .rejects.toMatchObject({ code: 'server_identity_unavailable' });
     vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => Response.json({ features: {},
@@ -55,10 +56,10 @@ it('reads the daemon-established Home identity for a separately resolved CLI Act
     const widgetDeps = createCliActionDeps({ credentials: byProfile.credentials!, token, sessionId: 'action-scope-fixture', mode: 'plain', ctx: null,
       serverId: byProfile.fixedServer!.serverId, serverIdentityId: byProfile.fixedServer!.serverIdentityId,
       serverHttpBaseUrl: byProfile.fixedServer!.serverApiUrl });
-    expect(widgetDeps.widgetAccountScope!()).toEqual({ serverId: 'srv_action_home', accountId: 'action-home-account' });
+    expect(widgetDeps.widgetAccountScope!()).toMatchObject({ serverId: 'srv_action_home', accountId: 'action-home-account' });
     const ambientWidgetDeps = createCliActionDeps({ credentials: ambient.credentials!, token, sessionId: 'action-scope-fixture', mode: 'plain', ctx: null,
       serverIdentityId: ambient.serverIdentityId });
-    expect(ambientWidgetDeps.widgetAccountScope!()).toEqual(widgetDeps.widgetAccountScope!());
+    expect(ambientWidgetDeps.widgetAccountScope!()).toMatchObject({ serverId: 'srv_action_home', accountId: 'action-home-account' });
     const surface = { serverId: 'srv_action_home', accountId: 'action-home-account', owner: { kind: 'home' as const } };
     const context = { surface: 'cli' as const, serverId: profile.id, serverIdentityId: 'srv_action_home' };
     expect(await admitWidgetActionSurfaceV1(widgetDeps, surface, context)).toBeNull();
@@ -66,5 +67,10 @@ it('reads the daemon-established Home identity for a separately resolved CLI Act
       .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
     expect(await admitWidgetActionSurfaceV1(widgetDeps, { ...surface, serverId: 'srv_other_home' }, context))
       .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+    await updateSettings(settings => ({ ...settings, servers: { ...settings.servers,
+      duplicate: { ...settings.servers![profile.id]!, id: 'duplicate' },
+    } }));
+    await expect(resolveActionCliCredentialTarget({ requestedServerId: profile.id, requireServerIdentityId: true, deps }))
+      .rejects.toMatchObject({ code: 'server_identity_unavailable' });
   });
 });

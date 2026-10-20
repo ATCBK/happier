@@ -49,6 +49,10 @@ export async function searchHomeMemory(args: Readonly<{
     signal?: AbortSignal;
 }>): Promise<MemorySearchResultV1> {
     if (args.signal?.aborted) throw createHomeMemorySearchAbortError();
+    if (args.scope.type === 'project') return {
+        v: 1, ok: false, errorCode: 'memory_project_scope_unsupported',
+        error: 'Project memory search requires a selected daemon.',
+    };
     const serverId = String(args.serverId ?? '').trim();
     const accountScope = createServerAccountScope(serverId, args.accountId);
     if (!accountScope) {

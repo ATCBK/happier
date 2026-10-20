@@ -9,6 +9,7 @@ import {
 import {
     readRegisteredBrowserRuntimeAutomationAdapter,
     readRegisteredBrowserRuntimeControlAdapter,
+    readRegisteredBrowserRuntimeDiagnosticsAdapter,
 } from '@/sync/domains/browser/actions/runtimeControlRegistry';
 import { readRegisteredBrowserRecordingAttachAdapter } from '@/sync/domains/browser/recording/runtimeAttachRegistry';
 import { readRegisteredBrowserContextAnnotationAdapter } from '@/sync/domains/browser/context/runtimeAnnotationRegistry';
@@ -42,6 +43,7 @@ export type CreateDefaultRuntimeActionExecutorInput = Readonly<{
     localServices?: Omit<
         CreateLocalServicesRuntimeActionExecutorInput,
         | 'fallback'
+        | 'executeOnMachine'
         | 'resolveMachineId'
         | 'fetchPreviewSnapshot'
         | 'fetchPublicPreviewStatus'
@@ -66,7 +68,7 @@ function resolveSessionMachineId(args: RuntimeActionExecuteArgs): string | null 
 export function createDefaultRuntimeActionExecutor(
     input: CreateDefaultRuntimeActionExecutorInput = {},
     accountLifetime?: ServerAccountScopeLifetime,
-    executeBrowserOnMachine?: RuntimeActionExecute,
+    executeOnMachine?: RuntimeActionExecute,
 ): RuntimeActionExecute {
     const fallback = createUnavailableRuntimeActionExecutor();
     const simulator = createSimulatorPreviewRuntimeActionExecutor({
@@ -77,6 +79,7 @@ export function createDefaultRuntimeActionExecutor(
     const computer = createComputerRuntimeActionExecutor({ fallback: simulator, accountLifetime });
     const localServices = createLocalServicesRuntimeActionExecutor({
         ...input.localServices,
+        executeOnMachine,
         readWorkspaceRefs: input.localServices?.readWorkspaceRefs ?? (() => {
             const state = readRegisteredStorageState();
             if (!state) return null;
@@ -98,7 +101,7 @@ export function createDefaultRuntimeActionExecutor(
         fallback: computer,
     });
     return createBrowserRuntimeActionExecutor({
-        executeOnMachine: executeBrowserOnMachine,
+        executeOnMachine,
         ...(input.browserControl ? { control: input.browserControl } : {}),
         ...(!input.browserControl
             ? {
@@ -111,6 +114,7 @@ export function createDefaultRuntimeActionExecutor(
             : {}),
         ...(input.browserAutomation ? { automation: input.browserAutomation } : {}),
         ...(!input.browserAutomation ? { resolveAutomation: (request) => readRegisteredBrowserRuntimeAutomationAdapter(request.browserSessionId, request.viewId) } : {}),
+        resolveDiagnostics: (request) => readRegisteredBrowserRuntimeDiagnosticsAdapter(request.browserSessionId, request.viewId),
         // BRW-15 attach-to-composer leaf: resolve the registered recording-attach owner so the
         // `browser.recording.attachToComposer` action dispatches a real attach (fail-closed when
         // no owner is registered).

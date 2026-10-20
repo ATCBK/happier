@@ -115,7 +115,8 @@ export const ManagedControllerSubmitInputV1Schema = lazyZodSchema(() => z.strict
 }));
 export const ManagedBootstrapCredentialCreateV1Schema = lazyZodSchema(() => z.strictObject({ ...current(), credential: SharedSavedSecretCreateInputV1Schema }));
 
-export const ProvisionersListInputV1Schema = lazyZodSchema(() => z.strictObject({ homeId: id(), controller: mini.optional(ManagedControllerV1Schema) }));
+export const ProvisionersListInputV1Schema = lazyZodSchema(() => z.strictObject({ homeId: id(), controller: mini.optional(ManagedControllerV1Schema),
+  contribution: mini.optional(asProtocolZod(PluginContributionIdentityV1Schema)) }));
 export const ProvisionerProbeInputV1Schema = lazyZodSchema(() => z.strictObject({ homeId: id(), controller: ManagedControllerV1Schema, contribution: asProtocolZod(PluginContributionIdentityV1Schema), credentials: mini.optional(ManagedCredentialSelectionsV1Schema) }));
 export const ProvisionerOptionsInputV1Schema = lazyZodSchema(() => z.strictObject({ homeId: id(), controller: ManagedControllerV1Schema, contribution: asProtocolZod(PluginContributionIdentityV1Schema), credentials: mini.optional(ManagedCredentialSelectionsV1Schema), selectors: PluginJsonValueV2Schema }));
 

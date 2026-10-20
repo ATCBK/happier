@@ -6,7 +6,7 @@ import {
 } from '../../refresh/refreshEligibility.js';
 
 /**
- * The clock a mounted surface evaluates the coordinator's refusal against.
+ * The display clock for the coordinator's refusal and an optional visible read age.
  *
  * A pacing block is an absolute moment: the coordinator publishes
  * `nextEligibleAtMs`, and every surface that offers **Refresh** decides from it
@@ -17,11 +17,11 @@ import {
  * store drops an expired refusal only when something reads its snapshot, and an
  * idle page reads nothing.
  *
- * So the moment the surface printed is the moment it observes. This is ONE
- * timeout for ONE already-published deadline, held only while a refusal is
- * actually displayed and cleared when it lifts or the surface unmounts. It
- * reads no provider, starts no pass, introduces no cadence and takes no
- * decision of its own: the deadline, the reason and the eligibility rule all
+ * One timeout observes the next displayed boundary: the published refusal's
+ * expiry or the next minute of a visible read age. Pass completedAtMs only
+ * while showing that age; hiding it removes its wake. The timestamp comes from
+ * the list store, never window assembly or mount time. This reads no provider,
+ * starts no pass and makes no freshness decision: the deadline, reason and eligibility rule all
  * remain the coordinator's (`core/CORPUS.md` §4.2), and all this does is ask
  * the same owner again at the one moment its answer can have changed.
  *
@@ -32,15 +32,20 @@ import {
  */
 export function useTriageRefreshEligibilityNowV1(
   block: TriageRefreshPacingBlockV1 | null | undefined,
+  completedAtMs?: number,
 ): number {
   // The wake count is not state anybody reads; it is what lets an expiry the
   // page did not otherwise notice become a render, and — when the deadline is
   // still ahead after one — what re-arms the next observation.
   const [observedExpiries, setObservedExpiries] = useState(0);
   const nowMs = Date.now();
-  const deadlineMs = isTriageRefreshPacingBlockActiveV1(block, nowMs)
+  const refusalDeadlineMs = isTriageRefreshPacingBlockActiveV1(block, nowMs)
     ? block.nextEligibleAtMs
     : null;
+  const nextAgeMinuteMs = completedAtMs === undefined ? null
+    : completedAtMs + (Math.floor(Math.max(0, nowMs - completedAtMs) / 60_000) + 1) * 60_000;
+  const deadlineMs = refusalDeadlineMs === null ? nextAgeMinuteMs
+    : nextAgeMinuteMs === null ? refusalDeadlineMs : Math.min(refusalDeadlineMs, nextAgeMinuteMs);
 
   useEffect(() => {
     if (deadlineMs === null) return;

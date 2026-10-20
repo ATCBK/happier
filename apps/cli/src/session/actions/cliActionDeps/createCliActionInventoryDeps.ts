@@ -1,11 +1,12 @@
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import { AccountProfileResponseSchema } from '@happier-dev/protocol/account/profile';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
-import { convertBackendTargetRefV2ToV1, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { buildBackendTargetKeyV2, convertBackendTargetRefV2ToV1, parseBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { isLegacyConfiguredAcpFlavorCarrier } from '@happier-dev/protocol/backends/targets/compat/customAcp';
 import type { AccountProfile, ActionExecutorContext, ActionExecutorDeps, BackendTargetRefV2 } from '@happier-dev/protocol';
 import axios from 'axios';
 import { configuration } from '@/configuration';
+import { resolveSessionCreationAgentTarget } from '@/session/creation/resolveSessionCreationAgentTarget';
 import { DaemonProviderModelProjectionResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
 import { AgentModelsProbeObservationSchema, AgentSessionModesProbeObservationSchema,
   AgentConfigOptionsProbeObservationSchema } from '@happier-dev/protocol/capabilities';
@@ -210,8 +211,9 @@ function resolveProbeAgentId(params: Readonly<{
   agentId: string;
   backendTarget: BackendTargetRefV2 | null;
 }>): string {
-  if (params.backendTarget?.sourceKind === 'configured' || Boolean(params.backendTarget?.configuredBackendId)) {
-    return 'customAcp';
+  if (params.backendTarget && (params.backendTarget.sourceKind === 'configured' || Boolean(params.backendTarget.configuredBackendId))) {
+    const target = parseBackendTargetKeyV2(buildBackendTargetKeyV2(params.backendTarget));
+    return target.kind === 'agent' ? resolveSessionCreationAgentTarget(target)?.agentId ?? '' : '';
   }
   return params.agentId || normalizeStringValue(params.backendTarget?.backendId);
 }
@@ -252,7 +254,7 @@ async function probeActionModelsBestEffort(params: Readonly<{
     agentId: params.agentId,
     backendTarget: params.backendTarget,
   });
-  if (!legacyCustomAcpCompat.isAgentLookupId(probeAgentId)) return null;
+  if (!probeAgentId) return null;
   if (!machineTargetCanUseLocalProbe({
     requestedMachineId: (params.args as { machineId?: unknown }).machineId,
     rawSession: params.rawSession,
@@ -409,6 +411,9 @@ export function createCliActionInventoryDeps(params: Readonly<{
     method: string;
     request: unknown;
     signal?: AbortSignal;
+    context?: ActionExecutorContext;
+    effectActionId?: string;
+    timeoutMs?: number | null;
   }>) => Promise<unknown>;
 }> & SessionStoredContentCryptoContext): Pick<
   ActionExecutorDeps,
@@ -425,7 +430,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
   | 'spawnProfilesList'
   | 'spawnConnectedServicesList'
   | 'spawnMcpServersPreview'
-> {
+> & Required<Pick<ActionExecutorDeps, 'readAccountAcpCatalog'>> {
   const metadataReaders = new Map<string, () => Promise<Record<string, unknown> | null>>();
   let accountProfilePromise: Promise<AccountProfile | null> | null = null;
   if (params.readCurrentSessionMetadata) metadataReaders.set(params.sessionId, params.readCurrentSessionMetadata);
@@ -644,6 +649,8 @@ export function createCliActionInventoryDeps(params: Readonly<{
         if (!catalog || !current || !catalog.isCurrent(current) || !await services.isCurrent()) return { items: [], source: 'unavailable' };
         return { items: [], scmDiffSummaryCatalog: ScmDiffSummaryModelCatalogObservationV1Schema.parse({ profiles: catalog.profiles,
           automaticProfiles: catalog.automaticProfiles, discoveryTargetKeys: catalog.discoveryTargetKeys,
+          ...(catalog.unavailableReason ? { unavailableReason: catalog.unavailableReason } : {}),
+          ...(catalog.unavailableTargets?.length ? { unavailableTargets: catalog.unavailableTargets } : {}),
           ...(catalog.probeFailures?.length ? { probeFailures: catalog.probeFailures } : {}) }) };
       }
       const agentId = args.agentId;
@@ -662,7 +669,8 @@ export function createCliActionInventoryDeps(params: Readonly<{
           })()
         : null;
       const usesConfiguredCompatBackend = backendTarget?.sourceKind === 'configured' || Boolean(backendTarget?.configuredBackendId);
-      const captured = usesConfiguredCompatBackend ? await readAcpInventorySnapshot(args.signal) : null;
+      const usesMachineProbe = Boolean(args.probe && args.machineId);
+      const captured = usesConfiguredCompatBackend && !usesMachineProbe ? await readAcpInventorySnapshot(args.signal) : null;
       const modelState = readSessionModelsState(await readSessionMetadataForId(params.sessionId));
       const provider = typeof modelState?.provider === 'string' ? modelState.provider.trim() : '';
       const availableModels = Array.isArray(modelState?.availableModels) ? modelState.availableModels : [];
@@ -679,7 +687,36 @@ export function createCliActionInventoryDeps(params: Readonly<{
         ? modelInventoryItemsFromSessionModels(availableModels)
         : [{ id: 'default', label: 'Default' }];
 
-      const probeResult = await probeActionModelsBestEffort({
+      const probeResult = usesMachineProbe ? await (async (): Promise<ProbedAgentModelsResult | null> => {
+        // Configured targets have no public runtime id. Match the native
+        // observation using the same probe identity as the local catalog path.
+        const probeAgentId = resolveProbeAgentId({ agentId: normalizedAgentId, backendTarget });
+        if (!probeAgentId) return null;
+        const unavailable: ProbedAgentModelsResult = {
+          agentId: probeAgentId, availableModels: [], supportsFreeform: false, source: 'unavailable',
+        };
+        if (!params.callMachineAction || !args.machineId) return unavailable;
+        const { transportTimeoutMs, ...probe } = args.probe!;
+        try {
+          const response = await params.callMachineAction({ machineId: args.machineId,
+            serverId: args.serverId ?? context?.serverId ?? params.serverId, method: RPC_METHODS.CAPABILITIES_INVOKE,
+            request: { id: `cli.${probeAgentId}`, method: 'probeModels', params: {
+              ...probe,
+              ...(backendTarget ? { backendTarget: convertBackendTargetRefV2ToV1(backendTarget) } : {}),
+            } }, context, effectActionId: 'agents.models.list',
+            ...(args.signal ?? context?.signal ? { signal: args.signal ?? context?.signal } : {}),
+            ...(transportTimeoutMs === undefined ? {} : { timeoutMs: transportTimeoutMs }),
+          });
+          if (!response || typeof response !== 'object' || !('ok' in response) || response.ok !== true || !('result' in response)) return unavailable;
+          const observation = AgentModelsProbeObservationSchema.safeParse(response.result);
+          if (!observation.success || observation.data.agentId && observation.data.agentId !== probeAgentId
+            || args.probe?.runtimeDescriptorV1 && observation.data.runtimeDescriptorV1Accepted !== true) return unavailable;
+          return { ...observation.data, agentId: probeAgentId, source: observation.data.source ?? 'dynamic' };
+        } catch {
+          (args.signal ?? context?.signal)?.throwIfAborted();
+          return unavailable;
+        }
+      })() : await probeActionModelsBestEffort({
         args,
         agentId: normalizedAgentId,
         backendTarget,
@@ -695,7 +732,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
         ? modelInventoryItemsFromProbeResult(probeResult)
         : null;
       const shouldUseProbeResult = Boolean(
-        probeResult && probedItems && (usesConfiguredCompatBackend || probeResult.source === 'dynamic' || !shouldUseSessionMetadataModels),
+        probeResult && probedItems && (usesMachineProbe || usesConfiguredCompatBackend || probeResult.source === 'dynamic' || !shouldUseSessionMetadataModels),
       );
       const resolvedItems = shouldUseProbeResult && probedItems
         ? probedItems
@@ -921,7 +958,8 @@ export function createCliActionInventoryDeps(params: Readonly<{
         items: profileItems,
       };
     },
-    spawnMcpServersPreview: async (args) => {
+    spawnMcpServersPreview: async (args, context) => {
+      context?.signal?.throwIfAborted();
       const agentId = normalizeStringValue((args as { agentId?: unknown }).agentId);
       const machineId = normalizeStringValue((args as { machineId?: unknown }).machineId)
         || await readCurrentSessionValue('machineId')
@@ -930,9 +968,10 @@ export function createCliActionInventoryDeps(params: Readonly<{
         || await readCurrentSessionValue('path')
         || process.cwd();
       if (!params.callMachineAction || !machineId || !agentId) return { ok: false, items: [], preview: null };
-      return projectSpawnMcpServersPreviewInventory(await params.callMachineAction({ machineId, serverId: params.serverId,
+      return projectSpawnMcpServersPreviewInventory(await params.callMachineAction({ machineId, serverId: context?.serverId ?? params.serverId,
         method: RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW, request: { machineId, directory, agentId,
-          ...((args as { selection?: unknown }).selection !== undefined ? { selection: args.selection } : {}) } }), args.limit);
+          ...((args as { selection?: unknown }).selection !== undefined ? { selection: args.selection } : {}) },
+        context, effectActionId: 'sessions.spawn.mcp_servers.preview', timeoutMs: null, signal: context?.signal }), args.limit);
     },
     sessionModesList: async ({ sessionId }) => {
       const sessionModes = readSessionModesState(await readSessionMetadataForId(sessionId));

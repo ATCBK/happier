@@ -85,8 +85,8 @@ describe('workspace Action intent adapter', () => {
         expect(execute('workspace.tabs.open', request)).toEqual({ ok: true });
         const destination = { sessionId: 'a', serverId: 'home-a' };
         expect(handoff.takeChatCurrent(destination)?.seed).toEqual({ query: 'needle', options: { matchCase: false, regex: false },
-            target: { kind: 'route-message-id', routeMessageId: makeExternalSessionHistoricalImportLocalId({
-                agentId: 'claude', remoteSessionId: 'native', directItemId: 'item' }) } });
+            target: { kind: 'route-message-id', routeMessageId: `server:${makeExternalSessionHistoricalImportLocalId({
+                agentId: 'claude', remoteSessionId: 'native', directItemId: 'item' })}` } });
         expect(JSON.stringify(state)).not.toContain('needle');
         expect(handoff.takeChatCurrent(destination)).toBeNull();
         current = false;

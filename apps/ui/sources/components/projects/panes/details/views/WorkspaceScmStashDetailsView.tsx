@@ -25,9 +25,9 @@ export const WorkspaceScmStashDetailsView = React.memo((props: WorkspaceScmStash
     const adapter = React.useMemo<ScmStashDetailsAdapter>(() => ({
         list: () => machineScmStashList(props.machineId, { cwd: props.rootPath }, { serverId: props.serverId }),
         show: (stashRef) => machineScmStashShow(props.machineId, { cwd: props.rootPath, stashRef }, { serverId: props.serverId }),
-        pop: (stashRef) => machineScmStashPop(props.machineId, { cwd: props.rootPath, stashRef }, { serverId: props.serverId }),
-        drop: (stashRef) => machineScmStashDrop(props.machineId, { cwd: props.rootPath, stashRef }, { serverId: props.serverId }),
-        apply: (stashRef) => machineScmStashApply(props.machineId, { cwd: props.rootPath, stashRef }, { serverId: props.serverId }),
+        pop: (stashRef, call) => machineScmStashPop(props.machineId, { cwd: props.rootPath, stashRef }, { serverId: props.serverId, ...call }),
+        drop: (stashRef, call) => machineScmStashDrop(props.machineId, { cwd: props.rootPath, stashRef }, { serverId: props.serverId, ...call }),
+        apply: (stashRef, call) => machineScmStashApply(props.machineId, { cwd: props.rootPath, stashRef }, { serverId: props.serverId, ...call }),
     }), [props.machineId, props.rootPath, props.serverId]);
 
     return (

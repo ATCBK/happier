@@ -31,7 +31,7 @@ import {
   type StopSessionIncompleteReason,
   type StopSessionResult,
 } from './stopSessionContract';
-import type { ExactTerminalControlServiceabilityRetirement, RetainedPlainRunnerRetirement } from './retireTerminalControlServiceability';
+import type { ExactTerminalControlServiceabilityRetirement, RetainedPlainRunnerRetirement, retireExactTerminalControlServiceability } from './retireTerminalControlServiceability';
 import { resolveTrackedSessionTerminalPresentation } from './resolveTrackedSessionTerminalPresentation';
 
 function mapDispositionFailureReason(
@@ -59,6 +59,9 @@ export type ExactTrackedRunnerStopWitness = Readonly<{
 }>;
 
 export type StopSessionOptions = Readonly<{
+  /** Captured authenticated metadata authority for this Stop; never transported. */
+  metadataContext?: Pick<Parameters<typeof retireExactTerminalControlServiceability>[0],
+    'credentials' | 'currentness' | 'resolveAuthorizationHeaders'>;
   expectedTrackedRunner?: ExactTrackedRunnerStopWitness;
   beforeSignalExactTrackedRunner?: (tracked: TrackedSession) => void | boolean | Promise<void | boolean>;
 }>;
@@ -187,18 +190,24 @@ export function createStopSession(params: Readonly<{
     attachmentInfo: ExactTerminalHostAttachmentInfo;
   }>) => Promise<void>;
   retireExactTerminalControlServiceability?: (input: Readonly<{
+    metadataContext?: StopSessionOptions['metadataContext'];
     happyHomeDir: string;
     sessionId: string;
     attachmentInfo: ExactTerminalHostAttachmentInfo;
     terminalMode: TerminalMode;
+    stoppedAt: number;
   }>) => Promise<ExactTerminalControlServiceabilityRetirement | void>;
   retireAbsentTerminalControlServiceability?: (input: Readonly<{
+    metadataContext?: StopSessionOptions['metadataContext'];
     sessionId: string;
     trackedSession: TrackedSession;
+    stoppedAt: number;
   }>) => Promise<RetainedPlainRunnerRetirement>;
   recoverStrandedTerminalControlServiceability?: (input: Readonly<{
+    metadataContext?: StopSessionOptions['metadataContext'];
     sessionId: string;
     expectedAttachmentId?: string;
+    stoppedAt: number;
   }>) => Promise<StopSessionResult | null>;
   expectedTerminalAttachmentId?: string;
   requireTerminalTopologyProof?: boolean;
@@ -271,6 +280,15 @@ export function createStopSession(params: Readonly<{
       return expected !== undefined
         && pidToTrackedSession.get(pid) === expected
         && isExactTrackedRunner(pid, expected, options?.expectedTrackedRunner);
+    };
+    const haveTrackedRunnersExited = async (trackedPids: readonly number[]): Promise<boolean> => {
+      if (!params.areTrackedRunnersExited) return false;
+      try {
+        return await params.areTrackedRunnersExited({ sessionId: normalizedSessionId, trackedPids });
+      } catch (error) {
+        logWarning(`[DAEMON RUN] Failed to check tracked runner exit for session ${normalizedSessionId}`, error);
+        return false;
+      }
     };
 
     const readHostAttachmentInfo = params.readHostAttachmentInfo ?? readTerminalHostAttachmentInfo;
@@ -355,6 +373,9 @@ export function createStopSession(params: Readonly<{
             && mode !== 'windows_terminal' && mode !== 'windows_console') continue;
           const pid = pidsToStop[index]!;
           const expected = expectedTrackedSessionsByPid.get(pid);
+          // No unknown host is signalled or disposed. A positively dead runner
+          // still proceeds through final presence, remainder and metadata retirement.
+          if (await haveTrackedRunnersExited([pid]) && isCapturedTrackedRunnerCurrent(pid)) continue;
           const ownsCurrentRunner = expected?.startedBy === 'daemon'
             && isCapturedTrackedRunnerCurrent(pid)
             && await isPidSafeHappySessionProcess({
@@ -401,6 +422,41 @@ export function createStopSession(params: Readonly<{
       }) ?? Promise.resolve(null);
       return await terminalHostAdaptersPromise;
     };
+    const retireAbsentRunnerServiceability = async (): Promise<StopSessionResult> => {
+      if (!isPidFallback && params.retireAbsentTerminalControlServiceability) {
+        try {
+          let retired = false;
+          for (const trackedSession of expectedTrackedSessionsByPid.values()) {
+            const retirement = await observeStopPhase('plain_control_serviceability_retirement', () =>
+              params.retireAbsentTerminalControlServiceability!({ sessionId: normalizedSessionId, trackedSession,
+                stoppedAt: Date.now(),
+                ...(options?.metadataContext ? { metadataContext: options.metadataContext } : {}) }));
+            if (retirement === 'deferred' && [...pidToTrackedSession.values()].includes(trackedSession)) {
+              return incompleteStopSession('terminal_control_serviceability_retirement_failed');
+            }
+            if (retirement === 'retired' || retirement === 'deferred') {
+              retired = true;
+              break;
+            }
+          }
+          if (!retired) {
+            // A native runner may publish hostPid before its webhook binds it
+            // to the tracked launcher. Reuse recovery's current-Machine and
+            // dead-host proof before retiring that different metadata owner.
+            const recovered = await params.recoverStrandedTerminalControlServiceability?.({
+              sessionId: normalizedSessionId,
+              stoppedAt: Date.now(),
+              ...(options?.metadataContext ? { metadataContext: options.metadataContext } : {}),
+            });
+            return recovered ?? incompleteStopSession('terminal_control_serviceability_retirement_failed');
+          }
+        } catch (error) {
+          logWarning('[DAEMON RUN] Failed to publish absent terminal control serviceability after runner Stop', error);
+          return incompleteStopSession('terminal_control_serviceability_retirement_failed');
+        }
+      }
+      return { status: 'stopped' };
+    };
     const retireLegacyAttachmentAfterPositiveDeath = async (
       evidence: NonNullable<typeof legacyRecoveryEvidence>,
       options: Readonly<{ runnerExitProven: boolean; trackedPids: readonly number[] }>,
@@ -446,7 +502,7 @@ export function createStopSession(params: Readonly<{
           removeAttachmentInfo: params.removeHostAttachmentInfo ?? removeTerminalHostAttachmentInfo,
         });
         return disposition.status === 'retired'
-          ? { status: 'stopped' }
+          ? options.trackedPids.length > 0 ? await retireAbsentRunnerServiceability() : { status: 'stopped' }
           : disposition.status === 'parked'
             ? incompleteStopSession(mapDispositionFailureReason(disposition.reason))
             : incompleteStopSession('terminal_attachment_descriptor_retirement_failed');
@@ -460,7 +516,7 @@ export function createStopSession(params: Readonly<{
         expected: evidence.attachmentInfo,
       }).catch(() => false);
       return removed
-        ? { status: 'stopped' }
+        ? options.trackedPids.length > 0 ? await retireAbsentRunnerServiceability() : { status: 'stopped' }
         : incompleteStopSession('attachment_mismatch');
     };
 
@@ -475,6 +531,8 @@ export function createStopSession(params: Readonly<{
         try {
           const recovered = await params.recoverStrandedTerminalControlServiceability({
             sessionId: normalizedSessionId,
+            stoppedAt: Date.now(),
+            ...(options?.metadataContext ? { metadataContext: options.metadataContext } : {}),
             ...(attachmentInfo?.version === 2
               ? { expectedAttachmentId: attachmentInfo.attachmentId }
               : {}),
@@ -523,21 +581,6 @@ export function createStopSession(params: Readonly<{
       }
     }
 
-    const haveTrackedRunnersExited = async (trackedPids: readonly number[]): Promise<boolean> => {
-      if (!params.areTrackedRunnersExited) return false;
-      try {
-        return await params.areTrackedRunnersExited({
-          sessionId: normalizedSessionId,
-          trackedPids,
-        });
-      } catch (error) {
-        logWarning(
-          `[DAEMON RUN] Failed to check tracked runner exit for session ${normalizedSessionId}`,
-          error,
-        );
-        return false;
-      }
-    };
     const runnersAlreadyExited = await observeStopPhase('runner_exit_probe', () => haveTrackedRunnersExited(pidsToStop));
     const signalEligiblePids: number[] = [];
     for (const pid of runnersAlreadyExited ? [] : pidsToStop) {
@@ -560,7 +603,9 @@ export function createStopSession(params: Readonly<{
       ? await observeStopPhase('remainder_capture', () => params.ownerRemainder!.capture(remainderOwner))
       : undefined;
     if (capturedRemainder) {
-      for (const session of expectedTrackedSessionsByPid.values()) session.ownerRemainderCapture = capturedRemainder;
+      // A planned retirement already captured this generation's physical tree.
+      // A later logical Session census must not erase its reparented Run children.
+      for (const session of expectedTrackedSessionsByPid.values()) session.ownerRemainderCapture ??= capturedRemainder;
     }
     let stoppedAny = false;
     const signaledPids: number[] = [];
@@ -588,6 +633,18 @@ export function createStopSession(params: Readonly<{
         }
         if (!isSignalAuthorityCurrent()
           || (session.startedBy === 'daemon' && session.childProcess && !isTrackedChildStillLiveForPid(session, pid))) continue;
+        if (params.ownerRemainder && session.ownerRemainderCapture?.scope !== 'subtree') {
+          // Logical ownership can belong to a child Run or a shared launch fence.
+          // Retain this runner's exact native tree before its ancestry disappears.
+          const tree = await observeStopPhase('runner_tree_capture', () => params.ownerRemainder!.captureTree(remainderOwner, {
+            pid,
+            ...(session.processStartTimeMs === undefined ? {} : { start: { startTimeMs: session.processStartTimeMs } }),
+          }));
+          if (!isSignalAuthorityCurrent()) continue;
+          if (!tree) return incompleteStopSession('runner_signal_incomplete');
+          session.ownerRemainderCapture = tree;
+          delete session.ownerRemainderResult;
+        }
         session.stopRequestedAtMs ??= Date.now();
         // The runner lifecycle owns its established exit wait; one terminator owns every signal.
         const result = await observeStopPhase('signal_request', () => terminateTargets({
@@ -699,12 +756,19 @@ export function createStopSession(params: Readonly<{
       trackedRunnerCount: pidsToStop.length,
     });
     if (params.ownerRemainder && pidsToStop.length > 0) {
-      const remainder = [...expectedTrackedSessionsByPid.values()]
-        .map((session) => session.ownerRemainderResult)
-        .find((result) => result !== undefined)
-        ?? await params.ownerRemainder.end(remainderOwner, capturedRemainder);
-      if (remainder.status !== 'complete') {
-        logWarning(`[DAEMON RUN] Session remainder cleanup was incomplete for ${normalizedSessionId}`, remainder);
+      const expectedSessions = [...expectedTrackedSessionsByPid.values()];
+      const completedCaptures = new Set(expectedSessions.filter((session) => session.ownerRemainderResult)
+        .map((session) => session.ownerRemainderCapture ?? capturedRemainder));
+      const pendingCaptures = new Set(expectedSessions.filter((session) => !session.ownerRemainderResult)
+        .map((session) => session.ownerRemainderCapture ?? capturedRemainder)
+        .filter((capture) => !completedCaptures.has(capture)));
+      const remainders = [
+        ...expectedSessions.flatMap((session) => session.ownerRemainderResult ? [session.ownerRemainderResult] : []),
+        ...await Promise.all([...pendingCaptures].map((capture) => params.ownerRemainder!.end(remainderOwner, capture))),
+      ];
+      const incompleteRemainder = remainders.find((remainder) => remainder.status !== 'complete');
+      if (incompleteRemainder) {
+        logWarning(`[DAEMON RUN] Session remainder cleanup was incomplete for ${normalizedSessionId}`, incompleteRemainder);
         return incompleteStopSession('runner_signal_incomplete');
       }
     }
@@ -729,10 +793,12 @@ export function createStopSession(params: Readonly<{
           ? async ({ attachmentInfo: currentAttachmentInfo }) => {
               const serviceabilityStartedAtMs = Date.now();
               await params.retireExactTerminalControlServiceability!({
+                ...(options?.metadataContext ? { metadataContext: options.metadataContext } : {}),
                 happyHomeDir: configuration.happyHomeDir,
                 sessionId: normalizedSessionId,
                 attachmentInfo: currentAttachmentInfo,
                 terminalMode: retiredTerminalMode,
+                stoppedAt: Date.now(),
               });
               logger.infoFile('[DAEMON STOP] Borrowed control serviceability retirement completed', {
                 sessionId: normalizedSessionId,
@@ -782,10 +848,12 @@ export function createStopSession(params: Readonly<{
           const serviceabilityStartedAtMs = Date.now();
           if (params.retireExactTerminalControlServiceability && retiredTerminalMode) {
             await params.retireExactTerminalControlServiceability({
+              ...(options?.metadataContext ? { metadataContext: options.metadataContext } : {}),
               happyHomeDir: configuration.happyHomeDir,
               sessionId: normalizedSessionId,
               attachmentInfo: currentAttachmentInfo,
               terminalMode: retiredTerminalMode,
+              stoppedAt: Date.now(),
             });
           }
           logger.infoFile('[DAEMON STOP] Control serviceability retirement completed', {
@@ -804,7 +872,9 @@ export function createStopSession(params: Readonly<{
       if (disposition.status === 'destroyed' && disposition.descriptorRetained) {
         return incompleteStopSession('terminal_attachment_descriptor_retirement_failed');
       }
-      if (disposition.status === 'destroyed' && params.onExactTerminalAttachmentRetired) {
+      // A concurrent confirmed-dead recovery can own the same exact retirement.
+      const attachmentRetired = disposition.status === 'destroyed' || disposition.status === 'retired';
+      if (attachmentRetired && params.onExactTerminalAttachmentRetired) {
         await params.onExactTerminalAttachmentRetired({
           happyHomeDir: configuration.happyHomeDir,
           sessionId: normalizedSessionId,
@@ -813,7 +883,7 @@ export function createStopSession(params: Readonly<{
           logWarning(`[DAEMON RUN] Failed to record terminal host retirement for session ${normalizedSessionId}`, error);
         });
       }
-      if (disposition.status === 'destroyed') {
+      if (attachmentRetired) {
         logger.infoFile('[DAEMON STOP] Exact attachment retirement completed', {
           sessionId: normalizedSessionId,
           elapsedMs: Date.now() - retirementStartedAtMs,
@@ -825,25 +895,6 @@ export function createStopSession(params: Readonly<{
         ? incompleteStopSession(mapDispositionFailureReason(disposition.reason))
         : incompleteStopSession('destroy_failed');
     }
-    if (!isPidFallback && params.retireAbsentTerminalControlServiceability) {
-      try {
-        let retired = false;
-        for (const trackedSession of expectedTrackedSessionsByPid.values()) {
-          const retirement = await params.retireAbsentTerminalControlServiceability({ sessionId: normalizedSessionId, trackedSession });
-          if (retirement === 'deferred' && [...pidToTrackedSession.values()].includes(trackedSession)) {
-            return incompleteStopSession('terminal_control_serviceability_retirement_failed');
-          }
-          if (retirement === 'retired' || retirement === 'deferred') {
-            retired = true;
-            break;
-          }
-        }
-        if (!retired) return incompleteStopSession('terminal_control_serviceability_retirement_failed');
-      } catch (error) {
-        logWarning('[DAEMON RUN] Failed to publish absent terminal control serviceability after runner Stop', error);
-        return incompleteStopSession('terminal_control_serviceability_retirement_failed');
-      }
-    }
-    return { status: 'stopped' };
+    return await retireAbsentRunnerServiceability();
   };
 }

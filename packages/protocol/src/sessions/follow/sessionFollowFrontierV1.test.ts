@@ -12,6 +12,15 @@ import {
 } from './sessionFollowFrontierV1.js';
 
 describe('SessionFollowFrontierV1', () => {
+  it('retains an exact waiting turn through projection, persistence and consumption', () => {
+    const waiting = projectSessionFollowFrontierFromSourceV1({ seq: 3, latestReadyEventSeq: 2,
+      agentStateVersion: 4, latestTurnId: 'question-turn', latestTurnStatus: 'waiting', active: false });
+    expect(waiting.turn).toEqual({ id: 'question-turn', status: 'waiting' });
+    expect(parsePersistedSessionFollowFrontierV1(encodePersistedSessionFollowFrontierV1(waiting))).toEqual(waiting);
+    expect(compareSessionFollowFrontierProgressV1(waiting, waiting)).toBe('equal');
+    expect(projectSessionFollowFrontierFromSourceV1({ seq: 4, latestReadyEventSeq: 2,
+      agentStateVersion: 5, latestTurnId: 'answer-turn', latestTurnStatus: 'in_progress', active: true }).turn).toBeNull();
+  });
   it('makes inactive own-turn progress deliverable without transcript or clock progress', () => {
     const source = { seq: 0, latestReadyEventSeq: 0, agentStateVersion: 0,
       latestTurnId: 'worker-turn', latestTurnStatus: 'in_progress', active: true };
@@ -198,5 +207,16 @@ describe('SessionFollowFrontierV1', () => {
     };
 
     expect(isSessionFollowConsumptionWithinCurrentV1({ expected, observed, consumed: current, current })).toBe(false);
+  });
+
+  it('can consume an original report while leaving the observed terminal outcome pending', () => {
+    const expected = { transcriptSeq: 1, readyEventSeq: 1, agentStateVersion: 1, turn: null };
+    const observed = { transcriptSeq: 20, readyEventSeq: 2, agentStateVersion: 2,
+      turn: { id: 'turn-completed', status: 'completed' as const } };
+    const consumed = { ...observed, transcriptSeq: 2, turn: expected.turn };
+    expect(isSessionFollowConsumptionWithinCurrentV1({ expected, observed, consumed, current: observed })).toBe(true);
+    expect(isSessionFollowConsumptionWithinCurrentV1({ expected, observed,
+      consumed: { ...consumed, turn: { id: 'unobserved', status: 'completed' } }, current: observed })).toBe(false);
+    expect(compareSessionFollowFrontierProgressV1(consumed, observed)).toBe('ahead');
   });
 });

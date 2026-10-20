@@ -13,7 +13,7 @@ const loader = createScopedSnapshotLoader<Target>({
         try { guard?.(); } catch { return; }
         beginProviderCatalogLoad(scope);
         let cryptoAdmission: ProviderCatalogCryptoAdmission | null = null;
-        return context.readWithMaintenance({
+        return context.readWithMaintenance<Awaited<ReturnType<typeof readProviderCatalog>>>({
             read: publication => readProviderCatalog(scope, undefined, guard, { ...publication,
                 onCryptoAdmission: admission => { cryptoAdmission = admission; },
             }),

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createDeferred } from '@/testkit/async/deferred';
 import { DeferredApiSessionClient } from './DeferredApiSessionClient';
 import type { Metadata } from '@/api/types';
+import type { SessionEventMessage } from '@/api/session/sessionMessageTypes';
 import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 import type { RegisteredSessionStateFieldMutationV1 } from '@/api/session/client/transport/mutations/sessionClientDurableMutationTypes';
 import { createCliRuntimeSessionStateBridge } from '../state/bridge';
@@ -95,6 +96,8 @@ describe('DeferredApiSessionClient', () => {
       updateMetadata: vi.fn(),
       updateAgentState: vi.fn(),
       keepAlive: vi.fn(),
+      updateAgentStateRequestSettlement: vi.fn(async () => {}),
+      getAgentStateSnapshot: vi.fn(() => null),
       getMetadataSnapshot: vi.fn(() => createMetadataStub()),
       fetchLatestUserPermissionIntentFromTranscript: vi.fn(async () => ({ intent: 'acceptEdits' as const, updatedAt: 12 })),
       waitForMetadataUpdate: vi.fn(async () => true),
@@ -230,6 +233,8 @@ describe('DeferredApiSessionClient', () => {
       updateMetadata: vi.fn(),
       updateAgentState: vi.fn(),
       keepAlive: vi.fn(),
+      updateAgentStateRequestSettlement: vi.fn(async () => {}),
+      getAgentStateSnapshot: vi.fn(() => null),
       getMetadataSnapshot: vi.fn(() => createMetadataStub()),
       waitForMetadataUpdate: vi.fn(async () => true),
       popPendingMessage: vi.fn(async () => true),
@@ -270,6 +275,8 @@ describe('DeferredApiSessionClient', () => {
       updateMetadata: vi.fn(),
       updateAgentState: vi.fn(),
       keepAlive: vi.fn(),
+      updateAgentStateRequestSettlement: vi.fn(async () => {}),
+      getAgentStateSnapshot: vi.fn(() => null),
       getMetadataSnapshot: vi.fn(() => createMetadataStub()),
       waitForMetadataUpdate: vi.fn(async () => true),
       popPendingMessage: vi.fn(async () => true),
@@ -326,6 +333,8 @@ describe('DeferredApiSessionClient', () => {
       updateMetadata: vi.fn(),
       updateAgentState: vi.fn(),
       keepAlive: vi.fn(),
+      updateAgentStateRequestSettlement: vi.fn(async () => {}),
+      getAgentStateSnapshot: vi.fn(() => null),
       getMetadataSnapshot: vi.fn(() => createMetadataStub()),
       waitForMetadataUpdate: vi.fn(async () => true),
       popPendingMessage: vi.fn(async () => true),
@@ -490,6 +499,8 @@ describe('DeferredApiSessionClient', () => {
       }),
       updateAgentState: vi.fn(),
       keepAlive: vi.fn(),
+      updateAgentStateRequestSettlement: vi.fn(async () => {}),
+      getAgentStateSnapshot: vi.fn(() => null),
       getMetadataSnapshot: vi.fn(() => createMetadataStub()),
       waitForMetadataUpdate: vi.fn(async () => true),
       popPendingMessage: vi.fn(async () => true),
@@ -523,8 +534,8 @@ describe('DeferredApiSessionClient', () => {
     const real = {
       sessionId: 'sess_1',
       rpcHandlerManager: { registerHandler: vi.fn(), invokeLocal: vi.fn(async () => ({})) },
-      enqueueSessionEventCommitted: vi.fn(async (event: unknown) => {
-        calls.push(`event:${String((event as any)?.id ?? '')}`);
+      enqueueSessionEventCommitted: vi.fn(async (event: SessionEventMessage) => {
+        calls.push(`event:${event.type === 'message' ? event.message : ''}`);
         return { persisted: true, delivered: true };
       }),
       enqueueAgentMessageCommitted: vi.fn(async () => ({ persisted: true, delivered: true })),
@@ -536,6 +547,8 @@ describe('DeferredApiSessionClient', () => {
       }),
       updateAgentState: vi.fn(),
       keepAlive: vi.fn(),
+      updateAgentStateRequestSettlement: vi.fn(async () => {}),
+      getAgentStateSnapshot: vi.fn(() => null),
       getMetadataSnapshot: vi.fn(() => null),
       waitForMetadataUpdate: vi.fn(async () => false),
       popPendingMessage: vi.fn(async () => false),
@@ -557,6 +570,8 @@ describe('DeferredApiSessionClient', () => {
       updateMetadata: vi.fn(),
       updateAgentState: vi.fn(),
       keepAlive: vi.fn(),
+      updateAgentStateRequestSettlement: vi.fn(async () => {}),
+      getAgentStateSnapshot: vi.fn(() => null),
       getMetadataSnapshot: vi.fn(() => null),
       waitForMetadataUpdate: vi.fn(async () => false),
       popPendingMessage: vi.fn(async () => false),
@@ -569,7 +584,7 @@ describe('DeferredApiSessionClient', () => {
       close: vi.fn(async () => {}),
     } as const;
 
-    deferred.enqueueSessionEventCommitted({ id: 'before' });
+    deferred.enqueueSessionEventCommitted({ type: 'message', message: 'before' });
     deferred.updateMetadata((m) => m);
 
     const attach1 = deferred.attach(real);
@@ -590,7 +605,7 @@ describe('DeferredApiSessionClient', () => {
 
     // This write happens while attach is still flushing.
     // It should be delivered after the buffered flush completes.
-    deferred.enqueueSessionEventCommitted({ id: 'during' });
+    deferred.enqueueSessionEventCommitted({ type: 'message', message: 'during' });
 
     metadataGate.resolve(undefined);
     await attach1;
@@ -632,6 +647,8 @@ describe('DeferredApiSessionClient', () => {
         calls.push('agentState');
       }),
       keepAlive: vi.fn(),
+      updateAgentStateRequestSettlement: vi.fn(async () => {}),
+      getAgentStateSnapshot: vi.fn(() => null),
       getMetadataSnapshot: vi.fn(() => null),
       waitForMetadataUpdate: vi.fn(async () => false),
       popPendingMessage: vi.fn(async () => false),
@@ -647,10 +664,10 @@ describe('DeferredApiSessionClient', () => {
     // Register handlers + send events before attach.
     // These should not reach the real session yet.
     deferred.rpcHandlerManager.registerHandler('abort', async () => {});
-    deferred.enqueueSessionEventCommitted({ type: 'message' });
+    deferred.enqueueSessionEventCommitted({ type: 'message', message: 'buffered session message' });
     const agentCustody = deferred.enqueueAgentMessageCommitted(
       'claude',
-      { type: 'message' },
+      { type: 'message', message: 'buffered agent message' },
       {
         localId: 'buffered-agent-message',
         provenance: { kind: 'non_dependent', source: 'external' },
@@ -972,7 +989,7 @@ describe('DeferredApiSessionClient', () => {
       metadataReason: 'overflowed-pre-attach-work-state',
     });
 
-    deferred.enqueueSessionEventCommitted({ type: 'newer-buffered-entry' });
+    deferred.enqueueSessionEventCommitted({ type: 'message', message: 'newer-buffered-entry' });
 
     await expect(write).resolves.toEqual({
       ok: false,
@@ -1041,7 +1058,7 @@ describe('DeferredApiSessionClient', () => {
         order.push(`execution:${activeCount}`);
         if (activeCount > 0) {
           deferred.enqueueSessionEventCommitted({
-            type: 'execution-observer-publication',
+            type: 'message', message: 'execution-observer-publication',
           });
         }
       },
@@ -1229,6 +1246,8 @@ describe('DeferredApiSessionClient', () => {
       updateMetadata: vi.fn(),
       updateAgentState: vi.fn(),
       keepAlive: vi.fn(),
+      updateAgentStateRequestSettlement: vi.fn(async () => {}),
+      getAgentStateSnapshot: vi.fn(() => null),
       getMetadataSnapshot: vi.fn(() => null),
       waitForMetadataUpdate: vi.fn(async () => false),
       popPendingMessage: vi.fn(async () => false),
@@ -1254,9 +1273,9 @@ describe('DeferredApiSessionClient', () => {
       limits: { maxEntries: 2, maxBytes: 10_000 },
     });
 
-    deferred.enqueueSessionEventCommitted({ id: 1 });
-    deferred.enqueueSessionEventCommitted({ id: 2 });
-    deferred.enqueueSessionEventCommitted({ id: 3 });
+    deferred.enqueueSessionEventCommitted({ type: 'message', message: '1' });
+    deferred.enqueueSessionEventCommitted({ type: 'message', message: '2' });
+    deferred.enqueueSessionEventCommitted({ type: 'message', message: '3' });
 
     expect(deferred.getBufferStats()).toEqual(
       expect.objectContaining({
@@ -1278,6 +1297,8 @@ describe('DeferredApiSessionClient', () => {
       updateMetadata: vi.fn(),
       updateAgentState: vi.fn(),
       keepAlive: vi.fn(),
+      updateAgentStateRequestSettlement: vi.fn(async () => {}),
+      getAgentStateSnapshot: vi.fn(() => null),
       getMetadataSnapshot: vi.fn(() => null),
       waitForMetadataUpdate: vi.fn(async () => false),
       popPendingMessage: vi.fn(async () => false),
@@ -1297,8 +1318,8 @@ describe('DeferredApiSessionClient', () => {
         type: 'message',
         message: expect.stringContaining('startup-buffer-overflow'),
       }),
-      { id: 2 },
-      { id: 3 },
+      { type: 'message', message: '2' },
+      { type: 'message', message: '3' },
     ]);
   });
 
@@ -1308,8 +1329,8 @@ describe('DeferredApiSessionClient', () => {
       limits: { maxEntries: 1, maxBytes: 10_000 },
     });
 
-    deferred.enqueueSessionEventCommitted({ id: 1 });
-    deferred.enqueueSessionEventCommitted({ id: 2 });
+    deferred.enqueueSessionEventCommitted({ type: 'message', message: '1' });
+    deferred.enqueueSessionEventCommitted({ type: 'message', message: '2' });
 
     const committed: unknown[] = [];
     const real = {
@@ -1324,6 +1345,8 @@ describe('DeferredApiSessionClient', () => {
       updateMetadata: vi.fn(),
       updateAgentState: vi.fn(),
       keepAlive: vi.fn(),
+      updateAgentStateRequestSettlement: vi.fn(async () => {}),
+      getAgentStateSnapshot: vi.fn(() => null),
       getMetadataSnapshot: vi.fn(() => null),
       waitForMetadataUpdate: vi.fn(async () => false),
       popPendingMessage: vi.fn(async () => false),
@@ -1343,7 +1366,7 @@ describe('DeferredApiSessionClient', () => {
         type: 'message',
         message: expect.stringContaining('startup-buffer-overflow'),
       }),
-      { id: 2 },
+      { type: 'message', message: '2' },
     ]);
   });
 
@@ -1352,7 +1375,7 @@ describe('DeferredApiSessionClient', () => {
       placeholderSessionId: 'PID-1',
       limits: { maxEntries: 10, maxBytes: 10_000 },
     });
-    deferred.enqueueSessionEventCommitted({ id: 'will-fail' });
+    deferred.enqueueSessionEventCommitted({ type: 'message', message: 'will-fail' });
 
     const enqueueSessionEventCommitted = vi.fn(async () => ({
       persisted: true,
@@ -1369,6 +1392,8 @@ describe('DeferredApiSessionClient', () => {
       updateMetadata: vi.fn(),
       updateAgentState: vi.fn(),
       keepAlive: vi.fn(),
+      updateAgentStateRequestSettlement: vi.fn(async () => {}),
+      getAgentStateSnapshot: vi.fn(() => null),
       getMetadataSnapshot: vi.fn(() => null),
       waitForMetadataUpdate: vi.fn(async () => false),
       popPendingMessage: vi.fn(async () => false),

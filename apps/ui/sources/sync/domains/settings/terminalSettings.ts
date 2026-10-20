@@ -11,6 +11,10 @@ export type TerminalSpawnOptions = {
 
 export type TerminalHost = 'none' | 'tmux' | 'zellij' | 'herdr';
 
+export type TerminalSpawnSettings = Pick<Settings,
+    | 'sessionTerminalHost' | 'sessionUseTmux' | 'sessionTmuxByMachineId' | 'sessionTerminalHostByMachineId'
+    | 'sessionTmuxSessionName' | 'sessionTmuxIsolated' | 'sessionTmuxTmpDir'>;
+
 import { resolveTerminalHost } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
 import { buildMachineTerminalSettingsPatch as buildCanonicalMachineTerminalSettingsPatch } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
 export { resolveTerminalHost };
@@ -36,7 +40,7 @@ function normalizeOptionalString(value: unknown): string | null {
 }
 
 export function resolveTerminalSpawnOptions(params: {
-    settings: Settings;
+    settings: TerminalSpawnSettings;
     machineId: string | null;
 }): TerminalSpawnOptions | null {
     const { settings, machineId } = params;

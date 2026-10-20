@@ -5,12 +5,12 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 import { isPluginError, PluginError } from '@happier-dev/plugin-sdk';
 import { type FileSystemService } from '@happier-dev/plugin-sdk/fs';
 import { type PluginPath } from '@happier-dev/plugin-sdk';
+import { readPortablePathSegmentViolation } from '@happier-dev/protocol/filesystem/portablePathSegment';
 import { isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
 
 const MAX_IO_BYTES = 16 * 1024 * 1024;
 const MAX_LIST_ITEMS = 100;
 const MAX_CURSOR_CHARS = 96;
-const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
 type Access = 'read' | 'write' | 'delete';
 export type PluginFileSystemScope = Readonly<{ root: PluginPath['root']; projectId?: string; pathPrefix?: string; access: readonly Access[] }>;
 export type PluginFileSystemDisclosureMismatch = Readonly<{
@@ -51,12 +51,8 @@ async function withStableFileSystemErrors<T>(operation: () => Promise<T>): Promi
 }
 
 function isInvalidPortableComponent(part: string): boolean {
-  return !part
-    || part === '.'
-    || part === '..'
-    || /[\u0000-\u001f<>:"|?*]/u.test(part)
-    || /[ .]$/u.test(part)
-    || WINDOWS_RESERVED_NAME.test(part);
+  // Validate the canonical spelling without changing existing workspace names.
+  return readPortablePathSegmentViolation(part.normalize('NFC')) !== null;
 }
 
 function normalizedRelativePath(value: string): string {
@@ -177,7 +173,7 @@ export function createPluginFileSystemService(params: Readonly<{
     if (path.root === 'workspace') return params.roots.workspace;
     return params.roots.projects.get(path.projectId) ?? fail('plugin_fs_root_unavailable', 'Project root is unavailable');
   }
-  function resolveOperationPath(path: PluginPath, access: Access): { root: string; relativePath: string; absolutePath: string } {
+  function resolveOperationPath(path: PluginPath, access: Access): { root: string; relativePath: string } {
     const relativePath = normalizedRelativePath(path.relativePath);
     const root = resolve(rootFor(path));
     if (!isPluginPathCoveredByDisclosure(path, params.scopes, access)) {
@@ -192,18 +188,19 @@ export function createPluginFileSystemService(params: Readonly<{
         // Cooperative-disclosure diagnostics cannot alter filesystem semantics.
       }
     }
-    const absolutePath = resolvePluginPathWithinRoots(params.roots, path);
-    return { root, relativePath, absolutePath };
+    resolvePluginPathWithinRoots(params.roots, path);
+    return { root, relativePath };
   }
-  async function assertPortableSpelling(root: string, relativePath: string, allowMissing: boolean): Promise<void> {
+  async function resolvePortableSpelling(root: string, relativePath: string, allowMissing: boolean): Promise<string> {
     let current = root;
-    for (const segment of relativePath ? relativePath.split('/') : []) {
+    const segments = relativePath ? relativePath.split('/') : [];
+    for (const [index, segment] of segments.entries()) {
       const entries = await readdir(current).catch(() => fail('plugin_fs_not_found', 'Filesystem path does not exist'));
       const folded = segment.normalize('NFC').toLocaleLowerCase('en-US');
       const matches = entries.filter((entry) => entry.normalize('NFC').toLocaleLowerCase('en-US') === folded);
       if (matches.length === 0) {
         if (!allowMissing) fail('plugin_fs_not_found', 'Filesystem path does not exist');
-        return;
+        return resolve(current, ...segments.slice(index));
       }
       const matchedEntry = matches[0]!;
       if (
@@ -219,10 +216,11 @@ export function createPluginFileSystemService(params: Readonly<{
         fail('plugin_fs_path_denied', 'Filesystem path resolves outside its root');
       }
     }
+    return current;
   }
-  async function assertContained(root: string, relativePath: string, candidate: string, allowMissing: boolean): Promise<void> {
+  async function resolveContainedPath(root: string, relativePath: string, allowMissing: boolean): Promise<string> {
     const canonicalRoot = await realpath(root).catch(() => fail('plugin_fs_root_unavailable', 'Filesystem root is unavailable'));
-    await assertPortableSpelling(root, relativePath, allowMissing);
+    const candidate = await resolvePortableSpelling(root, relativePath, allowMissing);
     let checked = candidate;
     if (allowMissing) {
       await mkdir(dirname(candidate), { recursive: true });
@@ -232,13 +230,14 @@ export function createPluginFileSystemService(params: Readonly<{
     if (!isCanonicalAbsolutePathInsideRoot(canonicalRoot, canonical)) {
       fail('plugin_fs_path_denied', 'Filesystem path resolves outside its root');
     }
+    return candidate;
   }
   const implementation: FileSystemService = {
     async readFile(path, options) {
       guard(options?.signal);
       const target = resolveOperationPath(path, 'read');
-      await assertContained(target.root, target.relativePath, target.absolutePath, false);
-      const handle = await open(target.absolutePath, 'r');
+      const absolutePath = await resolveContainedPath(target.root, target.relativePath, false);
+      const handle = await open(absolutePath, 'r');
       try {
         const info = await handle.stat();
         if (!info.isFile()) fail('plugin_fs_unsupported_kind', 'Filesystem entry kind is unsupported');
@@ -262,15 +261,15 @@ export function createPluginFileSystemService(params: Readonly<{
       if (!(data instanceof Uint8Array) || data.byteLength > MAX_IO_BYTES) fail('plugin_fs_too_large', 'Filesystem write exceeds byte limit');
       const target = resolveOperationPath(path, 'write');
       if (!target.relativePath) fail('plugin_fs_path_denied', 'Filesystem write target must name a file');
-      await assertContained(target.root, target.relativePath, target.absolutePath, true);
-      const existing = await lstat(target.absolutePath).catch((error: unknown) => {
+      const absolutePath = await resolveContainedPath(target.root, target.relativePath, true);
+      const existing = await lstat(absolutePath).catch((error: unknown) => {
         if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return null;
         throw error;
       });
       if (existing?.isDirectory() || existing?.isSymbolicLink()) {
         fail('plugin_fs_unsupported_kind', 'Filesystem entry kind is unsupported');
       }
-      const temporary = resolve(dirname(target.absolutePath), `.${randomUUID()}.tmp`);
+      const temporary = resolve(dirname(absolutePath), `.${randomUUID()}.tmp`);
       let handle: Awaited<ReturnType<typeof open>> | null = await open(temporary, 'wx');
       try {
         await handle.writeFile(data);
@@ -278,7 +277,7 @@ export function createPluginFileSystemService(params: Readonly<{
         await handle.close();
         handle = null;
         guard(options?.signal);
-        await rename(temporary, target.absolutePath);
+        await rename(temporary, absolutePath);
       } finally {
         try {
           if (handle) await handle.close();
@@ -290,8 +289,8 @@ export function createPluginFileSystemService(params: Readonly<{
     async stat(path, options) {
       guard(options?.signal);
       const target = resolveOperationPath(path, 'read');
-      await assertContained(target.root, target.relativePath, target.absolutePath, false);
-      const info = await nodeStat(target.absolutePath);
+      const absolutePath = await resolveContainedPath(target.root, target.relativePath, false);
+      const info = await nodeStat(absolutePath);
       if (!info.isFile() && !info.isDirectory()) fail('plugin_fs_unsupported_kind', 'Filesystem entry kind is unsupported');
       guard(options?.signal);
       return { kind: info.isFile() ? 'file' : 'directory', size: info.size, modifiedAtMs: info.mtimeMs };
@@ -299,10 +298,10 @@ export function createPluginFileSystemService(params: Readonly<{
     async list(path, options) {
       guard(options?.signal);
       const target = resolveOperationPath(path, 'read');
-      await assertContained(target.root, target.relativePath, target.absolutePath, false);
-      const directoryInfo = await nodeStat(target.absolutePath);
+      const absolutePath = await resolveContainedPath(target.root, target.relativePath, false);
+      const directoryInfo = await nodeStat(absolutePath);
       if (!directoryInfo.isDirectory()) fail('plugin_fs_unsupported_kind', 'Filesystem entry kind is unsupported');
-      const entries = (await readdir(target.absolutePath, { withFileTypes: true })).filter((entry) => entry.isFile() || entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name));
+      const entries = (await readdir(absolutePath, { withFileTypes: true })).filter((entry) => entry.isFile() || entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name));
       const foldedNames = new Set<string>();
       for (const entry of entries) {
         if (isInvalidPortableComponent(entry.name)) fail('plugin_fs_path_denied', 'Filesystem directory contains a non-portable entry name');
@@ -322,14 +321,14 @@ export function createPluginFileSystemService(params: Readonly<{
       guard(options?.signal);
       const target = resolveOperationPath(path, 'delete');
       if (!target.relativePath) fail('plugin_fs_path_denied', 'Filesystem root cannot be removed');
-      await assertContained(target.root, target.relativePath, target.absolutePath, false);
-      const info = await lstat(target.absolutePath);
+      const absolutePath = await resolveContainedPath(target.root, target.relativePath, false);
+      const info = await lstat(absolutePath);
       if (info.isSymbolicLink()) fail('plugin_fs_path_denied', 'Filesystem symlinks cannot be removed through this service');
       if (info.isDirectory() && options?.recursive !== true) {
         fail('plugin_fs_recursive_required', 'Recursive removal must be requested explicitly');
       }
       guard(options?.signal);
-      await rm(target.absolutePath, { recursive: options?.recursive === true, force: false });
+      await rm(absolutePath, { recursive: options?.recursive === true, force: false });
     },
   };
   const service: FileSystemService = {

@@ -23,6 +23,8 @@ vi.mock('react-native-mmkv', () => {
 import { clearPersistence } from '@/sync/domains/state/persistence';
 
 import { createSessionsDomain } from './sessions';
+import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
+import { filterReviewCommentDraftsIncludedInPrompt } from '@/sync/domains/input/reviewComments/reviewCommentPrompt';
 
 function createHarness() {
     let state: any = {
@@ -58,6 +60,45 @@ function createHarness() {
 describe('sessions domain: review comment drafts', () => {
     beforeEach(() => {
         clearPersistence();
+    });
+
+    it.each(['session', 'workspace'] as const)('clears only unchanged captured included %s drafts after an async send', (scope) => {
+        const captured: ReviewCommentDraft = {
+            id: 'sent', filePath: 'src/a.ts', source: 'file',
+            anchor: { kind: 'fileLine', startLine: 1 },
+            snapshot: { selectedLines: ['original'], beforeContext: [], afterContext: [] },
+            body: 'original comment', createdAt: 1,
+        };
+        for (const edit of [
+            { body: 'newer comment' },
+            { anchor: { kind: 'fileLine' as const, startLine: 9 } },
+            { snapshot: { selectedLines: ['newer code'], beforeContext: [], afterContext: [] } },
+            { includeInPrompt: false },
+        ]) {
+            clearPersistence();
+            const { get, domain } = createHarness();
+            const upsert = scope === 'session' ? domain.upsertSessionReviewCommentDraft : domain.upsertWorkspaceReviewCommentDraft;
+            const remove = scope === 'session' ? domain.deleteSessionReviewCommentDraft : domain.deleteWorkspaceReviewCommentDraft;
+            const read = () => scope === 'session'
+                ? get().reviewCommentsDraftsBySessionId.s1
+                : get().reviewCommentsDraftsByWorkspaceCacheKey.s1;
+            const unchanged = { ...captured, id: 'unchanged' };
+            const excluded = { ...captured, id: 'excluded', includeInPrompt: false };
+            upsert('s1', captured);
+            upsert('s1', unchanged);
+            upsert('s1', excluded);
+            const sent = filterReviewCommentDraftsIncludedInPrompt(read());
+            const newer = { ...captured, ...edit };
+            upsert('s1', newer);
+            for (const draft of sent) remove('s1', draft.id, structuredClone(draft));
+            expect(read()).toEqual([newer, excluded]);
+            const retained = read();
+            remove('s1', 'sent', captured);
+            expect(read()).toBe(retained);
+            // A direct user deletion is still unconditional.
+            remove('s1', 'sent');
+            expect(read()).toEqual([excluded]);
+        }
     });
 
     it('updates whether a session review comment draft is included in the next prompt', () => {

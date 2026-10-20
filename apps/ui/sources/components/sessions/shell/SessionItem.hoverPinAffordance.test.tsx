@@ -41,6 +41,7 @@ installSessionShellCommonModuleMocks({
                     id: 'u1',
                     timestamp: 0,
                     firstName: null,
+                    name: null,
                     lastName: null,
                     username: null,
                     avatar: null,
@@ -106,7 +107,7 @@ vi.mock('@/sync/ops', async (importOriginal) => {
     return createSyncOpsModuleMock({
         importOriginal,
         overrides: {
-            sessionStopWithServerScope: vi.fn(async () => ({ success: true })),
+            sessionStopWithServerScope: vi.fn(async (sessionId: string) => ({ success: true, sessionId, stopped: true as const })),
             sessionArchiveWithServerScope: vi.fn(async () => ({ success: true })),
         },
     });

@@ -2,12 +2,46 @@ import { describe, expect, it } from 'vitest';
 
 import { createReducer, reducer } from "@happier-dev/session-core/reducer";
 import { AgentExternalSessionTranscriptRawRecordSchema } from '@happier-dev/protocol';
+import { buildHappierBaseSystemPromptV1 } from '@happier-dev/protocol/prompts/systemPromptBaseV1';
 
 import { projectClaudeJsonlLineToDirectMessages } from '../../../../../../packages/plugins/claude/src/agent/transcripts/projection';
 
 import { normalizeExternalSessionTranscriptMessages } from './normalizeExternalSessionTranscriptMessages';
 
 describe('normalizeExternalSessionTranscriptMessages', () => {
+    it.each([undefined, { agentId: 'claude', remoteSessionId: 'native-1' }])('uses the host display projection under native/imported identity %j', sourceIdentity => {
+        const raw = { role: 'user', content: { type: 'text', text: 'Catalog guidance\n\nReal request' } };
+        const [message] = normalizeExternalSessionTranscriptMessages([{
+            id: 'user-1', createdAtMs: 1, displayUserText: 'Real request', raw,
+        }], sourceIdentity);
+        expect(message).toMatchObject({ role: 'user', content: { type: 'text', text: 'Real request' } });
+        expect(raw.content.text).toBe('Catalog guidance\n\nReal request');
+    });
+
+    it('projects injected user text for display without changing native records or agent text', () => {
+        const prefix = buildHappierBaseSystemPromptV1();
+        const text = `${prefix}\n\nFix the literal # Session title heading in my file.  Keep spacing.\n`;
+        const userRaw = Object.freeze({ role: 'user' as const, content: Object.freeze({ type: 'text' as const, text }) });
+        const items = [
+            { id: 'user', createdAtMs: 1, raw: userRaw },
+            { id: 'agent', createdAtMs: 2, raw: { role: 'agent' as const, content: {
+                type: 'acp', agentId: 'acme.agent', data: { type: 'text', text },
+            } } },
+            { id: 'ordinary', createdAtMs: 3, raw: { role: 'user' as const, content: {
+                type: 'text' as const, text: '# Session title\nPlease preserve this user-authored heading.',
+            } } },
+        ];
+        const [user, agent, ordinary] = normalizeExternalSessionTranscriptMessages(items);
+        expect(user).toMatchObject({ role: 'user', content: {
+            type: 'text', text: 'Fix the literal # Session title heading in my file.  Keep spacing.\n',
+        } });
+        expect(agent).toMatchObject({ role: 'agent', content: [{ type: 'text', text }] });
+        expect(ordinary).toMatchObject({ role: 'user', content: {
+            type: 'text', text: '# Session title\nPlease preserve this user-authored heading.',
+        } });
+        expect(userRaw.content.text).toBe(text);
+    });
+
     it('round-trips Claude agent output through current admission and the persisted transcript normalizer', () => {
         const projected = projectClaudeJsonlLineToDirectMessages({
             fileRelPath: 'session.jsonl',

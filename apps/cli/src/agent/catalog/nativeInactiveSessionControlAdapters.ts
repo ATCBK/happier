@@ -6,11 +6,14 @@ import {
 import {
   type AgentSessionControlContext,
   type AgentSessionGoalMutation,
+  type AgentSessionGoalMutationResult,
   type AgentSessionRuntimeFactory,
   type AgentSessionUsageLimitRecoveryResult,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { PluginError } from '@happier-dev/plugin-sdk';
 import type { WorkStatePublisher } from '@happier-dev/plugin-sdk/sessions/work-state';
+import { readSessionWorkStateV1FromMetadata } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateV1';
+import { SessionGoalControlFailureV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 
 import type { Metadata } from '@/api/types';
 import type { CatalogAgentId } from '@/agent/catalog/ids';
@@ -41,9 +44,9 @@ import {
 
 type RuntimeRegistryLease = PluginRuntimeRegistryLease;
 type InactiveControlAdapterParams =
-  | SessionGoalControlAdapterParams
+  (SessionGoalControlAdapterParams
   | SessionCatalogControlAdapterParams
-  | SessionUsageLimitRecoveryControlAdapterParams;
+  | SessionUsageLimitRecoveryControlAdapterParams) & Readonly<{ signal?: AbortSignal }>;
 
 type NativeInactiveOperation =
   | 'goal.get'
@@ -85,6 +88,9 @@ function unavailableDiagnostic(code: string) {
 
 function unavailableGoalResult(code: string) {
   return Object.freeze({
+    ok: false as const,
+    errorCode: code,
+    error: code,
     status: 'unavailable' as const,
     diagnostic: unavailableDiagnostic(code),
     retryable: true,
@@ -93,6 +99,9 @@ function unavailableGoalResult(code: string) {
 
 function unsupportedGoalResult(code: string) {
   return Object.freeze({
+    ok: false as const,
+    errorCode: code,
+    error: code,
     status: 'unsupported' as const,
     diagnostic: unavailableDiagnostic(code),
   });
@@ -271,26 +280,31 @@ async function resolveNativeInvocation(params: Readonly<{
   resolution: NativeInvocationResolution;
   release(): Promise<void>;
 }>> {
+  const operationAbort = new AbortController();
+  const signal = params.adapterParams.signal
+    ? AbortSignal.any([operationAbort.signal, params.adapterParams.signal])
+    : operationAbort.signal;
+  signal.throwIfAborted();
   const runtimeRegistryLease = await (
     params.dependencies?.acquireRuntimeRegistryLease
       ?? acquireAuthoritativePluginRuntimeRegistryLease
   )();
-  const operationAbort = new AbortController();
   const release = async () => {
     operationAbort.abort();
     await runtimeRegistryLease.release();
   };
-  const registry = runtimeRegistryLease.registry;
-  const contribution = registry.contributes.agentDefinitionsById.get(params.agentId);
-  if (!contribution?.pluginId || !declaresInactiveOperation(registry, params.agentId, params.operation)) {
-    return {
-      resolution: { kind: 'unavailable', code: 'inactive_agent_control_unsupported' },
-      release,
-    };
-  }
-
   try {
+    signal.throwIfAborted();
+    const registry = runtimeRegistryLease.registry;
+    const contribution = registry.contributes.agentDefinitionsById.get(params.agentId);
+    if (!contribution?.pluginId || !declaresInactiveOperation(registry, params.agentId, params.operation)) {
+      return {
+        resolution: { kind: 'unavailable', code: 'inactive_agent_control_unsupported' },
+        release,
+      };
+    }
     await activateAgentRuntimeContributionOnDemand(registry, params.agentId);
+    signal.throwIfAborted();
     const lease = registry.agentRuntimesByAgentId.get(params.agentId);
     if (!lease || !lease.hasPrimaryRuntime) {
       return { resolution: { kind: 'unavailable', code: 'inactive_agent_runtime_unavailable' }, release };
@@ -298,8 +312,9 @@ async function resolveNativeInvocation(params: Readonly<{
     if (!lease.isCurrent()) {
       return { resolution: { kind: 'unavailable', code: 'inactive_agent_runtime_generation_retired' }, release };
     }
-    const runtime = await lease.createRuntime({ signal: operationAbort.signal });
-    if (operationAbort.signal.aborted || !lease.isCurrent()) {
+    const runtime = await lease.createRuntime({ signal });
+    signal.throwIfAborted();
+    if (!lease.isCurrent()) {
       return {
         resolution: {
           kind: 'unavailable',
@@ -319,8 +334,9 @@ async function resolveNativeInvocation(params: Readonly<{
       registry,
       lease,
       adapterParams: params.adapterParams,
-      signal: operationAbort.signal,
+      signal,
     });
+    signal.throwIfAborted();
     const sessionCapabilities = readAgentSessionCapabilities(
       registry.contributes.agentDefinitionsById
         .get(params.agentId)
@@ -342,6 +358,10 @@ async function resolveNativeInvocation(params: Readonly<{
       release,
     };
   } catch {
+    if (signal.aborted) {
+      await release().catch(() => undefined);
+      signal.throwIfAborted();
+    }
     return { resolution: { kind: 'unavailable', code: 'inactive_agent_runtime_unavailable' }, release };
   }
 }
@@ -358,17 +378,20 @@ async function invokeNative<T>(params: Readonly<{
   try {
     resolved = await resolveNativeInvocation(params);
   } catch {
+    params.adapterParams.signal?.throwIfAborted();
     return params.unavailable('inactive_agent_runtime_unavailable');
   }
   try {
     if (resolved.resolution.kind === 'unavailable') {
       return params.unavailable(resolved.resolution.code);
     }
+    resolved.resolution.context.signal.throwIfAborted();
     const result = await params.invoke(resolved.resolution);
     return resolved.resolution.isCurrent()
       ? result
       : params.unavailable('inactive_agent_runtime_generation_retired');
   } catch {
+    params.adapterParams.signal?.throwIfAborted();
     return params.unavailable('inactive_agent_control_unavailable');
   } finally {
     await resolved.release().catch(() => undefined);
@@ -428,10 +451,26 @@ export function createNativeInactiveGoalAdapter(params: Readonly<{
   native: Readonly<{ get: boolean; set: boolean; clear: boolean }>;
   dependencies?: NativeInactiveSessionControlDependencies;
 }>) {
-  const withMetadata = (result: unknown, metadata: () => Record<string, unknown>) => ({
-    ...(result && typeof result === 'object' && !Array.isArray(result) ? result : { result }),
-    metadata: metadata(),
-  });
+  const withMetadata = (result: AgentSessionGoalMutationResult, metadata: () => Record<string, unknown>) => {
+    switch (result.status) {
+      case 'rejected':
+      case 'unavailable':
+      case 'unsupported': {
+        const failure = SessionGoalControlFailureV1Schema.safeParse(result.goalControlFailure);
+        return { status: result.status, ok: false as const, errorCode: result.diagnostic.code, error: result.diagnostic.code,
+          ...(result.status !== 'unsupported' ? { retryable: result.retryable } : {}),
+          ...(failure.success ? { goalControlFailure: failure.data } : {}) };
+      }
+    }
+    const current = metadata();
+    return {
+      ...(result.status === 'pending'
+        ? { status: result.status, operationId: result.operationId }
+        : { status: result.status, revision: result.revision }),
+      metadata: current,
+      workState: readSessionWorkStateV1FromMetadata(current),
+    };
+  };
   return Object.freeze({
     ...(params.native.get ? {
       getGoal: async (input: SessionGoalControlAdapterParams) => await invokeNative<unknown>({

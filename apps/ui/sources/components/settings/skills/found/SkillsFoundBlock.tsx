@@ -2,7 +2,7 @@ import * as React from 'react';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
-import { formatAgentNameList } from '@/components/capabilities/identity/agentNameList';
+import { formatAgentNameListFolded } from '@/components/capabilities/identity/agentNameList';
 import { useWhereItsOnNames } from '@/components/capabilities/where/useWhereItsOnNames';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -145,7 +145,7 @@ export const SkillsFoundBlock = React.memo(function SkillsFoundBlock(
                 ...(agents.length > 0
                   ? [
                       t('capabilities.skillsFound.readBy', {
-                        agents: formatAgentNameList(agents),
+                        agents: formatAgentNameListFolded(agents),
                         count: agents.length,
                       }),
                     ]

@@ -100,3 +100,36 @@ describe('Daily period chart', () => {
     expect(screen.findAllHostsByTestId('daily.chart-bar-3-0')).toHaveLength(1);
   });
 });
+
+describe('Daily keeps its shape: declared plot height and a chart-shaped first read', () => {
+  const medium = { size: 'medium' as const, footprint: { columns: 2, columnSpan: 1, rowSpan: 2, height: 'regular' as const, width: 'half' as const } };
+  const plotOf = (screen: Awaited<ReturnType<typeof renderScreen>>) => screen.findByType(StackedSeriesChart).props.viewportHeight as number;
+  it('draws the same plot in a tall cell as in its own room, so a taller partner or a refresh never stretches it', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(start + 20 * day);
+    const props = fixture([10, 30, 20], start + 3 * day);
+    // Its own room: the declared 252 px plot with the peak figure, axis, legend and coverage note around it.
+    const own = await renderScreen(<WidgetPresentationProvider value={{ ...medium, geometry: { width: 560, height: 368 } }}><UsageDailyWidget {...props} /></WidgetPresentationProvider>);
+    const tall = await renderScreen(<WidgetPresentationProvider value={{ ...medium, geometry: { width: 560, height: 920 } }}><UsageDailyWidget {...props} /></WidgetPresentationProvider>);
+    expect(plotOf(tall)).toBe(plotOf(own));
+    expect(plotOf(own)).toBeGreaterThanOrEqual(200);
+  });
+  it('holds the settled chart\'s room while its first read is pending, then says what it is still reading', async () => {
+    vi.useFakeTimers();
+    try {
+      const props = fixture([10, 30], start + 2 * day);
+      const query = props.query;
+      const slice = resolveUsagePageAggregation({ queries: [query], sources: [{ source: 'accounting', status: 'pending' as const }] }).results[0]!;
+      const geometry = { width: 560, height: 336 };
+      const settled = await renderScreen(<WidgetPresentationProvider value={{ ...medium, geometry }}><UsageDailyWidget {...props} /></WidgetPresentationProvider>);
+      const reading = await renderScreen(<WidgetPresentationProvider value={{ ...medium, geometry }}><UsageDailyWidget {...props} slice={slice} model={{ ...props.model, slice }} /></WidgetPresentationProvider>);
+      const plot = reading.findHostByTestId('daily.loading.plot');
+      expect(plot).not.toBeNull();
+      expect(plot!.props.style).toEqual(expect.objectContaining({ height: plotOf(settled) }));
+      expect(reading.findHostByTestId('daily.loading.note')?.props.children ?? null).toBeNull();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reading.getTextContent()).toMatch(/usage\.board\.page\.coveragePending|Still reading/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

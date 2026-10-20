@@ -2,12 +2,13 @@ import * as React from 'react';
 import { Platform } from 'react-native';
 import { useGlobalSearchParams, usePathname, useRouter } from 'expo-router';
 import { resolveHref } from 'expo-router/build/link/href';
+import { matchWorkspaceDestinationRoute, workspaceRouteHref } from './workspaceRoutes';
 import { randomUUID } from '@/platform/randomUUID';
 
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { getActiveUnsavedChangesGuard, runGuardedNavigation, runGuardedTabNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import { readDestinationInstanceTitle, resolveDestinationRefFromHref, type CompactAppDestination, type DestinationRef } from '../destinations/compactAppDestinationCatalog';
+import { readDestinationInstanceTitle, resolveCurrentAppDestination, resolveDestinationRefFromHref, type CompactAppDestination, type DestinationRef } from '../destinations/compactAppDestinationCatalog';
 import { createWorkspaceNavigationAdapter, sameDestinationRef, type WorkspaceOpenOptions } from './workspaceNavigationAdapter';
 import { bindWorkspaceBrowserHistory, createWorkspaceBrowserTransport, installWorkspaceBrowserHistory } from './workspaceBrowserTransport';
 import type { WorkspaceNavigationEntry } from './workspaceNavigationHistory';
@@ -27,6 +28,7 @@ import { useOptionalAppPaneFindSeedContext } from '../panes/AppPaneProvider';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { BROWSER_HISTORY_NAVIGATION_CHANGED } from '@/utils/navigation/browserHistoryNavigation';
 import { WorkspaceWindowTitle } from './WorkspaceWindowTitle';
+import { clearRouteAnchorSessionId, getSessionSurfaceVisibilityResetVersion, setRouteAnchorSessionId, subscribeSessionSurfaceVisibilityReset } from '@/sync/domains/session/sessionSurfaceVisibility';
 
 function readBrowserHref(): string | null {
     return Platform.OS === 'web' && typeof window !== 'undefined'
@@ -81,16 +83,27 @@ export function WorkspaceProvider(props: Readonly<{
     // Browser history is authoritative even when readiness changes before Expo updates its mirror.
     const routeHref = (() => {
         if (browserHref !== null) return browserHref;
-        const query = new URLSearchParams();
-        for (const [key, value] of Object.entries(params)) {
-            if (typeof value === 'string') query.set(key, value);
-        }
-        return `${pathname}${query.size ? `?${query}` : ''}`;
+        return workspaceRouteHref(pathname, params);
     })();
     const phone = props.phone === true && !props.enabled;
     const entry = props.entry === true && Platform.OS === 'web';
     // Width changes presentation, never the owner or lifetime of an admitted web destination.
     const routeDestination = resolveDestinationRefFromHref(props.catalog, routeHref);
+    const routeMatch = routeDestination ? matchWorkspaceDestinationRoute(routeHref.split(/[?#]/)[0]!) : null;
+    const routeSessionId = routeDestination?.kind === 'session' || routeDestination?.kind === 'sessionDetails'
+        ? routeDestination.params.id
+        : routeMatch?.routeKey.startsWith('session/') ? routeMatch.params.id : undefined;
+    // Unqualified routes retain their existing membership/ambiguity resolution
+    // in the Session body; a focused Home cannot choose their exact-read target.
+    const routeServerId = routeDestination?.params.serverId || null;
+    const visibilityResetVersion = React.useSyncExternalStore(subscribeSessionSurfaceVisibilityReset, getSessionSurfaceVisibilityResetVersion, getSessionSurfaceVisibilityResetVersion);
+    // Publish demand before core readiness admits the retained body. Sync uses
+    // this same route-priority owner for exact acquisition and list hydration.
+    React.useLayoutEffect(() => {
+        if (!routeSessionId) return;
+        setRouteAnchorSessionId(routeSessionId, routeServerId);
+        return () => clearRouteAnchorSessionId(routeSessionId);
+    }, [routeServerId, routeSessionId, visibilityResetVersion]);
     // Deferred web admission precedes shell presentation during onboarding
     // teardown. Lending an editable body to Expo while the shell is absent
     // would consume its handoff before the retained host can take custody.
@@ -128,8 +141,13 @@ export function WorkspaceProvider(props: Readonly<{
         // The body may finish an effect after navigation. Its old identity must
         // never name the new destination retained under the same tab key.
         if (latest.current.scopeKey !== scopeKey || latest.current.owner.getState().tabs[tabId]?.target !== ref) return () => {};
-        setPublishedTitles(current => current.scopeKey === scopeKey && current.titles[tabId]?.ref === ref && current.titles[tabId]?.title === title
-            ? current : { scopeKey, titles: { ...(current.scopeKey === scopeKey ? current.titles : {}), [tabId]: { ref, title } } });
+        setPublishedTitles(current => {
+            const previous = current.scopeKey === scopeKey ? current.titles[tabId] : undefined;
+            if (previous?.ref === ref && previous.title === title) return current;
+            return { scopeKey, titles: { ...(current.scopeKey === scopeKey ? current.titles : {}), [tabId]: {
+                ref, title, ...(previous?.ref === ref && previous.redirectSource ? { redirectSource: previous.redirectSource } : {}),
+            } } };
+        });
         return () => setPublishedTitles(current => {
             if (current.scopeKey !== scopeKey || current.titles[tabId]?.ref !== ref || current.titles[tabId]?.title !== title) return current;
             const state = latest.current.owner.getState();
@@ -201,9 +219,15 @@ export function WorkspaceProvider(props: Readonly<{
         return mounted;
     }, [guardTraversal, scopeKey, phoneTransport]);
     const eligible = routeDestination !== null;
+    // Overlay routes (including direct /search) launch destinations through this
+    // owner even though the overlay itself is not a retained workspace tab.
+    const overlayRoute = resolveCurrentAppDestination(props.catalog, routeHref.split(/[?#]/)[0]!)?.activation === 'overlay';
 
     React.useEffect(() => {
-        if (!(props.enabled || phone) || !owner.isReady || (!phone && (!eligible || !runtime.initialized))) return;
+        if (!(props.enabled || phone) || !owner.isReady || (!phone && !overlayRoute && (!eligible || !runtime.initialized))) return;
+        // An overlay has no tab URL to adopt. Its Actions still persist changes
+        // to the restored workspace instead of treating them as URL hydration.
+        if (overlayRoute) runtime.initialized = true;
         let current = true;
         const execute = createWorkspaceActionAdapter({
             getState: () => latest.current.owner.getState(), navigation: runtime.adapter,
@@ -257,14 +281,19 @@ export function WorkspaceProvider(props: Readonly<{
             return outcome;
         });
         return () => { current = false; retire(); };
-    }, [eligible, findHandoff, isCurrentUiOwner, owner.isReady, phone, props.enabled, runtime, scopeKey]);
+    }, [eligible, findHandoff, isCurrentUiOwner, owner.isReady, overlayRoute, phone, props.enabled, runtime, scopeKey]);
 
     React.useLayoutEffect(() => {
         if (!hostsRoute || !owner.isReady || !eligible) return;
         if (!runtime.initialized) {
             runtime.adapter.initialize(routeHref);
             runtime.initialized = true;
-        } else if (projectedHref.current !== routeHref) runtime.adapter.acceptUrl(routeHref);
+        } else if (projectedHref.current !== routeHref) {
+            // A different browser URL retires the preceding Expo mirror. Returning
+            // to that old URL is fresh navigation and must update the retained Home.
+            projectedHref.current = null;
+            runtime.adapter.acceptUrl(routeHref);
+        }
     }, [eligible, owner.isReady, hostsRoute, routeHref, runtime]);
 
     React.useLayoutEffect(() => {
@@ -342,10 +371,20 @@ export function WorkspaceProvider(props: Readonly<{
     const navigationForTab = React.useCallback((tabId: string): DestinationNavigation => {
         const existing = tabNavigations.get(tabId);
         if (existing) return existing;
-        const navigate = (href: Parameters<typeof router.push>[0], replace: boolean) => {
+        const navigate = (href: Parameters<typeof router.push>[0], replace: boolean, automatic = false) => {
             if (!isCurrentUiOwner()) return;
             const resolved = resolveHref(href);
-            if (!openHref(resolved, { tabId, replace })) {
+            const source = latest.current.owner.getState().tabs[tabId]?.target;
+            const published = latest.current.destinationTitles[tabId];
+            const redirectSource = published && published.ref === source ? published.redirectSource ?? source : source;
+            if (!openHref(resolved, { tabId, replace, ...(automatic && redirectSource ? { onOpened: () => {
+                const ref = latest.current.owner.getState().tabs[tabId]?.target;
+                if (!ref || !isCurrentUiOwner()) return;
+                setPublishedTitles(current => ({ scopeKey, titles: {
+                    ...(current.scopeKey === scopeKey ? current.titles : {}),
+                    [tabId]: { ref, title: null, redirectSource },
+                } }));
+            } } : {}) })) {
                 runUiNavigation(() => replace ? latest.current.router.replace(href) : latest.current.router.push(href));
             }
         };
@@ -369,6 +408,7 @@ export function WorkspaceProvider(props: Readonly<{
                 runtime.adapter.openHref(resolved, { mode: 'newTab', groupId: group.id });
             },
             replace: (href) => navigate(href, true),
+            redirect: (href) => navigate(href, true, true),
             back: () => {
                 if (!isCurrentUiOwner()) return;
                 if (runtime.browser) runtime.adapter.step(-1);

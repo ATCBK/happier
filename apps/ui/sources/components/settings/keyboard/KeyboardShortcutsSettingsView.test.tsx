@@ -142,24 +142,24 @@ describe('KeyboardShortcutsSettingsView', () => {
 
         const enabledSwitch = screen.findAllByType(Switch).find(node => node.props.testID === 'settings-keyboard-shortcuts-enabled');
         await act(async () => { enabledSwitch?.props.onValueChange(true); });
-        expect(storage.getState().settings.keyboardShortcutsV2Enabled).toBe(true);
+        await vi.waitFor(() => expect(storage.getState().settings.keyboardShortcutsV2Enabled).toBe(true));
 
         await screen.pressByTestIdAsync('settings-keyboard-shortcut-row-commandPalette.open');
         const disabledCommandSwitch = screen.findAllByType(Switch).find(node => node.props.testID === 'settings-keyboard-shortcut-enabled-commandPalette.open');
         await act(async () => { disabledCommandSwitch?.props.onValueChange(true); });
-        expect(storage.getState().settings).toMatchObject({
+        await vi.waitFor(() => expect(storage.getState().settings).toMatchObject({
             keyboardShortcutDisabledCommandIdsV1: [],
             commandPaletteEnabled: true,
-        });
+        }));
 
         await screen.pressByTestIdAsync('settings-keyboard-shortcut-reset-commandPalette.open');
-        expect(storage.getState().settings).toMatchObject({
+        await vi.waitFor(() => expect(storage.getState().settings).toMatchObject({
             keyboardShortcutDisabledCommandIdsV1: [],
             commandPaletteEnabled: true,
             keyboardShortcutOverridesV1: {
                 'session.new': [{ binding: 'Mod+K' }],
             },
-        });
+        }));
     });
 
     it('opens a shortcut capture modal and stores the resolved binding as a command override', async () => {

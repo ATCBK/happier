@@ -1,9 +1,12 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { LightMyRequestResponse } from "fastify";
 
 import { db } from "@/storage/db";
+import { sourceKeyForSessionFollowSourceV1 } from '@/app/session/follow/sessionFollowSourceIdentity';
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { withAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
 import { registerSessionArchiveRoutes } from "./registerSessionArchiveRoutes";
+import { SESSION_TRANSCRIPT_PUBLICATION_RECIPIENT_PROJECTION_SELECT } from "@/app/session/sessionTranscriptPublicationPolicy";
 
 const frontier = (transcriptSeq: number) => JSON.stringify({ v: 1, transcriptSeq, readyEventSeq: 0, agentStateVersion: 0, turn: null });
 
@@ -13,6 +16,57 @@ describe("Follow at the Session archive HTTP owner", () => {
         harness = await createLightSqliteHarness({ tempDirPrefix: "happier-follow-archive-", initAuth: false });
     }, 180_000);
     afterAll(async () => { await harness?.close(); });
+
+    it.each(["archive", "unarchive"] as const)("acknowledges the committed %s while publication is blocked, even if it later fails", async operation => {
+        const owner = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: "plain" } });
+        const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(),
+            metadata: "{}", encryptionMode: "plain", active: false,
+            archivedAt: operation === "unarchive" ? new Date() : null } });
+        let enterPublication!: () => void;
+        let releasePublication!: () => void;
+        let settlePublication!: () => void;
+        const entered = new Promise<void>(resolve => { enterPublication = resolve; });
+        const release = new Promise<void>(resolve => { releasePublication = resolve; });
+        const settled = new Promise<void>(resolve => { settlePublication = resolve; });
+        const delegate = db.session;
+        const originalFindUnique = delegate.findUnique;
+        const findUnique = originalFindUnique.bind(delegate);
+        // Hold only the post-commit database read. Access, transaction, Follow
+        // effects, cursor writes and HTTP serialization use their real owners.
+        const publicationRead = vi.spyOn(delegate, "findUnique").mockImplementation(args => {
+            if (args.where.id === session.id && args.select === SESSION_TRANSCRIPT_PUBLICATION_RECIPIENT_PROJECTION_SELECT) {
+                enterPublication();
+                // This database fault never resolves a row or exposes Prisma's
+                // relation methods; only the query's rejecting thenable is used.
+                return release.then(() => { settlePublication(); throw new Error("Publication database unavailable"); }) as ReturnType<typeof delegate.findUnique>;
+            }
+            return findUnique(args);
+        });
+        try {
+            await withAuthenticatedTestApp(registerSessionArchiveRoutes, async app => {
+                let status: number | undefined;
+                const response = app.inject({ method: "POST", url: `/v2/sessions/${session.id}/${operation}`,
+                    headers: { "x-test-user-id": owner.id } }).then((result: LightMyRequestResponse) => { status = result.statusCode; return result; });
+                await entered;
+                try {
+                    await expect.poll(() => status).toBe(200);
+                    const result = await response;
+                    expect(result.json()).toMatchObject({ success: true,
+                        archivedAt: operation === "archive" ? expect.any(Number) : null });
+                    const persisted = await findUnique({ where: { id: session.id } });
+                    expect(persisted?.archivedAt === null).toBe(operation === "unarchive");
+                } finally {
+                    releasePublication();
+                    await settled;
+                    await response;
+                }
+            });
+        } finally {
+            releasePublication();
+            publicationRead.mockRestore();
+            delegate.findUnique = originalFindUnique;
+        }
+    });
 
     it("retains private choices and unread while restoring Voice at current, only once", async () => {
         const owner = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: "plain" } });
@@ -24,10 +78,10 @@ describe("Follow at the Session archive HTTP owner", () => {
             accountId: owner.id, tag: crypto.randomUUID(), metadata: "{}", encryptionMode: "plain", archivedAt: new Date(),
         } });
         const where = { accountId_sessionId: { accountId: owner.id, sessionId: source.id } };
-        await db.$executeRaw`INSERT INTO AccountSessionFollow (accountId, sessionId, following, notificationLevel, includeInVoice, voiceDeliveredFrontier)
-            VALUES (${owner.id}, ${source.id}, true, 'important', true, ${frontier(9)})`;
-        await db.$executeRaw`INSERT INTO AccountSessionFollow (accountId, sessionId, following, notificationLevel, includeInVoice)
-            VALUES (${suppressed.id}, ${source.id}, false, 'none', false)`;
+        await db.accountSessionFollow.create({ data: { accountId: owner.id, sessionId: source.id,
+            following: true, notificationLevel: 'important', includeInVoice: true, voiceDeliveredFrontier: frontier(9) } });
+        await db.accountSessionFollow.create({ data: { accountId: suppressed.id, sessionId: source.id,
+            following: false, notificationLevel: 'none', includeInVoice: false } });
         const readFollow = async (accountId = owner.id) => {
             const rows = await db.$queryRaw<Array<{ following: boolean; includeInVoice: boolean; voiceDeliveredFrontier: string | null }>>`
                 SELECT following, includeInVoice, voiceDeliveredFrontier FROM AccountSessionFollow
@@ -35,8 +89,8 @@ describe("Follow at the Session archive HTTP owner", () => {
             return rows[0];
         };
         await db.accountSessionReadState.create({ data: { accountId: owner.id, sessionId: source.id, lastViewedSessionSeq: 2 } });
-        const edgeWhere = { destinationSessionId_sourceSessionId: { destinationSessionId: destination.id, sourceSessionId: source.id } };
-        await db.sessionFollowEdge.create({ data: { sourceSessionId: source.id, destinationSessionId: destination.id, deliveredTranscriptSeq: 1 } });
+        const edgeWhere = { destinationSessionId_sourceSessionId_relation: { destinationSessionId: destination.id, sourceSessionId: source.id, relation: 'follower' } };
+        await db.sessionFollowEdge.create({ data: { policyJson: '{"preset":"important"}', sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: source.id }), sourceSessionId: source.id, destinationSessionId: destination.id, deliveredTranscriptSeq: 1 } });
         await withAuthenticatedTestApp(registerSessionArchiveRoutes, async (app) => {
             const post = async (sessionId: string, action: string) => {
                 const response = await app.inject({ method: "POST", url: `/v2/sessions/${sessionId}/${action}`, headers: { "x-test-user-id": owner.id } });

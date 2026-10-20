@@ -152,7 +152,7 @@ describe('fetchAndApplyMachines request override', () => {
             await Promise.resolve();
             expect(store.getState().machineDisplayById.background).toBeDefined();
             expect(store.getState().machines.background?.availability?.kind).not.toBe('available');
-            expect(listSettled).toBe(true);
+            expect(listSettled).toBe(false);
         } finally {
             release.resolve();
             await loading;
@@ -161,6 +161,7 @@ describe('fetchAndApplyMachines request override', () => {
             metadata: createMachineFixture().metadata, availability: { kind: 'available' },
         }));
         await vi.waitFor(() => expect(store.getState().machines.peer?.availability?.kind).toBe('available'));
+        expect(listSettled).toBe(true);
         expect(batchSizes).toEqual([2]);
     });
     it('shows loading rather than a previous missing-key lock after current key material is ready', async () => {
@@ -262,13 +263,13 @@ describe('fetchAndApplyMachines request override', () => {
             },
         });
         const nextMetadata = { ...existing.metadata!, daemonTerminalSessionAttachSupported: false };
-        let finishHydration!: (metadata: typeof nextMetadata) => void;
-        const pendingMetadata = new Promise<typeof nextMetadata>((resolve) => { finishHydration = resolve; });
+        const entered = createDeferred<void>();
+        const pendingMetadata = createDeferred<typeof nextMetadata>();
         const encryption = await createEncryptionHarness();
-        encryption.decryptMetadata.mockImplementation(async () => pendingMetadata);
+        encryption.decryptMetadata.mockImplementation(async () => { entered.resolve(); return pendingMetadata.promise; });
         let current: Machine = existing;
 
-        await fetchAndApplyMachines({
+        const loading = fetchAndApplyMachines({
             credentials: legacyCredentials,
             sourceServerId: 'home-1',
             encryption,
@@ -280,10 +281,15 @@ describe('fetchAndApplyMachines request override', () => {
             applyMachines: (machines) => { current = machines[0]!; },
         });
 
-        expect(current.metadata?.daemonTerminalSessionAttachSupported).toBe(true);
-        expect(current.metadataVersion).toBe(1);
-        finishHydration(nextMetadata);
-        await vi.waitFor(() => expect(current.metadataVersion).toBe(2));
+        try {
+            await entered.promise;
+            expect(current.metadata?.daemonTerminalSessionAttachSupported).toBe(true);
+            expect(current.metadataVersion).toBe(1);
+        } finally {
+            pendingMetadata.resolve(nextMetadata);
+            await loading;
+        }
+        expect(current.metadataVersion).toBe(2);
         expect(current.metadata?.daemonTerminalSessionAttachSupported).toBe(false);
     });
 
@@ -485,20 +491,21 @@ describe('fetchAndApplyMachines request override', () => {
             ...createMachineFixture({ id, metadataVersion: 2, activeAt: index + 1 }),
             metadata: id, daemonState: 'daemon', daemonStateVersion: 1, dataEncryptionKey: null,
         }));
+        const loading = fetchAndApplyMachines({
+            credentials: legacyCredentials, sourceServerId: 'home-1', encryption, machineDataKeys: new Map(),
+            request: async () => jsonResponse(rows),
+            getExistingMachine: id => store.getState().machines[id],
+            getMachineSnapshot: () => store.getState().machines,
+            applyMachineDisplayEntries: () => {},
+            applyMachines: (machines, replace) => store.getState().applyMachines(machines, replace),
+        });
         try {
-            await fetchAndApplyMachines({
-                credentials: legacyCredentials, sourceServerId: 'home-1', encryption, machineDataKeys: new Map(),
-                request: async () => jsonResponse(rows),
-                getExistingMachine: id => store.getState().machines[id],
-                getMachineSnapshot: () => store.getState().machines,
-                applyMachineDisplayEntries: () => {},
-                applyMachines: (machines, replace) => store.getState().applyMachines(machines, replace),
-            });
             await vi.waitFor(() => expect(['fast-a', 'fast-b', 'fast-c'].every(id => Boolean(store.getState().machines[id]?.metadata))).toBe(true));
             expect(store.getState().machines.slow?.metadata).toBeNull();
             const replacement = createMachineFixture({ id: 'slow', metadataVersion: 3, daemonStateVersion: 2 });
             store.getState().applyMachines([replacement]);
             slow.resolve();
+            await loading;
             await vi.waitFor(() => expect(encryption.decryptDaemonState).toHaveBeenCalledTimes(4));
             // Yield to the next task so the real decrypt/publication continuations
             // have settled; this is not a timeout for the owning operation.
@@ -507,6 +514,7 @@ describe('fetchAndApplyMachines request override', () => {
             expect(store.getState().machines.slow?.metadata).toEqual(replacement.metadata);
         } finally {
             slow.resolve();
+            await loading;
         }
     });
 
@@ -667,8 +675,9 @@ describe('fetchAndApplyMachines request override', () => {
         );
 
         const encryption = await createEncryptionHarness();
-        encryption.decryptMetadata.mockImplementation(async () => new Promise<never>(() => {}));
-        encryption.decryptDaemonState.mockImplementation(async () => new Promise<never>(() => {}));
+        const release = createDeferred<void>();
+        encryption.decryptMetadata.mockImplementation(async () => { await release.promise; return existing.metadata; });
+        encryption.decryptDaemonState.mockImplementation(async () => { await release.promise; return existing.daemonState; });
         const applyMachines = vi.fn();
         const applyMachineDisplayEntries = vi.fn();
 
@@ -700,20 +709,19 @@ describe('fetchAndApplyMachines request override', () => {
             } as any),
         } as any);
 
-        const raceResult = await Promise.race([
-            fetchPromise.then(() => 'resolved'),
-            new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 25)),
-        ]);
-
-        expect(raceResult).toBe('resolved');
-        expect(applyMachines).toHaveBeenCalledWith([
-            expect.objectContaining({
-                id: 'm_cached',
-                metadataVersion: 5,
-                daemonStateVersion: 7,
-                daemonState: { status: 'running' },
-            }),
-        ], false, expect.any(Array));
+        try {
+            await vi.waitFor(() => expect(applyMachines).toHaveBeenCalledWith([
+                expect.objectContaining({
+                    id: 'm_cached',
+                    metadataVersion: 5,
+                    daemonStateVersion: 7,
+                    daemonState: { status: 'running' },
+                }),
+            ], false, expect.any(Array)));
+        } finally {
+            release.resolve();
+            await fetchPromise;
+        }
     });
 
     it('clears existing daemonState immediately when the fetched row no longer carries daemonState', async () => {
@@ -804,8 +812,8 @@ describe('fetchAndApplyMachines request override', () => {
         );
 
         const encryption = await createEncryptionHarness();
-        encryption.decryptMetadata.mockImplementation(async () => new Promise<never>(() => {}));
-        encryption.decryptDaemonState.mockImplementation(async () => new Promise<never>(() => {}));
+        const release = createDeferred<void>();
+        encryption.decryptMetadata.mockImplementation(async () => { await release.promise; return createMachineFixture().metadata; });
         const applyMachines = vi.fn();
         const applyMachineDisplayEntries = vi.fn();
 
@@ -820,26 +828,25 @@ describe('fetchAndApplyMachines request override', () => {
             cachedMachineDisplayEntries: {},
         });
 
-        const raceResult = await Promise.race([
-            fetchPromise.then(() => 'resolved'),
-            new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 25)),
-        ]);
-
-        expect(raceResult).toBe('resolved');
-        expect(applyMachineDisplayEntries).toHaveBeenCalledWith([
-            expect.objectContaining({
-                id: 'm_cold',
-                metadataVersion: 5,
-                metadata: null,
-            }),
-        ], { replace: false });
-        expect(applyMachines).toHaveBeenCalledWith([
-            expect.objectContaining({
-                id: 'm_cold',
-                metadataVersion: 5,
-                metadata: null,
-            }),
-        ], false, expect.any(Array));
+        try {
+            await vi.waitFor(() => expect(applyMachineDisplayEntries).toHaveBeenCalledWith([
+                expect.objectContaining({
+                    id: 'm_cold',
+                    metadataVersion: 5,
+                    metadata: null,
+                }),
+            ], { replace: false }));
+            expect(applyMachines).toHaveBeenCalledWith([
+                expect.objectContaining({
+                    id: 'm_cold',
+                    metadataVersion: 5,
+                    metadata: null,
+                }),
+            ], false, expect.any(Array));
+        } finally {
+            release.resolve();
+            await fetchPromise;
+        }
     });
 
     it('does not throw when the request transport fails (e.g. network error)', async () => {

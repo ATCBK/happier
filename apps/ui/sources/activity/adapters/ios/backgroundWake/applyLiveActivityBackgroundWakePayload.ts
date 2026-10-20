@@ -2,7 +2,7 @@ import {
     HAPPIER_FOCUS_LIVE_ACTIVITY_NAME,
     HappierFocusLiveActivityContentStateV1Schema,
 } from '@happier-dev/protocol/activity/live/remoteUpdates';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { LiveActivitySnapshot } from '../liveActivities/buildLiveActivitySnapshots';
 import {
@@ -11,30 +11,30 @@ import {
 } from '../liveActivities/liveActivityIdentity';
 import { resolveLiveActivityUpdateBudget } from '../liveActivities/resolveLiveActivityUpdateBudget';
 
-const BackgroundWakeActivityKeySchema = z.object({
-    serverId: z.string().trim().min(1),
-    sessionId: z.string().trim().min(1),
+const BackgroundWakeActivityKeySchema = z.strictObject({
+    serverId: z.string().check(z.trim(), z.minLength(1)),
+    sessionId: z.string().check(z.trim(), z.minLength(1)),
     activityName: z.literal(HAPPIER_FOCUS_LIVE_ACTIVITY_NAME),
-}).strict();
+});
 
-const BackgroundWakePayloadSchema = z.object({
+const BackgroundWakePayloadSchema = z.strictObject({
     type: z.literal('happier.liveActivityRemoteUpdate.v1'),
     v: z.literal(1),
-    requestId: z.string().trim().min(1),
-    createdAt: z.number().int().nonnegative(),
+    requestId: z.string().check(z.trim(), z.minLength(1)),
+    createdAt: z.number().check(z.int(), z.nonnegative()),
     event: z.enum(['update', 'end']),
     activityKey: BackgroundWakeActivityKeySchema,
-    snapshotFingerprint: z.string().trim().min(1),
-    contentState: HappierFocusLiveActivityContentStateV1Schema.nullable().optional(),
-}).strict().superRefine((payload, ctx) => {
+    snapshotFingerprint: z.string().check(z.trim(), z.minLength(1)),
+    contentState: z.optional(z.nullable(HappierFocusLiveActivityContentStateV1Schema)),
+}).check(z.superRefine((payload, ctx) => {
     if (payload.event !== 'update') return;
     if (payload.contentState !== null && payload.contentState !== undefined) return;
     ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['contentState'],
         message: 'Background wake update payload requires content state',
     });
-});
+}));
 
 export type LiveActivityBackgroundWakeCurrentState = Readonly<{
     activityInstanceKey: string;

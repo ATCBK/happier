@@ -8,12 +8,14 @@ import {
 import { ScmComparisonSourceSchema } from '@happier-dev/plugin-sdk/scm';
 
 import { TriageSourceFailureV1Schema } from './diagnostics.js';
+import { TriageTaskFieldsV1Schema } from './tasks.js';
 import {
     TriageEntryLocatorV1Schema,
     TriageSourceEntryLocalRefV1Schema,
 } from './identity.js';
 import {
     TriageConfiguredSourceConnectedAccountInstanceV1Schema,
+    TriageConfiguredSourceCredentialInstanceV1Schema,
     TriageConfiguredSourceInstanceV1Schema,
 } from './instances.js';
 import {
@@ -62,6 +64,7 @@ export const TriageScanInputV1Schema = defineTriageScanInputV1(TriageConfiguredS
 export const TriageScanConnectedAccountInputV1Schema = defineTriageScanInputV1(
     TriageConfiguredSourceConnectedAccountInstanceV1Schema,
 );
+export const TriageScanCredentialInputV1Schema = defineTriageScanInputV1(TriageConfiguredSourceCredentialInstanceV1Schema);
 export type TriageScanInputV1 = ReturnType<typeof TriageScanInputV1Schema.parse>;
 
 /**
@@ -121,6 +124,11 @@ export const TriageGetConnectedAccountInputV1Schema = defineProtocolObject({
     instance: TriageConfiguredSourceConnectedAccountInstanceV1Schema,
     ...triageGetInputFieldsV1,
 }, { policy: 'closed' });
+export const TriageGetCredentialInputV1Schema = defineProtocolObject({
+    v: defineProtocolLiteral(1),
+    instance: TriageConfiguredSourceCredentialInstanceV1Schema,
+    ...triageGetInputFieldsV1,
+}, { policy: 'closed' });
 export type TriageGetInputV1 = ReturnType<typeof TriageGetInputV1Schema.parse>;
 
 /**
@@ -134,6 +142,10 @@ export const TriageGetResultV1Schema = defineProtocolUnion([
     defineProtocolObject({
         ...TriageSourcePresentObservationV1Fields,
         comparisonSource: ScmComparisonSourceSchema.optional(),
+        /** Complete current values for declared task edits. Omitted members are
+         * unavailable, never empty or truncated. Exact-read-only, not snapshot,
+         * scan, retained projection, or mutation authority. */
+        taskFields: TriageTaskFieldsV1Schema.optional(),
     }, { policy: 'closed' }),
     TriageSourceAbsentObservationV1ProtocolSchema,
     TriageSourceMergedObservationV1ProtocolSchema,

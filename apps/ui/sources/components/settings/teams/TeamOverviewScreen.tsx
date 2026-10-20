@@ -25,9 +25,10 @@ import { useDirectoryAdministration } from './identity/useDirectoryAdministratio
 import { TeamSection } from './TeamSection';
 import { TeamSharedSessionsSection } from './TeamSharedSessionsSection';
 import type { TeamSectionContext } from './teamSectionContext';
-import { teamRoleLabel } from './teamLabels';
+import { isTeamViewerSuspended, teamViewerStandingLabel } from './teamLabels';
 import { TeamOwnerRequiredNotice } from './members/TeamOwnerRequiredNotice';
 import { TeamLeaveAction } from './members/TeamLeaveAction';
+import { TeamSuspendedNotice } from './members/TeamSuspendedNotice';
 import {
   teamAuthenticationPath,
   teamCredentialsPath,
@@ -133,6 +134,7 @@ const TeamOverviewHeader = React.memo(function TeamOverviewHeader(
   }>,
 ) {
   const { team, address, homeName } = props.context;
+  const standing = teamViewerStandingLabel(team);
   const invite = team.capabilities.manageInvitations && !props.context.archived && resolveTeamSetupSteps(team) === null;
   return (
     <PageHeader
@@ -151,12 +153,12 @@ const TeamOverviewHeader = React.memo(function TeamOverviewHeader(
         />
       }
       meta={[
-        ...(team.viewerRole
+        ...(standing
           ? [
               {
                 key: 'role',
                 testID: 'team-overview-role',
-                text: teamRoleLabel(team.viewerRole),
+                text: standing,
               },
             ]
           : []),
@@ -517,9 +519,6 @@ const TeamOverviewBody = React.memo(function TeamOverviewBody(
         ) : null}
       </ItemGroup>
 
-      {/* The page's last row is where a Team's leave-and-destroy actions live (the same closing
-          button row Settings uses for Archive). A member leaving the Team belongs here. */}
-      {!manages ? <TeamLeaveAction context={context} testID="team-overview-leave" /> : null}
     </>
   );
 });
@@ -569,7 +568,17 @@ export const TeamOverviewScreen = React.memo(function TeamOverviewScreen(
       renderHeader={(context) => <TeamOverviewHeader context={context} />}
       renderLoading={TeamOverviewLoading}
     >
-      {(context) => <TeamOverviewBody context={context} />}
+      {(context) => (
+        <>
+          {context.team.capabilities.viewTeam ? <TeamOverviewBody context={context} /> : null}
+          {isTeamViewerSuspended(context.team) ? <TeamSuspendedNotice /> : null}
+          {/* Leave-only viewers retain the Team identity and self-removal without mounting
+              the content's readers or ordinary member guidance. */}
+          {!context.team.capabilities.manageMembers && !context.team.capabilities.manageInvitations ? (
+            <TeamLeaveAction context={context} testID="team-overview-leave" />
+          ) : null}
+        </>
+      )}
     </TeamSection>
   );
 });

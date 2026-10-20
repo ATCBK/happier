@@ -81,13 +81,13 @@ export function useWorkspaceRepositoryTreeBrowser(input: Readonly<{
         return cached ? toLazyEntries(directoryPath, cached) : null;
     }, [workspaceCacheKey]);
 
-    const loadDirectoryEntries = React.useCallback(async (directoryPath: string) => {
-        const result = await listWorkspaceRepositoryDirectoryEntries({ scope, directoryPath });
+    const loadDirectoryEntries = React.useCallback(async (directoryPath: string, signal: AbortSignal) => {
+        const result = await listWorkspaceRepositoryDirectoryEntries({ scope, directoryPath, signal });
         return toLazyLoadResult(directoryPath, result);
     }, [scope]);
 
-    const warmDirectoryEntries = React.useCallback(async (directoryPath: string) => {
-        const result = await warmWorkspaceRepositoryDirectoryCache({ scope, directoryPath });
+    const warmDirectoryEntries = React.useCallback(async (directoryPath: string, signal: AbortSignal) => {
+        const result = await warmWorkspaceRepositoryDirectoryCache({ scope, directoryPath, signal });
         return toLazyLoadResult(directoryPath, result);
     }, [scope]);
 

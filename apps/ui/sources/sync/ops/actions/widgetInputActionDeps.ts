@@ -25,6 +25,7 @@ import { admitWidgetActionSurfaceV1 } from '@happier-dev/protocol/widgets';
 import { readWidgetInputTargetV1, validateWidgetWorkspaceInputV1 } from '@happier-dev/protocol/widgets/widgetInputAdmissionV1';
 import { readSessionWidgetProvidedContext } from '@/components/widgets/surface/sessionWidgetContext';
 import { MachineTargetV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
+import { canUsePrivateProjectAccountAction, createUiProjectAccountRowsClient } from '@/sync/api/projects/projectAccountRowsClient';
 
 const NO_PURPOSE_BINDINGS: QualifiedConnectedAccountPurposeBindingsV1 = { v: 1, bindings: [] };
 
@@ -250,8 +251,17 @@ export function createWidgetInputActionDepsV1(account: LazyActionAccountContext 
             const targetDeclaration = descriptor ? readWidgetInputTargetV1(descriptor) : null;
             if (targetDeclaration?.kind === 'invalid') return { status: 'unavailable', reasonCode: targetDeclaration.reasonCode };
             if (targetDeclaration?.kind === 'workspace' && targetDeclaration.path === field.path) {
-                return validateWidgetWorkspaceInputV1({ value, serverId: account.serverId,
-                    contextValues: readContext(request)[targetDeclaration.path] ?? [] }, workspaceRefResolutionContextV1);
+                if (!isCurrent() || !canUsePrivateProjectAccountAction(account, request.context))
+                    return { status: 'denied', reasonCode: 'widget_target_scope_mismatch' };
+                const rows = await createUiProjectAccountRowsClient(account).read(request.signal);
+                account.assertCurrent();
+                request.signal?.throwIfAborted();
+                if (!isCurrent() || !canUsePrivateProjectAccountAction(account, request.context)
+                    || !areServerAccountScopesEqual(rows.scope, viewer))
+                    return { status: 'denied', reasonCode: 'widget_target_scope_mismatch' };
+                if (rows.status !== 'ready' || rows.coverage !== 'complete')
+                    return { status: 'unavailable', reasonCode: 'widget_workspace_authority_unavailable' };
+                return validateWidgetWorkspaceInputV1({ value, serverId: account.serverId, workspaceRefs: rows.workspaceRefs }, workspaceRefResolutionContextV1);
             }
             if (targetDeclaration?.kind !== 'session' || targetDeclaration.path !== field.path) return { status: 'valid' };
             const address = VoiceTrackedSessionAddressV1Schema.safeParse(value);
@@ -264,13 +274,13 @@ export function createWidgetInputActionDepsV1(account: LazyActionAccountContext 
             });
             return read.status === 'ok' && read.value ? { status: 'valid' } : { status: 'denied', reasonCode: 'widget_session_access_denied' };
         },
-        resolveOptions: async (field, input, request) => {
+        resolveOptions: async (field, input, request, values) => {
             const descriptor = descriptors.get(request);
             const targetDeclaration = descriptor ? readWidgetInputTargetV1(descriptor) : null;
             const selected = targetDeclaration?.kind === 'session' ? VoiceTrackedSessionAddressV1Schema.safeParse(readInputPath(input, targetDeclaration.path)) : null;
             const result = await executor.execute('action.options.resolve', { consumer: { kind: 'widget', surface: request.ref.surface, definition: request.instance.definition,
                 ...(selected?.success ? { selectedSession: selected.data } : {}) },
-                fieldPath: field.path, draftInput: input }, { ...request.context, ...(request.signal ? { signal: request.signal } : {}) });
+                fieldPath: field.path, draftInput: input, values }, { ...request.context, ...(request.signal ? { signal: request.signal } : {}) });
             account.assertCurrent();
             if (!result.ok) return { status: result.errorCode === 'credential_scope_denied' ? 'denied' : 'unavailable', reasonCode: result.errorCode ?? 'widget_input_options_unavailable' };
             return (getActionSpec('action.options.resolve').outputSchema!.parse(result.result) as PublicActionResultById['action.options.resolve']).options;

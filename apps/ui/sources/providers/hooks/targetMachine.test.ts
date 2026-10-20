@@ -96,8 +96,9 @@ describe('useProviderSettingsTarget', () => {
         // be issued against a machine the canonical presence owner calls offline.
         expect(rendered.getCurrent().selection.selectedTarget?.machineId).toBe('machine-a');
         expect(rendered.getCurrent().machineId).toBeNull();
-        // This boundary fixture has no persisted Home profile; the explicit identity stays exact.
-        expect(rendered.getCurrent().serverId).toBe(rendered.getCurrent().selection.selectedTarget?.serverIdentityId);
+        // This fixture has no saved Home to authorize Account reads after execution becomes unavailable.
+        expect(rendered.getCurrent().serverId).toBeNull();
+        expect(rendered.getCurrent().accountAddressAvailable).toBe(false);
         expect(rendered.getCurrent().resolveCurrentTarget()).toBeNull();
         expect(rendered.getCurrent().machineRows.map(row => ({ machineId: row.target.machineId, online: row.online })))
             .toEqual([{ machineId: 'machine-a', online: false }]);

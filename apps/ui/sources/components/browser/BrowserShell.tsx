@@ -13,6 +13,8 @@ import type {
 import type { BrowserViewTargetV1 } from '@happier-dev/protocol';
 
 import { BrowserLaunchpad } from '@/components/browser/launchpad';
+import { resolveAgentBrowserPrerequisite } from '@/components/browser/launchpad/BrowserLaunchpad';
+import { useBrowserStreamedChrome } from '@/components/browser/streamed/BrowserStreamedSurfaceScope';
 import type { BrowserLaunchpadOpenTargetOptions } from '@/components/browser/launchpad/BrowserLaunchpad';
 import type {
     BrowserControlState,
@@ -47,6 +49,7 @@ import {
     resolveExternalUrlTargetFromInput,
     selectActiveBrowserView,
     selectBrowserToolbarModel,
+    selectBrowserViewDisplayHost,
 } from '@/sync/domains/browser/shell';
 import type { BrowserLaunchpadRow } from '@/sync/domains/browser/targets';
 import type { DesktopWebViewNativeAvailability } from '@/sync/domains/browser/adapters/desktopWebView';
@@ -78,6 +81,8 @@ import { isDaemonAuthoritativeBrowserView } from '@/sync/domains/browser/control
 import type { BrowserStreamedPageRect, BrowserStreamedSurfaceRuntime } from './adapters/BrowserStreamedTarget';
 import { BrowserPluginActionPlacements } from './BrowserPluginActionPlacements';
 import { BrowserShellPresence, type BrowserShellAgentPresence } from './copresence/BrowserShellPresence';
+import { BrowserFirstUseConnecting } from './streamed/BrowserFirstUseConnecting';
+import type { BrowserSandboxInstallOutcome } from '@/sync/domains/browser/firstUse/browserFirstUse';
 import {
     useSessionViewerBodyPresentation,
     type SessionViewerSourceNavigation,
@@ -245,6 +250,8 @@ export function BrowserShell(props: Readonly<{
     state: BrowserControlState;
     onCommand: (command: BrowserCommandV1) => void | Promise<ActionExecuteResult>;
     onCheckAgain?: (view: Readonly<{ browserSessionId: string; viewId: string }>) => Promise<ActionExecuteResult>;
+    /** Allow the managed browser's sandbox on the Session's Machine; null when the person declined. */
+    onAllowBrowserSandbox?: () => Promise<BrowserSandboxInstallOutcome | null>;
     onOpenInSystemBrowser?: (view: Readonly<{ browserSessionId: string; viewId: string }>) => void | Promise<ActionExecuteResult>;
     /**
      * B-2 cause-2: a sink the in-app render engines call to feed their page-load lifecycle
@@ -361,6 +368,9 @@ export function BrowserShell(props: Readonly<{
         [pluginLocale, props.pluginUiProjection],
     );
     const showLaunchpad = !activeView;
+    const streamedChrome = useBrowserStreamedChrome(props.streamedBrowserRuntime ?? null);
+    const streamedFirstUse = streamedChrome?.firstUse;
+    const firstUseConnecting = streamedFirstUse === 'preparing' || streamedFirstUse === 'opening' ? streamedFirstUse : null;
     const activeLocalPreviewMachineId = activeView?.target.kind === 'localServicePreview'
         ? activeView.target.machineId
         : null;
@@ -548,7 +558,7 @@ export function BrowserShell(props: Readonly<{
     // at the top, and the page controls move to a bottom bar in thumb reach. The launchpad is its own
     // page there (lab W): it brings its own address entry, so no browser chrome surrounds it.
     const phone = chromeDensity.density === 'phone';
-    const showPhoneChrome = phone && !showLaunchpad && !inViewer;
+    const showPhoneChrome = phone && (!showLaunchpad || firstUseConnecting !== null) && !inViewer;
     const controlMetrics = resolveBrowserChromeControlMetrics(chromeDensity.density);
     const addressField = (
         <BrowserUrlField
@@ -557,7 +567,9 @@ export function BrowserShell(props: Readonly<{
             density={controlMetrics.addressDensity}
             trailingAction={phone ? 'none' : 'copy'}
             formatWhileBlurred
-            value={activeView?.pendingUrl ?? activeView?.currentUrl ?? ''}
+            displayHost={selectBrowserViewDisplayHost(activeView)}
+            value={activeView?.pendingUrl ?? activeView?.currentUrl
+                ?? (firstUseConnecting ? streamedChrome?.firstUseTargetUrl : undefined) ?? ''}
             disabled={activeView ? !toolbar.canNavigate : !props.onNavigateInPlace}
             onEditStart={onAddressEdit}
             editIntentKey={activeView ? JSON.stringify([activeView.browserSessionId, activeView.viewId,
@@ -685,7 +697,14 @@ export function BrowserShell(props: Readonly<{
                     progress={activeView?.loadingProgress ?? null}
                     loading={activeView?.loadingState === 'loading'}
                 />
-                {showLaunchpad ? (
+                {showLaunchpad && firstUseConnecting ? (
+                    <BrowserFirstUseConnecting
+                        testID={`${testID}-first-use`}
+                        firstUse={firstUseConnecting}
+                        machineName={streamedChrome?.machineName ?? null}
+                        agent={props.agent ?? null}
+                    />
+                ) : showLaunchpad ? (
                     <BrowserLaunchpad
                         testID={`${testID}-launchpad`}
                         rows={launchpadRows}
@@ -697,6 +716,8 @@ export function BrowserShell(props: Readonly<{
                         refreshStatus={props.launchpadRefreshStatus ?? 'idle'}
                         refreshError={props.launchpadRefreshError}
                         localServicePreviewServerId={props.localServicePreviewServerId}
+                        agentBrowser={resolveAgentBrowserPrerequisite(streamedChrome, props.agent ?? null,
+                            props.onAllowBrowserSandbox)}
                         onOpenTarget={props.onOpenTarget}
                         onNavigateInPlace={props.onNavigateInPlace}
                     />

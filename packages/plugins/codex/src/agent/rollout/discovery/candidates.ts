@@ -34,6 +34,7 @@ export type CodexRolloutCandidateGroup = Readonly<{
 
 export type CodexRolloutCandidateEntry = Readonly<{
   remoteSessionId: string;
+  cwd?: string;
   source: CodexExternalSessionHomeEntry['source'];
   group: CodexRolloutCandidateGroup;
   /**
@@ -73,11 +74,12 @@ export type CodexRolloutCandidateSelection = Readonly<
  * would restart the whole multi-chunk build on any live Codex turn.
  *
  * `sourceGeneration` is scoped to exactly what THIS resume point depends on: the
- * single day container the cursor resumes inside, whose entry set decides
- * whether `fileName` is still the right anchor. A rollout created in any other
- * container cannot move that anchor, so it must not discard an in-progress
- * build — a corpus-wide generation makes an actively used Codex install restart
- * its build faster than the build advances, and it never converges.
+ * single day container the cursor resumes inside. The filename anchor is stable
+ * when files are added or appended, including inside that same container. New
+ * files below the frontier can be visited; files above it wait for the next scan.
+ * Only container replacement/removal invalidates the resume point — fencing
+ * directory entry changes makes an active Codex install restart faster than the
+ * build advances, and it never converges.
  */
 export type CodexRolloutCandidateScanBoundary = Readonly<{
   sourceGeneration: string;
@@ -344,6 +346,7 @@ export async function collectCodexRolloutCandidateEntries(params: Readonly<{
     signal: params.signal,
     deadlineAtMs: params.deadlineAtMs,
     onProgress: params.onProgress,
+    preparation: params.preparation,
   });
   throwIfCodexExternalSessionInvocationStopped(params);
   const grouped: GroupedRolloutCandidates = new Map();
@@ -359,6 +362,7 @@ export async function collectCodexRolloutCandidateEntries(params: Readonly<{
         signal: params.signal,
         deadlineAtMs: params.deadlineAtMs,
         onProgress: params.onProgress,
+        preparation: params.preparation,
       })),
       ...(await collectRolloutFiles({
         rootDir: join(homeEntry.codexHome, 'archived_sessions'),
@@ -368,6 +372,7 @@ export async function collectCodexRolloutCandidateEntries(params: Readonly<{
         signal: params.signal,
         deadlineAtMs: params.deadlineAtMs,
         onProgress: params.onProgress,
+        preparation: params.preparation,
       })),
     ];
     for (const entry of files) {
@@ -417,6 +422,7 @@ export async function selectCodexRolloutCandidateEntries(params: Readonly<{
       signal: params.signal,
       deadlineAtMs: params.deadlineAtMs,
       onProgress: params.onProgress,
+      preparation: params.preparation,
     });
     if (filenameMatches.length > 0) {
       const exactIdMatch = filenameMatches.some(({ remoteSessionId }) => remoteSessionId.toLowerCase() === searchTerm);
@@ -456,6 +462,7 @@ export async function selectCodexRolloutCandidateEntries(params: Readonly<{
     signal: params.signal,
     deadlineAtMs: params.deadlineAtMs,
     onProgress: params.onProgress,
+    preparation: params.preparation,
   });
 
   if (!searchTerm) {
@@ -483,7 +490,8 @@ export async function selectCodexRolloutCandidateEntries(params: Readonly<{
 async function readDirectoryEntries(
   dir: string,
   bounds: CodexExternalSessionInvocationBounds,
-): Promise<Dirent[]> {
+): Promise<Pick<Dirent, 'name' | 'isDirectory' | 'isFile' | 'isSymbolicLink'>[]> {
+  if (bounds.preparation) return await bounds.preparation.readDirectory(dir);
   throwIfCodexExternalSessionInvocationStopped(bounds);
   try {
     const entries = await readdir(dir, { withFileTypes: true });
@@ -507,9 +515,6 @@ async function describeDirectoryGeneration(
       String(metadata.dev),
       String(metadata.ino),
       String(metadata.birthtimeNs),
-      String(metadata.mtimeNs),
-      String(metadata.ctimeNs),
-      String(metadata.size),
     ].join(':');
   } catch {
     throwIfCodexExternalSessionInvocationStopped(bounds);
@@ -517,11 +522,11 @@ async function describeDirectoryGeneration(
   }
 }
 
-function directoryEntryName(entry: Dirent): string {
+function directoryEntryName(entry: Pick<Dirent, 'name'>): string {
   return typeof entry.name === 'string' ? entry.name : String(entry.name);
 }
 
-function isDirectoryEntry(entry: Dirent, pattern: RegExp): boolean {
+function isDirectoryEntry(entry: Pick<Dirent, 'name' | 'isDirectory' | 'isSymbolicLink'>, pattern: RegExp): boolean {
   return entry.isDirectory()
     && !entry.isSymbolicLink()
     && pattern.test(directoryEntryName(entry));
@@ -583,9 +588,8 @@ async function listCandidateContainersForHome(params: Readonly<{
 
 /**
  * Fingerprints exactly what one resume point depends on: the container the
- * cursor resumes inside. Its entry set is what decides whether the boundary's
- * `fileName` anchor is still correct, so a mutation there must invalidate the
- * cursor and a mutation anywhere else must not.
+ * cursor resumes inside. Its physical identity must remain intact; changes to
+ * its children cannot move the filename anchor and must not invalidate it.
  */
 async function resolveResumeContainerGeneration(params: Readonly<{
   containers: readonly CandidateContainer[];
@@ -628,6 +632,7 @@ async function listCandidateCorpusContainers(params: Readonly<{
       signal: params.signal,
       deadlineAtMs: params.deadlineAtMs,
       onProgress: params.onProgress,
+      preparation: params.preparation,
     }),
   ));
   throwIfCodexExternalSessionInvocationStopped(params);
@@ -636,7 +641,7 @@ async function listCandidateCorpusContainers(params: Readonly<{
     .sort((left, right) => compareCodexRolloutCandidateCodeUnits(right.key, left.key));
 }
 
-function rolloutCandidateFileNames(entries: readonly Dirent[]): string[] {
+function rolloutCandidateFileNames(entries: readonly Pick<Dirent, 'name' | 'isDirectory' | 'isFile' | 'isSymbolicLink'>[]): string[] {
   return entries
     .filter((entry) => {
       if (entry.isSymbolicLink() || !entry.isFile()) return false;
@@ -666,7 +671,7 @@ async function withRolloutCandidateTitles(params: Readonly<{
     params.entries,
     resolveCodexRolloutSearchBuildConcurrency(params.env),
     async (entry) => {
-      const { title, thread } = await readCodexRolloutHead(
+      const { title, thread, cwd } = await readCodexRolloutHead(
         entry.group.earliestFilePath,
         params,
         CODEX_ROLLOUT_TITLE_HEAD_BUDGET,
@@ -674,6 +679,7 @@ async function withRolloutCandidateTitles(params: Readonly<{
       return {
         ...entry,
         ...(title ? { title } : {}),
+        ...(cwd ? { cwd } : {}),
         ...(thread ? { thread } : {}),
       };
     },
@@ -703,6 +709,7 @@ export async function scanCodexRolloutCandidateChunk(params: Readonly<{
   env: NodeJS.ProcessEnv;
   limit: number;
   after?: CodexRolloutCandidateScanBoundary | null;
+  includeTitles?: boolean;
 }> & CodexExternalSessionInvocationBounds): Promise<CodexRolloutCandidateScanChunk> {
   throwIfCodexExternalSessionInvocationStopped(params);
   const containers = await listCandidateCorpusContainers(params);
@@ -714,6 +721,7 @@ export async function scanCodexRolloutCandidateChunk(params: Readonly<{
     signal: params.signal,
     deadlineAtMs: params.deadlineAtMs,
     onProgress: params.onProgress,
+    preparation: params.preparation,
   });
   if (after && after.sourceGeneration !== resumeGeneration) {
     return {
@@ -743,9 +751,8 @@ export async function scanCodexRolloutCandidateChunk(params: Readonly<{
     if (after && compareCodexRolloutCandidateCodeUnits(container.key, after.containerKey) > 0) {
       continue;
     }
-    // Captured BEFORE this container's entries are listed, so a rollout created
-    // between the two is either consumed by this chunk or invalidates the next
-    // one — never silently skipped by an anchor that already accounts for it.
+    // Capture physical identity before listing. Directory growth preserves the
+    // filename frontier; replacement/removal must still fence its continuation.
     const containerGeneration = container.key === after?.containerKey
       ? resumeGeneration
       : await resolveResumeContainerGeneration({
@@ -754,6 +761,7 @@ export async function scanCodexRolloutCandidateChunk(params: Readonly<{
         signal: params.signal,
         deadlineAtMs: params.deadlineAtMs,
         onProgress: params.onProgress,
+        preparation: params.preparation,
       });
     const fileNames = rolloutCandidateFileNames(
       await readDirectoryEntries(container.dir, params),
@@ -782,7 +790,7 @@ export async function scanCodexRolloutCandidateChunk(params: Readonly<{
       }
       let mtimeMs: number;
       try {
-        mtimeMs = (await stat(filePath)).mtimeMs;
+        mtimeMs = (params.preparation ? await params.preparation.readMetadata(filePath) : await stat(filePath)).mtimeMs;
         throwIfCodexExternalSessionInvocationStopped(params);
       } catch {
         throwIfCodexExternalSessionInvocationStopped(params);
@@ -804,12 +812,13 @@ export async function scanCodexRolloutCandidateChunk(params: Readonly<{
   }
 
   return {
-    entries: await withRolloutCandidateTitles({
+    entries: params.includeTitles === false ? toOrderedRolloutCandidateEntries(grouped) : await withRolloutCandidateTitles({
       entries: toOrderedRolloutCandidateEntries(grouped),
       env: params.env,
       signal: params.signal,
       deadlineAtMs: params.deadlineAtMs,
       onProgress: params.onProgress,
+      preparation: params.preparation,
     }),
     sourceGeneration: resumeGeneration,
     scanned,

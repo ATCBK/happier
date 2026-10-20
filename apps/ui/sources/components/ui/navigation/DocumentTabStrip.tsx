@@ -13,7 +13,7 @@ import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 import { Icon } from '@/components/ui/icons/Icon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { StatusDot } from '@/components/ui/status/StatusDot';
-import { resolveHappierTabKeySelection, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, happierFocusRingStyle, isHappierFocusVisible, resolveHappierTabKeySelection, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { DETAILS_TAB_STRIP_METRICS as M } from '@/components/appShell/panes/details/header/detailsTabHeaderMetrics';
 import { shadowLevelStyle } from '@/shadowElevation';
 import type { EntityDragItemV1, EntityDragKindV1, EntityDragScopeV1, EntityDropAdmissionV1, EntityDropEffectV1, EntityDropOutcomeV1 } from '@happier-dev/protocol/plugins/ui';
@@ -24,6 +24,9 @@ import Animated, { useAnimatedStyle, useSharedValue, withSequence, withTiming } 
 import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionTokens';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { createEntityDragGestureAdapter, ENTITY_DRAG_ACTIVATION_DISTANCE_PX } from '@/components/ui/treeDragDrop/entityDragGestureAdapter';
+import { resolveTreeDropAutoscrollTarget } from '@/components/ui/treeDragDrop/autoscroll/useTreeDropAutoscroll';
+import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
+import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
 
 export type DocumentTabEntityDragSource = Readonly<{
     runtime: EntityDragDropRuntime;
@@ -127,9 +130,9 @@ export type DocumentTabStripProps<T extends DocumentTabItem> = Readonly<{
     testIds?: DocumentTabStripTestIds;
     /**
      * `strip` (default): the Details strip — tabs scroll, each shows its pin and close.
-     * `bar`: the workspace bar (workspace lab T) — tabs shrink instead of scrolling (the consumer
-     * passes only the tabs that fit), a pinned tab is its mark alone, and close appears on hover and
-     * on the open tab in one always-reserved trailing slot. Pinning lives in the tab's menu.
+     * `bar`: the workspace bar (workspace lab T) — pinned marks stay fixed, while every other tab
+     * shrinks to its minimum width and then scrolls. Close appears on hover and on the open tab
+     * in one always-reserved trailing slot. Pinning lives in the tab's menu.
      * `rail`: the phone's open-tabs rail (phone-nav lab R) — the bar's anatomy as pills that scroll
      * sideways: each tab rests on a hairline, the open one takes the selection fill and its close,
      * and `subtitle` reads as a quiet count after the title (a split's panes).
@@ -157,6 +160,8 @@ export type DocumentTabStripProps<T extends DocumentTabItem> = Readonly<{
      */
     dropSlot?: boolean;
     dropRingTabKey?: string | null;
+    /** `bar` only: the surface under the strip, which its edge fades blend into. */
+    barFadeColor?: string;
 }>;
 
 /** The bar variant's measures (workspace lab T: 30 tall in the title strip, 28 in a pane strip). */
@@ -166,7 +171,7 @@ export const DOCUMENT_TAB_BAR_METRICS = Object.freeze({
     tabPaddingStartPx: 10,
     tabPaddingEndPx: 5,
     tabGapPx: 7,
-    tabMinWidthPx: 120,
+    tabMinWidthPx: 144,
     tabMaxWidthPx: 212,
     glyphBoxPx: 16,
     trailingSlotPx: 18,
@@ -174,6 +179,8 @@ export const DOCUMENT_TAB_BAR_METRICS = Object.freeze({
     stripGapPx: 2,
 });
 const B = DOCUMENT_TAB_BAR_METRICS;
+/** Room above and below the bar's tabs, inside its scroll clip, for the raised tab's shadow. */
+const BAR_SCROLL_BLEED_PX = 4;
 
 // Details lab 2 (`dl-strip`): tabs sit borderless on the strip; the open one takes the selection
 // fill, a preview tab reads in italics, a pinned tab shows its pin and an edited one its dot.
@@ -258,10 +265,37 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         gap: B.stripGapPx,
-        // One gap's room after the last tab, inside the clip, so the end-of-strip insertion mark
-        // (DnD lab C2) shows without the strip reflowing when a carry starts.
-        paddingRight: B.stripGapPx,
-        overflow: 'hidden',
+    },
+    /** The scrolling part of the bar: as wide as its tabs, never wider than the room it has. */
+    barViewport: {
+        flexShrink: 1,
+        minWidth: 0,
+        marginVertical: -BAR_SCROLL_BLEED_PX,
+    },
+    barScroll: {
+        flexGrow: 0,
+        flexShrink: 1,
+    },
+    barContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: B.stripGapPx,
+        // Room inside the clip for the raised tab's shadow and, at either end, the insertion mark
+        // (DnD lab C2), so the strip never reflows when a carry starts.
+        paddingVertical: BAR_SCROLL_BLEED_PX,
+        paddingHorizontal: B.stripGapPx,
+        // Tabs shrink to fit the visible strip before it scrolls (web resolves this against the
+        // scroller's own width).
+        maxWidth: '100%',
+    },
+    barFrame: {
+        flexShrink: 1,
+        minWidth: B.tabMinWidthPx,
+        maxWidth: B.tabMaxWidthPx,
+    },
+    /** The open tab keeps its whole name while its neighbours shrink. */
+    barFrameOpen: {
+        flexShrink: 0,
     },
     barTab: {
         flexDirection: 'row',
@@ -301,6 +335,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     entityTab: {
         flexShrink: 1,
         minWidth: 0,
+    },
+    /** A pinned mark keeps its whole box: its drag wrapper must not be crushed under a crowded strip. */
+    entityTabFixed: {
+        flexShrink: 0,
     },
     /** The carried item lands before this tab: a mark in the gap, so no tab moves under the pointer. */
     entityTabInsertion: {
@@ -427,37 +465,7 @@ export function DocumentTabStrip<T extends DocumentTabItem>(props: DocumentTabSt
     }
 
     if (props.variant === 'bar') {
-        return (
-            <View
-                style={styles.bar}
-                accessibilityRole="tablist"
-                accessibilityLabel={props.accessibilityLabel}
-                onLayout={refreshDropMeasurements}
-            >
-                {props.tabs.map((tab, tabIndex) => (
-                    <React.Fragment key={tab.key}>
-                    {tabIndex > 0 && props.tabs[tabIndex - 1]?.isPinned && !tab.isPinned
-                        ? <View style={styles.barPinSeparator} />
-                        : null}
-                    <DocumentBarTab
-                        tab={tab}
-                        index={tabIndex}
-                        active={props.activeTabKey ? tab.key === props.activeTabKey : false}
-                        emphasis={props.activeEmphasis ?? 'raised'}
-                        unsaved={props.unsavedTabKeys?.has(tab.key) === true}
-                        heightPx={props.barTabHeightPx ?? B.tabHeightPx}
-                        actionSize={actionSize}
-                        strip={props}
-                        onKeyDown={handleKeyDown}
-                        registerFocusTarget={(target) => {
-                            if (target) tabFocusTargetsRef.current.set(tab.key, target);
-                            else tabFocusTargetsRef.current.delete(tab.key);
-                        }}
-                    />
-                    </React.Fragment>
-                ))}
-            </View>
-        );
+        return <DocumentBar strip={props} actionSize={actionSize} onKeyDown={handleKeyDown} focusTargets={tabFocusTargetsRef.current} />;
     }
 
     return (
@@ -619,6 +627,176 @@ export function DocumentTabStrip<T extends DocumentTabItem>(props: DocumentTabSt
     );
 }
 
+/**
+ * Keeps the open tab in view in a strip that scrolls sideways: when it changes (a tab opened from
+ * elsewhere, chosen from the tab list, a preview replaced) and when the strip is first measured,
+ * without animating on arrival.
+ */
+function useRevealedActiveTab(activeTabKey: string | null) {
+    const scrollRef = React.useRef<ScrollView | null>(null);
+    const frames = React.useRef(new Map<string, { x: number; width: number }>());
+    const frameNodes = React.useRef(new Map<string, unknown>());
+    const viewport = React.useRef({ x: 0, width: 0 });
+    // The web reports a layout only when a size changes, so a tab pushed along by its neighbours
+    // keeps a stale position; read the live DOM there and the measured layout elsewhere.
+    const readViewport = React.useCallback(() => {
+        const node = (scrollRef.current as { getScrollableNode?: () => unknown } | null)?.getScrollableNode?.() as
+            { scrollLeft?: unknown; clientWidth?: unknown } | null | undefined;
+        return typeof node?.scrollLeft === 'number' && typeof node.clientWidth === 'number' && node.clientWidth > 0
+            ? { x: node.scrollLeft, width: node.clientWidth } : viewport.current;
+    }, []);
+    const readFrame = React.useCallback((key: string) => {
+        const node = frameNodes.current.get(key) as { offsetLeft?: unknown; offsetWidth?: unknown } | undefined;
+        return typeof node?.offsetLeft === 'number' && typeof node.offsetWidth === 'number' && node.offsetWidth > 0
+            ? { x: node.offsetLeft, width: node.offsetWidth } : frames.current.get(key);
+    }, []);
+    const reveal = React.useCallback((key: string | null, animated: boolean) => {
+        const frame = key ? readFrame(key) : undefined;
+        const { x, width } = readViewport();
+        if (!frame || width === 0) return;
+        if (frame.x < x + 12) scrollRef.current?.scrollTo({ x: Math.max(0, frame.x - 12), animated });
+        else if (frame.x + frame.width > x + width - 12) scrollRef.current?.scrollTo({ x: frame.x + frame.width - width + 12, animated });
+    }, [readFrame, readViewport]);
+    const registerFrameNode = React.useCallback((key: string, node: unknown) => {
+        if (node) frameNodes.current.set(key, node);
+        else frameNodes.current.delete(key);
+    }, []);
+    React.useEffect(() => { reveal(activeTabKey, false); }, [reveal, activeTabKey]);
+    return { scrollRef, frames, viewport, reveal, readViewport, registerFrameNode };
+}
+
+/**
+ * The bar's scroller, for the tabs inside it: a tab scrolled out of view is not a destination (its
+ * box still lies beyond the clip, over whatever is drawn there), and a carry near either end scrolls
+ * the strip.
+ */
+type DocumentBarScroll = Readonly<{
+    containsPointer: (pointer: Readonly<{ x: number; y: number }>) => boolean;
+    autoscroll: (pointer: Readonly<{ x: number; y: number }>) => void;
+    /** Native: re-read the visible strip's window frame with the tabs' own measurement. */
+    measure: () => Promise<void>;
+}>;
+const DocumentBarScrollContext = React.createContext<DocumentBarScroll | null>(null);
+
+type WheelLikeEvent = Readonly<{ deltaX?: number; deltaY?: number; nativeEvent?: Readonly<{ deltaX?: number; deltaY?: number }> }>;
+
+/**
+ * The workspace bar (workspace lab T): pinned tabs stay at the leading edge as their marks; every
+ * other tab sits in one strip that scrolls sideways. Tabs keep their natural width while they fit,
+ * shrink toward their minimum when crowded, and only then scroll. A soft fade marks an edge with
+ * more beyond it; a mouse wheel scrolls the strip sideways.
+ */
+function DocumentBar<T extends DocumentTabItem>(props: Readonly<{
+    strip: DocumentTabStripProps<T>;
+    actionSize: number;
+    onKeyDown: (event: React.KeyboardEvent<HTMLElement>, currentIndex: number) => void;
+    focusTargets: Map<string, { focus?: () => void }>;
+}>) {
+    const styles = stylesheet;
+    const { strip } = props;
+    const { theme } = useUnistyles();
+    const { scrollRef, frames, viewport, reveal, readViewport, registerFrameNode } = useRevealedActiveTab(strip.activeTabKey);
+    const fades = useScrollEdgeFades({ enabledEdges: { left: true, right: true }, overflowThreshold: 2, edgeThreshold: 2 });
+    const viewportHost = React.useRef<unknown>(null);
+    const viewportBounds = React.useRef<WindowBounds | null>(null);
+    const heightPx = strip.barTabHeightPx ?? B.tabHeightPx;
+    const pinned = strip.tabs.filter(tab => tab.isPinned);
+    const unpinned = strip.tabs.filter(tab => !tab.isPinned);
+    const refresh = strip.entityDragDrop?.runtime;
+    const measureViewport = React.useCallback(async () => {
+        const node = viewportHost.current;
+        const bounds = await measureWindowBounds(node);
+        if (viewportHost.current === node) viewportBounds.current = bounds;
+    }, []);
+    const autoscroll = React.useCallback((pointer: Readonly<{ x: number; y: number }>) => {
+        const bounds = readWindowBounds(viewportHost.current) ?? viewportBounds.current;
+        if (!bounds) return;
+        const content = Array.from(frames.current.values()).reduce((end, frame) => Math.max(end, frame.x + frame.width), 0);
+        const next = resolveTreeDropAutoscrollTarget({ pointerY: pointer.x, viewportTopY: bounds.x,
+            viewportHeight: bounds.width, scrollOffsetY: readViewport().x, contentHeight: content });
+        if (next !== readViewport().x) scrollRef.current?.scrollTo({ x: next, animated: false });
+    }, [frames, readViewport, scrollRef]);
+    const containsPointer = React.useCallback((pointer: Readonly<{ x: number; y: number }>) => {
+        const bounds = readWindowBounds(viewportHost.current) ?? viewportBounds.current;
+        return !bounds || (pointer.x >= bounds.x && pointer.x <= bounds.x + bounds.width);
+    }, []);
+    const scrollBinding = React.useMemo(() => ({ containsPointer, autoscroll, measure: measureViewport }), [autoscroll, containsPointer, measureViewport]);
+    const tabProps = (tab: T) => {
+        const index = strip.tabs.indexOf(tab);
+        return {
+            tab, index,
+            active: strip.activeTabKey ? tab.key === strip.activeTabKey : false,
+            emphasis: strip.activeEmphasis ?? 'raised',
+            unsaved: strip.unsavedTabKeys?.has(tab.key) === true,
+            heightPx, actionSize: props.actionSize, strip, onKeyDown: props.onKeyDown,
+            registerFocusTarget: (target: { focus?: () => void } | null) => {
+                if (target) props.focusTargets.set(tab.key, target);
+                else props.focusTargets.delete(tab.key);
+            },
+        } as const;
+    };
+    const onWheel = React.useCallback((event: WheelLikeEvent) => {
+        const deltaX = event.deltaX ?? event.nativeEvent?.deltaX ?? 0;
+        const deltaY = event.deltaY ?? event.nativeEvent?.deltaY ?? 0;
+        // A trackpad already scrolls sideways; a vertical wheel turns into sideways movement here.
+        if (Math.abs(deltaY) <= Math.abs(deltaX)) return;
+        scrollRef.current?.scrollTo({ x: Math.max(0, readViewport().x + deltaY), animated: false });
+    }, [readViewport, scrollRef]);
+    return (
+        <View style={styles.bar} accessibilityRole="tablist" accessibilityLabel={strip.accessibilityLabel}
+            onLayout={() => { void refresh?.refreshMeasurements(); }}>
+            {pinned.map(tab => <DocumentBarTab key={tab.key} {...tabProps(tab)} />)}
+            {pinned.length > 0 && unpinned.length > 0 ? <View style={styles.barPinSeparator} /> : null}
+            <View ref={(node) => { viewportHost.current = node; }} testID="document-tab-viewport" style={styles.barViewport} onLayout={() => { void measureViewport(); }}>
+                <DocumentBarScrollContext.Provider value={scrollBinding}>
+                    <ScrollView
+                        ref={scrollRef}
+                        horizontal
+                        style={[styles.barScroll, { height: heightPx + 2 * BAR_SCROLL_BLEED_PX }]}
+                        contentContainerStyle={[styles.barContent, {
+                            minWidth: unpinned.length * (B.tabMinWidthPx + B.stripGapPx) + B.stripGapPx,
+                        }]}
+                        showsHorizontalScrollIndicator={false}
+                        scrollEventThrottle={32}
+                        onLayout={(event) => {
+                            viewport.current = { ...viewport.current, width: event.nativeEvent.layout.width };
+                            fades.onViewportLayout(event);
+                            reveal(strip.activeTabKey, false);
+                            void measureViewport();
+                            void refresh?.refreshMeasurements();
+                        }}
+                        onContentSizeChange={(width, height) => {
+                            fades.onContentSizeChange(width, height);
+                            // A tab that just opened at the end widens the strip after its own layout.
+                            reveal(strip.activeTabKey, false);
+                        }}
+                        onScroll={(event) => {
+                            viewport.current = { ...viewport.current, x: event.nativeEvent.contentOffset.x };
+                            fades.onScroll(event);
+                            void refresh?.refreshMeasurements();
+                        }}
+                        {...(Platform.OS === 'web' ? { onWheel } : null)}
+                    >
+                        {unpinned.map(tab => (
+                            <View key={tab.key} testID={`document-tab-frame-${toTestIdSafeValue(tab.key)}`}
+                                ref={(node) => registerFrameNode(tab.key, node)}
+                                style={[styles.barFrame, tab.key === strip.activeTabKey ? styles.barFrameOpen : null]}
+                                onLayout={(event) => {
+                                    const { x, width } = event.nativeEvent.layout;
+                                    frames.current.set(tab.key, { x, width });
+                                    if (tab.key === strip.activeTabKey) reveal(tab.key, false);
+                                }}>
+                                <DocumentBarTab {...tabProps(tab)} />
+                            </View>
+                        ))}
+                    </ScrollView>
+                </DocumentBarScrollContext.Provider>
+                <ScrollEdgeFades color={strip.barFadeColor ?? theme.colors.background.canvas} size={20} edges={fades.visibility} />
+            </View>
+        </View>
+    );
+}
+
 /** The rail's pills are 30 tall; the press reaches the platform's comfortable touch height. */
 const RAIL_HIT_SLOP = { top: 7, bottom: 7 } as const;
 
@@ -634,17 +812,7 @@ function DocumentRail<T extends DocumentTabItem>(props: Readonly<{
 }>) {
     const styles = stylesheet;
     const { strip } = props;
-    const scrollRef = React.useRef<ScrollView | null>(null);
-    const frames = React.useRef(new Map<string, { x: number; width: number }>());
-    const viewport = React.useRef({ x: 0, width: 0 });
-    const reveal = React.useCallback((key: string | null, animated: boolean) => {
-        const frame = key ? frames.current.get(key) : undefined;
-        const { x, width } = viewport.current;
-        if (!frame || width === 0) return;
-        if (frame.x < x + 12) scrollRef.current?.scrollTo({ x: Math.max(0, frame.x - 12), animated });
-        else if (frame.x + frame.width > x + width - 12) scrollRef.current?.scrollTo({ x: frame.x + frame.width - width + 12, animated });
-    }, []);
-    React.useEffect(() => { reveal(strip.activeTabKey, false); }, [reveal, strip.activeTabKey]);
+    const { scrollRef, frames, viewport, reveal } = useRevealedActiveTab(strip.activeTabKey);
     return (
         <ScrollView
             ref={scrollRef}
@@ -732,6 +900,8 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
         railTabOpen: [stylesheet.railTabOpen, selectedPaint],
     };
     const [hovered, setHovered] = React.useState(false);
+    // The ring is for keyboard focus and belongs on the drawn tab, at its radius, not on the hit box.
+    const [focusVisible, setFocusVisible] = React.useState(false);
     const { tab, strip } = props;
     const draggedDuringPress = React.useRef(false);
     const dismissMenu = React.useRef(strip.onDismissTabMenu);
@@ -776,6 +946,7 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
                 hovered && !props.active ? styles.barTabHovered : null,
                 props.active && !props.rail ? (props.emphasis === 'raised' ? styles.barTabRaised : styles.barTabQuiet) : null,
                 props.rail ? [styles.railTab, props.active ? styles.railTabOpen : null] : null,
+                happierFocusRingStyle({ visible: focusVisible, color: theme.colors.border.focus }),
             ]}
             {...(Platform.OS === 'web' ? {
                 onPointerEnter: () => setHovered(true),
@@ -786,6 +957,8 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
                 ref={(target) => props.registerFocusTarget(target as { focus?: () => void } | null)}
                 onPress={() => strip.onActivate(tab.key)}
                 onPressIn={() => { draggedDuringPress.current = false; }}
+                onFocus={(event) => setFocusVisible(isHappierFocusVisible(event?.target))}
+                onBlur={() => setFocusVisible(false)}
                 onLongPress={openMenu ? (event) => { if (!draggedDuringPress.current) openMenu(event); } : undefined}
                 hitSlop={props.rail ? RAIL_HIT_SLOP : undefined}
                 {...(Platform.OS === 'web' && openMenu ? { onContextMenu: openMenu } : null)}
@@ -793,7 +966,7 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
                     ? (event) => props.onKeyDown(event, props.index)
                     : undefined}
                 testID={strip.testIds?.tab?.(safeTabKey) ?? undefined}
-                style={[styles.barTabPress, pinned ? styles.barTabPressPinned : null, { height: props.heightPx }]}
+                style={[styles.barTabPress, pinned ? styles.barTabPressPinned : null, { height: props.heightPx }, HAPPIER_FOCUS_RING_DELEGATED_STYLE]}
                 accessibilityRole="tab"
                 accessibilityLabel={status
                     ? `${t('session.detailsPanel.openTabA11y', { title: tab.title })}, ${status.label}`
@@ -884,6 +1057,7 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
     );
     return entitySource
         ? <DocumentEntityTab tab={tab} binding={entitySource} dropBinding={strip.entityDragDrop} gapPx={B.stripGapPx} first={props.index === 0}
+            fixed={pinned && !props.rail}
             endMark={strip.dropSlot === true && props.index === strip.tabs.length - 1}>{content}</DocumentEntityTab>
         : content;
 }
@@ -910,6 +1084,8 @@ function DocumentEntityTab(props: Readonly<{
     /** The strip's gap: the insertion mark sits in the gap before this tab. */
     gapPx: number;
     first: boolean;
+    /** The tab keeps its own width (a pinned mark) instead of shrinking with the strip. */
+    fixed?: boolean;
     /**
      * A kept tab lands after this, the strip's last tab (DnD lab C2 tab slot). The same mark as a
      * gap insertion, drawn past the tab's end, so the strip never reflows while the pointer crosses
@@ -966,7 +1142,8 @@ function DocumentEntityTab(props: Readonly<{
     React.useEffect(() => () => adapter.current?.cancel(), []);
     const content = <View ref={attach} collapsable={false} onLayout={() => {
         void measure().then(() => binding.runtime.refresh());
-    }} style={stylesheet.entityTab}>
+    }} testID={`document-tab-entity-${toTestIdSafeValue(tab.key)}`}
+        style={props.fixed ? [stylesheet.entityTab, stylesheet.entityTabFixed] : stylesheet.entityTab}>
         {props.children}
         {props.dropBinding ? <DocumentEntityTabTarget tab={tab} binding={props.dropBinding} bounds={bounds} measure={measure}
             gapPx={props.gapPx} first={props.first} endMark={props.endMark} /> : null}
@@ -987,10 +1164,13 @@ function DocumentEntityTabTarget(props: Readonly<{
 }>) {
     const { tab, binding } = props;
     const targetId = JSON.stringify(['document-tab', binding.id, tab.key, 'target']);
+    const scroll = React.useContext(DocumentBarScrollContext);
     useEntityDropTarget(binding.runtime, {
         id: targetId, scope: binding.scope, acceptedKinds: binding.acceptedKinds,
         isCurrent: () => binding.isCurrent?.() !== false,
-        getBounds: props.bounds, measureBounds: props.measure,
+        getBounds: props.bounds,
+        measureBounds: scroll ? async () => { await Promise.all([props.measure(), scroll.measure()]); } : props.measure,
+        ...(scroll ? { autoscroll: scroll.autoscroll, containsPointer: scroll.containsPointer } : {}),
         listDestinations: () => [{ destination: { beforeTabId: tab.key }, label: tab.title }],
         resolve: ({ item, input }) => binding.resolve({ item, beforeTabId: tab.key, input }),
         execute: binding.execute,

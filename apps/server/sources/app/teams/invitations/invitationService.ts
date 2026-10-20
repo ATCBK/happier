@@ -1,6 +1,7 @@
 import { deriveTeamInvitationStateV1, decodeTeamInvitationsCursorV1, encodeTeamInvitationsCursorV1, maskTeamInvitationRecipientEmail, teamInvitationsQueryKeyV1, type TeamInvitationAdmissibleRoleV1, type TeamInvitationPreviewResultV1, type TeamInvitationPreviewV1, type TeamInvitationRowV1, type TeamInvitationStateV1 } from '@happier-dev/protocol/teams/invitation';
 import { createHash } from "node:crypto";
 import type { Tx } from "@/storage/inTx";
+import { acquireTeamMutationAccountAdmissionInTx } from "../memberships/sessionAccessEffects";
 import type { SessionHistoryAccess } from "@/storage/enums.generated";
 import { defaultRepeatKeyExpiresAt, fetchRepeatKey, saveRepeatKey } from "@/storage/queue/repeatKey";
 import { readTransactionDatabaseTime } from "@/storage/transactionDatabaseTime";
@@ -201,6 +202,7 @@ export async function createTeamInvitationForActorInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamInvitationServiceResult<CreateTeamInvitationResult, CreateTeamInvitationError>> {
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId] });
     const authorized = await requireInvitationManagerInTx(tx, {
         teamId: input.teamId,
         actorAccountId: input.actorAccountId,
@@ -364,6 +366,7 @@ export async function revokeTeamInvitationForActorInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamInvitationServiceResult<TeamInvitationRowV1, TeamInvitationTargetError>> {
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId] });
     const authorized = await requireInvitationManagerInTx(tx, {
         teamId: input.teamId,
         actorAccountId: input.actorAccountId,
@@ -437,6 +440,7 @@ export async function reissueTeamInvitationForActorInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamInvitationServiceResult<ReissueTeamInvitationResultValue, ReissueTeamInvitationError>> {
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId] });
     const authorized = await requireInvitationManagerInTx(tx, {
         teamId: input.teamId,
         actorAccountId: input.actorAccountId,

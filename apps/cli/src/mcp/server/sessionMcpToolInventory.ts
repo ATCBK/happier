@@ -23,6 +23,8 @@ export function createSessionMcpToolInventory(params: Readonly<{
     authorityScope?: 'account' | 'session';
     requiredDirectActionIds?: readonly ActionId[];
     pluginRuntimeRegistryLease?: PluginRuntimeRegistryLease;
+    /** Containing bridge lifetime, independent of replaceable native incarnations. */
+    lifetimeSignal?: AbortSignal;
 }>) {
     let latestProjection: DaemonPluginCatalogProjection | undefined;
     let catalog: Readonly<{ tools: readonly ProjectedPluginToolCatalogEntry[];
@@ -45,7 +47,7 @@ export function createSessionMcpToolInventory(params: Readonly<{
         });
         // Native handlers are registered before their runtime exists. Bind its
         // existing lifetime at first use, not during that earlier registration.
-        lifetime = params.client.getRuntimeLifetimeSignal?.();
+        lifetime = params.lifetimeSignal ?? params.client.getRuntimeLifetimeSignal?.();
         if (lifetime?.aborted) dispose();
         else lifetime?.addEventListener('abort', dispose, { once: true });
     };
@@ -79,11 +81,10 @@ export function createSessionMcpToolInventory(params: Readonly<{
                 const connectionEpoch = params.client.getEphemeralStreamConnectionEpoch?.();
                 const signalReady = params.client.isDaemonPluginCatalogSignalReady?.() === true;
                 // Catalog work is shared by concurrent RPC callers. Only the
-                // containing host turn/runtime can cancel its producer; each
-                // request's signal cancels that request's wait below.
-                const producerSignals = [params.client.getHostTurnAbortSignal?.(), lifetime]
-                    .filter((candidate): candidate is AbortSignal => candidate != null);
-                const producerSignal = producerSignals.length > 1 ? AbortSignal.any(producerSignals) : producerSignals[0];
+                // containing lifetime can cancel its producer. A cancelled turn must not
+                // retire discovery or another caller's shared catalog work;
+                // each request's signal cancels that request's wait below.
+                const producerSignal = params.lifetimeSignal ?? params.client.getRuntimeLifetimeSignal?.() ?? undefined;
                 readingCatalog = (async () => {
                     const response = await readDaemonPluginCatalog({ selection: 'tools', ...(producerSignal ? { signal: producerSignal } : {}) }).catch(() => ({ kind: 'unavailable' as const }));
                     if (response.kind !== 'available') throw new DaemonPluginToolCatalogUnavailableError();

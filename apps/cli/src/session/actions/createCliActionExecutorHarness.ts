@@ -1,11 +1,15 @@
 import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { buildActionExecuteResultFromRecordedApprovalExecution, createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
-import { isActionEnabledByActionsSettings } from '@happier-dev/protocol/actions/actionSettings';
+import { isActionEnabledByActionsSettings, normalizeActionsSettingsV1, type ActionSettingsActionId } from '@happier-dev/protocol/actions/actionSettings';
 import { isActionEnabledWithSessionMemory } from '@happier-dev/protocol/actions/actionSurfaceAvailability';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { readSessionRolesV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
 import { resolveRuntimeActionExecutionFamily } from '@happier-dev/protocol/actions/executor/dispatch';
-import type { ActionExecuteResult, ActionExecutorDeps } from '@happier-dev/protocol';
+import { parseLocalServiceDomainActionRpcRequest, readLocalServiceControlActionRequest } from '@happier-dev/protocol/actions/specs/localServices';
+import { DaemonLocalServiceLauncherStartRequestV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
+import { ProjectWorkerStatusInputV1Schema } from '@happier-dev/protocol/actions/specs/projectWorkers';
+import { PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
+import type { ActionExecuteResult, ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/protocol';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 
 import { createActionSettingsProvider, type RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
@@ -17,6 +21,7 @@ import { createCliActionDeps } from './createCliActionDeps';
 import { createActionExecutionHookDeps } from './createActionExecutionHookDeps';
 import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/actions/blockingApprovalCoordinator';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 
 type MutableActionExecutorDeps = {
   -readonly [Key in keyof ActionExecutorDeps]: ActionExecutorDeps[Key];
@@ -26,6 +31,15 @@ type ApprovalWaitForDecisionArgs = Parameters<NonNullable<ActionExecutorDeps['ap
 type ApprovalResolveBlockingDecisionArgs = Parameters<NonNullable<ActionExecutorDeps['approvalsResolveBlockingDecision']>>[0];
 type ApprovalUpdateArgs = Parameters<NonNullable<ActionExecutorDeps['approvalsUpdate']>>[0];
 type ApprovalCreateArgs = Parameters<NonNullable<ActionExecutorDeps['approvalsCreate']>>[0];
+
+/** Admission can defer Ask only when the receiving Account policy retains it. */
+export function isOriginalCliApprovalPreservedAtAccount(actionId: ActionSettingsActionId, input: unknown,
+  context: ActionExecutorContext, provider: RuntimeActionSettingsProvider): boolean {
+  const accountSettings = provider.getAccountSettings?.();
+  return Boolean(accountSettings && isApprovalRequiredByActionsSettings(actionId,
+    normalizeActionsSettingsV1(accountSettings.actionsSettingsV1),
+    { surface: 'cli', authority: context.authority }, undefined, undefined, input));
+}
 
 /** Host-local requester custody; never an Action, SDK or transported field. */
 export type RecordedApprovalExecutionObservationArgs = Readonly<{
@@ -41,6 +55,8 @@ export function createCliActionExecutorHarness(
     actionsSettingsProvider?: RuntimeActionSettingsProvider;
     /** Current host-read Session choice; omission preserves unbound Account rights. */
     sessionMemoryEnabled?: boolean;
+    /** Machine owning an installed runtime override; remote children retain Machine transport. */
+    runtimeActionMachineId?: string;
   }>,
   overrides?: Partial<ActionExecutorDeps>,
 ): Readonly<{
@@ -49,7 +65,9 @@ export function createCliActionExecutorHarness(
   observeRecordedApprovalExecution(args: RecordedApprovalExecutionObservationArgs): Promise<ActionExecuteResult>;
 }> {
   const coordinator = getSharedBlockingApprovalCoordinator();
-  const baseDeps = createCliActionDeps(params);
+  // Nested widget admission must see this host's final registry/transport
+  // bindings, including the committed input-type dependencies installed below.
+  const baseDeps = createCliActionDeps(params, () => rawDeps);
   const baseDepsForRuntime = (() => {
     if (!params.actionsSettingsProvider || params.actionsSettingsProvider.getAccountSettings) {
       return baseDeps;
@@ -81,7 +99,13 @@ export function createCliActionExecutorHarness(
         placement: ctx.placement ?? null,
       },
     );
-  const isActionApprovalRequired: NonNullable<ActionExecutorDeps['isActionApprovalRequired']> = (id, ctx) =>
+  const requiresOriginalCliFiniteAdmission = (id: string, ctx: Parameters<NonNullable<ActionExecutorDeps['isActionApprovalRequired']>>[1]) =>
+    Object.hasOwn(PROJECT_FINITE_ACTION_RPC_METHODS_V1, id)
+      && params.credentials && !params.projectAction && !overrides?.projectAction && !params.machineActionDirectTargetTransport
+      && (!params.actionsSettingsProvider || params.actionsSettingsProvider.getAccountSettings)
+      && ctx.surface === 'cli' && !ctx.externalActionCredential && !ctx.externalActionExecutionAuthorization
+      && !ctx.rpcSessionAuthorization && (!ctx.actionCaller || ctx.actionCaller.kind === 'host');
+  const readApprovalRequired: NonNullable<ActionExecutorDeps['isActionApprovalRequired']> = (id, ctx, input, defaultUiConfirmation?: boolean) =>
     isApprovalRequiredByActionsSettings(
       id,
       params.actionsSettingsProvider?.getActionsSettings()
@@ -92,12 +116,29 @@ export function createCliActionExecutorHarness(
         authority: ctx.authority,
         presentUserConfirmation: ctx.presentUserConfirmation,
       },
+      undefined, undefined, input, defaultUiConfirmation,
     );
+  const isActionApprovalRequired: NonNullable<ActionExecutorDeps['isActionApprovalRequired']> = (id, ctx, input, defaultUiConfirmation) =>
+    // projectAction refuses a policy that cannot survive admission before it
+    // sends anything. The receiver persists Ask with the signed Machine root.
+    requiresOriginalCliFiniteAdmission(id, ctx) ? false : readApprovalRequired(id, ctx, input, defaultUiConfirmation);
   const rawDeps: MutableActionExecutorDeps = {
     ...baseDepsForRuntime,
+    projectAction: async args => {
+      if (requiresOriginalCliFiniteAdmission(args.actionId, args.context)
+        && readApprovalRequired(args.actionId, args.context, args.input)) {
+        if (!isOriginalCliApprovalPreservedAtAccount(args.actionId, args.input, args.context, originationSettingsProvider)) {
+          // A custom host policy may be narrower than Account policy. Neither
+          // unsigned replay nor a receiver waiver can preserve that requirement.
+          return { ok: false, errorCode: 'approval_context_unavailable', error: 'approval_context_unavailable' };
+        }
+      }
+      return await baseDepsForRuntime.projectAction!(args);
+    },
     approvalsWaitForDecision: async (args: ApprovalWaitForDecisionArgs) => {
       const serverUrl = params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
-      const result = await coordinator.waitForDecision({
+      const lifetime = rawDeps.hostActionApprovalLifetime;
+      const result = await timeWebLatencyPhase('approval.wait', () => coordinator.waitForDecision({
         artifactId: args.artifactId,
         request: args.request,
         serverId: args.serverId,
@@ -114,16 +155,39 @@ export function createCliActionExecutorHarness(
             serverId: args.serverId ?? null,
           })) : null;
         },
-      });
-      return { ...result, request: StoredApprovalRequestSchema.parse(result.request) };
+      }), undefined, () => ({ artifactId: args.artifactId,
+        ...(args.request.v === 2 ? { executionRequestId: args.request.executionOriginV1.requestId } : {}),
+        ...(lifetime && 'operationId' in lifetime ? { operationId: lifetime.operationId } : {}),
+        signalMatchesHostLifetime: Boolean(lifetime && args.signal === lifetime.signal),
+        signalAborted: args.signal?.aborted === true,
+        liveWaiterCount: coordinator.getLiveWaiterCount(args.artifactId),
+        detachedWaiterCount: coordinator.getDetachedWaiterCount(args.artifactId),
+      }));
+      const decision = { ...result, request: StoredApprovalRequestSchema.parse(result.request) };
+      if (result.decision === 'approve' && result.tokenExecution) {
+        Object.defineProperty(decision, 'tokenExecution', { value: result.tokenExecution, enumerable: false });
+      }
+      return decision;
     },
-    approvalsResolveBlockingDecision: async (args: ApprovalResolveBlockingDecisionArgs) =>
-      await coordinator.resolveBlockingDecision({
-        artifactId: args.artifactId,
-        request: args.request,
-        decision: args.decision,
-        decisionAuthority: args.decisionAuthority,
-      }),
+    approvalsResolveBlockingDecision: async (args: ApprovalResolveBlockingDecisionArgs) => {
+      let resolved: boolean | undefined;
+      return await timeWebLatencyPhase('approval.resolve_blocking', async () => {
+        const result = await coordinator.resolveBlockingDecision({
+          artifactId: args.artifactId,
+          request: args.request,
+          decision: args.decision,
+          decisionAuthority: args.decisionAuthority,
+          ...(args.tokenExecution ? { tokenExecution: args.tokenExecution } : {}),
+        });
+        resolved = result.resolved;
+        return result;
+      }, undefined, () => ({ artifactId: args.artifactId,
+        ...(args.request.v === 2 ? { executionRequestId: args.request.executionOriginV1.requestId } : {}),
+        liveWaiterCount: coordinator.getLiveWaiterCount(args.artifactId),
+        detachedWaiterCount: coordinator.getDetachedWaiterCount(args.artifactId),
+        ...(resolved === undefined ? {} : { resolved }),
+      }));
+    },
     isActionEnabled,
     isActionApprovalRequired,
     runtimeActionExecute: (() => {
@@ -137,6 +201,39 @@ export function createCliActionExecutorHarness(
     ...createActionExecutionHookDeps(),
     ...(overrides ?? {}),
   };
+  const installedRuntime = overrides?.runtimeActionExecute;
+  const localMachineId = params.runtimeActionMachineId ?? params.machineActionDirectTargetTransport?.machineId;
+  const installedWorker = overrides?.projectWorkerAction;
+  if (installedWorker && baseDepsForRuntime.projectWorkerAction) {
+    const transport = baseDepsForRuntime.projectWorkerAction;
+    rawDeps.projectWorkerAction = async args => {
+      // Installed finite workers own Status/retirement only. Sync inspection
+      // and Account preferences keep their canonical transports.
+      if (args.actionId !== 'projects.worker.status' && args.actionId !== 'projects.worker.copy.retire') {
+        return await transport(args);
+      }
+      if (args.actionId === 'projects.worker.status'
+        && localMachineId && ProjectWorkerStatusInputV1Schema.parse(args.input).destination.machineId !== localMachineId) {
+        return await transport(args);
+      }
+      return await installedWorker(args);
+    };
+  }
+  if (installedRuntime && localMachineId && baseDepsForRuntime.runtimeActionExecute) {
+    const transport = baseDepsForRuntime.runtimeActionExecute;
+    rawDeps.runtimeActionExecute = async args => {
+      if (resolveRuntimeActionExecutionFamily(args.actionId) === 'localServices') {
+        const control = readLocalServiceControlActionRequest(args.actionId, args.input);
+        const domain = parseLocalServiceDomainActionRpcRequest(args.actionId, args.input);
+        const start = args.actionId === 'localServices.launcher.start'
+          ? DaemonLocalServiceLauncherStartRequestV1Schema.safeParse(args.input) : null;
+        const machineId = control?.target.machineId ?? (domain?.success ? domain.data.machineId : undefined)
+          ?? (start?.success ? start.data.machineId : undefined);
+        if (machineId && machineId !== localMachineId) return await transport(args);
+      }
+      return await installedRuntime(args);
+    };
+  }
   const originalApprovalsUpdate = rawDeps.approvalsUpdate;
   const originalApprovalsCreate = rawDeps.approvalsCreate;
   if (originalApprovalsCreate) {

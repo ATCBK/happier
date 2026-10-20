@@ -377,6 +377,11 @@ export async function getHomeIrohEndpointState(): Promise<HomeIrohEndpointState>
     return await refreshActiveHomeIrohEndpointState();
 }
 
+/** Current lifecycle authority after preparation; never performs native IO. */
+export function readHomeIrohEndpointLifecycleState(): HomeIrohEndpointState {
+    return lifecycleState;
+}
+
 /**
  * Stops the Home Iroh ingress: clears the published in-memory snapshot first,
  * then delegates acceptor and endpoint cleanup to aggregate native shutdown.

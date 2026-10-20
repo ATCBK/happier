@@ -19,13 +19,14 @@ import { isCurrentSessionInputMachineTargetInTx, readCurrentCommittedSessionInpu
 import { readCurrentServerIdentityId } from '@/app/serverIdentity/serverIdentity';
 import { emitAutomationRunUpdatedToMachineOnly } from '@/app/automations/automationChangePublisher';
 import { afterTx, inTx, type Tx } from '@/storage/inTx';
-import { markAccountChanged } from '@/app/changes/markAccountChanged';
+import { markAccountChanged, type AccountChangePublication } from '@/app/changes/markAccountChanged';
 import { readWorkflowRunOriginWakeCandidatesInTx } from '@/app/workflows/workflowRunAttention';
 import { ManagedMachineError, projectManagedMachine, requireManagedControllerInTx, sameManagedInput, type StoredManagedMachine } from './managedRows';
 import { forwardRpcCall } from '@/app/api/socket/rpc/forwardRpcCall';
 import type { RpcAckResponseEmitter } from '@/app/api/socket/rpc/_types';
 import { readMachineDaemonSocketIdentity } from '@/app/machines/machineDaemonPresence';
 import { readVerifiedMachineSocketInstallationIdFromSocketData } from '@/app/api/socket/machineSocketInstallationProof';
+import type { PendingActivationHoldReasonV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
 
 type FiniteWakePreparation = Readonly<{ kind: 'not-needed' | 'ready'; isCurrent(): Promise<boolean> }>
     | Readonly<{ kind: 'unavailable' | 'submitted-unknown' }>;
@@ -168,24 +169,36 @@ async function readManagedWakeTargetBindingInTx(tx: Tx, input: Readonly<{
     catch (error) { if (error instanceof ManagedMachineError) return undefined; throw error; }
     const guest = await tx.machine.findUnique({ where: { id: input.machineId } });
     if (classifyMachineAvailabilityState(guest) !== 'available'
-        || await resolveEffectiveMachineRoleInTx(tx, { actorAccountId: input.actorAccountId, machineId: controller.machineId }) !== 'manage'
         || !await resolveEffectiveMachineRoleInTx(tx, { actorAccountId: input.actorAccountId, machineId: input.machineId })) return undefined;
+    const controllerRole = await resolveEffectiveMachineRoleInTx(tx, { actorAccountId: input.actorAccountId, machineId: controller.machineId });
     let projected;
     try { projected = projectManagedMachine(row); } catch { return undefined; }
     if (projected.observation?.availability === 'absent' || projected.observation?.storage === 'lost') return undefined;
-    return { homeId, managedId: row.id, enrolledMachineId: input.machineId,
-        expectedIntentRevision: row.intentRevision, controller, reason: 'admitted-work' as const };
+    return { binding: { homeId, managedId: row.id, enrolledMachineId: input.machineId,
+        expectedIntentRevision: row.intentRevision, controller, reason: 'admitted-work' as const }, controllerRole,
+        asleep: !projected.submittedNativeEffect && projected.observation?.availability === 'present'
+            && (projected.observation.power === 'stopped' || projected.observation.power === 'suspended') };
 }
 
 export async function resolveManagedWakeTargetInTx(tx: Tx, input: Readonly<{
     actorAccountId: string; machineId: string; origin: ManagedWakeTargetV1['origin'];
 }>): Promise<ManagedWakeTargetV1 | undefined> {
     const binding = await readManagedWakeTargetBindingInTx(tx, input);
-    return binding ? ManagedWakeTargetV1Schema.parse({ ...binding, origin: input.origin }) : undefined;
+    return binding?.controllerRole === 'manage' ? ManagedWakeTargetV1Schema.parse({ ...binding.binding, origin: input.origin }) : undefined;
+}
+
+/** Same binding and power-role owner as wake admission; this read cannot arm or start anything. */
+export async function readManagedPendingActivationHoldReasonInTx(tx: Tx, input: Readonly<{
+    actorAccountId: string; machineId: string; homeId: string; resumeRequested: boolean;
+}>): Promise<PendingActivationHoldReasonV1 | undefined> {
+    const current = await readManagedWakeTargetBindingInTx(tx, input);
+    if (!current?.asleep || current.binding.homeId !== input.homeId) return undefined;
+    if (current.controllerRole !== 'manage') return 'managed_power_required';
+    return input.resumeRequested ? undefined : 'resume_not_requested';
 }
 
 /** Real queued assignment is the durable origin; guest claims remain at the incumbent claim owner. */
-export async function publishManagedRunWakeInTx(tx: Tx, input: Readonly<{ accountId: string; runId: string; cursor: number }>): Promise<void> {
+export async function publishManagedRunWakeInTx(tx: Tx, input: Readonly<{ accountId: string; runId: string; cursor: AccountChangePublication }>): Promise<void> {
     const run = await tx.automationRun.findUnique({ where: { id: input.runId }, include: { assignments: true } });
     if (!run || run.accountId !== input.accountId || run.state !== 'queued' || run.claimedByMachineId !== null) return;
     for (const assignment of run.assignments) {
@@ -196,7 +209,7 @@ export async function publishManagedRunWakeInTx(tx: Tx, input: Readonly<{ accoun
             const cursor = controller.accountId === input.accountId ? input.cursor
                 : await markAccountChanged(tx, { accountId: controller.accountId, kind: 'machine', entityId: target.controller.machineId });
             afterTx(tx, () => emitAutomationRunUpdatedToMachineOnly({ accountId: controller.accountId,
-                machineId: target.controller.machineId, run, cursor, managedWakeTargetV1: target }));
+                machineId: target.controller.machineId, run, cursor: cursor.resolveCursor(), managedWakeTargetV1: target }));
         }
     }
 }
@@ -256,8 +269,9 @@ export async function readManagedWakePublicationAccountIdsInTx(tx: Tx, input: Re
     }) : [];
     const accountIds = new Set(machines.map(machine => machine.accountId));
     for (const target of targets.values()) {
-        const binding = await readManagedWakeTargetBindingInTx(tx, { actorAccountId: target.accountId, machineId: target.machineId });
-        if (!binding) continue;
+        const current = await readManagedWakeTargetBindingInTx(tx, { actorAccountId: target.accountId, machineId: target.machineId });
+        if (current?.controllerRole !== 'manage') continue;
+        const binding = current.binding;
         const controller = await tx.machine.findUnique({ where: { id: binding.controller.machineId }, select: { accountId: true } });
         if (controller) accountIds.add(controller.accountId);
     }
@@ -277,7 +291,7 @@ export async function publishManagedContextWakeInTx(tx: Tx, input: Readonly<{ ru
     const controller = await tx.machine.findUniqueOrThrow({ where: { id: target.controller.machineId }, select: { accountId: true } });
     const cursor = await markAccountChanged(tx, { accountId: controller.accountId, kind: 'machine', entityId: target.controller.machineId });
     afterTx(tx, () => emitAutomationRunUpdatedToMachineOnly({ accountId: controller.accountId,
-        machineId: target.controller.machineId, run, cursor, managedWakeTargetV1: target }));
+        machineId: target.controller.machineId, run, cursor: cursor.resolveCursor(), managedWakeTargetV1: target }));
 }
 
 /**
@@ -314,7 +328,7 @@ export async function assertManagedWakeOriginCurrentInTx(tx: Tx, input: Readonly
         if (!session || session.archivedAt !== null || origin.session.homeId !== row.homeId
             || session.pendingActivationStatus !== 'waiting' || session.pendingActivationRequestId !== origin.pendingRequestId
             || session.pendingActivationRequestedAt?.getTime() !== origin.requestedAt
-            || !session.pendingActivationRequestedAt || session.pendingActivationRequestedAt <= session.lastActiveAt
+            || !session.pendingActivationRequestedAt
             || !retained.success || !sameManagedInput({ homeId: retained.data.homeId, managedId: retained.data.managedId,
                 enrolledMachineId: retained.data.enrolledMachineId, origin: retained.data.origin },
                 { homeId: target.homeId, managedId: target.managedId,
@@ -387,7 +401,7 @@ export async function readPendingManagedWakeTargetInTx(tx: Tx, sessionId: string
         || stored.data.origin.session.homeId !== stored.data.homeId
         || stored.data.origin.pendingRequestId !== session.pendingActivationRequestId
         || stored.data.origin.requestedAt !== session.pendingActivationRequestedAt?.getTime()
-        || !session.pendingActivationRequestedAt || session.pendingActivationRequestedAt <= session.lastActiveAt) return undefined;
+        || !session.pendingActivationRequestedAt) return undefined;
     const row = await tx.managedMachine.findUnique({ where: { id: stored.data.managedId } });
     if (!row) return undefined;
     const current = await resolveManagedWakeTargetInTx(tx, { actorAccountId: session.accountId,

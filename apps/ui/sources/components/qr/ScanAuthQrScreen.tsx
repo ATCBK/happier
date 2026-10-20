@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { useNavigation, useRouter } from 'expo-router';
+import type { Href } from 'expo-router';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { PairingLinkEntryForm } from '@/components/account/restore/PairingLinkEntryForm';
@@ -12,7 +13,7 @@ import type { HomeQrEntryIntent } from '@/auth/pairing/homeQrEntryIntent';
 import { QrCodeScannerView } from './QrCodeScannerView';
 
 type ScanAuthQrScreenBaseProps = Readonly<{
-    fallbackHref: string;
+    fallbackHref: Href;
     title: string;
     subtitle: string;
     permissionRequiredMessage: string;
@@ -39,7 +40,7 @@ export function ScanAuthQrScreen(props: ScanAuthQrScreenProps) {
     const navigation = useNavigation();
     const handleBack = React.useCallback(() => {
         safeRouterBack({ router, navigation, fallbackHref: props.fallbackHref });
-    }, [navigation, props.fallbackHref, router]);
+    }, [navigation, props.fallbackHref, router] satisfies readonly [typeof navigation, Href, typeof router]);
     const showQrInstead = React.useCallback(() => {
         router.replace('/settings/add-phone');
     }, [router]);

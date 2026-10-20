@@ -1,6 +1,7 @@
 import { ACTION_ID_FAMILIES_V1, type RuntimeActionIdV1 } from '@happier-dev/protocol/actions/actionIds';
 import { BrowserAutomationCancelActiveResultV1Schema, BrowserAutomationActionRequestV1Schema, resolveBrowserAutomationActionRequester, type BrowserAutomationActionRequestV1 } from '@happier-dev/protocol/browser/automation/v1';
 import { BrowserCommandDispatchResultV1Schema, BrowserCommandV1Schema, type BrowserCommandV1 } from '@happier-dev/protocol/browser/control/v1';
+import type { BrowserEventV1 } from '@happier-dev/protocol/browser/events/v1';
 import { createUnavailableRuntimeActionExecutor, resolveRuntimeActionExecutionFamily } from '@happier-dev/protocol/actions/executor/dispatch';
 import { getActionSpec, PUBLIC_ACTION_INPUT_SCHEMAS } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
@@ -8,7 +9,12 @@ import type { RuntimeActionExecute, RuntimeActionExecuteArgs } from '@happier-de
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import type { PublicActionInputById } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
-import { readRegisteredBrowserRuntimeWorkspaceOpeningAdapter } from './runtimeControlRegistry';
+import {
+    readClaimedBrowserRuntimeWorkspaceOpenRegion,
+    readRegisteredBrowserRuntimeWorkspaceOpeningAdapter,
+    type BrowserWorkspaceOpenerRegion,
+} from './runtimeControlRegistry';
+import { MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS } from '@happier-dev/protocol/browser/automation/reverseDispatchV1';
 
 import {
     dispatchBrowserControlCommand,
@@ -52,6 +58,8 @@ type BrowserRuntimeActionFailure = Extract<ActionExecuteResult, Readonly<{ ok: f
 export type BrowserRuntimeControlAdapter = Readonly<{
     readState: () => BrowserControlState | null | undefined;
     applyDispatchResult: (result: BrowserControlCommandDispatchResult) => void | Promise<void>;
+    /** Project authoritative Machine events through the mounted host's existing reducer. */
+    applyDaemonEvents?: (events: readonly BrowserEventV1[]) => void | Promise<void>;
     sendDaemonCommand?: (command: BrowserCommandV1) => Promise<BrowserDaemonControlDispatchClientResult>;
     /** Trusted mounted platform/target facts, shared by UI and Agent dispatch. */
     readDispatchOptions?: (command: BrowserCommandV1) => Omit<BrowserControlCommandDispatchOptions, 'sendDaemonCommand' | 'clientControlService'>;
@@ -61,17 +69,25 @@ export type BrowserRuntimeAutomationAdapter = Readonly<{
     controlService: BrowserAutomationControlService | null | undefined;
 }>;
 
+export type BrowserRuntimeDiagnosticsAdapter = Readonly<{ execute: RuntimeActionExecute }>;
+
 /** A real workspace presentation owner, with no synthetic Browser view or control state. */
 export type BrowserRuntimeWorkspaceOpeningAdapter = Readonly<{
     scopeId: string;
     accountLifetime: ServerAccountScopeLifetime | null;
-    open: (input: PublicActionInputById['browser.workspace.open'], context: ActionExecutorContext) => Promise<unknown>;
+    open: (
+        input: PublicActionInputById['browser.workspace.open'],
+        context: ActionExecutorContext,
+        presentation?: Readonly<{ openerRegion: BrowserWorkspaceOpenerRegion }>,
+    ) => Promise<unknown>;
 }>;
 
 export type CreateBrowserRuntimeActionExecutorInput = Readonly<{
     control?: BrowserRuntimeControlAdapter;
     resolveControl?: (input: Readonly<{ browserSessionId: string; viewId: string; kind?: BrowserCommandV1['kind'] }>) => BrowserRuntimeControlAdapter | null | undefined;
     automation?: BrowserRuntimeAutomationAdapter;
+    diagnostics?: BrowserRuntimeDiagnosticsAdapter;
+    resolveDiagnostics?: (input: Readonly<{ browserSessionId: string; viewId: string }>) => BrowserRuntimeDiagnosticsAdapter | null | undefined;
     resolveAutomation?: (
         input: Readonly<{ browserSessionId: string; viewId?: string }>,
     ) => BrowserRuntimeAutomationAdapter | null | undefined;
@@ -136,6 +152,27 @@ function parseRuntimeActionInput(args: RuntimeActionExecuteArgs): Readonly<
     return parsed.success
         ? { ok: true, input: parsed.data }
         : { ok: false, result: invalidParametersResult };
+}
+
+async function executeBrowserMachineAction(
+    args: RuntimeActionExecuteArgs,
+    parsedInput: unknown,
+    executeOnMachine: RuntimeActionExecute | undefined,
+    unavailableReason: BrowserRuntimeActionDisabledReason = 'browser_control_route_unavailable',
+    control?: Pick<BrowserRuntimeControlAdapter, 'applyDaemonEvents'>,
+): Promise<unknown> {
+    const target = args.context.externalActionTarget;
+    if (!executeOnMachine || target?.kind !== 'machine' || !target.machineId.trim()) {
+        return browserRuntimeActionDisabledResult(unavailableReason);
+    }
+    const result = await executeOnMachine({ ...args, input: parsedInput });
+    if (control?.applyDaemonEvents) {
+        const dispatched = BrowserCommandDispatchResultV1Schema.safeParse(result);
+        if (dispatched.success && dispatched.data.status === 'dispatched') {
+            await control.applyDaemonEvents(dispatched.data.events);
+        }
+    }
+    return result;
 }
 
 function mapControlRejectedReason(
@@ -222,7 +259,8 @@ async function executeBrowserControlAction(
             || args.context.runtimeAccountId !== lifetime.scope.accountId) {
             return browserRuntimeActionDisabledResult('browser_view_unavailable');
         }
-        return await owner.open(request, args.context);
+        const openerRegion = readClaimedBrowserRuntimeWorkspaceOpenRegion(lifetime.scope, request.scopeId, request.commandId);
+        return await owner.open(request, args.context, openerRegion ? { openerRegion } : undefined);
     }
 
     const parsed = parseRuntimeActionInput(args);
@@ -248,27 +286,34 @@ async function executeBrowserControlAction(
 
     const command = BrowserCommandV1Schema.safeParse(parsed.input);
     if (!command.success) {
-        return invalidParametersResult;
+        // The catalog has already validated this Action. Control-family membership
+        // also includes Machine operations that are not BrowserCommands.
+        return await executeBrowserMachineAction(args, parsed.input, input.executeOnMachine);
     }
 
     // A Machine-targeted open creates the daemon-owned Browser before any viewer exists.
     // Mounted in-app engines supply their control explicitly and retain their local policy owner.
     const machineTarget = args.context.externalActionTarget;
     if (command.data.kind === 'openView' && !input.control && machineTarget?.kind === 'machine') {
-        if (!machineTarget.machineId.trim() || !input.executeOnMachine) {
-            return browserRuntimeActionDisabledResult('browser_control_route_unavailable');
-        }
-        return await input.executeOnMachine({ ...args, input: command.data });
+        return await executeBrowserMachineAction(args, command.data, input.executeOnMachine);
     }
 
     const control = input.control ?? input.resolveControl?.(command.data) ?? undefined;
     if (!control) {
-        return browserRuntimeActionDisabledResult('browser_control_unavailable');
+        return await executeBrowserMachineAction(args, command.data, input.executeOnMachine, 'browser_control_unavailable');
     }
 
     const state = control.readState();
     if (!state) {
-        return browserRuntimeActionDisabledResult('browser_control_unavailable');
+        return await executeBrowserMachineAction(args, command.data, input.executeOnMachine, 'browser_control_unavailable');
+    }
+    const view = 'viewId' in command.data ? state.viewsById[command.data.viewId] : null;
+    if (command.data.kind !== 'openView' && 'viewId' in command.data && !view) {
+        return await executeBrowserMachineAction(args, command.data, input.executeOnMachine, 'browser_control_unavailable');
+    }
+    if (view?.browserSessionId === command.data.browserSessionId
+        && isDaemonAuthoritativeBrowserView(view) && machineTarget?.kind === 'machine') {
+        return await executeBrowserMachineAction(args, command.data, input.executeOnMachine, 'browser_control_route_unavailable', control);
     }
 
     const daemonDispatch: { pending?: Promise<BrowserDaemonControlDispatchClientResult> } = {};
@@ -326,15 +371,14 @@ async function executeBrowserAutomationAction(
     const control = target ? input.control ?? input.resolveControl?.(target) : null;
     const state = control?.readState();
     const view = target ? state?.viewsById[target.viewId] : null;
+    if (!view && args.context.externalActionTarget?.kind === 'machine') {
+        return await executeBrowserMachineAction(args, parsed.input, input.executeOnMachine, 'browser_automation_unavailable');
+    }
     if (control && (!view || view.browserSessionId !== target?.browserSessionId)) {
         return browserRuntimeActionDisabledResult('browser_view_unavailable');
     }
     if (view && isDaemonAuthoritativeBrowserView(view)) {
-        const machineTarget = args.context.externalActionTarget;
-        if (!input.executeOnMachine || machineTarget?.kind !== 'machine' || !machineTarget.machineId.trim()) {
-            return browserRuntimeActionDisabledResult('browser_automation_unavailable');
-        }
-        return await input.executeOnMachine(args);
+        return await executeBrowserMachineAction(args, parsed.input, input.executeOnMachine, 'browser_automation_unavailable');
     }
 
     if (args.actionId === 'browser.automation.timeline.get') {
@@ -403,17 +447,6 @@ export function createBrowserRuntimeActionExecutor(
             return await executeBrowserAutomationAction(args, input);
         }
 
-        // Diagnostics run on the daemon; an exact Machine target uses the same admitted
-        // Account transport as other daemon-owned Browser Actions.
-        if (BROWSER_DIAGNOSTICS_ACTION_IDS.has(args.actionId)) {
-            const parsed = parseRuntimeActionInput(args);
-            if (!parsed.ok) return parsed.result;
-            const machineTarget = args.context.externalActionTarget;
-            if (!input.executeOnMachine || machineTarget?.kind !== 'machine' || !machineTarget.machineId.trim()) {
-                return browserRuntimeActionDisabledResult('browser_diagnostics_unavailable');
-            }
-            return await input.executeOnMachine({ ...args, input: parsed.input });
-        }
         // `browser.context.annotation.*` is an IN-APP capture family — it mutates the canonical
         // `BrowserContextState` (mode machine + draft capture + composer attach) through the
         // annotation adapter, not a daemon producer. Routing it through this front-door leaf is what
@@ -427,31 +460,29 @@ export function createBrowserRuntimeActionExecutor(
             });
             return await annotationExecutor(args.actionId, parsed.input);
         }
-        // `browser.context.capture*` egress is serviced by the DAEMON capture routes (live page +
-        // redaction schemas), not by the in-UI WebView. The UI-local `context/actions.ts` helpers
-        // build composer reference items for a different (already-working) attach flow, not a
-        // runtime-action dispatch against a live producer. The family is surfaced on `ui`/
-        // `agent` (real daemon executor), so the agent-approval floor activates; the UI
-        // executor itself defers to the daemon and fails closed here.
-        if (BROWSER_CONTEXT_ACTION_IDS.has(args.actionId)) {
-            return browserRuntimeActionDisabledResult('browser_context_unavailable');
+        if (args.actionId === 'browser.recording.attachToComposer') {
+            const parsed = parseRuntimeActionInput(args);
+            if (!parsed.ok) return parsed.result;
+            const attachExecutor = createBrowserRecordingAttachExecutor({
+                ...(input.recordingAttach ? { adapter: input.recordingAttach } : {}),
+                ...(input.resolveRecordingAttach ? { resolveAdapter: input.resolveRecordingAttach } : {}),
+            });
+            return await attachExecutor(parsed.input);
         }
-        if (BROWSER_RECORDING_ACTION_IDS.has(args.actionId)) {
-            // Only the attach-to-composer leaf has a real UI executor (resolves the registered
-            // recording-attach owner). The rest of the recording family (start/stop/cancel/status/
-            // listForView/discard/cleanupExpired) runs through the daemon recording owner, not this
-            // UI-local adapter. Its unavailable result describes placement, not global support.
-            if (args.actionId === 'browser.recording.attachToComposer') {
-                const parsed = parseRuntimeActionInput(args);
-                if (!parsed.ok) return parsed.result;
-                const attachExecutor = createBrowserRecordingAttachExecutor({
-                    ...(input.recordingAttach ? { adapter: input.recordingAttach } : {}),
-                    ...(input.resolveRecordingAttach ? { resolveAdapter: input.resolveRecordingAttach } : {}),
-                });
-                return await attachExecutor(parsed.input);
-            }
-            return browserRuntimeActionDisabledResult('browser_recording_unavailable');
+
+        // Other diagnostics, capture and recording use catalog admission and the exact-Machine
+        // transport. Interactive diagnostics prefer the exact registered mounted engine below.
+        const parsed = parseRuntimeActionInput(args);
+        if (!parsed.ok) return parsed.result;
+        if ((MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS as readonly string[]).includes(args.actionId)) {
+            const view = readBrowserViewInput(parsed.input);
+            const diagnostics = input.diagnostics ?? (view ? input.resolveDiagnostics?.(view) : null);
+            if (diagnostics) return await diagnostics.execute({ ...args, input: parsed.input });
         }
-        return browserRuntimeActionDisabledResult('browser_action_unbacked');
+        const unavailableReason = BROWSER_DIAGNOSTICS_ACTION_IDS.has(args.actionId) ? 'browser_diagnostics_unavailable'
+            : BROWSER_CONTEXT_ACTION_IDS.has(args.actionId) ? 'browser_context_unavailable'
+                : BROWSER_RECORDING_ACTION_IDS.has(args.actionId) ? 'browser_recording_unavailable'
+                    : 'browser_action_unbacked';
+        return await executeBrowserMachineAction(args, parsed.input, input.executeOnMachine, unavailableReason);
     };
 }

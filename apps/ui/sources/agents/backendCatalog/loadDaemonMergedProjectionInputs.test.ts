@@ -209,9 +209,9 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
         }
         const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
         const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
+        await serverScopedRpcSocketPool.stopAll();
         serverScopedRpcSocketPool.resetForTests();
         resetScopedMachineTransportCacheForTests();
-        await network.dispose();
     });
 
     it('publishes a background Home descriptor under its Account and retires only that Home when its request lifetime retires', async () => {
@@ -327,6 +327,28 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
             kind: 'ready',
             inputs: { composerSurfaceCatalog },
         });
+    });
+
+    it('releases an unanswered projection when its final reader leaves and recovers on the next attempt', async () => {
+        const { loadDaemonMergedProjectionCacheEntry } = await import('./loadDaemonMergedProjectionInputs');
+        const account = createAccountLifetime('account-a');
+        projectionDescribeMock.mockImplementationOnce(() => new Promise(() => {}));
+        projectionDescribeMock.mockResolvedValueOnce({ supported: true, projection: daemonProjection(8) });
+        const firstOwner = new AbortController();
+        const secondOwner = new AbortController();
+        const scope = { ...projectionScope, accountLifetime: account.lifetime };
+        const first = loadDaemonMergedProjectionCacheEntry({ ...scope, signal: firstOwner.signal });
+        const second = loadDaemonMergedProjectionCacheEntry({ ...scope, signal: secondOwner.signal });
+        await vi.waitFor(() => expect(projectionDescribeMock).toHaveBeenCalledTimes(1));
+        firstOwner.abort();
+        await expect(first).resolves.toBeNull();
+        let secondSettled = false;
+        void second.then(() => { secondSettled = true; });
+        expect(secondSettled).toBe(false);
+        secondOwner.abort();
+        await expect(second).resolves.toBeNull();
+        await expect(loadDaemonMergedProjectionCacheEntry(scope)).resolves.toMatchObject({ kind: 'ready' });
+        expect(projectionDescribeMock).toHaveBeenCalledTimes(2);
     });
 
     it('is the one per-machine owner: readers share one describe per projection revision', async () => {
@@ -482,7 +504,7 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
         }
     });
 
-    it('does not reuse a pre-inventory describe after the first daemon state is observed', async () => {
+    it.each(['absent', 'direct', 'display-first'] as const)('reuses a current describe across first %s Machine inventory and revalidates a later daemon replacement', async hydration => {
         const { loadDaemonMergedProjectionCacheEntry } = await import('./loadDaemonMergedProjectionInputs');
         const { storage } = await import('@/sync/domains/state/storage');
         const previousMachines = storage.getState().machines;
@@ -492,9 +514,29 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
         });
         storage.setState({ machines: Object.fromEntries(Object.entries(previousMachines).filter(([id]) => id !== 'machine-1')) });
         try {
+            if (hydration !== 'absent') {
+                storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', metadata: null,
+                    daemonStateVersion: 0, daemonState: null,
+                })], false, { sourceServerId: 'server-1' });
+            }
             projectionDescribeMock.mockResolvedValue({ supported: true, projection: daemonProjection(7) });
             await expect(read()).resolves.toMatchObject({ kind: 'ready' });
-            storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', daemonStateVersion: 1 })], false, { sourceServerId: 'server-1' });
+            if (hydration === 'display-first') {
+                storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', metadata: null,
+                    daemonStateVersion: 1, daemonState: null,
+                })], false, { sourceServerId: 'server-1' });
+                await expect(read()).resolves.toMatchObject({ kind: 'ready' });
+                expect(projectionDescribeMock).toHaveBeenCalledTimes(1);
+            }
+            storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', daemonStateVersion: 1,
+                daemonState: { runtimeId: 'daemon-a', contributionRegistryProjectionRevision: 1 },
+            })], false, { sourceServerId: 'server-1' });
+            await expect(read()).resolves.toMatchObject({ kind: 'ready' });
+            expect(projectionDescribeMock).toHaveBeenCalledTimes(1);
+
+            storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', daemonStateVersion: 2,
+                daemonState: { runtimeId: 'daemon-b', contributionRegistryProjectionRevision: 1 },
+            })], false, { sourceServerId: 'server-1' });
             await expect(read()).resolves.toMatchObject({ kind: 'ready' });
             expect(projectionDescribeMock).toHaveBeenCalledTimes(2);
         } finally {

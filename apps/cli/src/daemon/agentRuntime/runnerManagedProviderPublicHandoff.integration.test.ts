@@ -11,6 +11,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import cliDistBuildManifest from '@happier-dev/cli-common/cliDistBuildManifest';
@@ -176,7 +177,9 @@ const testState = vi.hoisted(() => ({
         testState.packagedRuntimeRoot
     ),
     resolveCliRuntimeAssetPath: vi.fn((...segments: string[]) =>
-        segments[0] === 'tools'
+        segments.join('/') === 'scripts/process_tree.cjs'
+            ? fileURLToPath(new URL('../../../scripts/process_tree.cjs', import.meta.url))
+        : segments[0] === 'tools'
             ? join(testState.packagedRuntimeRoot, ...segments)
             : join(testState.happyHomeDir, 'runtime-assets', ...segments)
     ),
@@ -395,6 +398,8 @@ function createPendingProcess(
         readBufferedStderr: () => new Uint8Array(),
         requestTermination: async () => await dispose(),
         dispose,
+        waitForSettlement: async () => { await wait; return { status: 'ended' as const }; },
+        onOutcomeUncertain: () => () => {},
     });
 }
 
@@ -795,7 +800,7 @@ describe('representative public Provider-to-SVC09 handoff', () => {
         const resolution = resolveProviderConnectionForMachine({
             connectionId,
             machineId,
-            accountSettings: { providerSettingsV1: initialSettings },
+            providerSettings: initialSettings,
             registry: providerRegistry,
             dnsEvidenceByEndpointUrl: new Map(),
         });

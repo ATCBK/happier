@@ -89,6 +89,7 @@ type MachineTerminalStreamCarrierOptions = Readonly<{
     serverId?: string | null;
     accountId?: string | null;
     timeoutMs?: number | null;
+    signal?: AbortSignal;
 }>;
 
 export function resolveTerminalStreamAppRelease(input: Readonly<{
@@ -185,7 +186,8 @@ function isControlCursorCompatibilityRejection(
 export function createMachineRpcTerminalStreamCarrier(
     options: MachineTerminalStreamCarrierOptions,
 ): TerminalStreamCarrier {
-    const rpcOptions = { serverId: options.serverId, accountId: options.accountId, timeoutMs: options.timeoutMs };
+    const rpcOptions = { serverId: options.serverId, accountId: options.accountId, timeoutMs: options.timeoutMs,
+        ...(options.signal ? { signal: options.signal } : {}) };
     // Admission supplies this Account binding. The Action owner selects own
     // Machine RPC or the signed requester carrier; the stream never guesses
     // custody or borrows the custodian's private Project/Session catalog.
@@ -198,7 +200,7 @@ export function createMachineRpcTerminalStreamCarrier(
             execute ??= createFrontDoorActionExecute();
         }
         const response = await execute(actionId, input, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
-            serverId: options.serverId, expectedAccountId: options.accountId });
+            serverId: options.serverId, expectedAccountId: options.accountId, signal: options.signal });
         if (!response.ok) throw Object.assign(new Error(response.error), { code: response.errorCode ?? response.error });
         const approval = ActionApprovalRequestCreatedResultSchema.safeParse(response.result);
         if (approval.success) throw new TerminalStreamInputError(approval.data.kind);

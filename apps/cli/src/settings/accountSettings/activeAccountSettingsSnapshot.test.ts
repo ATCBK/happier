@@ -6,7 +6,8 @@ import { LaunchProfileArtifactV1Schema, buildLaunchProfileArtifactHeaderV1 } fro
 import type { ArtifactSharingResourceV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
 import { DEFAULT_PROVIDER_SETTINGS_V1 } from '@happier-dev/protocol/providers/settings/v1';
 import { readProviderSettingsForCli } from '@/providers/settings/read';
-import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { sameProviderConnectionsCatalogAuthority } from '@/providers/lifecycle/currentAccountSettingsSnapshot';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, ProviderConnectionsCatalogV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import type { PromptLibraryCatalogSnapshotV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 
@@ -45,6 +46,18 @@ const configuredExternalSessionSourceRevisions = activeAccountSettingsSnapshot a
 }>;
 
 describe('active account settings snapshot publication', () => {
+  it.each([undefined, { status: 'loading' as const }])('retains privately prepared catalogs across an unchanged source observation (%j)', promptLibraryCatalog => {
+    const source = { ...snapshot({ scopeKey: 'session-source', version: 1, timing: 'after_runtime_idle' }), promptLibraryCatalog };
+    const admitted: PromptLibraryCatalogSnapshotV1 = { status: 'ready', rows: [], tombstones: [], diagnostics: [] };
+    const operation = { ...source, promptLibraryCatalog: admitted };
+    const next = { ...source, loadedAtMs: 2 };
+    expect(activeAccountSettingsSnapshot.preserveAccountCatalogsInSnapshot(operation, next, source).promptLibraryCatalog).toBe(admitted);
+    const withdrawn = { status: 'unavailable' as const, reason: 'forbidden' as const };
+    expect(activeAccountSettingsSnapshot.preserveAccountCatalogsInSnapshot(operation,
+      { ...next, promptLibraryCatalog: withdrawn }, source).promptLibraryCatalog).toBe(withdrawn);
+    expect(activeAccountSettingsSnapshot.preserveAccountCatalogsInSnapshot(operation,
+      { ...next, scopeKey: 'other-account' }, source).promptLibraryCatalog).toBe(promptLibraryCatalog);
+  });
     it('withdraws cached Provider authority before disclosure when Account decryption material is retired', () => {
         const base = snapshot({ scopeKey: 'scope-provider-keys', version: 4, timing: 'after_runtime_idle' });
         const providerConnectionsCatalog = { status: 'ready' as const, revision: 7, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 };
@@ -93,6 +106,19 @@ describe('active account settings snapshot publication', () => {
     expect(changed.snapshot.settings.sessionPendingQueueDeliveryTiming).toBe('after_foreground_ready');
   });
 
+  it('retains Provider admission when a newer preference publication reobserves the same row', () => {
+    const base = snapshot({ scopeKey: 'scope-provider-refresh', version: 1, timing: 'after_runtime_idle' });
+    const admitted = { status: 'ready' as const, revision: 4, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 };
+    setActiveAccountSettingsSnapshot({ ...base, providerConnectionsCatalog: admitted });
+    const reobserved = { ...admitted, catalog: ProviderConnectionsCatalogV1Schema.parse(admitted.catalog) };
+    const result = commitActiveAccountSettingsSnapshot({ ...base, settingsVersion: 2, providerConnectionsCatalog: reobserved });
+    expect(result.didCommit).toBe(true);
+    expect(sameProviderConnectionsCatalogAuthority(admitted, result.snapshot.providerConnectionsCatalog)).toBe(true);
+    const changed = { ...reobserved, revision: 5 };
+    const newer = commitActiveAccountSettingsSnapshot({ ...base, settingsVersion: 3, providerConnectionsCatalog: changed });
+    expect(sameProviderConnectionsCatalogAuthority(admitted, newer.snapshot.providerConnectionsCatalog)).toBe(false);
+  });
+
   it('publishes ACP row-only revisions and rejects a retired lifetime without rewriting preferences', () => {
     setActiveAccountSettingsSnapshot(snapshot({ scopeKey: 'scope-acp', version: 7, timing: 'after_runtime_idle' }));
     const bound = { scopeKey: 'scope-acp', lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() };
@@ -122,7 +148,7 @@ describe('active account settings snapshot publication', () => {
       expect(getActiveAccountSettingsSnapshot()).toBe(current);
       expect(activeAccountSettingsSnapshot.commitActiveAcpCatalog({ ...bound, catalog: first })).toBe(false);
       expect(activeAccountSettingsSnapshot.commitActiveAcpCatalog({ ...bound,
-        catalog: { ...first, revision: 'absent', sourceSettingsVersion: 8 } })).toBe(false);
+        catalog: { ...first, revision: 'absent', source: 'fresh', sourceSettingsVersion: 8 } })).toBe(false);
       expect(getActiveAccountSettingsSnapshot()).toBe(current);
       clearActiveAccountSettingsSnapshot();
       setActiveAccountSettingsSnapshot(snapshot({ scopeKey: 'scope-acp', version: 7, timing: 'after_runtime_idle' }));
@@ -149,8 +175,8 @@ describe('active account settings snapshot publication', () => {
     const catalogs = {
       remoteHostCatalog: { status: 'ready' as const, hosts: [], revision: 3, diagnostics: [] },
       notificationChannelCatalog: { status: 'ready' as const, channels: [], revision: 4, diagnostics: [] },
-      connectedPresentationCatalog: { status: 'ready' as const, entries: [], revision: 5, diagnostics: [] },
-      connectedAcknowledgementsCatalog: { status: 'ready' as const, entries: [], revision: 6, diagnostics: [] },
+      connectedPresentationCatalog: { status: 'ready' as const, entries: [], revision: 5, diagnostics: [] as const },
+      connectedAcknowledgementsCatalog: { status: 'ready' as const, entries: [], revision: 6, diagnostics: [] as const },
     };
     setActiveAccountSettingsSnapshot({ ...snapshot({ scopeKey: 'scope-a', version: 1, timing: 'after_runtime_idle' }), ...catalogs });
     setActiveAccountSettingsSnapshot(snapshot({ scopeKey: 'scope-a', version: 2, timing: 'after_foreground_ready' }));
@@ -167,8 +193,8 @@ describe('active account settings snapshot publication', () => {
     const catalogs = {
       remoteHostCatalog: { status: 'ready' as const, hosts: [], revision: 3, diagnostics: [] },
       notificationChannelCatalog: { status: 'ready' as const, channels: [], revision: 4, diagnostics: [] },
-      connectedPresentationCatalog: { status: 'ready' as const, entries: [], revision: 5, diagnostics: [] },
-      connectedAcknowledgementsCatalog: { status: 'ready' as const, entries: [], revision: 6, diagnostics: [] },
+      connectedPresentationCatalog: { status: 'ready' as const, entries: [], revision: 5, diagnostics: [] as const },
+      connectedAcknowledgementsCatalog: { status: 'ready' as const, entries: [], revision: 6, diagnostics: [] as const },
     };
     setActiveAccountSettingsSnapshot({ ...base, ...catalogs, settingsSecretsReadKeys: [new Uint8Array([1])] });
     setActiveAccountSettingsSnapshot({ ...base, settingsVersion: 2, settingsSecretsReadKeys: [new Uint8Array([1])] });
@@ -276,11 +302,45 @@ describe('active account settings snapshot publication', () => {
     unsubscribe();
   });
 
+  it('preserves admitted Provider row authority while publishing cleanup outcomes', () => {
+    const admitted = { status: 'ready' as const, revision: 7, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 };
+    const first = { ...snapshot({ scopeKey: 'scope-provider-cleanup', version: 4, timing: 'after_runtime_idle' }),
+      providerConnectionsCatalog: admitted };
+    setActiveAccountSettingsSnapshot(first);
+    const bound = { scopeKey: first.scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() };
+    const reobserved = { ...admitted, catalog: structuredClone(admitted.catalog) };
+
+    activeAccountSettingsSnapshot.beginActiveProviderConnectionsCatalogRefresh(bound);
+    activeAccountSettingsSnapshot.commitActiveProviderConnectionsCatalog({ ...bound, catalog: reobserved });
+    expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toBe(admitted);
+
+    activeAccountSettingsSnapshot.commitActiveProviderConnectionsCatalog({ ...bound,
+      catalog: { ...reobserved, cleanup: { status: 'complete' } } });
+    const completed = getActiveAccountSettingsSnapshot()!;
+    expect(completed.providerConnectionsCatalog).toMatchObject({ cleanup: { status: 'complete' } });
+    expect(sameProviderConnectionsCatalogAuthority(admitted, completed.providerConnectionsCatalog)).toBe(true);
+    expect(completed.settings).toBe(first.settings);
+    expect(completed.settingsVersion).toBe(first.settingsVersion);
+    expect(getActiveAccountSettingsSnapshotLifetimeToken()).toBe(bound.lifetimeToken);
+
+    const changedCatalog = ProviderConnectionsCatalogV1Schema.parse({ ...admitted.catalog,
+      connectionTombstones: [{ v: 1, id: 'pc_retired', contributionKey: null, lastDisplayName: 'Removed', deletedAt: 1 }] });
+    activeAccountSettingsSnapshot.commitActiveProviderConnectionsCatalog({ ...bound,
+      catalog: { ...reobserved, catalog: changedCatalog } });
+    const changed = getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog;
+    expect(changed).toMatchObject({ status: 'ready', catalog: changedCatalog });
+    expect(sameProviderConnectionsCatalogAuthority(admitted, changed)).toBe(false);
+
+    activeAccountSettingsSnapshot.commitActiveProviderConnectionsCatalog({ ...bound,
+      catalog: { ...reobserved, revision: admitted.revision + 1 } });
+    expect(sameProviderConnectionsCatalogAuthority(admitted,
+      getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog)).toBe(false);
+  });
+
   it('retains an unchanged ready prompt snapshot while publishing loading, changed catalog and Settings transitions', () => {
     setActiveAccountSettingsSnapshot(snapshot({ scopeKey: 'scope-prompt', version: 1, timing: 'after_runtime_idle' }));
     const bound = { scopeKey: 'scope-prompt', lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() };
-    const catalog: Extract<PromptLibraryCatalogSnapshotV1,
-      { status: 'ready' }> = { status: 'ready', rows: [], tombstones: [], diagnostics: [] };
+    const catalog = { status: 'ready', rows: [], tombstones: [], diagnostics: [] } satisfies PromptLibraryCatalogSnapshotV1;
     activeAccountSettingsSnapshot.commitActivePromptLibraryCatalog({ ...bound, catalog });
     const ready = getActiveAccountSettingsSnapshot();
     activeAccountSettingsSnapshot.commitActivePromptLibraryCatalog({ ...bound, catalog: { ...catalog } });
@@ -374,7 +434,7 @@ describe('active account settings snapshot publication', () => {
   it('reads prompt layers from the current admitted Account, refusing malformed or retired sources', () => {
     const base = { ...snapshot({ scopeKey: 'scope-a', version: 1, timing: 'after_runtime_idle' }),
       promptLibraryCatalog: { status: 'ready' as const, rows: [], tombstones: [], diagnostics: [] } };
-    const entry = { id: 'prompt-a', ref: { kind: 'doc', artifactId: 'doc-a' }, enabled: true, placement: 'system_append' };
+    const entry = { id: 'prompt-a', ref: { kind: 'doc' as const, artifactId: 'doc-a' }, enabled: true, placement: 'system_append' as const };
     const rawSettings = { promptStacksV1: { v: 1, surfaces: { coding: [entry], profilesById: { profile: [entry] } } } };
     setActiveAccountSettingsSnapshot({ ...base, settings: accountSettingsParse(rawSettings), rawSettings });
     const bound = { scopeKey: 'scope-a', lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), surface: 'coding' as const, profileId: 'profile' };
@@ -383,7 +443,7 @@ describe('active account settings snapshot publication', () => {
     const profileEntry = { ...entry, id: 'profile-only' };
     const profileCatalog = { status: 'ready' as const, authority: 'active' as const, control: null,
       controlRevision: 'absent' as const, diagnostics: [], referenceGuardRevision: 'absent' as const,
-      records: [{ revision: 0, record: { v: 1 as const, id: 'profile', enabled: true, secretBindings: {},
+      records: [{ revision: 0, record: { v: 1 as const, id: 'profile', enabled: true, skillSeeds: [], secretBindings: {},
         definition: { kind: 'artifact' as const, artifactId: 'profile-definition' }, promptStack: [profileEntry] } }],
     };
     expect(activeAccountSettingsSnapshot.commitActiveProfileCatalog({ ...bound, catalog: profileCatalog })).toBe(true);
@@ -431,7 +491,7 @@ describe('active account settings snapshot publication', () => {
       promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] },
       rawSettings: {}, profileCatalog: { status: 'ready', authority: 'inactive', source: 'destination', control: null,
         controlRevision: 'absent', diagnostics: [], referenceGuardRevision: 0,
-        records: [{ revision: 0, record: { v: 1, id: 'native', enabled: true, secretBindings: {},
+        records: [{ revision: 0, record: { v: 1, id: 'native', enabled: true, skillSeeds: [], secretBindings: {},
           definition: { kind: 'artifact', artifactId: 'native-definition' }, promptStack: [profileEntry] } }],
       },
     });
@@ -719,6 +779,65 @@ describe('active account settings snapshot publication', () => {
         expect(clearedAgain).toBe(cleared);
         expect(accountAReentered).toBeGreaterThan(cleared);
     });
+
+  it('keeps configured transcript sources current across unrelated catalog and queue preference changes', () => {
+    const cached = { ...snapshot({ scopeKey: 'source-account', version: 4, timing: 'after_runtime_idle' }), source: 'cache' as const };
+    setActiveAccountSettingsSnapshot(cached);
+    const sourceRevision = configuredExternalSessionSourceRevisions
+      .resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot());
+    expect(activeAccountSettingsSnapshot.commitActiveProfileCatalog({
+      scopeKey: cached.scopeKey,
+      lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
+      catalog: { status: 'ready', authority: 'inactive', control: null,
+        controlRevision: 'absent', records: [], diagnostics: [], referenceGuardRevision: 7 },
+    })).toBe(true);
+    expect(configuredExternalSessionSourceRevisions
+      .resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot())).toBe(sourceRevision);
+
+    const hydrated = getActiveAccountSettingsSnapshot()!;
+    setActiveAccountSettingsSnapshot({ ...hydrated, settingsVersion: 5,
+      settings: accountSettingsParse({ sessionPendingQueueDeliveryTiming: 'after_foreground_ready' }) });
+    expect(configuredExternalSessionSourceRevisions
+      .resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot())).toBe(sourceRevision);
+    clearActiveAccountSettingsSnapshot();
+    setActiveAccountSettingsSnapshot(hydrated);
+    expect(configuredExternalSessionSourceRevisions
+      .resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot())).not.toBe(sourceRevision);
+  });
+
+  it('invalidates configured sources when the initial version-zero settings read becomes available', () => {
+    const unavailable = { ...snapshot({ scopeKey: 'source-account', version: 0, timing: 'after_runtime_idle' }), source: 'none' as const };
+    setActiveAccountSettingsSnapshot(unavailable);
+    const sourceRevision = configuredExternalSessionSourceRevisions
+      .resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot());
+
+    expect(commitActiveAccountSettingsSnapshot({ ...unavailable, source: 'network', rawSettings: {}, loadedAtMs: 1 }).didCommit).toBe(true);
+    expect(configuredExternalSessionSourceRevisions
+      .resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot())).not.toBe(sourceRevision);
+  });
+
+  it('retires configured sources on consumed source settings or Account key withdrawal', () => {
+    const sources = [{ sourceKind: 'configuredHome', instances: [{ kind: 'agentSetting',
+      settingId: 'piAgentDir', byServerIdSettingId: 'piAgentDirByServerId', field: 'homePath', normalization: 'configuredPath' }] }];
+    const initial = { ...snapshot({ scopeKey: 'source-account', version: 1, timing: 'after_runtime_idle' }),
+      settings: accountSettingsParse({ piAgentDir: '/native/fallback', piAgentDirByServerId: { home: '/native/first', other: '/other' } }),
+      settingsSecretsReadKeys: [new Uint8Array(32).fill(1)] };
+    setActiveAccountSettingsSnapshot(initial);
+    const revision = () => activeAccountSettingsSnapshot.resolveActiveAccountConfiguredExternalSessionSourceRevision(
+      getActiveAccountSettingsSnapshot(), sources, 'home');
+    const first = revision();
+    setActiveAccountSettingsSnapshot({ ...initial, settingsVersion: 2,
+      settings: accountSettingsParse({ piAgentDir: '/changed/fallback', piAgentDirByServerId: { home: '/native/first', other: '/changed/other' },
+        sessionPendingQueueDeliveryTiming: 'after_foreground_ready' }) });
+    expect(revision()).toBe(first);
+    setActiveAccountSettingsSnapshot({ ...initial, settingsVersion: 3,
+      settings: accountSettingsParse({ piAgentDir: '/native/fallback', piAgentDirByServerId: { home: '/native/second' } }) });
+    expect(revision()).not.toBe(first);
+    const changedSource = revision();
+    setActiveAccountSettingsSnapshot({ ...getActiveAccountSettingsSnapshot()!, settingsVersion: 4,
+      settingsSecretsReadKeys: [] });
+    expect(revision()).not.toBe(changedSource);
+  });
 
   it('publishes a Connected Services-only projection through the active source revision without changing Settings revision', () => {
     const active = snapshot({ scopeKey: 'scope-a', version: 4, timing: 'after_runtime_idle' });

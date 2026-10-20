@@ -1,6 +1,9 @@
+import { lazyZodSchema } from '@happier-dev/protocol/lazyZodSchema';
+import * as z from 'zod/mini';
 import { describe, expect, it, vi } from 'vitest';
 import nacl from 'tweetnacl';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { encodeBase64, decodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { sealEncryptedDataKeyEnvelopeV1, openEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
 import { signAccountContentKeyBindingV1 } from '@happier-dev/protocol/crypto/accountContentKeyBindingV1';
@@ -28,21 +31,22 @@ describe('captured Machine recipient preparation transport', () => {
                 homeDir: '/home/owner', happyHomeDir: '/home/owner/.happier' }, secret)),
             metadataVersion: 1, daemonState: null, daemonStateVersion: 0, access };
         const home = await serveAccountHomes({ homes: [{ key: 'resource', serverUrl: `https://retired-${retirement}.test`,
-            accountId: 'alice', accountMode: 'e2ee', credentials: { token: 'replaced-by-fixture-subject', secret: encodeBase64(secret) } }],
+            accountId: 'alice', accountMode: 'e2ee', credentials: { token: createAccountTokenForTests('alice'), secret: encodeBase64(secret) } }],
             route: request => request.path === '/v1/machines/retired-machine'
                 ? Response.json({ machine: row }) : Response.json({ kind: 'refused', code: 'machine_unavailable' }) });
         const scope = { serverId: home.homes.resource!.id, accountId: 'alice' };
         const machine = createMachineFixture({ id: row.id, ...terminal, access });
+        const machineRequests = () => home.requests.filter(request => request.path.startsWith('/v1/machines/'));
         try {
             for (let pass = 0; pass < 3; pass++) {
                 await prepareMachineDataKeyEnvelopesForMachines({ scope, machines: [{ ...machine, activeAt: pass }],
                     recipientChangeCursors: new Map([[machine.id, pass]]), isCurrent: () => true });
             }
-            expect.soft(home.requests).toEqual([]);
-            const beforeExplicit = home.requests.length;
+            expect.soft(machineRequests()).toEqual([]);
+            const beforeExplicit = machineRequests().length;
             expect(await prepareMachineDataKeyEnvelopesForScope({ scope, machineId: machine.id }))
                 .toEqual({ kind: 'unavailable', code: 'machine_unavailable' });
-            expect(home.requests.slice(beforeExplicit).map(request => [request.method, request.path]))
+            expect(machineRequests().slice(beforeExplicit).map(request => [request.method, request.path]))
                 .toEqual([['GET', '/v1/machines/retired-machine']]);
         } finally { await home.dispose(); }
     });
@@ -72,8 +76,8 @@ describe('captured Machine recipient preparation transport', () => {
             access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'manage' as const, resourceMode: 'e2ee' as const, accessState: 'ready' as const } });
         const home = await serveAccountHomes({ homes: [
             { key: 'resource', serverUrl: 'https://machine-custodian.test', accountId: 'alice', accountMode: 'e2ee',
-                credentials: usesDataKey ? { token: 'replaced-by-fixture-subject', encryption: { publicKey: encodeBase64(owner.publicKey), machineKey: encodeBase64(owner.secretKey) } }
-                    : { token: 'replaced-by-fixture-subject', secret: encodeBase64(secret) } },
+                credentials: usesDataKey ? { token: createAccountTokenForTests('alice'), encryption: { publicKey: encodeBase64(owner.publicKey), machineKey: encodeBase64(owner.secretKey) } }
+                    : { token: createAccountTokenForTests('alice'), secret: encodeBase64(secret) } },
             { key: 'focused', serverUrl: 'https://machine-focused-custodian.test', accountId: 'cara' },
         ], route: async request => {
             if (request.home !== 'resource') return undefined;
@@ -98,7 +102,7 @@ describe('captured Machine recipient preparation transport', () => {
             }
             if (request.path.endsWith('/data-key-envelopes') && request.method === 'PATCH') {
                 const input = MachineRecipientKeyEnvelopeCommitInputV1Schema.parse({ machineId: 'machine',
-                    ...MachineRecipientKeyEnvelopeCommitInputV1Schema.omit({ machineId: true }).parse(request.body) });
+                    ...lazyZodSchema(() => z.omit(MachineRecipientKeyEnvelopeCommitInputV1Schema, { machineId: true })).parse(request.body) });
                 expect(input.expectedCallerDataEncryptionKey).toBe(ownerEnvelope);
                 expect(input.expectedMachineOwnerEnvelopeFingerprint).toBe(computeMachineOwnerEnvelopeFingerprintV1(decodeBase64(ownerEnvelope!)));
                 expect(input.expectedMetadataVersion).toBe(revision);
@@ -117,12 +121,13 @@ describe('captured Machine recipient preparation transport', () => {
                         contentPublicKeyFingerprint: null, encryptedDataKey: null, recipientContentPublicKeyFingerprint: null }] : [])] });
             return undefined;
         } });
+        const machineRequests = () => home.requests.filter(request => request.path.startsWith('/v1/machines/'));
         // Observe the real HTTP boundary, including the harness's mode route.
         const fetches = vi.spyOn(network, 'runtimeFetch');
         try {
             if (variant === 'malformed-present') {
                 expect(await prepareMachineDataKeyEnvelopesForScope({ scope: { serverId: home.homes.resource!.id, accountId: 'alice' }, machineId: 'machine' })).toMatchObject({ kind: 'unavailable' });
-                expect(home.requests.some(request => request.method === 'POST' || request.method === 'PATCH')).toBe(false);
+                expect(machineRequests().some(request => request.method === 'POST' || request.method === 'PATCH')).toBe(false);
                 expect(delivered).toBeNull();
                 return;
             }
@@ -136,7 +141,7 @@ describe('captured Machine recipient preparation transport', () => {
                 expect(await prepareMachineDataKeyEnvelopesForScope(fromList)).toEqual({ kind: 'prepared' });
                 // The authenticated list already supplied the owner observation. Only
                 // unknown transition outcomes may require another physical row read.
-                expect(home.requests.filter(request => request.path === '/v1/machines/machine'))
+                expect(machineRequests().filter(request => request.path === '/v1/machines/machine'))
                     .toHaveLength(variant === 'lost-ack' ? 1 : 0);
             }
             const currentKey = openEncryptedDataKeyEnvelopeV1({ envelope: decodeBase64(ownerEnvelope!), recipientSecretKeyOrSeed: owner.secretKey });
@@ -146,7 +151,7 @@ describe('captured Machine recipient preparation transport', () => {
             expect(delivered).not.toEqual(secret);
             expect((await new AES256Encryption(currentKey!).decrypt([decodeBase64(metadata)]))[0]).toEqual(editedMetadata);
             expect((await new AES256Encryption(currentKey!).decrypt([decodeBase64(daemonState)]))[0]).toEqual(editedState);
-            const physical = home.requests.filter(request => request.path.startsWith('/v1/machines/'));
+            const physical = machineRequests();
             expect(physical.every(request => request.home === 'resource' && request.accountId === 'alice')).toBe(true);
             expect(physical.filter(request => request.method === 'POST')).toHaveLength(1);
             if (variant === 'lost-ack') {
@@ -168,9 +173,12 @@ describe('captured Machine recipient preparation transport', () => {
                 }
                 // Explicit current Machine mode owns these resource reads. Repeated
                 // invalidation must not perform an unrelated Account-mode N+1.
-                expect(fetches.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/account/encryption')).toHaveLength(0);
+                expect(fetches.mock.calls.filter(([url]) => {
+                    const target = new URL(String(url));
+                    return target.origin === new URL(home.homes.resource!.serverUrl).origin && target.pathname === '/v1/account/encryption';
+                })).toHaveLength(0);
                 expect(fetches.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/machines/machine')).toHaveLength(4);
-                expect(home.requests.filter(request => request.method === 'POST')).toHaveLength(1);
+                expect(machineRequests().filter(request => request.method === 'POST')).toHaveLength(1);
                 const machine = createMachineFixture({ id: 'machine', active: false, dataEncryptionKey: ownerEnvelope,
                     keyBasis: row().keyBasis, metadataVersion: revision, daemonStateVersion: revision, access: { ...row().access, role: 'manage',
                         resourceMode: 'e2ee', accessState: 'ready' } });
@@ -179,10 +187,10 @@ describe('captured Machine recipient preparation transport', () => {
                 const refresh = (activeAt: number) => prepareMachineDataKeyEnvelopesForMachines({ scope,
                     machines: [{ ...machine, activeAt, active: activeAt % 2 === 0 }], publishedRows: [{ ...machine, ...row() }],
                     recipientChangeCursors, isCurrent: () => lifetimeCurrent });
-                const rowReadsBeforeRefresh = home.requests.filter(request => request.path === '/v1/machines/machine').length;
+                const rowReadsBeforeRefresh = machineRequests().filter(request => request.path === '/v1/machines/machine').length;
                 await refresh(1);
-                expect(home.requests.filter(request => request.path === '/v1/machines/machine')).toHaveLength(rowReadsBeforeRefresh);
-                const censusReads = () => home.requests.filter(request => request.path.endsWith('/data-key-envelopes') && request.method === 'GET').length;
+                expect(machineRequests().filter(request => request.path === '/v1/machines/machine')).toHaveLength(rowReadsBeforeRefresh);
+                const censusReads = () => machineRequests().filter(request => request.path.endsWith('/data-key-envelopes') && request.method === 'GET').length;
                 const before = censusReads();
                 for (let presence = 2; presence <= 6; presence++) await refresh(presence);
                 expect(censusReads() - before).toBe(0);
@@ -192,7 +200,7 @@ describe('captured Machine recipient preparation transport', () => {
                 await refresh(7);
                 expect(censusReads() - before).toBe(2); // Admission plus the existing final empty census.
                 expect(delivered).toEqual(preparedKey);
-                expect(home.requests.filter(request => request.method === 'PATCH')).toHaveLength(3);
+                expect(machineRequests().filter(request => request.method === 'PATCH')).toHaveLength(3);
                 await refresh(8);
                 expect(censusReads() - before).toBe(2);
                 const entered = createDeferred<void>();
@@ -242,11 +250,11 @@ describe('captured Machine recipient preparation transport', () => {
                 lifetimeCurrent = false;
                 await prepareMachineDataKeyEnvelopesForMachines({ scope, machines: [machine], recipientChangeCursors, isCurrent: () => true });
                 expect(censusReads() - beforeNewLifetime).toBe(2); // A retired crypto/Home lifetime cannot suppress new work.
-                const beforeRetiredScope = home.requests.length;
+                const beforeRetiredScope = machineRequests().length;
                 const retiredScopePreparation = { scope, machineId: 'machine', initialMachineRow: row(), isCurrent: () => false };
                 expect(await prepareMachineDataKeyEnvelopesForScope(retiredScopePreparation))
                     .toMatchObject({ kind: 'unavailable' });
-                expect(home.requests.slice(beforeRetiredScope)).toEqual([]);
+                expect(machineRequests().slice(beforeRetiredScope)).toEqual([]);
             }
         } finally { fetches.mockRestore(); await home.dispose(); }
     });

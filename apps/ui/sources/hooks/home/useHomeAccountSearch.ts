@@ -2,7 +2,7 @@ import * as React from 'react';
 import type { HomeAccountPickerRowV1 } from '@happier-dev/protocol/home/governance';
 
 import { useSearch, type SearchRequestContext } from '@/hooks/search/useSearch';
-import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
+import type { HomeActionFailure as HomeDomainFailure } from '@/sync/ops/home/homeActionOutcome';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { searchHomeAccounts } from '@/sync/ops/home/homeGovernanceOperations';
 

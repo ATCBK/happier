@@ -12,6 +12,8 @@ export const ESCAPE_LAYER_PRIORITIES = {
      */
     browserStopLoading: 5,
     focusSessionSurface: 10,
+    /** Take control of a shared computer from the Agent: only when no overlay, pane or selection claims Escape. */
+    computerTakeControl: 12,
     sessionListSelection: 15,
     draftClear: 20,
     pane: 100,

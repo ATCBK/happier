@@ -70,7 +70,7 @@ describe('prompt picker presentation controls', () => {
     it('places the empty favourites invitation inside the list without adding a selectable row', async () => {
         const { screen, outcomes } = await mount();
         const list = screen.findByTestId('agent-input-prompt-picker:list');
-        expect(list?.findAll((node) => node.props.children === 'agentInput.promptPicker.favoritesInvite').length).toBeGreaterThan(0);
+        expect(list?.findAll((node) => node.children.includes('agentInput.promptPicker.favoritesInvite')).length).toBeGreaterThan(0);
         await act(async () => screen.findByTestId('prompt-picker-search')?.props.onSubmitEditing?.());
         expect(outcomes.applied).toEqual([{ text: 'body', mode: 'insert' }]);
     });

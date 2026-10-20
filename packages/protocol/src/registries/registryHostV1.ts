@@ -1,7 +1,7 @@
 import { decodeBase64,encodeBase64 } from '../crypto/base64.js';
 import { REGISTRY_ACTION_INPUT_SCHEMAS_V1,REGISTRY_ACTION_OUTPUT_SCHEMAS_V1,type RegistryActionIdV1 } from './registryActionsV1.js';
 import { REGISTRY_FORMAT_ADAPTERS_V1 } from './formats/index.js';
-import { githubRegistryAdapterV1,createGitHubRegistryOperationV1,readGitHubRepositoryV1 } from './formats/github.js';
+import { githubRegistryAdapterV1,createGitHubRegistryOperationV1,readGitHubRepositoryV1,registryRelativePathV1 } from './formats/github.js';
 import { createClaudeMarketplaceRegistryAdapterV1 } from './formats/claudeMarketplace.js';
 import type { RegistryDetectedSourceV1,RegistryFetchContextV1,RegistryHttpV1,RegistryFormatAdapterV1 } from './formats/registryFormatAdapterV1.js';
 import { HAPPIER_PICKS_SOURCE_ID,deriveRegistrySourceIdV1,normalizeRegistrySourceUrlV1,resolveLegacyRegistrySourceRefV1,type RegistrySourceV1,type RegistrySourceDescriptorV1 } from './registrySourcesV1.js';
@@ -16,11 +16,11 @@ import type { RegistryUpdateCheckResultV1 } from './registryUpdatesV1.js';
 export type RegistryHostDepsV1=Readonly<{
   host:'web'|'native'|'node';http:RegistryHttpV1;signal?:AbortSignal;git?:RegistryFetchContextV1['git'];
   readSources:()=>Promise<readonly RegistrySourceDescriptorV1[]>;
-  updates?:(filter?:import('zod').infer<typeof REGISTRY_ACTION_INPUT_SCHEMAS_V1['registries.updates.check']>)=>Promise<RegistryUpdateCheckResultV1>;
+  updates?:(filter?:import('zod/mini').infer<typeof REGISTRY_ACTION_INPUT_SCHEMAS_V1['registries.updates.check']>)=>Promise<RegistryUpdateCheckResultV1>;
   mutateSources?:(mutation:RegistrySourcesMutationV1)=>Promise<RegistrySourcesMutationResultV1>;
   daemonFetch?:(request:RegistryFetchRequestV1)=>Promise<RegistryFetchResponseV1>;
   /** Delegates the same approved create Action; never sends credential material to the client. */
-  createSourceOnDaemon?:(input:import('zod').infer<typeof REGISTRY_ACTION_INPUT_SCHEMAS_V1['registries.sources.create']>)=>Promise<import('zod').infer<typeof REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.sources.create']>>;
+  createSourceOnDaemon?:(input:import('zod/mini').infer<typeof REGISTRY_ACTION_INPUT_SCHEMAS_V1['registries.sources.create']>)=>Promise<import('zod/mini').infer<typeof REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.sources.create']>>;
 }>;
 /** Only rejected transport calls carry this mark; adapter/parser TypeErrors do not. */
 class RegistryTransportFailureV1 extends Error {
@@ -37,9 +37,14 @@ export async function detectRegistrySourceV1(ctx:RegistryFetchContextV1,url:stri
   const normalized=normalizeRegistrySourceUrlV1(url);
   const repo=readGitHubRepositoryV1(normalized);
   if(repo) {
-    const marketplace=await ctx.http.getJson(`https://raw.githubusercontent.com/${repo.owner}/${repo.repo}/HEAD/.claude-plugin/marketplace.json`);
-    if (!marketplace.ok && marketplace.status.state === 'rate_limited') throw new RegistryFetchErrorV1(marketplace.status);
-    if(marketplace.ok && marketplace.value && typeof marketplace.value==='object' && 'plugins' in marketplace.value) return {format:'claude-marketplace',kinds:['skill'],title:repo.repo};
+    // An explicit skill file selects its folder; otherwise detect the format at
+    // the selected folder/ref, which may differ from the repository root.
+    if (!new URL(normalized).pathname.endsWith('/SKILL.md')) {
+      const path = registryRelativePathV1(repo.path ?? '').replace(/(?:^|\/)\.claude-plugin\/marketplace\.json$/, '');
+      const marketplace=await ctx.http.getJson(`https://raw.githubusercontent.com/${repo.owner}/${repo.repo}/${encodeURIComponent(repo.ref ?? 'HEAD')}/${path ? path.split('/').map(encodeURIComponent).join('/')+'/' : ''}.claude-plugin/marketplace.json`);
+      if (!marketplace.ok && marketplace.status.state === 'rate_limited') throw new RegistryFetchErrorV1(marketplace.status);
+      if(marketplace.ok && marketplace.value && typeof marketplace.value==='object' && 'plugins' in marketplace.value) return {format:'claude-marketplace',kinds:['skill'],title:repo.repo};
+    }
     const response=await ctx.http.getJson(`https://api.github.com/repos/${repo.owner}/${repo.repo}`);
     if (!response.ok && response.status.state === 'rate_limited') throw new RegistryFetchErrorV1(response.status);
     if(!response.ok) return {unsupported:response.status.state==='auth_failed'?'needs_token':'unreachable'};
@@ -148,11 +153,13 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
     };
     return fetchRegistrySkillFilesV1({...ctx,http},skill);
   };
-  const fetchRequest = async (raw: RegistryFetchRequestV1): Promise<RegistryFetchResponseV1> => {
+  const fetchRequest = async (raw: RegistryFetchRequestV1, admittedSource?: RegistrySourceDescriptorV1): Promise<RegistryFetchResponseV1> => {
     const request = RegistryFetchRequestV1Schema.parse(raw);
     try {
+      deps.signal?.throwIfAborted();
       if (!('sourceId' in request)) return await fetchLinkRequest(request);
-      const source = await sourceById(request.sourceId);
+      // A list already admitted this exact descriptor from its one Account inventory.
+      const source = admittedSource ?? await sourceById(request.sourceId);
       if (!source.enabled) throw new RegistryFetchErrorV1({ state: 'invalid_source' });
       const placements = resolveRegistryFetchPlanV1({
         host: deps.host, adapter: adapterFor(source), source, op: request.op,
@@ -343,7 +350,7 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
         const args = REGISTRY_ACTION_INPUT_SCHEMAS_V1[actionId].parse(value);
         const sources = (await deps.readSources()).filter(source => !args.kind || source.kinds.includes(args.kind));
         const picks = args.kind && args.kind !== 'plugin' && sources.find(source => source.id === HAPPIER_PICKS_SOURCE_ID);
-        const page = picks && await fetchRequest({ op: 'list', sourceId: picks.id, kind: args.kind! });
+        const page = picks && await fetchRequest({ op: 'list', sourceId: picks.id, kind: args.kind! }, picks);
         output = { sources: page && (page.op !== 'list' || page.page.items.length === 0)
           ? sources.filter(source => source.id !== HAPPIER_PICKS_SOURCE_ID) : sources };
         break;
@@ -442,7 +449,7 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
         const sources = (await deps.readSources()).filter(source => source.enabled && source.kinds.includes(args.kind)
           && (!args.sourceIds || args.sourceIds.includes(source.id)));
         const pages = await Promise.all(sources.map(async source => {
-          const response = await fetchRequest({ op: 'list', sourceId: source.id, kind: args.kind, query: args.query, cursor: args.cursor });
+          const response = await fetchRequest({ op: 'list', sourceId: source.id, kind: args.kind, query: args.query, cursor: args.cursor }, source);
           return response.op === 'list' ? response.page : {
             sourceId: source.id, status: response.op === 'error' ? response.status : { state: 'invalid_source' },
             items: [], nextCursor: null,
@@ -470,7 +477,8 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
     return REGISTRY_ACTION_OUTPUT_SCHEMAS_V1[actionId].parse(output);
   };
   return {
-    execute, fetchRequest, readRegistryItem, readRegistrySource: sourceById,
+    // The public fetch boundary always resolves Account authority; callers cannot supply a descriptor.
+    execute, fetchRequest: (request: RegistryFetchRequestV1) => fetchRequest(request), readRegistryItem, readRegistrySource: sourceById,
     fetchRegistrySkillFiles: filesForPointer, filesForPointer, readLinkSkills, fetchLinkSkillFiles,
   };
 }

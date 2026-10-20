@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
+import { z as zMini } from 'zod/mini';
 import { SessionAuthoringTerminalV1Schema } from './authoring/creationFieldsV1.js';
 import { OperationUpdateRequiredV1Schema } from '../compat/operationUpdateRequiredV1.js';
 import { SessionAccessErrorCodeV1Schema } from './access/sessionAccessOperationsV1.js';
@@ -17,20 +18,23 @@ export { SessionSpawnLaunchErrorV1Schema, type SessionSpawnLaunchErrorV1 } from 
 import { SessionSpawnLaunchErrorV1Schema, type SessionSpawnLaunchErrorV1 } from './creation/sessionSpawnLaunchErrorV1.js';
 
 // Process launch accepts the existing daemon modes, not integrated UI authoring.
-export const SpawnSessionTerminalSchema = lazyZodSchema(() => SessionAuthoringTerminalV1Schema.pick({ mode: true, tmux: true, herdr: true }).extend({
-  mode: SessionAuthoringTerminalV1Schema.shape.mode.unwrap().exclude(['integrated']).optional(),
-  tmux: SessionAuthoringTerminalV1Schema.shape.tmux.unwrap().strip().optional(),
-  herdr: SessionAuthoringTerminalV1Schema.shape.herdr.unwrap().strip().optional(),
-}).strip());
+export const SpawnSessionTerminalSchema = lazyZodSchema(() => {
+  const { mode, tmux, herdr } = SessionAuthoringTerminalV1Schema.shape;
+  return z.object({
+    mode: z.optional(z.enum(mode._zod.def.innerType.options.filter(value => value !== 'integrated'))),
+    tmux: z.optional(z.object(tmux._zod.def.innerType.shape)),
+    herdr: z.optional(z.object(herdr._zod.def.innerType.shape)),
+  });
+});
 
 /** Fresh execution authority is bound to the exact opaque user-message local id. */
-export const SpawnSessionExecutionAuthorizationSchema = lazyZodSchema(() => z.object({
+export const SpawnSessionExecutionAuthorizationSchema = lazyZodSchema(() => z.strictObject({
   provenance: z.literal('user_request'),
-  requestId: z.string().refine((value) => value.trim().length > 0, {
+  requestId: z.string().check(z.refine((value) => value.trim().length > 0, {
     message: 'Execution authorization request id must not be blank',
-  }),
-  requestedAt: z.number().int().nonnegative().optional(),
-}).strict());
+  })),
+  requestedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+}));
 export type SpawnSessionExecutionAuthorization = z.infer<typeof SpawnSessionExecutionAuthorizationSchema>;
 
 export const SPAWN_SESSION_ERROR_CODES = {
@@ -100,6 +104,8 @@ export type SpawnSessionErrorCode = (typeof SPAWN_SESSION_ERROR_CODES)[keyof typ
 export const SPAWN_SESSION_ERROR_DETAIL_KINDS = {
   LAUNCH_ERROR: 'launch_error',
   LAUNCH_RETIRED: 'launch_retired',
+  /** Fresh requester Home evidence was unavailable before the runner launched. */
+  REQUESTER_HOME_UNAVAILABLE: 'requester_home_unavailable',
   SPAWN_FAILURE: 'spawn_failure',
   TERMINAL_HOST_UNAVAILABLE: 'terminal_host_unavailable',
   /**
@@ -179,10 +185,10 @@ export type ProviderSpawnErrorDetail = Readonly<{
  * Safe terminal result emitted only when the server rejected the requested
  * creation-time organization placement with its explicit stable error code.
  */
-export const SessionCreationOrganizationInvalidSpawnErrorDetailSchema = lazyZodSchema(() => z.object({
+export const SessionCreationOrganizationInvalidSpawnErrorDetailSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal(SPAWN_SESSION_ERROR_DETAIL_KINDS.SESSION_CREATION_ORGANIZATION_INVALID),
   code: z.literal('organization_invalid'),
-}).strict());
+}));
 export type SessionCreationOrganizationInvalidSpawnErrorDetail = z.infer<
   typeof SessionCreationOrganizationInvalidSpawnErrorDetailSchema
 >;
@@ -191,10 +197,10 @@ export type SessionCreationOrganizationInvalidSpawnErrorDetail = z.infer<
  * Safe terminal result emitted when an existing Session's immutable
  * create-or-rejoin correspondence differs from the admitted request.
  */
-export const SessionCreationCorrespondenceConflictSpawnErrorDetailSchema = lazyZodSchema(() => z.object({
+export const SessionCreationCorrespondenceConflictSpawnErrorDetailSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal(SPAWN_SESSION_ERROR_DETAIL_KINDS.SESSION_CREATION_CORRESPONDENCE_CONFLICT),
   code: z.literal('creation_conflict'),
-}).strict());
+}));
 export type SessionCreationCorrespondenceConflictSpawnErrorDetail = z.infer<
   typeof SessionCreationCorrespondenceConflictSpawnErrorDetailSchema
 >;
@@ -203,10 +209,10 @@ export type SessionCreationCorrespondenceConflictSpawnErrorDetail = z.infer<
  * Safe terminal result emitted when the Home's atomic create refused the
  * requested initial access with a protocol-owned Session-access code.
  */
-export const SessionCreationAccessRefusedSpawnErrorDetailSchema = lazyZodSchema(() => z.object({
+export const SessionCreationAccessRefusedSpawnErrorDetailSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal(SPAWN_SESSION_ERROR_DETAIL_KINDS.SESSION_CREATION_ACCESS_REFUSED),
   code: SessionAccessErrorCodeV1Schema,
-}).strict());
+}));
 export type SessionCreationAccessRefusedSpawnErrorDetail = z.infer<
   typeof SessionCreationAccessRefusedSpawnErrorDetailSchema
 >;
@@ -216,11 +222,11 @@ export const SessionCreationTerminalSpawnErrorDetailSchema = lazyZodSchema(() =>
   SessionCreationOrganizationInvalidSpawnErrorDetailSchema,
   SessionCreationCorrespondenceConflictSpawnErrorDetailSchema,
   SessionCreationAccessRefusedSpawnErrorDetailSchema,
-  z.object({
+  z.strictObject({
     kind: z.literal(SPAWN_SESSION_ERROR_DETAIL_KINDS.SESSION_CREATION_INITIAL_TRIGGER_REFUSED),
     code: z.enum(['invalid_input', 'target_unavailable', 'feature_disabled']),
-  }).strict(),
-  OperationUpdateRequiredV1Schema.extend({
+  }),
+  zMini.extend(OperationUpdateRequiredV1Schema, {
     operation: z.literal('session.spawn_new'),
     component: z.enum(['server', 'daemon']),
     reason: z.literal('session_initial_access_update_required'),
@@ -230,30 +236,37 @@ export type SessionCreationTerminalSpawnErrorDetail = z.infer<
   typeof SessionCreationTerminalSpawnErrorDetailSchema
 >;
 
-export const TerminalHostUnavailableSpawnErrorDetailSchema = lazyZodSchema(() => z.object({
+export const TerminalHostUnavailableSpawnErrorDetailSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal(SPAWN_SESSION_ERROR_DETAIL_KINDS.TERMINAL_HOST_UNAVAILABLE),
   host: z.enum(['herdr', 'zellij']),
   reason: z.enum(['installation_unavailable', 'server_version_unsupported']),
-}).strict());
+}));
 export type TerminalHostUnavailableSpawnErrorDetail = z.infer<typeof TerminalHostUnavailableSpawnErrorDetailSchema>;
 
 /** Optional presentation diagnostic; the existing spawn outcome and error code remain authoritative. */
-export const SpawnFailureSpawnErrorDetailSchema = lazyZodSchema(() => SpawnFailureV1Schema.extend({
+export const SpawnFailureSpawnErrorDetailSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SpawnFailureV1Schema, {
   kind: z.literal(SPAWN_SESSION_ERROR_DETAIL_KINDS.SPAWN_FAILURE),
-}).strict());
+})));
 export type SpawnFailureSpawnErrorDetail = z.infer<typeof SpawnFailureSpawnErrorDetailSchema>;
 
 /** Exact daemon proof: startup failed before input, and its wrapper/runner custody was retired. */
-export const SessionLaunchRetiredV1Schema = lazyZodSchema(() => z.object({
+export const SessionLaunchRetiredV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('launch_retired'),
-  spawnNonce: z.string().min(1),
-  wrapperPid: z.number().int().positive().safe(),
-}).strict());
+  spawnNonce: z.string().check(z.minLength(1)),
+  wrapperPid: z.number().check(z.int(), z.positive(), z.int()),
+}));
 export type SessionLaunchRetiredV1 = z.infer<typeof SessionLaunchRetiredV1Schema>;
+
+/** Content-free transient cause; neither revocation nor a missing daemon capability. */
+const RequesterHomeUnavailableSpawnErrorDetailSchema = lazyZodSchema(() => z.strictObject({
+  kind: z.literal(SPAWN_SESSION_ERROR_DETAIL_KINDS.REQUESTER_HOME_UNAVAILABLE),
+}));
+type RequesterHomeUnavailableSpawnErrorDetail = z.infer<typeof RequesterHomeUnavailableSpawnErrorDetailSchema>;
 
 export type SpawnSessionErrorDetail =
   | SessionSpawnLaunchErrorV1
   | SessionLaunchRetiredV1
+  | RequesterHomeUnavailableSpawnErrorDetail
   | SpawnFailureSpawnErrorDetail
   | TerminalHostUnavailableSpawnErrorDetail
   | ConnectedServiceResumeUnreachableSpawnErrorDetail
@@ -518,6 +531,7 @@ export function isSessionCreationTerminalSpawnErrorDetail(
 export function isSpawnSessionErrorDetail(value: unknown): value is SpawnSessionErrorDetail {
   return SessionSpawnLaunchErrorV1Schema.safeParse(value).success
     || SessionLaunchRetiredV1Schema.safeParse(value).success
+    || RequesterHomeUnavailableSpawnErrorDetailSchema.safeParse(value).success
     || SpawnFailureSpawnErrorDetailSchema.safeParse(value).success
     || TerminalHostUnavailableSpawnErrorDetailSchema.safeParse(value).success
     || isConnectedServiceResumeUnreachableSpawnErrorDetail(value)
@@ -531,6 +545,7 @@ export function normalizeSpawnSessionErrorDetail(value: unknown): SpawnSessionEr
   if (!detail) return undefined;
   return SessionSpawnLaunchErrorV1Schema.safeParse(detail).data
     ?? SessionLaunchRetiredV1Schema.safeParse(detail).data
+    ?? RequesterHomeUnavailableSpawnErrorDetailSchema.safeParse(detail).data
     ?? SpawnFailureSpawnErrorDetailSchema.safeParse(detail).data
     ?? TerminalHostUnavailableSpawnErrorDetailSchema.safeParse(detail).data
     ?? normalizeConnectedServiceResumeUnreachableDetail(detail)

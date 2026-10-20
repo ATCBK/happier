@@ -1,21 +1,28 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ACTION_ID_FAMILIES_V1 } from '../../actions/actionIds.js';
 import { RPC_METHODS } from '../../rpc/methods.js';
 import { browserViewKey } from '../view/key.js';
-import { BrowserViewV1Schema } from '../view/v1.js';
+import { BROWSER_VIEW_ID_MAX_LENGTH } from '../view/v1.js';
 import { BrowserCommandDispatchResultV1Schema } from '../control/v1.js';
 import { BrowserAutomationActionResultV1Schema, BrowserAutomationCancelActiveResultV1Schema, BrowserAutomationInterruptedResultV1Schema, BrowserAutomationTimelineV1Schema } from './v1.js';
+import { BrowserDiagnosticsEvalResultV1Schema, BrowserDiagnosticsGetPropertiesResultV1Schema, BrowserDiagnosticsReleaseObjectGroupResultV1Schema, BrowserDiagnosticsElementPickerResultV1Schema } from '../diagnostics/v1.js';
+
+/** Interactive verbs with an actual mounted injected-engine producer. */
+export const MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS = [
+  'browser.diagnostics.eval', 'browser.diagnostics.getProperties', 'browser.diagnostics.releaseObjectGroup',
+  'browser.diagnostics.elementPicker.start', 'browser.diagnostics.elementPicker.cancel',
+] as const;
 
 /** A continuation of an already-admitted daemon Action, on the exact client-owned view. */
-export const UiBrowserAutomationDispatchRequestV1Schema = lazyZodSchema(() => z.object({
+export const UiBrowserAutomationDispatchRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  sessionId: z.string().trim().min(1),
-  actionId: z.enum([...ACTION_ID_FAMILIES_V1.browser_automation, 'browser.control.takeControl', 'browser.control.handBack']),
+  sessionId: z.string().check(z.trim(), z.minLength(1)),
+  actionId: z.enum([...ACTION_ID_FAMILIES_V1.browser_automation, ...MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS, 'browser.control.takeControl', 'browser.control.handBack', 'browser.view.openExternal']),
   input: z.unknown(),
-  authority: z.enum(['present_user', 'account_automation']).optional(),
-}).strict());
+  authority: z.optional(z.enum(['present_user', 'account_automation'])),
+}));
 export type UiBrowserAutomationDispatchRequestV1 = z.infer<typeof UiBrowserAutomationDispatchRequestV1Schema>;
 
 export const UiBrowserAutomationDispatchResultV1Schema = lazyZodSchema(() => z.union([
@@ -24,7 +31,11 @@ export const UiBrowserAutomationDispatchResultV1Schema = lazyZodSchema(() => z.u
   BrowserAutomationTimelineV1Schema,
   BrowserAutomationCancelActiveResultV1Schema,
   BrowserAutomationInterruptedResultV1Schema,
-  z.object({ ok: z.literal(false), errorCode: z.string().min(1), error: z.string().min(1) }).strict(),
+  BrowserDiagnosticsEvalResultV1Schema,
+  BrowserDiagnosticsGetPropertiesResultV1Schema,
+  BrowserDiagnosticsReleaseObjectGroupResultV1Schema,
+  BrowserDiagnosticsElementPickerResultV1Schema,
+  z.strictObject({ ok: z.literal(false), errorCode: z.string().check(z.minLength(1)), error: z.string().check(z.minLength(1)) }),
 ]));
 
 /** The existing RPC room is view-addressed so another tab cannot answer for this view. */
@@ -39,7 +50,5 @@ export function isUiBrowserAutomationDispatchMethod(method: string): boolean {
 
 // Each UTF-16 unit needs at most nine URI characters after JSON escaping. Include both
 // length prefixes and the encoded JSON quotes; the view identity schemas own the lengths.
-const sessionIdMax = BrowserViewV1Schema.shape.browserSessionId.maxLength ?? 0;
-const viewIdMax = BrowserViewV1Schema.shape.viewId.maxLength ?? 0;
 export const UI_BROWSER_AUTOMATION_DISPATCH_KEY_MAX_LENGTH =
-  9 * (sessionIdMax + viewIdMax + String(sessionIdMax).length + String(viewIdMax).length + 2) + 6;
+  9 * (2 * BROWSER_VIEW_ID_MAX_LENGTH + 2 * String(BROWSER_VIEW_ID_MAX_LENGTH).length + 2) + 6;

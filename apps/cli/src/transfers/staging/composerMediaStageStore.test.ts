@@ -46,6 +46,43 @@ describe('Composer media stage store', () => {
     }));
   });
 
+  it('marks only store-produced submission snapshots and retains their custody while offline', async () => {
+    const tempDirectory = await mkdtemp(join(tmpdir(), 'happier-composer-media-snapshot-custody-'));
+    tempDirectories.push(tempDirectory);
+    const tempPath = join(tempDirectory, 'incoming.png');
+    const bytes = createOneBitGrayscalePng(1, 1);
+    await writeFile(tempPath, bytes);
+    let now = 1_000;
+    const rootDirectory = join(tempDirectory, 'stages');
+    const store = createComposerMediaStageStore({ rootDirectory, executionTarget, now: () => now, orphanTtlMs: 100 });
+    const original = await store.finalizeUpload({ tempPath, sizeBytes: bytes.byteLength, sha256: sha256(bytes), executionTarget,
+      owner, mediaKind: 'image', mimeType: 'image/png', name: 'offline.png' });
+    if (!original.success) throw new Error(original.error);
+    const claimant = { composer: { kind: 'session', sessionId: 'session-a' }, attachmentInstanceId: 'attachment-a' } as const;
+    await store.claim({ handle: original.handle, executionTarget, owner, claimant });
+    const captured = await store.forkClaimForSubmission({ handle: original.handle, executionTarget, owner,
+      sourceClaimant: claimant, destinationClaimant: claimant, messageLocalId: 'ask-offline' });
+    if (captured.status !== 'claimed' || !captured.handle) throw new Error('Expected a captured submission');
+    await expect(store.inspectForFinalization({ handle: original.handle, executionTarget, owner, claimant }))
+      .resolves.not.toHaveProperty('isSubmissionSnapshot');
+    await expect(store.inspectForFinalization({ handle: captured.handle, executionTarget, owner, claimant }))
+      .resolves.toMatchObject({ status: 'ready', isSubmissionSnapshot: true });
+    now += 10_000;
+    await runComposerMediaStageStartupMaintenance({ rootDirectory, now: () => now, orphanTtlMs: 100 });
+    const restarted = createComposerMediaStageStore({ rootDirectory, executionTarget, now: () => now, orphanTtlMs: 100 });
+    await expect(restarted.inspectForFinalization({ handle: captured.handle, executionTarget, owner, claimant }))
+      .resolves.toMatchObject({ status: 'ready', isSubmissionSnapshot: true });
+    for (const [index, custody] of ['unsupported', { kind: 'submission' }].entries()) {
+      const invalid = await restarted.forkClaimForSubmission({ handle: original.handle, executionTarget, owner,
+        sourceClaimant: claimant, destinationClaimant: claimant, messageLocalId: `invalid-custody-${index}` });
+      if (invalid.status !== 'claimed' || !invalid.handle) throw new Error('Expected a captured submission');
+      await writeFile(join(rootDirectory, 'completed', invalid.handle.id, 'manifest.json'),
+        JSON.stringify({ v: 1, createdAtMs: now, handle: invalid.handle, custody }));
+      await expect(restarted.inspectForFinalization({ handle: invalid.handle, executionTarget, owner, claimant }))
+        .resolves.toMatchObject({ status: 'unavailable', reason: 'corrupt' });
+    }
+  });
+
   it('projects only producer claims and release markers as temporary lifecycle facts', async () => {
     const activeServerDir = await realpath(await mkdtemp(join(tmpdir(), 'happier-stage-storage-facts-')));
     tempDirectories.push(activeServerDir);
@@ -442,6 +479,11 @@ describe('Composer media stage store', () => {
       owner,
       claimant,
     })).resolves.toMatchObject({ status: 'ready' });
+    const restartedStore = createComposerMediaStageStore({ rootDirectory, executionTarget });
+    await expect(restartedStore.forkClaimForSubmission({
+      handle: finalized.handle, executionTarget, owner, sourceClaimant: claimant,
+      destinationClaimant: claimant, messageLocalId: 'message-1',
+    })).resolves.toMatchObject({ status: 'claimed', newlyAcquired: false, handle: forked.handle });
   });
 
   it('forks an unclaimed stage for a same-document submission capture and leaves it claimed for its owner', async () => {

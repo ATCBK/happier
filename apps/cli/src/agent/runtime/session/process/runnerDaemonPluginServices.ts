@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
-import type { ZodType } from 'zod';
+import type { ZodMiniType as ZodType } from 'zod/mini';
+import type { $ZodIssue } from 'zod/v4/core';
 import { isPluginError, PluginError } from '@happier-dev/plugin-sdk';
 import type {
     JsonValue,
@@ -219,6 +220,8 @@ type RunnerAuthorizedLaunchWire = Readonly<{
     maxStdoutBytes?: number;
     maxStderrBytes?: number;
     windowsVerbatimArguments?: true;
+    processOwnerTag?: string;
+    waitForGracefulRootExitBeforeTreeStop?: true;
 }>;
 
 function isRunnerAuthorizedLaunchWire(
@@ -257,6 +260,14 @@ function isRunnerAuthorizedLaunchWire(
         && (
             value.windowsVerbatimArguments === undefined
             || value.windowsVerbatimArguments === true
+        )
+        && (
+            value.processOwnerTag === undefined
+            || typeof value.processOwnerTag === 'string'
+        )
+        && (
+            value.waitForGracefulRootExitBeforeTreeStop === undefined
+            || value.waitForGracefulRootExitBeforeTreeStop === true
         );
 }
 
@@ -305,10 +316,31 @@ function parsePreparedSnapshot(
         managedProvider !== null
         && !managedProvider.success
     ) {
+        // Keep schema locations, including the leaves of a failed union,
+        // without recording credential values or capability paths.
+        const projectIssue = (
+            issue: $ZodIssue,
+            parentPath: readonly (string | number)[] = [],
+        ): Array<{ path: (string | number)[]; code: string }> => {
+            const path = [...parentPath, ...issue.path.map(
+                (part) => typeof part === 'symbol' ? String(part) : part,
+            )];
+            return issue.code === 'invalid_union'
+                ? issue.errors.flatMap((branch) => branch.flatMap(
+                    (child) => projectIssue(child, path),
+                ))
+                : [{ path, code: issue.code }];
+        };
+        const issues = managedProvider.error.issues.flatMap(
+            (issue) => projectIssue(issue),
+        );
         throw new PluginError({
             code: 'plugin_services_prepare_invalid',
-            message:
-                'Daemon returned an invalid managed Provider preparation bootstrap',
+            message: 'Daemon returned an invalid managed Provider preparation bootstrap: '
+                + issues.map(({ path, code }) => JSON.stringify(
+                    `${path.join('.') || '<root>'}:${code}`,
+                )).join(', '),
+            details: { issues },
         });
     }
     return Object.freeze({
@@ -405,6 +437,8 @@ function readDaemonWitness(
 export async function prepareRunnerDaemonPluginServices(
     input: Readonly<{
         invocationId: string;
+        /** Host-authored child cwd; only snapshot-backed Run invocations use it. */
+        executionRunCwd?: string;
         processOwner?: import('@/processes/ownerTag').ProcessOwnerRef;
         dispatch: RunnerDaemonPluginServicesDispatchV1;
         signal: AbortSignal;
@@ -457,6 +491,13 @@ export async function prepareRunnerDaemonPluginServices(
         >;
     }>,
 ): Promise<PluginServices> {
+    const dispatchInInvocation: RunnerDaemonPluginServicesDispatchV1 = (operation, options) =>
+        input.dispatch(operation, {
+            ...options,
+            signal: options?.signal
+                ? AbortSignal.any([input.signal, options.signal])
+                : input.signal,
+        });
     let prepared:
         PreparedRunnerDaemonPluginServicesSnapshotV1;
     let prepareInFlight:
@@ -482,7 +523,7 @@ export async function prepareRunnerDaemonPluginServices(
     });
     const startPreparedManagedProvider = async (
         snapshot: PreparedRunnerDaemonPluginServicesSnapshotV1,
-        send: RunnerDaemonPluginServicesDispatchV1 = input.dispatch,
+        send: RunnerDaemonPluginServicesDispatchV1 = dispatchInInvocation,
     ): Promise<void> => {
         if (!snapshot.managedProvider) return;
         await send({
@@ -494,7 +535,9 @@ export async function prepareRunnerDaemonPluginServices(
             ),
         });
     };
-    const prepareCurrentAuthority = async () => {
+    const prepareCurrentAuthority = async (
+        send: RunnerDaemonPluginServicesDispatchV1 = dispatchInInvocation,
+    ) => {
         prepareInFlight ??= (async () => {
             const recoveredRetention =
                 managedProviderRetention
@@ -508,10 +551,11 @@ export async function prepareRunnerDaemonPluginServices(
                 : null;
             managedProviderRetention = requestedRetention;
             const snapshot = parsePreparedSnapshot(
-                await input.dispatch({
+                await send({
                 kind: 'plugin_services.prepare_v1',
                 requestId: randomUUID(),
                 invocationId: input.invocationId,
+                ...(input.executionRunCwd ? { executionRunCwd: input.executionRunCwd } : {}),
                 ...(managedProviderRetention
                     ? { managedProviderRetention }
                     : {}),
@@ -549,7 +593,7 @@ export async function prepareRunnerDaemonPluginServices(
             prepared = snapshot;
             refreshManagedServicesBinding?.();
             if (refreshManagedServicesBinding) {
-                await startPreparedManagedProvider(snapshot);
+                await startPreparedManagedProvider(snapshot, send);
                 managedProviderRetention = snapshot.managedProvider
                     ? retainedFromBootstrap(
                         snapshot.managedProvider,
@@ -601,14 +645,16 @@ export async function prepareRunnerDaemonPluginServices(
             || operation.kind === 'plugin_sessions.external.close_list_v1'
             || operation.kind
                 === 'plugin_storage.transaction.rollback_v1';
+        // Cleanup keeps its own existing lifetime after the invocation retires.
+        const send = lifecycleCleanup ? input.dispatch : dispatchInInvocation;
         const ensurePreparedAfterObservedAuthority = async () => {
             if (prepareRevision !== observedPrepareRevision) {
                 return prepared;
             }
-            return await prepareCurrentAuthority();
+            return await prepareCurrentAuthority(send);
         };
         try {
-            return await input.dispatch(operation, options) as T;
+            return await send(operation, options) as T;
         } catch (error) {
             if (
                 readErrorCode(error)
@@ -625,7 +671,7 @@ export async function prepareRunnerDaemonPluginServices(
                 // reaching any canonical service method. Reprepare the same
                 // invocation on the current authority and retry once.
                 await ensurePreparedAfterObservedAuthority();
-                return await input.dispatch(
+                return await send(
                     operation,
                     options,
                 ) as T;
@@ -2019,31 +2065,39 @@ export async function prepareRunnerDaemonPluginServices(
         Object.freeze({
             async send(request, options) {
                 assertAvailable('notifications');
+                const { channelIds, data, ...wireRequest } = request;
                 return await dispatch<Awaited<ReturnType<
                     PluginServices['notifications']['send']
                 >>>({
                     kind: 'plugin_notifications.send_v1',
                     ...requestBase(),
                     request: {
+                        // Preserve unknown JS input until the closed transport
+                        // schema rejects it; never silently ignore routing intent.
+                        ...wireRequest,
                         clientRequestId:
                             request.clientRequestId,
                         categoryId: request.categoryId,
                         title: request.title,
+                        ...(request.itemId === undefined ? {} : { itemId: request.itemId }),
+                        ...(request.type === undefined ? {} : { type: request.type }),
+                        ...(request.page === undefined ? {} : { page: request.page }),
+                        ...(request.resolved === undefined ? {} : { resolved: request.resolved }),
                         ...(request.body
                             ? { body: request.body }
                             : {}),
-                        ...(request.channelIds
+                        ...(channelIds
                             ? {
                                 channelIds: [
-                                    ...request.channelIds,
+                                    ...channelIds,
                                 ],
                             }
-                            : {}),
-                        ...(request.data !== undefined
+                            : Object.hasOwn(request, 'channelIds') ? { channelIds } : {}),
+                        ...(data !== undefined
                             ? {
                                 data:
                                     encodeRunnerDaemonPluginServiceWireValueV1(
-                                        request.data,
+                                        data,
                                     ),
                         }
                         : {}),
@@ -2434,6 +2488,25 @@ export async function prepareRunnerDaemonPluginServices(
         }
         return value;
     };
+    const readAuthorizedExecLaunch = (raw: Record<string, unknown>): HostAuthorizedPluginExecLaunch => {
+        if (typeof raw.authorizationId !== 'string' || !isRunnerAuthorizedLaunchWire(raw.launch)) {
+            throw new PluginError({ code: 'plugin_exec_launch_authorization_invalid',
+                message: 'Daemon returned an invalid process launch authorization' });
+        }
+        const authorizationId = raw.authorizationId;
+        const { stdin, ...launch } = raw.launch;
+        let released = false;
+        return Object.freeze({ ...launch,
+            args: Object.freeze([...launch.args]), env: Object.freeze({ ...launch.env }),
+            ...(stdin === undefined ? {} : { stdin: new Uint8Array(Buffer.from(stdin, 'base64')) }),
+            release() {
+                if (released) return;
+                released = true;
+                void dispatch<null>({ kind: 'plugin_exec.launch.release_v1', requestId: randomUUID(),
+                    invocationId: input.invocationId, authorizationId }, { timeoutMs: 1_000 }).catch(() => undefined);
+            },
+        });
+    };
     const exec = createStableRunnerPluginExecService({
         ...(input.processOwner ? { processOwner: input.processOwner } : {}),
         signal: input.signal,
@@ -2543,7 +2616,7 @@ export async function prepareRunnerDaemonPluginServices(
             >[0] & Readonly<{ timeoutMs?: number }>,
             options?: Parameters<
                 PluginServices['exec']['spawn']
-            >[1],
+            >[1] & Readonly<{ agentNativeLaunch?: true }>,
             systemToolResolutionId?: string,
         ) {
             assertAvailable('exec');
@@ -2552,6 +2625,7 @@ export async function prepareRunnerDaemonPluginServices(
                     kind:
                         'plugin_exec.launch.authorize_v1',
                     ...requestBase(),
+                    ...(options?.agentNativeLaunch ? { agentNativeLaunch: true as const } : {}),
                     ...(systemToolResolutionId
                         ? { systemToolResolutionId }
                         : {}),
@@ -2596,73 +2670,16 @@ export async function prepareRunnerDaemonPluginServices(
                 'plugin_exec_launch_authorization_invalid',
                 'Daemon returned an invalid process launch authorization',
             );
-            if (
-                typeof raw.authorizationId !== 'string'
-                || !isRunnerAuthorizedLaunchWire(raw.launch)
-            ) {
-                throw new PluginError({
-                    code:
-                        'plugin_exec_launch_authorization_invalid',
-                    message:
-                        'Daemon returned an invalid process launch authorization',
-                });
-            }
-            let released = false;
-            const authorizationId = raw.authorizationId;
-            const launch = raw.launch;
-            const command = launch.command;
-            const args = launch.args;
-            return Object.freeze({
-                command,
-                args: Object.freeze([...args]),
-                env: Object.freeze({
-                    ...launch.env,
-                }),
-                ...(typeof launch.cwd === 'string'
-                    ? { cwd: launch.cwd }
-                    : {}),
-                ...(typeof launch.stdin === 'string'
-                    ? {
-                        stdin: new Uint8Array(
-                            Buffer.from(
-                                launch.stdin,
-                                'base64',
-                            ),
-                        ),
-                    }
-                    : {}),
-                ...(typeof launch.timeoutMs === 'number'
-                    ? { timeoutMs: launch.timeoutMs }
-                    : {}),
-                ...(typeof launch.maxStdoutBytes === 'number'
-                    ? {
-                        maxStdoutBytes:
-                            launch.maxStdoutBytes,
-                    }
-                    : {}),
-                ...(typeof launch.maxStderrBytes === 'number'
-                    ? {
-                        maxStderrBytes:
-                            launch.maxStderrBytes,
-                    }
-                    : {}),
-                ...(launch.windowsVerbatimArguments === true
-                    ? { windowsVerbatimArguments: true }
-                    : {}),
-                release() {
-                    if (released) return;
-                    released = true;
-                    void dispatch<null>({
-                        kind:
-                            'plugin_exec.launch.release_v1',
-                        requestId: randomUUID(),
-                        invocationId: input.invocationId,
-                        authorizationId,
-                    }, {
-                        timeoutMs: 1_000,
-                    }).catch(() => undefined);
-                },
-            } satisfies HostAuthorizedPluginExecLaunch);
+            return readAuthorizedExecLaunch(raw);
+        },
+        async authorizeResolvedAgentNativeLaunch(launch, options) {
+            assertAvailable('exec');
+            const { stdin, release: _release, ...tuple } = launch;
+            const raw = parseObjectResult(await dispatch<unknown>({
+                kind: 'plugin_exec.resolved_agent_launch.authorize_v1', ...requestBase(),
+                launch: { ...tuple, args: [...tuple.args], ...(stdin === undefined ? {} : { stdin: Buffer.from(stdin).toString('base64') }) },
+            }, options), 'plugin_exec_launch_authorization_invalid', 'Daemon returned an invalid process launch authorization');
+            return readAuthorizedExecLaunch(raw);
         },
     });
     let closeStarted = false;

@@ -1,8 +1,14 @@
-import { z } from 'zod';
+import { SessionGoalControlFailureV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
+import { z } from 'zod/mini';
+import { awaitGoalAcknowledgement } from '@/session/goalControls/awaitGoalAcknowledgement';
 
 import { ReviewStartInputSchema } from '@happier-dev/protocol/reviews/reviewStart';
 import { HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1 } from '@happier-dev/protocol/runtime/input/structuredInputV1';
+import { SessionStructuredInputAdmissionError } from '@/session/services/admitSessionStructuredInputV1';
+import { COMPOSER_SOURCE_REF_PRIVATE_META_FIELD_V1 } from '@happier-dev/protocol/plugins/ui/composerRef';
+import type { ComposerStagedMediaReleaseIntentV1 } from '@happier-dev/protocol/sessions/userMessageRpc';
 import { SessionPendingMessageComposerAdmissionPrepareRequestV1Schema, SessionPendingMessageComposerAdmissionPrepareResponseV1Schema, SessionPendingMessageComposerAdmissionAcceptedRequestV1Schema, SessionPendingMessageComposerAdmissionAbandonedRequestV1Schema } from '@happier-dev/protocol/sessions/userMessageRpc';
+import { SessionAttachmentsMessageMetaV1Schema } from '@happier-dev/protocol/messages/structured/sessionAttachmentsInputV1';
 import { SessionConnectedServiceAuthApplyGenerationRequestV1Schema, SessionConnectedServiceAuthApplyGenerationResponseV1Schema, SessionConnectedServiceAuthInvalidateTransportsRequestV1Schema, SessionConnectedServiceAuthReadRuntimeIdentityRequestV1Schema, SessionConnectedServiceAuthReadRuntimeIdentityResponseV1Schema, SessionGoalClearRequestV1Schema, SessionGoalGetRequestV1Schema, SessionGoalSetRequestV1Schema, SessionUsageLimitCheckNowRequestV1Schema, SessionUsageLimitConsumeResetCreditRequestV1Schema, SessionSkillCatalogListRequestV1Schema, SessionUsageLimitWaitResumeCancelRequestV1Schema, SessionUsageLimitWaitResumeEnableRequestV1Schema, SessionVendorPluginCatalogListRequestV1Schema, SessionWorkStateGetRequestV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 import { SessionPendingQueueWakeCapabilityRequestV1Schema, SessionPendingQueueWakeRequestV1Schema } from '@happier-dev/protocol/sessions/pending/sessionPendingQueueWakeV1';
 import { SessionTerminalComposerClearRequestV1Schema, SessionTerminalComposerClearResultV1Schema, buildUnsupportedSessionTerminalComposerClearResult } from '@happier-dev/protocol/sessions/control/terminalComposerClearV1';
@@ -18,7 +24,7 @@ import type { Metadata } from '@/api/types';
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import type { ComposerAttachmentDispatchResolver } from '@/agent/runtime/runPermissionModePromptLoop';
 import type { StructuredInputComposerReferenceResolver } from '@/agent/runtime/turns/resolveStructuredInputProviderContext';
-import type { AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agent-runtime';
+import type { AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agents/runtime';
 import { configuration } from '@/configuration';
 import { SkillCatalogItemV1Schema } from '@happier-dev/protocol/runtime/catalog/skills';
 import { resolveHappierSkillIdentity } from '@/prompts/skills/runtime/resolveHappierSkillIdentity';
@@ -34,6 +40,8 @@ import {
 } from '@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryOperationResult';
 
 export type SessionRuntimeControls = {
+  /** The incumbent host permission owner; Session-owned Runs retain its live callbacks. */
+  readPermissionHandler?: () => import('@/agent/acp/permissions/acpPermissionHandler').AcpPermissionHandler | null;
   /** Safe identities from this generation's applied model and auth owners. */
   readAppliedChildSelection?: () => import('@/agent/runtime/bridges/executionRun/runtime/openInputs').ExecutionRunAppliedParentSelection
     | Promise<import('@/agent/runtime/bridges/executionRun/runtime/openInputs').ExecutionRunAppliedParentSelection>;
@@ -141,6 +149,7 @@ export type SessionRuntimeControls = {
     text: string;
     meta: Record<string, unknown>;
     stagedMediaHandles?: readonly ComposerContentHandleV1[];
+    stagedMediaReleaseIntents?: readonly ComposerStagedMediaReleaseIntentV1[];
     sessionMediaMetadata?: Readonly<{
       key: 'happier' | 'happierMedia';
       envelope: import('@happier-dev/protocol').SessionMediaMessageMetaV1;
@@ -166,9 +175,9 @@ function unsupported(method: string): Readonly<{ ok: false; errorCode: string; e
   };
 }
 
-const workflowStepWithdrawRequestSchema = z.object({
-  localInputId: z.string().min(1).refine((value) => value.trim().length > 0),
-}).strict();
+const workflowStepWithdrawRequestSchema = z.strictObject({
+  localInputId: z.string().check(z.minLength(1), z.refine((value) => value.trim().length > 0)),
+});
 
 function pendingWakeUnavailable() {
   return { ok: false as const, error: 'pending_materialization_wake_unavailable' as const, errorCode: 'runtime_upgrade_required' as const };
@@ -192,14 +201,16 @@ function readWorkState(getSessionMetadata?: (() => Metadata | null) | null): unk
   return readDisplayableSessionWorkStateV1((metadata as Record<string, unknown>).sessionWorkStateV1);
 }
 
-function readRuntimeControlErrorResult(value: unknown): Readonly<{ ok: false; errorCode: string; error: string }> | null {
+function readRuntimeControlErrorResult(value: unknown) {
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
   if (record.ok !== false || typeof record.error !== 'string') return null;
+  const failure = SessionGoalControlFailureV1Schema.safeParse(record.goalControlFailure);
   return {
-    ok: false,
+    ok: false as const,
     error: record.error,
     errorCode: typeof record.errorCode === 'string' ? record.errorCode : 'runtime_control_failed',
+    ...(failure.success ? { goalControlFailure: failure.data } : {}),
   };
 }
 
@@ -261,6 +272,7 @@ export function registerSessionControlHandlers(
   opts: Readonly<{
     getSessionMetadata?: (() => Metadata | null) | null;
     sessionRuntimeControls?: SessionRuntimeControls | null;
+    waitForSessionRuntimeControls?: (signal?: AbortSignal) => Promise<boolean>;
     isUsageLimitRecoveryEnabled?: (() => Promise<boolean> | boolean) | null;
     checkRuntimeAuthUsageLimitRecovery?: CheckRuntimeAuthUsageLimitRecovery | null;
     notifyUsageLimitWaitResumeCancelled?: ((request: Readonly<{
@@ -295,7 +307,12 @@ export function registerSessionControlHandlers(
         const prepared = await prepare({
           localId: parsed.data.localId,
           text: parsed.data.text,
-          meta: { [HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]: parsed.data.structuredInput },
+        meta: {
+          [HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]: parsed.data.structuredInput,
+          ...(parsed.data.sourceComposerRef ? {
+            [COMPOSER_SOURCE_REF_PRIVATE_META_FIELD_V1]: parsed.data.sourceComposerRef,
+          } : {}),
+        },
         });
         const admitted = readAdmittedHappierStructuredInputV1FromMeta(prepared.meta);
         if (admitted.status !== 'admitted') {
@@ -328,15 +345,24 @@ export function registerSessionControlHandlers(
             errorCode: 'composer_media_metadata_missing',
           };
         }
+        const sessionAttachmentMetadata = (['happier', 'happierAttachments'] as const).flatMap(key => {
+          const envelope = SessionAttachmentsMessageMetaV1Schema.safeParse(prepared.meta[key]);
+          return envelope.success ? [{ key, envelope: envelope.data }] : [];
+        })[0];
         return SessionPendingMessageComposerAdmissionPrepareResponseV1Schema.parse({
           ok: true,
           text: prepared.text,
           structuredInput: admitted.structuredInput,
           stagedMediaHandles: prepared.stagedMediaHandles ?? [],
+          ...(prepared.stagedMediaReleaseIntents ? { stagedMediaReleaseIntents: prepared.stagedMediaReleaseIntents } : {}),
+          ...(sessionAttachmentMetadata ? { sessionAttachmentMetadata } : {}),
           ...(mediaMetadata ? { sessionMediaMetadata: mediaMetadata } : {}),
           ...(prepared.sessionMediaCleanup ? { sessionMediaCleanup: prepared.sessionMediaCleanup } : {}),
         });
       } catch (error) {
+        if (error instanceof SessionStructuredInputAdmissionError && error.code === 'session_attachment_upload_checkpoint_stale') {
+          return { ok: false, error: error.code, errorCode: error.code };
+        }
         const message = error instanceof Error ? error.message : 'composer_attachment_admission_failed';
         return { ok: false, error: message, errorCode: 'composer_attachment_admission_failed' };
       }
@@ -373,9 +399,14 @@ export function registerSessionControlHandlers(
     return { workState: readWorkState(opts.getSessionMetadata) };
   });
 
-  rpc.registerHandler(SESSION_RPC_METHODS.SESSION_GOAL_GET, async (raw: unknown) => {
+  rpc.registerHandler(SESSION_RPC_METHODS.SESSION_GOAL_GET, async (raw: unknown, context) => {
     const parsed = SessionGoalGetRequestV1Schema.safeParse(raw);
     if (!parsed.success) return invalidInput();
+    if (typeof opts.sessionRuntimeControls?.refreshGoal !== 'function') {
+      const ready = await opts.waitForSessionRuntimeControls?.(context?.signal);
+      context?.signal.throwIfAborted();
+      if (ready === false) return unsupported(SESSION_RPC_METHODS.SESSION_GOAL_GET);
+    }
     if (parsed.data.capabilitiesOnly === true) {
       // The opened runtime exposes these controls only after its native
       // direct-goal facet and per-open support signal agree. Inactive adapters
@@ -388,35 +419,47 @@ export function registerSessionControlHandlers(
     if (typeof opts.sessionRuntimeControls?.refreshGoal !== 'function') {
       return unsupported(SESSION_RPC_METHODS.SESSION_GOAL_GET);
     }
-    const result = readRuntimeControlErrorResult(await opts.sessionRuntimeControls.refreshGoal());
+    const result = readRuntimeControlErrorResult(await awaitGoalAcknowledgement(
+      () => opts.sessionRuntimeControls!.refreshGoal!(), context?.signal));
     if (result) return result;
     return { workState: readWorkState(opts.getSessionMetadata) };
   });
 
-  rpc.registerHandler(SESSION_RPC_METHODS.SESSION_GOAL_SET, async (raw: unknown) => {
+  rpc.registerHandler(SESSION_RPC_METHODS.SESSION_GOAL_SET, async (raw: unknown, context) => {
     const parsed = SessionGoalSetRequestV1Schema.safeParse(raw);
     if (!parsed.success) return invalidInput();
+    if (typeof opts.sessionRuntimeControls?.setGoal !== 'function') {
+      const ready = await opts.waitForSessionRuntimeControls?.(context?.signal);
+      context?.signal.throwIfAborted();
+      if (ready === false) return unsupported(SESSION_RPC_METHODS.SESSION_GOAL_SET);
+    }
     if (typeof opts.sessionRuntimeControls?.setGoal !== 'function') {
       return unsupported(SESSION_RPC_METHODS.SESSION_GOAL_SET);
     }
     const objective = parsed.data.objective ?? readCurrentGoalObjective(opts.getSessionMetadata) ?? undefined;
-    const result = readRuntimeControlErrorResult(await opts.sessionRuntimeControls.setGoal(objective, {
+    const result = readRuntimeControlErrorResult(await awaitGoalAcknowledgement(() => opts.sessionRuntimeControls!.setGoal!(objective, {
       ...(parsed.data.status ? { status: parsed.data.status } : {}),
       ...(Object.prototype.hasOwnProperty.call(parsed.data, 'tokenBudget')
         ? { tokenBudget: parsed.data.tokenBudget ?? null }
         : {}),
-    }));
+    }), context?.signal));
     if (result) return result;
     return { workState: readWorkState(opts.getSessionMetadata) };
   });
 
-  rpc.registerHandler(SESSION_RPC_METHODS.SESSION_GOAL_CLEAR, async (raw: unknown) => {
+  rpc.registerHandler(SESSION_RPC_METHODS.SESSION_GOAL_CLEAR, async (raw: unknown, context) => {
     const parsed = SessionGoalClearRequestV1Schema.safeParse(raw);
     if (!parsed.success) return invalidInput();
     if (typeof opts.sessionRuntimeControls?.clearGoal !== 'function') {
+      const ready = await opts.waitForSessionRuntimeControls?.(context?.signal);
+      context?.signal.throwIfAborted();
+      if (ready === false) return unsupported(SESSION_RPC_METHODS.SESSION_GOAL_CLEAR);
+    }
+    if (typeof opts.sessionRuntimeControls?.clearGoal !== 'function') {
       return unsupported(SESSION_RPC_METHODS.SESSION_GOAL_CLEAR);
     }
-    const result = readRuntimeControlErrorResult(await opts.sessionRuntimeControls.clearGoal());
+    const result = readRuntimeControlErrorResult(await awaitGoalAcknowledgement(
+      () => opts.sessionRuntimeControls!.clearGoal!(), context?.signal));
     if (result) return result;
     return { workState: readWorkState(opts.getSessionMetadata) };
   });

@@ -17,7 +17,7 @@ import { auth } from "@/app/auth/auth";
 import { eventRouter } from "@/app/events/connectionEventRouter";
 import { setAccountStatusInTx } from "@/app/home/governance/accountLifecycle";
 import { db } from "@/storage/db";
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot, inTx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { encodeBase64, decodeBase64 } from "privacy-kit";
@@ -32,6 +32,11 @@ import { withAuthenticatedTestApp } from "../testkit/sqliteFastify";
 import { currentAccountStoredContentCompatibilityHeaders } from "../testkit/accountStoredContentCompatibility";
 import { machinesRoutes } from "../routes/machines/machinesRoutes";
 import { MachinePublishedRowV1Schema } from "@happier-dev/protocol/machines/machineContentKeyTransitionV1";
+import { MACHINE_SESSION_TERMINAL_CAPTURE_EVENT_V1, MachineSessionTerminalCaptureResponseV1Schema } from "@happier-dev/protocol/sessions/control/machineSessionTerminalV1";
+import { SESSION_SERVER_START_INGRESS_EVENT_V1, SessionServerStartIngressRequestV1Schema, SessionServerStartIngressResponseV1Schema } from "@happier-dev/protocol/sessions/creation/sessionServerStartV1";
+import { SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1, SessionPendingEnqueueByMachineResponseV1Schema } from "@happier-dev/protocol/sessions/messages/sessionPendingMachineAdmissionV1";
+import { createSessionPublisherPresence } from "@/app/presence/sessionPublisherPresence";
+import { SESSION_PENDING_RESET_START_RELEASE_EVENT_V1, PendingResetStartReleaseRequestV1Schema, PendingResetStartReleaseResponseV1Schema } from "@happier-dev/protocol/sessions/pending/pendingRequestedActionV1";
 
 const HANDLER_OPTIONS = {
     operationSocketBatchLimits: {
@@ -215,12 +220,102 @@ describe("Machine authority mutations on an established socket", () => {
         });
         await db.teamCredentialExternalApiKey.deleteMany();
         await db.team.deleteMany();
+        await db.accessKey.deleteMany();
+        await db.session.deleteMany();
         await db.machine.deleteMany();
         await db.account.deleteMany();
     });
 
     afterAll(async () => {
         await harness.close();
+    });
+
+    it.each([
+        { event: MACHINE_SESSION_TERMINAL_CAPTURE_EVENT_V1, request: { v: 1, sessionId: "retained-session" },
+            response: { v: 1, status: "rejected", sessionId: "retained-session", reason: "internal_error" } },
+        { event: SESSION_SERVER_START_INGRESS_EVENT_V1, request: SessionServerStartIngressRequestV1Schema.parse({
+            v: 1, kind: "session.serverStart.ingress", runId: "retained-run", attempt: 1,
+            requestEnvelope: { t: "encrypted", c: "opaque-request" },
+        }),
+            response: { v: 1, kind: "result", result: { type: "pending", retryWithSameCreationKey: true, outcome: "unknown" } } },
+        { event: SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1, request: {
+            v: 1, sessionId: "retained-session", targetMachineId: "target-machine", localId: "retained-input",
+            content: { t: "plain", v: { role: "user", content: { type: "text", text: "retained input" } } },
+            requestedAction: { v: 1, kind: "enqueue" },
+        }, response: { v: 1, result: { status: "outcomeUnknown", localId: "retained-input",
+            code: "session_input_admission_acknowledgement_lost" } } },
+    ])("settles $event when the real Machine admission query loses its database connection", async ({ event, request, response }) => {
+        const fixture = await createEstablishedMachineFixture("unavailable-storage");
+        // Inject only the Prisma transport failure; registration, request parsing,
+        // Machine admission and the acknowledgement path use their real owners.
+        // Prisma exposes virtual delegate properties: spy restoration deletes
+        // the method. Restore its actual query explicitly at this boundary.
+        const machine = db.machine;
+        const query = machine.findFirst;
+        machine.findFirst = () => { throw Object.assign(new Error("database connection unavailable"), { code: "P2024" }); };
+        const callback = vi.fn();
+        try {
+            await expect(getSocketHandler(fixture.socket, event)(request, callback)).resolves.toBeUndefined();
+        } finally {
+            machine.findFirst = query;
+        }
+        expect(callback.mock.calls).toEqual([[response]]);
+        if (event === MACHINE_SESSION_TERMINAL_CAPTURE_EVENT_V1) {
+            expect(MachineSessionTerminalCaptureResponseV1Schema.parse(callback.mock.calls[0][0])).toEqual(response);
+        } else if (event === SESSION_SERVER_START_INGRESS_EVENT_V1) {
+            expect(SessionServerStartIngressResponseV1Schema.parse(callback.mock.calls[0][0])).toEqual(response);
+        } else {
+            expect(SessionPendingEnqueueByMachineResponseV1Schema.parse(callback.mock.calls[0][0])).toEqual(response);
+        }
+    });
+
+    it("settles reset release when the real credential currentness query loses storage", async () => {
+        const fixture = await createEstablishedMachineFixture("reset-release-storage");
+        const request = PendingResetStartReleaseRequestV1Schema.parse({
+            v: 1, sessionId: "retained-session", localId: "retained-input",
+            reset: { source: { bindingKind: "account", ref: {
+                service: { pluginId: "happier.agent.codex", localId: "openai" }, accountId: "profile",
+            } }, recordId: "paug_v1_abcdefgh", meterId: "weekly",
+            witness: { id: "accepted-history-entry", observedAtMs: 1000 } },
+        });
+        // Fault the external query on SQLite's canonical read-only connection;
+        // token verification and socket credential admission remain real.
+        const account = await inReadSnapshot(async reader => reader.account);
+        const query = account.findUnique;
+        account.findUnique = () => { throw Object.assign(new Error("database connection unavailable"), { code: "P2024" }); };
+        const callback = vi.fn();
+        try {
+            await expect(getSocketHandler(fixture.socket, SESSION_PENDING_RESET_START_RELEASE_EVENT_V1)(request, callback)).resolves.toBeUndefined();
+        } finally {
+            account.findUnique = query;
+        }
+        expect(callback.mock.calls).toEqual([[{ v: 1, ok: false, reason: "internal_error" }]]);
+        expect(PendingResetStartReleaseResponseV1Schema.parse(callback.mock.calls[0][0]))
+            .toEqual({ v: 1, ok: false, reason: "internal_error" });
+        expect(await db.sessionPendingMessage.count()).toBe(0);
+    });
+
+    it("captures the retained Session through registered presence wiring and refuses missing wiring", async () => {
+        const fixture = await createEstablishedMachineFixture("terminal-capture");
+        const fence = new Date("2026-10-18T09:30:00Z");
+        const session = await db.session.create({ data: {
+            accountId: fixture.accountId, tag: randomUUID(), metadata: "{}", active: true, lastActiveAt: fence,
+        } });
+        await db.accessKey.create({ data: {
+            accountId: fixture.accountId, machineId: fixture.machineId, sessionId: session.id, data: "encrypted",
+        } });
+        const request = { v: 1, sessionId: session.id };
+        expect(await emit(fixture, MACHINE_SESSION_TERMINAL_CAPTURE_EVENT_V1, request))
+            .toHaveBeenCalledWith({ v: 1, status: "rejected", sessionId: session.id, reason: "unsupported" });
+        machineUpdateHandler(fixture.accountId, fixture.socket as unknown as Socket, {
+            ...HANDLER_OPTIONS, sessionPublisherPresence: createSessionPublisherPresence(),
+        });
+        const callback = await emit(fixture, MACHINE_SESSION_TERMINAL_CAPTURE_EVENT_V1, request);
+        expect(MachineSessionTerminalCaptureResponseV1Schema.parse(callback.mock.calls[0][0])).toEqual({
+            v: 1, status: "captured", sessionId: session.id,
+            authority: { kind: "legacy-heartbeat", committedFenceMs: fence.getTime() },
+        });
+        expect((await db.session.findUniqueOrThrow({ where: { id: session.id } })).active).toBe(true);
     });
 
     it("retires only the exact authenticated Machine operation and leaves a newer operation intact on stale replay", async () => {

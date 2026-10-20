@@ -6,6 +6,7 @@ import type {
 
 export function createTranscriptSessionCommonPropsFixture(overrides?: Readonly<{
     toolChromeCommon?: Partial<TranscriptToolChromeCommon>;
+    messageDisplayCommon?: Partial<TranscriptSessionCommonProps['messageDisplayCommon']>;
 }>): TranscriptSessionCommonProps {
     return {
         forkCommon: {
@@ -37,6 +38,7 @@ export function createTranscriptSessionCommonPropsFixture(overrides?: Readonly<{
             transcriptStreamingSmoothingEnabled: true,
             debugInformationEnabled: false,
             workspacePath: null,
+            ...overrides?.messageDisplayCommon,
         },
         toolChromeCommon: {
             toolViewTimelineChromeMode: 'activity_feed',
